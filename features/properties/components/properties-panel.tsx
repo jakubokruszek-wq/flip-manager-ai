@@ -17,7 +17,10 @@ export function PropertiesPanel({ properties }: PropertiesPanelProps) {
       <PageHeader
         title={FEATURE_TITLE}
         actions={
-          <AddPropertyButton label="Dodaj nieruchomość" showPlus />
+          <AddPropertyButton
+            label="Dodaj nieruchomość"
+            showPlus
+          />
         }
       />
 

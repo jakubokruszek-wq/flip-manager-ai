@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -13,13 +14,14 @@ export function AddPropertyButton({
   label,
   showPlus = true,
 }: AddPropertyButtonProps) {
-  const handleClick = () => {
-    // Formularz dodawania zostanie podłączony w kolejnej iteracji.
-  };
+  const router = useRouter();
 
   return (
-    <Button variant="primary" onClick={handleClick}>
-      {showPlus ? <Plus className="h-4 w-4" aria-hidden="true" /> : null}
+    <Button
+      variant="default"
+      onClick={() => router.push("/properties/new")}
+    >
+      {showPlus && <Plus className="h-4 w-4" />}
       {label}
     </Button>
   );
