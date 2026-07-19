@@ -1,2 +1,2 @@
-export * from "./services/importer.service";
-export * from "./types";
+export type { PropertyImporterAdapter } from "./adapters/property-importer-adapter";
+export type { ImportedProperty, ImportSource } from "./types";

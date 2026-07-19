@@ -1,36 +1,55 @@
-import {
-  PropertyImportResult,
-  ImportSource,
-} from "../types";
+import "server-only";
 
-function detectSource(url: string): ImportSource {
-  const value = url.toLowerCase();
+import { propertyImporterAdapters } from "../adapters/registry";
+import { PropertyImportError } from "../errors";
+import type { ImportedProperty } from "../types";
 
-  if (value.includes("otodom")) return "otodom";
+/**
+ * Publiczny punkt wejścia importu. Nie zna domen ani szczegółów parserów;
+ * deleguje wybór do adapterów z rejestru.
+ */
+export async function importProperty(url: string): Promise<ImportedProperty> {
+  const normalizedUrl = normalizeImportUrl(url);
+  const adapter = propertyImporterAdapters.find((candidate) =>
+    candidate.supports(normalizedUrl)
+  );
 
-  if (value.includes("olx")) return "olx";
-
-  if (value.includes("gratka")) return "gratka";
-
-  if (value.includes("morizon")) return "morizon";
-
-  if (
-    value.includes("facebook.com") ||
-    value.includes("fb.com")
-  ) {
-    return "facebook";
+  if (!adapter) {
+    throw new PropertyImportError(
+      "UNSUPPORTED_SOURCE",
+      "Ten portal lub adres ogłoszenia nie jest jeszcze obsługiwany."
+    );
   }
 
-  return "unknown";
+  console.log("IMPORT SELECTED ADAPTER:", adapter.constructor.name);
+
+  return adapter.import(normalizedUrl);
 }
 
-export async function importProperty(
-  url: string
-): Promise<PropertyImportResult> {
-  const source = detectSource(url);
+function normalizeImportUrl(value: string): string {
+  const input = value.trim();
 
-  return {
-    source,
-    url,
-  };
+  if (!input) {
+    throw new PropertyImportError("INVALID_URL", "Adres ogłoszenia jest wymagany.");
+  }
+
+  try {
+    const url = new URL(input);
+
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      !url.hostname
+    ) {
+      throw new Error("Invalid import URL");
+    }
+
+    return url.href;
+  } catch {
+    throw new PropertyImportError(
+      "INVALID_URL",
+      "Podaj poprawny adres HTTPS ogłoszenia."
+    );
+  }
 }
