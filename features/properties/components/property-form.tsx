@@ -16,9 +16,10 @@ type PropertyFormProps = {
   saving: boolean;
   onChange: (field: ImportedPropertyFormField, value: string) => void;
   onSubmit: () => void;
+  submitLabel?: string;
 };
 
-export function PropertyForm({ values, saving, onChange, onSubmit }: PropertyFormProps) {
+export function PropertyForm({ values, saving, onChange, onSubmit, submitLabel = "Zapisz nieruchomość" }: PropertyFormProps) {
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const hasLongDescription = values.description.length > 600;
 
@@ -109,7 +110,7 @@ export function PropertyForm({ values, saving, onChange, onSubmit }: PropertyFor
       </section>
 
       <Button type="submit" className="w-full sm:w-auto" disabled={saving}>
-        {saving ? "Zapisywanie..." : "Zapisz nieruchomość"}
+        {saving ? "Zapisywanie..." : submitLabel}
       </Button>
     </form>
   );

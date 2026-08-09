@@ -1,0 +1,40 @@
+⚠ Turbopack's filesystem cache has been deleted because we previously detected an internal error in Turbopack. Builds or page loads may be slower as a result.
+FLIP FINDER LIST ERROR: {
+  message: 'TypeError: fetch failed',
+  details: 'TypeError: fetch failed\n' +
+    '\n' +
+    'Caused by: Error: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca (UNABLE_TO_VERIFY_LEAF_SIGNATURE)\n' +
+    'Error: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca\n' +
+    '    at TLSSocket.onConnectSecure (node:internal/tls/wrap:1748:34)\n' +
+    '    at TLSSocket.emit (node:events:509:28)\n' +
+    '    at TLSSocket._finishInit (node:internal/tls/wrap:1185:8)\n' +
+    '    at ssl.onhandshakedone (node:internal/tls/wrap:966:12)\n' +
+    '    at TLSWrap.callbackTrampoline (node:internal/async_hooks:130:17)',
+  hint: '',
+  code: ''
+}
+FLIP FINDER GET ERROR: {
+  message: 'TypeError: fetch failed',
+  details: 'TypeError: fetch failed\n' +
+    '\n' +
+    'Caused by: Error: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca (UNABLE_TO_VERIFY_LEAF_SIGNATURE)\n' +
+    'Error: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca\n' +
+    '    at TLSSocket.onConnectSecure (node:internal/tls/wrap:1748:34)\n' +
+    '    at TLSSocket.emit (node:events:509:28)\n' +
+    '    at TLSSocket._finishInit (node:internal/tls/wrap:1185:8)\n' +
+    '    at ssl.onhandshakedone (node:internal/tls/wrap:966:12)\n' +
+    '    at TLSWrap.callbackTrampoline (node:internal/async_hooks:130:17)',
+  hint: '',
+  code: ''
+}
+FLIP FINDER RESULTS ROUTE ERROR: Error: Nie udało się pobrać filtra.
+    at getSearchFilter (features\flip-finder\server\search-filters.ts:100:11)
+    at async getFilterResults (features\flip-finder\server\filter-results.ts:68:18)
+    at async GET (app\api\flip-finder\search-filters\[id]\results\route.ts:9:21)
+   98 |   if (error) {
+   99 |     console.error("FLIP FINDER GET ERROR:", error);
+> 100 |     throw new Error("Nie udało się pobrać filtra.");
+      |           ^
+  101 |   }
+  102 |
+  103 |   return data ? toSearchFilter(asRow(data)) : null;

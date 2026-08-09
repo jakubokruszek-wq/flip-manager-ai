@@ -1,0 +1,29 @@
+/* eslint-disable @next/next/no-img-element -- listing image hosts are dynamic source data */
+import { AlertTriangle, Building2 } from "lucide-react";
+
+import type { AttentionReason, DashboardOpportunity, DashboardSummary, PurchaseDecision } from "@/features/dashboard/types";
+import { cn } from "@/lib/utils";
+
+const currency = new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 });
+const number = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 });
+
+export function OpportunityCards({ opportunities }: { opportunities: DashboardOpportunity[] }) {
+  return <div className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-3 md:mx-0 md:grid md:grid-cols-2 md:overflow-visible md:px-0 xl:grid-cols-5">{opportunities.map((opportunity) => <div className="w-[82vw] max-w-80 shrink-0 snap-start md:w-auto md:max-w-none" key={opportunity.property.id}><OpportunityCard opportunity={opportunity} /></div>)}</div>;
+}
+
+export function AttentionItems({ items }: { items: DashboardSummary["attentionItems"] }) {
+  return <div className="mt-4 divide-y divide-border/60">{items.map(({ property, reasons }) => <details className="group" key={property.id}><summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-3.5 text-left transition-colors hover:text-gold"><span className="min-w-0"><span className="block truncate text-sm font-medium">{property.title ?? property.address}</span><span className="mt-1 flex flex-wrap gap-1.5">{reasons.map((reason) => <span className="ui-badge border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] text-warning" key={reason}>{attentionLabel(reason)}</span>)}</span></span><AlertTriangle className="size-4 shrink-0 text-warning" /></summary><div className="mb-4 grid grid-cols-2 gap-2 rounded-xl border border-border/60 bg-surface/60 p-3 text-xs"><Detail label="Adres" value={property.address} /><Detail label="Flip Score" value={formatMetric(property.flipScore)} /><Detail label="ROI" value={formatPercent(property.roi)} /><Detail label="Potencjalny zysk" value={formatCurrency(property.profit)} /></div></details>)}</div>;
+}
+
+function OpportunityCard({ opportunity }: { opportunity: DashboardOpportunity }) {
+  const { property } = opportunity;
+  return <details className="ui-card ui-card-hover group h-full overflow-hidden"><summary className="flex h-full cursor-pointer list-none flex-col text-left"><span className="relative block aspect-[16/10] overflow-hidden bg-surface-muted">{property.imageUrl ? <><img alt="" className="h-full w-full object-cover" src={property.imageUrl} /><span className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" /></> : <span className="flex h-full items-center justify-center"><Building2 className="size-9 text-muted-foreground/35" /></span>}<span className="absolute left-3 top-3 rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-xs font-semibold backdrop-blur">Flip {formatMetric(opportunity.flipScore)}</span><DecisionBadge decision={opportunity.decision} /></span><span className="flex flex-1 flex-col p-4"><span className="line-clamp-2 min-h-10 text-sm font-semibold leading-5 group-hover:text-gold">{property.title ?? property.address}</span><span className="mt-1 truncate text-xs text-muted-foreground">{property.district ?? property.city ?? "Lokalizacja nieuzupełniona"}</span><span className="mt-4 font-mono text-lg font-semibold">{formatCurrency(property.price)}</span><span className="mt-auto grid grid-cols-2 gap-2 pt-4 text-xs"><span className="rounded-lg bg-surface-muted/70 p-2"><span className="block text-muted-foreground">ROI</span><strong className="mt-0.5 block text-success">{formatPercent(opportunity.roi)}</strong></span><span className="rounded-lg bg-surface-muted/70 p-2"><span className="block text-muted-foreground">Zysk</span><strong className="mt-0.5 block text-gold">{formatCurrency(opportunity.potentialProfit)}</strong></span></span></span></summary><div className="border-t border-border/60 bg-surface/60 p-4 text-xs"><Detail label="Adres" value={property.address} /><div className="mt-2"><Detail label="Rekomendacja" value={decisionLabel(opportunity.decision)} /></div>{property.originalUrl ? <a className="mt-3 inline-flex text-gold hover:underline" href={property.originalUrl} rel="noreferrer" target="_blank">Otwórz ogłoszenie</a> : null}</div></details>;
+}
+
+function DecisionBadge({ decision }: { decision: PurchaseDecision | null }) { const label = decision === "buy" ? "Kup" : decision === "negotiate" ? "Negocjuj" : decision === "reject" ? "Odrzuć" : "Brak decyzji"; return <span className={cn("absolute bottom-3 right-3 rounded-full border px-2.5 py-1 text-xs font-semibold backdrop-blur", decision === "buy" ? "border-success/30 bg-success/20 text-success" : decision === "negotiate" ? "border-warning/30 bg-warning/20 text-warning" : "border-danger/30 bg-danger/20 text-danger")}>{label}</span>; }
+function Detail({ label, value }: { label: string; value: string }) { return <p><span className="text-muted-foreground">{label}: </span><strong>{value}</strong></p>; }
+function decisionLabel(decision: PurchaseDecision | null): string { return decision === "buy" ? "Kup" : decision === "negotiate" ? "Negocjuj" : decision === "reject" ? "Odrzuć" : "Brak decyzji"; }
+function attentionLabel(reason: AttentionReason): string { return { missing_analysis: "Brak analizy", missing_budget: "Brak kosztorysu", stale_analysis: "Stara analiza", weak_roi: "Słaby ROI", removed_listing: "Ogłoszenie usunięte" }[reason]; }
+function formatMetric(value: number | null): string { return value === null ? "—" : number.format(value); }
+function formatPercent(value: number | null): string { return value === null ? "—" : `${number.format(value)}%`; }
+function formatCurrency(value: number | null): string { return value === null ? "—" : currency.format(value); }

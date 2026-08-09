@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/jobs/facebook-watch", "schedule": "*/15 * * * *" }
+  ]
+}

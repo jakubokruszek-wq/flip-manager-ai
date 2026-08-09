@@ -1,0 +1,19 @@
+import type { RenovationStyle } from "../types";
+
+export const STYLE_CONFIGS: Record<RenovationStyle, { label: string; description: string; cost: string; prompt: string; tint: string; recommended?: boolean }> = {
+  "flip-signature": {
+    label: "Flip Signature",
+    description: "Nasz autorski styl do mieszkań inwestycyjnych.",
+    cost: "Standard · 1 900–2 200 zł/m²",
+    recommended: true,
+    tint: "from-amber-50/5 via-stone-500/20 to-amber-900/45",
+    prompt: "FLIP SIGNATURE investor interior — a bright, warm, elegant and minimal sales-safe renovation that feels like a new premium developer apartment while remaining rationally costed, never ostentatious, never luxury-showroom styling. Use matte cashmere cabinetry, warm broken white walls with absolutely no cool grey or blue undertones, warm beige, sand and taupe textiles, wide-plank matte natural light oak flooring, and restrained matte black accents only for faucets, lamps and handles. Kitchen: matte cashmere fronts, light natural-oak worktop, integrated appliances and simple black handles. Bathroom when visible: large-format 120x60 warm beige stone-effect porcelain tiles, walk-in shower, matte black fittings, cashmere vanity and oak top. Living room when visible: comfortable beige sofa, natural-oak coffee table, subtle oak TV wall panel with delicate vertical slats, abundant soft daylight. Bedroom when visible: upholstered bed, cashmere and beige linen accessories. Lighting: warm 3000K LED, slim black track lighting and restrained black lamps. Windows: natural warm-neutral curtains and light sheer curtains. Materials must look attainable, durable, easy to source and attractive to the broad resale market. Produce a highly photorealistic finished interior, not a catalogue set and not an extravagant luxury apartment",
+  },
+  modern: { label: "Modern", description: "Czyste linie, ciepłe neutrale i współczesne światło.", cost: "od 1 200 zł/m²", prompt: "clean modern interior, warm neutral palette, contemporary furniture, subtle black accents and layered lighting", tint: "from-slate-950/10 to-zinc-500/45" },
+  japandi: { label: "Japandi", description: "Naturalne drewno, spokój i miękki minimalizm.", cost: "od 1 400 zł/m²", prompt: "Japandi interior, pale natural wood, warm whites, tactile materials, calm minimal styling and soft diffused light", tint: "from-stone-900/5 to-amber-700/40" },
+  scandinavian: { label: "Scandinavian", description: "Jasne wnętrze, funkcjonalność i lekkie drewno.", cost: "od 1 100 zł/m²", prompt: "bright Scandinavian interior, whites, pale wood, practical furniture, subtle textiles and airy daylight", tint: "from-sky-100/10 to-slate-400/35" },
+  loft: { label: "Loft", description: "Grafit, metal, cegła i wyraziste oświetlenie.", cost: "od 1 300 zł/m²", prompt: "refined loft interior, graphite accents, restrained brick and metal details, warm wood and architectural lighting", tint: "from-neutral-950/25 to-orange-950/45" },
+  premium: { label: "Premium", description: "Kamień, drewno i elegancka zabudowa na wymiar.", cost: "od 2 200 zł/m²", prompt: "premium elegant interior, refined stone and wood finishes, sophisticated built-ins and high-quality lighting", tint: "from-zinc-950/10 to-yellow-900/45" },
+  "flip-budget": { label: "Flip Budget", description: "Efekt sprzedażowy przy kontrolowanym koszcie.", cost: "od 850 zł/m²", prompt: "cost-conscious flip-ready interior, durable laminate or vinyl, washable neutral paint, modular furniture and widely available fixtures", tint: "from-emerald-950/10 to-lime-800/35" },
+  luxury: { label: "Luxury", description: "Szlachetne materiały i dopracowany detal premium.", cost: "od 3 200 zł/m²", prompt: "luxury editorial interior, exceptional natural stone, rich wood veneer, bespoke joinery, sculptural lighting and restrained opulence", tint: "from-black/20 to-amber-950/55" },
+};

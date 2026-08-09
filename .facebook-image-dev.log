@@ -1,0 +1,126 @@
+
+> flip-manager@0.1.0 dev
+> next dev -p 3017
+
+▲ Next.js 16.2.10 (Turbopack)
+- Local:         http://localhost:3017
+- Network:       http://192.168.56.1:3017
+- Environments: .env.local
+✓ Ready in 1202ms
+Creating turbopack project { dir: 'C:\\Users\\mokru\\Desktop\\flip-manager', testMode: true }
+
+⨯ upstream image response failed for https://scontent-waw2-2.xx.fbcdn.net/test.jpg 403
+ GET /api/facebook-watcher 404 in 3.1s (next.js: 2.2s, proxy.ts: 676ms, application-code: 228ms)
+FACEBOOK IMAGE MIRROR {
+  listingId: '0d81e386-56ed-4b53-9db8-ab9eec73384e',
+  inputCount: 1,
+  uploadedCount: 0,
+  skippedCount: 1,
+  failedCount: 0
+}
+ POST /api/facebook-watcher/import 200 in 3.4s (next.js: 741ms, proxy.ts: 22ms, application-code: 2.7s)
+ GET /api/facebook-watcher/listings 200 in 632ms (next.js: 349ms, proxy.ts: 10ms, application-code: 273ms)
+ GET /flip-finder/facebook 200 in 1899ms (next.js: 1255ms, proxy.ts: 206ms, application-code: 439ms)
+PROPERTY FINDER IMPORT RECEIVED: {
+  listingId: '0d81e386-56ed-4b53-9db8-ab9eec73384e',
+  title: 'Facebook screenshot UX test',
+  price: 289000,
+  area: 46,
+  rooms: 2,
+  floor: null,
+  buildingType: null,
+  ownership: null,
+  description: 'Sprzedam mieszkanie bezpośrednio. Teofilów, 46 m2, 2 pokoje, 289000 zł, do remontu.',
+  images: [
+    'https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png'
+  ],
+  locationText: 'Teofilów',
+  address: 'Teofilów',
+  city: 'Łódź',
+  district: 'Bałuty',
+  originalUrl: 'https://www.facebook.com/share/p/199kRfjeGx',
+  normalizedUrl: 'https://www.facebook.com/share/p/199kRfjeGx',
+  source: 'facebook',
+  externalListingId: '486ada86ed72314175827677ca8ab6a1',
+  investmentAnalysis: null
+}
+PROPERTY FINDER IMPORT EXISTING: { found: true, propertyId: '0085d14b-6c45-4493-82bb-4a6e653b4136' }
+PROPERTY FINDER IMPORT WRITE: {
+  operation: 'update',
+  propertyId: '0085d14b-6c45-4493-82bb-4a6e653b4136'
+}
+ POST /api/properties/import-from-finder 200 in 851ms (next.js: 279ms, proxy.ts: 10ms, application-code: 562ms)
+PROPERTY FINDER IMPORT RECEIVED: {
+  listingId: '0d81e386-56ed-4b53-9db8-ab9eec73384e',
+  title: 'Facebook screenshot UX test',
+  price: 289000,
+  area: 46,
+  rooms: 2,
+  floor: null,
+  buildingType: null,
+  ownership: null,
+  description: 'Sprzedam mieszkanie bezpośrednio. Teofilów, 46 m2, 2 pokoje, 289000 zł, do remontu.',
+  images: [
+    'https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png'
+  ],
+  locationText: 'Teofilów',
+  address: 'Teofilów',
+  city: 'Łódź',
+  district: 'Bałuty',
+  originalUrl: 'https://www.facebook.com/share/p/199kRfjeGx',
+  normalizedUrl: 'https://www.facebook.com/share/p/199kRfjeGx',
+  source: 'facebook',
+  externalListingId: '486ada86ed72314175827677ca8ab6a1',
+  investmentAnalysis: null
+}
+PROPERTY FINDER IMPORT EXISTING: { found: true, propertyId: '0085d14b-6c45-4493-82bb-4a6e653b4136' }
+PROPERTY FINDER IMPORT WRITE: {
+  operation: 'update',
+  propertyId: '0085d14b-6c45-4493-82bb-4a6e653b4136'
+}
+ POST /api/properties/import-from-finder 200 in 314ms (next.js: 4ms, proxy.ts: 8ms, application-code: 303ms)
+ GET /api/properties 405 in 320ms (next.js: 294ms, proxy.ts: 10ms, application-code: 16ms)
+ GET /flip-finder/facebook 200 in 205ms (next.js: 9ms, proxy.ts: 14ms, application-code: 182ms)
+ GET /api/facebook-watcher/listings 200 in 472ms (next.js: 145ms, proxy.ts: 18ms, application-code: 309ms)
+ GET /properties 200 in 2.2s (next.js: 1625ms, proxy.ts: 11ms, application-code: 542ms)
+ GET /properties 200 in 1228ms (next.js: 9ms, proxy.ts: 11ms, application-code: 1208ms)
+ GET /properties 200 in 425ms (next.js: 10ms, proxy.ts: 11ms, application-code: 403ms)
+ GET /properties 200 in 492ms (next.js: 9ms, proxy.ts: 9ms, application-code: 474ms)
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.2.10 (Turbopack)
+- Local:         http://localhost:3017
+- Network:       http://192.168.56.1:3017
+- Environments: .env.local
+✓ Ready in 1360ms
+Creating turbopack project { dir: 'C:\\Users\\mokru\\Desktop\\flip-manager', testMode: true }
+
+ GET /properties 200 in 2.2s (next.js: 364ms, proxy.ts: 331ms, application-code: 1515ms)
+ GET /properties 200 in 781ms (next.js: 156ms, proxy.ts: 66ms, application-code: 559ms)
+[browser] Image with src "https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+ GET /properties 200 in 340ms (next.js: 3ms, proxy.ts: 5ms, application-code: 332ms)
+[browser] Image with src "https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+ GET /properties 200 in 388ms (next.js: 6ms, proxy.ts: 5ms, application-code: 378ms)
+[browser] Image with src "https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+ GET /flip-finder 200 in 219ms (next.js: 59ms, proxy.ts: 6ms, application-code: 154ms)
+ GET /api/flip-finder/search-filters 200 in 648ms (next.js: 117ms, proxy.ts: 12ms, application-code: 519ms)
+ GET /api/flip-finder/search-filters/6ebf3a9c-5418-4ae6-a0bf-1989b6603367/results 200 in 1800ms (next.js: 1340ms, proxy.ts: 10ms, application-code: 449ms)
+[browser] Image with src "https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+ GET /flip-finder 200 in 133ms (next.js: 5ms, proxy.ts: 8ms, application-code: 121ms)
+ GET /api/flip-finder/search-filters 200 in 316ms (next.js: 8ms, proxy.ts: 9ms, application-code: 299ms)
+ GET /api/flip-finder/search-filters/6ebf3a9c-5418-4ae6-a0bf-1989b6603367/results 200 in 571ms (next.js: 31ms, proxy.ts: 6ms, application-code: 534ms)
+[browser] Image with src "https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+ GET /flip-finder 200 in 178ms (next.js: 6ms, proxy.ts: 13ms, application-code: 158ms)
+ GET /api/flip-finder/search-filters 200 in 451ms (next.js: 6ms, proxy.ts: 16ms, application-code: 429ms)
+ GET /api/flip-finder/search-filters/6ebf3a9c-5418-4ae6-a0bf-1989b6603367/results 200 in 573ms (next.js: 34ms, proxy.ts: 11ms, application-code: 527ms)
+[browser] Image with src "https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+ GET /flip-finder 200 in 96ms (next.js: 7ms, proxy.ts: 5ms, application-code: 84ms)
+ GET /api/flip-finder/search-filters 200 in 319ms (next.js: 9ms, proxy.ts: 9ms, application-code: 302ms)
+ GET /api/flip-finder/search-filters/6ebf3a9c-5418-4ae6-a0bf-1989b6603367/results 200 in 490ms (next.js: 32ms, proxy.ts: 7ms, application-code: 451ms)
+[browser] Image with src "https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/2026-08-09/0b62d7a8-6ac0-431f-b6dd-64455f3e4156.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading

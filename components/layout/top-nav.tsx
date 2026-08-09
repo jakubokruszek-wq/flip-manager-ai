@@ -1,11 +1,13 @@
 "use client";
 
-import { Menu, Search, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Sidebar } from "@/components/layout/sidebar";
 import { IconButton } from "@/components/ui/icon-button";
+import { SearchField } from "@/components/ui/search-field";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { AlertsBell } from "@/features/alerts/components/alerts-bell";
 import { cn } from "@/lib/utils";
 
 type TopNavProps = {
@@ -39,7 +41,7 @@ export function TopNav({ title = "Dashboard" }: TopNavProps) {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-4 border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:px-6">
+      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-4 border-b border-border/80 bg-background/75 px-4 backdrop-blur-xl sm:px-6">
         <IconButton
           label={mobileMenuOpen ? "Zamknij nawigację" : "Otwórz nawigację"}
           className="lg:hidden"
@@ -54,7 +56,7 @@ export function TopNav({ title = "Dashboard" }: TopNavProps) {
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-muted-foreground lg:hidden">
-            Flip Manager AI
+            Flip Manager
           </p>
           <h2 className="hidden truncate text-sm font-semibold tracking-tight text-foreground lg:block">
             {title}
@@ -62,21 +64,11 @@ export function TopNav({ title = "Dashboard" }: TopNavProps) {
         </div>
 
         <div className="hidden max-w-md flex-1 lg:flex">
-          <label className="relative w-full">
-            <span className="sr-only">Szukaj</span>
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              placeholder="Szukaj..."
-              className="h-9 w-full rounded-lg border border-border bg-surface-elevated pl-9 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20"
-            />
-          </label>
+          <SearchField placeholder="Szukaj..." />
         </div>
 
         <div className="flex items-center gap-1">
+          <AlertsBell />
           <ThemeToggle />
         </div>
       </header>

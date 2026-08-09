@@ -14,13 +14,13 @@ type SidebarNavItemProps = {
 export function SidebarNavItem({ item, onNavigate }: SidebarNavItemProps) {
   const pathname = usePathname();
   const Icon = item.icon;
-  const isActive = item.href ? pathname === item.href : false;
+  const isActive = item.href ? pathname === item.href || pathname.startsWith(`${item.href}/`) : false;
 
   const itemClassName = cn(
-    "group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+    "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
     isActive
-      ? "bg-surface-muted text-foreground"
-      : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
+      ? "bg-gold/10 text-foreground ring-1 ring-gold/15"
+      : "text-muted-foreground hover:bg-surface-hover/70 hover:text-foreground",
     item.disabled && "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
   );
 
@@ -29,7 +29,7 @@ export function SidebarNavItem({ item, onNavigate }: SidebarNavItemProps) {
       <Icon
         className={cn(
           "h-4 w-4 shrink-0",
-          isActive ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
+          isActive ? "text-gold" : "text-muted-foreground group-hover:text-gold",
         )}
         aria-hidden="true"
       />

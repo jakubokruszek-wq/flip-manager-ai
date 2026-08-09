@@ -1,12 +1,6 @@
-export type ListingSource =
-  | "otodom"
-  | "olx"
-  | "gratka"
-  | "morizon"
-  | "facebook"
-  | "unknown";
+import type { PropertyDetectedSource } from "@/features/properties/types/property";
 
-export function detectSource(url: string): ListingSource {
+export function detectSource(url: string): PropertyDetectedSource {
   const value = url.toLowerCase();
 
   if (value.includes("otodom")) return "otodom";

@@ -1,0 +1,16 @@
+
+> flip-manager@0.1.0 dev
+> next dev -p 3001
+
+▲ Next.js 16.2.10 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.56.1:3001
+- Environments: .env.local
+✓ Ready in 946ms
+Creating turbopack project { dir: 'C:\\Users\\mokru\\Desktop\\flip-manager', testMode: true }
+
+ GET /api/flip-finder/search-filters 500 in 9.5s (next.js: 1068ms, proxy.ts: 512ms, application-code: 7.9s)
+ GET /api/flip-finder/search-filters/6ebf3a9c-5418-4ae6-a0bf-1989b6603367/results 500 in 9.4s (next.js: 1259ms, proxy.ts: 18ms, application-code: 8.1s)
+○ Compiling /flip-finder ...
+ GET /flip-finder 200 in 8.5s (next.js: 7.6s, proxy.ts: 25ms, application-code: 905ms)
+[?25h

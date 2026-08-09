@@ -1,48 +1,16 @@
-export type ImportedPropertyFormValues = {
-  title: string;
-  price: string;
-  area: string;
-  rooms: string;
-  floor: string;
-  buildingType: string;
-  ownership: string;
-  rent: string;
-  address: string;
-  district: string;
-  city: string;
-  description: string;
-  originalUrl: string;
-  source: string;
-};
+import type { PropertiesInsert as SharedPropertiesInsert, PropertyFormValues, PropertySaveRequest as SharedPropertySaveRequest } from "./property";
+
+export type ImportedPropertyFormValues = PropertyFormValues;
 
 export type ImportedPropertyFormField = keyof ImportedPropertyFormValues;
 
-export const SUPPORTED_PROPERTY_SOURCES = ["otodom"] as const;
+export const SUPPORTED_PROPERTY_SOURCES = ["otodom", "facebook"] as const;
 
 export type SupportedPropertySource = (typeof SUPPORTED_PROPERTY_SOURCES)[number];
 
-export type PropertySaveRequest = ImportedPropertyFormValues & {
-  images: string[];
-};
+export type PropertySaveRequest = SharedPropertySaveRequest;
 
-export type PropertiesInsert = {
-  title: string | null;
-  price: number | null;
-  area: number | null;
-  rooms: number | null;
-  floor: string | null;
-  building_type: string | null;
-  ownership: string | null;
-  rent: number | null;
-  address: string;
-  district: string | null;
-  city: string | null;
-  notes: string | null;
-  original_url: string | null;
-  source: SupportedPropertySource;
-  images: string[];
-  status: "draft";
-};
+export type PropertiesInsert = SharedPropertiesInsert;
 
 export type SavePropertyResponse = {
   id: string;

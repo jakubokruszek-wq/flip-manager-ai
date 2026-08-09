@@ -1,8 +1,11 @@
 export {
   LISTING_SOURCES,
+  ACTIVE_SCAN_SOURCES,
   LISTING_STATUSES,
   MARKET_TYPES,
   SOURCE_SCAN_STATUSES,
+  isActiveScanSource,
+  type ActiveScanSource,
   type JsonValue,
   type Listing,
   type ListingSnapshot,

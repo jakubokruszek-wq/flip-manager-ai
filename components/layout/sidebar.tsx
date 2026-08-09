@@ -9,12 +9,12 @@ type SidebarProps = {
 
 export function Sidebar({ onNavigate }: SidebarProps) {
   return (
-    <aside className="flex h-full w-full flex-col border-r border-border bg-surface">
-      <div className="flex h-16 items-center border-b border-border px-4">
+    <aside className="flex h-full w-full flex-col border-r border-border/80 bg-surface/90 backdrop-blur-xl">
+      <div className="flex h-16 items-center border-b border-border/80 px-5">
         <Logo />
       </div>
 
-      <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
+      <nav className="flex-1 space-y-7 overflow-y-auto px-3 py-5">
         {navigationSections.map((section) => (
           <div key={section.label ?? section.items[0]?.title} className="space-y-1">
             {section.label ? (
@@ -35,8 +35,8 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         ))}
       </nav>
 
-      <div className="border-t border-border px-4 py-4">
-        <p className="text-xs text-muted-foreground">
+      <div className="border-t border-border/80 px-5 py-4">
+        <p className="text-xs font-medium tracking-wide text-muted-foreground">
           Flip Manager AI
         </p>
       </div>

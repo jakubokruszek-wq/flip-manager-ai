@@ -1,4 +1,3 @@
-export const APP_NAME = "Flip Manager AI";
+export const APP_NAME = "Flip Manager";
 
-export const APP_DESCRIPTION =
-  "Profesjonalne zarządzanie flipami nieruchomości wspierane przez AI";
+export const APP_DESCRIPTION = "Flip Manager by Jakub Okruszek";

@@ -1,0 +1,8 @@
+⨯ Another next dev server is already running.
+
+- Local:        http://localhost:3000
+- PID:          16472
+- Dir:          C:\Users\mokru\Desktop\flip-manager
+- Log:          .next\dev\logs\next-development.log
+
+Run taskkill /PID 16472 /F to stop it.

@@ -1,0 +1,9 @@
+⚠ Port 3000 is in use by process 25900, using available port 3001 instead.
+⨯ Another next dev server is already running.
+
+- Local:        http://localhost:3000
+- PID:          25900
+- Dir:          C:\Users\mokru\Desktop\flip-manager
+- Log:          .next\dev\logs\next-development.log
+
+Run taskkill /PID 25900 /F to stop it.

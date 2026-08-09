@@ -27,8 +27,8 @@ export const modules: ModuleDefinition[] = [
   },
   {
     id: "deals",
-    title: "Okazje",
-    href: "/opportunities",
+    title: "Flip Finder",
+    href: "/flip-finder",
     icon: Sparkles,
   },
   {

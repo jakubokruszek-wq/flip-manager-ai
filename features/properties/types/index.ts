@@ -1,21 +1,24 @@
-export type PropertyStatus =
-  | "draft"
-  | "analysis"
-  | "acquired"
-  | "renovation"
-  | "listed"
-  | "sold";
-
-export type Property = {
-  id: string;
-  imageUrl: string | null;
-  address: string;
-  status: PropertyStatus;
-  flipScore: number | null;
-  purchasePrice: number | null;
-  renovationCost: number | null;
-  expectedSalePrice: number | null;
-  profit: number | null;
-  roi: number | null;
-  updatedAt: string;
-};
+export type {
+  Property,
+  PropertyAnalysis,
+  PropertyAnalysisInput,
+  PropertyCalculator,
+  PropertyDetectedSource,
+  PropertyFields,
+  PropertyFinderSource,
+  PropertyListing,
+  PropertyListingResult,
+  PropertyListingStatus,
+  PropertyMarketType,
+  PropertySearchListing,
+  PropertySource,
+  PropertySourceListing,
+  PropertyStatus,
+  FacebookCollectorPropertyPayload,
+  NormalizedFacebookPropertyImport,
+} from "./property";
+export type {
+  InvestmentCalculatorSnapshot,
+  PropertyInvestmentAnalysis,
+  PropertyWithInvestmentAnalysis,
+} from "./investment-analysis";

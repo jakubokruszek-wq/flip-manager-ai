@@ -1,0 +1,2 @@
+import { updateWatchedFacebookGroup } from "@/features/facebook-groups/server";
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) { try { return Response.json({ group: await updateWatchedFacebookGroup((await params).id, await request.json()) }); } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Aktualizacja grupy nie powiodła się." }, { status: 400 }); } }

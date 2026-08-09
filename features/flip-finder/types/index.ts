@@ -1,10 +1,20 @@
-export const LISTING_SOURCES = ["otodom", "olx", "facebook"] as const;
+import type { PropertyFinderSource, PropertyListing, PropertyListingStatus, PropertyMarketType } from "@/features/properties/types/property";
 
-export type ListingSource = (typeof LISTING_SOURCES)[number];
+export const LISTING_SOURCES = ["otodom", "olx", "morizon", "facebook"] as const;
+
+export type ListingSource = PropertyFinderSource;
+
+export const ACTIVE_SCAN_SOURCES = ["otodom", "olx", "morizon"] as const;
+
+export type ActiveScanSource = (typeof ACTIVE_SCAN_SOURCES)[number];
+
+export function isActiveScanSource(value: string): value is ActiveScanSource {
+  return ACTIVE_SCAN_SOURCES.some((source) => source === value);
+}
 
 export const LISTING_STATUSES = ["active", "removed", "sold", "watched"] as const;
 
-export type ListingStatus = (typeof LISTING_STATUSES)[number];
+export type ListingStatus = PropertyListingStatus;
 
 export const SOURCE_SCAN_STATUSES = ["running", "completed", "failed", "partial"] as const;
 
@@ -12,7 +22,7 @@ export type SourceScanStatus = (typeof SOURCE_SCAN_STATUSES)[number];
 
 export const MARKET_TYPES = ["primary", "secondary"] as const;
 
-export type MarketType = (typeof MARKET_TYPES)[number];
+export type MarketType = PropertyMarketType;
 
 export type JsonValue =
   | string
@@ -22,39 +32,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export type Listing = {
-  id: string;
-  source: ListingSource;
-  externalListingId: string;
-  originalUrl: string;
-  normalizedUrl: string | null;
-  title: string | null;
-  price: number | null;
-  area: number | null;
-  pricePerSqm: number | null;
-  rooms: number | null;
-  floor: string | null;
-  buildingType: string | null;
-  ownership: string | null;
-  rent: number | null;
-  address: string | null;
-  district: string | null;
-  city: string | null;
-  description: string | null;
-  images: string[];
-  status: ListingStatus;
-  firstSeenAt: string;
-  lastSeenAt: string;
-  removedAt: string | null;
-  contentHash: string | null;
-  flipScore: number | null;
-  estimatedRenovationCost: number | null;
-  estimatedSalePrice: number | null;
-  estimatedProfit: number | null;
-  estimatedRoi: number | null;
-  createdAt: string;
-  updatedAt: string;
-};
+export type Listing = PropertyListing;
 
 export type ListingSnapshot = {
   id: string;
@@ -78,6 +56,11 @@ export type SourceScan = {
   listingsFound: number;
   listingsCreated: number;
   listingsUpdated: number;
+  scannedCount: number;
+  matchedCount: number;
+  newCount: number;
+  priceDropCount: number;
+  warnings: JsonValue[];
   errorMessage: string | null;
   filterSnapshot: JsonValue;
 };
@@ -122,6 +105,8 @@ export type ListingFilterMatch = {
   matchScore: number | null;
   matchReasons: JsonValue[];
   isCurrentMatch: boolean;
+  matchOrigin?: "scan" | "filter_recalculation" | "collector_import";
+  sourceScanId?: string | null;
 };
 
 export interface ListingSearchAdapter<TSearchParameters = unknown> {
