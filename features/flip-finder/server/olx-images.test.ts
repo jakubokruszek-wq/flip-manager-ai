@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { extractOlxImages } from "./olx-images";
+import { extractOlxImages } from "./olx-images.ts";
 
 test("extracts a single OLX image", () => {
   assert.deepEqual(extractOlxImages(["https://ireland.apollo.olxcdn.com/v1/files/one/image;s=750x1000"]), ["https://ireland.apollo.olxcdn.com/v1/files/one/image;s=750x1000"]);

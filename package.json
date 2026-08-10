@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "olx-worker": "node --env-file-if-exists=workers/olx-browser/.env.local --experimental-strip-types workers/olx-browser/src/index.ts",
     "start": "next start",
     "lint": "eslint"
   },

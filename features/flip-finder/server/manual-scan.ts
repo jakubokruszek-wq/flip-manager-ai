@@ -1,19 +1,18 @@
 import "server-only";
 
 import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-evaluation";
-import { resolveListingImages } from "@/features/flip-finder/listing-images";
 import { addMatchDiagnostic, createMatchDiagnostic, emptyMatchDiagnosticSummary, mergeMatchDiagnosticSummaries, type MatchDiagnosticSummary } from "@/features/flip-finder/match-diagnostics";
-import { isPriceDrop, needsSnapshot } from "@/features/flip-finder/otodom-search";
 import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/scan-counters";
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
+import { enqueueOlxJob } from "@/features/flip-finder/server/olx-jobs";
+import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
-import type { PropertyListing } from "@/features/properties/types/property";
 import { createClient } from "@/lib/supabase/server";
+import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 
-export type SourceScanResult = { source: string; status: "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; matchDiagnostics: MatchDiagnosticSummary };
-export type ScanSummary = { status: "completed" | "partial"; sourcesRun: number; sourcesCompleted: number; sourcesFailed: number; fetched: number; normalized: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; actualErrors: number; sourceResults: SourceScanResult[]; matchDiagnostics: MatchDiagnosticSummary; scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number; warnings: string[] };
-type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images">;
-type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
+export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; matchDiagnostics: MatchDiagnosticSummary };
+export type ScanSummary = { runId: string; status: "running" | "completed" | "partial"; sourcesRun: number; sourcesCompleted: number; sourcesFailed: number; fetched: number; normalized: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; actualErrors: number; sourceResults: SourceScanResult[]; matchDiagnostics: MatchDiagnosticSummary; scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number; warnings: string[] };
+type SupabaseClient = DatabaseClient;
 type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
 type ScanClock = { startedAt: string; startedMs: number };
@@ -39,25 +38,34 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
   if (!sources.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
   const supabase = await createClient();
   await failStaleRunningScans(supabase, filterId, sources);
-  const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", sources.map((source) => source.id)).eq("status", "running").limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", sources.map((source) => source.id)).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
   if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
 
   scanLog("SCAN START", { scanId: runId, source: "all", checked: 0, new: 0, matched: 0, durationMs: 0 });
   try {
-    for (const source of sources) {
+    for (const source of sources.filter((item) => item.id !== "olx")) {
       sourceResults.push(await scanSource(source, filterId, filter, supabase, runId, ownedScans));
     }
+    if (sources.some((source) => source.id === "olx")) {
+      try {
+        await enqueueOlxJob(filter, runId);
+        sourceResults.push(pendingResult("olx"));
+      } catch (error) {
+        sourceResults.push(failedResult("olx", 0, "OLX_ENQUEUE_FAILED", error instanceof Error ? error.message : "Nie udało się dodać OLX do kolejki."));
+      }
+    }
     const completed = sourceResults.filter((result) => result.status === "completed");
-    const failed = sourceResults.length - completed.length;
-    if (!completed.length) throw statusError(502, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
+    const pending = sourceResults.filter((result) => result.status === "pending");
+    const failed = sourceResults.filter((result) => result.status === "failed").length;
+    if (!completed.length && !pending.length) throw statusError(502, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
     const sum = (key: keyof Pick<SourceScanResult, "fetched" | "normalized" | "matched" | "listingsCreated" | "newMatches" | "updated" | "priceDrops" | "rejected">) => sourceResults.reduce((total, result) => total + result[key], 0);
     const warnings = sourceResults.filter((result) => result.errorMessage).map((result) => `${result.source}: ${result.errorMessage}`);
     const matchDiagnostics = mergeMatchDiagnosticSummaries(sourceResults.map((result) => result.matchDiagnostics));
     console.info("MATCH DIAGNOSTICS SUMMARY", JSON.stringify(matchDiagnostics));
     const { error: updateError } = await supabase.from("search_filters").update({ last_scanned_at: new Date().toISOString() }).eq("id", filterId).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
     if (updateError) console.error("FLIP FINDER LAST SCANNED UPDATE ERROR:", { scanId: runId, filterId, error: updateError });
-    return { status: failed ? "partial" : "completed", sourcesRun: sources.length, sourcesCompleted: completed.length, sourcesFailed: failed, fetched: sum("fetched"), normalized: sum("normalized"), listingsCreated: sum("listingsCreated"), newMatches: sum("newMatches"), updated: sum("updated"), priceDrops: sum("priceDrops"), rejected: sum("rejected"), actualErrors: failed, sourceResults, matchDiagnostics, scannedCount: sum("fetched"), matchedCount: sum("matched"), newCount: sum("newMatches"), updatedCount: sum("updated"), priceDropCount: sum("priceDrops"), warnings };
+    return { runId, status: pending.length ? "running" : failed ? "partial" : "completed", sourcesRun: sources.length, sourcesCompleted: completed.length, sourcesFailed: failed, fetched: sum("fetched"), normalized: sum("normalized"), listingsCreated: sum("listingsCreated"), newMatches: sum("newMatches"), updated: sum("updated"), priceDrops: sum("priceDrops"), rejected: sum("rejected"), actualErrors: failed, sourceResults, matchDiagnostics, scannedCount: sum("fetched"), matchedCount: sum("matched"), newCount: sum("newMatches"), updatedCount: sum("updated"), priceDropCount: sum("priceDrops"), warnings };
   } finally {
     await failOwnedRunningScans(supabase, ownedScans);
     scanLog("SCAN FINALIZE", { scanId: runId, source: "all", checked: total(sourceResults, "fetched"), new: total(sourceResults, "newMatches"), matched: total(sourceResults, "matched"), durationMs: Date.now() - scanStarted });
@@ -66,7 +74,7 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
 
 async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>): Promise<SourceScanResult> {
   const started = Date.now();
-  const { data: scan, error } = await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", filter_snapshot: filter }).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
+  const { data: scan, error } = await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter }).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
   if (error || !scan || typeof scan.id !== "string" || typeof scan.started_at !== "string") return failedResult(source.id, Date.now() - started, "SCAN_CREATE_FAILED", "Nie udało się rozpocząć skanu źródła.");
   const scanClock = { startedAt: scan.started_at, startedMs: started };
   ownedScans.set(scan.id, scanClock);
@@ -110,24 +118,6 @@ async function scanSource(source: SearchSource, filterId: string, filter: Loaded
   return result;
 }
 
-async function persistListing(supabase: SupabaseClient, filterId: string, item: SourceListing, createMatch: boolean, unknownFields: string[], sourceScanId: string, matchedAt: string, signal: AbortSignal): Promise<{ listingId: string; listingCreated: boolean; matchCreated: boolean; updated: number; priceDrop: number }> {
-  const { data: existing, error: existingError } = await supabase.from("listings").select("id,price,content_hash,images").eq("source", item.source).eq("external_listing_id", item.externalListingId).abortSignal(signal).maybeSingle();
-  if (existingError) throw new Error("Nie udało się sprawdzić istniejącej oferty.");
-  const current = existing && typeof existing === "object" && "id" in existing && typeof existing.id === "string" ? { id: existing.id, price: typeof existing.price === "number" ? existing.price : null, contentHash: typeof existing.content_hash === "string" ? existing.content_hash : null, images: Array.isArray(existing.images) ? existing.images.filter((image: unknown): image is string => typeof image === "string") : [] } satisfies ExistingListing : null;
-  const changed = needsSnapshot(current ? { price: current.price, contentHash: current.contentHash } : null, { price: item.price, contentHash: item.contentHash });
-  const priceDrop = isPriceDrop(current?.price ?? null, item.price) ? 1 : 0;
-  const images = resolveListingImages(current?.images ?? [], item.thumbnailUrl, item.images);
-  const { data: saved, error } = await supabase.from("listings").upsert({ source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", last_seen_at: matchedAt, content_hash: item.contentHash }, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single();
-  if (error || !saved || typeof saved.id !== "string") throw new Error("Nie udało się zapisać oferty.");
-  if (changed) { const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: item.rawPayload }).abortSignal(signal); if (snapshotError) throw new Error("Nie udało się zapisać historii oferty."); }
-  if (!createMatch) return { listingId: saved.id, listingCreated: current === null, matchCreated: false, updated: current && changed ? 1 : 0, priceDrop };
-  const matchReasons = [...new Set([`${item.source}_search`, ...unknownFields.map((field) => `unknown_${field}`)])];
-  const { error: insertMatchError } = await supabase.from("listing_filter_matches").insert({ listing_id: saved.id, search_filter_id: filterId, last_matched_at: matchedAt, is_current_match: true, match_reasons: matchReasons, match_score: null, match_origin: "scan", source_scan_id: sourceScanId }).abortSignal(signal);
-  let matchCreated = !insertMatchError;
-  if (insertMatchError) { if (insertMatchError.code !== "23505") throw new Error("Nie udało się zapisać dopasowania."); const { error: updateMatchError } = await supabase.from("listing_filter_matches").update({ last_matched_at: matchedAt, is_current_match: true, match_reasons: matchReasons, match_score: null, match_origin: "scan", source_scan_id: sourceScanId }).eq("listing_id", saved.id).eq("search_filter_id", filterId).abortSignal(signal); if (updateMatchError) throw new Error("Nie udało się odświeżyć dopasowania."); matchCreated = false; }
-  return { listingId: saved.id, listingCreated: current === null, matchCreated, updated: current && changed ? 1 : 0, priceDrop };
-}
-
 async function failStaleRunningScans(supabase: SupabaseClient, filterId: string, sources: SearchSource[]): Promise<void> {
   const staleBefore = new Date(Date.now() - STALE_SCAN_TIMEOUT_MS).toISOString();
   const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).eq("search_filter_id", filterId).in("source", sources.map((source) => source.id)).eq("status", "running").lt("started_at", staleBefore).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
@@ -162,6 +152,7 @@ function scanTimestamp({ startedAt, startedMs }: ScanClock): string {
 }
 
 function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
+function pendingResult(source: string): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage: "OLX: oczekuje na lokalny worker", matchDiagnostics: emptyMatchDiagnosticSummary() }; }
 function total(results: SourceScanResult[], key: "fetched" | "newMatches" | "matched"): number { return results.reduce((sum, result) => sum + result[key], 0); }
 function scanLog(event: "SCAN START" | "SOURCE START" | "SOURCE DONE" | "SOURCE ERROR" | "SCAN FINALIZE", data: { scanId: string; source: string; checked: number; new: number; matched: number; durationMs: number }): void { if (process.env.NODE_ENV === "development") console.info(event, data); }
 
