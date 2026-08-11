@@ -15,6 +15,16 @@ export type WorkerAuthResult =
   | { ok: true; timestamp: number; nonce: string }
   | { ok: false; code: "MISSING_AUTH" | "INVALID_TIMESTAMP" | "EXPIRED_REQUEST" | "INVALID_SIGNATURE" | "REPLAYED_NONCE" };
 
+type NonceStoreError = {
+  code?: string | null;
+};
+
+export function resolveNonceStoreResult(error: NonceStoreError | null): boolean {
+  if (!error) return true;
+  if (error.code === "23505") return false;
+  throw new Error("NONCE_STORE_FAILED");
+}
+
 export function createWorkerAuthHeaders(input: {
   secret: string;
   method: string;

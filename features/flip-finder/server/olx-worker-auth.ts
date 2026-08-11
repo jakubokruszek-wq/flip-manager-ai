@@ -1,6 +1,6 @@
 import "server-only";
 
-import { verifyWorkerAuth } from "@/features/flip-finder/olx-worker-protocol";
+import { resolveNonceStoreResult, verifyWorkerAuth } from "@/features/flip-finder/olx-worker-protocol";
 import { createOlxWorkerAdminClient } from "@/features/flip-finder/server/olx-worker-admin";
 
 export async function authenticateOlxWorkerRequest(request: Request): Promise<
@@ -21,7 +21,15 @@ export async function authenticateOlxWorkerRequest(request: Request): Promise<
     useNonce: async (nonce, expiresAt) => {
       await supabase.from("olx_worker_nonces").delete().lt("expires_at", new Date().toISOString());
       const inserted = await supabase.from("olx_worker_nonces").insert({ nonce, expires_at: new Date(expiresAt).toISOString() });
-      return !inserted.error;
+      if (inserted.error) {
+        console.error("OLX NONCE STORE ERROR", {
+          code: inserted.error.code,
+          message: inserted.error.message,
+          details: inserted.error.details,
+          hint: inserted.error.hint,
+        });
+      }
+      return resolveNonceStoreResult(inserted.error);
     },
   });
   if (!result.ok) return { ok: false, response: Response.json({ error: result.code }, { status: 401 }) };

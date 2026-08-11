@@ -6,6 +6,7 @@ import {
   OLX_WORKER_NONCE_HEADER,
   OLX_WORKER_SIGNATURE_HEADER,
   OLX_WORKER_TIMESTAMP_HEADER,
+  resolveNonceStoreResult,
   verifyWorkerAuth,
 } from "./olx-worker-protocol.ts";
 
@@ -38,4 +39,13 @@ test("rejects changed body and expired timestamp", async () => {
   const expired = await verifyWorkerAuth({ secret, method: "POST", pathname: "/api/olx-worker/claim", body, headers: headers(now - 600_000, "nonce-2"), now, useNonce });
   assert.deepEqual(changed, { ok: false, code: "INVALID_SIGNATURE" });
   assert.deepEqual(expired, { ok: false, code: "EXPIRED_REQUEST" });
+});
+
+test("maps only a unique nonce conflict to replay", () => {
+  assert.equal(resolveNonceStoreResult({ code: "23505" }), false);
+});
+
+test("reports nonce storage failures instead of replay", () => {
+  assert.throws(() => resolveNonceStoreResult({ code: "42501" }), { message: "NONCE_STORE_FAILED" });
+  assert.throws(() => resolveNonceStoreResult({ code: "PGRST000" }), { message: "NONCE_STORE_FAILED" });
 });
