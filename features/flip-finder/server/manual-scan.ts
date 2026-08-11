@@ -5,6 +5,7 @@ import { addMatchDiagnostic, createMatchDiagnostic, emptyMatchDiagnosticSummary,
 import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/scan-counters";
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
 import { enqueueOlxJob } from "@/features/flip-finder/server/olx-jobs";
+import { enqueueFacebookJob } from "@/features/facebook-worker/jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { createClient } from "@/lib/supabase/server";
@@ -35,10 +36,12 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
   if (!filter) throw statusError(404, "Nie znaleziono filtra.");
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
   const sources = activeSources(filter);
-  if (!sources.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
+  const facebookEnabled = filter.sources.includes("facebook");
+  const sourceIds = [...sources.map((source) => source.id), ...(facebookEnabled ? ["facebook"] : [])];
+  if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
   const supabase = await createClient();
-  await failStaleRunningScans(supabase, filterId, sources);
-  const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", sources.map((source) => source.id)).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  await failStaleRunningScans(supabase, filterId, sourceIds);
+  const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", sourceIds).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
   if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
 
@@ -55,6 +58,14 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
         sourceResults.push(failedResult("olx", 0, "OLX_ENQUEUE_FAILED", error instanceof Error ? error.message : "Nie udało się dodać OLX do kolejki."));
       }
     }
+    if (facebookEnabled) {
+      try {
+        await enqueueFacebookJob(filter, runId);
+        sourceResults.push(pendingResult("facebook"));
+      } catch (error) {
+        sourceResults.push(failedResult("facebook", 0, "FACEBOOK_ENQUEUE_FAILED", error instanceof Error ? error.message : "Facebook enqueue failed."));
+      }
+    }
     const completed = sourceResults.filter((result) => result.status === "completed");
     const pending = sourceResults.filter((result) => result.status === "pending");
     const failed = sourceResults.filter((result) => result.status === "failed").length;
@@ -65,7 +76,7 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
     console.info("MATCH DIAGNOSTICS SUMMARY", JSON.stringify(matchDiagnostics));
     const { error: updateError } = await supabase.from("search_filters").update({ last_scanned_at: new Date().toISOString() }).eq("id", filterId).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
     if (updateError) console.error("FLIP FINDER LAST SCANNED UPDATE ERROR:", { scanId: runId, filterId, error: updateError });
-    return { runId, status: pending.length ? "running" : failed ? "partial" : "completed", sourcesRun: sources.length, sourcesCompleted: completed.length, sourcesFailed: failed, fetched: sum("fetched"), normalized: sum("normalized"), listingsCreated: sum("listingsCreated"), newMatches: sum("newMatches"), updated: sum("updated"), priceDrops: sum("priceDrops"), rejected: sum("rejected"), actualErrors: failed, sourceResults, matchDiagnostics, scannedCount: sum("fetched"), matchedCount: sum("matched"), newCount: sum("newMatches"), updatedCount: sum("updated"), priceDropCount: sum("priceDrops"), warnings };
+    return { runId, status: pending.length ? "running" : failed ? "partial" : "completed", sourcesRun: sourceIds.length, sourcesCompleted: completed.length, sourcesFailed: failed, fetched: sum("fetched"), normalized: sum("normalized"), listingsCreated: sum("listingsCreated"), newMatches: sum("newMatches"), updated: sum("updated"), priceDrops: sum("priceDrops"), rejected: sum("rejected"), actualErrors: failed, sourceResults, matchDiagnostics, scannedCount: sum("fetched"), matchedCount: sum("matched"), newCount: sum("newMatches"), updatedCount: sum("updated"), priceDropCount: sum("priceDrops"), warnings };
   } finally {
     await failOwnedRunningScans(supabase, ownedScans);
     scanLog("SCAN FINALIZE", { scanId: runId, source: "all", checked: total(sourceResults, "fetched"), new: total(sourceResults, "newMatches"), matched: total(sourceResults, "matched"), durationMs: Date.now() - scanStarted });
@@ -118,9 +129,9 @@ async function scanSource(source: SearchSource, filterId: string, filter: Loaded
   return result;
 }
 
-async function failStaleRunningScans(supabase: SupabaseClient, filterId: string, sources: SearchSource[]): Promise<void> {
+async function failStaleRunningScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
   const staleBefore = new Date(Date.now() - STALE_SCAN_TIMEOUT_MS).toISOString();
-  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).eq("search_filter_id", filterId).in("source", sources.map((source) => source.id)).eq("status", "running").lt("started_at", staleBefore).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).eq("search_filter_id", filterId).in("source", sourceIds).eq("status", "running").lt("started_at", staleBefore).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) throw statusError(500, "Nie udało się zwolnić wygasłej blokady skanu.");
 }
 
@@ -152,7 +163,7 @@ function scanTimestamp({ startedAt, startedMs }: ScanClock): string {
 }
 
 function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
-function pendingResult(source: string): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage: "OLX: oczekuje na lokalny worker", matchDiagnostics: emptyMatchDiagnosticSummary() }; }
+function pendingResult(source: string): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage: `${source === "olx" ? "OLX" : "Facebook"}: oczekuje na lokalny worker`, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
 function total(results: SourceScanResult[], key: "fetched" | "newMatches" | "matched"): number { return results.reduce((sum, result) => sum + result[key], 0); }
 function scanLog(event: "SCAN START" | "SOURCE START" | "SOURCE DONE" | "SOURCE ERROR" | "SCAN FINALIZE", data: { scanId: string; source: string; checked: number; new: number; matched: number; durationMs: number }): void { if (process.env.NODE_ENV === "development") console.info(event, data); }
 

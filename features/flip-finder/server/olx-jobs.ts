@@ -145,11 +145,12 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
 
 export async function getOlxScanRunStatus(runId: string) {
   const supabase = createOlxWorkerAdminClient();
-  const [scans, jobs] = await Promise.all([
+  const [scans, jobs, facebookJobs] = await Promise.all([
     supabase.from("source_scans").select("source,status,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,error_message").eq("scan_run_id", runId),
     supabase.from("olx_scan_jobs").select("status,error_code,error_message,heartbeat_at").eq("scan_run_id", runId).maybeSingle(),
+    supabase.from("facebook_scan_jobs").select("status,error_code,error_message,heartbeat_at").eq("scan_run_id", runId).maybeSingle(),
   ]);
-  if (scans.error || jobs.error) throw new Error("SCAN_STATUS_FAILED");
+  if (scans.error || jobs.error || facebookJobs.error) throw new Error("SCAN_STATUS_FAILED");
   const rows = (scans.data ?? []) as Row[];
   const pending = rows.some((row) => row.status === "pending" || row.status === "running");
   const failed = rows.filter((row) => row.status === "failed").length;
@@ -158,7 +159,8 @@ export async function getOlxScanRunStatus(runId: string) {
     runId,
     status: pending ? "running" : failed ? "partial" : "completed",
     olxJobStatus: jobs.data?.status ?? null,
-    message: jobs.data?.status === "queued" ? "OLX: oczekuje na lokalny worker" : jobs.data?.error_message ?? null,
+    facebookJobStatus: facebookJobs.data?.status ?? null,
+    message: jobs.data?.status === "queued" ? "OLX: oczekuje na lokalny worker" : facebookJobs.data?.status === "queued" ? "Facebook: oczekuje na lokalny worker" : jobs.data?.error_message ?? facebookJobs.data?.error_message ?? null,
     scannedCount: sum("scanned_count"), matchedCount: sum("matched_count"), newCount: sum("new_count"),
     updatedCount: sum("listings_updated"), priceDropCount: sum("price_drop_count"),
   };

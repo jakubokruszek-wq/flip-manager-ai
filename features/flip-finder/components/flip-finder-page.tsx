@@ -9,6 +9,7 @@ import {
   dashboardCount,
   filterResultsHref,
   hasLatestScan,
+  latestScanCounters,
   NO_SCANS_MESSAGE,
   scanStatusLabel,
 } from "@/features/flip-finder/dashboard";
@@ -67,7 +68,7 @@ export function FlipFinderPage() {
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/flip-finder/search-filters");
+      const response = await fetch("/api/flip-finder/search-filters", { cache: "no-store" });
       const payload: unknown = await readJson(response);
 
       if (!response.ok || !isSearchFilterListResponse(payload)) {
@@ -124,7 +125,8 @@ export function FlipFinderPage() {
 
       if (payload.status === "running" && payload.runId) {
         waitingForWorker = true;
-        setNotice("OLX: oczekuje na lokalny worker. Otodom i Morizon zakończyły swój bieżący przebieg.");
+        const pendingSources = payload.sourceResults?.filter((result) => result.status === "pending").map((result) => sourceDisplayLabel(result.source)).join(" i ");
+        setNotice(`${pendingSources || "Źródło"}: oczekuje na lokalny worker. Pozostałe źródła zakończyły swój bieżący przebieg.`);
         void monitorScanRun(filter.id, payload.runId);
         await load();
         setResultsRevision((current) => current + 1);
@@ -176,7 +178,7 @@ export function FlipFinderPage() {
         const response = await fetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
         const payload: unknown = await readJson(response);
         if (!response.ok || !isScanResponse(payload) || payload.status === "running") continue;
-        setNotice(payload.status === "partial" ? "Skan zakończył się częściowo. OLX zgłosił kontrolowany błąd; wcześniejsze oferty pozostały dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.newCount)} nowych dopasowań.`);
+        setNotice(payload.status === "partial" ? "Skan zakończył się częściowo. Jedno ze źródeł zgłosiło kontrolowany błąd; wcześniejsze oferty pozostały dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.newCount)} nowych dopasowań.`);
         await load();
         setResultsRevision((current) => current + 1);
         break;
@@ -477,7 +479,7 @@ function DiagnosticBar({ analyzed, count, label }: { analyzed: number; count: nu
 
 function SourceDiagnosticCard({ source }: { source: NonNullable<ScanResponse["sourceResults"]>[number] }) {
   const reason = mainDiagnosticReason(source.matchDiagnostics);
-  if (source.status === "pending") return <div className="rounded-xl border border-gold/20 bg-gold/[0.05] p-4"><p className="font-semibold">{sourceDisplayLabel(source.source)}</p><p className="mt-3 text-sm text-muted-foreground">OLX: oczekuje na lokalny worker</p></div>;
+  if (source.status === "pending") return <div className="rounded-xl border border-gold/20 bg-gold/[0.05] p-4"><p className="font-semibold">{sourceDisplayLabel(source.source)}</p><p className="mt-3 text-sm text-muted-foreground">{sourceDisplayLabel(source.source)}: oczekuje na lokalny worker</p></div>;
   return <div className="rounded-xl border border-border/60 bg-surface-elevated/60 p-4"><div className="flex items-center justify-between gap-3"><p className="font-semibold">{sourceDisplayLabel(source.source)}</p><span className={`ui-badge ${source.status === "failed" ? "border-danger/20 bg-danger/10 text-danger" : "border-success/20 bg-success/10 text-success"}`}>{source.status === "failed" ? "Błąd" : "Zakończony"}</span></div>{source.status === "failed" ? <p className="mt-3 text-sm text-danger">{source.errorMessage ?? "Źródło nie zakończyło skanu."}</p> : <dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-muted-foreground">Sprawdzone</dt><dd className="mt-0.5 font-mono font-semibold">{formatNumber(source.fetched ?? 0)}</dd></div><div><dt className="text-xs text-muted-foreground">Dopasowane</dt><dd className="mt-0.5 font-mono font-semibold text-gold">{formatNumber(source.matched ?? source.matchDiagnostics?.matched ?? 0)}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Główny powód odrzucenia</dt><dd className="mt-0.5 font-medium">{reason}</dd></div></dl>}</div>;
 }
 
@@ -492,7 +494,7 @@ function mainDiagnosticReason(diagnostics: MatchDiagnostics | undefined): string
 
 function percentage(value: number, total: number): number { return total > 0 ? Math.min(100, Math.max(0, value / total * 100)) : 0; }
 function formatPercent(value: number, total: number): string { return `${percentage(value, total).toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%`; }
-function sourceDisplayLabel(value: string): string { return value === "otodom" ? "Otodom" : value === "olx" ? "OLX" : value === "morizon" ? "Morizon" : value; }
+function sourceDisplayLabel(value: string): string { return value === "otodom" ? "Otodom" : value === "olx" ? "OLX" : value === "morizon" ? "Morizon" : value === "facebook" ? "Facebook" : value; }
 
 function FilterActions({ filter, onAction }: { filter: SearchFilterListItem; onAction: (filter: SearchFilterListItem, action: "toggle" | "duplicate" | "delete") => Promise<void> }) {
   const [confirmationOpen, setConfirmationOpen] = useState(false);
@@ -570,6 +572,7 @@ function LatestScanPanel({
   }
 
   const filterName = filters.find((filter) => filter.id === scan.searchFilterId)?.name;
+  const counters = latestScanCounters(scan);
 
   return (
     <Card className="p-5 sm:p-6">
@@ -588,13 +591,13 @@ function LatestScanPanel({
         <ScanDetail label="Sprawdzone oferty" value={formatNumber(scan.scannedCount ?? 0)} />
         <ScanDetail label="Globalnie nowe oferty" value={formatNumber(scan.listingsCreated ?? 0)} />
         <ScanDetail label="Nowe dopasowania" value={formatNumber(scan.newCount ?? 0)} />
-        <ScanDetail label="Aktualizacje" value={formatNumber(scan.listingsUpdated ?? 0)} />
-        <ScanDetail label="Obniżki cen" value={formatNumber(scan.priceDropCount ?? 0)} />
+        <ScanDetail label="Aktualizacje" value={formatNumber(counters.updatedCount)} />
+        <ScanDetail label="Obniżki cen" value={formatNumber(counters.priceDropCount)} />
         <ScanDetail label="Błędy" value={formatNumber(scan.errorsCount ?? 0)} />
       </dl>
 
-      {scan.status === "pending" && scan.source === "olx" ? (
-        <p className="mt-5 text-sm text-muted-foreground" role="status">OLX: oczekuje na lokalny worker</p>
+      {scan.status === "pending" && (scan.source === "olx" || scan.source === "facebook") ? (
+        <p className="mt-5 text-sm text-muted-foreground" role="status">{sourceLabel(scan.source)}: oczekuje na lokalny worker</p>
       ) : null}
       {scan.status === "running" ? (
         <p className="mt-5 flex items-center gap-2 text-sm text-muted-foreground" role="status">

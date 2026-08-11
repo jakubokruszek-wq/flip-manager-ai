@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "olx-worker": "node --env-file-if-exists=workers/olx-browser/.env.local --experimental-strip-types workers/olx-browser/src/index.ts",
+    "facebook-worker": "node --env-file-if-exists=workers/facebook-browser/.env.local --experimental-strip-types workers/facebook-browser/src/index.ts",
+    "facebook-worker:login": "node --env-file-if-exists=workers/facebook-browser/.env.local --experimental-strip-types workers/facebook-browser/src/index.ts --login",
     "start": "next start",
     "lint": "eslint"
   },
