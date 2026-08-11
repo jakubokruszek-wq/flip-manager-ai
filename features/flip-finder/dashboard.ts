@@ -6,6 +6,15 @@ export function dashboardCount(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+export function latestScanCounters(
+  scan: Pick<SearchFilterScan, "listingsUpdated" | "priceDropCount">,
+): { updatedCount: number; priceDropCount: number } {
+  return {
+    updatedCount: dashboardCount(scan.listingsUpdated),
+    priceDropCount: dashboardCount(scan.priceDropCount),
+  };
+}
+
 export function canRunManualScan(isActive: boolean, scanning: boolean): boolean {
   return isActive && !scanning;
 }
