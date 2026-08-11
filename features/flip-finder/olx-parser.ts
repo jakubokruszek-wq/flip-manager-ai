@@ -52,8 +52,22 @@ export function parseOlxAds(html: string): Record<string, unknown>[] {
   } catch {
     throw new Error("OLX: niepoprawny JSON PRERENDERED_STATE.");
   }
+  const listingState = atPath(state, ["listing"]);
+  const listingListingState = atPath(state, ["listing", "listing"]);
   const ads = atPath(state, ["listing", "listing", "ads"]);
-  return Array.isArray(ads) ? ads.filter(isRecord) : [];
+  console.info("OLX_PARSER_SHAPE", {
+    topLevelKeys: objectKeys(state),
+    listingKeys: objectKeys(listingState),
+    listingListingKeys: objectKeys(listingListingState),
+    adsType: valueType(ads),
+    adsLength: Array.isArray(ads) ? ads.length : null,
+    nearbyArrayPaths: nearbyArrayPaths([
+      { path: "listing", value: listingState },
+      { path: "listing.listing", value: listingListingState },
+    ]),
+  });
+  if (!Array.isArray(ads)) throw new Error("OLX_PARSER_SHAPE_CHANGED");
+  return ads.filter(isRecord);
 }
 
 export function isOlxChallengeHtml(html: string): boolean {
@@ -136,6 +150,34 @@ function atPath(value: unknown, path: string[]): unknown {
     current = current[key];
   }
   return current;
+}
+
+function objectKeys(value: unknown): string[] {
+  return isRecord(value) ? Object.keys(value).slice(0, 20) : [];
+}
+
+function valueType(value: unknown): string {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  return typeof value;
+}
+
+function nearbyArrayPaths(nodes: Array<{ path: string; value: unknown }>): string[] {
+  const paths = new Set<string>();
+  for (const node of nodes) {
+    if (!isRecord(node.value)) continue;
+    for (const [key, value] of Object.entries(node.value)) {
+      if (Array.isArray(value)) paths.add(`${node.path}.${key}`);
+      else if (isRecord(value)) {
+        for (const [nestedKey, nestedValue] of Object.entries(value)) {
+          if (Array.isArray(nestedValue)) paths.add(`${node.path}.${key}.${nestedKey}`);
+          if (paths.size >= 20) return [...paths];
+        }
+      }
+      if (paths.size >= 20) return [...paths];
+    }
+  }
+  return [...paths];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
