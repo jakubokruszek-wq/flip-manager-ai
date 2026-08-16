@@ -44,6 +44,25 @@ export type FacebookCompletion = {
   durationMs: number;
 };
 
+export type FacebookCompletionResult = {
+  source: "facebook";
+  status: "completed";
+  fetched: number;
+  normalized: number;
+  durationMs: number;
+  postsReceived: number;
+  postsProcessed: number;
+  listingsCreated: number;
+  listingsUpdated: number;
+  listingsSkipped: number;
+  matched: number;
+  newMatches: number;
+  extractionFailed: number;
+  imagesMirrored: number;
+  priceDrops: number;
+  errors: number;
+};
+
 export type FacebookJobState = {
   status: FacebookJobStatus;
   attempts: number;

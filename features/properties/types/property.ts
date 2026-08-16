@@ -80,7 +80,7 @@ export type ImportedProperty = Pick<PropertyFields, "price" | "area" | "rooms" |
 export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "area" | "rooms" | "floor" | "pricePerSqm" | "city" | "district" | "locationText" | "thumbnailUrl" | "buildingType" | "description"> & {
   /** Optional to keep existing source adapters compatible while allowing gallery persistence. */
   images?: string[];
-  source: Extract<PropertySource, "otodom" | "olx" | "morizon">;
+  source: Extract<PropertySource, "otodom" | "olx" | "morizon" | "facebook">;
   externalListingId: string;
   originalUrl: string;
   normalizedUrl: string;

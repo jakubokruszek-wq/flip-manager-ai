@@ -1,9 +1,12 @@
 import "server-only";
 
 import type { SearchFilter } from "@/features/flip-finder";
+import { getAlerts } from "@/features/alerts/server";
+import { importFacebookWatcher } from "@/features/facebook-watcher/server";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { assertFacebookGroupUrl, parseFacebookGroupSnapshot } from "./completion";
-import { facebookJobIdempotencyKey, type FacebookCompletion, type FacebookFailureCode, type FacebookWorkerJob } from "./types";
+import { processFacebookPostBatch } from "./post-flow";
+import { facebookJobIdempotencyKey, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
 const LEASE_SECONDS = 180;
@@ -59,22 +62,47 @@ export async function heartbeatFacebookJob(input: { jobId: string; leaseToken: s
   return leasedUntil;
 }
 
-export async function completeFacebookJob(input: FacebookCompletion): Promise<{ source: "facebook"; status: "completed"; fetched: number; normalized: number; durationMs: number }> {
+export async function completeFacebookJob(input: FacebookCompletion): Promise<FacebookCompletionResult> {
   const supabase = createFacebookWatcherAdminClient();
-  const existing = await supabase.from("facebook_scan_jobs").select("status,source_scan_id,group_snapshot,result_summary").eq("id", input.jobId).maybeSingle();
+  const existing = await supabase.from("facebook_scan_jobs").select("status,source_scan_id,search_filter_id,group_snapshot,result_summary").eq("id", input.jobId).maybeSingle();
   if (existing.error || !existing.data) throw new Error("FACEBOOK_JOB_NOT_FOUND");
   if (existing.data.status === "completed" && isCompletionResult(existing.data.result_summary)) return existing.data.result_summary;
   const lease = await supabase.from("facebook_scan_jobs").select("id").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
   if (lease.error || !lease.data) throw new Error("FACEBOOK_JOB_LEASE_LOST");
   const groups = parseFacebookGroupSnapshot(existing.data.group_snapshot);
   if (input.posts.some((post) => post.groupId !== groups[0].id)) throw new Error("FACEBOOK_GROUP_MISMATCH");
-  const result = { source: "facebook" as const, status: "completed" as const, fetched: input.posts.length, normalized: input.posts.length, durationMs: input.durationMs };
   const now = new Date().toISOString();
+  const sourceScanId = String(existing.data.source_scan_id);
+  const searchFilterId = String(existing.data.search_filter_id);
+  const sourceScan = await supabase.from("source_scans").select("filter_snapshot").eq("id", sourceScanId).maybeSingle();
+  if (sourceScan.error || !sourceScan.data) throw new Error(`FACEBOOK_SOURCE_SCAN_READ_FAILED: ${sourceScan.error?.message ?? "missing source scan"}`);
+  const filter = parseStoredFilter(sourceScan.data.filter_snapshot, searchFilterId);
+  const summary = await processFacebookPostBatch(input.posts, async (post) => {
+    const imported = await importFacebookWatcher({
+      url: post.permalink ?? undefined,
+      postText: post.text || undefined,
+      groupName: groups[0].name,
+      publishedAt: post.publishedAt ?? undefined,
+      images: post.imageUrls,
+    }, {
+      filter,
+      sourceScanId,
+      groupId: groups[0].id,
+      groupName: groups[0].name,
+      groupUrl: groups[0].url,
+      postId: post.postId,
+      checkedAt: now,
+    });
+    return { status: imported.status, listingId: imported.listingId, listingCreated: imported.listingCreated, listingUpdated: imported.listingUpdated, matched: imported.matched, matchCreated: imported.matchCreated, imagesMirrored: imported.imagesMirrored, priceDrops: imported.priceDrops, warnings: imported.warnings };
+  });
+  if (summary.listingIds.length > 0) await getAlerts();
+  const normalized = summary.postsProcessed - summary.listingsSkipped - summary.extractionFailed;
+  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors };
   const scan = await supabase.from("source_scans").update({
-    status: "completed", finished_at: now, scanned_count: input.posts.length, listings_found: input.posts.length,
-    matched_count: 0, listings_created: 0, new_count: 0, listings_updated: 0, price_drop_count: 0,
-    warnings: input.warnings, error_message: null,
-  }).eq("id", existing.data.source_scan_id).in("status", ["pending", "running"]);
+    status: "completed", finished_at: now, scanned_count: summary.postsProcessed, listings_found: normalized,
+    matched_count: summary.matched, listings_created: summary.listingsCreated, new_count: summary.newMatches, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops,
+    warnings: [...input.warnings, ...summary.warnings].slice(0, 100), error_message: null,
+  }).eq("id", sourceScanId).in("status", ["pending", "running"]);
   if (scan.error) throw new Error(`FACEBOOK_SOURCE_SCAN_FINALIZE_FAILED: ${scan.error.message}`);
   const job = await supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: result, error_code: null, error_message: null })
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("status", "running");
@@ -99,7 +127,8 @@ export function parseFacebookFailurePayload(value: unknown) {
   return { jobId: requiredString(row.jobId), leaseToken: requiredString(row.leaseToken), workerId: requiredString(row.workerId), errorCode: requiredString(row.errorCode), errorMessage: requiredString(row.errorMessage) };
 }
 
-function isCompletionResult(value: unknown): value is { source: "facebook"; status: "completed"; fetched: number; normalized: number; durationMs: number } { const row = asRow(value); return Boolean(row && row.source === "facebook" && row.status === "completed" && typeof row.fetched === "number" && typeof row.normalized === "number" && typeof row.durationMs === "number"); }
+function isCompletionResult(value: unknown): value is FacebookCompletionResult { const row = asRow(value); return Boolean(row && row.source === "facebook" && row.status === "completed" && typeof row.fetched === "number" && typeof row.normalized === "number" && typeof row.durationMs === "number" && typeof row.postsReceived === "number" && typeof row.postsProcessed === "number" && typeof row.listingsCreated === "number" && typeof row.listingsUpdated === "number" && typeof row.listingsSkipped === "number" && typeof row.matched === "number" && typeof row.newMatches === "number" && typeof row.extractionFailed === "number" && typeof row.imagesMirrored === "number" && typeof row.priceDrops === "number" && typeof row.errors === "number"); }
+function parseStoredFilter(value: unknown, expectedId: string): SearchFilter { const row = asRow(value); if (!row || row.id !== expectedId || !Array.isArray(row.sources) || !row.sources.includes("facebook")) throw new Error("FACEBOOK_FILTER_SNAPSHOT_INVALID"); return value as SearchFilter; }
 function asRow(value: unknown): Row | null { return value && typeof value === "object" && !Array.isArray(value) ? value as Row : null; }
 function requireRow(value: unknown): Row { const row = asRow(value); if (!row) throw new Error("INVALID_PAYLOAD"); return row; }
 function requiredString(value: unknown): string { if (typeof value !== "string" || !value.trim()) throw new Error("INVALID_PAYLOAD"); return value.trim(); }
