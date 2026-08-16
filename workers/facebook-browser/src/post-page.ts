@@ -1,10 +1,96 @@
 import type { Page } from "playwright";
 import type { FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import { logFacebookWorker } from "./logger.ts";
 
-export const MAX_FACEBOOK_POSTS_PER_JOB = 5;
+export const MAX_FACEBOOK_DISCOVERED_POSTS = 50;
+export const MAX_FACEBOOK_DISCOVERY_SCROLLS = 20;
+export const MAX_FACEBOOK_EMPTY_SCROLLS = 3;
+export const MAX_VISION_POSTS_PER_JOB = 15;
+export const MAX_FACEBOOK_POSTS_PER_JOB = MAX_FACEBOOK_DISCOVERED_POSTS;
+export const FACEBOOK_POST_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
 
 export type DiscoveredFacebookPost = { postId: string; permalink: string };
-export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; box: { x: number; y: number; width: number; height: number }; candidateCount: number };
+export type FreshDiscoveredFacebookPost = DiscoveredFacebookPost & { discoveredPublishedAt: string | null; freshnessFailure: FacebookPostFreshnessFailure | null };
+export type FacebookPostFreshnessFailure = "FACEBOOK_POST_TOO_OLD" | "FACEBOOK_POST_AGE_UNKNOWN";
+export type FacebookPostAgeSource = "FEED" | "POST_PAGE_METADATA" | "POST_PAGE";
+export type FacebookPostAgeResolution = { post: FreshDiscoveredFacebookPost; source: FacebookPostAgeSource; ageHours: number | null; decision: "PROCESS" | "TOO_OLD" | "UNKNOWN" };
+export type FacebookPostAgeFallback = { publishedAt: string | null; source: Exclude<FacebookPostAgeSource, "FEED"> };
+export type FacebookPostTimeDiagnostic = {
+  post_id: string;
+  final_path: string;
+  candidates: Array<{ tag: string; role: string | null; attribute_names: string[]; datetime: string | null; data_utime: string | null; data_timestamp: string | null; aria_label_parseable_as_time: boolean; title_parseable_as_time: boolean; nesting_depth: number | null; inside_main: boolean; inside_comment_region: boolean; distance_to_post_region: number | null; candidate_score: number }>;
+  metadata: Array<{ metadata_source: string; timestamp_value: string; linked_to_expected_post_id: boolean }>;
+};
+export type FacebookDiscoveryStopReason = "OLDER_THAN_72H" | "MAX_POSTS" | "MAX_SCROLLS" | "NO_NEW_POSTS" | "END_OF_FEED";
+export type FacebookDiscoveryLoopResult = { posts: FreshDiscoveredFacebookPost[]; scrollCount: number; stopReason: FacebookDiscoveryStopReason };
+export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
+export type FacebookPostRegionFailureReason = "POST_ANCHOR_NOT_FOUND" | "NO_ANCESTOR_CANDIDATES" | "ALL_TOO_SMALL" | "ALL_REJECTED_AS_COMMENTS" | "NO_CONTENT_NODES" | "INVALID_BOUNDING_BOX" | "AMBIGUOUS_CANDIDATES" | "UNKNOWN";
+export type FacebookPostRegionDiagnosticCounts = {
+  dedicatedPageUrlMatches: boolean;
+  canonicalAnchorCount: number;
+  candidateAncestorCount: number;
+  candidatesAfterSizeFilter: number;
+  candidatesAfterContentFilter: number;
+  candidatesAfterCommentFilter: number;
+  candidatesAfterVisibilityFilter: number;
+  validBoundingBoxCount: number;
+  ambiguousTopCandidates: boolean;
+};
+
+export type FacebookPostRegionRankingCandidate = {
+  rootIndex: number;
+  score: number;
+  area: number;
+  visible: boolean;
+  validBoundingBox: boolean;
+  hasContent: boolean;
+  containsCommentSection: boolean;
+  containsToolbar: boolean;
+  containsForm: boolean;
+  mediaCount: number;
+  textNodeCount: number;
+  nestingDepth: number | null;
+};
+
+export function rankFacebookPostRegionCandidates<T extends FacebookPostRegionRankingCandidate>(candidates: T[]): { ranked: T[]; cleanPoolUsed: boolean; ambiguous: boolean } {
+  const clean = candidates.filter((candidate) => candidate.visible
+    && candidate.validBoundingBox
+    && candidate.hasContent
+    && !candidate.containsCommentSection
+    && !candidate.containsToolbar
+    && !candidate.containsForm);
+  const cleanPoolUsed = clean.length > 0;
+  const ranked = [...(cleanPoolUsed ? clean : candidates)].sort((left, right) => {
+    if (cleanPoolUsed) {
+      return right.mediaCount - left.mediaCount
+        || right.textNodeCount - left.textNodeCount
+        || right.score - left.score
+        || (left.nestingDepth ?? Number.MAX_SAFE_INTEGER) - (right.nestingDepth ?? Number.MAX_SAFE_INTEGER)
+        || left.area - right.area;
+    }
+    return right.score - left.score || left.area - right.area;
+  });
+  const first = ranked[0];
+  const second = ranked[1];
+  const ambiguous = Boolean(first && second
+    && first.mediaCount === second.mediaCount
+    && first.textNodeCount === second.textNodeCount
+    && Math.abs(first.score - second.score) < 0.001
+    && first.nestingDepth === second.nestingDepth
+    && Math.abs(first.area - second.area) < 100);
+  return { ranked, cleanPoolUsed, ambiguous };
+}
+
+export function determineFacebookPostRegionFailureReason(counts: FacebookPostRegionDiagnosticCounts): FacebookPostRegionFailureReason {
+  if (!counts.dedicatedPageUrlMatches) return "POST_ANCHOR_NOT_FOUND";
+  if (counts.candidateAncestorCount === 0) return "NO_ANCESTOR_CANDIDATES";
+  if (counts.candidatesAfterSizeFilter === 0) return "ALL_TOO_SMALL";
+  if (counts.candidatesAfterContentFilter === 0) return "NO_CONTENT_NODES";
+  if (counts.candidatesAfterCommentFilter === 0) return "ALL_REJECTED_AS_COMMENTS";
+  if (counts.candidatesAfterVisibilityFilter === 0 || counts.validBoundingBoxCount === 0) return "INVALID_BOUNDING_BOX";
+  if (counts.ambiguousTopCandidates) return "AMBIGUOUS_CANDIDATES";
+  return "UNKNOWN";
+}
 
 export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost, groupId: string, dependencies: { open: (permalink: string) => Promise<void>; capture: (postId: string) => Promise<FacebookPostRegion>; analyze: (input: { postId: string; screenshotDataUrl: string }) => Promise<FacebookVisionExtraction> }): Promise<FacebookPostSnapshot> {
   await dependencies.open(post.permalink);
@@ -34,52 +120,870 @@ export function discoverPostLinksFromHrefs(hrefs: string[], limit = MAX_FACEBOOK
   return [...unique.values()];
 }
 
-export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POSTS_PER_JOB): Promise<DiscoveredFacebookPost[]> {
-  const hrefs = await page.locator('a[href*="/groups/"][href*="/posts/"]').evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).href));
-  return discoverPostLinksFromHrefs(hrefs, limit);
+export function facebookPostFreshnessFailure(publishedAt: string | null, nowMs = Date.now()): FacebookPostFreshnessFailure | null {
+  if (!publishedAt) return "FACEBOOK_POST_AGE_UNKNOWN";
+  const publishedAtMs = Date.parse(publishedAt);
+  if (!Number.isFinite(publishedAtMs) || publishedAtMs > nowMs + 5 * 60 * 1_000) return "FACEBOOK_POST_AGE_UNKNOWN";
+  return nowMs - publishedAtMs <= FACEBOOK_POST_MAX_AGE_MS ? null : "FACEBOOK_POST_TOO_OLD";
 }
 
-export async function captureFacebookPostRegion(page: Page, postId: string): Promise<FacebookPostRegion> {
-  const region = await page.evaluate((targetPostId) => {
-    const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
-    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).filter((link) => { const url = new URL(link.href, location.href); return postPath.test(url.pathname) && !url.searchParams.has("comment_id"); });
-    const roots: Element[] = [];
-    for (const link of links) {
-      let current: Element | null = link;
-      for (let depth = 0; current && depth < 12; depth += 1, current = current.parentElement) if (!roots.includes(current)) roots.push(current);
+export function freshFacebookPosts(posts: FreshDiscoveredFacebookPost[]): FreshDiscoveredFacebookPost[] {
+  return posts.filter((post) => post.freshnessFailure === null);
+}
+
+export function limitFacebookVisionPosts(posts: FreshDiscoveredFacebookPost[], limit = MAX_VISION_POSTS_PER_JOB): { selected: FreshDiscoveredFacebookPost[]; remainingFreshCount: number } {
+  const selected = posts.slice(0, limit);
+  return { selected, remainingFreshCount: Math.max(0, posts.length - selected.length) };
+}
+
+export function parseFacebookMaxPostsArgument(argv: string[]): number | null {
+  const raw = argv.find((argument) => argument.startsWith("--max-facebook-posts="))?.split("=", 2)[1];
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_VISION_POSTS_PER_JOB) throw new Error(`--max-facebook-posts must be an integer between 1 and ${MAX_VISION_POSTS_PER_JOB}.`);
+  return value;
+}
+
+export function parseFacebookTimestampValue(value: string | null, nowMs = Date.now()): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLocaleLowerCase("pl-PL").replace(/\s+/g, " ");
+  if (/^\d{9,13}$/.test(normalized)) {
+    const numeric = Number(normalized);
+    const timestamp = normalized.length <= 10 ? numeric * 1_000 : numeric;
+    return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+  }
+  const directTimestamp = Date.parse(value);
+  if (Number.isFinite(directTimestamp)) return new Date(directTimestamp).toISOString();
+  const relative = normalized.match(/^(\d+)\s*(min(?:ut(?:a|y|ę)?)?|m|godz(?:\.|in(?:a|y|ę)?)?|h|dni|dzień|d)(?:\s+temu)?$/u);
+  if (relative) {
+    const amount = Number(relative[1]);
+    const unit = relative[2];
+    const multiplier = unit.startsWith("min") || unit === "m" ? 60_000 : unit.startsWith("godz") || unit === "h" ? 60 * 60_000 : 24 * 60 * 60_000;
+    return new Date(nowMs - amount * multiplier).toISOString();
+  }
+  const yesterday = normalized.match(/^wczoraj(?:\s+(?:o\s+)?(\d{1,2}):(\d{2}))?$/u);
+  if (yesterday) {
+    const date = new Date(nowMs);
+    date.setDate(date.getDate() - 1);
+    if (yesterday[1] && yesterday[2]) date.setHours(Number(yesterday[1]), Number(yesterday[2]), 0, 0);
+    return date.toISOString();
+  }
+  const months: Record<string, number> = { stycznia: 0, lutego: 1, marca: 2, kwietnia: 3, maja: 4, czerwca: 5, lipca: 6, sierpnia: 7, września: 8, października: 9, listopada: 10, grudnia: 11 };
+  const absolute = normalized.match(/^(\d{1,2})\s+(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|października|listopada|grudnia)(?:\s+(\d{4}))?(?:\s+(?:o\s+)?(\d{1,2}):(\d{2}))?$/u);
+  if (!absolute) return null;
+  const now = new Date(nowMs);
+  let year = absolute[3] ? Number(absolute[3]) : now.getFullYear();
+  let date = new Date(year, months[absolute[2]], Number(absolute[1]), Number(absolute[4] ?? 0), Number(absolute[5] ?? 0));
+  if (!absolute[3] && date.getTime() > nowMs + 5 * 60_000) {
+    year -= 1;
+    date = new Date(year, months[absolute[2]], Number(absolute[1]), Number(absolute[4] ?? 0), Number(absolute[5] ?? 0));
+  }
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+export async function resolveFacebookPostAge(post: FreshDiscoveredFacebookPost, nowMs: number, fallback: () => Promise<string | null | FacebookPostAgeFallback>): Promise<FacebookPostAgeResolution> {
+  const feedPublishedAt = post.discoveredPublishedAt;
+  const fallbackResult = feedPublishedAt ? null : await fallback();
+  const publishedAt = feedPublishedAt ?? (typeof fallbackResult === "string" || fallbackResult === null ? fallbackResult : fallbackResult.publishedAt);
+  const source: FacebookPostAgeSource = feedPublishedAt ? "FEED" : typeof fallbackResult === "object" && fallbackResult ? fallbackResult.source : "POST_PAGE";
+  const freshnessFailure = facebookPostFreshnessFailure(publishedAt, nowMs);
+  const resolvedPost = { ...post, discoveredPublishedAt: publishedAt, freshnessFailure };
+  const ageHours = publishedAt ? Math.max(0, (nowMs - Date.parse(publishedAt)) / (60 * 60_000)) : null;
+  return { post: resolvedPost, source, ageHours: ageHours !== null && Number.isFinite(ageHours) ? ageHours : null, decision: freshnessFailure === null ? "PROCESS" : freshnessFailure === "FACEBOOK_POST_TOO_OLD" ? "TOO_OLD" : "UNKNOWN" };
+}
+
+export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POSTS_PER_JOB, nowMs = Date.now()): Promise<FreshDiscoveredFacebookPost[]> {
+  const records = await page.locator('a[href*="/groups/"][href*="/posts/"]').evaluateAll((links) => links.map((element) => {
+    const link = element as HTMLAnchorElement;
+    const url = new URL(link.href, location.href);
+    if (url.searchParams.has("comment_id")) return { href: link.href, timestampValues: [] as string[] };
+    const postPath = url.pathname.replace(/\/$/, "");
+    let container: Element = link;
+    for (let depth = 0, current: Element | null = link; current && depth < 4; depth += 1, current = current.parentElement) {
+      const cleanMatchingLinks = [current, ...Array.from(current.querySelectorAll('a[href*="/groups/"][href*="/posts/"]'))]
+        .filter((candidate): candidate is HTMLAnchorElement => candidate instanceof HTMLAnchorElement)
+        .filter((candidate) => { const candidateUrl = new URL(candidate.href, location.href); return candidateUrl.pathname.replace(/\/$/, "") === postPath && !candidateUrl.searchParams.has("comment_id"); });
+      const commentLinks = current.querySelectorAll('a[href*="comment_id="]').length;
+      if (cleanMatchingLinks.length === 1 && commentLinks === 0) container = current;
+      else if (depth > 0) break;
     }
-    const candidates = roots.flatMap((root) => {
+    const timeElements = [link, ...Array.from(link.querySelectorAll<HTMLElement>("time[datetime],abbr[data-utime]")), ...Array.from(container.querySelectorAll<HTMLElement>("time[datetime],abbr[data-utime]"))].slice(0, 12);
+    const machineValues: string[] = []; const labelValues: string[] = []; const textValues: string[] = [];
+    const add = (target: string[], value: string | null) => { const trimmed = value?.trim(); if (trimmed && !target.includes(trimmed)) target.push(trimmed); };
+    for (const candidate of timeElements) {
+      add(machineValues, candidate.getAttribute("data-utime"));
+      add(machineValues, candidate.getAttribute("datetime"));
+      add(labelValues, candidate.getAttribute("aria-label"));
+      add(labelValues, candidate.getAttribute("title"));
+      add(textValues, candidate.textContent);
+    }
+    return { href: link.href, timestampValues: [...machineValues, ...labelValues, ...textValues] };
+  }));
+  const unique = new Map<string, FreshDiscoveredFacebookPost>();
+  for (const record of records) {
+    const post = canonicalFacebookPostUrl(record.href);
+    if (!post) continue;
+    const publishedAt = record.timestampValues.map((value) => parseFacebookTimestampValue(value, nowMs)).find((value): value is string => value !== null) ?? null;
+    const candidate = { ...post, discoveredPublishedAt: publishedAt, freshnessFailure: facebookPostFreshnessFailure(publishedAt, nowMs) };
+    const existing = unique.get(post.postId);
+    if (!existing || existing.freshnessFailure && !candidate.freshnessFailure) unique.set(post.postId, candidate);
+  }
+  return [...unique.values()].slice(0, limit);
+}
+
+function hasChronologicalOldBoundary(posts: FreshDiscoveredFacebookPost[]): boolean {
+  const dated = posts.filter((post) => post.discoveredPublishedAt !== null);
+  if (!dated.some((post) => post.freshnessFailure === "FACEBOOK_POST_TOO_OLD")) return false;
+  for (let index = 1; index < dated.length; index += 1) {
+    if (Date.parse(dated[index].discoveredPublishedAt!) > Date.parse(dated[index - 1].discoveredPublishedAt!) + 5 * 60_000) return false;
+  }
+  return dated[dated.length - 1]?.freshnessFailure === "FACEBOOK_POST_TOO_OLD";
+}
+
+export async function runFacebookDiscoveryLoop(dependencies: {
+  collect: () => Promise<FreshDiscoveredFacebookPost[]>;
+  scroll: (scrollIndex: number) => Promise<{ moved: boolean; scrollY: number }>;
+  heartbeat?: () => Promise<void>;
+  onScroll?: (event: { scrollIndex: number; discoveredTotal: number; newPostCount: number; scrollY: number }) => void;
+}, limits: { maxPosts?: number; maxScrolls?: number; maxEmptyScrolls?: number } = {}): Promise<FacebookDiscoveryLoopResult> {
+  const maxPosts = limits.maxPosts ?? MAX_FACEBOOK_DISCOVERED_POSTS;
+  const maxScrolls = limits.maxScrolls ?? MAX_FACEBOOK_DISCOVERY_SCROLLS;
+  const maxEmptyScrolls = limits.maxEmptyScrolls ?? MAX_FACEBOOK_EMPTY_SCROLLS;
+  const unique = new Map<string, FreshDiscoveredFacebookPost>();
+  const merge = (batch: FreshDiscoveredFacebookPost[]) => {
+    let added = 0;
+    for (const post of batch) {
+      const existing = unique.get(post.postId);
+      if (!existing && unique.size < maxPosts) { unique.set(post.postId, post); added += 1; }
+      else if (existing?.freshnessFailure && !post.freshnessFailure) unique.set(post.postId, post);
+    }
+    return added;
+  };
+  merge(await dependencies.collect());
+  if (unique.size >= maxPosts) return { posts: [...unique.values()], scrollCount: 0, stopReason: "MAX_POSTS" };
+  if (hasChronologicalOldBoundary([...unique.values()])) return { posts: [...unique.values()], scrollCount: 0, stopReason: "OLDER_THAN_72H" };
+  let emptyScrolls = 0;
+  for (let scrollIndex = 1; scrollIndex <= maxScrolls; scrollIndex += 1) {
+    const movement = await dependencies.scroll(scrollIndex);
+    await dependencies.heartbeat?.();
+    const newPostCount = movement.moved ? merge(await dependencies.collect()) : 0;
+    dependencies.onScroll?.({ scrollIndex, discoveredTotal: unique.size, newPostCount, scrollY: movement.scrollY });
+    if (!movement.moved) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "END_OF_FEED" };
+    emptyScrolls = newPostCount === 0 ? emptyScrolls + 1 : 0;
+    if (unique.size >= maxPosts) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "MAX_POSTS" };
+    if (hasChronologicalOldBoundary([...unique.values()])) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "OLDER_THAN_72H" };
+    if (emptyScrolls >= maxEmptyScrolls) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "NO_NEW_POSTS" };
+  }
+  return { posts: [...unique.values()], scrollCount: maxScrolls, stopReason: "MAX_SCROLLS" };
+}
+
+export async function discoverFacebookPostsByScrolling(page: Page, nowMs = Date.now(), heartbeat?: () => Promise<void>): Promise<FacebookDiscoveryLoopResult> {
+  return runFacebookDiscoveryLoop({
+    collect: () => discoverFacebookPosts(page, MAX_FACEBOOK_DISCOVERED_POSTS, nowMs),
+    scroll: async () => {
+      const before = await page.evaluate(() => ({ y: window.scrollY, height: document.documentElement.scrollHeight }));
+      await page.evaluate(() => window.scrollBy({ top: Math.max(600, window.innerHeight * 0.85), behavior: "auto" }));
+      await page.waitForTimeout(800);
+      const after = await page.evaluate(() => ({ y: window.scrollY, height: document.documentElement.scrollHeight }));
+      return { moved: after.y > before.y || after.height > before.height, scrollY: after.y };
+    },
+    heartbeat,
+    onScroll: (event) => logFacebookWorker("FACEBOOK_DISCOVERY_SCROLL", { scrollIndex: event.scrollIndex, discoveredTotal: event.discoveredTotal, newPostCount: event.newPostCount, scrollY: Math.round(event.scrollY) }),
+  });
+}
+
+export async function detectFacebookPostAgeOnDedicatedPage(page: Page, postId: string, nowMs = Date.now()): Promise<FacebookPostAgeFallback> {
+  const metadataCandidates = await page.evaluate((targetPostId) => {
+    const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
+    if (!postPath.test(location.pathname)) return [];
+    const results: Array<{ key: string; value: string; linked: boolean; depth: number }> = [];
+    const timeKeys = new Set(["creation_time", "publish_time", "timestamp"]);
+    const scalarMatchesPostId = (key: string, value: unknown) => /(?:^|_)(?:post_?)?id$/i.test(key) && String(value) === targetPostId;
+    const visit = (value: unknown, depth: number): boolean => {
+      if (!value || typeof value !== "object" || depth > 30) return false;
+      if (Array.isArray(value)) return value.map((item) => visit(item, depth + 1)).some(Boolean);
+      const entries = Object.entries(value as Record<string, unknown>);
+      const directMatch = entries.some(([key, item]) => typeof item !== "object" && scalarMatchesPostId(key, item));
+      const childMatch = entries.filter(([, item]) => item && typeof item === "object").map(([, item]) => visit(item, depth + 1)).some(Boolean);
+      const linked = directMatch || childMatch;
+      for (const [key, item] of entries) if (timeKeys.has(key.toLowerCase()) && (typeof item === "string" || typeof item === "number")) results.push({ key: key.toLowerCase(), value: String(item), linked, depth });
+      return linked;
+    };
+    document.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"],script[type="application/json"]').forEach((script) => {
+      const source = script.textContent ?? "";
+      if (!source || source.length > 2_000_000) return;
+      try { visit(JSON.parse(source), 0); }
+      catch {
+        const idPositions = [...source.matchAll(new RegExp(targetPostId, "g"))].map((match) => match.index ?? -100_000);
+        const timePattern = /["']?(creation_time|publish_time|timestamp)["']?\s*[:=]\s*["']?([0-9]{9,13}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"'\s,}]+)/gi;
+        for (const match of source.matchAll(timePattern)) {
+          const position = match.index ?? 100_000;
+          results.push({ key: match[1].toLowerCase(), value: match[2], linked: idPositions.some((idPosition) => Math.abs(idPosition - position) <= 2_000), depth: 0 });
+        }
+      }
+    });
+    return results.filter((candidate) => candidate.linked).sort((left, right) => (left.key === "creation_time" ? 0 : 1) - (right.key === "creation_time" ? 0 : 1) || right.depth - left.depth);
+  }, postId);
+  for (const candidate of metadataCandidates) {
+    const publishedAt = parseFacebookTimestampValue(candidate.value, nowMs);
+    if (!publishedAt) continue;
+    const timestamp = Date.parse(publishedAt);
+    if (!Number.isFinite(timestamp) || timestamp < Date.UTC(2010, 0, 1) || timestamp > nowMs + 5 * 60_000) continue;
+    return { publishedAt, source: "POST_PAGE_METADATA" };
+  }
+  return { publishedAt: await detectFacebookPostPublishedAt(page, postId, nowMs), source: "POST_PAGE" };
+}
+
+export async function detectFacebookPostPublishedAt(page: Page, postId: string, nowMs = Date.now()): Promise<string | null> {
+  const values = await page.evaluate((targetPostId) => {
+    const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
+    if (!postPath.test(location.pathname)) return [];
+    const main = document.querySelector("main,[role=\"main\"]") ?? document.body;
+    const candidates = Array.from(main.querySelectorAll<HTMLElement>('time[datetime],abbr[data-utime],a[aria-label],a[title]'))
+      .filter((element) => {
+        if (element.closest('form,[role="toolbar"],[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]')) return false;
+        const article = element.closest<HTMLElement>('[role="article"]');
+        if (article && article.getBoundingClientRect().height < 220) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })
+      .sort((left, right) => {
+        const leftMachine = left.hasAttribute("datetime") || left.hasAttribute("data-utime") ? 0 : 1;
+        const rightMachine = right.hasAttribute("datetime") || right.hasAttribute("data-utime") ? 0 : 1;
+        return leftMachine - rightMachine || left.getBoundingClientRect().top - right.getBoundingClientRect().top;
+      })
+      .slice(0, 30);
+    const timestampValues: string[] = [];
+    for (const candidate of candidates) {
+      for (const value of [candidate.getAttribute("data-utime"), candidate.getAttribute("datetime"), candidate.getAttribute("aria-label"), candidate.getAttribute("title"), candidate.matches("time,abbr") ? candidate.textContent : null]) {
+        const trimmed = value?.trim();
+        if (trimmed && !timestampValues.includes(trimmed)) timestampValues.push(trimmed);
+      }
+    }
+    return timestampValues;
+  }, postId);
+  return values.map((value) => parseFacebookTimestampValue(value, nowMs)).find((value): value is string => value !== null) ?? null;
+}
+
+export async function collectFacebookPostTimeDiagnostic(page: Page, postId: string, nowMs = Date.now()): Promise<FacebookPostTimeDiagnostic> {
+  const raw = await page.evaluate((targetPostId) => {
+    const main = document.querySelector("main,[role=\"main\"]") ?? document.body;
+    const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
+    const elements = new Set<HTMLElement>(Array.from(main.querySelectorAll<HTMLElement>('time,abbr,[datetime],[data-utime],[data-timestamp],[title],[aria-label]')));
+    const postLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).filter((link) => { const url = new URL(link.href, location.href); return postPath.test(url.pathname) && !url.searchParams.has("comment_id"); });
+    for (const link of postLinks) {
+      let current: Element | null = link;
+      for (let depth = 0; current && depth < 6; depth += 1, current = current.parentElement) {
+        if (current instanceof HTMLElement) elements.add(current);
+        for (const sibling of [current.previousElementSibling, current.nextElementSibling]) if (sibling instanceof HTMLElement) elements.add(sibling);
+        current.querySelectorAll<HTMLElement>('time,abbr,[datetime],[data-utime],[data-timestamp],[title],[aria-label]').forEach((element) => elements.add(element));
+      }
+    }
+    const regionSignal = main.querySelector<HTMLElement>('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"],img[data-visualcompletion="media-vc-image"],video');
+    const regionElement = regionSignal?.closest<HTMLElement>('[role="article"],section,div') ?? regionSignal;
+    const regionRect = regionElement?.getBoundingClientRect() ?? null;
+    const candidates = [...elements].slice(0, 80).map((element) => {
+      const rect = element.getBoundingClientRect();
+      let nestingDepth: number | null = null;
+      for (let depth = 0, current: Element | null = element; current && depth < 20; depth += 1, current = current.parentElement) if (current === main) { nestingDepth = depth; break; }
+      return {
+        tag: element.tagName.toLowerCase(),
+        role: element.getAttribute("role"),
+        attributeNames: element.getAttributeNames().slice(0, 20),
+        datetime: element.getAttribute("datetime"),
+        dataUtime: element.getAttribute("data-utime"),
+        dataTimestamp: element.getAttribute("data-timestamp"),
+        ariaLabel: element.getAttribute("aria-label"),
+        title: element.getAttribute("title"),
+        nestingDepth,
+        insideMain: main.contains(element),
+        insideCommentRegion: Boolean(element.closest('[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i],form')) || Boolean(element.closest('[role="article"]') && element.closest<HTMLElement>('[role="article"]')!.getBoundingClientRect().height < 220),
+        distanceToPostRegion: regionRect ? Math.round(Math.abs(rect.top - regionRect.top)) : null,
+      };
+    });
+    const metadata: Array<{ metadataSource: string; timestampValue: string; linked: boolean }> = [];
+    const addMetadata = (metadataSource: string, timestampValue: string | null, linked: boolean) => {
+      const value = timestampValue?.trim();
+      if (value && metadata.length < 20 && !metadata.some((item) => item.metadataSource === metadataSource && item.timestampValue === value)) metadata.push({ metadataSource, timestampValue: value, linked });
+    };
+    document.querySelectorAll<HTMLMetaElement>('meta[property="article:published_time"],meta[name="article:published_time"],meta[itemprop="datePublished"]').forEach((meta) => addMetadata("META", meta.content, postPath.test(location.pathname)));
+    document.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"],script[type="application/json"]').forEach((script, scriptIndex) => {
+      const source = script.textContent ?? "";
+      if (source.length > 2_000_000) return;
+      const linked = source.includes(targetPostId);
+      const pattern = /["']?(creation_time|publish_time|timestamp)["']?\s*[:=]\s*["']?([0-9]{9,13}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"'\s,}]+)/gi;
+      for (const match of source.matchAll(pattern)) addMetadata(`SCRIPT_${scriptIndex}:${match[1].toLowerCase()}`, match[2], linked);
+    });
+    return { finalPath: location.pathname, candidates, metadata };
+  }, postId);
+  const candidates = raw.candidates.map((candidate) => {
+    const ariaParseable = parseFacebookTimestampValue(candidate.ariaLabel, nowMs) !== null;
+    const titleParseable = parseFacebookTimestampValue(candidate.title, nowMs) !== null;
+    const datetime = candidate.datetime && Number.isFinite(Date.parse(candidate.datetime)) ? candidate.datetime : null;
+    const dataUtime = candidate.dataUtime && /^\d{9,13}$/.test(candidate.dataUtime) ? candidate.dataUtime : null;
+    const dataTimestamp = candidate.dataTimestamp && /^\d{9,13}$/.test(candidate.dataTimestamp) ? candidate.dataTimestamp : null;
+    const machineScore = datetime || dataUtime || dataTimestamp ? 100 : 0;
+    return { tag: candidate.tag, role: candidate.role, attribute_names: candidate.attributeNames, datetime, data_utime: dataUtime, data_timestamp: dataTimestamp, aria_label_parseable_as_time: ariaParseable, title_parseable_as_time: titleParseable, nesting_depth: candidate.nestingDepth, inside_main: candidate.insideMain, inside_comment_region: candidate.insideCommentRegion, distance_to_post_region: candidate.distanceToPostRegion, candidate_score: machineScore + (ariaParseable ? 60 : 0) + (titleParseable ? 60 : 0) + (candidate.insideMain ? 10 : 0) - (candidate.insideCommentRegion ? 100 : 0) - Math.min(50, Math.round((candidate.distanceToPostRegion ?? 0) / 20)) };
+  }).sort((left, right) => right.candidate_score - left.candidate_score).slice(0, 50);
+  const metadata = raw.metadata.flatMap((item) => parseFacebookTimestampValue(item.timestampValue, nowMs) ? [{ metadata_source: item.metadataSource, timestamp_value: item.timestampValue, linked_to_expected_post_id: item.linked }] : []);
+  return { post_id: postId, final_path: raw.finalPath, candidates, metadata };
+}
+
+export async function captureFacebookPostRegion(page: Page, postId: string, options: { mediaDiagnostic?: boolean } = {}): Promise<FacebookPostRegion> {
+  const captureToken = `flip-${postId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic }) => {
+    const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
+    const dedicatedPageUrlMatches = postPath.test(location.pathname);
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).filter((link) => { const url = new URL(link.href, location.href); return postPath.test(url.pathname) && !url.searchParams.has("comment_id"); });
+    const main = document.querySelector("main,[role=\"main\"]") ?? document.body;
+    const mainRect = main.getBoundingClientRect();
+    const commentRegionSelector = '[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]';
+    const headerSidebarSelector = 'nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"]';
+    const interactiveTextSelector = '[role="toolbar"],form,button,[role="button"]';
+    const mediaUiExclusionSelector = '[role="toolbar"],form';
+    const rectDistance = (left: DOMRect, right: DOMRect) => {
+      const horizontal = Math.max(left.left - right.right, right.left - left.right, 0);
+      const vertical = Math.max(left.top - right.bottom, right.top - left.bottom, 0);
+      return Math.hypot(horizontal, vertical);
+    };
+    const postReferenceElements = [
+      ...links,
+      ...Array.from(main.querySelectorAll<HTMLElement>('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"],div[dir="auto"],p,[data-lexical-text="true"]'))
+        .filter((element) => !element.closest(`${commentRegionSelector},${headerSidebarSelector},${interactiveTextSelector}`)),
+    ];
+    const postReferenceRects = postReferenceElements.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0);
+    const possibleMedia = new Set<HTMLElement>(main.querySelectorAll<HTMLElement>('img,video,[role="img"]'));
+    Array.from(main.querySelectorAll<HTMLElement>("*")).slice(0, 3_000).forEach((element) => {
+      if (getComputedStyle(element).backgroundImage !== "none") possibleMedia.add(element);
+    });
+    const mediaFacts = Array.from(possibleMedia).map((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const visible = rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+      const insideComment = Boolean(element.closest(commentRegionSelector));
+      const insideHeaderSidebar = Boolean(element.closest(headerSidebarSelector));
+      // Facebook wraps gallery tiles in links/buttons that open the photo viewer.
+      // Their dimensions and placement decide whether they are post media; the
+      // wrapper alone must not classify them as reaction/control UI.
+      const insideInteractiveUi = Boolean(element.closest(mediaUiExclusionSelector));
+      const naturalWidth = element instanceof HTMLImageElement ? element.naturalWidth : element instanceof HTMLVideoElement ? element.videoWidth : element.querySelector<HTMLImageElement>("img")?.naturalWidth ?? 0;
+      const naturalHeight = element instanceof HTMLImageElement ? element.naturalHeight : element instanceof HTMLVideoElement ? element.videoHeight : element.querySelector<HTMLImageElement>("img")?.naturalHeight ?? 0;
+      const nearPostReference = postReferenceRects.some((reference) => rectDistance(rect, reference) <= 200);
+      return { element, rect, visible, insideComment, insideHeaderSidebar, insideInteractiveUi, naturalWidth, naturalHeight, nearPostReference };
+    });
+    const qualifiedPostMedia = new Set(mediaFacts.filter((fact) => {
+      const notIconSized = fact.rect.width > 48 && fact.rect.height > 48;
+      const renderedCandidate = fact.rect.width >= 100 && fact.rect.height >= 100;
+      const naturalCandidate = (fact.element instanceof HTMLImageElement || fact.element instanceof HTMLVideoElement) && Math.max(fact.naturalWidth, fact.naturalHeight) >= 300;
+      const tileCandidate = fact.rect.width >= 90 && fact.rect.width <= 160 && fact.rect.height >= 90 && fact.rect.height <= 160 && fact.nearPostReference;
+      const similarTileCount = tileCandidate ? mediaFacts.filter((other) => other.rect.width >= 90 && other.rect.width <= 160
+        && other.rect.height >= 90 && other.rect.height <= 160
+        && other.nearPostReference
+        && Math.abs(other.rect.width - fact.rect.width) <= 30
+        && Math.abs(other.rect.height - fact.rect.height) <= 30
+        && rectDistance(other.rect, fact.rect) <= 800).length : 0;
+      return fact.visible && !fact.insideComment && !fact.insideHeaderSidebar && !fact.insideInteractiveUi
+        && notIconSized && (renderedCandidate || naturalCandidate || similarTileCount >= 2);
+    }).map((fact) => fact.element));
+    const dedupedPostMediaFacts = mediaFacts.filter((fact) => qualifiedPostMedia.has(fact.element)).reduce<typeof mediaFacts>((deduped, fact) => {
+      const sameGeometry = deduped.some((existing) => Math.abs(existing.rect.left - fact.rect.left) <= 2
+        && Math.abs(existing.rect.top - fact.rect.top) <= 2
+        && Math.abs(existing.rect.width - fact.rect.width) <= 2
+        && Math.abs(existing.rect.height - fact.rect.height) <= 2);
+      if (!sameGeometry) deduped.push(fact);
+      return deduped;
+    }, []);
+    const dedupedPostMedia = new Set(dedupedPostMediaFacts.map((fact) => fact.element));
+    const mediaUnionBox = dedupedPostMediaFacts.length ? {
+      left: Math.min(...dedupedPostMediaFacts.map((fact) => fact.rect.left)),
+      top: Math.min(...dedupedPostMediaFacts.map((fact) => fact.rect.top)),
+      right: Math.max(...dedupedPostMediaFacts.map((fact) => fact.rect.right)),
+      bottom: Math.max(...dedupedPostMediaFacts.map((fact) => fact.rect.bottom)),
+    } : null;
+    const relatedTextSignal = mediaUnionBox ? postReferenceElements
+      .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rectDistance(rect, mediaUnionBox as DOMRect) <= 300)
+      .sort((left, right) => rectDistance(left.rect, mediaUnionBox as DOMRect) - rectDistance(right.rect, mediaUnionBox as DOMRect))[0]?.element ?? null : null;
+    const mediaAwareElements: Element[] = [...dedupedPostMedia, ...(relatedTextSignal ? [relatedTextSignal] : [])];
+    const findLowestCommonAncestor = (elements: Element[], boundary: Element): Element | null => {
+      if (!elements.length) return null;
+      let current: Element | null = elements[0].parentElement;
+      while (current) {
+        if (elements.every((element) => current?.contains(element))) return current;
+        if (current === boundary) break;
+        current = current.parentElement;
+      }
+      return null;
+    };
+    const mediaAwareAncestor = findLowestCommonAncestor(mediaAwareElements, main);
+    const roots: Element[] = [];
+    const nestingDepths = new Map<Element, number>();
+    const addAncestors = (element: Element, boundary: Element | null, maxDepth: number) => {
+      let current: Element | null = element;
+      for (let depth = 0; current && depth < maxDepth; depth += 1, current = current.parentElement) {
+        if (!roots.includes(current)) roots.push(current);
+        nestingDepths.set(current, Math.min(nestingDepths.get(current) ?? depth, depth));
+        if (current === boundary) break;
+      }
+    };
+    if (dedicatedPageUrlMatches) {
+      for (const link of links) addAncestors(link, null, 12);
+      const contentSignals = [
+        ...Array.from(main.querySelectorAll<HTMLElement>('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"],div[dir="auto"],p,[data-lexical-text="true"]')),
+        ...dedupedPostMedia,
+      ].slice(0, 120);
+      for (const signal of contentSignals) addAncestors(signal, main, 7);
+      if (mediaAwareAncestor) addAncestors(mediaAwareAncestor, main, 12);
+    }
+    let candidatesAfterSizeFilter = 0;
+    let candidatesAfterContentFilter = 0;
+    let candidatesAfterCommentFilter = 0;
+    let candidatesAfterVisibilityFilter = 0;
+    let validBoundingBoxCount = 0;
+    const candidateDiagnostics: Array<Record<string, unknown>> = [];
+    const candidates = roots.flatMap((root, rootIndex) => {
       const rect = root.getBoundingClientRect();
-      if (rect.width < 280 || rect.width > 1_200 || rect.height < 100 || rect.height > 1_600) return [];
-      const excluded = (element: Element) => {
-        if (element.closest('button,[role="button"],[role="toolbar"],form,[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]')) return true;
+      const style = getComputedStyle(root);
+      const visible = rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+      const descendantPostLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]'));
+      const rootPostLink = root instanceof HTMLAnchorElement && root.matches('a[href*="/groups/"][href*="/posts/"]') ? [root] : [];
+      const containsPostPermalink = [...rootPostLink, ...descendantPostLinks].some((link) => { const url = new URL(link.href, location.href); return postPath.test(url.pathname) && !url.searchParams.has("comment_id"); });
+      const containsCommentSection = root.matches('[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]') || Boolean(root.querySelector('[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i],[role="article"] [role="article"]'));
+      const containsToolbar = root.matches('[role="toolbar"]') || Boolean(root.querySelector('[role="toolbar"]'));
+      const containsForm = root.matches("form") || Boolean(root.querySelector("form"));
+      const excludedContainer = root.matches('nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"],form,[role="toolbar"]') || Boolean(root.closest('nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"]'));
+      const sizeAccepted = rect.width >= 280 && rect.width <= 1_200 && rect.height >= 100 && rect.height <= 1_600;
+      const rawTextNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"],div[dir="auto"],p,[data-lexical-text="true"]'));
+      const rawMedia = Array.from(dedupedPostMedia).filter(
+        (element) => element !== root && root.contains(element),
+      );
+      if (sizeAccepted && rawTextNodes.length + rawMedia.length > 0) candidatesAfterContentFilter += 1;
+      const excludedAsComment = (element: Element) => {
+        if (element.closest('[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]')) return true;
         const nestedArticle = element.closest('[role="article"]');
         if (nestedArticle && nestedArticle !== root && nestedArticle.getBoundingClientRect().height < 220) return true;
         return false;
       };
-      const textNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"],div[dir="auto"],p,[data-lexical-text="true"]'))
+      const excluded = (element: Element) => excludedAsComment(element) || Boolean(element.closest('button,[role="button"],[role="toolbar"],form'));
+      const excludedMedia = (element: Element) => excludedAsComment(element) || Boolean(element.closest('[role="toolbar"],form'));
+      const commentFilteredNodes = [...rawTextNodes, ...rawMedia].filter((element) => !excludedAsComment(element));
+      const textNodes = rawTextNodes
         .filter((element) => !excluded(element) && element.innerText.trim().length >= 12 && !element.querySelector('a,button,[role="button"],[role="toolbar"]'));
-      const media = Array.from(root.querySelectorAll<HTMLElement>('img[data-visualcompletion="media-vc-image"],a[href*="/photo"] img,video'))
-        .filter((element) => !excluded(element) && element.getBoundingClientRect().width >= 120 && element.getBoundingClientRect().height >= 80);
+      const media = rawMedia
+        .filter((element) => {
+          if (excludedMedia(element) || element.closest('nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"]')) return false;
+          return true;
+        });
       const visualNodes = [...textNodes, ...media];
-      if (!visualNodes.length) return [];
       const boxes = visualNodes.map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0);
-      if (!boxes.length) return [];
-      const x = Math.max(0, Math.min(...boxes.map((box) => box.x)) - 8); const y = Math.max(0, Math.min(...boxes.map((box) => box.y)) + window.scrollY - 8);
-      const right = Math.min(document.documentElement.scrollWidth, Math.max(...boxes.map((box) => box.right)) + 8); const bottom = Math.min(document.documentElement.scrollHeight, Math.max(...boxes.map((box) => box.bottom + window.scrollY)) + 8);
       const contentLength = textNodes.reduce((total, element) => total + Math.min(element.innerText.trim().length, 2_000), 0);
-      const score = contentLength + media.length * 250 - Math.max(0, visualNodes.length - 20) * 20;
-      const imageUrls = media.flatMap((element) => element instanceof HTMLImageElement && element.src ? [element.src] : []);
+      const topPreference = Math.max(0, 200 - Math.max(0, rect.top - mainRect.top) / 4);
+      const score = contentLength + media.length * 250 - Math.max(0, visualNodes.length - 20) * 20 + topPreference;
+      const rejectionReasons: string[] = [];
+      if (rect.width < 280 || rect.height < 100) rejectionReasons.push("TOO_SMALL");
+      if (rect.width > 1_200 || rect.height > 1_600) rejectionReasons.push("TOO_LARGE");
+      if (!visible) rejectionReasons.push("NOT_VISIBLE");
+      if (!containsPostPermalink && !dedicatedPageUrlMatches) rejectionReasons.push("NO_POST_SIGNAL");
+      if (rawTextNodes.length + rawMedia.length === 0 || visualNodes.length === 0) rejectionReasons.push("NO_TEXT_OR_MEDIA");
+      if (rawTextNodes.length + rawMedia.length > 0 && commentFilteredNodes.length === 0) rejectionReasons.push("COMMENT_REGION");
+      if (containsToolbar && visualNodes.length === 0) rejectionReasons.push("TOOLBAR_REGION");
+      if (excludedContainer) rejectionReasons.push(root.matches('form,[role="toolbar"]') ? "TOOLBAR_REGION" : "NO_POST_SIGNAL");
+      if (sizeAccepted) candidatesAfterSizeFilter += 1;
+      if (sizeAccepted && !containsCommentSection && commentFilteredNodes.length > 0) candidatesAfterCommentFilter += 1;
+      if (sizeAccepted && !excludedContainer && visible && visualNodes.length > 0) candidatesAfterVisibilityFilter += 1;
+      if (sizeAccepted && !excludedContainer && visualNodes.length > 0 && boxes.length > 0) validBoundingBoxCount += 1;
+      if (sizeAccepted && !excludedContainer && visualNodes.length > 0 && boxes.length === 0) rejectionReasons.push("INVALID_BOUNDING_BOX");
+      candidateDiagnostics.push({
+        index: rootIndex,
+        tag: root.tagName.toLowerCase(),
+        role: root.getAttribute("role"),
+        nesting_depth: nestingDepths.get(root) ?? null,
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        area: Math.round(rect.width * rect.height),
+        visible,
+        text_node_count: textNodes.length,
+        media_count: media.length,
+        img_count: root.querySelectorAll("img").length,
+        video_count: root.querySelectorAll("video").length,
+        link_count: root.querySelectorAll("a").length,
+        contains_post_permalink: containsPostPermalink,
+        contains_comment_section: containsCommentSection,
+        contains_toolbar: containsToolbar,
+        contains_form: containsForm,
+        score,
+        rejection_reasons: rejectionReasons,
+      });
+      if (!sizeAccepted || excludedContainer || !visualNodes.length || !boxes.length) return [];
+      const candidateBox = {
+        x: Math.max(0, rect.left + window.scrollX),
+        y: Math.max(0, rect.top + window.scrollY),
+        width: Math.min(rect.width, document.documentElement.scrollWidth - Math.max(0, rect.left + window.scrollX)),
+        height: Math.min(rect.height, document.documentElement.scrollHeight - Math.max(0, rect.top + window.scrollY)),
+      };
+      const mediaBoxes = media.map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0);
+      const mediaBox = mediaBoxes.length ? {
+        x: Math.min(...mediaBoxes.map((box) => box.left + window.scrollX)),
+        y: Math.min(...mediaBoxes.map((box) => box.top + window.scrollY)),
+        width: Math.max(...mediaBoxes.map((box) => box.right + window.scrollX)) - Math.min(...mediaBoxes.map((box) => box.left + window.scrollX)),
+        height: Math.max(...mediaBoxes.map((box) => box.bottom + window.scrollY)) - Math.min(...mediaBoxes.map((box) => box.top + window.scrollY)),
+      } : null;
+      const commentTops = Array.from(root.querySelectorAll<HTMLElement>('[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i],[role="article"]'))
+        .filter((element) => element.matches('[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]') || element.getBoundingClientRect().height < 220)
+        .map((element) => element.getBoundingClientRect().top + window.scrollY)
+        .filter((top) => top > candidateBox.y);
+      const commentBoundaryY = commentTops.length ? Math.min(...commentTops) : null;
+      const mediaBottom = mediaBox ? mediaBox.y + mediaBox.height : null;
+      const contentBottom = Math.max(...boxes.map((box) => box.bottom + window.scrollY));
+      const safeCommentBoundary = commentBoundaryY !== null && commentBoundaryY >= Math.max(contentBottom, mediaBottom ?? contentBottom) - 1 ? commentBoundaryY : null;
+      const candidateBottom = candidateBox.y + candidateBox.height;
+      const finalBottom = safeCommentBoundary !== null ? Math.min(candidateBottom, safeCommentBoundary) : candidateBottom;
+      const cropReasons: string[] = [];
+      if (safeCommentBoundary !== null && safeCommentBoundary < candidateBottom) cropReasons.push("COMMENT_BOUNDARY_APPLIED");
+      if (commentBoundaryY !== null && safeCommentBoundary === null && mediaBottom !== null && commentBoundaryY < mediaBottom) cropReasons.push("COMMENT_BOUNDARY_INTERSECTS_MEDIA_IGNORED");
+      if (candidateBox.height < rect.height || candidateBox.width < rect.width) cropReasons.push("DOCUMENT_BOUNDS_CLAMPED");
+      const box = { x: candidateBox.x, y: candidateBox.y, width: candidateBox.width, height: finalBottom - candidateBox.y };
+      const imageUrls = media.flatMap((element) => {
+        if (element instanceof HTMLImageElement && element.src) return [element.src];
+        const nestedImage = element.querySelector<HTMLImageElement>("img[src]");
+        return nestedImage?.src ? [nestedImage.src] : [];
+      });
       const time = root.querySelector<HTMLTimeElement>("time[datetime]")?.dateTime ?? null;
-      return [{ score, area: rect.width * rect.height, box: { x, y, width: right - x, height: bottom - y }, imageUrls, publishedAt: time }];
-    }).sort((left, right) => right.score - left.score || left.area - right.area);
-    if (!candidates.length || candidates[0].box.width < 120 || candidates[0].box.height < 40 || candidates[0].box.height > 1_200) return null;
-    if (candidates[1] && candidates[0].score === candidates[1].score && Math.abs(candidates[0].area - candidates[1].area) < 100) return null;
-    return { ...candidates[0], candidateCount: candidates.length };
-  }, postId);
+      return [{
+        rootIndex,
+        score,
+        area: rect.width * rect.height,
+        visible,
+        validBoundingBox: boxes.length > 0 && rect.width >= 120 && rect.height >= 40 && rect.height <= 1_200,
+        hasContent: visualNodes.length > 0,
+        containsCommentSection,
+        containsToolbar,
+        containsForm,
+        mediaCount: media.length,
+        textNodeCount: textNodes.length,
+        nestingDepth: nestingDepths.get(root) ?? null,
+        box,
+        imageUrls,
+        publishedAt: time,
+        screenshotDiagnostic: {
+          candidate_box: candidateBox,
+          media_box: mediaBox,
+          comment_boundary_y: commentBoundaryY,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          scroll_y: window.scrollY,
+          final_clip: box,
+          crop_reasons: cropReasons,
+        },
+      }];
+    });
+    // This callback runs in the page context, so keep the browser-side ranking
+    // self-contained instead of closing over the exported Node test helper.
+    const mediaAwareRootIndex = mediaAwareAncestor ? roots.indexOf(mediaAwareAncestor) : -1;
+    const mediaAwareCandidate = mediaAwareRootIndex >= 0 ? candidates.find((candidate) => candidate.rootIndex === mediaAwareRootIndex) ?? null : null;
+    const mediaAwareCommentBoundary = mediaAwareCandidate?.screenshotDiagnostic.comment_boundary_y ?? null;
+    const mediaAwareMediaBox = mediaAwareCandidate?.screenshotDiagnostic.media_box ?? null;
+    const mediaAboveCommentBoundary = mediaAwareCommentBoundary === null || (mediaAwareMediaBox !== null
+      && mediaAwareMediaBox.y + mediaAwareMediaBox.height <= mediaAwareCommentBoundary + 1);
+    const mediaAwareRejectionReason = qualifiedPostMedia.size === 0 ? "NO_QUALIFIED_MEDIA"
+      : dedupedPostMedia.size === 0 ? "NO_DEDUPED_MEDIA"
+        : !mediaAwareAncestor ? "COMMON_ANCESTOR_NOT_FOUND"
+          : !mediaAwareCandidate ? "ANCESTOR_CANDIDATE_REJECTED"
+            : !mediaAwareCandidate.validBoundingBox ? "INVALID_CANDIDATE_BOX"
+              : mediaAwareCandidate.mediaCount === 0 ? "QUALIFIED_MEDIA_NOT_IN_CANDIDATE"
+                : null;
+    const mediaAwareBuildDiagnostic = {
+      qualified_media_count: qualifiedPostMedia.size,
+      deduped_media_count: dedupedPostMedia.size,
+      common_ancestor_found: mediaAwareAncestor !== null,
+      ancestor_contains_comments: mediaAwareCandidate?.containsCommentSection ?? (mediaAwareAncestor ? Boolean(mediaAwareAncestor.querySelector(commentRegionSelector)) : false),
+      comment_boundary_found: mediaAwareCommentBoundary !== null,
+      media_above_comment_boundary: mediaAboveCommentBoundary,
+      candidate_box_valid: mediaAwareCandidate?.validBoundingBox ?? false,
+      rejection_reason: mediaAwareRejectionReason,
+    };
+    const fallbackCandidates = candidates.filter((candidate) => candidate.visible
+      && candidate.validBoundingBox
+      && candidate.hasContent);
+    const cleanCandidates = fallbackCandidates.filter((candidate) => candidate.visible
+      && candidate.validBoundingBox
+      && candidate.hasContent
+      && !candidate.containsCommentSection
+      && !candidate.containsToolbar
+      && !candidate.containsForm);
+    const cleanPoolUsed = cleanCandidates.length > 0;
+    const mediaFallbackCandidates = cleanPoolUsed || mediaAwareRejectionReason !== null || !mediaAwareCandidate ? [] : [mediaAwareCandidate];
+    const mediaFallbackUsed = mediaFallbackCandidates.length > 0;
+    const selectionStrategy = cleanPoolUsed ? "CLEAN" : mediaFallbackUsed ? "MEDIA_AWARE" : "GENERAL_FALLBACK";
+    const selectionPool = [...(cleanPoolUsed ? cleanCandidates : mediaFallbackUsed ? mediaFallbackCandidates : fallbackCandidates)].sort((left, right) => {
+      if (cleanPoolUsed) {
+        return right.mediaCount - left.mediaCount
+          || right.textNodeCount - left.textNodeCount
+          || right.score - left.score
+          || (left.nestingDepth ?? Number.MAX_SAFE_INTEGER) - (right.nestingDepth ?? Number.MAX_SAFE_INTEGER)
+          || left.area - right.area;
+      }
+      if (mediaFallbackUsed) {
+        const leftDirtySignals = Number(left.containsCommentSection) + Number(left.containsToolbar) + Number(left.containsForm);
+        const rightDirtySignals = Number(right.containsCommentSection) + Number(right.containsToolbar) + Number(right.containsForm);
+        return right.mediaCount - left.mediaCount
+          || Number(right.textNodeCount > 0) - Number(left.textNodeCount > 0)
+          || leftDirtySignals - rightDirtySignals
+          || (left.nestingDepth ?? Number.MAX_SAFE_INTEGER) - (right.nestingDepth ?? Number.MAX_SAFE_INTEGER)
+          || left.area - right.area
+          || right.score - left.score;
+      }
+      return right.score - left.score || left.area - right.area;
+    });
+    const firstCandidate = selectionPool[0];
+    const secondCandidate = selectionPool[1];
+    const ambiguousCleanCandidates = Boolean(firstCandidate && secondCandidate
+      && firstCandidate.mediaCount === secondCandidate.mediaCount
+      && firstCandidate.textNodeCount === secondCandidate.textNodeCount
+      && Math.abs(firstCandidate.score - secondCandidate.score) < 0.001
+      && firstCandidate.nestingDepth === secondCandidate.nestingDepth
+      && Math.abs(firstCandidate.area - secondCandidate.area) < 100);
+    if (cleanPoolUsed) {
+      for (const candidate of candidates.filter((item) => item.containsCommentSection || item.containsToolbar || item.containsForm)) {
+        const diagnostic = candidateDiagnostics.find((item) => item.index === candidate.rootIndex);
+        if (!diagnostic) continue;
+        const rejectionReasons = diagnostic.rejection_reasons as string[];
+        if (candidate.containsCommentSection && !rejectionReasons.includes("COMMENT_REGION")) rejectionReasons.push("COMMENT_REGION");
+        if (candidate.containsToolbar && !rejectionReasons.includes("TOOLBAR_REGION")) rejectionReasons.push("TOOLBAR_REGION");
+        if (candidate.containsForm && !rejectionReasons.includes("FORM_REGION")) rejectionReasons.push("FORM_REGION");
+      }
+    }
+    const invalidTopBoundingBox = Boolean(selectionPool[0] && !selectionPool[0].validBoundingBox);
+    if (invalidTopBoundingBox) {
+      validBoundingBoxCount = 0;
+      const diagnostic = candidateDiagnostics.find((candidate) => candidate.index === selectionPool[0].rootIndex);
+      if (diagnostic) (diagnostic.rejection_reasons as string[]).push("INVALID_BOUNDING_BOX");
+    }
+    const ambiguousTopCandidates = ambiguousCleanCandidates;
+    if (ambiguousTopCandidates) {
+      for (const candidate of selectionPool.slice(0, 2)) {
+        const diagnostic = candidateDiagnostics.find((item) => item.index === candidate.rootIndex);
+        if (diagnostic) (diagnostic.rejection_reasons as string[]).push("AMBIGUOUS_SCORE");
+      }
+    }
+    const selected = selectionPool.length && !invalidTopBoundingBox && !ambiguousTopCandidates ? selectionPool[0] : null;
+    const selectedRoot = selected ? roots[selected.rootIndex] : null;
+    const selectedRect = selectedRoot?.getBoundingClientRect() ?? null;
+    const mediaDiagnostic = collectMediaDiagnostic ? (() => {
+      type DiagnosticSourceType = "IMG" | "PICTURE" | "ROLE_IMG" | "VIDEO" | "POSTER" | "BACKGROUND";
+      const found: Array<{ element: HTMLElement; sourceType: DiagnosticSourceType }> = [];
+      const seen = new WeakMap<HTMLElement, Set<DiagnosticSourceType>>();
+      const add = (element: HTMLElement, sourceType: DiagnosticSourceType) => {
+        const types = seen.get(element) ?? new Set<DiagnosticSourceType>();
+        if (types.has(sourceType)) return;
+        types.add(sourceType); seen.set(element, types); found.push({ element, sourceType });
+      };
+      document.querySelectorAll<HTMLImageElement>("img").forEach((element) => add(element, element.closest("picture") ? "PICTURE" : "IMG"));
+      document.querySelectorAll<HTMLElement>('[role="img"]').forEach((element) => { if (!(element instanceof HTMLImageElement)) add(element, "ROLE_IMG"); });
+      document.querySelectorAll<HTMLVideoElement>("video").forEach((element) => { add(element, "VIDEO"); if (element.hasAttribute("poster")) add(element, "POSTER"); });
+      Array.from(document.querySelectorAll<HTMLElement>("body *")).slice(0, 3_000).forEach((element) => {
+        if (getComputedStyle(element).backgroundImage !== "none") add(element, "BACKGROUND");
+      });
+      const mainRoot = document.querySelector("main,[role=\"main\"]");
+      const commentSelector = '[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]';
+      const headerSidebarSelector = 'nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"]';
+      const distanceToSelected = (rect: DOMRect) => {
+        if (!selectedRect) return null;
+        const horizontal = Math.max(selectedRect.left - rect.right, rect.left - selectedRect.right, 0);
+        const vertical = Math.max(selectedRect.top - rect.bottom, rect.top - selectedRect.bottom, 0);
+        return Math.round(Math.hypot(horizontal, vertical));
+      };
+      const ancestorDepth = (element: HTMLElement) => {
+        if (!selectedRoot || !selectedRoot.contains(element)) return null;
+        let depth = 0; let current: Element | null = element;
+        while (current && current !== selectedRoot) { depth += 1; current = current.parentElement; }
+        return current === selectedRoot ? depth : null;
+      };
+      const candidates = found.map(({ element, sourceType }) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const visible = rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+        const insideMain = Boolean(mainRoot?.contains(element));
+        const insideCommentRegion = Boolean(element.closest(commentSelector));
+        const insideHeaderSidebar = Boolean(element.closest(headerSidebarSelector));
+        const postMediaCandidate = qualifiedPostMedia.has(element);
+        const exclusionReason = !visible ? "NOT_VISIBLE"
+          : insideCommentRegion ? "COMMENT_REGION"
+            : insideHeaderSidebar ? "HEADER_SIDEBAR"
+              : !insideMain ? "OUTSIDE_MAIN"
+                : !postMediaCandidate ? "TOO_SMALL"
+                  : null;
+        const naturalWidth = element instanceof HTMLImageElement ? element.naturalWidth : element instanceof HTMLVideoElement ? element.videoWidth : null;
+        const naturalHeight = element instanceof HTMLImageElement ? element.naturalHeight : element instanceof HTMLVideoElement ? element.videoHeight : null;
+        return {
+          tag: element.tagName.toLowerCase(), source_type: sourceType, width: Math.round(rect.width), height: Math.round(rect.height),
+          natural_width: naturalWidth, natural_height: naturalHeight, visible, inside_main: insideMain,
+          inside_comment_region: insideCommentRegion, inside_header_sidebar: insideHeaderSidebar,
+          distance_to_selected_region: distanceToSelected(rect), ancestor_depth_to_selected_region: ancestorDepth(element),
+          excluded_by_rule: exclusionReason !== null, exclusion_reason: exclusionReason,
+        };
+      });
+      const typeCounts = candidates.reduce<Record<string, number>>((counts, candidate) => { counts[candidate.source_type] = (counts[candidate.source_type] ?? 0) + 1; return counts; }, {});
+      return {
+        post_id: targetPostId,
+        candidates,
+        summary: {
+          total_media_candidates: candidates.length,
+          large_visible_candidates: candidates.filter((candidate) => candidate.visible && !candidate.excluded_by_rule).length,
+          excluded_candidates: candidates.filter((candidate) => candidate.excluded_by_rule).length,
+          candidates_inside_comments: candidates.filter((candidate) => candidate.inside_comment_region).length,
+          candidates_inside_main: candidates.filter((candidate) => candidate.inside_main).length,
+          candidate_types: typeCounts,
+        },
+      };
+    })() : null;
+    document.querySelectorAll("[data-flip-facebook-capture]").forEach((element) => element.removeAttribute("data-flip-facebook-capture"));
+    if (selected) roots[selected.rootIndex]?.setAttribute("data-flip-facebook-capture", targetCaptureToken);
+    return {
+      region: selected ? {
+        score: selected.score,
+        area: selected.area,
+        box: selected.box,
+        imageUrls: selected.imageUrls,
+        publishedAt: selected.publishedAt,
+        candidateCount: candidates.length,
+        cleanPoolUsed,
+        mediaFallbackUsed,
+        mediaCandidateCount: mediaFallbackCandidates.length,
+        cleanCandidateCount: cleanCandidates.length,
+        qualifiedMediaCount: qualifiedPostMedia.size,
+        fallbackCandidateCount: fallbackCandidates.length,
+        selectionStrategy,
+        selectedMediaCount: selected.mediaCount,
+        containsCommentSection: selected.containsCommentSection,
+        containsToolbar: selected.containsToolbar,
+        containsForm: selected.containsForm,
+        screenshotDiagnostic: selected.screenshotDiagnostic,
+      } : null,
+      diagnostic: {
+        post_id: targetPostId,
+        final_path: location.pathname,
+        dedicated_page_url_matches: dedicatedPageUrlMatches,
+        canonical_post_anchor_found: links.length > 0,
+        canonical_anchor_count: links.length,
+        candidate_ancestor_count: roots.length,
+        candidates_after_size_filter: candidatesAfterSizeFilter,
+        candidates_after_content_filter: candidatesAfterContentFilter,
+        candidates_after_comment_filter: candidatesAfterCommentFilter,
+        candidates_after_visibility_filter: candidatesAfterVisibilityFilter,
+        valid_bounding_box_count: validBoundingBoxCount,
+        ambiguous_top_candidates: ambiguousTopCandidates,
+        selected_candidate_index: selected?.rootIndex ?? null,
+        candidates: candidateDiagnostics.slice(0, 10),
+      },
+      mediaAwareBuildDiagnostic,
+      mediaDiagnostic,
+    };
+  }, { targetPostId: postId, captureToken, collectMediaDiagnostic: options.mediaDiagnostic === true });
+  const counts: FacebookPostRegionDiagnosticCounts = {
+    dedicatedPageUrlMatches: evaluated.diagnostic.dedicated_page_url_matches,
+    canonicalAnchorCount: evaluated.diagnostic.canonical_anchor_count,
+    candidateAncestorCount: evaluated.diagnostic.candidate_ancestor_count,
+    candidatesAfterSizeFilter: evaluated.diagnostic.candidates_after_size_filter,
+    candidatesAfterContentFilter: evaluated.diagnostic.candidates_after_content_filter,
+    candidatesAfterCommentFilter: evaluated.diagnostic.candidates_after_comment_filter,
+    candidatesAfterVisibilityFilter: evaluated.diagnostic.candidates_after_visibility_filter,
+    validBoundingBoxCount: evaluated.diagnostic.valid_bounding_box_count,
+    ambiguousTopCandidates: evaluated.diagnostic.ambiguous_top_candidates,
+  };
+  const regionFailureReason = evaluated.region ? null : determineFacebookPostRegionFailureReason(counts);
+  logFacebookWorker("FACEBOOK_POST_REGION_DIAGNOSTIC", { ...evaluated.diagnostic, region_failure_reason: regionFailureReason });
+  logFacebookWorker("FACEBOOK_MEDIA_AWARE_BUILD_DIAGNOSTIC", {
+    post_id: postId,
+    ...evaluated.mediaAwareBuildDiagnostic,
+  });
+  if (evaluated.mediaDiagnostic) logFacebookWorker("FACEBOOK_MEDIA_DISCOVERY_DIAGNOSTIC", evaluated.mediaDiagnostic);
+  const region = evaluated.region;
   if (!region) throw new Error("FACEBOOK_POST_REGION_NOT_FOUND");
-  const screenshot = await page.screenshot({ type: "jpeg", quality: 65, clip: region.box, animations: "disabled" });
+  logFacebookWorker("FACEBOOK_POST_SELECTION_STRATEGY", {
+    post_id: postId,
+    clean_candidate_count: region.cleanCandidateCount,
+    qualified_media_count: region.qualifiedMediaCount,
+    fallback_candidate_count: region.fallbackCandidateCount,
+    strategy: region.selectionStrategy,
+  });
+  const selectedLocator = page.locator(`[data-flip-facebook-capture="${captureToken}"]`);
+  const selectedElementBox = await selectedLocator.boundingBox().catch(() => null);
+  const requiresCommentCrop = region.screenshotDiagnostic.crop_reasons.includes("COMMENT_BOUNDARY_APPLIED");
+  let captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK" = region.cleanPoolUsed && selectedElementBox && !requiresCommentCrop ? "ELEMENT_SCREENSHOT" : "CLIP_FALLBACK";
+  let compressed = false;
+  let screenshot: Buffer;
+  const capture = async (quality: number): Promise<Buffer> => {
+    if (captureMethod === "ELEMENT_SCREENSHOT") {
+      try {
+        return await selectedLocator.screenshot({ type: "jpeg", quality, animations: "disabled", scale: "css", timeout: 30_000 });
+      } catch {
+        captureMethod = "CLIP_FALLBACK";
+      }
+    }
+    return page.screenshot({ type: "jpeg", quality, clip: region.box, animations: "disabled", scale: "css" });
+  };
+  try {
+    screenshot = await capture(65);
+    for (const quality of [45, 30]) {
+      if (facebookScreenshotDataUrlLength(screenshot) <= 900_000) break;
+      compressed = true;
+      screenshot = await capture(quality);
+    }
+  } finally {
+    await selectedLocator.evaluate((element) => element.removeAttribute("data-flip-facebook-capture")).catch(() => undefined);
+  }
   const screenshotDataUrl = `data:image/jpeg;base64,${screenshot.toString("base64")}`;
   if (screenshotDataUrl.length > 900_000) throw new Error("FACEBOOK_POST_SCREENSHOT_TOO_LARGE");
-  return { screenshotDataUrl, imageUrls: [...new Set(region.imageUrls)].slice(0, 5), publishedAt: region.publishedAt, box: region.box, candidateCount: region.candidateCount };
+  const screenshotDimensions = readJpegDimensions(screenshot) ?? { width: Math.round(selectedElementBox?.width ?? region.box.width), height: Math.round(selectedElementBox?.height ?? region.box.height) };
+  logFacebookWorker("FACEBOOK_POST_SCREENSHOT_DIAGNOSTIC", {
+    post_id: postId,
+    selected_element_box: selectedElementBox,
+    screenshot_width: screenshotDimensions.width,
+    screenshot_height: screenshotDimensions.height,
+    capture_method: captureMethod,
+    resized: false,
+    compressed,
+    ...region.screenshotDiagnostic,
+  });
+  if (region.mediaFallbackUsed) {
+    logFacebookWorker("FACEBOOK_MEDIA_FALLBACK_DIAGNOSTIC", {
+      post_id: postId,
+      media_candidates: region.mediaCandidateCount,
+      selected_media_count: region.selectedMediaCount,
+      selected_ancestor_box: selectedElementBox ?? region.screenshotDiagnostic.candidate_box,
+      contains_comments: region.containsCommentSection,
+      comment_boundary_found: region.screenshotDiagnostic.comment_boundary_y !== null,
+      capture_method: captureMethod,
+      final_screenshot_width: screenshotDimensions.width,
+      final_screenshot_height: screenshotDimensions.height,
+    });
+  }
+  const reportedBox = selectedElementBox && captureMethod === "ELEMENT_SCREENSHOT"
+    ? { x: selectedElementBox.x, y: selectedElementBox.y, width: selectedElementBox.width, height: selectedElementBox.height }
+    : region.box;
+  return { screenshotDataUrl, imageUrls: [...new Set(region.imageUrls)].slice(0, 5), publishedAt: region.publishedAt, box: reportedBox, candidateCount: region.candidateCount, selectedMediaCount: region.selectedMediaCount, screenshotWidth: screenshotDimensions.width, screenshotHeight: screenshotDimensions.height, captureMethod, compressed };
+}
+
+function facebookScreenshotDataUrlLength(screenshot: Buffer): number {
+  return "data:image/jpeg;base64,".length + Math.ceil(screenshot.length / 3) * 4;
+}
+
+function readJpegDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) { offset += 1; continue; }
+    while (bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || marker >= 0xd0 && marker <= 0xd7) continue;
+    if (offset + 1 >= bytes.length) return null;
+    const length = bytes[offset] * 256 + bytes[offset + 1];
+    if (length < 2 || offset + length > bytes.length) return null;
+    if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+      return { height: bytes[offset + 3] * 256 + bytes[offset + 4], width: bytes[offset + 5] * 256 + bytes[offset + 6] };
+    }
+    offset += length;
+  }
+  return null;
 }
