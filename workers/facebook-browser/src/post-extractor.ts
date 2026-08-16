@@ -1,6 +1,7 @@
 import type { FacebookPostSnapshot } from "../../../features/facebook-worker/types.ts";
 
-export type RawFacebookPost = { permalink?: string | null; text?: string | null; imageUrls?: string[]; publishedAt?: string | null; extractionError?: "FACEBOOK_POST_BODY_NOT_FOUND" | null };
+export type FacebookBodyCandidateDiagnostic = { tag: string; role: string | null; dataAttributes: string[]; length: number; source: "dedicated" | "fallback"; score: number };
+export type RawFacebookPost = { permalink?: string | null; text?: string | null; imageUrls?: string[]; publishedAt?: string | null; extractionError?: "FACEBOOK_POST_BODY_NOT_FOUND" | null; bodyDiagnostics?: { candidateCount: number; candidates: FacebookBodyCandidateDiagnostic[] } };
 
 export function normalizeFacebookPosts(groupId: string, candidates: RawFacebookPost[]): FacebookPostSnapshot[] {
   const seen = new Set<string>(); const posts: FacebookPostSnapshot[] = [];

@@ -35,6 +35,25 @@ test("extracts the main post body and excludes nested comments and UI strings", 
   } finally { await browser.close(); }
 });
 
+test("extracts a likely body from fallback candidates without a dedicated message selector", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <article role="article">
+        <a href="https://www.facebook.com/groups/1/posts/101/">1 godz.</a>
+        <div dir="auto">Sprzedam bezpośrednio mieszkanie 52 m², trzy pokoje, Łódź Radogoszcz.</div>
+        <div role="toolbar"><span dir="auto">Lubię to!</span><span dir="auto">Odpowiedz</span><span dir="auto">Udostępnij</span></div>
+        <div role="article"><div dir="auto">Proszę o priv</div></div>
+      </article>
+    `);
+    const result = await readFacebookGroup(page, { id: "group-1", name: "Fixture", url: "https://www.facebook.com/groups/1/" });
+    assert.equal(result.posts.length, 1);
+    assert.equal(result.posts[0].text, "Sprzedam bezpośrednio mieszkanie 52 m², trzy pokoje, Łódź Radogoszcz.");
+    assert.doesNotMatch(result.posts[0].text, /Proszę o priv|Lubię to|Odpowiedz|Udostępnij/);
+  } finally { await browser.close(); }
+});
+
 test("removes Facebook action labels from normalized text", () => {
   assert.equal(cleanFacebookPostText("Sprzedam mieszkanie Lubię to! Odpowiedz Udostępnij"), "Sprzedam mieszkanie");
 });
