@@ -1,4 +1,4 @@
-import type { FacebookCompletion, FacebookGroupSnapshot, FacebookPostSnapshot } from "./types";
+import type { FacebookCompletion, FacebookGroupSnapshot, FacebookPostSnapshot, FacebookVisionExtraction } from "./types";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
 const MAX_POSTS = 20;
@@ -45,7 +45,15 @@ function parsePost(value: unknown): FacebookPostSnapshot {
     text: typeof row.text === "string" ? row.text.slice(0, MAX_TEXT) : "",
     imageUrls: stringArray(row.imageUrls, MAX_IMAGES, 2_000).map(assertHttpsUrl),
     publishedAt: nullableIsoDate(row.publishedAt),
+    vision: parseVision(row.vision),
   };
+}
+
+function parseVision(value: unknown): FacebookVisionExtraction | null {
+  if (value === null || value === undefined) return null;
+  const row = requireRow(value);
+  if (typeof row.isProperty !== "boolean") throw new Error("INVALID_FACEBOOK_VISION");
+  return { isProperty: row.isProperty === true, title: nullableString(row.title, 500), description: nullableString(row.description, 2_000), visibleText: nullableString(row.visibleText, 2_000), city: nullableString(row.city, 200), district: nullableString(row.district, 200), neighborhood: nullableString(row.neighborhood, 200), street: nullableString(row.street, 300), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableNumber(row.floor), totalFloors: nullableNumber(row.totalFloors), condition: row.condition === "renovation" || row.condition === "ready" ? row.condition : null, sellerType: row.sellerType === "private" || row.sellerType === "agency" ? row.sellerType : null, confidence: boundedConfidence(row.confidence) };
 }
 
 function assertHttpsUrl(value: string): string { const url = new URL(value); if (url.protocol !== "https:") throw new Error("INVALID_IMAGE_URL"); return url.toString(); }
@@ -54,5 +62,6 @@ function requiredString(value: unknown, field: string, max: number): string { if
 function nullableString(value: unknown, max: number): string | null { return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null; }
 function nullableIsoDate(value: unknown): string | null { if (value === null || value === undefined || value === "") return null; if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new Error("INVALID_PUBLISHED_AT"); return new Date(value).toISOString(); }
 function nonnegativeInteger(value: unknown): number { if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error("INVALID_NUMBER"); return value; }
+function nullableNumber(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
+function boundedConfidence(value: unknown): number { return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0; }
 function stringArray(value: unknown, maxItems: number, maxLength: number): string[] { if (!Array.isArray(value) || value.length > maxItems || value.some((item) => typeof item !== "string" || item.length > maxLength)) throw new Error("INVALID_STRING_ARRAY"); return value.map(String); }
-

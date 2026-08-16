@@ -22,6 +22,26 @@ export type FacebookPostSnapshot = {
   text: string;
   imageUrls: string[];
   publishedAt: string | null;
+  vision?: FacebookVisionExtraction | null;
+};
+
+export type FacebookVisionExtraction = {
+  isProperty: boolean;
+  title: string | null;
+  description: string | null;
+  visibleText: string | null;
+  city: string | null;
+  district: string | null;
+  neighborhood: string | null;
+  street: string | null;
+  price: number | null;
+  area: number | null;
+  rooms: number | null;
+  floor: number | null;
+  totalFloors: number | null;
+  condition: "renovation" | "ready" | null;
+  sellerType: "private" | "agency" | null;
+  confidence: number;
 };
 
 export type FacebookWorkerJob = {

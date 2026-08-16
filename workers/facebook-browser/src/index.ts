@@ -20,7 +20,7 @@ if (loginMode) {
         activeJob = job; logFacebookWorker("FACEBOOK_JOB_START", { jobId: job.id, runId: job.runId, attempt: job.attempts });
         const heartbeat = setInterval(() => void api.heartbeat(job, shutdown.signal).then(() => logFacebookWorker("FACEBOOK_JOB_HEARTBEAT", { jobId: job.id })).catch((error) => logFacebookWorker("FACEBOOK_JOB_HEARTBEAT_ERROR", { jobId: job.id, message: safeMessage(error) })), 30_000);
         try {
-          const result = await fetchFacebookGroupWithBrowser(config.profileDir, job.groups[0], shutdown.signal);
+          const result = await fetchFacebookGroupWithBrowser(config.profileDir, job.groups[0], shutdown.signal, async (input, signal) => (await api.vision(job, input, signal)).vision);
           await api.complete(job, result, shutdown.signal); logFacebookWorker("FACEBOOK_JOB_COMPLETE", { jobId: job.id, posts: result.posts.length, durationMs: result.durationMs });
         } catch (error) {
           const code = error instanceof ControlledFacebookFailure ? error.code : shutdown.signal.aborted ? "WORKER_SHUTDOWN" : "FACEBOOK_WORKER_ERROR";
