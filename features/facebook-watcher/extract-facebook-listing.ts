@@ -2,6 +2,7 @@ import "server-only";
 
 import { analyzeFacebookImages } from "./analyze-facebook-images";
 import { extractFacebookProperty } from "./extract-facebook-property";
+import { FACEBOOK_CONFIDENCE_FIELDS, type FacebookFieldConfidence } from "../facebook-worker/types.ts";
 import type { FacebookListingInput, FacebookProperty } from "./types";
 
 export async function extractFacebookListing(input: FacebookListingInput): Promise<FacebookProperty> {
@@ -29,7 +30,17 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     condition: textResult.condition ?? vision.condition,
     sellerType: textResult.sellerType ?? vision.sellerType,
     confidence: Math.max(textResult.confidence, vision.confidence),
+    fieldConfidence: selectFieldConfidence(textResult, vision),
   };
+}
+
+function selectFieldConfidence(textResult: FacebookProperty, vision: NonNullable<Awaited<ReturnType<typeof analyzeFacebookImages>>>): FacebookFieldConfidence {
+  return Object.fromEntries(FACEBOOK_CONFIDENCE_FIELDS.map((field) => [
+    field,
+    textResult[field] !== null && textResult[field] !== undefined
+      ? textResult.fieldConfidence?.[field] ?? textResult.confidence
+      : vision.fieldConfidence?.[field] ?? vision.confidence,
+  ])) as FacebookFieldConfidence;
 }
 
 export function isUsableFacebookProperty(property: FacebookProperty, sourceText: string | undefined): boolean {

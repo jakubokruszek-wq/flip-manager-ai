@@ -5,7 +5,7 @@ import type { FacebookPostSnapshot, FacebookVisionExtraction } from "./types.ts"
 import { detectedVisionFields, facebookVisionToListingInput } from "./vision-adapter.ts";
 
 function vision(isProperty: boolean): FacebookVisionExtraction {
-  return { isProperty, title: isProperty ? "Mieszkanie Łódź" : null, description: isProperty ? "Sprzedam mieszkanie 45 m²" : null, visibleText: isProperty ? "Sprzedam mieszkanie 45 m², 2 pokoje" : "Spotkanie grupy w sobotę", city: isProperty ? "Łódź" : null, district: null, neighborhood: null, street: null, price: isProperty ? 350_000 : null, area: isProperty ? 45 : null, rooms: isProperty ? 2 : null, floor: null, totalFloors: null, condition: null, sellerType: isProperty ? "private" : null, confidence: 0.95 };
+  return { isProperty, title: isProperty ? "Mieszkanie Łódź" : null, description: isProperty ? "Sprzedam mieszkanie 45 m²" : null, visibleText: isProperty ? "Sprzedam mieszkanie 45 m², 2 pokoje" : "Spotkanie grupy w sobotę", city: isProperty ? "Łódź" : null, district: null, neighborhood: null, street: null, price: isProperty ? 350_000 : null, area: isProperty ? 45 : null, rooms: isProperty ? 2 : null, floor: null, totalFloors: null, condition: null, sellerType: isProperty ? "private" : null, confidence: 0.95, fieldConfidence: { price: 0.96, area: 0.94, rooms: 0.93, city: 0.9 } };
 }
 
 function post(result: FacebookVisionExtraction): FacebookPostSnapshot {
@@ -21,6 +21,8 @@ test("Vision output maps into the existing Facebook listing input", () => {
   assert.equal(input.postText, "Sprzedam mieszkanie 45 m², 2 pokoje");
   assert.equal(input.overrides?.price, 350_000);
   assert.equal(input.overrides?.area, 45);
+  assert.equal(input.overrides?.rooms, 2);
+  assert.equal(input.analysisFieldConfidence?.area, 0.94);
   assert.deepEqual(input.analysisFlags, ["vision_post_region"]);
 });
 

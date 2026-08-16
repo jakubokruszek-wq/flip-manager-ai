@@ -1,3 +1,5 @@
+import type { FacebookFieldConfidence } from "../facebook-worker/types";
+
 export type FacebookListingInput = {
   url?: string;
   postText?: string;
@@ -7,6 +9,7 @@ export type FacebookListingInput = {
   images?: string[];
   overrides?: Partial<Pick<FacebookProperty, "title" | "city" | "district" | "neighborhood" | "street" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "marketType" | "condition" | "sellerType" | "description">>;
   analysisConfidence?: number;
+  analysisFieldConfidence?: FacebookFieldConfidence;
   analysisFlags?: string[];
 };
 
@@ -28,6 +31,7 @@ export type FacebookProperty = {
   originalUrl: string | null;
   images: string[];
   confidence: number;
+  fieldConfidence?: FacebookFieldConfidence;
   flags: string[];
 };
 

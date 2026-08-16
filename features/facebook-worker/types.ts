@@ -42,7 +42,16 @@ export type FacebookVisionExtraction = {
   condition: "renovation" | "ready" | null;
   sellerType: "private" | "agency" | null;
   confidence: number;
+  fieldConfidence?: FacebookFieldConfidence;
 };
+
+export const FACEBOOK_CONFIDENCE_FIELDS = [
+  "title", "description", "city", "district", "neighborhood", "street",
+  "price", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",
+] as const;
+
+export type FacebookConfidenceField = (typeof FACEBOOK_CONFIDENCE_FIELDS)[number];
+export type FacebookFieldConfidence = Partial<Record<FacebookConfidenceField, number>>;
 
 export type FacebookWorkerJob = {
   id: string;

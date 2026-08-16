@@ -18,6 +18,7 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
     images: post.imageUrls,
     overrides: vision ? overrides : undefined,
     analysisConfidence: vision?.confidence,
+    analysisFieldConfidence: vision?.fieldConfidence,
     analysisFlags: vision ? ["vision_post_region"] : undefined,
   };
 }

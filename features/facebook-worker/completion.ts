@@ -1,4 +1,4 @@
-import type { FacebookCompletion, FacebookGroupSnapshot, FacebookPostSnapshot, FacebookVisionExtraction } from "./types";
+import { FACEBOOK_CONFIDENCE_FIELDS, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
 const MAX_POSTS = 20;
@@ -53,7 +53,13 @@ function parseVision(value: unknown): FacebookVisionExtraction | null {
   if (value === null || value === undefined) return null;
   const row = requireRow(value);
   if (typeof row.isProperty !== "boolean") throw new Error("INVALID_FACEBOOK_VISION");
-  return { isProperty: row.isProperty === true, title: nullableString(row.title, 500), description: nullableString(row.description, 2_000), visibleText: nullableString(row.visibleText, 2_000), city: nullableString(row.city, 200), district: nullableString(row.district, 200), neighborhood: nullableString(row.neighborhood, 200), street: nullableString(row.street, 300), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableNumber(row.floor), totalFloors: nullableNumber(row.totalFloors), condition: row.condition === "renovation" || row.condition === "ready" ? row.condition : null, sellerType: row.sellerType === "private" || row.sellerType === "agency" ? row.sellerType : null, confidence: boundedConfidence(row.confidence) };
+  return { isProperty: row.isProperty === true, title: nullableString(row.title, 500), description: nullableString(row.description, 2_000), visibleText: nullableString(row.visibleText, 2_000), city: nullableString(row.city, 200), district: nullableString(row.district, 200), neighborhood: nullableString(row.neighborhood, 200), street: nullableString(row.street, 300), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableNumber(row.floor), totalFloors: nullableNumber(row.totalFloors), condition: row.condition === "renovation" || row.condition === "ready" ? row.condition : null, sellerType: row.sellerType === "private" || row.sellerType === "agency" ? row.sellerType : null, confidence: boundedConfidence(row.confidence), fieldConfidence: parseFieldConfidence(row.fieldConfidence) };
+}
+
+function parseFieldConfidence(value: unknown): FacebookFieldConfidence | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  return Object.fromEntries(FACEBOOK_CONFIDENCE_FIELDS.map((field) => [field, boundedConfidence(row[field])])) as FacebookFieldConfidence;
 }
 
 function assertHttpsUrl(value: string): string { const url = new URL(value); if (url.protocol !== "https:") throw new Error("INVALID_IMAGE_URL"); return url.toString(); }
