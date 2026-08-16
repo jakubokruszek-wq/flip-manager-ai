@@ -19,9 +19,8 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
     if (failure) throw new ControlledFacebookFailure(failure, `Facebook access stopped: ${failure}`);
     if (response && !response.ok()) throw new ControlledFacebookFailure(response.status() === 403 ? "FACEBOOK_ACCESS_DENIED" : "FACEBOOK_GROUP_UNAVAILABLE", `Facebook group returned HTTP ${response.status()}`);
     logFacebookWorker("FACEBOOK_SESSION_OK", { groupId: group.id });
-    const posts = await readFacebookGroup(page, group);
+    const extracted = await readFacebookGroup(page, group); const posts = extracted.posts;
     logFacebookWorker("FACEBOOK_GROUP_DONE", { groupId: group.id, posts: posts.length, durationMs: Date.now() - started });
-    return { posts, warnings: posts.length ? [] : ["Facebook group returned no visible posts."], durationMs: Date.now() - started };
+    return { posts, warnings: [...extracted.warnings, ...(posts.length ? [] : ["Facebook group returned no visible posts."])], durationMs: Date.now() - started };
   } finally { await context.close(); }
 }
-
