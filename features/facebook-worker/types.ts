@@ -61,6 +61,21 @@ export type FacebookCompletionResult = {
   imagesMirrored: number;
   priceDrops: number;
   errors: number;
+  skippedDiagnostics: Array<{
+    job_id: string;
+    source_scan_id: string;
+    post_id: string | null;
+    group_id: string;
+    permalink: string | null;
+    text_length: number;
+    image_count: number;
+    real_estate_language: boolean;
+    structured_field_count: number;
+    detected_fields: string[];
+    classification: "not_a_property";
+    reason_code: "NO_REAL_ESTATE_LANGUAGE_AND_TOO_FEW_FIELDS";
+    text_preview: string;
+  }>;
 };
 
 export type FacebookJobState = {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { processFacebookPostBatch, type FacebookPostImportResult } from "./post-flow.ts";
+import { processFacebookPostBatch, redactFacebookPostPreview, type FacebookPostImportResult } from "./post-flow.ts";
 import type { FacebookPostSnapshot } from "./types.ts";
 
 function post(postId: string, text = "Sprzedam mieszkanie 45 m2, 2 pokoje, 350000 zl"): FacebookPostSnapshot {
@@ -74,4 +74,29 @@ test("post without stable id and permalink is skipped before extraction", async 
   const result = await processFacebookPostBatch([value], async () => { called = true; return outcome(); });
   assert.equal(called, false);
   assert.equal(result.listingsSkipped, 1);
+});
+
+test("skipped post stores bounded and redacted diagnostic instead of full text", async () => {
+  const privateText = `Autor: Jan Kowalski\nKontakt +48 501 234 567 lub jan.kowalski@example.com. ${"Nieistotna dalsza treść ".repeat(30)}`;
+  const item = { ...post("diagnostic", privateText), imageUrls: ["https://scontent.xx.fbcdn.net/a.jpg"] };
+  const result = await processFacebookPostBatch([item], async () => outcome({ status: "skipped", listingId: null, listingCreated: false, matched: false, matchCreated: false, imagesMirrored: 0, notProperty: { realEstateLanguage: false, structuredFieldCount: 2, detectedFields: ["price", "area"] } }), { jobId: "job-1", sourceScanId: "scan-1" });
+  const diagnostic = result.skippedDiagnostics[0];
+  assert.equal(diagnostic.job_id, "job-1");
+  assert.equal(diagnostic.source_scan_id, "scan-1");
+  assert.equal(diagnostic.classification, "not_a_property");
+  assert.deepEqual(diagnostic.detected_fields, ["price", "area"]);
+  assert.ok(diagnostic.text_preview.length <= 300);
+  assert.doesNotMatch(diagnostic.text_preview, /Jan Kowalski|501 234 567|jan\.kowalski@example\.com/);
+  assert.match(diagnostic.text_preview, /AUTOR USUNIETY|TELEFON USUNIETY|EMAIL USUNIETY/);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(privateText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("stores diagnostics for at most three skipped posts", async () => {
+  const items = ["1", "2", "3", "4"].map((id) => post(id, `Post ${id}`));
+  const result = await processFacebookPostBatch(items, async () => outcome({ status: "skipped", listingId: null, listingCreated: false, matched: false, matchCreated: false, imagesMirrored: 0, notProperty: { realEstateLanguage: false, structuredFieldCount: 0, detectedFields: [] } }), { jobId: "job-1", sourceScanId: "scan-1" });
+  assert.equal(result.skippedDiagnostics.length, 3);
+});
+
+test("redacts token-like values from preview", () => {
+  assert.equal(redactFacebookPostPreview("token=secret-value mieszkanie"), "token=[REDACTED] mieszkanie");
 });

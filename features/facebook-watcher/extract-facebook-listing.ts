@@ -33,14 +33,24 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
 }
 
 export function isUsableFacebookProperty(property: FacebookProperty, sourceText: string | undefined): boolean {
+  return classifyFacebookProperty(property, sourceText).usable;
+}
+
+export type FacebookPropertyClassification = {
+  usable: boolean;
+  realEstateLanguage: boolean;
+  structuredFieldCount: number;
+  detectedFields: string[];
+};
+
+export function classifyFacebookProperty(property: FacebookProperty, sourceText: string | undefined): FacebookPropertyClassification {
   const text = sourceText?.toLocaleLowerCase("pl-PL") ?? "";
-  const explicitPropertyLanguage = /mieszkan|nieruchomo|kawalerk|apartament|lokal mieszkal|\bm[2-6]\b/.test(text);
-  const structuredFields = [property.price, property.area, property.rooms, property.neighborhood, property.district, property.street]
-    .filter((value) => value !== null).length;
-  return explicitPropertyLanguage || structuredFields >= 3;
+  const realEstateLanguage = /mieszkan|nieruchomo|kawalerk|apartament|lokal mieszkal|\bm[2-6]\b/.test(text);
+  const detectedFields = (["price", "area", "rooms", "neighborhood", "district", "street"] as const)
+    .filter((field) => property[field] !== null);
+  return { usable: realEstateLanguage || detectedFields.length >= 3, realEstateLanguage, structuredFieldCount: detectedFields.length, detectedFields };
 }
 
 function needsVision(property: FacebookProperty): boolean {
   return property.price === null || property.area === null || property.rooms === null || (property.street === null && property.neighborhood === null && property.district === null);
 }
-

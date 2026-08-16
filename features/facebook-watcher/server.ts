@@ -8,7 +8,7 @@ import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import type { SearchFilter } from "@/features/flip-finder";
-import { extractFacebookListing, isUsableFacebookProperty } from "./extract-facebook-listing";
+import { classifyFacebookProperty, extractFacebookListing } from "./extract-facebook-listing";
 import type { FacebookProperty } from "./types";
 import { manualFacebookAdapter } from "./facebook-source-adapter";
 import { createFacebookWatcherAdminClient } from "./supabase-admin";
@@ -41,14 +41,20 @@ export type FacebookImportResult = {
   imagesMirrored: number;
   priceDrops: number;
   warnings: string[];
+  notProperty?: {
+    realEstateLanguage: boolean;
+    structuredFieldCount: number;
+    detectedFields: string[];
+  };
 };
 
 export async function importFacebookWatcher(input: FacebookListingInput, context?: FacebookAutomatedImportContext): Promise<FacebookImportResult> {
   const normalized = await manualFacebookAdapter.importManual(input);
   const extractedBase = await extractFacebookListing(normalized);
   const extracted = { ...extractedBase, ...normalized.overrides, originalUrl: extractedBase.originalUrl, images: extractedBase.images, flags: normalized.analysisFlags ?? extractedBase.flags, confidence: typeof normalized.analysisConfidence === "number" ? Math.max(0, Math.min(1, normalized.analysisConfidence)) : extractedBase.confidence };
-  if (context && !isUsableFacebookProperty(extracted, normalized.postText)) {
-    return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [] };
+  const classification = classifyFacebookProperty(extracted, normalized.postText);
+  if (context && !classification.usable) {
+    return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: classification.realEstateLanguage, structuredFieldCount: classification.structuredFieldCount, detectedFields: classification.detectedFields } };
   }
   const hash = createHash("sha256").update([normalized.postText, extracted.price, extracted.area, extracted.neighborhood].join("|")).digest("hex");
   const sourceUrl = extracted.originalUrl ?? (context ? facebookPostUrl(context.groupUrl, context.postId) : `manual:${hash}`);
