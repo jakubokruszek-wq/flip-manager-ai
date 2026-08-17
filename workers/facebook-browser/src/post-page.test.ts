@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
-import { canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, extractFacebookAuthoritativeTextFromStructuredData, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookPostIdArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookPostAge, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, extractFacebookAuthoritativeTextFromStructuredData, extractFacebookAuthoritativeTextResolutionFromStructuredData, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookPostIdArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookAuthoritativeTextSources, resolveFacebookPostAge, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 
 const vision: FacebookVisionExtraction = { isProperty: true, listingIntent: "SELL_PROPERTY", intentConfidence: 0.98, title: "Mieszkanie Łódź", description: "Sprzedam mieszkanie 50 m²", visibleText: "Sprzedam mieszkanie 50 m²", city: "Łódź", district: null, neighborhood: null, street: null, price: 400_000, area: 50, rooms: 2, floor: null, totalFloors: null, condition: null, sellerType: "private", confidence: 0.95, imageAssessments: [] };
 
@@ -24,6 +24,57 @@ test("structured metadata binds authoritative text to the exact post and ignores
     ],
   }], "1646249253686136");
   assert.equal(text, "Kupię za gotówkę mieszkanie w Łodzi");
+});
+
+test("direct post message wins over a sale description nested under an attachment", () => {
+  const resolution = extractFacebookAuthoritativeTextResolutionFromStructuredData([{
+    post_id: "1646249253686136",
+    message: "Kupię za gotówkę mieszkanie w Łodzi",
+    attachments: [{ description: "Sprzedam mieszkanie w Łodzi", media: { caption: "Sprzedam mieszkanie" } }],
+  }], "1646249253686136");
+  assert.equal(resolution.text, "Kupię za gotówkę mieszkanie w Łodzi");
+  assert.equal(resolution.selectedReason, "DIRECT_POST_MESSAGE");
+  const selected = resolution.candidates[resolution.selectedCandidateIndex ?? -1];
+  assert.deepEqual(selected.buy_signals, ["BUY_KUPIE"]);
+  assert.deepEqual(selected.sell_signals, []);
+  const attachment = resolution.candidates.find((candidate) => candidate.field_path_category === "ATTACHMENT_TEXT");
+  assert.deepEqual(attachment?.sell_signals, ["SELL_SPRZEDAM"]);
+  assert.equal(attachment?.direct_post_field, false);
+});
+
+test("metadata and DOM with opposing strong signals produce a controlled source conflict", () => {
+  const resolution = resolveFacebookAuthoritativeTextSources("Sprzedam mieszkanie w Łodzi", "Kupię za gotówkę mieszkanie w Łodzi");
+  assert.equal(resolution.source, "CONFLICT");
+  assert.equal(resolution.text, "");
+  assert.equal(resolution.conflict, true);
+});
+
+test("matching metadata and DOM BUY signals keep metadata authoritative", () => {
+  const resolution = resolveFacebookAuthoritativeTextSources("Kupię mieszkanie w Łodzi", "Kupię za gotówkę mieszkanie w Łodzi");
+  assert.equal(resolution.source, "POST_PAGE_METADATA");
+  assert.equal(resolution.text, "Kupię mieszkanie w Łodzi");
+  assert.equal(resolution.conflict, false);
+});
+
+test("matching metadata and DOM SELL signals keep metadata authoritative", () => {
+  const resolution = resolveFacebookAuthoritativeTextSources("Sprzedam mieszkanie w Łodzi", "Na sprzedaż mieszkanie w Łodzi");
+  assert.equal(resolution.source, "POST_PAGE_METADATA");
+  assert.equal(resolution.text, "Sprzedam mieszkanie w Łodzi");
+  assert.equal(resolution.conflict, false);
+});
+
+test("capture reports conflict when direct metadata SELL opposes clean post-region DOM BUY", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    await page.route("https://www.facebook.com/groups/1/posts/203/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
+    await page.goto("https://www.facebook.com/groups/1/posts/203/");
+    const metadata = JSON.stringify({ post_id: "203", message: "Sprzedam mieszkanie w Łodzi" });
+    await page.setContent(`<script type="application/json">${metadata}</script><main><section style="width:590px;height:400px"><div data-ad-comet-preview="message" style="height:80px">Kupię za gotówkę mieszkanie w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section></main>`);
+    const region = await captureFacebookPostRegion(page, "203");
+    assert.equal(region.authoritativePostText, "");
+    assert.equal(region.authoritativePostTextSource, "CONFLICT");
+  } finally { await browser.close(); }
 });
 
 test("capture prefers exact post metadata over neighboring sale text", async () => {

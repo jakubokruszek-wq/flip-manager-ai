@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import { inspectFacebookIntentSignals, type FacebookIntentSignalName } from "../../../features/facebook-watcher/facebook-intent.ts";
 import { logFacebookWorker } from "./logger.ts";
 
 export const MAX_FACEBOOK_DISCOVERED_POSTS = 50;
@@ -99,50 +100,157 @@ export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost,
   return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt, vision };
 }
 
-export function extractFacebookAuthoritativeTextFromStructuredData(values: unknown[], expectedPostId: string): string {
-  const candidates: Array<{ text: string; priority: number }> = [];
+export type FacebookMetadataTextCandidateDiagnostic = {
+  field_path_category: string;
+  field_name: string;
+  text_length: number;
+  nesting_depth: number;
+  direct_post_field: boolean;
+  under_attachment: boolean;
+  under_comment: boolean;
+  buy_signals: FacebookIntentSignalName[];
+  sell_signals: FacebookIntentSignalName[];
+};
+
+export type FacebookMetadataTextResolution = {
+  text: string;
+  candidates: FacebookMetadataTextCandidateDiagnostic[];
+  selectedCandidateIndex: number | null;
+  selectedReason: string;
+};
+
+export type FacebookAuthoritativeTextSourceResolution = {
+  text: string;
+  source: FacebookAuthoritativePostTextSource;
+  metadataBuySignals: FacebookIntentSignalName[];
+  metadataSellSignals: FacebookIntentSignalName[];
+  domBuySignals: FacebookIntentSignalName[];
+  domSellSignals: FacebookIntentSignalName[];
+  conflict: boolean;
+};
+
+type MetadataTextCandidate = FacebookMetadataTextCandidateDiagnostic & { text: string; priority: number; selectable: boolean };
+
+export function extractFacebookAuthoritativeTextResolutionFromStructuredData(values: unknown[], expectedPostId: string): FacebookMetadataTextResolution {
+  const candidates: MetadataTextCandidate[] = [];
   const idKey = /^(?:id|post_id|postid|story_fbid|feedback_target_id)$/i;
-  const textPriority: Record<string, number> = { message: 400, body: 300, story: 200, text: 100 };
-  const excludedKey = /comment|repl(?:y|ies)|feedback|reaction|actor|author|profile|recommend/i;
   const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   const directPostId = (value: Record<string, unknown>) => Object.entries(value).find(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number"))?.[1];
-  const collectLinkedText = (value: unknown, depth: number, inheritedPriority = 0): void => {
+  const attachmentKey = /attachment|media|photo|video|gallery|thumbnail/i;
+  const sharedKey = /share|shared|quoted|repost|reshare/i;
+  const commentKey = /comment|repl(?:y|ies)|feedback|reaction/i;
+  const accessibilityKey = /accessibility|alt(?:_text)?|recommend|sidebar|header/i;
+  const textualKey = /^(?:message|text|story|body|title|description|caption|alt|alt_text|accessibility_text)$/i;
+  const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim().slice(0, 2_000);
+  const addCandidate = (textValue: string, fieldName: string, path: string[], depth: number): void => {
+    const text = normalizeText(textValue);
+    if (text.length < 8) return;
+    const lowerPath = path.map((item) => item.toLowerCase());
+    const underAttachment = lowerPath.some((item) => attachmentKey.test(item));
+    const underShared = lowerPath.some((item) => sharedKey.test(item));
+    const underComment = lowerPath.some((item) => commentKey.test(item));
+    const underAccessibility = lowerPath.some((item) => accessibilityKey.test(item));
+    const directPath = lowerPath.join(".");
+    const directMessage = directPath === "message";
+    const directMessageText = directPath === "message.text";
+    const directBody = directPath === "body";
+    const directBodyText = directPath === "body.text";
+    const directStory = directPath === "story";
+    const selectable = !underAttachment && !underShared && !underComment && !underAccessibility
+      && (directMessage || directMessageText || directBody || directBodyText || directStory);
+    const priority = directMessage ? 500 : directMessageText ? 450 : directBodyText ? 440 : directBody ? 430 : directStory ? 400 : 0;
+    const category = directMessage ? "DIRECT_POST_MESSAGE"
+      : directMessageText ? "DIRECT_POST_MESSAGE_TEXT"
+        : directBodyText ? "DIRECT_POST_BODY_TEXT"
+          : directBody ? "DIRECT_POST_BODY"
+            : directStory ? "DIRECT_POST_STORY"
+              : underComment ? "COMMENT_TEXT"
+                : underShared ? "SHARED_CONTENT_TEXT"
+                  : underAttachment ? "ATTACHMENT_TEXT"
+                    : underAccessibility ? "ACCESSIBILITY_TEXT" : "NESTED_POST_TEXT";
+    const signals = inspectFacebookIntentSignals(text);
+    candidates.push({
+      text,
+      priority,
+      selectable,
+      field_path_category: category,
+      field_name: fieldName,
+      text_length: text.length,
+      nesting_depth: depth,
+      direct_post_field: selectable,
+      under_attachment: underAttachment,
+      under_comment: underComment,
+      buy_signals: signals.buySignals,
+      sell_signals: signals.sellSignals,
+    });
+  };
+  const collectLinkedCandidates = (value: unknown, path: string[], depth: number): void => {
     if (depth > 15 || value === null || value === undefined) return;
-    if (typeof value === "string") {
-      const text = value.replace(/\s+/g, " ").trim();
-      if (inheritedPriority > 0 && text.length >= 8 && text.length <= 5_000) candidates.push({ text: text.slice(0, 2_000), priority: inheritedPriority + Math.min(text.length, 1_000) / 10 });
-      return;
-    }
-    if (Array.isArray(value)) { for (const item of value) collectLinkedText(item, depth + 1, inheritedPriority); return; }
+    if (Array.isArray(value)) { for (const item of value) collectLinkedCandidates(item, path, depth + 1); return; }
     const row = record(value); if (!row) return;
     const nestedId = directPostId(row);
-    if (nestedId !== undefined && String(nestedId) !== expectedPostId) return;
+    if (depth > 0 && nestedId !== undefined && String(nestedId) !== expectedPostId) return;
     for (const [key, item] of Object.entries(row)) {
-      if (excludedKey.test(key)) continue;
-      const fieldPriority = textPriority[key.toLowerCase()] ?? 0;
-      const priority = fieldPriority > 0 ? Math.max(fieldPriority, inheritedPriority) : 0;
-      collectLinkedText(item, depth + 1, priority);
+      const nextPath = [...path, key];
+      if (typeof item === "string" && textualKey.test(key)) addCandidate(item, key, nextPath, depth);
+      else if (item && typeof item === "object") collectLinkedCandidates(item, nextPath, depth + 1);
     }
   };
+  const matchedRows = new Set<Record<string, unknown>>();
   const visit = (value: unknown, depth: number): void => {
     if (depth > 30 || value === null || value === undefined) return;
     if (Array.isArray(value)) { for (const item of value) visit(item, depth + 1); return; }
     const row = record(value); if (!row) return;
     const matched = Object.entries(row).some(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number") && String(item) === expectedPostId);
-    if (matched) collectLinkedText(row, 0);
+    if (matched && !matchedRows.has(row)) { matchedRows.add(row); collectLinkedCandidates(row, [], 0); }
     for (const item of Object.values(row)) if (item && typeof item === "object") visit(item, depth + 1);
   };
   for (const value of values) visit(value, 0);
-  return candidates.sort((left, right) => right.priority - left.priority || right.text.length - left.text.length)[0]?.text ?? "";
+  const selected = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => candidate.selectable)
+    .sort((left, right) => right.candidate.priority - left.candidate.priority || right.candidate.text.length - left.candidate.text.length)[0];
+  return {
+    text: selected?.candidate.text ?? "",
+    candidates: candidates.map(({ text: _text, priority: _priority, selectable: _selectable, ...diagnostic }) => diagnostic),
+    selectedCandidateIndex: selected?.index ?? null,
+    selectedReason: selected ? selected.candidate.field_path_category : "NO_APPROVED_DIRECT_POST_TEXT_FIELD",
+  };
 }
 
-async function extractFacebookAuthoritativeTextFromMetadata(page: Page, postId: string): Promise<string> {
+export function extractFacebookAuthoritativeTextFromStructuredData(values: unknown[], expectedPostId: string): string {
+  return extractFacebookAuthoritativeTextResolutionFromStructuredData(values, expectedPostId).text;
+}
+
+export function resolveFacebookAuthoritativeTextSources(metadataText: string, domText: string): FacebookAuthoritativeTextSourceResolution {
+  const metadataSignals = inspectFacebookIntentSignals(metadataText);
+  const domSignals = inspectFacebookIntentSignals(domText);
+  const orientation = (buy: FacebookIntentSignalName[], sell: FacebookIntentSignalName[]) => buy.length > 0 && sell.length === 0 ? "BUY" : sell.length > 0 && buy.length === 0 ? "SELL" : "NONE";
+  const metadataOrientation = orientation(metadataSignals.buySignals, metadataSignals.sellSignals);
+  const domOrientation = orientation(domSignals.buySignals, domSignals.sellSignals);
+  const conflict = metadataOrientation !== "NONE" && domOrientation !== "NONE" && metadataOrientation !== domOrientation;
+  const selected = conflict
+    ? { text: "", source: "CONFLICT" as const }
+    : metadataText ? { text: metadataText, source: "POST_PAGE_METADATA" as const }
+      : domText ? { text: domText, source: "POST_REGION_DOM" as const }
+        : { text: "", source: "NONE" as const };
+  return { ...selected, metadataBuySignals: metadataSignals.buySignals, metadataSellSignals: metadataSignals.sellSignals, domBuySignals: domSignals.buySignals, domSellSignals: domSignals.sellSignals, conflict };
+}
+
+async function extractFacebookAuthoritativeTextFromMetadata(page: Page, postId: string): Promise<FacebookMetadataTextResolution> {
   const sources = await page.locator('script[type="application/ld+json"],script[type="application/json"]').evaluateAll((scripts, targetPostId) => scripts
     .map((script) => script.textContent ?? "")
     .filter((source) => source.length > 0 && source.length <= 2_000_000 && source.includes(targetPostId))
     .slice(0, 100), postId);
   const values = sources.flatMap((source) => { try { return [JSON.parse(source) as unknown]; } catch { return []; } });
-  return extractFacebookAuthoritativeTextFromStructuredData(values, postId);
+  const resolution = extractFacebookAuthoritativeTextResolutionFromStructuredData(values, postId);
+  logFacebookWorker("FACEBOOK_METADATA_TEXT_CANDIDATES_DIAGNOSTIC", {
+    post_id: postId,
+    candidates: resolution.candidates.slice(0, 50),
+    selected_candidate_index: resolution.selectedCandidateIndex,
+    selected_reason: resolution.selectedReason,
+  });
+  return resolution;
 }
 
 export function canonicalFacebookPostUrl(value: string, expectedPostId?: string): DiscoveredFacebookPost | null {
@@ -506,7 +614,8 @@ export async function collectFacebookPostTimeDiagnostic(page: Page, postId: stri
 }
 
 export async function captureFacebookPostRegion(page: Page, postId: string, options: { mediaDiagnostic?: boolean } = {}): Promise<FacebookPostRegion> {
-  const metadataAuthoritativeText = await extractFacebookAuthoritativeTextFromMetadata(page, postId);
+  const metadataResolution = await extractFacebookAuthoritativeTextFromMetadata(page, postId);
+  const metadataAuthoritativeText = metadataResolution.text;
   const captureToken = `flip-${postId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic }) => {
     const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
@@ -985,7 +1094,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   });
   const selectedLocator = page.locator(`[data-flip-facebook-capture="${captureToken}"]`);
   const selectedElementBox = await selectedLocator.boundingBox().catch(() => null);
-  const domAuthoritativeText = metadataAuthoritativeText ? "" : await selectedLocator.evaluate((root, commentBoundaryY) => {
+  const domAuthoritativeText = await selectedLocator.evaluate((root, commentBoundaryY) => {
     const commentSelector = '[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]';
     const excludedSelector = 'nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"],[role="toolbar"],form,button,[role="button"]';
     const dedicatedSelector = '[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"]';
@@ -1010,10 +1119,18 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
     const selected = unique.sort((left, right) => Number(right.dedicated) - Number(left.dedicated) || right.text.length - left.text.length || left.order - right.order)[0];
     return selected?.text ?? "";
   }, region.screenshotDiagnostic.comment_boundary_y).catch(() => "");
-  const authoritativePostText = metadataAuthoritativeText || domAuthoritativeText;
-  const authoritativePostTextSource: FacebookAuthoritativePostTextSource = metadataAuthoritativeText
-    ? "POST_PAGE_METADATA"
-    : domAuthoritativeText ? "POST_REGION_DOM" : "NONE";
+  const authoritativeResolution = resolveFacebookAuthoritativeTextSources(metadataAuthoritativeText, domAuthoritativeText);
+  const authoritativePostText = authoritativeResolution.text;
+  const authoritativePostTextSource = authoritativeResolution.source;
+  logFacebookWorker("FACEBOOK_AUTHORITATIVE_TEXT_SOURCE_COMPARE", {
+    metadata_available: metadataAuthoritativeText.length > 0,
+    metadata_buy_signals: authoritativeResolution.metadataBuySignals,
+    metadata_sell_signals: authoritativeResolution.metadataSellSignals,
+    dom_available: domAuthoritativeText.length > 0,
+    dom_buy_signals: authoritativeResolution.domBuySignals,
+    dom_sell_signals: authoritativeResolution.domSellSignals,
+    sources_conflict: authoritativeResolution.conflict,
+  });
   logFacebookWorker("FACEBOOK_AUTHORITATIVE_TEXT_DIAGNOSTIC", {
     post_id: postId,
     source: authoritativePostTextSource,

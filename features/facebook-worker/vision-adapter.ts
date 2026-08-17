@@ -20,6 +20,21 @@ function resolveFacebookPostIntent(post: FacebookPostSnapshot) {
 }
 
 function resolveFacebookPostIntentWithSource(post: FacebookPostSnapshot) {
+  if (post.authoritativePostTextSource === "CONFLICT") {
+    return {
+      intent: {
+        intent: "UNKNOWN" as const,
+        confidence: 0.35,
+        reasonCode: "FACEBOOK_INTENT_UNKNOWN" as const,
+        deterministicIntent: "UNKNOWN" as const,
+        visionIntent: post.vision?.listingIntent ?? "UNKNOWN",
+        intentSource: "CONFLICT" as const,
+        conflict: true,
+      },
+      classifierText: "",
+      textSource: "CLASSIFIER_INPUT_SOURCE_CONFLICT",
+    };
+  }
   const authoritativePostText = post.authoritativePostText?.trim() ?? "";
   if (authoritativePostText) {
     return {
@@ -54,7 +69,9 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
   }
   return {
     url: post.permalink ?? undefined,
-    postText: post.authoritativePostText?.trim() || post.vision?.visibleText?.trim() || undefined,
+    postText: post.authoritativePostTextSource === "CONFLICT"
+      ? undefined
+      : post.authoritativePostText?.trim() || post.vision?.visibleText?.trim() || undefined,
     groupName,
     publishedAt: post.publishedAt ?? undefined,
     images: acceptedFacebookPropertyImages(post.imageUrls, vision?.imageAssessments),

@@ -27,7 +27,7 @@ export type FacebookPostSnapshot = {
   vision?: FacebookVisionExtraction | null;
 };
 
-export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "NONE"] as const;
+export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "CONFLICT", "NONE"] as const;
 export type FacebookAuthoritativePostTextSource = (typeof FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES)[number];
 
 export const FACEBOOK_LISTING_INTENTS = [

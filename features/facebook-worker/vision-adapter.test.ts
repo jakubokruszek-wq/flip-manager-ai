@@ -66,6 +66,15 @@ test("surrounding Vision sale text cannot override authoritative BUY post text",
   assert.equal(result.notProperty?.reasonCode, "FACEBOOK_BUY_REQUEST");
 });
 
+test("metadata and DOM intent conflict is skipped before persistence even when Vision says sale", async () => {
+  const conflicting = { ...post(vision(true)), authoritativePostText: "", authoritativePostTextSource: "CONFLICT" as const };
+  let persistenceCalls = 0;
+  const result = await persistEligibleFacebookPost(conflicting, async () => { persistenceCalls += 1; return persisted(); });
+  assert.equal(persistenceCalls, 0);
+  assert.equal(result.status, "skipped");
+  assert.equal(result.notProperty?.reasonCode, "FACEBOOK_INTENT_UNKNOWN");
+});
+
 test("unrelated portraits, group, quote and lifestyle images are not accepted", () => {
   const urls = ["portrait", "group", "quote", "lifestyle"];
   const assessments = urls.map((_, imageIndex) => ({ imageIndex, relevance: "NON_PROPERTY_IMAGE" as const, confidence: 0.99 }));
