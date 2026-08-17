@@ -30,22 +30,23 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const location = await resolveLocation({ address: street, street, district: explicitDistrict, city: explicitNeighborhood || explicitDistrict || /łódź/i.test(text) ? "Łódź" : null, locationText: text, title: text.split(/[.!?\n]/)[0] ?? null, description: text || null });
   const confidence = Math.min(0.98, 0.35 + known * 0.12);
   const intent = resolveFacebookListingIntent(text, input.listingIntent, input.intentConfidence);
+  const describesConcreteProperty = !["BUY_PROPERTY", "RENT_WANTED", "SERVICE", "OTHER"].includes(intent.intent);
   const property: FacebookProperty = {
     title: text.split(/[.!?\n]/)[0]?.trim().slice(0, 180) || "Oferta z Facebooka",
     city: location.city,
     neighborhood: explicitNeighborhood ?? location.neighborhood,
     district: explicitDistrict ?? location.district,
     street: street ?? location.street,
-    price: priceThousands ? Math.round((number(priceThousands[1]) ?? 0) * 1000) : number(priceFull?.[1]),
-    area,
-    rooms: number(explicitRooms?.[1]) ?? (mRooms ? Math.max(1, Number(mRooms[1]) - 1) : null),
-    floor: fraction ? Number(fraction[1]) : floor,
-    totalFloors: fraction ? Number(fraction[2]) : null,
-    marketType: /rynek pierwotny|deweloper/i.test(text) ? "primary" : /sprzedam|po babci|do remontu/i.test(text) ? "secondary" : null,
-    sellerType: /bez pośrednik|bezpośrednio|prywatnie/i.test(text) ? "private" : /biuro|agencj|pośrednik/i.test(text) ? "agency" : null,
-    condition: /remont|po babci/i.test(text) ? "renovation" : /po remoncie|do wejścia/i.test(text) ? "ready" : null,
+    price: describesConcreteProperty ? priceThousands ? Math.round((number(priceThousands[1]) ?? 0) * 1000) : number(priceFull?.[1]) : null,
+    area: describesConcreteProperty ? area : null,
+    rooms: describesConcreteProperty ? number(explicitRooms?.[1]) ?? (mRooms ? Math.max(1, Number(mRooms[1]) - 1) : null) : null,
+    floor: describesConcreteProperty ? fraction ? Number(fraction[1]) : floor : null,
+    totalFloors: describesConcreteProperty && fraction ? Number(fraction[2]) : null,
+    marketType: describesConcreteProperty ? /rynek pierwotny|deweloper/i.test(text) ? "primary" : /sprzedam|po babci|do remontu/i.test(text) ? "secondary" : null : null,
+    sellerType: describesConcreteProperty ? /bez pośrednik|bezpośrednio|prywatnie/i.test(text) ? "private" : /biuro|agencj|pośrednik/i.test(text) ? "agency" : null : null,
+    condition: describesConcreteProperty ? /remont|po babci/i.test(text) ? "renovation" : /po remoncie|do wejścia/i.test(text) ? "ready" : null : null,
     description: text || null, originalUrl: input.url ?? null, images: input.images ?? [],
-    confidence, flags, listingIntent: intent.intent, intentConfidence: intent.confidence,
+    confidence, flags, listingIntent: intent.intent, intentConfidence: intent.confidence, intentSource: intent.intentSource,
     imageAssessments: input.imageAssessments ?? [],
   };
   property.fieldConfidence = Object.fromEntries([

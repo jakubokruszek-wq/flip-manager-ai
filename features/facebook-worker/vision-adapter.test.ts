@@ -47,11 +47,12 @@ test("Vision not-a-property is skipped without persistence", async () => {
 
 test("buy request is gated before persistence, matching, score, alerts and price history", async () => {
   const text = "Kupię za gotówkę mieszkanie 1-2 pokoje (30-40m2) w Łodzi. Może być do remontu. Do 220 000 zł";
-  const buy = { ...vision(true), listingIntent: "BUY_PROPERTY" as const, intentConfidence: 0.99, visibleText: text, price: 220_000, area: 40, rooms: 2 };
+  const buy = { ...vision(true), listingIntent: "SELL_PROPERTY" as const, intentConfidence: 0.98, visibleText: "Mieszkanie w Łodzi", price: 220_000, area: 40, rooms: 2 };
+  const item = { ...post(buy), text, imageUrls: ["unrelated-profile"] };
   let persistenceCalls = 0;
-  const result = await persistEligibleFacebookPost(post(buy), async () => { persistenceCalls += 1; return persisted(); });
+  const result = await persistEligibleFacebookPost(item, async () => { persistenceCalls += 1; return persisted(); });
   assert.equal(persistenceCalls, 0);
-  assert.deepEqual({ status: result.status, listingId: result.listingId, matched: result.matched, matchCreated: result.matchCreated, priceDrops: result.priceDrops }, { status: "skipped", listingId: null, matched: false, matchCreated: false, priceDrops: 0 });
+  assert.deepEqual({ status: result.status, listingId: result.listingId, matched: result.matched, matchCreated: result.matchCreated, priceDrops: result.priceDrops, imagesMirrored: result.imagesMirrored }, { status: "skipped", listingId: null, matched: false, matchCreated: false, priceDrops: 0, imagesMirrored: 0 });
   assert.equal(result.notProperty?.reasonCode, "FACEBOOK_BUY_REQUEST");
 });
 

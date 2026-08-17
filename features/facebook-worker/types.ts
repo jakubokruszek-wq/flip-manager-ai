@@ -30,6 +30,11 @@ export const FACEBOOK_LISTING_INTENTS = [
 ] as const;
 export type FacebookListingIntent = (typeof FACEBOOK_LISTING_INTENTS)[number];
 
+export const FACEBOOK_INTENT_SOURCES = [
+  "DETERMINISTIC_BUY", "DETERMINISTIC_SELL", "VISION", "CONFLICT", "UNKNOWN",
+] as const;
+export type FacebookIntentSource = (typeof FACEBOOK_INTENT_SOURCES)[number];
+
 export const FACEBOOK_IMAGE_RELEVANCE = ["PROPERTY_IMAGE", "NON_PROPERTY_IMAGE", "UNKNOWN"] as const;
 export type FacebookImageRelevance = (typeof FACEBOOK_IMAGE_RELEVANCE)[number];
 export type FacebookImageAssessment = {

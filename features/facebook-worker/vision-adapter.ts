@@ -6,8 +6,17 @@ import type { FacebookPostImportResult } from "./post-flow.ts";
 const MIN_PROPERTY_IMAGE_CONFIDENCE = 0.8;
 
 export function evaluateFacebookPersistenceGate(post: FacebookPostSnapshot) {
-  const intent = resolveFacebookListingIntent(post.vision?.visibleText ?? post.text, post.vision?.listingIntent, post.vision?.intentConfidence);
+  const intent = resolveFacebookPostIntent(post);
+  console.info("FACEBOOK_INTENT_DECISION", { deterministic_intent: intent.deterministicIntent, vision_intent: intent.visionIntent, final_intent: intent.intent, intent_source: intent.intentSource, conflict: intent.conflict });
   return { ...intent, allowed: post.vision?.isProperty === true && intent.intent === "SELL_PROPERTY" };
+}
+
+function resolveFacebookPostIntent(post: FacebookPostSnapshot) {
+  const deterministic = resolveFacebookListingIntent(post.text, null, null);
+  const intent = deterministic.intentSource === "DETERMINISTIC_BUY" || deterministic.intentSource === "DETERMINISTIC_SELL" || deterministic.intentSource === "CONFLICT"
+    ? { ...deterministic, visionIntent: post.vision?.listingIntent ?? "UNKNOWN" }
+    : resolveFacebookListingIntent(facebookVisionIntentText(post), post.vision?.listingIntent, post.vision?.intentConfidence);
+  return intent;
 }
 
 export async function persistEligibleFacebookPost(
@@ -22,6 +31,7 @@ export async function persistEligibleFacebookPost(
 
 export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupName: string): FacebookListingInput {
   const vision = post.vision;
+  const intent = resolveFacebookPostIntent(post);
   const overrides: NonNullable<FacebookListingInput["overrides"]> = {};
   if (vision) {
     assignKnown(overrides, "title", vision.title); assignKnown(overrides, "description", vision.description);
@@ -31,7 +41,7 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
   }
   return {
     url: post.permalink ?? undefined,
-    postText: (vision?.visibleText ?? post.text) || undefined,
+    postText: post.text || facebookVisionIntentText(post) || undefined,
     groupName,
     publishedAt: post.publishedAt ?? undefined,
     images: acceptedFacebookPropertyImages(post.imageUrls, vision?.imageAssessments),
@@ -39,10 +49,15 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
     analysisConfidence: vision?.confidence,
     analysisFieldConfidence: vision?.fieldConfidence,
     analysisFlags: vision ? ["vision_post_region"] : undefined,
-    listingIntent: vision?.listingIntent,
-    intentConfidence: vision?.intentConfidence,
+    listingIntent: intent.intent,
+    intentConfidence: intent.confidence,
+    intentSource: intent.intentSource,
     imageAssessments: vision?.imageAssessments,
   };
+}
+
+function facebookVisionIntentText(post: FacebookPostSnapshot): string {
+  return [...new Set([post.vision?.visibleText, post.vision?.title, post.vision?.description].map((value) => value?.trim()).filter((value): value is string => Boolean(value)))].join("\n");
 }
 
 export function acceptedFacebookPropertyImages(imageUrls: string[], assessments: FacebookVisionExtraction["imageAssessments"] | undefined): string[] {

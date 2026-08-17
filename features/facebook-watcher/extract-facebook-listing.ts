@@ -36,6 +36,7 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     fieldConfidence: selectFieldConfidence(textResult, vision),
     listingIntent: intent.intent,
     intentConfidence: intent.confidence,
+    intentSource: intent.intentSource,
     imageAssessments: vision.imageAssessments,
     images: acceptedImages,
   };

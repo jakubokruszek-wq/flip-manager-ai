@@ -25,6 +25,7 @@ export function normalizeFacebookListing(input: FacebookListingInput): FacebookL
     analysisFlags: input.analysisFlags,
     listingIntent: input.listingIntent,
     intentConfidence: input.intentConfidence,
+    intentSource: input.intentSource,
     imageAssessments: input.imageAssessments,
   };
 }
