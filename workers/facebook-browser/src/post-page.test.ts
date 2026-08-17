@@ -42,6 +42,29 @@ test("direct post message wins over a sale description nested under an attachmen
   assert.equal(attachment?.direct_post_field, false);
 });
 
+test("outer BUY message wins over a SELL shared story bound to the same root post", () => {
+  const resolution = extractFacebookAuthoritativeTextResolutionFromStructuredData([{
+    post_id: "1646249253686136",
+    actor: { id: "author-node" },
+    message: { text: "Kupię za gotówkę mieszkanie 1-2 pokoje w Łodzi" },
+    attached_story: {
+      post_id: "embedded-sale-post",
+      message: { text: "Sprzedam mieszkanie 42 m2 w Łodzi" },
+    },
+  }], "1646249253686136");
+  assert.equal(resolution.outerText, "Kupię za gotówkę mieszkanie 1-2 pokoje w Łodzi");
+  assert.equal(resolution.sharedText, "Sprzedam mieszkanie 42 m2 w Łodzi");
+  assert.deepEqual(resolution.candidates.find((candidate) => candidate.text_layer === "OUTER_POST_TEXT")?.buy_signals, ["BUY_KUPIE"]);
+  assert.deepEqual(resolution.candidates.find((candidate) => candidate.text_layer === "SHARED_POST_TEXT")?.sell_signals, ["SELL_SPRZEDAM"]);
+});
+
+test("shared post is an explicit fallback only when outer post text is empty", () => {
+  const resolution = resolveFacebookAuthoritativeTextSources("", "", "Sprzedam mieszkanie 42 m2 w Łodzi", "");
+  assert.equal(resolution.source, "SHARED_POST_FALLBACK");
+  assert.equal(resolution.selectedLayer, "SHARED_POST_TEXT");
+  assert.equal(resolution.text, "Sprzedam mieszkanie 42 m2 w Łodzi");
+});
+
 test("metadata and DOM with opposing strong signals produce a controlled source conflict", () => {
   const resolution = resolveFacebookAuthoritativeTextSources("Sprzedam mieszkanie w Łodzi", "Kupię za gotówkę mieszkanie w Łodzi");
   assert.equal(resolution.source, "CONFLICT");
@@ -74,6 +97,19 @@ test("capture reports conflict when direct metadata SELL opposes clean post-regi
     const region = await captureFacebookPostRegion(page, "203");
     assert.equal(region.authoritativePostText, "");
     assert.equal(region.authoritativePostTextSource, "CONFLICT");
+  } finally { await browser.close(); }
+});
+
+test("post-region geometry keeps outer BUY separate from an embedded SELL card", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 1000 } });
+    await page.route("https://www.facebook.com/groups/1/posts/204/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
+    await page.goto("https://www.facebook.com/groups/1/posts/204/");
+    await page.setContent(`<main><section style="width:590px;height:600px"><div data-ad-comet-preview="message" style="height:100px">Kupię za gotówkę mieszkanie w Łodzi</div><section data-testid="shared-post" style="height:500px"><div dir="auto" style="height:80px">Sprzedam mieszkanie 42 m2 w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='420'%3E%3C/svg%3E" style="display:block;width:590px;height:420px"></section></section></main>`);
+    const region = await captureFacebookPostRegion(page, "204");
+    assert.equal(region.authoritativePostText, "Kupię za gotówkę mieszkanie w Łodzi");
+    assert.equal(region.authoritativePostTextSource, "POST_REGION_DOM");
   } finally { await browser.close(); }
 });
 

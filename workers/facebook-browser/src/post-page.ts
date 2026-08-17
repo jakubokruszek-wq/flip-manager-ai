@@ -102,18 +102,27 @@ export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost,
 
 export type FacebookMetadataTextCandidateDiagnostic = {
   field_path_category: string;
+  text_layer: FacebookPostTextLayer;
   field_name: string;
   text_length: number;
   nesting_depth: number;
   direct_post_field: boolean;
   under_attachment: boolean;
+  under_shared: boolean;
+  under_media: boolean;
   under_comment: boolean;
   buy_signals: FacebookIntentSignalName[];
   sell_signals: FacebookIntentSignalName[];
 };
 
+export type FacebookPostTextLayer = "OUTER_POST_TEXT" | "SHARED_POST_TEXT" | "ATTACHMENT_TEXT" | "MEDIA_TEXT" | "COMMENT_TEXT" | "IGNORED_TEXT";
+
 export type FacebookMetadataTextResolution = {
   text: string;
+  outerText: string;
+  sharedText: string;
+  attachmentText: string;
+  mediaText: string;
   candidates: FacebookMetadataTextCandidateDiagnostic[];
   selectedCandidateIndex: number | null;
   selectedReason: string;
@@ -127,6 +136,7 @@ export type FacebookAuthoritativeTextSourceResolution = {
   domBuySignals: FacebookIntentSignalName[];
   domSellSignals: FacebookIntentSignalName[];
   conflict: boolean;
+  selectedLayer: "OUTER_POST_TEXT" | "SHARED_POST_TEXT" | "NONE" | "CONFLICT";
 };
 
 type MetadataTextCandidate = FacebookMetadataTextCandidateDiagnostic & { text: string; priority: number; selectable: boolean };
@@ -136,85 +146,109 @@ export function extractFacebookAuthoritativeTextResolutionFromStructuredData(val
   const idKey = /^(?:id|post_id|postid|story_fbid|feedback_target_id)$/i;
   const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   const directPostId = (value: Record<string, unknown>) => Object.entries(value).find(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number"))?.[1];
-  const attachmentKey = /attachment|media|photo|video|gallery|thumbnail/i;
-  const sharedKey = /share|shared|quoted|repost|reshare/i;
+  const attachmentKey = /attachment/i;
+  const mediaKey = /media|photo|video|gallery|thumbnail/i;
+  const sharedKey = /attached_story|shared_story|reshared_post|shared_post|quoted|repost|reshare|substory|share/i;
   const commentKey = /comment|repl(?:y|ies)|feedback|reaction/i;
   const accessibilityKey = /accessibility|alt(?:_text)?|recommend|sidebar|header/i;
   const textualKey = /^(?:message|text|story|body|title|description|caption|alt|alt_text|accessibility_text)$/i;
   const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim().slice(0, 2_000);
-  const addCandidate = (textValue: string, fieldName: string, path: string[], depth: number): void => {
+  const addCandidate = (textValue: string, fieldName: string, path: string[], depth: number, inheritedPath: string[]): void => {
     const text = normalizeText(textValue);
     if (text.length < 8) return;
-    const lowerPath = path.map((item) => item.toLowerCase());
+    const lowerPath = [...inheritedPath, ...path].map((item) => item.toLowerCase());
+    const relativePath = path.map((item) => item.toLowerCase());
     const underAttachment = lowerPath.some((item) => attachmentKey.test(item));
+    const underMedia = lowerPath.some((item) => mediaKey.test(item));
     const underShared = lowerPath.some((item) => sharedKey.test(item));
     const underComment = lowerPath.some((item) => commentKey.test(item));
     const underAccessibility = lowerPath.some((item) => accessibilityKey.test(item));
-    const directPath = lowerPath.join(".");
+    const semanticBoundary = relativePath.reduce((last, item, index) => sharedKey.test(item) || attachmentKey.test(item) || mediaKey.test(item) || commentKey.test(item) ? index : last, -1);
+    const directPath = relativePath.slice(semanticBoundary + 1).join(".");
     const directMessage = directPath === "message";
     const directMessageText = directPath === "message.text";
     const directBody = directPath === "body";
     const directBodyText = directPath === "body.text";
     const directStory = directPath === "story";
-    const selectable = !underAttachment && !underShared && !underComment && !underAccessibility
-      && (directMessage || directMessageText || directBody || directBodyText || directStory);
+    const approvedDirectField = directMessage || directMessageText || directBody || directBodyText || directStory;
+    const outerSelectable = !underAttachment && !underMedia && !underShared && !underComment && !underAccessibility && approvedDirectField;
+    const sharedSelectable = underShared && !underComment && !underAccessibility && approvedDirectField;
+    const selectable = outerSelectable || sharedSelectable;
     const priority = directMessage ? 500 : directMessageText ? 450 : directBodyText ? 440 : directBody ? 430 : directStory ? 400 : 0;
-    const category = directMessage ? "DIRECT_POST_MESSAGE"
+    const layer: FacebookPostTextLayer = underComment ? "COMMENT_TEXT"
+      : underShared ? "SHARED_POST_TEXT"
+        : underMedia ? "MEDIA_TEXT"
+          : underAttachment ? "ATTACHMENT_TEXT"
+            : outerSelectable ? "OUTER_POST_TEXT" : "IGNORED_TEXT";
+    const category = underComment ? "COMMENT_TEXT"
+      : underShared ? "SHARED_CONTENT_TEXT"
+        : underMedia ? "MEDIA_TEXT"
+          : underAttachment ? "ATTACHMENT_TEXT"
+            : directMessage ? "DIRECT_POST_MESSAGE"
       : directMessageText ? "DIRECT_POST_MESSAGE_TEXT"
         : directBodyText ? "DIRECT_POST_BODY_TEXT"
           : directBody ? "DIRECT_POST_BODY"
             : directStory ? "DIRECT_POST_STORY"
-              : underComment ? "COMMENT_TEXT"
-                : underShared ? "SHARED_CONTENT_TEXT"
-                  : underAttachment ? "ATTACHMENT_TEXT"
-                    : underAccessibility ? "ACCESSIBILITY_TEXT" : "NESTED_POST_TEXT";
+              : underAccessibility ? "ACCESSIBILITY_TEXT" : "NESTED_POST_TEXT";
     const signals = inspectFacebookIntentSignals(text);
     candidates.push({
       text,
       priority,
       selectable,
       field_path_category: category,
+      text_layer: layer,
       field_name: fieldName,
       text_length: text.length,
       nesting_depth: depth,
-      direct_post_field: selectable,
+      direct_post_field: outerSelectable,
       under_attachment: underAttachment,
+      under_shared: underShared,
+      under_media: underMedia,
       under_comment: underComment,
       buy_signals: signals.buySignals,
       sell_signals: signals.sellSignals,
     });
   };
-  const collectLinkedCandidates = (value: unknown, path: string[], depth: number): void => {
+  const collectLinkedCandidates = (value: unknown, path: string[], depth: number, inheritedPath: string[]): void => {
     if (depth > 15 || value === null || value === undefined) return;
-    if (Array.isArray(value)) { for (const item of value) collectLinkedCandidates(item, path, depth + 1); return; }
+    if (Array.isArray(value)) { for (const item of value) collectLinkedCandidates(item, path, depth + 1, inheritedPath); return; }
     const row = record(value); if (!row) return;
     const nestedId = directPostId(row);
-    if (depth > 0 && nestedId !== undefined && String(nestedId) !== expectedPostId) return;
+    const explicitEmbeddedContext = path.some((item) => sharedKey.test(item) || attachmentKey.test(item) || mediaKey.test(item));
+    if (depth > 0 && nestedId !== undefined && String(nestedId) !== expectedPostId && !explicitEmbeddedContext) return;
     for (const [key, item] of Object.entries(row)) {
       const nextPath = [...path, key];
-      if (typeof item === "string" && textualKey.test(key)) addCandidate(item, key, nextPath, depth);
-      else if (item && typeof item === "object") collectLinkedCandidates(item, nextPath, depth + 1);
+      if (typeof item === "string" && textualKey.test(key)) addCandidate(item, key, nextPath, depth, inheritedPath);
+      else if (item && typeof item === "object") collectLinkedCandidates(item, nextPath, depth + 1, inheritedPath);
     }
   };
   const matchedRows = new Set<Record<string, unknown>>();
-  const visit = (value: unknown, depth: number): void => {
+  const visit = (value: unknown, depth: number, path: string[]): void => {
     if (depth > 30 || value === null || value === undefined) return;
-    if (Array.isArray(value)) { for (const item of value) visit(item, depth + 1); return; }
+    if (Array.isArray(value)) { for (const item of value) visit(item, depth + 1, path); return; }
     const row = record(value); if (!row) return;
     const matched = Object.entries(row).some(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number") && String(item) === expectedPostId);
-    if (matched && !matchedRows.has(row)) { matchedRows.add(row); collectLinkedCandidates(row, [], 0); }
-    for (const item of Object.values(row)) if (item && typeof item === "object") visit(item, depth + 1);
+    if (matched && !matchedRows.has(row)) { matchedRows.add(row); collectLinkedCandidates(row, [], 0, path); }
+    for (const [key, item] of Object.entries(row)) if (item && typeof item === "object") visit(item, depth + 1, [...path, key]);
   };
-  for (const value of values) visit(value, 0);
-  const selected = candidates
+  for (const value of values) visit(value, 0, []);
+  const ranked = (layer: FacebookPostTextLayer) => candidates
     .map((candidate, index) => ({ candidate, index }))
-    .filter(({ candidate }) => candidate.selectable)
+    .filter(({ candidate }) => candidate.selectable && candidate.text_layer === layer)
     .sort((left, right) => right.candidate.priority - left.candidate.priority || right.candidate.text.length - left.candidate.text.length)[0];
+  const selectedOuter = ranked("OUTER_POST_TEXT");
+  const selectedShared = ranked("SHARED_POST_TEXT");
+  const selected = selectedOuter ?? selectedShared;
+  const longest = (layer: FacebookPostTextLayer) => candidates.filter((candidate) => candidate.text_layer === layer).sort((left, right) => right.text.length - left.text.length)[0]?.text ?? "";
   return {
     text: selected?.candidate.text ?? "",
+    outerText: selectedOuter?.candidate.text ?? "",
+    sharedText: selectedShared?.candidate.text ?? "",
+    attachmentText: longest("ATTACHMENT_TEXT"),
+    mediaText: longest("MEDIA_TEXT"),
     candidates: candidates.map(({ text: _text, priority: _priority, selectable: _selectable, ...diagnostic }) => diagnostic),
     selectedCandidateIndex: selected?.index ?? null,
-    selectedReason: selected ? selected.candidate.field_path_category : "NO_APPROVED_DIRECT_POST_TEXT_FIELD",
+    selectedReason: selectedOuter ? selectedOuter.candidate.field_path_category : selectedShared ? "SHARED_POST_FALLBACK" : "NO_APPROVED_DIRECT_POST_TEXT_FIELD",
   };
 }
 
@@ -222,19 +256,29 @@ export function extractFacebookAuthoritativeTextFromStructuredData(values: unkno
   return extractFacebookAuthoritativeTextResolutionFromStructuredData(values, expectedPostId).text;
 }
 
-export function resolveFacebookAuthoritativeTextSources(metadataText: string, domText: string): FacebookAuthoritativeTextSourceResolution {
+export function resolveFacebookAuthoritativeTextSources(metadataText: string, domText: string, metadataSharedText = "", domSharedText = ""): FacebookAuthoritativeTextSourceResolution {
   const metadataSignals = inspectFacebookIntentSignals(metadataText);
   const domSignals = inspectFacebookIntentSignals(domText);
   const orientation = (buy: FacebookIntentSignalName[], sell: FacebookIntentSignalName[]) => buy.length > 0 && sell.length === 0 ? "BUY" : sell.length > 0 && buy.length === 0 ? "SELL" : "NONE";
   const metadataOrientation = orientation(metadataSignals.buySignals, metadataSignals.sellSignals);
   const domOrientation = orientation(domSignals.buySignals, domSignals.sellSignals);
   const conflict = metadataOrientation !== "NONE" && domOrientation !== "NONE" && metadataOrientation !== domOrientation;
-  const selected = conflict
+  const sharedMetadataSignals = inspectFacebookIntentSignals(metadataSharedText);
+  const sharedDomSignals = inspectFacebookIntentSignals(domSharedText);
+  const outerAvailable = Boolean(metadataText || domText);
+  const sharedConflict = !outerAvailable
+    && orientation(sharedMetadataSignals.buySignals, sharedMetadataSignals.sellSignals) !== "NONE"
+    && orientation(sharedDomSignals.buySignals, sharedDomSignals.sellSignals) !== "NONE"
+    && orientation(sharedMetadataSignals.buySignals, sharedMetadataSignals.sellSignals) !== orientation(sharedDomSignals.buySignals, sharedDomSignals.sellSignals);
+  const selected = conflict || sharedConflict
     ? { text: "", source: "CONFLICT" as const }
     : metadataText ? { text: metadataText, source: "POST_PAGE_METADATA" as const }
       : domText ? { text: domText, source: "POST_REGION_DOM" as const }
+        : metadataSharedText ? { text: metadataSharedText, source: "SHARED_POST_FALLBACK" as const }
+          : domSharedText ? { text: domSharedText, source: "SHARED_POST_FALLBACK" as const }
         : { text: "", source: "NONE" as const };
-  return { ...selected, metadataBuySignals: metadataSignals.buySignals, metadataSellSignals: metadataSignals.sellSignals, domBuySignals: domSignals.buySignals, domSellSignals: domSignals.sellSignals, conflict };
+  const selectedLayer = selected.source === "CONFLICT" ? "CONFLICT" : selected.source === "SHARED_POST_FALLBACK" ? "SHARED_POST_TEXT" : selected.source === "NONE" ? "NONE" : "OUTER_POST_TEXT";
+  return { ...selected, metadataBuySignals: metadataSignals.buySignals, metadataSellSignals: metadataSignals.sellSignals, domBuySignals: domSignals.buySignals, domSellSignals: domSignals.sellSignals, conflict: conflict || sharedConflict, selectedLayer };
 }
 
 async function extractFacebookAuthoritativeTextFromMetadata(page: Page, postId: string): Promise<FacebookMetadataTextResolution> {
@@ -251,6 +295,89 @@ async function extractFacebookAuthoritativeTextFromMetadata(page: Page, postId: 
     selected_reason: resolution.selectedReason,
   });
   return resolution;
+}
+
+export type FacebookDomPostTextLayers = {
+  outerText: string;
+  sharedText: string;
+  attachmentText: string;
+  mediaText: string;
+  sharedContentDetected: boolean;
+};
+
+async function extractFacebookPostTextLayersFromDom(page: Page, captureToken: string, postId: string, commentBoundaryY: number | null): Promise<FacebookDomPostTextLayers> {
+  return page.evaluate(({ captureToken: token, expectedPostId, commentBoundary }) => {
+    const empty = { outerText: "", sharedText: "", attachmentText: "", mediaText: "", sharedContentDetected: false };
+    const selectedRoot = document.querySelector<HTMLElement>(`[data-flip-facebook-capture="${token}"]`);
+    const main = document.querySelector<HTMLElement>('main,[role="main"]') ?? document.body;
+    if (!selectedRoot || !main) return empty;
+    const commentSelector = '[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]';
+    const excludedSelector = 'nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"],[role="toolbar"],form,button,[role="button"]';
+    const dedicatedSelector = '[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"]';
+    const candidateSelector = `${dedicatedSelector},div[dir="auto"],p,[data-lexical-text="true"]`;
+    const sharedSelector = '[data-testid*="shared" i],[data-testid*="reshare" i],[data-ad-preview*="attachment" i],[data-ad-comet-preview*="attachment" i],blockquote';
+    const attachmentSelector = '[data-testid*="attachment" i],[data-ad-preview*="attachment" i],[data-ad-comet-preview*="attachment" i]';
+    const mediaSelector = 'picture,video,[role="img"],[style*="background-image"]';
+    const uiOnly = /^(?:lubię to!?|like|odpowiedz|reply|udostępnij|share|wyślij|send|więcej|see more)$/iu;
+    const selectedRect = selectedRoot.getBoundingClientRect();
+    const overlapRatio = (rect: DOMRect) => Math.max(0, Math.min(rect.right, selectedRect.right) - Math.max(rect.left, selectedRect.left)) / Math.max(1, Math.min(rect.width, selectedRect.width));
+    const explicitSharedRoots = Array.from(main.querySelectorAll<HTMLElement>(sharedSelector));
+    for (const anchor of Array.from(main.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]'))) {
+      try {
+        const match = new URL(anchor.href, location.href).pathname.match(/\/posts\/(\d+)/i);
+        if (!match || match[1] === expectedPostId || new URL(anchor.href, location.href).searchParams.has("comment_id")) continue;
+        let ancestor: HTMLElement | null = anchor;
+        for (let depth = 0; ancestor && depth < 8; depth += 1, ancestor = ancestor.parentElement) {
+          const rect = ancestor.getBoundingClientRect();
+          if (rect.width >= 250 && rect.height >= 100) { explicitSharedRoots.push(ancestor); break; }
+        }
+      } catch { /* Ignore malformed hrefs. */ }
+    }
+    const uniqueSharedRoots = explicitSharedRoots.filter((root, index) => explicitSharedRoots.indexOf(root) === index);
+    type Candidate = { text: string; order: number; dedicated: boolean; rect: DOMRect; insideSelected: boolean; insideShared: boolean; insideAttachment: boolean; insideMedia: boolean };
+    const candidates = Array.from(main.querySelectorAll<HTMLElement>(candidateSelector)).flatMap((element, order): Candidate[] => {
+      if (element.closest(commentSelector) || element.closest(excludedSelector)) return [];
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const pageTop = rect.top + window.scrollY;
+      if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return [];
+      if (commentBoundary !== null && pageTop >= commentBoundary - 1) return [];
+      const text = element.innerText.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter((line) => line.length > 0 && !uiOnly.test(line)).join(" ").trim();
+      if (text.length < 8 || text.length > 5_000) return [];
+      return [{
+        text: text.slice(0, 2_000), order, dedicated: element.matches(dedicatedSelector), rect,
+        insideSelected: selectedRoot.contains(element),
+        insideShared: uniqueSharedRoots.some((root) => root.contains(element)),
+        insideAttachment: Boolean(element.closest(attachmentSelector)),
+        insideMedia: Boolean(element.closest(mediaSelector)),
+      }];
+    });
+    const outerAboveSelected = candidates.filter((candidate) => !candidate.insideSelected
+      && candidate.rect.bottom <= selectedRect.top + 16
+      && selectedRect.top - candidate.rect.bottom <= 500
+      && overlapRatio(candidate.rect) >= 0.5);
+    const firstSharedTop = uniqueSharedRoots.reduce((top, root) => Math.min(top, root.getBoundingClientRect().top), Number.POSITIVE_INFINITY);
+    const outerInsideComposite = candidates.filter((candidate) => candidate.insideSelected && !candidate.insideShared
+      && Number.isFinite(firstSharedTop) && candidate.rect.bottom <= firstSharedTop + 8);
+    const outerCandidates = [...outerAboveSelected, ...outerInsideComposite];
+    const geometryComposite = outerAboveSelected.length > 0 && candidates.some((candidate) => candidate.insideSelected);
+    const sharedContentDetected = uniqueSharedRoots.length > 0 || geometryComposite;
+    const sharedCandidates = candidates.filter((candidate) => candidate.insideShared || geometryComposite && candidate.insideSelected);
+    const attachmentCandidates = candidates.filter((candidate) => candidate.insideAttachment && !candidate.insideShared);
+    const mediaCandidates = candidates.filter((candidate) => candidate.insideMedia && !candidate.insideShared);
+    const pick = (pool: Candidate[]) => {
+      const unique = pool.filter((candidate, index) => pool.findIndex((other) => other.text === candidate.text) === index);
+      return unique.sort((left, right) => Number(right.dedicated) - Number(left.dedicated) || right.text.length - left.text.length || left.order - right.order)[0]?.text ?? "";
+    };
+    const fallbackOuter = sharedContentDetected ? "" : pick(candidates.filter((candidate) => candidate.insideSelected && !candidate.insideAttachment && !candidate.insideMedia));
+    return {
+      outerText: pick(outerCandidates) || fallbackOuter,
+      sharedText: pick(sharedCandidates),
+      attachmentText: pick(attachmentCandidates),
+      mediaText: pick(mediaCandidates),
+      sharedContentDetected,
+    };
+  }, { captureToken, expectedPostId: postId, commentBoundary: commentBoundaryY }).catch(() => ({ outerText: "", sharedText: "", attachmentText: "", mediaText: "", sharedContentDetected: false }));
 }
 
 export function canonicalFacebookPostUrl(value: string, expectedPostId?: string): DiscoveredFacebookPost | null {
@@ -615,7 +742,6 @@ export async function collectFacebookPostTimeDiagnostic(page: Page, postId: stri
 
 export async function captureFacebookPostRegion(page: Page, postId: string, options: { mediaDiagnostic?: boolean } = {}): Promise<FacebookPostRegion> {
   const metadataResolution = await extractFacebookAuthoritativeTextFromMetadata(page, postId);
-  const metadataAuthoritativeText = metadataResolution.text;
   const captureToken = `flip-${postId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic }) => {
     const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
@@ -1094,39 +1220,35 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   });
   const selectedLocator = page.locator(`[data-flip-facebook-capture="${captureToken}"]`);
   const selectedElementBox = await selectedLocator.boundingBox().catch(() => null);
-  const domAuthoritativeText = await selectedLocator.evaluate((root, commentBoundaryY) => {
-    const commentSelector = '[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]';
-    const excludedSelector = 'nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"],[role="toolbar"],form,button,[role="button"]';
-    const dedicatedSelector = '[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"]';
-    const candidateSelector = `${dedicatedSelector},div[dir="auto"],p,[data-lexical-text="true"]`;
-    const uiOnly = /^(?:lubię to!?|like|odpowiedz|reply|udostępnij|share|wyślij|send|więcej|see more)$/iu;
-    const candidates = Array.from(root.querySelectorAll<HTMLElement>(candidateSelector)).flatMap((element, order) => {
-      if (element.closest(commentSelector) || element.closest(excludedSelector)) return [];
-      const nestedArticle = element.closest<HTMLElement>('[role="article"]');
-      if (nestedArticle && nestedArticle !== root && nestedArticle.getBoundingClientRect().height < 220) return [];
-      const rect = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      const pageTop = rect.top + window.scrollY;
-      if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return [];
-      if (commentBoundaryY !== null && pageTop >= commentBoundaryY - 1) return [];
-      const lines = element.innerText.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter((line) => line.length > 0 && !uiOnly.test(line));
-      const text = lines.join(" ").trim();
-      if (text.length < 8 || text.length > 5_000) return [];
-      return [{ element, text: text.slice(0, 2_000), order, dedicated: element.matches(dedicatedSelector) }];
-    });
-    const pool = candidates.some((candidate) => candidate.dedicated) ? candidates.filter((candidate) => candidate.dedicated) : candidates;
-    const unique = pool.filter((candidate, index) => pool.findIndex((other) => other.text === candidate.text) === index);
-    const selected = unique.sort((left, right) => Number(right.dedicated) - Number(left.dedicated) || right.text.length - left.text.length || left.order - right.order)[0];
-    return selected?.text ?? "";
-  }, region.screenshotDiagnostic.comment_boundary_y).catch(() => "");
-  const authoritativeResolution = resolveFacebookAuthoritativeTextSources(metadataAuthoritativeText, domAuthoritativeText);
+  const domLayers = await extractFacebookPostTextLayersFromDom(page, captureToken, postId, region.screenshotDiagnostic.comment_boundary_y);
+  const authoritativeResolution = resolveFacebookAuthoritativeTextSources(metadataResolution.outerText, domLayers.outerText, metadataResolution.sharedText, domLayers.sharedText);
   const authoritativePostText = authoritativeResolution.text;
   const authoritativePostTextSource = authoritativeResolution.source;
+  const outerDiagnosticText = metadataResolution.outerText || domLayers.outerText;
+  const sharedDiagnosticText = metadataResolution.sharedText || domLayers.sharedText;
+  const attachmentDiagnosticText = metadataResolution.attachmentText || domLayers.attachmentText || metadataResolution.mediaText || domLayers.mediaText;
+  const outerSignals = inspectFacebookIntentSignals(outerDiagnosticText);
+  const sharedSignals = inspectFacebookIntentSignals(sharedDiagnosticText);
+  const attachmentSignals = inspectFacebookIntentSignals(attachmentDiagnosticText);
+  logFacebookWorker("FACEBOOK_POST_TEXT_LAYER_DIAGNOSTIC", {
+    post_id: postId,
+    outer_text_length: outerDiagnosticText.length,
+    outer_buy_signals: outerSignals.buySignals,
+    outer_sell_signals: outerSignals.sellSignals,
+    shared_text_length: sharedDiagnosticText.length,
+    shared_buy_signals: sharedSignals.buySignals,
+    shared_sell_signals: sharedSignals.sellSignals,
+    attachment_text_length: attachmentDiagnosticText.length,
+    attachment_buy_signals: attachmentSignals.buySignals,
+    attachment_sell_signals: attachmentSignals.sellSignals,
+    selected_layer: authoritativeResolution.selectedLayer,
+    shared_content_detected: Boolean(metadataResolution.sharedText || domLayers.sharedContentDetected),
+  });
   logFacebookWorker("FACEBOOK_AUTHORITATIVE_TEXT_SOURCE_COMPARE", {
-    metadata_available: metadataAuthoritativeText.length > 0,
+    metadata_available: metadataResolution.outerText.length > 0,
     metadata_buy_signals: authoritativeResolution.metadataBuySignals,
     metadata_sell_signals: authoritativeResolution.metadataSellSignals,
-    dom_available: domAuthoritativeText.length > 0,
+    dom_available: domLayers.outerText.length > 0,
     dom_buy_signals: authoritativeResolution.domBuySignals,
     dom_sell_signals: authoritativeResolution.domSellSignals,
     sources_conflict: authoritativeResolution.conflict,

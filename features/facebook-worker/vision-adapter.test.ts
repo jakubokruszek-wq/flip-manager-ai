@@ -75,6 +75,17 @@ test("metadata and DOM intent conflict is skipped before persistence even when V
   assert.equal(result.notProperty?.reasonCode, "FACEBOOK_INTENT_UNKNOWN");
 });
 
+test("outer BUY text gates persistence even when embedded shared content and Vision say sale", async () => {
+  const outerBuy = { ...post(vision(true)), authoritativePostText: "Kupię za gotówkę mieszkanie 1-2 pokoje w Łodzi", authoritativePostTextSource: "POST_PAGE_METADATA" as const };
+  let persistenceCalls = 0;
+  const result = await persistEligibleFacebookPost(outerBuy, async () => { persistenceCalls += 1; return persisted(); });
+  assert.equal(persistenceCalls, 0);
+  assert.equal(result.status, "skipped");
+  assert.equal(result.notProperty?.reasonCode, "FACEBOOK_BUY_REQUEST");
+  assert.equal(result.imagesMirrored, 0);
+  assert.equal(result.priceDrops, 0);
+});
+
 test("unrelated portraits, group, quote and lifestyle images are not accepted", () => {
   const urls = ["portrait", "group", "quote", "lifestyle"];
   const assessments = urls.map((_, imageIndex) => ({ imageIndex, relevance: "NON_PROPERTY_IMAGE" as const, confidence: 0.99 }));
