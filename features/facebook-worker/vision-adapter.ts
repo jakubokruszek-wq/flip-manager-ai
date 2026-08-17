@@ -1,22 +1,35 @@
 import type { FacebookListingInput } from "../facebook-watcher/types.ts";
 import type { FacebookPostSnapshot, FacebookVisionExtraction } from "./types.ts";
-import { resolveFacebookListingIntent } from "../facebook-watcher/facebook-intent.ts";
+import { inspectFacebookIntentSignals, resolveFacebookListingIntent } from "../facebook-watcher/facebook-intent.ts";
 import type { FacebookPostImportResult } from "./post-flow.ts";
 
 const MIN_PROPERTY_IMAGE_CONFIDENCE = 0.8;
 
 export function evaluateFacebookPersistenceGate(post: FacebookPostSnapshot) {
-  const intent = resolveFacebookPostIntent(post);
+  const resolution = resolveFacebookPostIntentWithSource(post);
+  const intent = resolution.intent;
   console.info("FACEBOOK_INTENT_DECISION", { deterministic_intent: intent.deterministicIntent, vision_intent: intent.visionIntent, final_intent: intent.intent, intent_source: intent.intentSource, conflict: intent.conflict });
+  logFacebookIntentSignals(post.postId, "AUTHORITATIVE_POST_TEXT", post.authoritativePostText ?? "", intent.intent);
+  logFacebookIntentSignals(post.postId, "VISION_VISIBLE_TEXT", post.vision?.visibleText ?? "", intent.intent);
+  logFacebookIntentSignals(post.postId, resolution.textSource, resolution.classifierText, intent.intent);
   return { ...intent, allowed: post.vision?.isProperty === true && intent.intent === "SELL_PROPERTY" };
 }
 
 function resolveFacebookPostIntent(post: FacebookPostSnapshot) {
-  const deterministic = resolveFacebookListingIntent(post.text, null, null);
-  const intent = deterministic.intentSource === "DETERMINISTIC_BUY" || deterministic.intentSource === "DETERMINISTIC_SELL" || deterministic.intentSource === "CONFLICT"
-    ? { ...deterministic, visionIntent: post.vision?.listingIntent ?? "UNKNOWN" }
-    : resolveFacebookListingIntent(facebookVisionIntentText(post), post.vision?.listingIntent, post.vision?.intentConfidence);
-  return intent;
+  return resolveFacebookPostIntentWithSource(post).intent;
+}
+
+function resolveFacebookPostIntentWithSource(post: FacebookPostSnapshot) {
+  const authoritativePostText = post.authoritativePostText?.trim() ?? "";
+  if (authoritativePostText) {
+    return {
+      intent: resolveFacebookListingIntent(authoritativePostText, post.vision?.listingIntent, post.vision?.intentConfidence),
+      classifierText: authoritativePostText,
+      textSource: "CLASSIFIER_INPUT_AUTHORITATIVE_POST_TEXT",
+    };
+  }
+  const classifierText = post.vision?.visibleText?.trim() ?? "";
+  return { intent: resolveFacebookListingIntent(classifierText, post.vision?.listingIntent, post.vision?.intentConfidence), classifierText, textSource: "CLASSIFIER_INPUT_VISION_VISIBLE_TEXT" };
 }
 
 export async function persistEligibleFacebookPost(
@@ -41,7 +54,7 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
   }
   return {
     url: post.permalink ?? undefined,
-    postText: post.text || facebookVisionIntentText(post) || undefined,
+    postText: post.authoritativePostText?.trim() || post.vision?.visibleText?.trim() || undefined,
     groupName,
     publishedAt: post.publishedAt ?? undefined,
     images: acceptedFacebookPropertyImages(post.imageUrls, vision?.imageAssessments),
@@ -56,8 +69,17 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
   };
 }
 
-function facebookVisionIntentText(post: FacebookPostSnapshot): string {
-  return [...new Set([post.vision?.visibleText, post.vision?.title, post.vision?.description].map((value) => value?.trim()).filter((value): value is string => Boolean(value)))].join("\n");
+function logFacebookIntentSignals(postId: string | null, textSource: string, text: string, finalIntent: string | null): void {
+  const signals = inspectFacebookIntentSignals(text);
+  console.info("FACEBOOK_INTENT_SIGNAL_DIAGNOSTIC", {
+    post_id: postId,
+    text_source: textSource,
+    text_length: signals.normalizedLength,
+    buy_signals: signals.buySignals,
+    sell_signals: signals.sellSignals,
+    conflicting_signals: signals.buySignals.length > 0 && signals.sellSignals.length > 0,
+    final_intent: finalIntent ?? "UNKNOWN",
+  });
 }
 
 export function acceptedFacebookPropertyImages(imageUrls: string[], assessments: FacebookVisionExtraction["imageAssessments"] | undefined): string[] {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { extractFacebookProperty } from "./extract-facebook-property.ts";
-import { resolveFacebookListingIntent } from "./facebook-intent.ts";
+import { inspectFacebookIntentSignals, resolveFacebookListingIntent } from "./facebook-intent.ts";
 
 test("classifies the real buy request without mapping its ranges as a sale", async () => {
   const text = "Kupię za gotówkę mieszkanie 1-2 pokoje (30-40m2) w Łodzi. Może być do remontu. Do 220 000 zł";
@@ -47,4 +47,20 @@ test("real buy and sell conflict is unknown and cannot persist", () => {
 test("Vision decides only when text has no strong deterministic signal", () => {
   const result = resolveFacebookListingIntent("Atrakcyjna propozycja w centrum Łodzi", "SELL_PROPERTY", 0.91);
   assert.deepEqual({ intent: result.intent, source: result.intentSource }, { intent: "SELL_PROPERTY", source: "VISION" });
+});
+
+test("detects BUY_KUPIE with Polish diacritics", () => {
+  const signals = inspectFacebookIntentSignals("Kupię za gotówkę mieszkanie w Łodzi");
+  assert.deepEqual(signals.buySignals, ["BUY_KUPIE"]);
+  assert.deepEqual(signals.sellSignals, []);
+});
+
+test("detects BUY_KUPIE without Polish diacritics", () => {
+  const signals = inspectFacebookIntentSignals("Kupie za gotowke mieszkanie w Lodzi");
+  assert.deepEqual(signals.buySignals, ["BUY_KUPIE"]);
+});
+
+test("normalizes hidden Unicode and non-breaking spaces", () => {
+  const signals = inspectFacebookIntentSignals("Ku\u200Bpię\u00a0za\u00a0gotówkę mieszkanie w Łodzi");
+  assert.deepEqual(signals.buySignals, ["BUY_KUPIE"]);
 });

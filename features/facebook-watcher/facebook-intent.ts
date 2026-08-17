@@ -10,16 +10,51 @@ export type FacebookIntentDecision = {
   conflict: boolean;
 };
 
+export type FacebookIntentSignalName =
+  | "BUY_KUPIE"
+  | "BUY_CHCE_KUPIC"
+  | "BUY_CHETNIE_KUPIE"
+  | "BUY_INTERESUJE_MNIE_ZAKUP"
+  | "BUY_POSZUKUJE"
+  | "BUY_SZUKAM"
+  | "SELL_SPRZEDAM"
+  | "SELL_NA_SPRZEDAZ"
+  | "SELL_DO_SPRZEDANIA"
+  | "SELL_OFERUJE_NA_SPRZEDAZ";
+
+export type FacebookIntentSignals = {
+  normalizedLength: number;
+  propertyContext: boolean;
+  buySignals: FacebookIntentSignalName[];
+  sellSignals: FacebookIntentSignalName[];
+};
+
+const BUY_PATTERNS: ReadonlyArray<{ name: FacebookIntentSignalName; pattern: RegExp; requiresPropertyContext: boolean }> = [
+  { name: "BUY_KUPIE", pattern: /\bkupie(?:\s+za\s+gotowke)?\b/u, requiresPropertyContext: true },
+  { name: "BUY_CHCE_KUPIC", pattern: /\bchce\s+kupic\b/u, requiresPropertyContext: true },
+  { name: "BUY_CHETNIE_KUPIE", pattern: /\bchetnie\s+kupie\b/u, requiresPropertyContext: true },
+  { name: "BUY_INTERESUJE_MNIE_ZAKUP", pattern: /\binteresuje\s+mnie\s+zakup\b/u, requiresPropertyContext: true },
+  { name: "BUY_POSZUKUJE", pattern: /\bposzukuje\s+(?:pilnie\s+)?(?:mieszkania|domu|nieruchomosci|kawalerki|apartamentu)\b/u, requiresPropertyContext: false },
+  { name: "BUY_SZUKAM", pattern: /\bszukam\s+(?:pilnie\s+)?(?:mieszkania|domu|nieruchomosci|kawalerki|apartamentu)\b/u, requiresPropertyContext: false },
+];
+
+const SELL_PATTERNS: ReadonlyArray<{ name: FacebookIntentSignalName; pattern: RegExp }> = [
+  { name: "SELL_SPRZEDAM", pattern: /\bsprzedam\b/u },
+  { name: "SELL_NA_SPRZEDAZ", pattern: /\bna\s+sprzedaz\b/u },
+  { name: "SELL_DO_SPRZEDANIA", pattern: /\bdo\s+sprzedania\b/u },
+  { name: "SELL_OFERUJE_NA_SPRZEDAZ", pattern: /\boferuje\s+na\s+sprzedaz\b/u },
+];
+
 export function resolveFacebookListingIntent(
   text: string | null | undefined,
   visionIntent: FacebookListingIntent | null | undefined,
   visionConfidence: number | null | undefined,
 ): FacebookIntentDecision {
   const normalized = normalizeIntentText(text ?? "");
-  const propertyContext = /\b(mieszkan[\p{L}\d]*|nieruchomo[\p{L}\d]*|kawalerk[\p{L}\d]*|apartament[\p{L}\d]*|dom[\p{L}\d]*|lokal[\p{L}\d]*)\b/u.test(normalized);
-  const buySignal = propertyContext && /\b(kupie(?:\s+za\s+gotowke)?|chce\s+kupic|chetnie\s+kupie|interesuje\s+mnie\s+zakup)\b/u.test(normalized)
-    || /\b(?:poszukuje|szukam)\s+(?:pilnie\s+)?(?:mieszkania|domu|nieruchomosci|kawalerki|apartamentu)\b/u.test(normalized);
-  const sellSignal = propertyContext && /\b(sprzedam|na\s+sprzedaz|do\s+sprzedania|oferuje\s+na\s+sprzedaz)\b/u.test(normalized);
+  const signals = inspectNormalizedFacebookIntentSignals(normalized);
+  const propertyContext = signals.propertyContext;
+  const buySignal = signals.buySignals.length > 0;
+  const sellSignal = signals.sellSignals.length > 0;
   const rentWantedSignal = /\b(szukam|poszukuje)\b[^.\n]{0,80}\b(wynajecia|najmu|wynajme)\b/u.test(normalized);
   const rentOfferSignal = /\b(do wynajecia|wynajme|oferuje najem)\b/u.test(normalized) && !rentWantedSignal;
   const serviceSignal = /\b(uslugi remontowe|wykonczenia wnetrz|posrednictwo|agent nieruchomosci|fotografia nieruchomosci)\b/u.test(normalized);
@@ -40,6 +75,10 @@ export function resolveFacebookListingIntent(
   return decision("UNKNOWN", boundedVisionConfidence, "UNKNOWN", normalizedVisionIntent, "UNKNOWN");
 }
 
+export function inspectFacebookIntentSignals(text: string | null | undefined): FacebookIntentSignals {
+  return inspectNormalizedFacebookIntentSignals(normalizeIntentText(text ?? ""));
+}
+
 export function facebookIntentSkipReason(intent: FacebookListingIntent): FacebookSkipReasonCode | null {
   if (intent === "SELL_PROPERTY") return null;
   if (intent === "BUY_PROPERTY") return "FACEBOOK_BUY_REQUEST";
@@ -54,7 +93,18 @@ function decision(intent: FacebookListingIntent, confidence: number, determinist
 }
 
 function normalizeIntentText(value: string): string {
-  return value.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/\s+/g, " ").trim();
+  return value.normalize("NFKD").replace(/\p{M}/gu, "").replace(/\p{Cf}/gu, "").toLocaleLowerCase("pl-PL").replace(/\s+/g, " ").trim();
+}
+
+function inspectNormalizedFacebookIntentSignals(normalized: string): FacebookIntentSignals {
+  const propertyContext = /\b(mieszkan[\p{L}\d]*|nieruchomo[\p{L}\d]*|kawalerk[\p{L}\d]*|apartament[\p{L}\d]*|dom[\p{L}\d]*|lokal[\p{L}\d]*)\b/u.test(normalized);
+  const buySignals = BUY_PATTERNS
+    .filter(({ pattern, requiresPropertyContext }) => (!requiresPropertyContext || propertyContext) && pattern.test(normalized))
+    .map(({ name }) => name);
+  const sellSignals = propertyContext
+    ? SELL_PATTERNS.filter(({ pattern }) => pattern.test(normalized)).map(({ name }) => name)
+    : [];
+  return { normalizedLength: normalized.length, propertyContext, buySignals, sellSignals };
 }
 
 function boundedConfidence(value: number | null | undefined): number {

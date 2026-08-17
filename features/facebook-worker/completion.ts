@@ -1,4 +1,4 @@
-import { FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
+import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
 const MAX_POSTS = 20;
@@ -42,6 +42,8 @@ function parsePost(value: unknown): FacebookPostSnapshot {
     postId: nullableString(row.postId, 300),
     groupId: requiredString(row.groupId, "GROUP_ID", 200),
     permalink: row.permalink === null ? null : assertFacebookPermalink(requiredString(row.permalink, "PERMALINK", 2_000)),
+    authoritativePostText: nullableString(row.authoritativePostText, MAX_TEXT),
+    authoritativePostTextSource: FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES.includes(row.authoritativePostTextSource as never) ? row.authoritativePostTextSource as FacebookPostSnapshot["authoritativePostTextSource"] : "NONE",
     text: typeof row.text === "string" ? row.text.slice(0, MAX_TEXT) : "",
     imageUrls: stringArray(row.imageUrls, MAX_IMAGES, 2_000).map(assertHttpsUrl),
     publishedAt: nullableIsoDate(row.publishedAt),

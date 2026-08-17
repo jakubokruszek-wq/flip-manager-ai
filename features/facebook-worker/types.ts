@@ -19,11 +19,16 @@ export type FacebookPostSnapshot = {
   postId: string | null;
   groupId: string;
   permalink: string | null;
+  authoritativePostText?: string | null;
+  authoritativePostTextSource?: FacebookAuthoritativePostTextSource;
   text: string;
   imageUrls: string[];
   publishedAt: string | null;
   vision?: FacebookVisionExtraction | null;
 };
+
+export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "NONE"] as const;
+export type FacebookAuthoritativePostTextSource = (typeof FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES)[number];
 
 export const FACEBOOK_LISTING_INTENTS = [
   "SELL_PROPERTY", "BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE", "OTHER", "UNKNOWN",
