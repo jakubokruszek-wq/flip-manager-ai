@@ -19,7 +19,7 @@ test("creates a canonical permalink without tracking parameters", () => {
 test("structured metadata binds authoritative text to the exact post and ignores adjacent posts and comments", () => {
   const text = extractFacebookAuthoritativeTextFromStructuredData([{
     feed: [
-      { post_id: "1646249253686136", message: { text: "Kupię za gotówkę mieszkanie w Łodzi" }, comments: [{ id: "comment-1", message: "Sprzedam mieszkanie" }] },
+      { post_id: "1646249253686136", actor: { id: "author-node" }, message: { text: "Kupię za gotówkę mieszkanie w Łodzi" }, comments: [{ id: "comment-1", message: "Sprzedam mieszkanie" }] },
       { post_id: "other-post", message: "Sprzedam mieszkanie 42 m2" },
     ],
   }], "1646249253686136");
@@ -29,6 +29,7 @@ test("structured metadata binds authoritative text to the exact post and ignores
 test("direct post message wins over a sale description nested under an attachment", () => {
   const resolution = extractFacebookAuthoritativeTextResolutionFromStructuredData([{
     post_id: "1646249253686136",
+    actor: { id: "author-node" },
     message: "Kupię za gotówkę mieszkanie w Łodzi",
     attachments: [{ description: "Sprzedam mieszkanie w Łodzi", media: { caption: "Sprzedam mieszkanie" } }],
   }], "1646249253686136");
@@ -54,15 +55,44 @@ test("outer BUY message wins over a SELL shared story bound to the same root pos
   }], "1646249253686136");
   assert.equal(resolution.outerText, "Kupię za gotówkę mieszkanie 1-2 pokoje w Łodzi");
   assert.equal(resolution.sharedText, "Sprzedam mieszkanie 42 m2 w Łodzi");
+  assert.equal(resolution.rootStoryIdentified, true);
+  assert.equal(resolution.rootAuthorMessageIdentified, true);
   assert.deepEqual(resolution.candidates.find((candidate) => candidate.text_layer === "OUTER_POST_TEXT")?.buy_signals, ["BUY_KUPIE"]);
   assert.deepEqual(resolution.candidates.find((candidate) => candidate.text_layer === "SHARED_POST_TEXT")?.sell_signals, ["SELL_SPRZEDAM"]);
 });
 
-test("shared post is an explicit fallback only when outer post text is empty", () => {
-  const resolution = resolveFacebookAuthoritativeTextSources("", "", "Sprzedam mieszkanie 42 m2 w Łodzi", "");
+test("shared post is an explicit fallback only when the bound root story has no own message", () => {
+  const resolution = resolveFacebookAuthoritativeTextSources("", "", "Sprzedam mieszkanie 42 m2 w Łodzi", "", { sharedContentDetected: true, rootStoryIdentified: true, metadataRootAuthorIdentified: false, domRootAuthorIdentified: false });
   assert.equal(resolution.source, "SHARED_POST_FALLBACK");
-  assert.equal(resolution.selectedLayer, "SHARED_POST_TEXT");
+  assert.equal(resolution.selectedLayer, "SHARED_CONTENT_TEXT");
+  assert.equal(resolution.provenance, "SHARED_CONTENT_ONLY");
   assert.equal(resolution.text, "Sprzedam mieszkanie 42 m2 w Łodzi");
+});
+
+test("ambiguous composite cannot fall back to shared sale text or Vision", () => {
+  const resolution = resolveFacebookAuthoritativeTextSources("Sprzedam mieszkanie", "", "Sprzedam mieszkanie 42 m2", "", { sharedContentDetected: true, rootStoryIdentified: false, metadataRootAuthorIdentified: false, domRootAuthorIdentified: false });
+  assert.equal(resolution.source, "NONE");
+  assert.equal(resolution.provenance, "AMBIGUOUS_COMPOSITE");
+  assert.equal(resolution.selectedLayer, "AMBIGUOUS_COMPOSITE");
+  assert.equal(resolution.text, "");
+});
+
+test("composite metadata without a root author binding cannot classify embedded sale text as outer", () => {
+  const metadata = extractFacebookAuthoritativeTextResolutionFromStructuredData([{
+    post_id: "1646249253686136",
+    message: { text: "Sprzedam mieszkanie 42 m2 w Łodzi" },
+    attached_story: { post_id: "shared-sale", message: "Sprzedam mieszkanie 42 m2" },
+  }], "1646249253686136");
+  const resolution = resolveFacebookAuthoritativeTextSources(metadata.outerText, "", metadata.sharedText, "", {
+    sharedContentDetected: metadata.sharedContentDetected,
+    metadataRootAuthorIdentified: metadata.rootAuthorMessageIdentified,
+    domRootAuthorIdentified: false,
+    rootStoryIdentified: metadata.rootStoryIdentified,
+  });
+  assert.equal(metadata.rootAuthorMessageIdentified, false);
+  assert.equal(resolution.source, "NONE");
+  assert.equal(resolution.provenance, "AMBIGUOUS_COMPOSITE");
+  assert.equal(resolution.text, "");
 });
 
 test("metadata and DOM with opposing strong signals produce a controlled source conflict", () => {
@@ -92,8 +122,8 @@ test("capture reports conflict when direct metadata SELL opposes clean post-regi
     const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
     await page.route("https://www.facebook.com/groups/1/posts/203/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
     await page.goto("https://www.facebook.com/groups/1/posts/203/");
-    const metadata = JSON.stringify({ post_id: "203", message: "Sprzedam mieszkanie w Łodzi" });
-    await page.setContent(`<script type="application/json">${metadata}</script><main><section style="width:590px;height:400px"><div data-ad-comet-preview="message" style="height:80px">Kupię za gotówkę mieszkanie w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section></main>`);
+    const metadata = JSON.stringify({ post_id: "203", actor: { id: "author-node" }, message: "Sprzedam mieszkanie w Łodzi" });
+    await page.setContent(`<script type="application/json">${metadata}</script><main><section data-testid="root-story" style="width:590px;height:400px"><header data-testid="post-author"></header><div data-ad-comet-preview="message" style="height:80px">Kupię za gotówkę mieszkanie w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section></main>`);
     const region = await captureFacebookPostRegion(page, "203");
     assert.equal(region.authoritativePostText, "");
     assert.equal(region.authoritativePostTextSource, "CONFLICT");
@@ -106,7 +136,7 @@ test("post-region geometry keeps outer BUY separate from an embedded SELL card",
     const page = await browser.newPage({ viewport: { width: 800, height: 1000 } });
     await page.route("https://www.facebook.com/groups/1/posts/204/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
     await page.goto("https://www.facebook.com/groups/1/posts/204/");
-    await page.setContent(`<main><section style="width:590px;height:600px"><div data-ad-comet-preview="message" style="height:100px">Kupię za gotówkę mieszkanie w Łodzi</div><section data-testid="shared-post" style="height:500px"><div dir="auto" style="height:80px">Sprzedam mieszkanie 42 m2 w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='420'%3E%3C/svg%3E" style="display:block;width:590px;height:420px"></section></section></main>`);
+    await page.setContent(`<main><section data-testid="root-story" style="width:590px;height:600px"><header data-testid="post-author"></header><div data-ad-comet-preview="message" style="height:100px">Kupię za gotówkę mieszkanie w Łodzi</div><section data-testid="shared-post" style="height:500px"><div dir="auto" style="height:80px">Sprzedam mieszkanie 42 m2 w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='420'%3E%3C/svg%3E" style="display:block;width:590px;height:420px"></section></section></main>`);
     const region = await captureFacebookPostRegion(page, "204");
     assert.equal(region.authoritativePostText, "Kupię za gotówkę mieszkanie w Łodzi");
     assert.equal(region.authoritativePostTextSource, "POST_REGION_DOM");
@@ -119,7 +149,7 @@ test("capture prefers exact post metadata over neighboring sale text", async () 
     const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
     await page.route("https://www.facebook.com/groups/1/posts/1646249253686136/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
     await page.goto("https://www.facebook.com/groups/1/posts/1646249253686136/");
-    const metadata = JSON.stringify({ posts: [{ post_id: "1646249253686136", message: "Kupię za gotówkę mieszkanie w Łodzi", comments: [{ message: "Sprzedam mieszkanie" }] }, { post_id: "other", message: "Sprzedam mieszkanie 42 m2" }] });
+    const metadata = JSON.stringify({ posts: [{ post_id: "1646249253686136", actor: { id: "author-node" }, message: "Kupię za gotówkę mieszkanie w Łodzi", comments: [{ message: "Sprzedam mieszkanie" }] }, { post_id: "other", message: "Sprzedam mieszkanie 42 m2" }] });
     await page.setContent(`<script type="application/json">${metadata}</script><main><section style="width:590px;height:400px"><div data-ad-comet-preview="message" style="height:80px">Tekst DOM nie ma pierwszeństwa</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section></main>`);
     const region = await captureFacebookPostRegion(page, "1646249253686136");
     assert.equal(region.authoritativePostText, "Kupię za gotówkę mieszkanie w Łodzi");
@@ -133,7 +163,7 @@ test("post region DOM excludes comments when metadata is unavailable", async () 
     const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
     await page.route("https://www.facebook.com/groups/1/posts/201/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
     await page.goto("https://www.facebook.com/groups/1/posts/201/");
-    await page.setContent(`<main><section style="width:590px;height:520px"><section id="post" style="width:590px;height:400px"><div data-ad-comet-preview="message" style="height:80px">Kupię za gotówkę mieszkanie w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section><section aria-label="Komentarze" style="height:120px"><div dir="auto">Sprzedam mieszkanie</div></section></section></main>`);
+    await page.setContent(`<main><section data-testid="root-story" style="width:590px;height:520px"><header data-testid="post-author"></header><section id="post" style="width:590px;height:400px"><div data-ad-comet-preview="message" style="height:80px">Kupię za gotówkę mieszkanie w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section><section aria-label="Komentarze" style="height:120px"><div dir="auto">Sprzedam mieszkanie</div></section></section></main>`);
     const region = await captureFacebookPostRegion(page, "201");
     assert.equal(region.authoritativePostText, "Kupię za gotówkę mieszkanie w Łodzi");
     assert.equal(region.authoritativePostTextSource, "POST_REGION_DOM");
@@ -328,7 +358,7 @@ test("opens the dedicated page before capture and Vision", async () => {
   const order: string[] = [];
   const result = await processDedicatedFacebookPost({ postId: "99", permalink: "https://www.facebook.com/groups/1/posts/99/" }, "group-1", {
     open: async () => { order.push("open"); },
-    capture: async () => { order.push("capture"); return { screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: ["https://scontent.xx.fbcdn.net/property.jpg"], publishedAt: null, authoritativePostText: "", authoritativePostTextSource: "NONE", box: { x: 0, y: 0, width: 500, height: 300 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 300, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }; },
+    capture: async () => { order.push("capture"); return { screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: ["https://scontent.xx.fbcdn.net/property.jpg"], publishedAt: null, authoritativePostText: "", authoritativePostTextSource: "NONE", authoritativePostTextProvenance: "NONE", box: { x: 0, y: 0, width: 500, height: 300 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 300, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }; },
     analyze: async () => { order.push("vision"); return vision; },
   });
   assert.deepEqual(order, ["open", "capture", "vision"]);

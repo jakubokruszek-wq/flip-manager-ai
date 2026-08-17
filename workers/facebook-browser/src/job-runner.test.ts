@@ -57,7 +57,7 @@ test("explicit post id skips discovery and completes exactly one dedicated post"
       dedicatedPosts += 1;
       posts.push(await processDedicatedFacebookPost(post, "group-1", {
         open: async () => undefined,
-        capture: async () => ({ screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: [], publishedAt: null, authoritativePostText: "", authoritativePostTextSource: "NONE", box: { x: 0, y: 0, width: 500, height: 400 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 400, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }),
+        capture: async () => ({ screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: [], publishedAt: null, authoritativePostText: "", authoritativePostTextSource: "NONE", authoritativePostTextProvenance: "NONE", box: { x: 0, y: 0, width: 500, height: 400 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 400, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }),
         analyze: async () => vision,
       }));
     }

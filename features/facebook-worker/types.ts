@@ -21,6 +21,7 @@ export type FacebookPostSnapshot = {
   permalink: string | null;
   authoritativePostText?: string | null;
   authoritativePostTextSource?: FacebookAuthoritativePostTextSource;
+  authoritativePostTextProvenance?: FacebookAuthoritativePostTextProvenance;
   text: string;
   imageUrls: string[];
   publishedAt: string | null;
@@ -29,6 +30,9 @@ export type FacebookPostSnapshot = {
 
 export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "SHARED_POST_FALLBACK", "CONFLICT", "NONE"] as const;
 export type FacebookAuthoritativePostTextSource = (typeof FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES)[number];
+
+export const FACEBOOK_AUTHORITATIVE_POST_TEXT_PROVENANCE = ["ROOT_AUTHOR_MESSAGE", "SHARED_CONTENT_ONLY", "AMBIGUOUS_COMPOSITE", "NONE"] as const;
+export type FacebookAuthoritativePostTextProvenance = (typeof FACEBOOK_AUTHORITATIVE_POST_TEXT_PROVENANCE)[number];
 
 export const FACEBOOK_LISTING_INTENTS = [
   "SELL_PROPERTY", "BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE", "OTHER", "UNKNOWN",

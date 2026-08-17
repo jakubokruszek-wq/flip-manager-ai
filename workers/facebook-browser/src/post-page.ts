@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import type { FacebookAuthoritativePostTextProvenance, FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { inspectFacebookIntentSignals, type FacebookIntentSignalName } from "../../../features/facebook-watcher/facebook-intent.ts";
 import { logFacebookWorker } from "./logger.ts";
 
@@ -24,7 +24,7 @@ export type FacebookPostTimeDiagnostic = {
 };
 export type FacebookDiscoveryStopReason = "OLDER_THAN_72H" | "MAX_POSTS" | "MAX_SCROLLS" | "NO_NEW_POSTS" | "END_OF_FEED" | "DEBUG_TARGET";
 export type FacebookDiscoveryLoopResult = { posts: FreshDiscoveredFacebookPost[]; scrollCount: number; stopReason: FacebookDiscoveryStopReason };
-export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; authoritativePostText: string; authoritativePostTextSource: FacebookAuthoritativePostTextSource; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
+export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; authoritativePostText: string; authoritativePostTextSource: FacebookAuthoritativePostTextSource; authoritativePostTextProvenance: FacebookAuthoritativePostTextProvenance; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
 export type FacebookPostRegionFailureReason = "POST_ANCHOR_NOT_FOUND" | "NO_ANCESTOR_CANDIDATES" | "ALL_TOO_SMALL" | "ALL_REJECTED_AS_COMMENTS" | "NO_CONTENT_NODES" | "INVALID_BOUNDING_BOX" | "AMBIGUOUS_CANDIDATES" | "UNKNOWN";
 export type FacebookPostRegionDiagnosticCounts = {
   dedicatedPageUrlMatches: boolean;
@@ -97,7 +97,7 @@ export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost,
   await dependencies.open(post.permalink);
   const region = await dependencies.capture(post.postId);
   const vision = await dependencies.analyze({ postId: post.postId, screenshotDataUrl: region.screenshotDataUrl, imageUrls: region.imageUrls });
-  return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt, vision };
+  return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt, vision };
 }
 
 export type FacebookMetadataTextCandidateDiagnostic = {
@@ -111,6 +111,8 @@ export type FacebookMetadataTextCandidateDiagnostic = {
   under_shared: boolean;
   under_media: boolean;
   under_comment: boolean;
+  root_story_bound: boolean;
+  root_author_message: boolean;
   buy_signals: FacebookIntentSignalName[];
   sell_signals: FacebookIntentSignalName[];
 };
@@ -123,6 +125,9 @@ export type FacebookMetadataTextResolution = {
   sharedText: string;
   attachmentText: string;
   mediaText: string;
+  rootStoryIdentified: boolean;
+  rootAuthorMessageIdentified: boolean;
+  sharedContentDetected: boolean;
   candidates: FacebookMetadataTextCandidateDiagnostic[];
   selectedCandidateIndex: number | null;
   selectedReason: string;
@@ -136,7 +141,8 @@ export type FacebookAuthoritativeTextSourceResolution = {
   domBuySignals: FacebookIntentSignalName[];
   domSellSignals: FacebookIntentSignalName[];
   conflict: boolean;
-  selectedLayer: "OUTER_POST_TEXT" | "SHARED_POST_TEXT" | "NONE" | "CONFLICT";
+  selectedLayer: "ROOT_AUTHOR_MESSAGE" | "SHARED_CONTENT_TEXT" | "AMBIGUOUS_COMPOSITE" | "NONE" | "CONFLICT";
+  provenance: FacebookAuthoritativePostTextProvenance;
 };
 
 type MetadataTextCandidate = FacebookMetadataTextCandidateDiagnostic & { text: string; priority: number; selectable: boolean };
@@ -150,10 +156,13 @@ export function extractFacebookAuthoritativeTextResolutionFromStructuredData(val
   const mediaKey = /media|photo|video|gallery|thumbnail/i;
   const sharedKey = /attached_story|shared_story|reshared_post|shared_post|quoted|repost|reshare|substory|share/i;
   const commentKey = /comment|repl(?:y|ies)|feedback|reaction/i;
+  const authorKey = /^(?:actor|actors|author|authors|owner|composer|creation_actor)$/i;
   const accessibilityKey = /accessibility|alt(?:_text)?|recommend|sidebar|header/i;
-  const textualKey = /^(?:message|text|story|body|title|description|caption|alt|alt_text|accessibility_text)$/i;
+  const textualKey = /^(?:message|message_text|text|story|body|title|description|caption|alt|alt_text|accessibility_text)$/i;
+  let rootStoryIdentified = false;
+  let sharedContentDetected = false;
   const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim().slice(0, 2_000);
-  const addCandidate = (textValue: string, fieldName: string, path: string[], depth: number, inheritedPath: string[]): void => {
+  const addCandidate = (textValue: string, fieldName: string, path: string[], depth: number, inheritedPath: string[], rootStoryBound: boolean): void => {
     const text = normalizeText(textValue);
     if (text.length < 8) return;
     const lowerPath = [...inheritedPath, ...path].map((item) => item.toLowerCase());
@@ -167,14 +176,16 @@ export function extractFacebookAuthoritativeTextResolutionFromStructuredData(val
     const directPath = relativePath.slice(semanticBoundary + 1).join(".");
     const directMessage = directPath === "message";
     const directMessageText = directPath === "message.text";
+    const directMessageTextField = directPath === "message_text" || directPath === "message_text.text";
     const directBody = directPath === "body";
     const directBodyText = directPath === "body.text";
     const directStory = directPath === "story";
-    const approvedDirectField = directMessage || directMessageText || directBody || directBodyText || directStory;
-    const outerSelectable = !underAttachment && !underMedia && !underShared && !underComment && !underAccessibility && approvedDirectField;
+    const approvedDirectField = directMessage || directMessageText || directMessageTextField || directBody || directBodyText || directStory;
+    const rootAuthorMessage = rootStoryBound && !underAttachment && !underMedia && !underShared && !underComment && !underAccessibility && approvedDirectField;
+    const outerSelectable = rootAuthorMessage;
     const sharedSelectable = underShared && !underComment && !underAccessibility && approvedDirectField;
     const selectable = outerSelectable || sharedSelectable;
-    const priority = directMessage ? 500 : directMessageText ? 450 : directBodyText ? 440 : directBody ? 430 : directStory ? 400 : 0;
+    const priority = directMessage ? 500 : directMessageText || directMessageTextField ? 450 : directBodyText ? 440 : directBody ? 430 : directStory ? 400 : 0;
     const layer: FacebookPostTextLayer = underComment ? "COMMENT_TEXT"
       : underShared ? "SHARED_POST_TEXT"
         : underMedia ? "MEDIA_TEXT"
@@ -205,21 +216,25 @@ export function extractFacebookAuthoritativeTextResolutionFromStructuredData(val
       under_shared: underShared,
       under_media: underMedia,
       under_comment: underComment,
+      root_story_bound: rootStoryBound,
+      root_author_message: rootAuthorMessage,
       buy_signals: signals.buySignals,
       sell_signals: signals.sellSignals,
     });
   };
-  const collectLinkedCandidates = (value: unknown, path: string[], depth: number, inheritedPath: string[]): void => {
+  const collectLinkedCandidates = (value: unknown, path: string[], depth: number, inheritedPath: string[], rootStoryBound: boolean): void => {
     if (depth > 15 || value === null || value === undefined) return;
-    if (Array.isArray(value)) { for (const item of value) collectLinkedCandidates(item, path, depth + 1, inheritedPath); return; }
+    if (Array.isArray(value)) { for (const item of value) collectLinkedCandidates(item, path, depth + 1, inheritedPath, rootStoryBound); return; }
     const row = record(value); if (!row) return;
     const nestedId = directPostId(row);
     const explicitEmbeddedContext = path.some((item) => sharedKey.test(item) || attachmentKey.test(item) || mediaKey.test(item));
+    if (path.some((item) => sharedKey.test(item))) sharedContentDetected = true;
     if (depth > 0 && nestedId !== undefined && String(nestedId) !== expectedPostId && !explicitEmbeddedContext) return;
     for (const [key, item] of Object.entries(row)) {
       const nextPath = [...path, key];
-      if (typeof item === "string" && textualKey.test(key)) addCandidate(item, key, nextPath, depth, inheritedPath);
-      else if (item && typeof item === "object") collectLinkedCandidates(item, nextPath, depth + 1, inheritedPath);
+      if (sharedKey.test(key)) sharedContentDetected = true;
+      if (typeof item === "string" && textualKey.test(key)) addCandidate(item, key, nextPath, depth, inheritedPath, rootStoryBound);
+      else if (item && typeof item === "object") collectLinkedCandidates(item, nextPath, depth + 1, inheritedPath, rootStoryBound);
     }
   };
   const matchedRows = new Set<Record<string, unknown>>();
@@ -228,7 +243,12 @@ export function extractFacebookAuthoritativeTextResolutionFromStructuredData(val
     if (Array.isArray(value)) { for (const item of value) visit(item, depth + 1, path); return; }
     const row = record(value); if (!row) return;
     const matched = Object.entries(row).some(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number") && String(item) === expectedPostId);
-    if (matched && !matchedRows.has(row)) { matchedRows.add(row); collectLinkedCandidates(row, [], 0, path); }
+    if (matched && !matchedRows.has(row)) {
+      matchedRows.add(row);
+      const rootStoryBound = String(directPostId(row)) === expectedPostId && Object.keys(row).some((key) => authorKey.test(key));
+      if (rootStoryBound) rootStoryIdentified = true;
+      collectLinkedCandidates(row, [], 0, path, rootStoryBound);
+    }
     for (const [key, item] of Object.entries(row)) if (item && typeof item === "object") visit(item, depth + 1, [...path, key]);
   };
   for (const value of values) visit(value, 0, []);
@@ -246,6 +266,9 @@ export function extractFacebookAuthoritativeTextResolutionFromStructuredData(val
     sharedText: selectedShared?.candidate.text ?? "",
     attachmentText: longest("ATTACHMENT_TEXT"),
     mediaText: longest("MEDIA_TEXT"),
+    rootStoryIdentified,
+    rootAuthorMessageIdentified: Boolean(selectedOuter),
+    sharedContentDetected,
     candidates: candidates.map(({ text: _text, priority: _priority, selectable: _selectable, ...diagnostic }) => diagnostic),
     selectedCandidateIndex: selected?.index ?? null,
     selectedReason: selectedOuter ? selectedOuter.candidate.field_path_category : selectedShared ? "SHARED_POST_FALLBACK" : "NO_APPROVED_DIRECT_POST_TEXT_FIELD",
@@ -256,28 +279,45 @@ export function extractFacebookAuthoritativeTextFromStructuredData(values: unkno
   return extractFacebookAuthoritativeTextResolutionFromStructuredData(values, expectedPostId).text;
 }
 
-export function resolveFacebookAuthoritativeTextSources(metadataText: string, domText: string, metadataSharedText = "", domSharedText = ""): FacebookAuthoritativeTextSourceResolution {
-  const metadataSignals = inspectFacebookIntentSignals(metadataText);
-  const domSignals = inspectFacebookIntentSignals(domText);
+export type FacebookAuthoritativeTextResolutionContext = {
+  sharedContentDetected?: boolean;
+  metadataRootAuthorIdentified?: boolean;
+  domRootAuthorIdentified?: boolean;
+  rootStoryIdentified?: boolean;
+};
+
+export function resolveFacebookAuthoritativeTextSources(metadataText: string, domText: string, metadataSharedText = "", domSharedText = "", context: FacebookAuthoritativeTextResolutionContext = {}): FacebookAuthoritativeTextSourceResolution {
+  const metadataRootText = context.metadataRootAuthorIdentified === false ? "" : metadataText;
+  const domRootText = context.domRootAuthorIdentified === false ? "" : domText;
+  const sharedContentDetected = context.sharedContentDetected ?? Boolean(metadataSharedText || domSharedText);
+  const rootStoryIdentified = context.rootStoryIdentified ?? Boolean(metadataRootText || domRootText);
+  const metadataSignals = inspectFacebookIntentSignals(metadataRootText);
+  const domSignals = inspectFacebookIntentSignals(domRootText);
   const orientation = (buy: FacebookIntentSignalName[], sell: FacebookIntentSignalName[]) => buy.length > 0 && sell.length === 0 ? "BUY" : sell.length > 0 && buy.length === 0 ? "SELL" : "NONE";
   const metadataOrientation = orientation(metadataSignals.buySignals, metadataSignals.sellSignals);
   const domOrientation = orientation(domSignals.buySignals, domSignals.sellSignals);
   const conflict = metadataOrientation !== "NONE" && domOrientation !== "NONE" && metadataOrientation !== domOrientation;
   const sharedMetadataSignals = inspectFacebookIntentSignals(metadataSharedText);
   const sharedDomSignals = inspectFacebookIntentSignals(domSharedText);
-  const outerAvailable = Boolean(metadataText || domText);
+  const outerAvailable = Boolean(metadataRootText || domRootText);
   const sharedConflict = !outerAvailable
     && orientation(sharedMetadataSignals.buySignals, sharedMetadataSignals.sellSignals) !== "NONE"
     && orientation(sharedDomSignals.buySignals, sharedDomSignals.sellSignals) !== "NONE"
     && orientation(sharedMetadataSignals.buySignals, sharedMetadataSignals.sellSignals) !== orientation(sharedDomSignals.buySignals, sharedDomSignals.sellSignals);
+  const ambiguousComposite = sharedContentDetected && !outerAvailable && !rootStoryIdentified;
   const selected = conflict || sharedConflict
-    ? { text: "", source: "CONFLICT" as const }
-    : metadataText ? { text: metadataText, source: "POST_PAGE_METADATA" as const }
-      : domText ? { text: domText, source: "POST_REGION_DOM" as const }
-        : metadataSharedText ? { text: metadataSharedText, source: "SHARED_POST_FALLBACK" as const }
-          : domSharedText ? { text: domSharedText, source: "SHARED_POST_FALLBACK" as const }
-        : { text: "", source: "NONE" as const };
-  const selectedLayer = selected.source === "CONFLICT" ? "CONFLICT" : selected.source === "SHARED_POST_FALLBACK" ? "SHARED_POST_TEXT" : selected.source === "NONE" ? "NONE" : "OUTER_POST_TEXT";
+    ? { text: "", source: "CONFLICT" as const, provenance: "AMBIGUOUS_COMPOSITE" as const }
+    : ambiguousComposite
+      ? { text: "", source: "NONE" as const, provenance: "AMBIGUOUS_COMPOSITE" as const }
+      : metadataRootText ? { text: metadataRootText, source: "POST_PAGE_METADATA" as const, provenance: "ROOT_AUTHOR_MESSAGE" as const }
+        : domRootText ? { text: domRootText, source: "POST_REGION_DOM" as const, provenance: "ROOT_AUTHOR_MESSAGE" as const }
+          : rootStoryIdentified && metadataSharedText ? { text: metadataSharedText, source: "SHARED_POST_FALLBACK" as const, provenance: "SHARED_CONTENT_ONLY" as const }
+            : rootStoryIdentified && domSharedText ? { text: domSharedText, source: "SHARED_POST_FALLBACK" as const, provenance: "SHARED_CONTENT_ONLY" as const }
+              : { text: "", source: "NONE" as const, provenance: "NONE" as const };
+  const selectedLayer = selected.provenance === "ROOT_AUTHOR_MESSAGE" ? "ROOT_AUTHOR_MESSAGE"
+    : selected.provenance === "SHARED_CONTENT_ONLY" ? "SHARED_CONTENT_TEXT"
+      : selected.provenance === "AMBIGUOUS_COMPOSITE" ? "AMBIGUOUS_COMPOSITE"
+        : "NONE";
   return { ...selected, metadataBuySignals: metadataSignals.buySignals, metadataSellSignals: metadataSignals.sellSignals, domBuySignals: domSignals.buySignals, domSellSignals: domSignals.sellSignals, conflict: conflict || sharedConflict, selectedLayer };
 }
 
@@ -303,11 +343,13 @@ export type FacebookDomPostTextLayers = {
   attachmentText: string;
   mediaText: string;
   sharedContentDetected: boolean;
+  rootStoryIdentified: boolean;
+  rootAuthorMessageIdentified: boolean;
 };
 
 async function extractFacebookPostTextLayersFromDom(page: Page, captureToken: string, postId: string, commentBoundaryY: number | null): Promise<FacebookDomPostTextLayers> {
   return page.evaluate(({ captureToken: token, expectedPostId, commentBoundary }) => {
-    const empty = { outerText: "", sharedText: "", attachmentText: "", mediaText: "", sharedContentDetected: false };
+    const empty = { outerText: "", sharedText: "", attachmentText: "", mediaText: "", sharedContentDetected: false, rootStoryIdentified: false, rootAuthorMessageIdentified: false };
     const selectedRoot = document.querySelector<HTMLElement>(`[data-flip-facebook-capture="${token}"]`);
     const main = document.querySelector<HTMLElement>('main,[role="main"]') ?? document.body;
     if (!selectedRoot || !main) return empty;
@@ -316,6 +358,7 @@ async function extractFacebookPostTextLayersFromDom(page: Page, captureToken: st
     const dedicatedSelector = '[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"]';
     const candidateSelector = `${dedicatedSelector},div[dir="auto"],p,[data-lexical-text="true"]`;
     const sharedSelector = '[data-testid*="shared" i],[data-testid*="reshare" i],[data-ad-preview*="attachment" i],[data-ad-comet-preview*="attachment" i],blockquote';
+    const rootAuthorSelector = '[data-testid*="post-author" i],[data-testid*="story-author" i],[data-testid*="actor" i],[data-testid*="composer" i],[data-pagelet*="author" i]';
     const attachmentSelector = '[data-testid*="attachment" i],[data-ad-preview*="attachment" i],[data-ad-comet-preview*="attachment" i]';
     const mediaSelector = 'picture,video,[role="img"],[style*="background-image"]';
     const uiOnly = /^(?:lubię to!?|like|odpowiedz|reply|udostępnij|share|wyślij|send|więcej|see more)$/iu;
@@ -334,7 +377,14 @@ async function extractFacebookPostTextLayersFromDom(page: Page, captureToken: st
       } catch { /* Ignore malformed hrefs. */ }
     }
     const uniqueSharedRoots = explicitSharedRoots.filter((root, index) => explicitSharedRoots.indexOf(root) === index);
-    type Candidate = { text: string; order: number; dedicated: boolean; rect: DOMRect; insideSelected: boolean; insideShared: boolean; insideAttachment: boolean; insideMedia: boolean };
+    const rootStorySelector = '[data-testid*="root-story" i],[data-pagelet*="story" i],[data-pagelet*="feedunit" i]';
+    const rootStoryContainers = Array.from(main.querySelectorAll<HTMLElement>(rootStorySelector));
+    if (selectedRoot.matches(rootStorySelector)) rootStoryContainers.push(selectedRoot);
+    const rootStoryFor = (element: HTMLElement) => {
+      const closest = element.closest<HTMLElement>(rootStorySelector);
+      return closest?.querySelector(rootAuthorSelector) ? closest : null;
+    };
+    type Candidate = { text: string; order: number; dedicated: boolean; rect: DOMRect; insideSelected: boolean; insideShared: boolean; insideAttachment: boolean; insideMedia: boolean; rootAuthorBound: boolean };
     const candidates = Array.from(main.querySelectorAll<HTMLElement>(candidateSelector)).flatMap((element, order): Candidate[] => {
       if (element.closest(commentSelector) || element.closest(excludedSelector)) return [];
       const rect = element.getBoundingClientRect();
@@ -344,21 +394,24 @@ async function extractFacebookPostTextLayersFromDom(page: Page, captureToken: st
       if (commentBoundary !== null && pageTop >= commentBoundary - 1) return [];
       const text = element.innerText.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter((line) => line.length > 0 && !uiOnly.test(line)).join(" ").trim();
       if (text.length < 8 || text.length > 5_000) return [];
+      const insideShared = uniqueSharedRoots.some((root) => root.contains(element));
+      const rootAuthorBound = element.matches(dedicatedSelector) && !insideShared && Boolean(rootStoryFor(element));
       return [{
         text: text.slice(0, 2_000), order, dedicated: element.matches(dedicatedSelector), rect,
         insideSelected: selectedRoot.contains(element),
-        insideShared: uniqueSharedRoots.some((root) => root.contains(element)),
+        insideShared,
         insideAttachment: Boolean(element.closest(attachmentSelector)),
         insideMedia: Boolean(element.closest(mediaSelector)),
+        rootAuthorBound,
       }];
     });
-    const outerAboveSelected = candidates.filter((candidate) => !candidate.insideSelected
+    const outerAboveSelected = candidates.filter((candidate) => candidate.rootAuthorBound && !candidate.insideSelected
       && candidate.rect.bottom <= selectedRect.top + 16
       && selectedRect.top - candidate.rect.bottom <= 500
       && overlapRatio(candidate.rect) >= 0.5);
     const firstSharedTop = uniqueSharedRoots.reduce((top, root) => Math.min(top, root.getBoundingClientRect().top), Number.POSITIVE_INFINITY);
-    const outerInsideComposite = candidates.filter((candidate) => candidate.insideSelected && !candidate.insideShared
-      && Number.isFinite(firstSharedTop) && candidate.rect.bottom <= firstSharedTop + 8);
+    const outerInsideComposite = candidates.filter((candidate) => candidate.rootAuthorBound && candidate.insideSelected && !candidate.insideShared
+      && (!Number.isFinite(firstSharedTop) || candidate.rect.bottom <= firstSharedTop + 8));
     const outerCandidates = [...outerAboveSelected, ...outerInsideComposite];
     const geometryComposite = outerAboveSelected.length > 0 && candidates.some((candidate) => candidate.insideSelected);
     const sharedContentDetected = uniqueSharedRoots.length > 0 || geometryComposite;
@@ -369,15 +422,17 @@ async function extractFacebookPostTextLayersFromDom(page: Page, captureToken: st
       const unique = pool.filter((candidate, index) => pool.findIndex((other) => other.text === candidate.text) === index);
       return unique.sort((left, right) => Number(right.dedicated) - Number(left.dedicated) || right.text.length - left.text.length || left.order - right.order)[0]?.text ?? "";
     };
-    const fallbackOuter = sharedContentDetected ? "" : pick(candidates.filter((candidate) => candidate.insideSelected && !candidate.insideAttachment && !candidate.insideMedia));
+    const rootStoryIdentified = rootStoryContainers.some((container) => container.querySelector(rootAuthorSelector));
     return {
-      outerText: pick(outerCandidates) || fallbackOuter,
+      outerText: pick(outerCandidates),
       sharedText: pick(sharedCandidates),
       attachmentText: pick(attachmentCandidates),
       mediaText: pick(mediaCandidates),
       sharedContentDetected,
+      rootStoryIdentified,
+      rootAuthorMessageIdentified: outerCandidates.length > 0,
     };
-  }, { captureToken, expectedPostId: postId, commentBoundary: commentBoundaryY }).catch(() => ({ outerText: "", sharedText: "", attachmentText: "", mediaText: "", sharedContentDetected: false }));
+  }, { captureToken, expectedPostId: postId, commentBoundary: commentBoundaryY }).catch(() => ({ outerText: "", sharedText: "", attachmentText: "", mediaText: "", sharedContentDetected: false, rootStoryIdentified: false, rootAuthorMessageIdentified: false }));
 }
 
 export function canonicalFacebookPostUrl(value: string, expectedPostId?: string): DiscoveredFacebookPost | null {
@@ -1221,9 +1276,16 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   const selectedLocator = page.locator(`[data-flip-facebook-capture="${captureToken}"]`);
   const selectedElementBox = await selectedLocator.boundingBox().catch(() => null);
   const domLayers = await extractFacebookPostTextLayersFromDom(page, captureToken, postId, region.screenshotDiagnostic.comment_boundary_y);
-  const authoritativeResolution = resolveFacebookAuthoritativeTextSources(metadataResolution.outerText, domLayers.outerText, metadataResolution.sharedText, domLayers.sharedText);
+  const sharedContentDetected = metadataResolution.sharedContentDetected || domLayers.sharedContentDetected;
+  const authoritativeResolution = resolveFacebookAuthoritativeTextSources(metadataResolution.outerText, domLayers.outerText, metadataResolution.sharedText, domLayers.sharedText, {
+    sharedContentDetected,
+    metadataRootAuthorIdentified: metadataResolution.rootAuthorMessageIdentified,
+    domRootAuthorIdentified: domLayers.rootAuthorMessageIdentified,
+    rootStoryIdentified: metadataResolution.rootStoryIdentified || domLayers.rootStoryIdentified,
+  });
   const authoritativePostText = authoritativeResolution.text;
   const authoritativePostTextSource = authoritativeResolution.source;
+  const authoritativePostTextProvenance = authoritativeResolution.provenance;
   const outerDiagnosticText = metadataResolution.outerText || domLayers.outerText;
   const sharedDiagnosticText = metadataResolution.sharedText || domLayers.sharedText;
   const attachmentDiagnosticText = metadataResolution.attachmentText || domLayers.attachmentText || metadataResolution.mediaText || domLayers.mediaText;
@@ -1242,7 +1304,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
     attachment_buy_signals: attachmentSignals.buySignals,
     attachment_sell_signals: attachmentSignals.sellSignals,
     selected_layer: authoritativeResolution.selectedLayer,
-    shared_content_detected: Boolean(metadataResolution.sharedText || domLayers.sharedContentDetected),
+    shared_content_detected: sharedContentDetected,
   });
   logFacebookWorker("FACEBOOK_AUTHORITATIVE_TEXT_SOURCE_COMPARE", {
     metadata_available: metadataResolution.outerText.length > 0,
@@ -1256,6 +1318,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   logFacebookWorker("FACEBOOK_AUTHORITATIVE_TEXT_DIAGNOSTIC", {
     post_id: postId,
     source: authoritativePostTextSource,
+    provenance: authoritativePostTextProvenance,
     text_length: authoritativePostText.length,
     linked_to_expected_post_id: authoritativePostTextSource !== "NONE",
     comment_text_included: false,
@@ -1313,7 +1376,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   const reportedBox = selectedElementBox && captureMethod === "ELEMENT_SCREENSHOT"
     ? { x: selectedElementBox.x, y: selectedElementBox.y, width: selectedElementBox.width, height: selectedElementBox.height }
     : region.box;
-  return { screenshotDataUrl, imageUrls: [...new Set(region.imageUrls)].slice(0, 5), publishedAt: region.publishedAt, authoritativePostText, authoritativePostTextSource, box: reportedBox, candidateCount: region.candidateCount, selectedMediaCount: region.selectedMediaCount, screenshotWidth: screenshotDimensions.width, screenshotHeight: screenshotDimensions.height, captureMethod, compressed };
+  return { screenshotDataUrl, imageUrls: [...new Set(region.imageUrls)].slice(0, 5), publishedAt: region.publishedAt, authoritativePostText, authoritativePostTextSource, authoritativePostTextProvenance, box: reportedBox, candidateCount: region.candidateCount, selectedMediaCount: region.selectedMediaCount, screenshotWidth: screenshotDimensions.width, screenshotHeight: screenshotDimensions.height, captureMethod, compressed };
 }
 
 function facebookScreenshotDataUrlLength(screenshot: Buffer): number {

@@ -86,6 +86,17 @@ test("outer BUY text gates persistence even when embedded shared content and Vis
   assert.equal(result.priceDrops, 0);
 });
 
+test("ambiguous composite blocks Vision sale fallback before persistence", async () => {
+  let calls = 0;
+  const item = { ...post(vision(true)), authoritativePostText: "", authoritativePostTextSource: "NONE" as const, authoritativePostTextProvenance: "AMBIGUOUS_COMPOSITE" as const };
+  const result = await persistEligibleFacebookPost(item, async () => { calls += 1; return persisted(); });
+  assert.equal(calls, 0);
+  assert.equal(result.status, "skipped");
+  assert.equal(result.listingUpdated, false);
+  assert.equal(result.imagesMirrored, 0);
+  assert.equal(result.priceDrops, 0);
+});
+
 test("unrelated portraits, group, quote and lifestyle images are not accepted", () => {
   const urls = ["portrait", "group", "quote", "lifestyle"];
   const assessments = urls.map((_, imageIndex) => ({ imageIndex, relevance: "NON_PROPERTY_IMAGE" as const, confidence: 0.99 }));
