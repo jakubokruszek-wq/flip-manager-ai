@@ -1,5 +1,6 @@
 import type { FacebookListingInput, FacebookProperty } from "./types";
 import { resolveLocation } from "../location-intelligence/resolve-location.ts";
+import { resolveFacebookListingIntent } from "./facebook-intent.ts";
 
 const PLACES = [
   ["radogoszcz zachód", "Radogoszcz Zachód", "Bałuty"], ["radogoszcz", "Radogoszcz", "Bałuty"],
@@ -28,6 +29,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const explicitDistrict = place?.[2] ?? districtFound;
   const location = await resolveLocation({ address: street, street, district: explicitDistrict, city: explicitNeighborhood || explicitDistrict || /łódź/i.test(text) ? "Łódź" : null, locationText: text, title: text.split(/[.!?\n]/)[0] ?? null, description: text || null });
   const confidence = Math.min(0.98, 0.35 + known * 0.12);
+  const intent = resolveFacebookListingIntent(text, input.listingIntent, input.intentConfidence);
   const property: FacebookProperty = {
     title: text.split(/[.!?\n]/)[0]?.trim().slice(0, 180) || "Oferta z Facebooka",
     city: location.city,
@@ -43,7 +45,8 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     sellerType: /bez pośrednik|bezpośrednio|prywatnie/i.test(text) ? "private" : /biuro|agencj|pośrednik/i.test(text) ? "agency" : null,
     condition: /remont|po babci/i.test(text) ? "renovation" : /po remoncie|do wejścia/i.test(text) ? "ready" : null,
     description: text || null, originalUrl: input.url ?? null, images: input.images ?? [],
-    confidence, flags,
+    confidence, flags, listingIntent: intent.intent, intentConfidence: intent.confidence,
+    imageAssessments: input.imageAssessments ?? [],
   };
   property.fieldConfidence = Object.fromEntries([
     "title", "description", "city", "district", "neighborhood", "street", "price", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",

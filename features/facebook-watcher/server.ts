@@ -17,6 +17,7 @@ import { mirrorFacebookImages } from "./server/mirror-facebook-images";
 import { FACEBOOK_WORKFLOW_STATUSES, type FacebookListingInput, type FacebookWatcherListing, type FacebookWorkflowStatus } from "./types";
 import { recordFacebookGroupImport } from "@/features/facebook-groups/server";
 import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebookFieldConfidence } from "./facebook-data-quality";
+import { resolveFacebookListingIntent } from "./facebook-intent";
 
 type Row = Record<string, unknown>;
 
@@ -46,13 +47,21 @@ export type FacebookImportResult = {
     realEstateLanguage: boolean;
     structuredFieldCount: number;
     detectedFields: string[];
+    classification?: "not_a_property" | "non_sale_intent";
+    reasonCode?: import("../facebook-worker/types").FacebookSkipReasonCode;
   };
 };
 
 export async function importFacebookWatcher(input: FacebookListingInput, context?: FacebookAutomatedImportContext): Promise<FacebookImportResult> {
   const normalized = await manualFacebookAdapter.importManual(input);
+  const intent = resolveFacebookListingIntent(normalized.postText, normalized.listingIntent, normalized.intentConfidence);
+  if (context && intent.intent !== "SELL_PROPERTY") {
+    const extracted = skippedFacebookProperty(normalized, intent.intent, intent.confidence);
+    const realEstateLanguage = intent.intent === "BUY_PROPERTY" || intent.intent === "RENT_OFFER" || intent.intent === "RENT_WANTED";
+    return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent", reasonCode: intent.reasonCode ?? "FACEBOOK_INTENT_UNKNOWN" } };
+  }
   const extractedBase = await extractFacebookListing(normalized);
-  const extracted = { ...extractedBase, ...normalized.overrides, originalUrl: extractedBase.originalUrl, images: extractedBase.images, flags: normalized.analysisFlags ?? extractedBase.flags, confidence: typeof normalized.analysisConfidence === "number" ? Math.max(0, Math.min(1, normalized.analysisConfidence)) : extractedBase.confidence, fieldConfidence: { ...extractedBase.fieldConfidence, ...normalized.analysisFieldConfidence } };
+  const extracted = { ...extractedBase, ...normalized.overrides, originalUrl: extractedBase.originalUrl, images: extractedBase.images, flags: normalized.analysisFlags ?? extractedBase.flags, confidence: typeof normalized.analysisConfidence === "number" ? Math.max(0, Math.min(1, normalized.analysisConfidence)) : extractedBase.confidence, fieldConfidence: { ...extractedBase.fieldConfidence, ...normalized.analysisFieldConfidence }, listingIntent: intent.intent, intentConfidence: intent.confidence, imageAssessments: normalized.imageAssessments ?? extractedBase.imageAssessments };
   const classification = classifyFacebookProperty(extracted, normalized.postText);
   if (context && !classification.usable) {
     return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: classification.realEstateLanguage, structuredFieldCount: classification.structuredFieldCount, detectedFields: classification.detectedFields } };
@@ -101,6 +110,15 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   return { status, listingId, extracted, opportunityScore: score, listingCreated: status === "created", listingUpdated: status === "updated", matched: false, matchCreated: false, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops: 0, warnings: imageMirror.warnings };
 }
 
+function skippedFacebookProperty(input: FacebookListingInput, listingIntent: NonNullable<FacebookProperty["listingIntent"]>, intentConfidence: number): FacebookProperty {
+  return {
+    title: "Post Facebook pominięty", city: null, district: null, neighborhood: null, street: null,
+    price: null, area: null, rooms: null, floor: null, totalFloors: null, marketType: null,
+    sellerType: null, condition: null, description: null, originalUrl: input.url ?? null, images: [],
+    confidence: 0, fieldConfidence: {}, flags: [], listingIntent, intentConfidence, imageAssessments: [],
+  };
+}
+
 async function importAutomatedFacebook(input: {
   supabase: ReturnType<typeof createFacebookWatcherAdminClient>;
   normalized: FacebookListingInput;
@@ -121,6 +139,7 @@ async function importAutomatedFacebook(input: {
     fieldConfidence: parseFacebookFieldConfidence(previousMetadata.fieldConfidence),
   } : null, extracted);
   const effective = qualityMerge.property;
+  if (effective.listingIntent !== "SELL_PROPERTY") throw new Error("FACEBOOK_INTENT_GATE_FAILED");
   const imageMirror = await mirrorFacebookImages({ listingId: existing?.id ?? externalId, imageUrls: effective.images, existingImages: existingState.images });
   effective.images = imageMirror.images;
   const pricePerSqm = effective.price && effective.area ? effective.price / effective.area : null;
@@ -139,7 +158,7 @@ async function importAutomatedFacebook(input: {
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
     matchCreated = decision.matches ? await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now) : false;
   } else {
-    const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: normalized.publishedAt ?? null, flags: effective.flags };
+    const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: normalized.publishedAt ?? null, flags: effective.flags, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence };
     const contentHash = calculateContentHash({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor, locationText, images: imageMirror.images });
     const listing: SourceListing = { source: "facebook", externalListingId: externalId, originalUrl: sourceUrl, normalizedUrl: sourceUrl, title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), pricePerSqm, city: effective.city, district: effective.district, locationText, images: imageMirror.images, thumbnailUrl: imageMirror.images[0] ?? null, buildingType: null, description: effective.description, rawPayload, contentHash };
     const saved = await persistListing(supabase, context.filter.id, listing, decision.matches, decision.unknownFields, context.sourceScanId, now, AbortSignal.timeout(75_000));
@@ -152,7 +171,7 @@ async function importAutomatedFacebook(input: {
     if (scoreUpdate.error) throw new Error(`FACEBOOK_SCORE_PERSIST_FAILED: ${scoreUpdate.error.message}`);
   }
 
-  const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: normalized.publishedAt ?? null, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, confidence: effective.confidence, fieldConfidence: qualityMerge.fieldConfidence, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, imageMirror: imageMirror.stats, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
+  const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: normalized.publishedAt ?? null, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, confidence: effective.confidence, fieldConfidence: qualityMerge.fieldConfidence, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, imageMirror: imageMirror.stats, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
   if (metadata.error) throw new Error(`FACEBOOK_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
   await recordFacebookGroupImport(context.groupName, listingCreated, score >= 85 || effective.sellerType === "private" && effective.condition === "renovation");
   return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)] };

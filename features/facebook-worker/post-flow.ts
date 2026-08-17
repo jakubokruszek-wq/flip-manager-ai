@@ -1,4 +1,4 @@
-import type { FacebookPostSnapshot } from "./types";
+import type { FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
 
 export type FacebookPostImportResult = {
   status: "created" | "updated" | "skipped";
@@ -14,6 +14,8 @@ export type FacebookPostImportResult = {
     realEstateLanguage: boolean;
     structuredFieldCount: number;
     detectedFields: string[];
+    classification?: "not_a_property" | "non_sale_intent";
+    reasonCode?: FacebookSkipReasonCode;
   };
 };
 
@@ -28,8 +30,8 @@ export type FacebookSkippedDiagnostic = {
   real_estate_language: boolean;
   structured_field_count: number;
   detected_fields: string[];
-  classification: "not_a_property";
-  reason_code: "NO_REAL_ESTATE_LANGUAGE_AND_TOO_FEW_FIELDS";
+  classification: "not_a_property" | "non_sale_intent";
+  reason_code: FacebookSkipReasonCode;
   text_preview: string;
 };
 
@@ -103,7 +105,7 @@ export function redactFacebookPostPreview(text: string): string {
 }
 
 function createSkippedDiagnostic(post: FacebookPostSnapshot, signals: NonNullable<FacebookPostImportResult["notProperty"]>, context: { jobId: string; sourceScanId: string }): FacebookSkippedDiagnostic {
-  return { job_id: context.jobId, source_scan_id: context.sourceScanId, post_id: post.postId, group_id: post.groupId, permalink: post.permalink, text_length: post.text.length, image_count: post.imageUrls.length, real_estate_language: signals.realEstateLanguage, structured_field_count: signals.structuredFieldCount, detected_fields: signals.detectedFields.slice(0, 10), classification: "not_a_property", reason_code: "NO_REAL_ESTATE_LANGUAGE_AND_TOO_FEW_FIELDS", text_preview: redactFacebookPostPreview(post.text) };
+  return { job_id: context.jobId, source_scan_id: context.sourceScanId, post_id: post.postId, group_id: post.groupId, permalink: post.permalink, text_length: post.text.length, image_count: post.imageUrls.length, real_estate_language: signals.realEstateLanguage, structured_field_count: signals.structuredFieldCount, detected_fields: signals.detectedFields.slice(0, 10), classification: signals.classification ?? "not_a_property", reason_code: signals.reasonCode ?? "NO_REAL_ESTATE_LANGUAGE_AND_TOO_FEW_FIELDS", text_preview: redactFacebookPostPreview(post.text) };
 }
 
 function safeErrorCode(error: unknown): string {

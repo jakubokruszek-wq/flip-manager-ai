@@ -21,7 +21,11 @@ export function normalizeFacebookListing(input: FacebookListingInput): FacebookL
     images: [...new Set((input.images ?? []).map((image) => image.trim()).filter(Boolean))].slice(0, 12),
     overrides: input.overrides,
     analysisConfidence: input.analysisConfidence,
+    analysisFieldConfidence: input.analysisFieldConfidence,
     analysisFlags: input.analysisFlags,
+    listingIntent: input.listingIntent,
+    intentConfidence: input.intentConfidence,
+    imageAssessments: input.imageAssessments,
   };
 }
 

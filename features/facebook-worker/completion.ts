@@ -1,4 +1,4 @@
-import { FACEBOOK_CONFIDENCE_FIELDS, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
+import { FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
 const MAX_POSTS = 20;
@@ -53,7 +53,16 @@ function parseVision(value: unknown): FacebookVisionExtraction | null {
   if (value === null || value === undefined) return null;
   const row = requireRow(value);
   if (typeof row.isProperty !== "boolean") throw new Error("INVALID_FACEBOOK_VISION");
-  return { isProperty: row.isProperty === true, title: nullableString(row.title, 500), description: nullableString(row.description, 2_000), visibleText: nullableString(row.visibleText, 2_000), city: nullableString(row.city, 200), district: nullableString(row.district, 200), neighborhood: nullableString(row.neighborhood, 200), street: nullableString(row.street, 300), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableNumber(row.floor), totalFloors: nullableNumber(row.totalFloors), condition: row.condition === "renovation" || row.condition === "ready" ? row.condition : null, sellerType: row.sellerType === "private" || row.sellerType === "agency" ? row.sellerType : null, confidence: boundedConfidence(row.confidence), fieldConfidence: parseFieldConfidence(row.fieldConfidence) };
+  return { isProperty: row.isProperty === true, listingIntent: FACEBOOK_LISTING_INTENTS.includes(row.listingIntent as never) ? row.listingIntent as FacebookVisionExtraction["listingIntent"] : "UNKNOWN", intentConfidence: boundedConfidence(row.intentConfidence), title: nullableString(row.title, 500), description: nullableString(row.description, 2_000), visibleText: nullableString(row.visibleText, 2_000), city: nullableString(row.city, 200), district: nullableString(row.district, 200), neighborhood: nullableString(row.neighborhood, 200), street: nullableString(row.street, 300), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableNumber(row.floor), totalFloors: nullableNumber(row.totalFloors), condition: row.condition === "renovation" || row.condition === "ready" ? row.condition : null, sellerType: row.sellerType === "private" || row.sellerType === "agency" ? row.sellerType : null, confidence: boundedConfidence(row.confidence), fieldConfidence: parseFieldConfidence(row.fieldConfidence), imageAssessments: parseImageAssessments(row.imageAssessments) };
+}
+
+function parseImageAssessments(value: unknown): FacebookImageAssessment[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, MAX_IMAGES).flatMap((item) => {
+    const row = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : null;
+    if (!row || !Number.isInteger(row.imageIndex) || !FACEBOOK_IMAGE_RELEVANCE.includes(row.relevance as never)) return [];
+    return [{ imageIndex: row.imageIndex as number, relevance: row.relevance as FacebookImageAssessment["relevance"], confidence: boundedConfidence(row.confidence) }];
+  });
 }
 
 function parseFieldConfidence(value: unknown): FacebookFieldConfidence | undefined {

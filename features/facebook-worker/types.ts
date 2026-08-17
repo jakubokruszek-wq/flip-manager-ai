@@ -25,8 +25,23 @@ export type FacebookPostSnapshot = {
   vision?: FacebookVisionExtraction | null;
 };
 
+export const FACEBOOK_LISTING_INTENTS = [
+  "SELL_PROPERTY", "BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE", "OTHER", "UNKNOWN",
+] as const;
+export type FacebookListingIntent = (typeof FACEBOOK_LISTING_INTENTS)[number];
+
+export const FACEBOOK_IMAGE_RELEVANCE = ["PROPERTY_IMAGE", "NON_PROPERTY_IMAGE", "UNKNOWN"] as const;
+export type FacebookImageRelevance = (typeof FACEBOOK_IMAGE_RELEVANCE)[number];
+export type FacebookImageAssessment = {
+  imageIndex: number;
+  relevance: FacebookImageRelevance;
+  confidence: number;
+};
+
 export type FacebookVisionExtraction = {
   isProperty: boolean;
+  listingIntent: FacebookListingIntent;
+  intentConfidence: number;
   title: string | null;
   description: string | null;
   visibleText: string | null;
@@ -43,6 +58,7 @@ export type FacebookVisionExtraction = {
   sellerType: "private" | "agency" | null;
   confidence: number;
   fieldConfidence?: FacebookFieldConfidence;
+  imageAssessments: FacebookImageAssessment[];
 };
 
 export const FACEBOOK_CONFIDENCE_FIELDS = [
@@ -101,11 +117,19 @@ export type FacebookCompletionResult = {
     real_estate_language: boolean;
     structured_field_count: number;
     detected_fields: string[];
-    classification: "not_a_property";
-    reason_code: "NO_REAL_ESTATE_LANGUAGE_AND_TOO_FEW_FIELDS";
+    classification: "not_a_property" | "non_sale_intent";
+    reason_code: FacebookSkipReasonCode;
     text_preview: string;
   }>;
 };
+
+export type FacebookSkipReasonCode =
+  | "NO_REAL_ESTATE_LANGUAGE_AND_TOO_FEW_FIELDS"
+  | "FACEBOOK_BUY_REQUEST"
+  | "FACEBOOK_RENT_REQUEST"
+  | "FACEBOOK_SERVICE_POST"
+  | "FACEBOOK_NON_SALE_POST"
+  | "FACEBOOK_INTENT_UNKNOWN";
 
 export type FacebookJobState = {
   status: FacebookJobStatus;

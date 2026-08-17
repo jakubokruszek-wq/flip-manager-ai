@@ -4,6 +4,7 @@ import { analyzeFacebookImages } from "./analyze-facebook-images";
 import { extractFacebookProperty } from "./extract-facebook-property";
 import { FACEBOOK_CONFIDENCE_FIELDS, type FacebookFieldConfidence } from "../facebook-worker/types.ts";
 import type { FacebookListingInput, FacebookProperty } from "./types";
+import { resolveFacebookListingIntent } from "./facebook-intent";
 
 export async function extractFacebookListing(input: FacebookListingInput): Promise<FacebookProperty> {
   const base = await extractFacebookProperty(input);
@@ -15,6 +16,8 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
   const textResult = vision.visibleText
     ? await extractFacebookProperty({ ...input, postText: combinedText })
     : base;
+  const intent = resolveFacebookListingIntent(combinedText, vision.listingIntent, vision.intentConfidence);
+  const acceptedImages = (input.images ?? []).filter((_, index) => vision.imageAssessments.some((assessment) => assessment.imageIndex === index && assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8));
 
   return {
     ...textResult,
@@ -31,6 +34,10 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     sellerType: textResult.sellerType ?? vision.sellerType,
     confidence: Math.max(textResult.confidence, vision.confidence),
     fieldConfidence: selectFieldConfidence(textResult, vision),
+    listingIntent: intent.intent,
+    intentConfidence: intent.confidence,
+    imageAssessments: vision.imageAssessments,
+    images: acceptedImages,
   };
 }
 

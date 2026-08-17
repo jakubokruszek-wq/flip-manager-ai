@@ -6,7 +6,7 @@ import { importFacebookWatcher } from "@/features/facebook-watcher/server";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { assertFacebookGroupUrl, parseFacebookGroupSnapshot } from "./completion";
 import { processFacebookPostBatch } from "./post-flow";
-import { detectedVisionFields, facebookVisionToListingInput } from "./vision-adapter";
+import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
 import { facebookJobIdempotencyKey, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
@@ -79,20 +79,18 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   if (sourceScan.error || !sourceScan.data) throw new Error(`FACEBOOK_SOURCE_SCAN_READ_FAILED: ${sourceScan.error?.message ?? "missing source scan"}`);
   const filter = parseStoredFilter(sourceScan.data.filter_snapshot, searchFilterId);
   const summary = await processFacebookPostBatch(input.posts, async (post) => {
-    if (post.vision?.isProperty === false) {
-      const detectedFields = detectedVisionFields(post.vision);
-      return { status: "skipped" as const, listingId: null, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: false, structuredFieldCount: detectedFields.length, detectedFields } };
-    }
-    const imported = await importFacebookWatcher(facebookVisionToListingInput(post, groups[0].name), {
-      filter,
-      sourceScanId,
-      groupId: groups[0].id,
-      groupName: groups[0].name,
-      groupUrl: groups[0].url,
-      postId: post.postId,
-      checkedAt: now,
+    return persistEligibleFacebookPost(post, async (eligiblePost) => {
+      const imported = await importFacebookWatcher(facebookVisionToListingInput(eligiblePost, groups[0].name), {
+        filter,
+        sourceScanId,
+        groupId: groups[0].id,
+        groupName: groups[0].name,
+        groupUrl: groups[0].url,
+        postId: eligiblePost.postId,
+        checkedAt: now,
+      });
+      return { status: imported.status, listingId: imported.listingId, listingCreated: imported.listingCreated, listingUpdated: imported.listingUpdated, matched: imported.matched, matchCreated: imported.matchCreated, imagesMirrored: imported.imagesMirrored, priceDrops: imported.priceDrops, warnings: imported.warnings, notProperty: imported.notProperty };
     });
-    return { status: imported.status, listingId: imported.listingId, listingCreated: imported.listingCreated, listingUpdated: imported.listingUpdated, matched: imported.matched, matchCreated: imported.matchCreated, imagesMirrored: imported.imagesMirrored, priceDrops: imported.priceDrops, warnings: imported.warnings, notProperty: imported.notProperty };
   }, { jobId: input.jobId, sourceScanId });
   if (summary.listingIds.length > 0) await getAlerts();
   const normalized = summary.postsProcessed - summary.listingsSkipped - summary.extractionFailed;

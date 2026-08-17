@@ -1,4 +1,4 @@
-import type { FacebookFieldConfidence } from "../facebook-worker/types";
+import type { FacebookFieldConfidence, FacebookImageAssessment, FacebookListingIntent } from "../facebook-worker/types";
 
 export type FacebookListingInput = {
   url?: string;
@@ -11,6 +11,9 @@ export type FacebookListingInput = {
   analysisConfidence?: number;
   analysisFieldConfidence?: FacebookFieldConfidence;
   analysisFlags?: string[];
+  listingIntent?: FacebookListingIntent;
+  intentConfidence?: number;
+  imageAssessments?: FacebookImageAssessment[];
 };
 
 export type FacebookProperty = {
@@ -33,6 +36,9 @@ export type FacebookProperty = {
   confidence: number;
   fieldConfidence?: FacebookFieldConfidence;
   flags: string[];
+  listingIntent?: FacebookListingIntent;
+  intentConfidence?: number;
+  imageAssessments?: FacebookImageAssessment[];
 };
 
 export type FacebookWatcherListing = FacebookProperty & {
