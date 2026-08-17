@@ -92,10 +92,10 @@ export function determineFacebookPostRegionFailureReason(counts: FacebookPostReg
   return "UNKNOWN";
 }
 
-export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost, groupId: string, dependencies: { open: (permalink: string) => Promise<void>; capture: (postId: string) => Promise<FacebookPostRegion>; analyze: (input: { postId: string; screenshotDataUrl: string }) => Promise<FacebookVisionExtraction> }): Promise<FacebookPostSnapshot> {
+export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost, groupId: string, dependencies: { open: (permalink: string) => Promise<void>; capture: (postId: string) => Promise<FacebookPostRegion>; analyze: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }) => Promise<FacebookVisionExtraction> }): Promise<FacebookPostSnapshot> {
   await dependencies.open(post.permalink);
   const region = await dependencies.capture(post.postId);
-  const vision = await dependencies.analyze({ postId: post.postId, screenshotDataUrl: region.screenshotDataUrl });
+  const vision = await dependencies.analyze({ postId: post.postId, screenshotDataUrl: region.screenshotDataUrl, imageUrls: region.imageUrls });
   return { postId: post.postId, groupId, permalink: post.permalink, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt, vision };
 }
 

@@ -6,7 +6,7 @@ import { logFacebookWorker } from "./logger.ts";
 import { captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, limitFacebookVisionPosts, processDedicatedFacebookPost, resolveFacebookPostAge, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
 
-export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false) {
+export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false) {
   const started = Date.now(); const url = assertWorkerFacebookGroupUrl(group.url).toString();
   logFacebookWorker("FACEBOOK_BROWSER_START", { groupId: group.id });
   const context = await chromium.launchPersistentContext(profileDir, { headless: true, locale: "pl-PL" });
