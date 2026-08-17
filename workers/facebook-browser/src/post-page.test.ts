@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
-import { canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookPostAge, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, extractFacebookAuthoritativeTextFromStructuredData, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookPostIdArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookPostAge, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 
 const vision: FacebookVisionExtraction = { isProperty: true, listingIntent: "SELL_PROPERTY", intentConfidence: 0.98, title: "Mieszkanie Łódź", description: "Sprzedam mieszkanie 50 m²", visibleText: "Sprzedam mieszkanie 50 m²", city: "Łódź", district: null, neighborhood: null, street: null, price: 400_000, area: 50, rooms: 2, floor: null, totalFloors: null, condition: null, sellerType: "private", confidence: 0.95, imageAssessments: [] };
 
@@ -14,6 +14,57 @@ test("deduplicates two comment links by stable post id", () => {
 
 test("creates a canonical permalink without tracking parameters", () => {
   assert.deepEqual(canonicalFacebookPostUrl("https://m.facebook.com/groups/test/posts/123/?__tn__=R#x"), { postId: "123", permalink: "https://www.facebook.com/groups/test/posts/123/" });
+});
+
+test("structured metadata binds authoritative text to the exact post and ignores adjacent posts and comments", () => {
+  const text = extractFacebookAuthoritativeTextFromStructuredData([{
+    feed: [
+      { post_id: "1646249253686136", message: { text: "Kupię za gotówkę mieszkanie w Łodzi" }, comments: [{ id: "comment-1", message: "Sprzedam mieszkanie" }] },
+      { post_id: "other-post", message: "Sprzedam mieszkanie 42 m2" },
+    ],
+  }], "1646249253686136");
+  assert.equal(text, "Kupię za gotówkę mieszkanie w Łodzi");
+});
+
+test("capture prefers exact post metadata over neighboring sale text", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    await page.route("https://www.facebook.com/groups/1/posts/1646249253686136/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
+    await page.goto("https://www.facebook.com/groups/1/posts/1646249253686136/");
+    const metadata = JSON.stringify({ posts: [{ post_id: "1646249253686136", message: "Kupię za gotówkę mieszkanie w Łodzi", comments: [{ message: "Sprzedam mieszkanie" }] }, { post_id: "other", message: "Sprzedam mieszkanie 42 m2" }] });
+    await page.setContent(`<script type="application/json">${metadata}</script><main><section style="width:590px;height:400px"><div data-ad-comet-preview="message" style="height:80px">Tekst DOM nie ma pierwszeństwa</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section></main>`);
+    const region = await captureFacebookPostRegion(page, "1646249253686136");
+    assert.equal(region.authoritativePostText, "Kupię za gotówkę mieszkanie w Łodzi");
+    assert.equal(region.authoritativePostTextSource, "POST_PAGE_METADATA");
+  } finally { await browser.close(); }
+});
+
+test("post region DOM excludes comments when metadata is unavailable", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    await page.route("https://www.facebook.com/groups/1/posts/201/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
+    await page.goto("https://www.facebook.com/groups/1/posts/201/");
+    await page.setContent(`<main><section style="width:590px;height:520px"><section id="post" style="width:590px;height:400px"><div data-ad-comet-preview="message" style="height:80px">Kupię za gotówkę mieszkanie w Łodzi</div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='320'%3E%3C/svg%3E" style="display:block;width:590px;height:320px"></section><section aria-label="Komentarze" style="height:120px"><div dir="auto">Sprzedam mieszkanie</div></section></section></main>`);
+    const region = await captureFacebookPostRegion(page, "201");
+    assert.equal(region.authoritativePostText, "Kupię za gotówkę mieszkanie w Łodzi");
+    assert.equal(region.authoritativePostTextSource, "POST_REGION_DOM");
+    assert.doesNotMatch(region.authoritativePostText, /sprzedam/i);
+  } finally { await browser.close(); }
+});
+
+test("empty metadata and DOM keep authoritative text empty for Vision fallback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    await page.route("https://www.facebook.com/groups/1/posts/202/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
+    await page.goto("https://www.facebook.com/groups/1/posts/202/");
+    await page.setContent(`<main><section style="width:590px;height:400px"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='400'%3E%3C/svg%3E" style="display:block;width:590px;height:400px"></section></main>`);
+    const region = await captureFacebookPostRegion(page, "202");
+    assert.equal(region.authoritativePostText, "");
+    assert.equal(region.authoritativePostTextSource, "NONE");
+  } finally { await browser.close(); }
 });
 
 test("accepts Facebook posts up to 72 hours and rejects older or unknown age", () => {
@@ -190,7 +241,7 @@ test("opens the dedicated page before capture and Vision", async () => {
   const order: string[] = [];
   const result = await processDedicatedFacebookPost({ postId: "99", permalink: "https://www.facebook.com/groups/1/posts/99/" }, "group-1", {
     open: async () => { order.push("open"); },
-    capture: async () => { order.push("capture"); return { screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: ["https://scontent.xx.fbcdn.net/property.jpg"], publishedAt: null, box: { x: 0, y: 0, width: 500, height: 300 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 300, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }; },
+    capture: async () => { order.push("capture"); return { screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: ["https://scontent.xx.fbcdn.net/property.jpg"], publishedAt: null, authoritativePostText: "", authoritativePostTextSource: "NONE", box: { x: 0, y: 0, width: 500, height: 300 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 300, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }; },
     analyze: async () => { order.push("vision"); return vision; },
   });
   assert.deepEqual(order, ["open", "capture", "vision"]);
@@ -236,6 +287,12 @@ test("parses the explicit one-post debug limit without changing the default", ()
   assert.equal(parseFacebookMaxPostsArgument(["node", "index.ts"]), null);
   assert.equal(parseFacebookMaxPostsArgument(["node", "index.ts", "--max-facebook-posts=1"]), 1);
   assert.throws(() => parseFacebookMaxPostsArgument(["--max-facebook-posts=0"]), /between 1 and 15/);
+});
+
+test("parses an explicit Facebook target post id", () => {
+  assert.equal(parseFacebookPostIdArgument(["node", "index.ts"]), null);
+  assert.equal(parseFacebookPostIdArgument(["node", "index.ts", "--facebook-post-id=123"]), "123");
+  assert.throws(() => parseFacebookPostIdArgument(["--facebook-post-id=abc"]), /only digits/);
 });
 
 test("screenshots the post content region above comments", async () => {

@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import type { FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { logFacebookWorker } from "./logger.ts";
 
 export const MAX_FACEBOOK_DISCOVERED_POSTS = 50;
@@ -21,9 +21,9 @@ export type FacebookPostTimeDiagnostic = {
   candidates: Array<{ tag: string; role: string | null; attribute_names: string[]; datetime: string | null; data_utime: string | null; data_timestamp: string | null; aria_label_parseable_as_time: boolean; title_parseable_as_time: boolean; nesting_depth: number | null; inside_main: boolean; inside_comment_region: boolean; distance_to_post_region: number | null; candidate_score: number }>;
   metadata: Array<{ metadata_source: string; timestamp_value: string; linked_to_expected_post_id: boolean }>;
 };
-export type FacebookDiscoveryStopReason = "OLDER_THAN_72H" | "MAX_POSTS" | "MAX_SCROLLS" | "NO_NEW_POSTS" | "END_OF_FEED";
+export type FacebookDiscoveryStopReason = "OLDER_THAN_72H" | "MAX_POSTS" | "MAX_SCROLLS" | "NO_NEW_POSTS" | "END_OF_FEED" | "DEBUG_TARGET";
 export type FacebookDiscoveryLoopResult = { posts: FreshDiscoveredFacebookPost[]; scrollCount: number; stopReason: FacebookDiscoveryStopReason };
-export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
+export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; authoritativePostText: string; authoritativePostTextSource: FacebookAuthoritativePostTextSource; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
 export type FacebookPostRegionFailureReason = "POST_ANCHOR_NOT_FOUND" | "NO_ANCESTOR_CANDIDATES" | "ALL_TOO_SMALL" | "ALL_REJECTED_AS_COMMENTS" | "NO_CONTENT_NODES" | "INVALID_BOUNDING_BOX" | "AMBIGUOUS_CANDIDATES" | "UNKNOWN";
 export type FacebookPostRegionDiagnosticCounts = {
   dedicatedPageUrlMatches: boolean;
@@ -96,7 +96,53 @@ export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost,
   await dependencies.open(post.permalink);
   const region = await dependencies.capture(post.postId);
   const vision = await dependencies.analyze({ postId: post.postId, screenshotDataUrl: region.screenshotDataUrl, imageUrls: region.imageUrls });
-  return { postId: post.postId, groupId, permalink: post.permalink, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt, vision };
+  return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt, vision };
+}
+
+export function extractFacebookAuthoritativeTextFromStructuredData(values: unknown[], expectedPostId: string): string {
+  const candidates: Array<{ text: string; priority: number }> = [];
+  const idKey = /^(?:id|post_id|postid|story_fbid|feedback_target_id)$/i;
+  const textPriority: Record<string, number> = { message: 400, body: 300, story: 200, text: 100 };
+  const excludedKey = /comment|repl(?:y|ies)|feedback|reaction|actor|author|profile|recommend/i;
+  const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const directPostId = (value: Record<string, unknown>) => Object.entries(value).find(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number"))?.[1];
+  const collectLinkedText = (value: unknown, depth: number, inheritedPriority = 0): void => {
+    if (depth > 15 || value === null || value === undefined) return;
+    if (typeof value === "string") {
+      const text = value.replace(/\s+/g, " ").trim();
+      if (inheritedPriority > 0 && text.length >= 8 && text.length <= 5_000) candidates.push({ text: text.slice(0, 2_000), priority: inheritedPriority + Math.min(text.length, 1_000) / 10 });
+      return;
+    }
+    if (Array.isArray(value)) { for (const item of value) collectLinkedText(item, depth + 1, inheritedPriority); return; }
+    const row = record(value); if (!row) return;
+    const nestedId = directPostId(row);
+    if (nestedId !== undefined && String(nestedId) !== expectedPostId) return;
+    for (const [key, item] of Object.entries(row)) {
+      if (excludedKey.test(key)) continue;
+      const fieldPriority = textPriority[key.toLowerCase()] ?? 0;
+      const priority = fieldPriority > 0 ? Math.max(fieldPriority, inheritedPriority) : 0;
+      collectLinkedText(item, depth + 1, priority);
+    }
+  };
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 30 || value === null || value === undefined) return;
+    if (Array.isArray(value)) { for (const item of value) visit(item, depth + 1); return; }
+    const row = record(value); if (!row) return;
+    const matched = Object.entries(row).some(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number") && String(item) === expectedPostId);
+    if (matched) collectLinkedText(row, 0);
+    for (const item of Object.values(row)) if (item && typeof item === "object") visit(item, depth + 1);
+  };
+  for (const value of values) visit(value, 0);
+  return candidates.sort((left, right) => right.priority - left.priority || right.text.length - left.text.length)[0]?.text ?? "";
+}
+
+async function extractFacebookAuthoritativeTextFromMetadata(page: Page, postId: string): Promise<string> {
+  const sources = await page.locator('script[type="application/ld+json"],script[type="application/json"]').evaluateAll((scripts, targetPostId) => scripts
+    .map((script) => script.textContent ?? "")
+    .filter((source) => source.length > 0 && source.length <= 2_000_000 && source.includes(targetPostId))
+    .slice(0, 100), postId);
+  const values = sources.flatMap((source) => { try { return [JSON.parse(source) as unknown]; } catch { return []; } });
+  return extractFacebookAuthoritativeTextFromStructuredData(values, postId);
 }
 
 export function canonicalFacebookPostUrl(value: string, expectedPostId?: string): DiscoveredFacebookPost | null {
@@ -142,6 +188,36 @@ export function parseFacebookMaxPostsArgument(argv: string[]): number | null {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1 || value > MAX_VISION_POSTS_PER_JOB) throw new Error(`--max-facebook-posts must be an integer between 1 and ${MAX_VISION_POSTS_PER_JOB}.`);
   return value;
+}
+
+export function parseFacebookPostIdArgument(argv: string[]): string | null {
+  const argumentsWithValue = argv.filter((argument) => argument.startsWith("--facebook-post-id="));
+  if (argumentsWithValue.length === 0) return null;
+  if (argumentsWithValue.length > 1) throw new Error("--facebook-post-id may be provided only once.");
+  const postId = argumentsWithValue[0].slice("--facebook-post-id=".length);
+  if (!/^\d+$/.test(postId)) throw new Error("--facebook-post-id must contain only digits.");
+  return postId;
+}
+
+export function createFacebookDebugTarget(groupUrlValue: string, postId: string): FreshDiscoveredFacebookPost {
+  const groupUrl = new URL(groupUrlValue);
+  if (groupUrl.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(groupUrl.hostname)) throw new Error("Facebook debug target requires a Facebook group URL.");
+  const groupPath = groupUrl.pathname.match(/^\/groups\/([^/]+)/i);
+  if (!groupPath) throw new Error("Facebook debug target requires a Facebook group URL.");
+  const post = canonicalFacebookPostUrl(`https://www.facebook.com/groups/${groupPath[1]}/posts/${postId}/`, postId);
+  if (!post) throw new Error("Unable to create the Facebook debug target URL.");
+  return { ...post, discoveredPublishedAt: null, freshnessFailure: "FACEBOOK_POST_AGE_UNKNOWN" };
+}
+
+export async function resolveFacebookPostDiscovery(input: {
+  groupUrl: string;
+  debugPostId: string | null;
+  discover: () => Promise<FacebookDiscoveryLoopResult>;
+}): Promise<FacebookDiscoveryLoopResult> {
+  if (input.debugPostId) {
+    return { posts: [createFacebookDebugTarget(input.groupUrl, input.debugPostId)], scrollCount: 0, stopReason: "DEBUG_TARGET" };
+  }
+  return input.discover();
 }
 
 export function parseFacebookTimestampValue(value: string | null, nowMs = Date.now()): string | null {
@@ -430,6 +506,7 @@ export async function collectFacebookPostTimeDiagnostic(page: Page, postId: stri
 }
 
 export async function captureFacebookPostRegion(page: Page, postId: string, options: { mediaDiagnostic?: boolean } = {}): Promise<FacebookPostRegion> {
+  const metadataAuthoritativeText = await extractFacebookAuthoritativeTextFromMetadata(page, postId);
   const captureToken = `flip-${postId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic }) => {
     const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
@@ -908,6 +985,42 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   });
   const selectedLocator = page.locator(`[data-flip-facebook-capture="${captureToken}"]`);
   const selectedElementBox = await selectedLocator.boundingBox().catch(() => null);
+  const domAuthoritativeText = metadataAuthoritativeText ? "" : await selectedLocator.evaluate((root, commentBoundaryY) => {
+    const commentSelector = '[data-testid*="comment" i],[aria-label*="comment" i],[aria-label*="komentar" i]';
+    const excludedSelector = 'nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"],[role="toolbar"],form,button,[role="button"]';
+    const dedicatedSelector = '[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"]';
+    const candidateSelector = `${dedicatedSelector},div[dir="auto"],p,[data-lexical-text="true"]`;
+    const uiOnly = /^(?:lubię to!?|like|odpowiedz|reply|udostępnij|share|wyślij|send|więcej|see more)$/iu;
+    const candidates = Array.from(root.querySelectorAll<HTMLElement>(candidateSelector)).flatMap((element, order) => {
+      if (element.closest(commentSelector) || element.closest(excludedSelector)) return [];
+      const nestedArticle = element.closest<HTMLElement>('[role="article"]');
+      if (nestedArticle && nestedArticle !== root && nestedArticle.getBoundingClientRect().height < 220) return [];
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const pageTop = rect.top + window.scrollY;
+      if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return [];
+      if (commentBoundaryY !== null && pageTop >= commentBoundaryY - 1) return [];
+      const lines = element.innerText.split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter((line) => line.length > 0 && !uiOnly.test(line));
+      const text = lines.join(" ").trim();
+      if (text.length < 8 || text.length > 5_000) return [];
+      return [{ element, text: text.slice(0, 2_000), order, dedicated: element.matches(dedicatedSelector) }];
+    });
+    const pool = candidates.some((candidate) => candidate.dedicated) ? candidates.filter((candidate) => candidate.dedicated) : candidates;
+    const unique = pool.filter((candidate, index) => pool.findIndex((other) => other.text === candidate.text) === index);
+    const selected = unique.sort((left, right) => Number(right.dedicated) - Number(left.dedicated) || right.text.length - left.text.length || left.order - right.order)[0];
+    return selected?.text ?? "";
+  }, region.screenshotDiagnostic.comment_boundary_y).catch(() => "");
+  const authoritativePostText = metadataAuthoritativeText || domAuthoritativeText;
+  const authoritativePostTextSource: FacebookAuthoritativePostTextSource = metadataAuthoritativeText
+    ? "POST_PAGE_METADATA"
+    : domAuthoritativeText ? "POST_REGION_DOM" : "NONE";
+  logFacebookWorker("FACEBOOK_AUTHORITATIVE_TEXT_DIAGNOSTIC", {
+    post_id: postId,
+    source: authoritativePostTextSource,
+    text_length: authoritativePostText.length,
+    linked_to_expected_post_id: authoritativePostTextSource !== "NONE",
+    comment_text_included: false,
+  });
   const requiresCommentCrop = region.screenshotDiagnostic.crop_reasons.includes("COMMENT_BOUNDARY_APPLIED");
   let captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK" = region.cleanPoolUsed && selectedElementBox && !requiresCommentCrop ? "ELEMENT_SCREENSHOT" : "CLIP_FALLBACK";
   let compressed = false;
@@ -961,7 +1074,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   const reportedBox = selectedElementBox && captureMethod === "ELEMENT_SCREENSHOT"
     ? { x: selectedElementBox.x, y: selectedElementBox.y, width: selectedElementBox.width, height: selectedElementBox.height }
     : region.box;
-  return { screenshotDataUrl, imageUrls: [...new Set(region.imageUrls)].slice(0, 5), publishedAt: region.publishedAt, box: reportedBox, candidateCount: region.candidateCount, selectedMediaCount: region.selectedMediaCount, screenshotWidth: screenshotDimensions.width, screenshotHeight: screenshotDimensions.height, captureMethod, compressed };
+  return { screenshotDataUrl, imageUrls: [...new Set(region.imageUrls)].slice(0, 5), publishedAt: region.publishedAt, authoritativePostText, authoritativePostTextSource, box: reportedBox, candidateCount: region.candidateCount, selectedMediaCount: region.selectedMediaCount, screenshotWidth: screenshotDimensions.width, screenshotHeight: screenshotDimensions.height, captureMethod, compressed };
 }
 
 function facebookScreenshotDataUrlLength(screenshot: Buffer): number {
