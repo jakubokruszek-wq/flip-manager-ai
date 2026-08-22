@@ -1,5 +1,5 @@
 import { authenticateFacebookWorkerRequest } from "@/features/facebook-worker/auth";
-import { getFacebookPostCache } from "@/features/facebook-worker/jobs";
+import { getFacebookWorkerCache } from "@/features/facebook-worker/jobs";
 
 export const runtime = "nodejs";
 
@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   if (!auth.ok) return auth.response;
   try {
     const input = parsePayload(JSON.parse(auth.body) as unknown);
-    return Response.json({ hits: await getFacebookPostCache(input) });
+    return Response.json(await getFacebookWorkerCache(input));
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "FACEBOOK_CACHE_LOOKUP_FAILED" }, { status: 409 });
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCachedFacebookPostSnapshot, FACEBOOK_POST_CACHE_TTL_MS, isFacebookCachedPostStillFresh, parseReusableFacebookPostCache, partitionFacebookPostsByCache, resolveFacebookPostCacheHits, shouldStopForKnownOldSequence } from "./performance.ts";
+import { aggregateFacebookPerformance, createCachedFacebookPostSnapshot, FACEBOOK_FRESH_AGE_CACHE_TTL_MS, FACEBOOK_POST_CACHE_TTL_MS, isFacebookCachedPostStillFresh, parseReusableFacebookAgeCache, parseReusableFacebookPostCache, partitionFacebookPostsByCache, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits, shouldStopForKnownOldSequence } from "./performance.ts";
 import { processFacebookPostBatch } from "./post-flow.ts";
 import { isExpectedFacebookPostPage, runFacebookDiscoveryLoop } from "../../workers/facebook-browser/src/post-page.ts";
 
@@ -60,9 +60,10 @@ test("age detection and extraction reuse the already open dedicated page", () =>
 });
 
 test("discovery early stop requires a conservative sequence of known old posts", () => {
-  const posts = Array.from({ length: 5 }, (_, index) => ({ postId: String(index), publishedAt: new Date(now - (61 + index) * 60 * 60_000).toISOString() }));
+  const posts = Array.from({ length: 5 }, (_, index) => ({ postId: String(index), publishedAt: new Date(now - (73 + index) * 60 * 60_000).toISOString() }));
   assert.equal(shouldStopForKnownOldSequence(posts, new Set(posts.map((post) => post.postId)), now), true);
   assert.equal(shouldStopForKnownOldSequence([{ ...posts[0], publishedAt: new Date(now - 10 * 60 * 60_000).toISOString() }, ...posts.slice(1)], new Set(posts.map((post) => post.postId)), now), false);
+  assert.equal(shouldStopForKnownOldSequence([{ ...posts[0], publishedAt: new Date(now - 72 * 60 * 60_000).toISOString() }, ...posts.slice(1)], new Set(posts.map((post) => post.postId)), now), false);
 });
 
 test("discovery loop stops before scrolling on a trailing known-old sequence", async () => {
@@ -71,8 +72,40 @@ test("discovery loop stops before scrolling on a trailing known-old sequence", a
   const result = await runFacebookDiscoveryLoop({
     collect: async () => posts,
     scroll: async () => { scrolls += 1; return { moved: true, scrollY: 100 }; },
-    lookupKnown: async () => Object.fromEntries(posts.map((post, index) => [post.postId, { publishedAt: new Date(now - (61 + index) * 60 * 60_000).toISOString() }])),
+    lookupKnown: async () => Object.fromEntries(posts.map((post, index) => [post.postId, { publishedAt: new Date(now - (73 + index) * 60 * 60_000).toISOString() }])),
   });
   assert.equal(result.stopReason, "KNOWN_OLD_SEQUENCE");
   assert.equal(scrolls, 0);
+});
+
+test("TOO_OLD age cache is reusable while UNKNOWN is never an unsafe old hit", () => {
+  const checkedAt = new Date(now - 60_000).toISOString();
+  const resultSummary = { ageCache: [
+    { postId: "old", checkedAt, publishedAt: new Date(now - 80 * 60 * 60_000).toISOString(), decision: "TOO_OLD", source: "FEED" },
+    { postId: "unknown", checkedAt, publishedAt: null, decision: "UNKNOWN", source: "POST_PAGE" },
+  ] };
+  assert.equal(parseReusableFacebookAgeCache(resultSummary).length, 1);
+  const hits = resolveFacebookAgeCacheHits({ currentRunId: "run-2", sources: [{ jobId: "job-1", runId: "run-1", resultSummary }], postIds: ["old", "unknown"], nowMs: now });
+  assert.equal(hits.old.decision, "TOO_OLD");
+  assert.equal(hits.unknown, undefined);
+});
+
+test("expired FRESH age cache requires a normal age recheck", () => {
+  const resultSummary = { ageCache: [{ postId: "fresh", checkedAt: new Date(now - FACEBOOK_FRESH_AGE_CACHE_TTL_MS - 1).toISOString(), publishedAt, decision: "FRESH", source: "POST_PAGE_METADATA" }] };
+  const hits = resolveFacebookAgeCacheHits({ currentRunId: "run-2", sources: [{ jobId: "job-1", runId: "run-1", resultSummary }], postIds: ["fresh"], nowMs: now });
+  assert.equal(hits.fresh, undefined);
+});
+
+test("run performance summary aggregates age optimization counters", () => {
+  const summary = aggregateFacebookPerformance([{ performance: {
+    postsDiscovered: 5, discoveredPostIds: ["1", "2"], duplicatePostIdsSkipped: 0,
+    pageOpens: 1, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 2, discoveryScrolls: 3,
+    feedAgeHits: 2, ageCacheHits: 2, agePageFallbacks: 1,
+    oldPostsSkippedBeforePageOpen: 4, earlyStopOldBoundaryCount: 1,
+  } }], 1_500);
+  assert.equal(summary.feedAgeHits, 2);
+  assert.equal(summary.ageCacheHits, 2);
+  assert.equal(summary.agePageFallbacks, 1);
+  assert.equal(summary.oldPostsSkippedBeforePageOpen, 4);
+  assert.equal(summary.earlyStopOldBoundaryCount, 1);
 });

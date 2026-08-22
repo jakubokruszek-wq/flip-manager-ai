@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
-import { canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, extractFacebookAuthoritativeTextFromStructuredData, extractFacebookAuthoritativeTextResolutionFromStructuredData, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookPostIdArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookAuthoritativeTextSources, resolveFacebookPostAge, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, extractFacebookAuthoritativeTextFromStructuredData, extractFacebookAuthoritativeTextResolutionFromStructuredData, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookPostIdArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookAuthoritativeTextSources, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 
 const vision: FacebookVisionExtraction = { isProperty: true, listingIntent: "SELL_PROPERTY", intentConfidence: 0.98, title: "Mieszkanie Łódź", description: "Sprzedam mieszkanie 50 m²", visibleText: "Sprzedam mieszkanie 50 m²", city: "Łódź", district: null, neighborhood: null, street: null, price: 400_000, area: 50, rooms: 2, floor: null, totalFloors: null, condition: null, sellerType: "private", confidence: 0.95, imageAssessments: [] };
 
@@ -228,6 +228,67 @@ test("ignores a timestamp attached to a comment permalink", async () => {
   } finally { await browser.close(); }
 });
 
+test("exact-bound feed timestamp resolves age without dedicated-page fallback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<a href="https://www.facebook.com/groups/1/posts/995/"><time datetime="2026-08-16T10:00:00.000Z">2 godz.</time></a>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    let fallbackCalls = 0;
+    const resolved = await resolveFacebookPostAge(post, now, async () => { fallbackCalls += 1; return null; });
+    assert.equal(resolved.ageHours, 2);
+    assert.equal(resolved.decision, "PROCESS");
+    assert.equal(fallbackCalls, 0);
+  } finally { await browser.close(); }
+});
+
+test("exact-bound old feed timestamp skips before dedicated page", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<a href="https://www.facebook.com/groups/1/posts/994/" data-utime="1786579200"></a>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    assert.equal(post.freshnessFailure, "FACEBOOK_POST_TOO_OLD");
+  } finally { await browser.close(); }
+});
+
+test("conflicting exact-bound feed timestamps remain unknown and use page fallback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<a href="https://www.facebook.com/groups/1/posts/993/" datetime="2026-08-16T10:00:00.000Z"><time datetime="2026-08-15T10:00:00.000Z">czas</time></a>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    let fallbackCalls = 0;
+    const resolved = await resolveFacebookPostAge(post, now, async () => { fallbackCalls += 1; return { publishedAt: "2026-08-16T09:00:00.000Z", source: "POST_PAGE_METADATA" }; });
+    assert.equal(post.discoveredPublishedAt, null);
+    assert.equal(resolved.decision, "PROCESS");
+    assert.equal(fallbackCalls, 1);
+  } finally { await browser.close(); }
+});
+
+test("shared attachment timestamp is not accepted as feed post age", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<a href="https://www.facebook.com/groups/1/posts/992/">Post</a><script type="application/json">{"post_id":"992","attachment":{"creation_time":1786874400}}</script>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    assert.equal(post.discoveredPublishedAt, null);
+    assert.equal(post.freshnessFailure, "FACEBOOK_POST_AGE_UNKNOWN");
+  } finally { await browser.close(); }
+});
+
+test("cached old decision resolves without invoking a page fallback", async () => {
+  const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+  const post: FreshDiscoveredFacebookPost = { postId: "991", permalink: "https://www.facebook.com/groups/1/posts/991/", discoveredPublishedAt: null, freshnessFailure: "FACEBOOK_POST_AGE_UNKNOWN" };
+  const resolved = resolveFacebookPostAgeFromCache(post, { postId: "991", checkedAt: new Date(now - 60_000).toISOString(), publishedAt: new Date(now - 80 * 60 * 60_000).toISOString(), decision: "TOO_OLD", source: "POST_PAGE_METADATA", sourceJobId: "job-1", scope: "RECENT" }, now);
+  assert.equal(resolved.decision, "TOO_OLD");
+  assert.equal(resolved.source, "AGE_CACHE");
+});
+
 test("resolves unknown feed age from the dedicated post page before processing", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -317,13 +378,17 @@ test("discovery stops after 20 productive scrolls", async () => {
   assert.equal(result.stopReason, "MAX_SCROLLS");
 });
 
-test("chronological post older than 72 hours stops further discovery", async () => {
-  const fresh: FreshDiscoveredFacebookPost = { postId: "fresh", permalink: "https://www.facebook.com/groups/1/posts/1/", discoveredPublishedAt: "2026-08-16T10:00:00.000Z", freshnessFailure: null };
-  const old: FreshDiscoveredFacebookPost = { postId: "old", permalink: "https://www.facebook.com/groups/1/posts/2/", discoveredPublishedAt: "2026-08-12T10:00:00.000Z", freshnessFailure: "FACEBOOK_POST_TOO_OLD" };
+test("five chronological old posts stop discovery while a fresh post in the trailing sequence prevents it", async () => {
+  const old = (index: number): FreshDiscoveredFacebookPost => ({ postId: `old-${index}`, permalink: `https://www.facebook.com/groups/1/posts/${index}/`, discoveredPublishedAt: new Date(Date.UTC(2026, 7, 12, 10 - index, 0, 0)).toISOString(), freshnessFailure: "FACEBOOK_POST_TOO_OLD" });
   let batch = 0;
-  const result = await runFacebookDiscoveryLoop({ collect: async () => batch++ === 0 ? [fresh] : [fresh, old], scroll: async () => ({ moved: true, scrollY: 700 }) });
+  const result = await runFacebookDiscoveryLoop({ collect: async () => batch++ === 0 ? [old(0)] : Array.from({ length: 5 }, (_, index) => old(index)), scroll: async () => ({ moved: true, scrollY: 700 }) });
   assert.equal(result.stopReason, "OLDER_THAN_72H");
   assert.equal(result.scrollCount, 1);
+
+  const fresh: FreshDiscoveredFacebookPost = { postId: "fresh", permalink: "https://www.facebook.com/groups/1/posts/fresh/", discoveredPublishedAt: "2026-08-16T10:00:00.000Z", freshnessFailure: null };
+  let collectCount = 0;
+  const protectedResult = await runFacebookDiscoveryLoop({ collect: async () => collectCount++ === 0 ? [...Array.from({ length: 4 }, (_, index) => old(index)), fresh] : [...Array.from({ length: 4 }, (_, index) => old(index)), fresh], scroll: async (index) => ({ moved: index < 1, scrollY: 700 }) });
+  assert.notEqual(protectedResult.stopReason, "OLDER_THAN_72H");
 });
 
 test("only fresh posts enter Vision and the per-job limit is 15", () => {

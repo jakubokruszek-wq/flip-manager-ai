@@ -8,8 +8,8 @@ import { assertFacebookGroupUrl, assertFacebookPostsBelongToGroup, parseFacebook
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
-import { aggregateFacebookPerformance, FACEBOOK_POST_CACHE_TTL_MS, resolveFacebookPostCacheHits } from "./performance";
-import { type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
+import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
+import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
 const LEASE_SECONDS = 180;
@@ -83,23 +83,29 @@ export async function heartbeatFacebookJob(input: { jobId: string; leaseToken: s
   return leasedUntil;
 }
 
-export async function getFacebookPostCache(input: { jobId: string; leaseToken: string; workerId: string; postIds: string[] }): Promise<Record<string, FacebookPostCacheHit & { publishedAt: string }>> {
+export async function getFacebookWorkerCache(input: { jobId: string; leaseToken: string; workerId: string; postIds: string[] }): Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }> {
   const supabase = createFacebookWatcherAdminClient();
   const current = await supabase.from("facebook_scan_jobs").select("id,scan_run_id,search_filter_id,started_at").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
   if (current.error || !current.data) throw new Error("FACEBOOK_JOB_LEASE_LOST");
   const jobStartedAt = Date.parse(String(current.data.started_at));
   const cacheReferenceTime = Number.isFinite(jobStartedAt) ? jobStartedAt : Date.now();
-  const cutoff = new Date(cacheReferenceTime - FACEBOOK_POST_CACHE_TTL_MS).toISOString();
+  const cutoff = new Date(cacheReferenceTime - FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS).toISOString();
   const cached = await supabase.from("facebook_scan_jobs").select("id,scan_run_id,result_summary,finished_at")
-    .eq("search_filter_id", current.data.search_filter_id).eq("status", "completed").gte("finished_at", cutoff).neq("id", input.jobId).order("finished_at", { ascending: false }).limit(30);
+    .eq("search_filter_id", current.data.search_filter_id).eq("status", "completed").gte("finished_at", cutoff).neq("id", input.jobId).order("finished_at", { ascending: false }).limit(200);
   if (cached.error) throw new Error(`FACEBOOK_CACHE_QUERY_FAILED: ${cached.error.message}`);
-  const hits = resolveFacebookPostCacheHits({ currentRunId: String(current.data.scan_run_id), sources: (cached.data ?? []).map((row) => ({ jobId: String(row.id), runId: String(row.scan_run_id), resultSummary: row.result_summary })), postIds: input.postIds, nowMs: cacheReferenceTime });
+  const sources = (cached.data ?? []).map((row) => ({ jobId: String(row.id), runId: String(row.scan_run_id), resultSummary: row.result_summary }));
+  const hits = resolveFacebookPostCacheHits({ currentRunId: String(current.data.scan_run_id), sources, postIds: input.postIds, nowMs: cacheReferenceTime });
+  const ageHits = resolveFacebookAgeCacheHits({ currentRunId: String(current.data.scan_run_id), sources, postIds: input.postIds, nowMs: cacheReferenceTime });
   const listingIds = [...new Set(Object.values(hits).map((hit) => hit.listingId))];
-  if (listingIds.length === 0) return {};
+  if (listingIds.length === 0) return { hits: {}, ageHits };
   const listings = await supabase.from("listings").select("id,source,external_listing_id,status").in("id", listingIds).eq("source", "facebook").eq("status", "active");
   if (listings.error) throw new Error(`FACEBOOK_CACHE_LISTING_QUERY_FAILED: ${listings.error.message}`);
   const valid = new Map((listings.data ?? []).map((row) => [String(row.id), String(row.external_listing_id)]));
-  return Object.fromEntries(Object.entries(hits).filter(([postId, hit]) => valid.get(hit.listingId) === postId));
+  return { hits: Object.fromEntries(Object.entries(hits).filter(([postId, hit]) => valid.get(hit.listingId) === postId)), ageHits };
+}
+
+export async function getFacebookPostCache(input: { jobId: string; leaseToken: string; workerId: string; postIds: string[] }): Promise<Record<string, FacebookPostCacheHit & { publishedAt: string }>> {
+  return (await getFacebookWorkerCache(input)).hits;
 }
 
 export async function completeFacebookJob(input: FacebookCompletion): Promise<FacebookCompletionResult> {
@@ -139,7 +145,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   }, { jobId: input.jobId, sourceScanId });
   if (summary.listingIds.length > 0) await getAlerts();
   const normalized = summary.postsProcessed - summary.listingsSkipped - summary.extractionFailed;
-  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now, outcome: "SELL_PERSISTED" })), performance: input.performance };
+  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now, outcome: "SELL_PERSISTED" })), ageCache: input.ageCache, performance: input.performance };
   const scan = await supabase.from("source_scans").update({
     status: "completed", finished_at: now, scanned_count: summary.postsProcessed, listings_found: normalized,
     matched_count: summary.matched, listings_created: summary.listingsCreated, new_count: summary.newMatches, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops,

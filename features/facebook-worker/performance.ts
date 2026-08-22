@@ -1,13 +1,15 @@
-import type { FacebookGroupSnapshot, FacebookPerformanceMetrics, FacebookPostCacheEntry, FacebookPostCacheHit, FacebookPostSnapshot } from "./types.ts";
+import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookGroupSnapshot, FacebookPerformanceMetrics, FacebookPostCacheEntry, FacebookPostCacheHit, FacebookPostSnapshot } from "./types.ts";
 
 export const FACEBOOK_POST_CACHE_TTL_MS = 15 * 60_000;
+export const FACEBOOK_FRESH_AGE_CACHE_TTL_MS = 15 * 60_000;
+export const FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS = 30 * 24 * 60 * 60_000;
 export const FACEBOOK_KNOWN_OLD_STREAK_LIMIT = 5;
-export const FACEBOOK_KNOWN_OLD_MIN_AGE_MS = 60 * 60 * 60_000;
+export const FACEBOOK_KNOWN_OLD_MIN_AGE_MS = 72 * 60 * 60_000;
 
 type CacheSource = { jobId: string; runId: string; resultSummary: unknown };
 
 export function emptyFacebookPerformanceMetrics(): FacebookPerformanceMetrics {
-  return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0 };
+  return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0 };
 }
 
 export function parseReusableFacebookPostCache(value: unknown): FacebookPostCacheEntry[] {
@@ -40,6 +42,41 @@ export function resolveFacebookPostCacheHits(input: { currentRunId: string; sour
   return hits;
 }
 
+export function parseReusableFacebookAgeCache(value: unknown): FacebookAgeCacheEntry[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const entries = (value as Record<string, unknown>).ageCache;
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const row = entry as Record<string, unknown>;
+    if (typeof row.postId !== "string" || !row.postId || typeof row.checkedAt !== "string" || !Number.isFinite(Date.parse(row.checkedAt))) return [];
+    if (row.decision !== "FRESH" && row.decision !== "TOO_OLD") return [];
+    if (typeof row.publishedAt !== "string" || !Number.isFinite(Date.parse(row.publishedAt))) return [];
+    if (row.source !== "FEED" && row.source !== "POST_PAGE_METADATA" && row.source !== "POST_PAGE") return [];
+    return [{ postId: row.postId, checkedAt: row.checkedAt, publishedAt: row.publishedAt, decision: row.decision, source: row.source }];
+  });
+}
+
+export function resolveFacebookAgeCacheHits(input: { currentRunId: string; sources: CacheSource[]; postIds: string[]; nowMs?: number }): Record<string, FacebookAgeCacheHit> {
+  const nowMs = input.nowMs ?? Date.now();
+  const requested = new Set(input.postIds);
+  const hits: Record<string, FacebookAgeCacheHit> = {};
+  const sorted = [...input.sources].sort((left, right) => newestAgeCheckedAt(right.resultSummary) - newestAgeCheckedAt(left.resultSummary));
+  for (const source of sorted) {
+    for (const entry of parseReusableFacebookAgeCache(source.resultSummary)) {
+      if (!requested.has(entry.postId) || hits[entry.postId]) continue;
+      const checkedAge = nowMs - Date.parse(entry.checkedAt);
+      const ttl = entry.decision === "TOO_OLD" ? FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS : FACEBOOK_FRESH_AGE_CACHE_TTL_MS;
+      if (checkedAge < 0 || checkedAge > ttl) continue;
+      const publishedAtMs = Date.parse(entry.publishedAt!);
+      if (!Number.isFinite(publishedAtMs) || publishedAtMs > nowMs + 5 * 60_000) continue;
+      const currentDecision = nowMs - publishedAtMs <= FACEBOOK_KNOWN_OLD_MIN_AGE_MS ? "FRESH" : "TOO_OLD";
+      hits[entry.postId] = { ...entry, decision: currentDecision, sourceJobId: source.jobId, scope: source.runId === input.currentRunId ? "RUN" : "RECENT" };
+    }
+  }
+  return hits;
+}
+
 export function isFacebookCachedPostStillFresh(publishedAt: string, nowMs = Date.now()): boolean {
   const published = Date.parse(publishedAt);
   return Number.isFinite(published) && published <= nowMs + 5 * 60_000 && nowMs - published <= 72 * 60 * 60_000;
@@ -64,7 +101,7 @@ export function shouldStopForKnownOldSequence(posts: Array<{ postId: string; pub
   let streak = 0;
   for (const post of posts) {
     const published = post.publishedAt ? Date.parse(post.publishedAt) : Number.NaN;
-    const knownAndOld = known.has(post.postId) && Number.isFinite(published) && nowMs - published >= FACEBOOK_KNOWN_OLD_MIN_AGE_MS;
+    const knownAndOld = known.has(post.postId) && Number.isFinite(published) && nowMs - published > FACEBOOK_KNOWN_OLD_MIN_AGE_MS;
     streak = knownAndOld ? streak + 1 : 0;
   }
   return streak >= limit;
@@ -78,9 +115,13 @@ export function aggregateFacebookPerformance(results: unknown[], durationMs: num
   });
   const discoveredIds = new Set(metrics.flatMap((item) => Array.isArray(item.discoveredPostIds) ? item.discoveredPostIds.filter((id): id is string => typeof id === "string") : []));
   const sum = (field: string) => metrics.reduce((total, item) => total + (typeof item[field] === "number" ? Number(item[field]) : 0), 0);
-  return { groupsProcessed: metrics.length, postsDiscovered: sum("postsDiscovered"), uniquePostIds: discoveredIds.size, duplicatePostIdsSkipped: sum("duplicatePostIdsSkipped"), pageOpens: sum("pageOpens"), visionCalls: sum("visionCalls"), visionCacheHits: sum("visionCacheHits"), knownPostSkips: sum("knownPostSkips"), discoveryScrolls: sum("discoveryScrolls"), durationMs };
+  return { groupsProcessed: metrics.length, postsDiscovered: sum("postsDiscovered"), uniquePostIds: discoveredIds.size, duplicatePostIdsSkipped: sum("duplicatePostIdsSkipped"), pageOpens: sum("pageOpens"), visionCalls: sum("visionCalls"), visionCacheHits: sum("visionCacheHits"), knownPostSkips: sum("knownPostSkips"), discoveryScrolls: sum("discoveryScrolls"), feedAgeHits: sum("feedAgeHits"), ageCacheHits: sum("ageCacheHits"), agePageFallbacks: sum("agePageFallbacks"), oldPostsSkippedBeforePageOpen: sum("oldPostsSkippedBeforePageOpen"), earlyStopOldBoundaryCount: sum("earlyStopOldBoundaryCount"), durationMs };
 }
 
 function newestAnalyzedAt(resultSummary: unknown): number {
   return Math.max(0, ...parseReusableFacebookPostCache(resultSummary).map((entry) => Date.parse(entry.analyzedAt)));
+}
+
+function newestAgeCheckedAt(resultSummary: unknown): number {
+  return Math.max(0, ...parseReusableFacebookAgeCache(resultSummary).map((entry) => Date.parse(entry.checkedAt)));
 }

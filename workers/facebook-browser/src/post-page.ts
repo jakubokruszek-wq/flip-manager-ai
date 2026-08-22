@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { FacebookAuthoritativePostTextProvenance, FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import type { FacebookAgeCacheHit, FacebookAuthoritativePostTextProvenance, FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { inspectFacebookIntentSignals, type FacebookIntentSignalName } from "../../../features/facebook-watcher/facebook-intent.ts";
 import { logFacebookWorker } from "./logger.ts";
 import { shouldStopForKnownOldSequence } from "../../../features/facebook-worker/performance.ts";
@@ -14,9 +14,9 @@ export const FACEBOOK_POST_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
 export type DiscoveredFacebookPost = { postId: string; permalink: string };
 export type FreshDiscoveredFacebookPost = DiscoveredFacebookPost & { discoveredPublishedAt: string | null; freshnessFailure: FacebookPostFreshnessFailure | null };
 export type FacebookPostFreshnessFailure = "FACEBOOK_POST_TOO_OLD" | "FACEBOOK_POST_AGE_UNKNOWN";
-export type FacebookPostAgeSource = "FEED" | "POST_PAGE_METADATA" | "POST_PAGE";
+export type FacebookPostAgeSource = "FEED" | "POST_PAGE_METADATA" | "POST_PAGE" | "AGE_CACHE";
 export type FacebookPostAgeResolution = { post: FreshDiscoveredFacebookPost; source: FacebookPostAgeSource; ageHours: number | null; decision: "PROCESS" | "TOO_OLD" | "UNKNOWN" };
-export type FacebookPostAgeFallback = { publishedAt: string | null; source: Exclude<FacebookPostAgeSource, "FEED"> };
+export type FacebookPostAgeFallback = { publishedAt: string | null; source: "POST_PAGE_METADATA" | "POST_PAGE" };
 export type FacebookPostTimeDiagnostic = {
   post_id: string;
   final_path: string;
@@ -565,38 +565,67 @@ export async function resolveFacebookPostAge(post: FreshDiscoveredFacebookPost, 
   return { post: resolvedPost, source, ageHours: ageHours !== null && Number.isFinite(ageHours) ? ageHours : null, decision: freshnessFailure === null ? "PROCESS" : freshnessFailure === "FACEBOOK_POST_TOO_OLD" ? "TOO_OLD" : "UNKNOWN" };
 }
 
+export function resolveFacebookPostAgeFromCache(post: FreshDiscoveredFacebookPost, hit: FacebookAgeCacheHit, nowMs: number): FacebookPostAgeResolution {
+  const freshnessFailure = facebookPostFreshnessFailure(hit.publishedAt, nowMs);
+  const resolvedPost = { ...post, discoveredPublishedAt: hit.publishedAt, freshnessFailure };
+  const publishedAtMs = hit.publishedAt ? Date.parse(hit.publishedAt) : Number.NaN;
+  const ageHours = Number.isFinite(publishedAtMs) ? Math.max(0, (nowMs - publishedAtMs) / (60 * 60_000)) : null;
+  return { post: resolvedPost, source: "AGE_CACHE", ageHours, decision: freshnessFailure === null ? "PROCESS" : freshnessFailure === "FACEBOOK_POST_TOO_OLD" ? "TOO_OLD" : "UNKNOWN" };
+}
+
 export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POSTS_PER_JOB, nowMs = Date.now()): Promise<FreshDiscoveredFacebookPost[]> {
   const records = await page.locator('a[href*="/groups/"][href*="/posts/"]').evaluateAll((links) => links.map((element) => {
     const link = element as HTMLAnchorElement;
     const url = new URL(link.href, location.href);
     if (url.searchParams.has("comment_id")) return { href: link.href, timestampValues: [] as string[] };
-    const postPath = url.pathname.replace(/\/$/, "");
-    let container: Element = link;
-    for (let depth = 0, current: Element | null = link; current && depth < 4; depth += 1, current = current.parentElement) {
-      const cleanMatchingLinks = [current, ...Array.from(current.querySelectorAll('a[href*="/groups/"][href*="/posts/"]'))]
-        .filter((candidate): candidate is HTMLAnchorElement => candidate instanceof HTMLAnchorElement)
-        .filter((candidate) => { const candidateUrl = new URL(candidate.href, location.href); return candidateUrl.pathname.replace(/\/$/, "") === postPath && !candidateUrl.searchParams.has("comment_id"); });
-      const commentLinks = current.querySelectorAll('a[href*="comment_id="]').length;
-      if (cleanMatchingLinks.length === 1 && commentLinks === 0) container = current;
-      else if (depth > 0) break;
-    }
-    const timeElements = [link, ...Array.from(link.querySelectorAll<HTMLElement>("time[datetime],abbr[data-utime]")), ...Array.from(container.querySelectorAll<HTMLElement>("time[datetime],abbr[data-utime]"))].slice(0, 12);
+    // Only timestamps carried by the exact post permalink are trusted here.
+    // Siblings and broad ancestors can belong to comments, attachments or shared posts.
+    const timeElements = [link, ...Array.from(link.querySelectorAll<HTMLElement>("time[datetime],abbr[data-utime],[datetime],[data-utime],[data-timestamp]"))].slice(0, 12);
     const machineValues: string[] = []; const labelValues: string[] = []; const textValues: string[] = [];
     const add = (target: string[], value: string | null) => { const trimmed = value?.trim(); if (trimmed && !target.includes(trimmed)) target.push(trimmed); };
     for (const candidate of timeElements) {
       add(machineValues, candidate.getAttribute("data-utime"));
       add(machineValues, candidate.getAttribute("datetime"));
+      add(machineValues, candidate.getAttribute("data-timestamp"));
       add(labelValues, candidate.getAttribute("aria-label"));
       add(labelValues, candidate.getAttribute("title"));
       add(textValues, candidate.textContent);
     }
     return { href: link.href, timestampValues: [...machineValues, ...labelValues, ...textValues] };
   }));
+  const requestedPostIds = [...new Set(records.map((record) => canonicalFacebookPostUrl(record.href)?.postId).filter((postId): postId is string => Boolean(postId)))];
+  const structuredValues = await page.evaluate((postIds) => {
+    const requested = new Set(postIds);
+    const result: Record<string, string[]> = {};
+    const forbiddenPath = /comment|reply|attachment|media|photo|video|share|reshar|recommend|sidebar/i;
+    const idKey = /^(?:id|post_id|postId|story_fbid|top_level_post_id)$/;
+    const timeKey = /^(?:creation_time|publish_time|timestamp)$/i;
+    const visit = (value: unknown, path: string[], depth: number) => {
+      if (!value || typeof value !== "object" || depth > 25) return;
+      if (Array.isArray(value)) { value.forEach((item) => visit(item, path, depth + 1)); return; }
+      const entries = Object.entries(value as Record<string, unknown>);
+      const directId = entries.find(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number") && requested.has(String(item)))?.[1];
+      if (directId !== undefined && !path.some((part) => forbiddenPath.test(part))) {
+        for (const [key, item] of entries) if (timeKey.test(key) && (typeof item === "string" || typeof item === "number")) {
+          const id = String(directId); (result[id] ??= []).push(String(item));
+        }
+      }
+      for (const [key, item] of entries) if (item && typeof item === "object") visit(item, [...path, key], depth + 1);
+    };
+    document.querySelectorAll<HTMLScriptElement>('script[type="application/json"],script[type="application/ld+json"]').forEach((script) => {
+      const source = script.textContent ?? "";
+      if (!source || source.length > 2_000_000) return;
+      try { visit(JSON.parse(source), [], 0); } catch { /* ambiguous inline scripts are not an age source */ }
+    });
+    return result;
+  }, requestedPostIds);
   const unique = new Map<string, FreshDiscoveredFacebookPost>();
   for (const record of records) {
     const post = canonicalFacebookPostUrl(record.href);
     if (!post) continue;
-    const publishedAt = record.timestampValues.map((value) => parseFacebookTimestampValue(value, nowMs)).find((value): value is string => value !== null) ?? null;
+    const parsedValues = [...record.timestampValues, ...(structuredValues[post.postId] ?? [])].map((value) => parseFacebookTimestampValue(value, nowMs)).filter((value): value is string => value !== null);
+    const timestamps = [...new Set(parsedValues.map((value) => Date.parse(value)))].filter(Number.isFinite);
+    const publishedAt = timestamps.length > 0 && Math.max(...timestamps) - Math.min(...timestamps) <= 5 * 60_000 ? new Date(Math.min(...timestamps)).toISOString() : null;
     const candidate = { ...post, discoveredPublishedAt: publishedAt, freshnessFailure: facebookPostFreshnessFailure(publishedAt, nowMs) };
     const existing = unique.get(post.postId);
     if (!existing || existing.freshnessFailure && !candidate.freshnessFailure) unique.set(post.postId, candidate);
@@ -604,13 +633,13 @@ export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POS
   return [...unique.values()].slice(0, limit);
 }
 
-function hasChronologicalOldBoundary(posts: FreshDiscoveredFacebookPost[]): boolean {
+function hasChronologicalOldBoundary(posts: FreshDiscoveredFacebookPost[], limit = 5): boolean {
   const dated = posts.filter((post) => post.discoveredPublishedAt !== null);
-  if (!dated.some((post) => post.freshnessFailure === "FACEBOOK_POST_TOO_OLD")) return false;
+  if (dated.length < limit) return false;
   for (let index = 1; index < dated.length; index += 1) {
     if (Date.parse(dated[index].discoveredPublishedAt!) > Date.parse(dated[index - 1].discoveredPublishedAt!) + 5 * 60_000) return false;
   }
-  return dated[dated.length - 1]?.freshnessFailure === "FACEBOOK_POST_TOO_OLD";
+  return dated.slice(-limit).every((post) => post.freshnessFailure === "FACEBOOK_POST_TOO_OLD");
 }
 
 export async function runFacebookDiscoveryLoop(dependencies: {

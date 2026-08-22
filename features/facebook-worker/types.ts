@@ -44,6 +44,22 @@ export type FacebookPostCacheEntry = {
   outcome: "SELL_PERSISTED";
 };
 
+export type FacebookAgeDecision = "FRESH" | "TOO_OLD" | "UNKNOWN";
+export type FacebookAgeSource = "FEED" | "POST_PAGE_METADATA" | "POST_PAGE";
+
+export type FacebookAgeCacheEntry = {
+  postId: string;
+  checkedAt: string;
+  publishedAt: string | null;
+  decision: FacebookAgeDecision;
+  source: FacebookAgeSource;
+};
+
+export type FacebookAgeCacheHit = FacebookAgeCacheEntry & {
+  sourceJobId: string;
+  scope: "RUN" | "RECENT";
+};
+
 export type FacebookPerformanceMetrics = {
   postsDiscovered: number;
   discoveredPostIds: string[];
@@ -53,6 +69,11 @@ export type FacebookPerformanceMetrics = {
   visionCacheHits: number;
   knownPostSkips: number;
   discoveryScrolls: number;
+  feedAgeHits: number;
+  ageCacheHits: number;
+  agePageFallbacks: number;
+  oldPostsSkippedBeforePageOpen: number;
+  earlyStopOldBoundaryCount: number;
 };
 
 export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "SHARED_POST_FALLBACK", "CONFLICT", "NONE"] as const;
@@ -129,6 +150,7 @@ export type FacebookCompletion = {
   warnings: string[];
   durationMs: number;
   performance: FacebookPerformanceMetrics;
+  ageCache: FacebookAgeCacheEntry[];
 };
 
 export type FacebookCompletionResult = {
@@ -164,6 +186,7 @@ export type FacebookCompletionResult = {
     text_preview: string;
   }>;
   postCache: FacebookPostCacheEntry[];
+  ageCache: FacebookAgeCacheEntry[];
   performance: FacebookPerformanceMetrics;
 };
 
