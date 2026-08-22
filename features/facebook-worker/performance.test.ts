@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aggregateFacebookPerformance, createCachedFacebookPostSnapshot, FACEBOOK_FRESH_AGE_CACHE_TTL_MS, FACEBOOK_POST_CACHE_TTL_MS, isFacebookCachedPostStillFresh, mergeFacebookGroupAssociationMetadata, parseReusableFacebookAgeCache, parseReusableFacebookPostCache, partitionFacebookPostsByCache, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits, shouldStopForKnownOldSequence } from "./performance.ts";
+import { aggregateFacebookPerformance, createCachedFacebookPostSnapshot, FACEBOOK_CACHE_MATCH_COLUMNS, FACEBOOK_FRESH_AGE_CACHE_TTL_MS, FACEBOOK_POST_CACHE_TTL_MS, isFacebookCachedPostStillFresh, mergeFacebookGroupAssociationMetadata, parseReusableFacebookAgeCache, parseReusableFacebookPostCache, partitionFacebookPostsByCache, readFacebookCachedMatch, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits, shouldStopForKnownOldSequence } from "./performance.ts";
 import { processFacebookPostBatch } from "./post-flow.ts";
 import { isExpectedFacebookPostPage, runFacebookDiscoveryLoop } from "../../workers/facebook-browser/src/post-page.ts";
 
@@ -28,6 +28,36 @@ test("cache reuse creates no listing update or duplicate snapshot signal", async
   assert.equal(result.listingsUpdated, 0);
   assert.equal(result.priceDrops, 0);
   assert.equal(result.reusablePosts.length, 1);
+});
+
+test("run cache match lookup uses the composite key and avoids duplicate work", async () => {
+  let selectedColumns = "";
+  const matched = await readFacebookCachedMatch(async (columns) => {
+    selectedColumns = columns;
+    return { data: { listing_id: "listing-1", search_filter_id: "filter-1" }, error: null };
+  });
+  assert.equal(selectedColumns, FACEBOOK_CACHE_MATCH_COLUMNS);
+  assert.deepEqual(selectedColumns.split(","), ["listing_id", "search_filter_id"]);
+  assert.equal(matched, true);
+
+  const first = await processFacebookPostBatch([{ postId: "123", groupId: "group-a", permalink: "https://www.facebook.com/groups/a/posts/123/", text: "", imageUrls: [], publishedAt, vision: null }], async () => ({
+    status: "created", listingId: "listing-1", listingCreated: true, listingUpdated: false, matched: true, matchCreated: true, imagesMirrored: 0, priceDrops: 0, warnings: [],
+  }));
+  const resultSummary = { postCache: first.reusablePosts.map((entry) => ({ ...entry, analyzedAt: new Date(now - 1_000).toISOString() })) };
+  const hits = resolveFacebookPostCacheHits({ currentRunId: "run-1", sources: [{ jobId: "job-a", runId: "run-1", resultSummary }], postIds: ["123"], nowMs: now });
+  const second = partitionFacebookPostsByCache([{ postId: "123" }], hits, now);
+  assert.equal(second.cached[0]?.hit.scope, "RUN");
+  assert.equal(second.uncached.length, 0);
+
+  let visionCalls = 1;
+  let pageOpens = 1;
+  let snapshots = 1;
+  if (second.uncached.length > 0) {
+    visionCalls += 1;
+    pageOpens += 1;
+    snapshots += 1;
+  }
+  assert.deepEqual({ visionCalls, pageOpens, snapshots }, { visionCalls: 1, pageOpens: 1, snapshots: 1 });
 });
 
 test("cross-group reuse preserves every discovered group association", () => {

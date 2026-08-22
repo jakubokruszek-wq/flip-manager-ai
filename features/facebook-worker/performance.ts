@@ -7,6 +7,18 @@ export const FACEBOOK_KNOWN_OLD_STREAK_LIMIT = 5;
 export const FACEBOOK_KNOWN_OLD_MIN_AGE_MS = 72 * 60 * 60_000;
 
 type CacheSource = { jobId: string; runId: string; resultSummary: unknown };
+type FacebookCacheMatchRow = { listing_id: unknown; search_filter_id: unknown };
+type FacebookCacheMatchReadResult = { data: FacebookCacheMatchRow | null; error: { message: string } | null };
+
+export const FACEBOOK_CACHE_MATCH_COLUMNS = "listing_id,search_filter_id";
+
+export async function readFacebookCachedMatch(
+  query: (columns: typeof FACEBOOK_CACHE_MATCH_COLUMNS) => PromiseLike<FacebookCacheMatchReadResult>,
+): Promise<boolean> {
+  const result = await query(FACEBOOK_CACHE_MATCH_COLUMNS);
+  if (result.error) throw new Error(`FACEBOOK_CACHE_MATCH_READ_FAILED: ${result.error.message}`);
+  return result.data !== null;
+}
 
 export function emptyFacebookPerformanceMetrics(): FacebookPerformanceMetrics {
   return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0 };

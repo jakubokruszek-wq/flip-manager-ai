@@ -8,7 +8,7 @@ import { assertFacebookGroupUrl, assertFacebookPostsBelongToGroup, parseFacebook
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
-import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeFacebookGroupAssociationMetadata, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
+import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeFacebookGroupAssociationMetadata, readFacebookCachedMatch, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
@@ -189,9 +189,8 @@ async function associateCachedFacebookListing(
     metadata: { ...associatedMetadata, source: "facebook_worker_cache", postId: input.postId, checkedAt: now, cacheAnalyzedAt: input.analyzedAt },
   }, { onConflict: "source,source_post_url" });
   if (saved.error) throw new Error(`FACEBOOK_CACHE_METADATA_PERSIST_FAILED: ${saved.error.message}`);
-  const match = await supabase.from("listing_filter_matches").select("id").eq("listing_id", input.listingId).eq("search_filter_id", input.filterId).eq("is_current_match", true).maybeSingle();
-  if (match.error) throw new Error(`FACEBOOK_CACHE_MATCH_READ_FAILED: ${match.error.message}`);
-  return { status: "reused" as const, listingId: input.listingId, listingCreated: false, listingUpdated: false, matched: Boolean(match.data), matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [] };
+  const matched = await readFacebookCachedMatch((columns) => supabase.from("listing_filter_matches").select(columns).eq("listing_id", input.listingId).eq("search_filter_id", input.filterId).eq("is_current_match", true).maybeSingle());
+  return { status: "reused" as const, listingId: input.listingId, listingCreated: false, listingUpdated: false, matched, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [] };
 }
 
 export async function failFacebookJob(input: { jobId: string; leaseToken: string; workerId: string; errorCode: FacebookFailureCode | string; errorMessage: string }): Promise<void> {
