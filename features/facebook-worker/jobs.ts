@@ -4,41 +4,60 @@ import type { SearchFilter } from "@/features/flip-finder";
 import { getAlerts } from "@/features/alerts/server";
 import { importFacebookWatcher } from "@/features/facebook-watcher/server";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
-import { assertFacebookGroupUrl, parseFacebookGroupSnapshot } from "./completion";
+import { assertFacebookGroupUrl, assertFacebookPostsBelongToGroup, parseFacebookGroupSnapshot } from "./completion";
+import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
-import { facebookJobIdempotencyKey, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookWorkerJob } from "./types";
+import { type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
 const LEASE_SECONDS = 180;
 
-export async function enqueueFacebookJob(filter: SearchFilter, runId: string): Promise<{ jobId: string; sourceScanId: string; status: "queued" }> {
+export type FacebookEnqueueResult = {
+  jobs: Array<{ jobId: string; sourceScanId: string; groupId: string; status: "queued" }>;
+  failedGroups: Array<{ groupId: string; error: string }>;
+  reasonCode: "FACEBOOK_NO_ENABLED_GROUP" | null;
+};
+
+export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): Promise<FacebookEnqueueResult> {
   const supabase = createFacebookWatcherAdminClient();
-  const groups = await supabase.from("watched_facebook_groups").select("id,name,url").eq("enabled", true).order("priority").order("created_at").limit(1);
+  const groups = await supabase.from("watched_facebook_groups").select("id,name,url,priority,created_at").eq("enabled", true);
   if (groups.error) throw new Error(`FACEBOOK_GROUP_QUERY_FAILED: ${groups.error.message}`);
-
-  const snapshot = (groups.data ?? []).map((group) => ({ id: String(group.id), name: String(group.name), url: assertFacebookGroupUrl(String(group.url)).toString() }));
-  if (snapshot.length !== 1) {
-    const failed = await supabase.from("source_scans").insert({
-      search_filter_id: filter.id, source: "facebook", status: "failed", scan_run_id: runId,
-      filter_snapshot: filter, finished_at: new Date().toISOString(), error_message: "FACEBOOK_NO_ENABLED_GROUP",
+  const watchedGroups: WatchedFacebookGroup[] = (groups.data ?? []).map((group) => ({
+    id: String(group.id), name: String(group.name), url: assertFacebookGroupUrl(String(group.url)).toString(),
+    priority: group.priority === "high" || group.priority === "low" ? group.priority : "normal",
+    createdAt: String(group.created_at),
+  }));
+  const plans = planFacebookGroupJobs(filter.id, runId, watchedGroups);
+  if (plans.length === 0) {
+    const terminal = await supabase.from("source_scans").insert({
+      search_filter_id: filter.id, source: "facebook", status: "completed", scan_run_id: runId,
+      filter_snapshot: filter, finished_at: new Date().toISOString(), warnings: ["FACEBOOK_NO_ENABLED_GROUP"], error_message: null,
     });
-    if (failed.error) throw new Error(`FACEBOOK_NO_ENABLED_GROUP; SOURCE_SCAN_CREATE_FAILED: ${failed.error.message}`);
-    throw new Error("FACEBOOK_NO_ENABLED_GROUP");
+    if (terminal.error) throw new Error(`FACEBOOK_NO_ENABLED_GROUP; SOURCE_SCAN_CREATE_FAILED: ${terminal.error.message}`);
+    return { jobs: [], failedGroups: [], reasonCode: "FACEBOOK_NO_ENABLED_GROUP" };
   }
-
-  const scan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "pending", scan_run_id: runId, filter_snapshot: filter }).select("id").single();
-  if (scan.error || !scan.data?.id) throw new Error(`FACEBOOK_SOURCE_SCAN_CREATE_FAILED: ${scan.error?.message ?? "missing id"}`);
-  const sourceScanId = String(scan.data.id);
-  const job = await supabase.from("facebook_scan_jobs").insert({
-    scan_run_id: runId, source_scan_id: sourceScanId, search_filter_id: filter.id,
-    group_snapshot: snapshot, idempotency_key: facebookJobIdempotencyKey(filter.id, runId),
-  }).select("id").single();
-  if (job.error || !job.data?.id) {
-    await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: "FACEBOOK_JOB_ENQUEUE_FAILED" }).eq("id", sourceScanId);
-    throw new Error(`FACEBOOK_JOB_ENQUEUE_FAILED: ${job.error?.message ?? "missing id"}`);
+  const result: FacebookEnqueueResult = { jobs: [], failedGroups: [], reasonCode: null };
+  for (const plan of plans) {
+    const scan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "pending", scan_run_id: runId, filter_snapshot: filter }).select("id").single();
+    if (scan.error || !scan.data?.id) {
+      result.failedGroups.push({ groupId: plan.group.id, error: `FACEBOOK_SOURCE_SCAN_CREATE_FAILED: ${scan.error?.message ?? "missing id"}` });
+      continue;
+    }
+    const sourceScanId = String(scan.data.id);
+    const job = await supabase.from("facebook_scan_jobs").insert({
+      scan_run_id: runId, source_scan_id: sourceScanId, search_filter_id: filter.id,
+      group_snapshot: plan.groupSnapshot, idempotency_key: plan.idempotencyKey,
+    }).select("id").single();
+    if (job.error || !job.data?.id) {
+      const message = `FACEBOOK_JOB_ENQUEUE_FAILED: ${job.error?.message ?? "missing id"}`;
+      await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: message }).eq("id", sourceScanId);
+      result.failedGroups.push({ groupId: plan.group.id, error: message });
+      continue;
+    }
+    result.jobs.push({ jobId: String(job.data.id), sourceScanId, groupId: plan.group.id, status: "queued" });
   }
-  return { jobId: String(job.data.id), sourceScanId, status: "queued" };
+  return result;
 }
 
 export async function claimFacebookJob(workerId: string): Promise<FacebookWorkerJob | null> {
@@ -50,7 +69,7 @@ export async function claimFacebookJob(workerId: string): Promise<FacebookWorker
   if (!row) return null;
   return {
     id: requiredString(row.id), runId: requiredString(row.scan_run_id), sourceScanId: requiredString(row.source_scan_id), filterId: requiredString(row.search_filter_id),
-    groups: parseFacebookGroupSnapshot(row.group_snapshot), leaseToken: requiredString(row.lease_token), leasedUntil: requiredString(row.leased_until), attempts: nonnegativeInteger(row.attempts),
+    group: parseFacebookGroupSnapshot(row.group_snapshot), leaseToken: requiredString(row.lease_token), leasedUntil: requiredString(row.leased_until), attempts: nonnegativeInteger(row.attempts),
   };
 }
 
@@ -70,8 +89,8 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   if (existing.data.status === "completed" && isCompletionResult(existing.data.result_summary)) return existing.data.result_summary;
   const lease = await supabase.from("facebook_scan_jobs").select("id").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
   if (lease.error || !lease.data) throw new Error("FACEBOOK_JOB_LEASE_LOST");
-  const groups = parseFacebookGroupSnapshot(existing.data.group_snapshot);
-  if (input.posts.some((post) => post.groupId !== groups[0].id)) throw new Error("FACEBOOK_GROUP_MISMATCH");
+  const group = parseFacebookGroupSnapshot(existing.data.group_snapshot);
+  assertFacebookPostsBelongToGroup(input.posts, group);
   const now = new Date().toISOString();
   const sourceScanId = String(existing.data.source_scan_id);
   const searchFilterId = String(existing.data.search_filter_id);
@@ -80,12 +99,12 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   const filter = parseStoredFilter(sourceScan.data.filter_snapshot, searchFilterId);
   const summary = await processFacebookPostBatch(input.posts, async (post) => {
     return persistEligibleFacebookPost(post, async (eligiblePost) => {
-      const imported = await importFacebookWatcher(facebookVisionToListingInput(eligiblePost, groups[0].name), {
+      const imported = await importFacebookWatcher(facebookVisionToListingInput(eligiblePost, group.name), {
         filter,
         sourceScanId,
-        groupId: groups[0].id,
-        groupName: groups[0].name,
-        groupUrl: groups[0].url,
+        groupId: group.id,
+        groupName: group.name,
+        groupUrl: group.url,
         postId: eligiblePost.postId,
         checkedAt: now,
       });
@@ -104,7 +123,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   const job = await supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: result, error_code: null, error_message: null })
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("status", "running");
   if (job.error) throw new Error(`FACEBOOK_JOB_FINALIZE_FAILED: ${job.error.message}`);
-  await supabase.from("watched_facebook_groups").update({ access_status: "CONNECTED", last_checked_at: now, last_error: null }).eq("id", groups[0].id);
+  await supabase.from("watched_facebook_groups").update({ access_status: "CONNECTED", last_checked_at: now, last_error: null }).eq("id", group.id);
   return result;
 }
 
@@ -114,9 +133,9 @@ export async function failFacebookJob(input: { jobId: string; leaseToken: string
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").select("source_scan_id,group_snapshot").maybeSingle();
   if (job.error || !job.data) throw new Error("FACEBOOK_JOB_LEASE_LOST");
   await supabase.from("source_scans").update({ status: "failed", finished_at: now, error_message: `${input.errorCode}: ${input.errorMessage}`.slice(0, 1_000) }).eq("id", job.data.source_scan_id).in("status", ["pending", "running"]);
-  const groups = parseFacebookGroupSnapshot(job.data.group_snapshot);
+  const group = parseFacebookGroupSnapshot(job.data.group_snapshot);
   const accessStatus = input.errorCode === "FACEBOOK_LOGIN_REQUIRED" || input.errorCode === "FACEBOOK_SESSION_EXPIRED" || input.errorCode === "FACEBOOK_CHALLENGE" ? "AUTH_REQUIRED" : "UNAVAILABLE";
-  await supabase.from("watched_facebook_groups").update({ access_status: accessStatus, last_checked_at: now, last_error: input.errorMessage.slice(0, 1_000) }).eq("id", groups[0].id);
+  await supabase.from("watched_facebook_groups").update({ access_status: accessStatus, last_checked_at: now, last_error: input.errorMessage.slice(0, 1_000) }).eq("id", group.id);
 }
 
 export function parseFacebookFailurePayload(value: unknown) {

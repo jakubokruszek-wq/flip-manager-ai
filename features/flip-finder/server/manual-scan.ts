@@ -5,7 +5,7 @@ import { addMatchDiagnostic, createMatchDiagnostic, emptyMatchDiagnosticSummary,
 import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/scan-counters";
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
 import { enqueueOlxJob } from "@/features/flip-finder/server/olx-jobs";
-import { enqueueFacebookJob } from "@/features/facebook-worker/jobs";
+import { enqueueFacebookJobs } from "@/features/facebook-worker/jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { createClient } from "@/lib/supabase/server";
@@ -60,8 +60,10 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
     }
     if (facebookEnabled) {
       try {
-        await enqueueFacebookJob(filter, runId);
-        sourceResults.push(pendingResult("facebook"));
+        const queued = await enqueueFacebookJobs(filter, runId);
+        if (queued.jobs.length > 0) sourceResults.push(pendingResult("facebook"));
+        else if (queued.reasonCode === "FACEBOOK_NO_ENABLED_GROUP") sourceResults.push(skippedResult("facebook", queued.reasonCode));
+        else sourceResults.push(failedResult("facebook", 0, "FACEBOOK_ENQUEUE_FAILED", queued.failedGroups.map((item) => item.error).join(" ") || "Facebook enqueue failed."));
       } catch (error) {
         sourceResults.push(failedResult("facebook", 0, "FACEBOOK_ENQUEUE_FAILED", error instanceof Error ? error.message : "Facebook enqueue failed."));
       }
@@ -164,6 +166,7 @@ function scanTimestamp({ startedAt, startedMs }: ScanClock): string {
 
 function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
 function pendingResult(source: string): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage: `${source === "olx" ? "OLX" : "Facebook"}: oczekuje na lokalny worker`, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
+function skippedResult(source: string, reasonCode: string): SourceScanResult { return { source, status: "completed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: reasonCode, errorMessage: null, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
 function total(results: SourceScanResult[], key: "fetched" | "newMatches" | "matched"): number { return results.reduce((sum, result) => sum + result[key], 0); }
 function scanLog(event: "SCAN START" | "SOURCE START" | "SOURCE DONE" | "SOURCE ERROR" | "SCAN FINALIZE", data: { scanId: string; source: string; checked: number; new: number; matched: number; durationMs: number }): void { if (process.env.NODE_ENV === "development") console.info(event, data); }
 

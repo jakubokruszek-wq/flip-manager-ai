@@ -16,9 +16,9 @@ test("post with successful extraction creates a listing and match", async () => 
   assert.deepEqual({ created: result.listingsCreated, matched: result.matched, errors: result.errors }, { created: 1, matched: 1, errors: 0 });
 });
 
-test("the same post processed twice keeps one listing identity", async () => {
+test("the same post id seen in two groups keeps one listing identity", async () => {
   const seen = new Set<string>();
-  const result = await processFacebookPostBatch([post("1"), post("1")], async (item) => {
+  const result = await processFacebookPostBatch([post("1"), { ...post("1"), groupId: "group-2", permalink: "https://www.facebook.com/groups/group-2/posts/1/" }], async (item) => {
     const existing = seen.has(item.postId!); seen.add(item.postId!);
     return outcome({ status: existing ? "updated" : "created", listingId: "listing-1", listingCreated: !existing, listingUpdated: false, matchCreated: !existing });
   });

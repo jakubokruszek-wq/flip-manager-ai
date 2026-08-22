@@ -17,10 +17,14 @@ export function assertFacebookPermalink(value: string): string {
   return url.toString();
 }
 
-export function parseFacebookGroupSnapshot(value: unknown): FacebookGroupSnapshot[] {
+export function parseFacebookGroupSnapshot(value: unknown): FacebookGroupSnapshot {
   if (!Array.isArray(value) || value.length !== 1) throw new Error("FACEBOOK_GROUP_REQUIRED");
   const row = requireRow(value[0]);
-  return [{ id: requiredString(row.id, "GROUP_ID", 200), name: requiredString(row.name, "GROUP_NAME", 200), url: assertFacebookGroupUrl(requiredString(row.url, "GROUP_URL", 2_000)).toString() }];
+  return { id: requiredString(row.id, "GROUP_ID", 200), name: requiredString(row.name, "GROUP_NAME", 200), url: assertFacebookGroupUrl(requiredString(row.url, "GROUP_URL", 2_000)).toString() };
+}
+
+export function assertFacebookPostsBelongToGroup(posts: Array<{ groupId: string }>, group: FacebookGroupSnapshot): void {
+  if (posts.some((post) => post.groupId !== group.id)) throw new Error("FACEBOOK_GROUP_MISMATCH");
 }
 
 export function parseFacebookCompletionPayload(value: unknown): FacebookCompletion {

@@ -88,7 +88,7 @@ export type FacebookWorkerJob = {
   runId: string;
   sourceScanId: string;
   filterId: string;
-  groups: FacebookGroupSnapshot[];
+  group: FacebookGroupSnapshot;
   leaseToken: string;
   leasedUntil: string;
   attempts: number;
@@ -154,8 +154,8 @@ export type FacebookJobState = {
   heartbeatAt: number | null;
 };
 
-export function facebookJobIdempotencyKey(filterId: string, scanRunId: string): string {
-  return `${filterId}:facebook:${scanRunId}`;
+export function facebookJobIdempotencyKey(filterId: string, scanRunId: string, groupId: string): string {
+  return `${filterId}:facebook:${scanRunId}:${groupId}`;
 }
 
 export function claimFacebookJobState(state: FacebookJobState, now: number, leaseMs = 180_000): FacebookJobState {
