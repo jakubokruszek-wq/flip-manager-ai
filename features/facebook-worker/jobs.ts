@@ -8,7 +8,8 @@ import { assertFacebookGroupUrl, assertFacebookPostsBelongToGroup, parseFacebook
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
-import { type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookWorkerJob } from "./types";
+import { aggregateFacebookPerformance, FACEBOOK_POST_CACHE_TTL_MS, resolveFacebookPostCacheHits } from "./performance";
+import { type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
 const LEASE_SECONDS = 180;
@@ -82,9 +83,28 @@ export async function heartbeatFacebookJob(input: { jobId: string; leaseToken: s
   return leasedUntil;
 }
 
+export async function getFacebookPostCache(input: { jobId: string; leaseToken: string; workerId: string; postIds: string[] }): Promise<Record<string, FacebookPostCacheHit & { publishedAt: string }>> {
+  const supabase = createFacebookWatcherAdminClient();
+  const current = await supabase.from("facebook_scan_jobs").select("id,scan_run_id,search_filter_id,started_at").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
+  if (current.error || !current.data) throw new Error("FACEBOOK_JOB_LEASE_LOST");
+  const jobStartedAt = Date.parse(String(current.data.started_at));
+  const cacheReferenceTime = Number.isFinite(jobStartedAt) ? jobStartedAt : Date.now();
+  const cutoff = new Date(cacheReferenceTime - FACEBOOK_POST_CACHE_TTL_MS).toISOString();
+  const cached = await supabase.from("facebook_scan_jobs").select("id,scan_run_id,result_summary,finished_at")
+    .eq("search_filter_id", current.data.search_filter_id).eq("status", "completed").gte("finished_at", cutoff).neq("id", input.jobId).order("finished_at", { ascending: false }).limit(30);
+  if (cached.error) throw new Error(`FACEBOOK_CACHE_QUERY_FAILED: ${cached.error.message}`);
+  const hits = resolveFacebookPostCacheHits({ currentRunId: String(current.data.scan_run_id), sources: (cached.data ?? []).map((row) => ({ jobId: String(row.id), runId: String(row.scan_run_id), resultSummary: row.result_summary })), postIds: input.postIds, nowMs: cacheReferenceTime });
+  const listingIds = [...new Set(Object.values(hits).map((hit) => hit.listingId))];
+  if (listingIds.length === 0) return {};
+  const listings = await supabase.from("listings").select("id,source,external_listing_id,status").in("id", listingIds).eq("source", "facebook").eq("status", "active");
+  if (listings.error) throw new Error(`FACEBOOK_CACHE_LISTING_QUERY_FAILED: ${listings.error.message}`);
+  const valid = new Map((listings.data ?? []).map((row) => [String(row.id), String(row.external_listing_id)]));
+  return Object.fromEntries(Object.entries(hits).filter(([postId, hit]) => valid.get(hit.listingId) === postId));
+}
+
 export async function completeFacebookJob(input: FacebookCompletion): Promise<FacebookCompletionResult> {
   const supabase = createFacebookWatcherAdminClient();
-  const existing = await supabase.from("facebook_scan_jobs").select("status,source_scan_id,search_filter_id,group_snapshot,result_summary").eq("id", input.jobId).maybeSingle();
+  const existing = await supabase.from("facebook_scan_jobs").select("status,scan_run_id,source_scan_id,search_filter_id,group_snapshot,result_summary").eq("id", input.jobId).maybeSingle();
   if (existing.error || !existing.data) throw new Error("FACEBOOK_JOB_NOT_FOUND");
   if (existing.data.status === "completed" && isCompletionResult(existing.data.result_summary)) return existing.data.result_summary;
   const lease = await supabase.from("facebook_scan_jobs").select("id").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
@@ -98,6 +118,12 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   if (sourceScan.error || !sourceScan.data) throw new Error(`FACEBOOK_SOURCE_SCAN_READ_FAILED: ${sourceScan.error?.message ?? "missing source scan"}`);
   const filter = parseStoredFilter(sourceScan.data.filter_snapshot, searchFilterId);
   const summary = await processFacebookPostBatch(input.posts, async (post) => {
+    if (post.cacheHit && post.postId && post.permalink) {
+      const validated = await getFacebookPostCache({ jobId: input.jobId, leaseToken: input.leaseToken, workerId: input.workerId, postIds: [post.postId] });
+      const cache = validated[post.postId];
+      if (!cache || cache.sourceJobId !== post.cacheHit.sourceJobId || cache.listingId !== post.cacheHit.listingId) throw new Error("FACEBOOK_CACHE_HIT_INVALID");
+      return associateCachedFacebookListing(supabase, { listingId: cache.listingId, sourceUrl: post.permalink, postId: post.postId, groupId: group.id, groupName: group.name, filterId: filter.id, publishedAt: post.publishedAt, analyzedAt: cache.analyzedAt });
+    }
     return persistEligibleFacebookPost(post, async (eligiblePost) => {
       const imported = await importFacebookWatcher(facebookVisionToListingInput(eligiblePost, group.name), {
         filter,
@@ -113,7 +139,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   }, { jobId: input.jobId, sourceScanId });
   if (summary.listingIds.length > 0) await getAlerts();
   const normalized = summary.postsProcessed - summary.listingsSkipped - summary.extractionFailed;
-  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics };
+  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now, outcome: "SELL_PERSISTED" })), performance: input.performance };
   const scan = await supabase.from("source_scans").update({
     status: "completed", finished_at: now, scanned_count: summary.postsProcessed, listings_found: normalized,
     matched_count: summary.matched, listings_created: summary.listingsCreated, new_count: summary.newMatches, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops,
@@ -123,8 +149,29 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   const job = await supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: result, error_code: null, error_message: null })
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("status", "running");
   if (job.error) throw new Error(`FACEBOOK_JOB_FINALIZE_FAILED: ${job.error.message}`);
+  const completed = await supabase.from("facebook_scan_jobs").select("result_summary").eq("scan_run_id", existing.data.scan_run_id).eq("status", "completed");
+  if (!completed.error) console.info("FACEBOOK_PERF_RUN_SUMMARY", aggregateFacebookPerformance((completed.data ?? []).map((row) => row.result_summary), (completed.data ?? []).reduce((total, row) => total + (typeof (row.result_summary as Row | null)?.durationMs === "number" ? Number((row.result_summary as Row).durationMs) : 0), 0)));
   await supabase.from("watched_facebook_groups").update({ access_status: "CONNECTED", last_checked_at: now, last_error: null }).eq("id", group.id);
   return result;
+}
+
+async function associateCachedFacebookListing(
+  supabase: ReturnType<typeof createFacebookWatcherAdminClient>,
+  input: { listingId: string; sourceUrl: string; postId: string; groupId: string; groupName: string; filterId: string; publishedAt: string | null; analyzedAt: string },
+) {
+  const now = new Date().toISOString();
+  const prior = await supabase.from("listing_source_metadata").select("metadata").eq("source", "facebook").eq("source_post_url", input.sourceUrl).maybeSingle();
+  if (prior.error) throw new Error(`FACEBOOK_CACHE_METADATA_READ_FAILED: ${prior.error.message}`);
+  const metadata = asRow(prior.data?.metadata) ?? {};
+  const saved = await supabase.from("listing_source_metadata").upsert({
+    listing_id: input.listingId, source: "facebook", source_post_url: input.sourceUrl, group_name: input.groupName,
+    author_name: null, published_at: input.publishedAt, collected_at: now,
+    metadata: { ...metadata, source: "facebook_worker_cache", groupId: input.groupId, groupName: input.groupName, postId: input.postId, checkedAt: now, cacheAnalyzedAt: input.analyzedAt },
+  }, { onConflict: "source,source_post_url" });
+  if (saved.error) throw new Error(`FACEBOOK_CACHE_METADATA_PERSIST_FAILED: ${saved.error.message}`);
+  const match = await supabase.from("listing_filter_matches").select("id").eq("listing_id", input.listingId).eq("search_filter_id", input.filterId).eq("is_current_match", true).maybeSingle();
+  if (match.error) throw new Error(`FACEBOOK_CACHE_MATCH_READ_FAILED: ${match.error.message}`);
+  return { status: "reused" as const, listingId: input.listingId, listingCreated: false, listingUpdated: false, matched: Boolean(match.data), matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [] };
 }
 
 export async function failFacebookJob(input: { jobId: string; leaseToken: string; workerId: string; errorCode: FacebookFailureCode | string; errorMessage: string }): Promise<void> {

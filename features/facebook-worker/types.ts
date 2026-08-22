@@ -26,6 +26,33 @@ export type FacebookPostSnapshot = {
   imageUrls: string[];
   publishedAt: string | null;
   vision?: FacebookVisionExtraction | null;
+  cacheHit?: FacebookPostCacheHit | null;
+};
+
+export type FacebookPostCacheHit = {
+  sourceJobId: string;
+  listingId: string;
+  analyzedAt: string;
+  scope: "RUN" | "RECENT";
+};
+
+export type FacebookPostCacheEntry = {
+  postId: string;
+  listingId: string;
+  analyzedAt: string;
+  publishedAt: string;
+  outcome: "SELL_PERSISTED";
+};
+
+export type FacebookPerformanceMetrics = {
+  postsDiscovered: number;
+  discoveredPostIds: string[];
+  duplicatePostIdsSkipped: number;
+  pageOpens: number;
+  visionCalls: number;
+  visionCacheHits: number;
+  knownPostSkips: number;
+  discoveryScrolls: number;
 };
 
 export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "SHARED_POST_FALLBACK", "CONFLICT", "NONE"] as const;
@@ -101,6 +128,7 @@ export type FacebookCompletion = {
   posts: FacebookPostSnapshot[];
   warnings: string[];
   durationMs: number;
+  performance: FacebookPerformanceMetrics;
 };
 
 export type FacebookCompletionResult = {
@@ -135,6 +163,8 @@ export type FacebookCompletionResult = {
     reason_code: FacebookSkipReasonCode;
     text_preview: string;
   }>;
+  postCache: FacebookPostCacheEntry[];
+  performance: FacebookPerformanceMetrics;
 };
 
 export type FacebookSkipReasonCode =

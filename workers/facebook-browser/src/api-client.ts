@@ -1,5 +1,5 @@
 import { createFacebookWorkerAuthHeaders, FACEBOOK_WORKER_NONCE_HEADER, FACEBOOK_WORKER_SIGNATURE_HEADER, FACEBOOK_WORKER_TIMESTAMP_HEADER } from "../../../features/facebook-worker/protocol.ts";
-import type { FacebookVisionExtraction, FacebookWorkerJob } from "../../../features/facebook-worker/types.ts";
+import type { FacebookPostCacheHit, FacebookVisionExtraction, FacebookWorkerJob } from "../../../features/facebook-worker/types.ts";
 import type { FacebookWorkerConfig } from "./config.ts";
 
 export function createFacebookApiClient(config: FacebookWorkerConfig) {
@@ -14,6 +14,7 @@ export function createFacebookApiClient(config: FacebookWorkerConfig) {
   return {
     claim: (signal?: AbortSignal) => post<{ job: FacebookWorkerJob | null }>("/api/facebook-worker/claim", { workerId: config.workerId }, signal),
     heartbeat: (job: FacebookWorkerJob, signal?: AbortSignal) => post("/api/facebook-worker/heartbeat", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId }, signal),
+    postCache: (job: FacebookWorkerJob, postIds: string[], signal?: AbortSignal) => post<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }> }>("/api/facebook-worker/post-cache", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, postIds }, signal),
     vision: (job: FacebookWorkerJob, input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal?: AbortSignal) => post<{ vision: FacebookVisionExtraction }>("/api/facebook-worker/vision", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, ...input }, signal),
     complete: (job: FacebookWorkerJob, result: { posts: unknown[]; warnings: string[]; durationMs: number }, signal?: AbortSignal) => post("/api/facebook-worker/complete", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, ...result }, signal),
     fail: (job: FacebookWorkerJob, errorCode: string, errorMessage: string, signal?: AbortSignal) => post("/api/facebook-worker/fail", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, errorCode, errorMessage }, signal),

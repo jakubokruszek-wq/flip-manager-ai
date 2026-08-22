@@ -35,7 +35,7 @@ if (loginMode) {
         const heartbeat = setInterval(() => void api.heartbeat(job, shutdown.signal).then(() => logFacebookWorker("FACEBOOK_JOB_HEARTBEAT", { jobId: job.id })).catch((error) => logFacebookWorker("FACEBOOK_JOB_HEARTBEAT_ERROR", { jobId: job.id, message: safeMessage(error) })), 30_000);
         try {
           const result = await runFacebookJobCompletion(
-            () => fetchFacebookGroupWithBrowser(config.profileDir, job.group, shutdown.signal, async (input, signal) => (await api.vision(job, input, signal)).vision, async () => { await api.heartbeat(job, shutdown.signal); }, timeDiagnosticMode, debugMaxPosts, mediaDiagnosticMode, debugPostId),
+            () => fetchFacebookGroupWithBrowser(config.profileDir, job.group, shutdown.signal, async (input, signal) => (await api.vision(job, input, signal)).vision, async () => { await api.heartbeat(job, shutdown.signal); }, timeDiagnosticMode, debugMaxPosts, mediaDiagnosticMode, debugPostId, (postIds, signal) => api.postCache(job, postIds, signal).then((result) => result.hits)),
             (completedResult) => api.complete(job, completedResult, shutdown.signal),
           );
           logFacebookWorker("FACEBOOK_JOB_COMPLETE", { jobId: job.id, posts: result.posts.length, durationMs: result.durationMs });

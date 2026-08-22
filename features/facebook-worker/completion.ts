@@ -1,4 +1,4 @@
-import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
+import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPerformanceMetrics, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
 const MAX_POSTS = 20;
@@ -37,6 +37,7 @@ export function parseFacebookCompletionPayload(value: unknown): FacebookCompleti
     posts: row.posts.map(parsePost),
     warnings: stringArray(row.warnings, 20, 500),
     durationMs: nonnegativeInteger(row.durationMs),
+    performance: parsePerformance(row.performance),
   };
 }
 
@@ -52,6 +53,30 @@ function parsePost(value: unknown): FacebookPostSnapshot {
     imageUrls: stringArray(row.imageUrls, MAX_IMAGES, 2_000).map(assertHttpsUrl),
     publishedAt: nullableIsoDate(row.publishedAt),
     vision: parseVision(row.vision),
+    cacheHit: parseCacheHit(row.cacheHit),
+  };
+}
+
+function parseCacheHit(value: unknown): FacebookPostSnapshot["cacheHit"] {
+  if (value === null || value === undefined) return null;
+  const row = requireRow(value);
+  const scope = row.scope === "RUN" || row.scope === "RECENT" ? row.scope : null;
+  if (!scope) throw new Error("INVALID_FACEBOOK_CACHE_HIT");
+  return { sourceJobId: requiredString(row.sourceJobId, "SOURCE_JOB_ID", 100), listingId: requiredString(row.listingId, "LISTING_ID", 100), analyzedAt: requiredIsoDate(row.analyzedAt), scope };
+}
+
+function parsePerformance(value: unknown): FacebookPerformanceMetrics {
+  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0 };
+  const row = requireRow(value);
+  return {
+    postsDiscovered: nonnegativeInteger(row.postsDiscovered),
+    discoveredPostIds: stringArray(row.discoveredPostIds, 50, 300),
+    duplicatePostIdsSkipped: nonnegativeInteger(row.duplicatePostIdsSkipped),
+    pageOpens: nonnegativeInteger(row.pageOpens),
+    visionCalls: nonnegativeInteger(row.visionCalls),
+    visionCacheHits: nonnegativeInteger(row.visionCacheHits),
+    knownPostSkips: nonnegativeInteger(row.knownPostSkips),
+    discoveryScrolls: nonnegativeInteger(row.discoveryScrolls),
   };
 }
 
@@ -82,6 +107,7 @@ function requireRow(value: unknown): Record<string, unknown> { if (!value || typ
 function requiredString(value: unknown, field: string, max: number): string { if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error(`INVALID_${field}`); return value.trim(); }
 function nullableString(value: unknown, max: number): string | null { return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null; }
 function nullableIsoDate(value: unknown): string | null { if (value === null || value === undefined || value === "") return null; if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new Error("INVALID_PUBLISHED_AT"); return new Date(value).toISOString(); }
+function requiredIsoDate(value: unknown): string { const parsed = nullableIsoDate(value); if (!parsed) throw new Error("INVALID_DATE"); return parsed; }
 function nonnegativeInteger(value: unknown): number { if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error("INVALID_NUMBER"); return value; }
 function nullableNumber(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
 function boundedConfidence(value: unknown): number { return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0; }

@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import type { FacebookAuthoritativePostTextProvenance, FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { inspectFacebookIntentSignals, type FacebookIntentSignalName } from "../../../features/facebook-watcher/facebook-intent.ts";
 import { logFacebookWorker } from "./logger.ts";
+import { shouldStopForKnownOldSequence } from "../../../features/facebook-worker/performance.ts";
 
 export const MAX_FACEBOOK_DISCOVERED_POSTS = 50;
 export const MAX_FACEBOOK_DISCOVERY_SCROLLS = 20;
@@ -22,7 +23,7 @@ export type FacebookPostTimeDiagnostic = {
   candidates: Array<{ tag: string; role: string | null; attribute_names: string[]; datetime: string | null; data_utime: string | null; data_timestamp: string | null; aria_label_parseable_as_time: boolean; title_parseable_as_time: boolean; nesting_depth: number | null; inside_main: boolean; inside_comment_region: boolean; distance_to_post_region: number | null; candidate_score: number }>;
   metadata: Array<{ metadata_source: string; timestamp_value: string; linked_to_expected_post_id: boolean }>;
 };
-export type FacebookDiscoveryStopReason = "OLDER_THAN_72H" | "MAX_POSTS" | "MAX_SCROLLS" | "NO_NEW_POSTS" | "END_OF_FEED" | "DEBUG_TARGET";
+export type FacebookDiscoveryStopReason = "OLDER_THAN_72H" | "KNOWN_OLD_SEQUENCE" | "MAX_POSTS" | "MAX_SCROLLS" | "NO_NEW_POSTS" | "END_OF_FEED" | "DEBUG_TARGET";
 export type FacebookDiscoveryLoopResult = { posts: FreshDiscoveredFacebookPost[]; scrollCount: number; stopReason: FacebookDiscoveryStopReason };
 export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; authoritativePostText: string; authoritativePostTextSource: FacebookAuthoritativePostTextSource; authoritativePostTextProvenance: FacebookAuthoritativePostTextProvenance; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
 export type FacebookPostRegionFailureReason = "POST_ANCHOR_NOT_FOUND" | "NO_ANCESTOR_CANDIDATES" | "ALL_TOO_SMALL" | "ALL_REJECTED_AS_COMMENTS" | "NO_CONTENT_NODES" | "INVALID_BOUNDING_BOX" | "AMBIGUOUS_CANDIDATES" | "UNKNOWN";
@@ -97,7 +98,8 @@ export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost,
   await dependencies.open(post.permalink);
   const region = await dependencies.capture(post.postId);
   const vision = await dependencies.analyze({ postId: post.postId, screenshotDataUrl: region.screenshotDataUrl, imageUrls: region.imageUrls });
-  return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt, vision };
+  const discoveredPublishedAt = "discoveredPublishedAt" in post && typeof post.discoveredPublishedAt === "string" ? post.discoveredPublishedAt : null;
+  return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt ?? discoveredPublishedAt, vision };
 }
 
 export type FacebookMetadataTextCandidateDiagnostic = {
@@ -499,6 +501,11 @@ export function createFacebookDebugTarget(groupUrlValue: string, postId: string)
   return { ...post, discoveredPublishedAt: null, freshnessFailure: "FACEBOOK_POST_AGE_UNKNOWN" };
 }
 
+export function isExpectedFacebookPostPage(pageUrl: string, postId: string): boolean {
+  try { return new RegExp(`/groups/[^/]+/posts/${postId}/?$`, "i").test(new URL(pageUrl).pathname); }
+  catch { return false; }
+}
+
 export async function resolveFacebookPostDiscovery(input: {
   groupUrl: string;
   debugPostId: string | null;
@@ -611,6 +618,7 @@ export async function runFacebookDiscoveryLoop(dependencies: {
   scroll: (scrollIndex: number) => Promise<{ moved: boolean; scrollY: number }>;
   heartbeat?: () => Promise<void>;
   onScroll?: (event: { scrollIndex: number; discoveredTotal: number; newPostCount: number; scrollY: number }) => void;
+  lookupKnown?: (postIds: string[]) => Promise<Record<string, { publishedAt: string }>>;
 }, limits: { maxPosts?: number; maxScrolls?: number; maxEmptyScrolls?: number } = {}): Promise<FacebookDiscoveryLoopResult> {
   const maxPosts = limits.maxPosts ?? MAX_FACEBOOK_DISCOVERED_POSTS;
   const maxScrolls = limits.maxScrolls ?? MAX_FACEBOOK_DISCOVERY_SCROLLS;
@@ -626,8 +634,14 @@ export async function runFacebookDiscoveryLoop(dependencies: {
     return added;
   };
   merge(await dependencies.collect());
+  const reachedKnownOldBoundary = async () => {
+    if (!dependencies.lookupKnown || unique.size === 0) return false;
+    const known = await dependencies.lookupKnown([...unique.keys()]);
+    return shouldStopForKnownOldSequence([...unique.values()].map((post) => ({ postId: post.postId, publishedAt: post.discoveredPublishedAt ?? known[post.postId]?.publishedAt ?? null })), new Set(Object.keys(known)));
+  };
   if (unique.size >= maxPosts) return { posts: [...unique.values()], scrollCount: 0, stopReason: "MAX_POSTS" };
   if (hasChronologicalOldBoundary([...unique.values()])) return { posts: [...unique.values()], scrollCount: 0, stopReason: "OLDER_THAN_72H" };
+  if (await reachedKnownOldBoundary()) return { posts: [...unique.values()], scrollCount: 0, stopReason: "KNOWN_OLD_SEQUENCE" };
   let emptyScrolls = 0;
   for (let scrollIndex = 1; scrollIndex <= maxScrolls; scrollIndex += 1) {
     const movement = await dependencies.scroll(scrollIndex);
@@ -638,12 +652,13 @@ export async function runFacebookDiscoveryLoop(dependencies: {
     emptyScrolls = newPostCount === 0 ? emptyScrolls + 1 : 0;
     if (unique.size >= maxPosts) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "MAX_POSTS" };
     if (hasChronologicalOldBoundary([...unique.values()])) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "OLDER_THAN_72H" };
+    if (await reachedKnownOldBoundary()) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "KNOWN_OLD_SEQUENCE" };
     if (emptyScrolls >= maxEmptyScrolls) return { posts: [...unique.values()], scrollCount: scrollIndex, stopReason: "NO_NEW_POSTS" };
   }
   return { posts: [...unique.values()], scrollCount: maxScrolls, stopReason: "MAX_SCROLLS" };
 }
 
-export async function discoverFacebookPostsByScrolling(page: Page, nowMs = Date.now(), heartbeat?: () => Promise<void>): Promise<FacebookDiscoveryLoopResult> {
+export async function discoverFacebookPostsByScrolling(page: Page, nowMs = Date.now(), heartbeat?: () => Promise<void>, lookupKnown?: (postIds: string[]) => Promise<Record<string, { publishedAt: string }>>): Promise<FacebookDiscoveryLoopResult> {
   return runFacebookDiscoveryLoop({
     collect: () => discoverFacebookPosts(page, MAX_FACEBOOK_DISCOVERED_POSTS, nowMs),
     scroll: async () => {
@@ -654,6 +669,7 @@ export async function discoverFacebookPostsByScrolling(page: Page, nowMs = Date.
       return { moved: after.y > before.y || after.height > before.height, scrollY: after.y };
     },
     heartbeat,
+    lookupKnown,
     onScroll: (event) => logFacebookWorker("FACEBOOK_DISCOVERY_SCROLL", { scrollIndex: event.scrollIndex, discoveredTotal: event.discoveredTotal, newPostCount: event.newPostCount, scrollY: Math.round(event.scrollY) }),
   });
 }

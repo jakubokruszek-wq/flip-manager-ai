@@ -1,7 +1,7 @@
 import type { FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
 
 export type FacebookPostImportResult = {
-  status: "created" | "updated" | "skipped";
+  status: "created" | "updated" | "reused" | "skipped";
   listingId: string | null;
   listingCreated: boolean;
   listingUpdated: boolean;
@@ -50,6 +50,7 @@ export type FacebookPostFlowSummary = {
   listingIds: string[];
   warnings: string[];
   skippedDiagnostics: FacebookSkippedDiagnostic[];
+  reusablePosts: Array<{ postId: string; listingId: string; publishedAt: string }>;
 };
 
 export async function processFacebookPostBatch(
@@ -60,7 +61,7 @@ export async function processFacebookPostBatch(
   const summary: FacebookPostFlowSummary = {
     postsReceived: posts.length, postsProcessed: 0, listingsCreated: 0, listingsUpdated: 0,
     listingsSkipped: 0, matched: 0, newMatches: 0, extractionFailed: 0,
-    imagesMirrored: 0, priceDrops: 0, errors: 0, listingIds: [], warnings: [], skippedDiagnostics: [],
+    imagesMirrored: 0, priceDrops: 0, errors: 0, listingIds: [], warnings: [], skippedDiagnostics: [], reusablePosts: [],
   };
 
   for (const post of posts) {
@@ -83,7 +84,10 @@ export async function processFacebookPostBatch(
       if (result.status === "skipped" && result.notProperty && context && summary.skippedDiagnostics.length < 3) {
         summary.skippedDiagnostics.push(createSkippedDiagnostic(post, result.notProperty, context));
       }
-      if (result.listingId && !summary.listingIds.includes(result.listingId)) summary.listingIds.push(result.listingId);
+      if (result.status !== "reused" && result.listingId && !summary.listingIds.includes(result.listingId)) summary.listingIds.push(result.listingId);
+      if (result.status !== "skipped" && result.listingId && post.postId && post.publishedAt) {
+        summary.reusablePosts.push({ postId: post.postId, listingId: result.listingId, publishedAt: post.publishedAt });
+      }
     } catch (error) {
       summary.extractionFailed += 1;
       summary.errors += 1;
