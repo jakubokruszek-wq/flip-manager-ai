@@ -54,7 +54,7 @@ export async function persistEligibleFacebookPost(
   const gate = evaluateFacebookPersistenceGate(post);
   if (gate.allowed) return persist(post);
   const detectedFields = post.vision ? detectedVisionFields(post.vision) : [];
-  return { status: "skipped", listingId: null, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: post.vision?.isProperty === true, structuredFieldCount: detectedFields.length, detectedFields, classification: gate.intent === "UNKNOWN" && post.vision?.isProperty === false ? "not_a_property" : "non_sale_intent", reasonCode: gate.reasonCode ?? "FACEBOOK_INTENT_UNKNOWN" } };
+  return { status: "skipped", listingId: null, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: post.vision?.isProperty === true, structuredFieldCount: detectedFields.length, detectedFields, classification: gate.intent === "UNKNOWN" && post.vision?.isProperty === false ? "not_a_property" : "non_sale_intent", reasonCode: gate.reasonCode ?? "FACEBOOK_INTENT_UNKNOWN", listingIntent: gate.intent, intentSource: gate.intentSource } };
 }
 
 export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupName: string): FacebookListingInput {

@@ -1,9 +1,10 @@
-import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookAgeCacheEntry, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPerformanceMetrics, type FacebookPostSnapshot, type FacebookVisionExtraction } from "./types.ts";
+import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookAgeCacheEntry, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPerformanceMetrics, type FacebookPostSnapshot, type FacebookSkipReasonCode, type FacebookVisionExtraction } from "./types.ts";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
 const MAX_POSTS = 20;
 const MAX_TEXT = 2_000;
 const MAX_IMAGES = 5;
+const FACEBOOK_SKIP_REASON_CODES: FacebookSkipReasonCode[] = ["NO_REAL_ESTATE_LANGUAGE_AND_TOO_FEW_FIELDS", "FACEBOOK_BUY_REQUEST", "FACEBOOK_RENT_REQUEST", "FACEBOOK_SERVICE_POST", "FACEBOOK_NON_SALE_POST", "FACEBOOK_INTENT_UNKNOWN"];
 
 export function assertFacebookGroupUrl(value: string): URL {
   const url = new URL(value);
@@ -63,11 +64,16 @@ function parseCacheHit(value: unknown): FacebookPostSnapshot["cacheHit"] {
   const row = requireRow(value);
   const scope = row.scope === "RUN" || row.scope === "RECENT" ? row.scope : null;
   if (!scope) throw new Error("INVALID_FACEBOOK_CACHE_HIT");
-  return { sourceJobId: requiredString(row.sourceJobId, "SOURCE_JOB_ID", 100), listingId: requiredString(row.listingId, "LISTING_ID", 100), analyzedAt: requiredIsoDate(row.analyzedAt), scope };
+  const outcome = row.outcome === "DETERMINISTIC_SKIP" ? "DETERMINISTIC_SKIP" : "SELL_PERSISTED";
+  const listingId = outcome === "SELL_PERSISTED" ? requiredString(row.listingId, "LISTING_ID", 100) : null;
+  const reasonCode = FACEBOOK_SKIP_REASON_CODES.includes(row.reasonCode as FacebookSkipReasonCode) ? row.reasonCode as FacebookSkipReasonCode : undefined;
+  const listingIntent = FACEBOOK_LISTING_INTENTS.includes(row.listingIntent as never) ? row.listingIntent as FacebookVisionExtraction["listingIntent"] : undefined;
+  const intentSource = row.intentSource === "DETERMINISTIC_BUY" || row.intentSource === "DETERMINISTIC_SELL" ? row.intentSource : undefined;
+  return { sourceJobId: requiredString(row.sourceJobId, "SOURCE_JOB_ID", 100), listingId, analyzedAt: requiredIsoDate(row.analyzedAt), scope, outcome, reasonCode, listingIntent, intentSource };
 }
 
 function parsePerformance(value: unknown): FacebookPerformanceMetrics {
-  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0 };
+  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0 };
   const row = requireRow(value);
   return {
     postsDiscovered: nonnegativeInteger(row.postsDiscovered),
@@ -87,6 +93,12 @@ function parsePerformance(value: unknown): FacebookPerformanceMetrics {
     exactBoundFeedTimestamps: optionalNonnegativeInteger(row.exactBoundFeedTimestamps),
     rejectedAmbiguousFeedTimestamps: optionalNonnegativeInteger(row.rejectedAmbiguousFeedTimestamps),
     feedAgeHitRate: optionalRate(row.feedAgeHitRate),
+    duplicatePostIdsAcrossGroups: optionalNonnegativeInteger(row.duplicatePostIdsAcrossGroups),
+    fullExtractionCacheHits: optionalNonnegativeInteger(row.fullExtractionCacheHits),
+    fullExtractionCacheMisses: optionalNonnegativeInteger(row.fullExtractionCacheMisses),
+    dedicatedPageReuses: optionalNonnegativeInteger(row.dedicatedPageReuses),
+    duplicateVisionCallsAvoided: optionalNonnegativeInteger(row.duplicateVisionCallsAvoided),
+    duplicatePageOpensAvoided: optionalNonnegativeInteger(row.duplicatePageOpensAvoided),
   };
 }
 

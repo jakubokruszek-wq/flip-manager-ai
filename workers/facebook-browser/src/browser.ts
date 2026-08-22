@@ -4,7 +4,7 @@ import { createCachedFacebookPostSnapshot, emptyFacebookPerformanceMetrics, part
 import { ControlledFacebookFailure } from "./errors.ts";
 import { assertWorkerFacebookGroupUrl } from "./group-reader.ts";
 import { logFacebookWorker } from "./logger.ts";
-import { captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
 
 export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false, debugPostId: string | null = null, lookupCache?: (postIds: string[], signal: AbortSignal) => Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }>) {
@@ -54,7 +54,29 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       await heartbeat?.();
       return { posts: [], warnings: ["FACEBOOK_TIME_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
-    const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discovered = discovery.posts; const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
+    const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discovered = discovery.posts; const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
+    const visionCapacity = debugPostId ? 1 : debugMaxPosts ?? MAX_VISION_POSTS_PER_JOB;
+    const processFreshPost = async (post: FreshDiscoveredFacebookPost) => {
+      try {
+        signal.throwIfAborted();
+        const snapshot = await processDedicatedFacebookPost(post, group.id, {
+          open: async (permalink) => {
+            const alreadyOpen = isExpectedFacebookPostPage(page.url(), post.postId);
+            performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0;
+            if (alreadyOpen) performance.dedicatedPageReuses += 1;
+          },
+          capture: async (postId) => { const region = await captureFacebookPostRegion(page, postId); logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
+          analyze: async (input) => { performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, signal); logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
+        });
+        posts.push(snapshot); processedFreshPostIds.add(post.postId);
+      } catch (error) {
+        if (error instanceof ControlledFacebookFailure) throw error;
+        const reasonCode = controlledPostFailureCode(error);
+        warnings.push(`${reasonCode}: post ${post.postId} nie zostaĹ‚ przetworzony.`);
+        logFacebookWorker("FACEBOOK_POST_EXTRACTION_FAILED", { groupId: group.id, postId: post.postId, reasonCode });
+        processedFreshPostIds.add(post.postId);
+      }
+    };
     performance.postsDiscovered = discovered.length; performance.discoveredPostIds = discovered.map((post) => post.postId); performance.discoveryScrolls = discovery.scrollCount;
     performance.feedAgeHits = discovered.filter((post) => post.discoveredPublishedAt !== null).length;
     const feedDiagnostics = discovered.flatMap((post) => post.feedAgeDiagnostic ? [post.feedAgeDiagnostic] : []);
@@ -66,16 +88,24 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
     performance.earlyStopOldBoundaryCount = discovery.stopReason === "OLDER_THAN_72H" || discovery.stopReason === "KNOWN_OLD_SEQUENCE" ? 1 : 0;
     if (!debugPostId && lookupCache) await lookupAndRemember(discovered.map((post) => post.postId));
     const partitioned = partitionFacebookPostsByCache(discovered, cacheHits, ageReferenceMs);
+    performance.fullExtractionCacheHits = partitioned.cached.length;
+    performance.fullExtractionCacheMisses = partitioned.uncached.length;
     for (const { post, hit } of partitioned.cached) {
       posts.push(createCachedFacebookPostSnapshot(post, group, hit));
-      performance.visionCacheHits += 1; performance.knownPostSkips += 1; performance.duplicatePostIdsSkipped += hit.scope === "RUN" ? 1 : 0;
+      performance.visionCacheHits += 1; performance.knownPostSkips += 1;
+      if (hit.scope === "RUN") {
+        performance.duplicatePostIdsSkipped += 1; performance.duplicatePostIdsAcrossGroups += 1;
+        performance.duplicateVisionCallsAvoided += 1; performance.duplicatePageOpensAvoided += 1;
+      }
     }
     for (const [order, post] of partitioned.uncached.entries()) {
       logFacebookWorker("FACEBOOK_POST_DISCOVERED", { groupId: group.id, postId: post.postId, order, freshnessFailure: post.freshnessFailure });
       const cachedAge = !debugPostId && !post.discoveredPublishedAt ? ageCacheHits[post.postId] : undefined;
+      let dedicatedPageOpenedForAge = false;
       const age = cachedAge ? resolveFacebookPostAgeFromCache(post, cachedAge, ageReferenceMs) : await resolveFacebookPostAge(post, ageReferenceMs, async () => {
           performance.agePageFallbacks += 1;
           performance.pageOpens += await openFacebookPostPage(page, post.permalink, group.id, post.postId) ? 1 : 0;
+          dedicatedPageOpenedForAge = true;
           if (debugPostId && !debugSessionConfirmed) { logFacebookWorker("FACEBOOK_SESSION_OK", { groupId: group.id }); debugSessionConfirmed = true; }
           const detectedAge = await detectFacebookPostAgeOnDedicatedPage(page, post.postId, ageReferenceMs);
           await heartbeat?.();
@@ -92,6 +122,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
         logFacebookWorker("FACEBOOK_POST_EXTRACTION_FAILED", { groupId: group.id, postId: post.postId, reasonCode: age.post.freshnessFailure });
       } else {
         freshPosts.push(age.post);
+        if (!mediaDiagnosticMode && dedicatedPageOpenedForAge && processedFreshPostIds.size < visionCapacity) await processFreshPost(age.post);
         if (debugPostId || mediaDiagnosticMode || debugMaxPosts !== null && freshPosts.length >= debugMaxPosts) break;
       }
     }
@@ -104,13 +135,14 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       await heartbeat?.();
       return { posts: [], warnings: ["FACEBOOK_MEDIA_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
-    const visionLimit = limitFacebookVisionPosts(freshPosts, debugPostId ? 1 : debugMaxPosts ?? undefined);
+    const remainingFreshPosts = freshPosts.filter((post) => !processedFreshPostIds.has(post.postId));
+    const visionLimit = limitFacebookVisionPosts(remainingFreshPosts, Math.max(0, visionCapacity - processedFreshPostIds.size));
     if (visionLimit.remainingFreshCount > 0) logFacebookWorker("FACEBOOK_VISION_JOB_LIMIT_REACHED", { remainingFreshCount: visionLimit.remainingFreshCount });
     for (const post of visionLimit.selected) {
       try {
         signal.throwIfAborted();
         const snapshot = await processDedicatedFacebookPost(post, group.id, {
-          open: async (permalink) => { performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0; },
+          open: async (permalink) => { const alreadyOpen = isExpectedFacebookPostPage(page.url(), post.postId); performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0; if (alreadyOpen) performance.dedicatedPageReuses += 1; },
           capture: async (postId) => { const region = await captureFacebookPostRegion(page, postId); logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
           analyze: async (input) => { performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, signal); logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
         });

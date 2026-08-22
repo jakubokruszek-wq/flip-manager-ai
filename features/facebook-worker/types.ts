@@ -31,17 +31,24 @@ export type FacebookPostSnapshot = {
 
 export type FacebookPostCacheHit = {
   sourceJobId: string;
-  listingId: string;
+  listingId: string | null;
   analyzedAt: string;
   scope: "RUN" | "RECENT";
+  outcome: "SELL_PERSISTED" | "DETERMINISTIC_SKIP";
+  reasonCode?: FacebookSkipReasonCode;
+  listingIntent?: FacebookListingIntent;
+  intentSource?: FacebookIntentSource;
 };
 
 export type FacebookPostCacheEntry = {
   postId: string;
-  listingId: string;
+  listingId: string | null;
   analyzedAt: string;
   publishedAt: string;
-  outcome: "SELL_PERSISTED";
+  outcome: "SELL_PERSISTED" | "DETERMINISTIC_SKIP";
+  reasonCode?: FacebookSkipReasonCode;
+  listingIntent?: FacebookListingIntent;
+  intentSource?: FacebookIntentSource;
 };
 
 export type FacebookAgeDecision = "FRESH" | "TOO_OLD" | "UNKNOWN";
@@ -78,6 +85,12 @@ export type FacebookPerformanceMetrics = {
   exactBoundFeedTimestamps: number;
   rejectedAmbiguousFeedTimestamps: number;
   feedAgeHitRate: number;
+  duplicatePostIdsAcrossGroups: number;
+  fullExtractionCacheHits: number;
+  fullExtractionCacheMisses: number;
+  dedicatedPageReuses: number;
+  duplicateVisionCallsAvoided: number;
+  duplicatePageOpensAvoided: number;
 };
 
 export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "SHARED_POST_FALLBACK", "CONFLICT", "NONE"] as const;

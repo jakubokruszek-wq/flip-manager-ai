@@ -9,20 +9,31 @@ export const FACEBOOK_KNOWN_OLD_MIN_AGE_MS = 72 * 60 * 60_000;
 type CacheSource = { jobId: string; runId: string; resultSummary: unknown };
 
 export function emptyFacebookPerformanceMetrics(): FacebookPerformanceMetrics {
-  return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0 };
+  return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0 };
 }
 
 export function parseReusableFacebookPostCache(value: unknown): FacebookPostCacheEntry[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
   const entries = (value as Record<string, unknown>).postCache;
   if (!Array.isArray(entries)) return [];
-  return entries.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+  const parsed: FacebookPostCacheEntry[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const row = entry as Record<string, unknown>;
-    if (row.outcome !== "SELL_PERSISTED" || typeof row.postId !== "string" || !row.postId || typeof row.listingId !== "string" || !row.listingId || typeof row.analyzedAt !== "string" || typeof row.publishedAt !== "string") return [];
-    if (!Number.isFinite(Date.parse(row.analyzedAt)) || !Number.isFinite(Date.parse(row.publishedAt))) return [];
-    return [{ postId: row.postId, listingId: row.listingId, analyzedAt: row.analyzedAt, publishedAt: row.publishedAt, outcome: "SELL_PERSISTED" as const }];
-  });
+    if ((row.outcome !== "SELL_PERSISTED" && row.outcome !== "DETERMINISTIC_SKIP") || typeof row.postId !== "string" || !row.postId || typeof row.analyzedAt !== "string" || typeof row.publishedAt !== "string") continue;
+    if (!Number.isFinite(Date.parse(row.analyzedAt)) || !Number.isFinite(Date.parse(row.publishedAt))) continue;
+    if (row.outcome === "SELL_PERSISTED") {
+      if (typeof row.listingId !== "string" || !row.listingId) continue;
+      parsed.push({ postId: row.postId, listingId: row.listingId, analyzedAt: row.analyzedAt, publishedAt: row.publishedAt, outcome: "SELL_PERSISTED" });
+      continue;
+    }
+    const safeReason = row.reasonCode === "FACEBOOK_BUY_REQUEST" || row.reasonCode === "FACEBOOK_RENT_REQUEST" || row.reasonCode === "FACEBOOK_SERVICE_POST";
+    const safeIntent = row.listingIntent === "BUY_PROPERTY" || row.listingIntent === "RENT_OFFER" || row.listingIntent === "RENT_WANTED" || row.listingIntent === "SERVICE";
+    const safeSource = row.intentSource === "DETERMINISTIC_BUY" || row.intentSource === "DETERMINISTIC_SELL";
+    if (!safeReason || !safeIntent || !safeSource) continue;
+    parsed.push({ postId: row.postId, listingId: null, analyzedAt: row.analyzedAt, publishedAt: row.publishedAt, outcome: "DETERMINISTIC_SKIP", reasonCode: row.reasonCode as FacebookPostCacheEntry["reasonCode"], listingIntent: row.listingIntent as FacebookPostCacheEntry["listingIntent"], intentSource: row.intentSource as FacebookPostCacheEntry["intentSource"] });
+  }
+  return parsed;
 }
 
 export function resolveFacebookPostCacheHits(input: { currentRunId: string; sources: CacheSource[]; postIds: string[]; nowMs?: number; ttlMs?: number }): Record<string, FacebookPostCacheHit & { publishedAt: string }> {
@@ -36,7 +47,7 @@ export function resolveFacebookPostCacheHits(input: { currentRunId: string; sour
       if (!requested.has(entry.postId) || hits[entry.postId]) continue;
       const age = nowMs - Date.parse(entry.analyzedAt);
       if (age < 0 || age > ttlMs) continue;
-      hits[entry.postId] = { sourceJobId: source.jobId, listingId: entry.listingId, analyzedAt: entry.analyzedAt, publishedAt: entry.publishedAt, scope: source.runId === input.currentRunId ? "RUN" : "RECENT" };
+      hits[entry.postId] = { sourceJobId: source.jobId, listingId: entry.listingId, analyzedAt: entry.analyzedAt, publishedAt: entry.publishedAt, scope: source.runId === input.currentRunId ? "RUN" : "RECENT", outcome: entry.outcome, reasonCode: entry.reasonCode, listingIntent: entry.listingIntent, intentSource: entry.intentSource };
     }
   }
   return hits;
@@ -97,6 +108,20 @@ export function createCachedFacebookPostSnapshot(post: { postId: string; permali
   return { postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: "", authoritativePostTextSource: "NONE", authoritativePostTextProvenance: "NONE", text: "", imageUrls: [], publishedAt: hit.publishedAt, vision: null, cacheHit: hit };
 }
 
+export function mergeFacebookGroupAssociationMetadata(metadata: Record<string, unknown>, group: { id: string; name: string }): Record<string, unknown> {
+  const ids = new Set<string>([
+    ...(Array.isArray(metadata.groupIds) ? metadata.groupIds.filter((value): value is string => typeof value === "string") : []),
+    ...(typeof metadata.groupId === "string" ? [metadata.groupId] : []),
+    group.id,
+  ]);
+  const names = new Set<string>([
+    ...(Array.isArray(metadata.groupNames) ? metadata.groupNames.filter((value): value is string => typeof value === "string") : []),
+    ...(typeof metadata.groupName === "string" ? [metadata.groupName] : []),
+    group.name,
+  ]);
+  return { ...metadata, groupId: group.id, groupName: group.name, groupIds: [...ids], groupNames: [...names] };
+}
+
 export function shouldStopForKnownOldSequence(posts: Array<{ postId: string; publishedAt: string | null }>, known: ReadonlySet<string>, nowMs = Date.now(), limit = FACEBOOK_KNOWN_OLD_STREAK_LIMIT): boolean {
   let streak = 0;
   for (const post of posts) {
@@ -117,7 +142,7 @@ export function aggregateFacebookPerformance(results: unknown[], durationMs: num
   const sum = (field: string) => metrics.reduce((total, item) => total + (typeof item[field] === "number" ? Number(item[field]) : 0), 0);
   const postsDiscovered = sum("postsDiscovered");
   const exactBoundFeedTimestamps = sum("exactBoundFeedTimestamps");
-  return { groupsProcessed: metrics.length, postsDiscovered, uniquePostIds: discoveredIds.size, duplicatePostIdsSkipped: sum("duplicatePostIdsSkipped"), pageOpens: sum("pageOpens"), visionCalls: sum("visionCalls"), visionCacheHits: sum("visionCacheHits"), knownPostSkips: sum("knownPostSkips"), discoveryScrolls: sum("discoveryScrolls"), feedAgeHits: sum("feedAgeHits"), ageCacheHits: sum("ageCacheHits"), agePageFallbacks: sum("agePageFallbacks"), oldPostsSkippedBeforePageOpen: sum("oldPostsSkippedBeforePageOpen"), earlyStopOldBoundaryCount: sum("earlyStopOldBoundaryCount"), feedTimestampCandidates: sum("feedTimestampCandidates"), exactBoundFeedTimestamps, rejectedAmbiguousFeedTimestamps: sum("rejectedAmbiguousFeedTimestamps"), feedAgeHitRate: postsDiscovered > 0 ? exactBoundFeedTimestamps / postsDiscovered : 0, durationMs };
+  return { groupsProcessed: metrics.length, postsDiscovered, uniquePostIds: discoveredIds.size, duplicatePostIdsSkipped: sum("duplicatePostIdsSkipped"), pageOpens: sum("pageOpens"), visionCalls: sum("visionCalls"), visionCacheHits: sum("visionCacheHits"), knownPostSkips: sum("knownPostSkips"), discoveryScrolls: sum("discoveryScrolls"), feedAgeHits: sum("feedAgeHits"), ageCacheHits: sum("ageCacheHits"), agePageFallbacks: sum("agePageFallbacks"), oldPostsSkippedBeforePageOpen: sum("oldPostsSkippedBeforePageOpen"), earlyStopOldBoundaryCount: sum("earlyStopOldBoundaryCount"), feedTimestampCandidates: sum("feedTimestampCandidates"), exactBoundFeedTimestamps, rejectedAmbiguousFeedTimestamps: sum("rejectedAmbiguousFeedTimestamps"), feedAgeHitRate: postsDiscovered > 0 ? exactBoundFeedTimestamps / postsDiscovered : 0, duplicatePostIdsAcrossGroups: Math.max(0, postsDiscovered - discoveredIds.size), fullExtractionCacheHits: sum("fullExtractionCacheHits"), fullExtractionCacheMisses: sum("fullExtractionCacheMisses"), dedicatedPageReuses: sum("dedicatedPageReuses"), duplicateVisionCallsAvoided: sum("duplicateVisionCallsAvoided"), duplicatePageOpensAvoided: sum("duplicatePageOpensAvoided"), durationMs };
 }
 
 function newestAnalyzedAt(resultSummary: unknown): number {

@@ -1,4 +1,4 @@
-import type { FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
+import type { FacebookIntentSource, FacebookListingIntent, FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
 
 export type FacebookPostImportResult = {
   status: "created" | "updated" | "reused" | "skipped";
@@ -16,6 +16,8 @@ export type FacebookPostImportResult = {
     detectedFields: string[];
     classification?: "not_a_property" | "non_sale_intent";
     reasonCode?: FacebookSkipReasonCode;
+    listingIntent?: FacebookListingIntent;
+    intentSource?: FacebookIntentSource;
   };
 };
 
@@ -50,7 +52,10 @@ export type FacebookPostFlowSummary = {
   listingIds: string[];
   warnings: string[];
   skippedDiagnostics: FacebookSkippedDiagnostic[];
-  reusablePosts: Array<{ postId: string; listingId: string; publishedAt: string }>;
+  reusablePosts: Array<
+    | { postId: string; listingId: string; publishedAt: string; outcome: "SELL_PERSISTED" }
+    | { postId: string; listingId: null; publishedAt: string; outcome: "DETERMINISTIC_SKIP"; reasonCode: FacebookSkipReasonCode; listingIntent: FacebookListingIntent; intentSource: FacebookIntentSource }
+  >;
 };
 
 export async function processFacebookPostBatch(
@@ -86,7 +91,10 @@ export async function processFacebookPostBatch(
       }
       if (result.status !== "reused" && result.listingId && !summary.listingIds.includes(result.listingId)) summary.listingIds.push(result.listingId);
       if (result.status !== "skipped" && result.listingId && post.postId && post.publishedAt) {
-        summary.reusablePosts.push({ postId: post.postId, listingId: result.listingId, publishedAt: post.publishedAt });
+        summary.reusablePosts.push({ postId: post.postId, listingId: result.listingId, publishedAt: post.publishedAt, outcome: "SELL_PERSISTED" });
+      } else if (result.status === "skipped" && post.postId && post.publishedAt && isSafeDeterministicSkip(result.notProperty)) {
+        const skip = result.notProperty!;
+        summary.reusablePosts.push({ postId: post.postId, listingId: null, publishedAt: post.publishedAt, outcome: "DETERMINISTIC_SKIP", reasonCode: skip.reasonCode!, listingIntent: skip.listingIntent!, intentSource: skip.intentSource! });
       }
     } catch (error) {
       summary.extractionFailed += 1;
@@ -95,6 +103,13 @@ export async function processFacebookPostBatch(
     }
   }
   return summary;
+}
+
+function isSafeDeterministicSkip(value: FacebookPostImportResult["notProperty"]): boolean {
+  if (!value || (value.intentSource !== "DETERMINISTIC_BUY" && value.intentSource !== "DETERMINISTIC_SELL")) return false;
+  return (value.reasonCode === "FACEBOOK_BUY_REQUEST" && value.listingIntent === "BUY_PROPERTY")
+    || (value.reasonCode === "FACEBOOK_RENT_REQUEST" && (value.listingIntent === "RENT_OFFER" || value.listingIntent === "RENT_WANTED"))
+    || (value.reasonCode === "FACEBOOK_SERVICE_POST" && value.listingIntent === "SERVICE");
 }
 
 export function redactFacebookPostPreview(text: string): string {

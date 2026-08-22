@@ -8,7 +8,7 @@ import { assertFacebookGroupUrl, assertFacebookPostsBelongToGroup, parseFacebook
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
-import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
+import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeFacebookGroupAssociationMetadata, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
@@ -96,12 +96,12 @@ export async function getFacebookWorkerCache(input: { jobId: string; leaseToken:
   const sources = (cached.data ?? []).map((row) => ({ jobId: String(row.id), runId: String(row.scan_run_id), resultSummary: row.result_summary }));
   const hits = resolveFacebookPostCacheHits({ currentRunId: String(current.data.scan_run_id), sources, postIds: input.postIds, nowMs: cacheReferenceTime });
   const ageHits = resolveFacebookAgeCacheHits({ currentRunId: String(current.data.scan_run_id), sources, postIds: input.postIds, nowMs: cacheReferenceTime });
-  const listingIds = [...new Set(Object.values(hits).map((hit) => hit.listingId))];
-  if (listingIds.length === 0) return { hits: {}, ageHits };
+  const listingIds = [...new Set(Object.values(hits).flatMap((hit) => hit.outcome === "SELL_PERSISTED" && hit.listingId ? [hit.listingId] : []))];
+  if (listingIds.length === 0) return { hits, ageHits };
   const listings = await supabase.from("listings").select("id,source,external_listing_id,status").in("id", listingIds).eq("source", "facebook").eq("status", "active");
   if (listings.error) throw new Error(`FACEBOOK_CACHE_LISTING_QUERY_FAILED: ${listings.error.message}`);
   const valid = new Map((listings.data ?? []).map((row) => [String(row.id), String(row.external_listing_id)]));
-  return { hits: Object.fromEntries(Object.entries(hits).filter(([postId, hit]) => valid.get(hit.listingId) === postId)), ageHits };
+  return { hits: Object.fromEntries(Object.entries(hits).filter(([postId, hit]) => hit.outcome === "DETERMINISTIC_SKIP" || Boolean(hit.listingId && valid.get(hit.listingId) === postId))), ageHits };
 }
 
 export async function getFacebookPostCache(input: { jobId: string; leaseToken: string; workerId: string; postIds: string[] }): Promise<Record<string, FacebookPostCacheHit & { publishedAt: string }>> {
@@ -127,7 +127,9 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
     if (post.cacheHit && post.postId && post.permalink) {
       const validated = await getFacebookPostCache({ jobId: input.jobId, leaseToken: input.leaseToken, workerId: input.workerId, postIds: [post.postId] });
       const cache = validated[post.postId];
-      if (!cache || cache.sourceJobId !== post.cacheHit.sourceJobId || cache.listingId !== post.cacheHit.listingId) throw new Error("FACEBOOK_CACHE_HIT_INVALID");
+      if (!cache || cache.sourceJobId !== post.cacheHit.sourceJobId || cache.listingId !== post.cacheHit.listingId || cache.outcome !== post.cacheHit.outcome) throw new Error("FACEBOOK_CACHE_HIT_INVALID");
+      if (cache.outcome === "DETERMINISTIC_SKIP") return reusedDeterministicSkip(cache);
+      if (!cache.listingId) throw new Error("FACEBOOK_CACHE_HIT_INVALID");
       return associateCachedFacebookListing(supabase, { listingId: cache.listingId, sourceUrl: post.permalink, postId: post.postId, groupId: group.id, groupName: group.name, filterId: filter.id, publishedAt: post.publishedAt, analyzedAt: cache.analyzedAt });
     }
     return persistEligibleFacebookPost(post, async (eligiblePost) => {
@@ -145,7 +147,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   }, { jobId: input.jobId, sourceScanId });
   if (summary.listingIds.length > 0) await getAlerts();
   const normalized = summary.postsProcessed - summary.listingsSkipped - summary.extractionFailed;
-  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now, outcome: "SELL_PERSISTED" })), ageCache: input.ageCache, performance: input.performance };
+  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now })), ageCache: input.ageCache, performance: input.performance };
   const scan = await supabase.from("source_scans").update({
     status: "completed", finished_at: now, scanned_count: summary.postsProcessed, listings_found: normalized,
     matched_count: summary.matched, listings_created: summary.listingsCreated, new_count: summary.newMatches, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops,
@@ -161,6 +163,17 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   return result;
 }
 
+function reusedDeterministicSkip(cache: FacebookPostCacheHit) {
+  return {
+    status: "skipped" as const, listingId: null, listingCreated: false, listingUpdated: false,
+    matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [],
+    notProperty: {
+      realEstateLanguage: true, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent" as const,
+      reasonCode: cache.reasonCode ?? "FACEBOOK_INTENT_UNKNOWN", listingIntent: cache.listingIntent, intentSource: cache.intentSource,
+    },
+  };
+}
+
 async function associateCachedFacebookListing(
   supabase: ReturnType<typeof createFacebookWatcherAdminClient>,
   input: { listingId: string; sourceUrl: string; postId: string; groupId: string; groupName: string; filterId: string; publishedAt: string | null; analyzedAt: string },
@@ -169,10 +182,11 @@ async function associateCachedFacebookListing(
   const prior = await supabase.from("listing_source_metadata").select("metadata").eq("source", "facebook").eq("source_post_url", input.sourceUrl).maybeSingle();
   if (prior.error) throw new Error(`FACEBOOK_CACHE_METADATA_READ_FAILED: ${prior.error.message}`);
   const metadata = asRow(prior.data?.metadata) ?? {};
+  const associatedMetadata = mergeFacebookGroupAssociationMetadata(metadata, { id: input.groupId, name: input.groupName });
   const saved = await supabase.from("listing_source_metadata").upsert({
     listing_id: input.listingId, source: "facebook", source_post_url: input.sourceUrl, group_name: input.groupName,
     author_name: null, published_at: input.publishedAt, collected_at: now,
-    metadata: { ...metadata, source: "facebook_worker_cache", groupId: input.groupId, groupName: input.groupName, postId: input.postId, checkedAt: now, cacheAnalyzedAt: input.analyzedAt },
+    metadata: { ...associatedMetadata, source: "facebook_worker_cache", postId: input.postId, checkedAt: now, cacheAnalyzedAt: input.analyzedAt },
   }, { onConflict: "source,source_post_url" });
   if (saved.error) throw new Error(`FACEBOOK_CACHE_METADATA_PERSIST_FAILED: ${saved.error.message}`);
   const match = await supabase.from("listing_filter_matches").select("id").eq("listing_id", input.listingId).eq("search_filter_id", input.filterId).eq("is_current_match", true).maybeSingle();

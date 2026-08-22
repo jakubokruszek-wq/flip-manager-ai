@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aggregateFacebookPerformance, createCachedFacebookPostSnapshot, FACEBOOK_FRESH_AGE_CACHE_TTL_MS, FACEBOOK_POST_CACHE_TTL_MS, isFacebookCachedPostStillFresh, parseReusableFacebookAgeCache, parseReusableFacebookPostCache, partitionFacebookPostsByCache, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits, shouldStopForKnownOldSequence } from "./performance.ts";
+import { aggregateFacebookPerformance, createCachedFacebookPostSnapshot, FACEBOOK_FRESH_AGE_CACHE_TTL_MS, FACEBOOK_POST_CACHE_TTL_MS, isFacebookCachedPostStillFresh, mergeFacebookGroupAssociationMetadata, parseReusableFacebookAgeCache, parseReusableFacebookPostCache, partitionFacebookPostsByCache, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits, shouldStopForKnownOldSequence } from "./performance.ts";
 import { processFacebookPostBatch } from "./post-flow.ts";
 import { isExpectedFacebookPostPage, runFacebookDiscoveryLoop } from "../../workers/facebook-browser/src/post-page.ts";
 
@@ -30,10 +30,47 @@ test("cache reuse creates no listing update or duplicate snapshot signal", async
   assert.equal(result.reusablePosts.length, 1);
 });
 
+test("cross-group reuse preserves every discovered group association", () => {
+  const merged = mergeFacebookGroupAssociationMetadata({ groupId: "group-a", groupName: "A" }, { id: "group-b", name: "B" });
+  assert.deepEqual(merged.groupIds, ["group-a", "group-b"]);
+  assert.deepEqual(merged.groupNames, ["A", "B"]);
+});
+
 test("BUY, UNKNOWN and failed results cannot be reused as SELL", () => {
   for (const outcome of ["BUY_PROPERTY", "UNKNOWN", "FAILED"]) {
     assert.deepEqual(parseReusableFacebookPostCache({ postCache: [{ postId: "123", listingId: "listing-1", analyzedAt: new Date(now).toISOString(), publishedAt, outcome }] }), []);
   }
+});
+
+test("deterministic BUY skip is safely reused across group jobs without persistence", async () => {
+  const resultSummary = { postCache: [{ postId: "buy-1", listingId: null, analyzedAt: new Date(now - 60_000).toISOString(), publishedAt, outcome: "DETERMINISTIC_SKIP", reasonCode: "FACEBOOK_BUY_REQUEST", listingIntent: "BUY_PROPERTY", intentSource: "DETERMINISTIC_BUY" }] };
+  const hits = resolveFacebookPostCacheHits({ currentRunId: "run-1", sources: [{ jobId: "job-a", runId: "run-1", resultSummary }], postIds: ["buy-1"], nowMs: now });
+  const partition = partitionFacebookPostsByCache([{ postId: "buy-1", permalink: "https://www.facebook.com/groups/2/posts/buy-1/" }], hits, now);
+  assert.equal(partition.cached.length, 1);
+  assert.equal(partition.cached[0].hit.outcome, "DETERMINISTIC_SKIP");
+  assert.equal(partition.cached[0].hit.scope, "RUN");
+  assert.equal(partition.uncached.length, 0);
+});
+
+test("UNKNOWN, CONFLICT and failed skip decisions are never reusable", () => {
+  for (const entry of [
+    { outcome: "DETERMINISTIC_SKIP", reasonCode: "FACEBOOK_INTENT_UNKNOWN", listingIntent: "UNKNOWN", intentSource: "CONFLICT" },
+    { outcome: "DETERMINISTIC_SKIP", reasonCode: "FACEBOOK_INTENT_UNKNOWN", listingIntent: "UNKNOWN", intentSource: "UNKNOWN" },
+    { outcome: "FAILED", reasonCode: "FACEBOOK_INTENT_UNKNOWN", listingIntent: "UNKNOWN", intentSource: "UNKNOWN" },
+  ]) {
+    assert.deepEqual(parseReusableFacebookPostCache({ postCache: [{ postId: "123", listingId: null, analyzedAt: new Date(now).toISOString(), publishedAt, ...entry }] }), []);
+  }
+});
+
+test("a deterministic BUY skip is written once and remains snapshot-free", async () => {
+  const skipped = await processFacebookPostBatch([{ postId: "buy-1", groupId: "group-a", permalink: "https://www.facebook.com/groups/a/posts/buy-1/", text: "", imageUrls: [], publishedAt, vision: null }], async () => ({
+    status: "skipped", listingId: null, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [],
+    notProperty: { realEstateLanguage: true, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent", reasonCode: "FACEBOOK_BUY_REQUEST", listingIntent: "BUY_PROPERTY", intentSource: "DETERMINISTIC_BUY" },
+  }));
+  assert.equal(skipped.listingsCreated, 0);
+  assert.equal(skipped.listingsUpdated, 0);
+  assert.equal(skipped.priceDrops, 0);
+  assert.deepEqual(skipped.reusablePosts, [{ postId: "buy-1", listingId: null, publishedAt, outcome: "DETERMINISTIC_SKIP", reasonCode: "FACEBOOK_BUY_REQUEST", listingIntent: "BUY_PROPERTY", intentSource: "DETERMINISTIC_BUY" }]);
 });
 
 test("expired cache performs normal extraction", () => {
@@ -104,6 +141,8 @@ test("run performance summary aggregates age optimization counters", () => {
     oldPostsSkippedBeforePageOpen: 4, earlyStopOldBoundaryCount: 1,
     feedTimestampCandidates: 6, exactBoundFeedTimestamps: 2,
     rejectedAmbiguousFeedTimestamps: 1, feedAgeHitRate: 0.4,
+    duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 2, fullExtractionCacheMisses: 3,
+    dedicatedPageReuses: 1, duplicateVisionCallsAvoided: 2, duplicatePageOpensAvoided: 2,
   } }], 1_500);
   assert.equal(summary.feedAgeHits, 2);
   assert.equal(summary.ageCacheHits, 2);
@@ -114,4 +153,18 @@ test("run performance summary aggregates age optimization counters", () => {
   assert.equal(summary.exactBoundFeedTimestamps, 2);
   assert.equal(summary.rejectedAmbiguousFeedTimestamps, 1);
   assert.equal(summary.feedAgeHitRate, 0.4);
+  assert.equal(summary.fullExtractionCacheHits, 2);
+  assert.equal(summary.dedicatedPageReuses, 1);
+  assert.equal(summary.duplicateVisionCallsAvoided, 2);
+});
+
+test("run summary reports raw cross-group duplicates even when not all were reusable", () => {
+  const base = { ...aggregateFacebookPerformance([], 0), groupsProcessed: undefined, uniquePostIds: undefined, durationMs: undefined };
+  const summary = aggregateFacebookPerformance([
+    { performance: { ...base, postsDiscovered: 2, discoveredPostIds: ["1", "2"] } },
+    { performance: { ...base, postsDiscovered: 2, discoveredPostIds: ["2", "3"] } },
+  ], 10);
+  assert.equal(summary.postsDiscovered, 4);
+  assert.equal(summary.uniquePostIds, 3);
+  assert.equal(summary.duplicatePostIdsAcrossGroups, 1);
 });
