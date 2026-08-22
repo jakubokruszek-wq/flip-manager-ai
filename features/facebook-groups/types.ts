@@ -24,5 +24,9 @@ export type WatchedFacebookGroup = {
 };
 
 export type FacebookGroupInput = Pick<WatchedFacebookGroup, "name" | "url" | "city" | "district" | "neighborhood" | "priority" | "keywords" | "enabled">;
+export type AddWatchedFacebookGroupResult =
+  | { success: true; duplicate: false; group: WatchedFacebookGroup }
+  | { success: false; duplicate: true; error: "Ta grupa jest już obserwowana."; group: WatchedFacebookGroup }
+  | { success: false; duplicate: false; error: string; validationError: true };
 export type GroupCheckResult = { status: FacebookGroupAccessStatus; posts: FacebookListingInput[]; checkedAt: string; error?: string };
 export interface FacebookGroupSourceAdapter { checkGroup(group: WatchedFacebookGroup): Promise<GroupCheckResult> }
