@@ -13,12 +13,15 @@ test("completion rejects a post from another group", () => assert.throws(() => a
 test("completion accepts a server-verifiable cache reference and performance metrics", () => {
   const completion = parseFacebookCompletionPayload({
     jobId: "job-2", leaseToken: "lease-2", workerId: "worker-2", warnings: [], durationMs: 100,
-    performance: { postsDiscovered: 1, discoveredPostIds: ["123"], duplicatePostIdsSkipped: 1, pageOpens: 1, visionCalls: 0, visionCacheHits: 1, knownPostSkips: 1, discoveryScrolls: 0, feedAgeHits: 1, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 1, earlyStopOldBoundaryCount: 1 },
+    performance: { postsDiscovered: 1, discoveredPostIds: ["123"], duplicatePostIdsSkipped: 1, pageOpens: 1, visionCalls: 0, visionCacheHits: 1, knownPostSkips: 1, discoveryScrolls: 0, feedAgeHits: 1, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 1, earlyStopOldBoundaryCount: 1, feedTimestampCandidates: 2, exactBoundFeedTimestamps: 1, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 1 },
     ageCache: [{ postId: "123", checkedAt: "2026-08-22T10:02:00.000Z", publishedAt: "2026-08-22T10:00:00.000Z", decision: "FRESH", source: "FEED" }],
     posts: [{ postId: "123", groupId: "group-b", permalink: "https://www.facebook.com/groups/group-b/posts/123/", text: "", imageUrls: [], publishedAt: "2026-08-22T10:00:00.000Z", vision: null, cacheHit: { sourceJobId: "job-1", listingId: "listing-1", analyzedAt: "2026-08-22T10:01:00.000Z", scope: "RUN" } }],
   });
   assert.equal(completion.posts[0].cacheHit?.listingId, "listing-1");
   assert.equal(completion.performance.visionCalls, 0);
   assert.equal(completion.performance.feedAgeHits, 1);
+  assert.equal(completion.performance.feedTimestampCandidates, 2);
+  assert.equal(completion.performance.exactBoundFeedTimestamps, 1);
+  assert.equal(completion.performance.feedAgeHitRate, 1);
   assert.equal(completion.ageCache[0].source, "FEED");
 });

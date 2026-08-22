@@ -9,7 +9,7 @@ export const FACEBOOK_KNOWN_OLD_MIN_AGE_MS = 72 * 60 * 60_000;
 type CacheSource = { jobId: string; runId: string; resultSummary: unknown };
 
 export function emptyFacebookPerformanceMetrics(): FacebookPerformanceMetrics {
-  return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0 };
+  return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0 };
 }
 
 export function parseReusableFacebookPostCache(value: unknown): FacebookPostCacheEntry[] {
@@ -115,7 +115,9 @@ export function aggregateFacebookPerformance(results: unknown[], durationMs: num
   });
   const discoveredIds = new Set(metrics.flatMap((item) => Array.isArray(item.discoveredPostIds) ? item.discoveredPostIds.filter((id): id is string => typeof id === "string") : []));
   const sum = (field: string) => metrics.reduce((total, item) => total + (typeof item[field] === "number" ? Number(item[field]) : 0), 0);
-  return { groupsProcessed: metrics.length, postsDiscovered: sum("postsDiscovered"), uniquePostIds: discoveredIds.size, duplicatePostIdsSkipped: sum("duplicatePostIdsSkipped"), pageOpens: sum("pageOpens"), visionCalls: sum("visionCalls"), visionCacheHits: sum("visionCacheHits"), knownPostSkips: sum("knownPostSkips"), discoveryScrolls: sum("discoveryScrolls"), feedAgeHits: sum("feedAgeHits"), ageCacheHits: sum("ageCacheHits"), agePageFallbacks: sum("agePageFallbacks"), oldPostsSkippedBeforePageOpen: sum("oldPostsSkippedBeforePageOpen"), earlyStopOldBoundaryCount: sum("earlyStopOldBoundaryCount"), durationMs };
+  const postsDiscovered = sum("postsDiscovered");
+  const exactBoundFeedTimestamps = sum("exactBoundFeedTimestamps");
+  return { groupsProcessed: metrics.length, postsDiscovered, uniquePostIds: discoveredIds.size, duplicatePostIdsSkipped: sum("duplicatePostIdsSkipped"), pageOpens: sum("pageOpens"), visionCalls: sum("visionCalls"), visionCacheHits: sum("visionCacheHits"), knownPostSkips: sum("knownPostSkips"), discoveryScrolls: sum("discoveryScrolls"), feedAgeHits: sum("feedAgeHits"), ageCacheHits: sum("ageCacheHits"), agePageFallbacks: sum("agePageFallbacks"), oldPostsSkippedBeforePageOpen: sum("oldPostsSkippedBeforePageOpen"), earlyStopOldBoundaryCount: sum("earlyStopOldBoundaryCount"), feedTimestampCandidates: sum("feedTimestampCandidates"), exactBoundFeedTimestamps, rejectedAmbiguousFeedTimestamps: sum("rejectedAmbiguousFeedTimestamps"), feedAgeHitRate: postsDiscovered > 0 ? exactBoundFeedTimestamps / postsDiscovered : 0, durationMs };
 }
 
 function newestAnalyzedAt(resultSummary: unknown): number {

@@ -243,6 +243,36 @@ test("exact-bound feed timestamp resolves age without dedicated-page fallback", 
   } finally { await browser.close(); }
 });
 
+test("machine-readable timestamp in the same root story is exact-bound to its permalink", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<article data-pagelet="GroupFeedUnit"><header><a href="https://www.facebook.com/groups/1/posts/990/">Post</a><span data-utime="1786874400"></span></header></article>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    assert.equal(post.discoveredPublishedAt, "2026-08-16T10:00:00.000Z");
+    assert.equal(post.feedAgeDiagnostic?.bindingMethod, "EXACT_COMMON_ROOT_STORY");
+    assert.equal(post.feedAgeDiagnostic?.machineReadable, true);
+    assert.equal(post.feedAgeDiagnostic?.decision, "PROCESS");
+  } finally { await browser.close(); }
+});
+
+test("relative feed timestamp in the same exact story resolves without a page fallback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<article data-pagelet="GroupFeedUnit"><a href="https://www.facebook.com/groups/1/posts/989/">Post</a><span dir="auto">2 h</span></article>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    let fallbackCalls = 0;
+    const resolved = await resolveFacebookPostAge(post, now, async () => { fallbackCalls += 1; return null; });
+    assert.equal(resolved.ageHours, 2);
+    assert.equal(post.feedAgeDiagnostic?.selectedSource, "ROOT_STORY_TEXT");
+    assert.equal(post.feedAgeDiagnostic?.bindingMethod, "EXACT_COMMON_ROOT_STORY");
+    assert.equal(fallbackCalls, 0);
+  } finally { await browser.close(); }
+});
+
 test("exact-bound old feed timestamp skips before dedicated page", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -278,6 +308,71 @@ test("shared attachment timestamp is not accepted as feed post age", async () =>
     const [post] = await discoverFacebookPosts(page, 5, now);
     assert.equal(post.discoveredPublishedAt, null);
     assert.equal(post.freshnessFailure, "FACEBOOK_POST_AGE_UNKNOWN");
+  } finally { await browser.close(); }
+});
+
+test("timestamp rendered inside a shared story is rejected", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<article><section data-testid="shared_story_attachment"><a href="https://www.facebook.com/groups/1/posts/988/"><time datetime="2026-08-16T10:00:00.000Z">2 h</time></a></section></article>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    assert.equal(post.discoveredPublishedAt, null);
+    assert.equal(post.feedAgeDiagnostic?.rejectionReason, "SHARED_OR_ATTACHMENT_CONTEXT");
+  } finally { await browser.close(); }
+});
+
+test("timestamp from a neighboring post is not bound to the requested permalink", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<main><div><a href="https://www.facebook.com/groups/1/posts/987/">Post</a></div><div><a href="https://www.facebook.com/groups/1/posts/986/"><time datetime="2026-08-16T10:00:00.000Z">2 h</time></a></div></main>');
+    const posts = await discoverFacebookPosts(page, 5, now);
+    const requested = posts.find((post) => post.postId === "987");
+    assert.equal(requested?.discoveredPublishedAt, null);
+    assert.equal(requested?.feedAgeDiagnostic?.rejectionReason, "ADJACENT_POST_AMBIGUITY");
+  } finally { await browser.close(); }
+});
+
+test("date without a time falls back when its precision crosses the 72 hour boundary", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = new Date(2026, 7, 22, 12, 0, 0).getTime();
+    await page.setContent('<article><a href="https://www.facebook.com/groups/1/posts/984/">Post</a><span title="19 sierpnia 2026"></span></article>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    assert.equal(post.discoveredPublishedAt, null);
+    assert.equal(post.feedAgeDiagnostic?.rejectionReason, "DATE_PRECISION_CROSSES_72H");
+  } finally { await browser.close(); }
+});
+
+test("feed timestamps preserve the exact 72 hour boundary and reject anything older", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    const exact = Math.floor((now - 72 * 60 * 60_000) / 1_000);
+    const older = exact - 1;
+    await page.setContent(`<article><a href="https://www.facebook.com/groups/1/posts/983/" data-utime="${exact}"></a></article><article><a href="https://www.facebook.com/groups/1/posts/982/" data-utime="${older}"></a></article>`);
+    const posts = await discoverFacebookPosts(page, 5, now);
+    assert.equal(posts.find((post) => post.postId === "983")?.freshnessFailure, null);
+    assert.equal(posts.find((post) => post.postId === "982")?.freshnessFailure, "FACEBOOK_POST_TOO_OLD");
+  } finally { await browser.close(); }
+});
+
+test("missing feed timestamp stays unknown and invokes dedicated-page fallback", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+    await page.setContent('<article><a href="https://www.facebook.com/groups/1/posts/981/">Post</a></article>');
+    const [post] = await discoverFacebookPosts(page, 5, now);
+    let fallbackCalls = 0;
+    await resolveFacebookPostAge(post, now, async () => { fallbackCalls += 1; return null; });
+    assert.equal(post.feedAgeDiagnostic?.rejectionReason, "NO_TIMESTAMP");
+    assert.equal(fallbackCalls, 1);
   } finally { await browser.close(); }
 });
 
@@ -338,6 +433,8 @@ test("selects only creation_time linked to the expected post id", async () => {
 test("parses yesterday and Polish absolute Facebook timestamps", () => {
   const now = new Date(2026, 7, 16, 12, 0, 0).getTime();
   assert.ok(parseFacebookTimestampValue("wczoraj o 10:30", now));
+  assert.ok(parseFacebookTimestampValue("Yesterday at 10:30", now));
+  assert.ok(parseFacebookTimestampValue("Aug 15 at 09:15", now));
   assert.ok(parseFacebookTimestampValue("14 sierpnia 2026 o 09:15", now));
 });
 

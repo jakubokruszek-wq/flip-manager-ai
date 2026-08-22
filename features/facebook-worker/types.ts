@@ -74,6 +74,10 @@ export type FacebookPerformanceMetrics = {
   agePageFallbacks: number;
   oldPostsSkippedBeforePageOpen: number;
   earlyStopOldBoundaryCount: number;
+  feedTimestampCandidates: number;
+  exactBoundFeedTimestamps: number;
+  rejectedAmbiguousFeedTimestamps: number;
+  feedAgeHitRate: number;
 };
 
 export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "SHARED_POST_FALLBACK", "CONFLICT", "NONE"] as const;

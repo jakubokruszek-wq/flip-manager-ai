@@ -67,7 +67,7 @@ function parseCacheHit(value: unknown): FacebookPostSnapshot["cacheHit"] {
 }
 
 function parsePerformance(value: unknown): FacebookPerformanceMetrics {
-  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0 };
+  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0 };
   const row = requireRow(value);
   return {
     postsDiscovered: nonnegativeInteger(row.postsDiscovered),
@@ -83,6 +83,10 @@ function parsePerformance(value: unknown): FacebookPerformanceMetrics {
     agePageFallbacks: optionalNonnegativeInteger(row.agePageFallbacks),
     oldPostsSkippedBeforePageOpen: optionalNonnegativeInteger(row.oldPostsSkippedBeforePageOpen),
     earlyStopOldBoundaryCount: optionalNonnegativeInteger(row.earlyStopOldBoundaryCount),
+    feedTimestampCandidates: optionalNonnegativeInteger(row.feedTimestampCandidates),
+    exactBoundFeedTimestamps: optionalNonnegativeInteger(row.exactBoundFeedTimestamps),
+    rejectedAmbiguousFeedTimestamps: optionalNonnegativeInteger(row.rejectedAmbiguousFeedTimestamps),
+    feedAgeHitRate: optionalRate(row.feedAgeHitRate),
   };
 }
 
@@ -128,6 +132,11 @@ function nullableIsoDate(value: unknown): string | null { if (value === null || 
 function requiredIsoDate(value: unknown): string { const parsed = nullableIsoDate(value); if (!parsed) throw new Error("INVALID_DATE"); return parsed; }
 function nonnegativeInteger(value: unknown): number { if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error("INVALID_NUMBER"); return value; }
 function optionalNonnegativeInteger(value: unknown): number { return value === null || value === undefined ? 0 : nonnegativeInteger(value); }
+function optionalRate(value: unknown): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new Error("INVALID_RATE");
+  return value;
+}
 function nullableNumber(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
 function boundedConfidence(value: unknown): number { return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0; }
 function stringArray(value: unknown, maxItems: number, maxLength: number): string[] { if (!Array.isArray(value) || value.length > maxItems || value.some((item) => typeof item !== "string" || item.length > maxLength)) throw new Error("INVALID_STRING_ARRAY"); return value.map(String); }

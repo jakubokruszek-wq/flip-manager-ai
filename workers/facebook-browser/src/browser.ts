@@ -57,6 +57,12 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
     const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discovered = discovery.posts; const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
     performance.postsDiscovered = discovered.length; performance.discoveredPostIds = discovered.map((post) => post.postId); performance.discoveryScrolls = discovery.scrollCount;
     performance.feedAgeHits = discovered.filter((post) => post.discoveredPublishedAt !== null).length;
+    const feedDiagnostics = discovered.flatMap((post) => post.feedAgeDiagnostic ? [post.feedAgeDiagnostic] : []);
+    performance.feedTimestampCandidates = feedDiagnostics.reduce((total, diagnostic) => total + diagnostic.candidatesFound, 0);
+    performance.exactBoundFeedTimestamps = performance.feedAgeHits;
+    performance.rejectedAmbiguousFeedTimestamps = feedDiagnostics.filter((diagnostic) => diagnostic.rejectionReason === "AMBIGUOUS_TIMESTAMP" || diagnostic.rejectionReason === "DATE_PRECISION_CROSSES_72H").length;
+    performance.feedAgeHitRate = discovered.length > 0 ? performance.feedAgeHits / discovered.length : 0;
+    for (const diagnostic of feedDiagnostics) logFacebookWorker("FACEBOOK_FEED_AGE_DIAGNOSTIC", diagnostic);
     performance.earlyStopOldBoundaryCount = discovery.stopReason === "OLDER_THAN_72H" || discovery.stopReason === "KNOWN_OLD_SEQUENCE" ? 1 : 0;
     if (!debugPostId && lookupCache) await lookupAndRemember(discovered.map((post) => post.postId));
     const partitioned = partitionFacebookPostsByCache(discovered, cacheHits, ageReferenceMs);

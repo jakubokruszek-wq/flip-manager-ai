@@ -102,10 +102,16 @@ test("run performance summary aggregates age optimization counters", () => {
     pageOpens: 1, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 2, discoveryScrolls: 3,
     feedAgeHits: 2, ageCacheHits: 2, agePageFallbacks: 1,
     oldPostsSkippedBeforePageOpen: 4, earlyStopOldBoundaryCount: 1,
+    feedTimestampCandidates: 6, exactBoundFeedTimestamps: 2,
+    rejectedAmbiguousFeedTimestamps: 1, feedAgeHitRate: 0.4,
   } }], 1_500);
   assert.equal(summary.feedAgeHits, 2);
   assert.equal(summary.ageCacheHits, 2);
   assert.equal(summary.agePageFallbacks, 1);
   assert.equal(summary.oldPostsSkippedBeforePageOpen, 4);
   assert.equal(summary.earlyStopOldBoundaryCount, 1);
+  assert.equal(summary.feedTimestampCandidates, 6);
+  assert.equal(summary.exactBoundFeedTimestamps, 2);
+  assert.equal(summary.rejectedAmbiguousFeedTimestamps, 1);
+  assert.equal(summary.feedAgeHitRate, 0.4);
 });

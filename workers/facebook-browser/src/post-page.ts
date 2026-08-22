@@ -12,7 +12,8 @@ export const MAX_FACEBOOK_POSTS_PER_JOB = MAX_FACEBOOK_DISCOVERED_POSTS;
 export const FACEBOOK_POST_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
 
 export type DiscoveredFacebookPost = { postId: string; permalink: string };
-export type FreshDiscoveredFacebookPost = DiscoveredFacebookPost & { discoveredPublishedAt: string | null; freshnessFailure: FacebookPostFreshnessFailure | null };
+export type FacebookFeedAgeDiagnostic = { postId: string; candidatesFound: number; selectedSource: string | null; bindingMethod: string | null; machineReadable: boolean; ageHours: number | null; decision: "PROCESS" | "TOO_OLD" | "UNKNOWN"; rejectionReason: "NO_TIMESTAMP" | "COMMENT_CONTEXT" | "SHARED_OR_ATTACHMENT_CONTEXT" | "ADJACENT_POST_AMBIGUITY" | "AMBIGUOUS_TIMESTAMP" | "DATE_PRECISION_CROSSES_72H" | "INVALID_TIMESTAMP" | null };
+export type FreshDiscoveredFacebookPost = DiscoveredFacebookPost & { discoveredPublishedAt: string | null; freshnessFailure: FacebookPostFreshnessFailure | null; feedAgeDiagnostic?: FacebookFeedAgeDiagnostic };
 export type FacebookPostFreshnessFailure = "FACEBOOK_POST_TOO_OLD" | "FACEBOOK_POST_AGE_UNKNOWN";
 export type FacebookPostAgeSource = "FEED" | "POST_PAGE_METADATA" | "POST_PAGE" | "AGE_CACHE";
 export type FacebookPostAgeResolution = { post: FreshDiscoveredFacebookPost; source: FacebookPostAgeSource; ageHours: number | null; decision: "PROCESS" | "TOO_OLD" | "UNKNOWN" };
@@ -519,37 +520,40 @@ export async function resolveFacebookPostDiscovery(input: {
 
 export function parseFacebookTimestampValue(value: string | null, nowMs = Date.now()): string | null {
   if (!value) return null;
-  const normalized = value.trim().toLocaleLowerCase("pl-PL").replace(/\s+/g, " ");
+  const normalized = value.trim().toLocaleLowerCase("pl-PL").normalize("NFKD").replace(/\p{M}/gu, "").replace(/\s+/g, " ");
   if (/^\d{9,13}$/.test(normalized)) {
     const numeric = Number(normalized);
     const timestamp = normalized.length <= 10 ? numeric * 1_000 : numeric;
     return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
   }
-  const directTimestamp = Date.parse(value);
-  if (Number.isFinite(directTimestamp)) return new Date(directTimestamp).toISOString();
-  const relative = normalized.match(/^(\d+)\s*(min(?:ut(?:a|y|ę)?)?|m|godz(?:\.|in(?:a|y|ę)?)?|h|dni|dzień|d)(?:\s+temu)?$/u);
+  const relative = normalized.match(/^(\d+)\s*(min(?:ut(?:a|y|e)?)?|m|godz(?:\.|in(?:a|y|e)?)?|hours?|hrs?|h|dni|dzien|days?|d)(?:\s+temu|\s+ago)?$/u);
   if (relative) {
     const amount = Number(relative[1]);
     const unit = relative[2];
-    const multiplier = unit.startsWith("min") || unit === "m" ? 60_000 : unit.startsWith("godz") || unit === "h" ? 60 * 60_000 : 24 * 60 * 60_000;
+    const multiplier = unit.startsWith("min") || unit === "m" ? 60_000 : unit.startsWith("godz") || unit.startsWith("hour") || unit.startsWith("hr") || unit === "h" ? 60 * 60_000 : 24 * 60 * 60_000;
     return new Date(nowMs - amount * multiplier).toISOString();
   }
-  const yesterday = normalized.match(/^wczoraj(?:\s+(?:o\s+)?(\d{1,2}):(\d{2}))?$/u);
+  const yesterday = normalized.match(/^(?:wczoraj|yesterday)(?:\s+(?:(?:o|at)\s+)?(\d{1,2}):(\d{2}))?$/u);
   if (yesterday) {
     const date = new Date(nowMs);
     date.setDate(date.getDate() - 1);
-    if (yesterday[1] && yesterday[2]) date.setHours(Number(yesterday[1]), Number(yesterday[2]), 0, 0);
+    date.setHours(Number(yesterday[1] ?? 0), Number(yesterday[2] ?? 0), 0, 0);
     return date.toISOString();
   }
-  const months: Record<string, number> = { stycznia: 0, lutego: 1, marca: 2, kwietnia: 3, maja: 4, czerwca: 5, lipca: 6, sierpnia: 7, września: 8, października: 9, listopada: 10, grudnia: 11 };
-  const absolute = normalized.match(/^(\d{1,2})\s+(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|października|listopada|grudnia)(?:\s+(\d{4}))?(?:\s+(?:o\s+)?(\d{1,2}):(\d{2}))?$/u);
-  if (!absolute) return null;
+  const months: Record<string, number> = { stycznia: 0, january: 0, jan: 0, lutego: 1, february: 1, feb: 1, marca: 2, march: 2, mar: 2, kwietnia: 3, april: 3, apr: 3, maja: 4, may: 4, czerwca: 5, june: 5, jun: 5, lipca: 6, july: 6, jul: 6, sierpnia: 7, august: 7, aug: 7, wrzesnia: 8, september: 8, sep: 8, pazdziernika: 9, october: 9, oct: 9, listopada: 10, november: 10, nov: 10, grudnia: 11, december: 11, dec: 11 };
+  const dayFirst = normalized.match(/^(\d{1,2})\s+(\p{L}+)(?:\s+(\d{4}))?(?:\s+(?:(?:o|at)\s+)?(\d{1,2}):(\d{2}))?$/u);
+  const monthFirst = normalized.match(/^(\p{L}+)\s+(\d{1,2})(?:,?\s+(\d{4}))?(?:\s+(?:(?:o|at)\s+)?(\d{1,2}):(\d{2}))?$/u);
+  const absolute = dayFirst ? { day: dayFirst[1], month: dayFirst[2], year: dayFirst[3], hour: dayFirst[4], minute: dayFirst[5] } : monthFirst ? { day: monthFirst[2], month: monthFirst[1], year: monthFirst[3], hour: monthFirst[4], minute: monthFirst[5] } : null;
+  if (!absolute || months[absolute.month] === undefined) {
+    const directTimestamp = /^\d{4}-\d{2}-\d{2}(?:[T\s].+)?$/u.test(normalized) ? Date.parse(value) : Number.NaN;
+    return Number.isFinite(directTimestamp) ? new Date(directTimestamp).toISOString() : null;
+  }
   const now = new Date(nowMs);
-  let year = absolute[3] ? Number(absolute[3]) : now.getFullYear();
-  let date = new Date(year, months[absolute[2]], Number(absolute[1]), Number(absolute[4] ?? 0), Number(absolute[5] ?? 0));
-  if (!absolute[3] && date.getTime() > nowMs + 5 * 60_000) {
+  let year = absolute.year ? Number(absolute.year) : now.getFullYear();
+  let date = new Date(year, months[absolute.month], Number(absolute.day), Number(absolute.hour ?? 0), Number(absolute.minute ?? 0));
+  if (!absolute.year && date.getTime() > nowMs + 5 * 60_000) {
     year -= 1;
-    date = new Date(year, months[absolute[2]], Number(absolute[1]), Number(absolute[4] ?? 0), Number(absolute[5] ?? 0));
+    date = new Date(year, months[absolute.month], Number(absolute.day), Number(absolute.hour ?? 0), Number(absolute.minute ?? 0));
   }
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
@@ -573,30 +577,93 @@ export function resolveFacebookPostAgeFromCache(post: FreshDiscoveredFacebookPos
   return { post: resolvedPost, source: "AGE_CACHE", ageHours, decision: freshnessFailure === null ? "PROCESS" : freshnessFailure === "FACEBOOK_POST_TOO_OLD" ? "TOO_OLD" : "UNKNOWN" };
 }
 
+type FeedTimestampCandidate = { value: string; source: string; bindingMethod: string; machineReadable: boolean; priority: number };
+
+function isFeedDateWithoutTime(value: string): boolean {
+  const normalized = value.trim().toLocaleLowerCase("pl-PL").normalize("NFKD").replace(/\p{M}/gu, "").replace(/\s+/g, " ");
+  if (/^(?:wczoraj|yesterday)$/u.test(normalized)) return true;
+  if (/^\d+\s*(?:min(?:ut(?:a|y|e)?)?|m|godz(?:\.|in(?:a|y|e)?)?|hours?|hrs?|h|dni|dzien|days?|d)(?:\s+temu|\s+ago)?$/u.test(normalized)) return false;
+  return !/\d{1,2}:\d{2}/u.test(normalized)
+    && (/^\d{1,2}\s+\p{L}+(?:\s+\d{4})?$/u.test(normalized) || /^\p{L}+\s+\d{1,2}(?:,?\s+\d{4})?$/u.test(normalized));
+}
+
+function resolveFeedTimestampCandidates(candidates: FeedTimestampCandidate[], nowMs: number): { publishedAt: string | null; selected: FeedTimestampCandidate | null; rejectionReason: FacebookFeedAgeDiagnostic["rejectionReason"] } {
+  const unique = [...new Map(candidates.map((candidate) => [`${candidate.source}:${candidate.value}`, candidate])).values()];
+  const parsed = unique.flatMap((candidate) => {
+    const publishedAt = parseFacebookTimestampValue(candidate.value, nowMs);
+    if (!publishedAt) return [];
+    const timestamp = Date.parse(publishedAt);
+    if (!Number.isFinite(timestamp) || timestamp > nowMs + 5 * 60_000 || timestamp < Date.UTC(2004, 0, 1)) return [];
+    if (!isFeedDateWithoutTime(candidate.value)) return [{ candidate, timestamp, boundaryAmbiguous: false }];
+    const date = new Date(timestamp);
+    const earliest = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0).getTime();
+    const latest = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999).getTime();
+    const threshold = nowMs - FACEBOOK_POST_MAX_AGE_MS;
+    if (earliest <= threshold && latest >= threshold) return [{ candidate, timestamp, boundaryAmbiguous: true }];
+    return [{ candidate, timestamp: latest < threshold ? latest : earliest, boundaryAmbiguous: false }];
+  });
+  if (parsed.length === 0) return { publishedAt: null, selected: null, rejectionReason: unique.length ? "INVALID_TIMESTAMP" : "NO_TIMESTAMP" };
+  const bestPriority = Math.min(...parsed.map((item) => item.candidate.priority));
+  const preferred = parsed.filter((item) => item.candidate.priority === bestPriority);
+  if (preferred.some((item) => item.boundaryAmbiguous)) return { publishedAt: null, selected: null, rejectionReason: "DATE_PRECISION_CROSSES_72H" };
+  const timestamps = [...new Set(preferred.map((item) => item.timestamp))];
+  if (timestamps.length > 1 && Math.max(...timestamps) - Math.min(...timestamps) > 5 * 60_000) return { publishedAt: null, selected: null, rejectionReason: "AMBIGUOUS_TIMESTAMP" };
+  return { publishedAt: new Date(Math.min(...timestamps)).toISOString(), selected: preferred[0].candidate, rejectionReason: null };
+}
+
 export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POSTS_PER_JOB, nowMs = Date.now()): Promise<FreshDiscoveredFacebookPost[]> {
-  const records = await page.locator('a[href*="/groups/"][href*="/posts/"]').evaluateAll((links) => links.map((element) => {
-    const link = element as HTMLAnchorElement;
-    const url = new URL(link.href, location.href);
-    if (url.searchParams.has("comment_id")) return { href: link.href, timestampValues: [] as string[] };
-    // Only timestamps carried by the exact post permalink are trusted here.
-    // Siblings and broad ancestors can belong to comments, attachments or shared posts.
-    const timeElements = [link, ...Array.from(link.querySelectorAll<HTMLElement>("time[datetime],abbr[data-utime],[datetime],[data-utime],[data-timestamp]"))].slice(0, 12);
-    const machineValues: string[] = []; const labelValues: string[] = []; const textValues: string[] = [];
-    const add = (target: string[], value: string | null) => { const trimmed = value?.trim(); if (trimmed && !target.includes(trimmed)) target.push(trimmed); };
-    for (const candidate of timeElements) {
-      add(machineValues, candidate.getAttribute("data-utime"));
-      add(machineValues, candidate.getAttribute("datetime"));
-      add(machineValues, candidate.getAttribute("data-timestamp"));
-      add(labelValues, candidate.getAttribute("aria-label"));
-      add(labelValues, candidate.getAttribute("title"));
-      add(textValues, candidate.textContent);
-    }
-    return { href: link.href, timestampValues: [...machineValues, ...labelValues, ...textValues] };
-  }));
+  const records = await page.locator('a[href*="/groups/"][href*="/posts/"]').evaluateAll((links) => {
+    type Candidate = { value: string; source: string; bindingMethod: string; machineReadable: boolean; priority: number };
+    type Record = { href: string; candidates: Candidate[]; rejectionReason: "COMMENT_CONTEXT" | "SHARED_OR_ATTACHMENT_CONTEXT" | "ADJACENT_POST_AMBIGUITY" | null };
+    const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/\/groups\/[^/]+\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
+    const marker = (element: Element) => [element.getAttribute("role"), element.getAttribute("data-testid"), element.getAttribute("data-pagelet"), element.getAttribute("aria-label")].filter(Boolean).join(" ").toLocaleLowerCase("pl-PL");
+    const pathHas = (element: Element, pattern: RegExp) => { for (let current: Element | null = element, depth = 0; current && depth < 12; current = current.parentElement, depth += 1) if (pattern.test(marker(current))) return true; return false; };
+    const nestedArticle = (element: Element) => { const article = element.closest('[role="article"]'); return Boolean(article?.parentElement?.closest('[role="article"]')); };
+    const commentContext = (element: Element) => nestedArticle(element) || pathHas(element, /comment|reply|komentar|odpowied/i);
+    const sharedContext = (element: Element) => pathHas(element, /attachment|shared|reshar|substory|media.?overlay|photo.?viewer/i);
+    const add = (list: Candidate[], value: string | null, source: string, bindingMethod: string, machineReadable: boolean, priority: number) => {
+      const trimmed = value?.trim(); if (trimmed && trimmed.length <= 160 && !list.some((item) => item.source === source && item.value === trimmed)) list.push({ value: trimmed, source, bindingMethod, machineReadable, priority });
+    };
+    const looksLikeTimestampText = (value: string | null) => {
+      const normalized = value?.trim().toLocaleLowerCase("pl-PL").normalize("NFKD").replace(/\p{M}/gu, "").replace(/\s+/g, " ") ?? "";
+      return /^(?:wczoraj|yesterday)(?:\s+(?:(?:o|at)\s+)?\d{1,2}:\d{2})?$/u.test(normalized)
+        || /^\d+\s*(?:min(?:ut(?:a|y)?)?|m|godz(?:in(?:a|y)?)?|godz\.?|h|dni|dzien|d|minutes?|mins?|hours?|hrs?|days?)(?:\s+temu|\s+ago)?$/u.test(normalized)
+        || /^\d{1,2}\s+\p{L}+(?:\s+\d{4})?(?:\s+(?:(?:o|at)\s+)?\d{1,2}:\d{2})?$/u.test(normalized)
+        || /^\p{L}+\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:(?:o|at)\s+)?\d{1,2}:\d{2})?$/u.test(normalized);
+    };
+    const collectFromNode = (list: Candidate[], node: Element, sourcePrefix: string, bindingMethod: string, allowText: boolean) => {
+      for (const attribute of Array.from(node.attributes)) if (/^(?:datetime|data-(?:utime|timestamp|time|date))$/i.test(attribute.name)) add(list, attribute.value, `${sourcePrefix}_MACHINE`, bindingMethod, true, 0);
+      add(list, node.getAttribute("aria-label"), `${sourcePrefix}_ARIA_LABEL`, bindingMethod, false, 1);
+      add(list, node.getAttribute("title"), `${sourcePrefix}_TITLE`, bindingMethod, false, 1);
+      if (allowText && looksLikeTimestampText(node.textContent)) add(list, node.textContent, `${sourcePrefix}_TEXT`, bindingMethod, false, 2);
+    };
+    return links.map((element): Record => {
+      const link = element as HTMLAnchorElement; const url = new URL(link.href, location.href); const postId = postIdFromHref(link.href);
+      if (!postId || url.searchParams.has("comment_id") || commentContext(link)) return { href: link.href, candidates: [], rejectionReason: "COMMENT_CONTEXT" };
+      if (sharedContext(link)) return { href: link.href, candidates: [], rejectionReason: "SHARED_OR_ATTACHMENT_CONTEXT" };
+      const candidates: Candidate[] = [];
+      collectFromNode(candidates, link, "PERMALINK", "EXACT_PERMALINK", true);
+      for (const node of Array.from(link.querySelectorAll<HTMLElement>('time,abbr,[datetime],[data-utime],[data-timestamp],[data-time],[data-date],[aria-label],[title]')).slice(0, 30)) {
+        if (!commentContext(node) && !sharedContext(node)) collectFromNode(candidates, node, "PERMALINK_DESCENDANT", "EXACT_PERMALINK", node.matches("time,abbr"));
+      }
+      let foundExactRoot = false; let sawAdjacentPosts = false;
+      for (let root = link.parentElement, depth = 0; root && depth < 10 && root !== document.body; root = root.parentElement, depth += 1) {
+        if (commentContext(root) || sharedContext(root)) continue;
+        const ids = new Set(Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).filter((anchor) => { try { return !new URL(anchor.href, location.href).searchParams.has("comment_id"); } catch { return false; } }).map((anchor) => postIdFromHref(anchor.href)).filter((id): id is string => Boolean(id)));
+        if (ids.size !== 1 || !ids.has(postId)) { if (ids.size > 1) sawAdjacentPosts = true; continue; }
+        const nodes = Array.from(root.querySelectorAll<HTMLElement>('time,abbr,[datetime],[data-utime],[data-timestamp],[data-time],[data-date],a[aria-label],a[title],span[aria-label],span[title],span[dir="auto"]')).slice(0, 80);
+        const safeNodes = nodes.filter((node) => !commentContext(node) && !sharedContext(node) && (!node.closest('a[href*="/groups/"][href*="/posts/"]') || postIdFromHref(node.closest<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')!.href) === postId));
+        if (safeNodes.length === 0) continue;
+        for (const node of safeNodes) collectFromNode(candidates, node, "ROOT_STORY", "EXACT_COMMON_ROOT_STORY", node.matches("time,abbr,span[dir=auto]") && (node.textContent?.trim().length ?? 0) <= 40);
+        foundExactRoot = true; break;
+      }
+      return { href: link.href, candidates, rejectionReason: candidates.length ? null : sawAdjacentPosts && !foundExactRoot ? "ADJACENT_POST_AMBIGUITY" : null };
+    });
+  });
   const requestedPostIds = [...new Set(records.map((record) => canonicalFacebookPostUrl(record.href)?.postId).filter((postId): postId is string => Boolean(postId)))];
   const structuredValues = await page.evaluate((postIds) => {
     const requested = new Set(postIds);
-    const result: Record<string, string[]> = {};
+    const result: Record<string, Array<{ value: string; source: string; bindingMethod: string; machineReadable: boolean; priority: number }>> = {};
     const forbiddenPath = /comment|reply|attachment|media|photo|video|share|reshar|recommend|sidebar/i;
     const idKey = /^(?:id|post_id|postId|story_fbid|top_level_post_id)$/;
     const timeKey = /^(?:creation_time|publish_time|timestamp)$/i;
@@ -607,7 +674,7 @@ export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POS
       const directId = entries.find(([key, item]) => idKey.test(key) && (typeof item === "string" || typeof item === "number") && requested.has(String(item)))?.[1];
       if (directId !== undefined && !path.some((part) => forbiddenPath.test(part))) {
         for (const [key, item] of entries) if (timeKey.test(key) && (typeof item === "string" || typeof item === "number")) {
-          const id = String(directId); (result[id] ??= []).push(String(item));
+          const id = String(directId); (result[id] ??= []).push({ value: String(item), source: `STRUCTURED_${key.toUpperCase()}`, bindingMethod: "EXACT_POST_METADATA", machineReadable: true, priority: 0 });
         }
       }
       for (const [key, item] of entries) if (item && typeof item === "object") visit(item, [...path, key], depth + 1);
@@ -623,12 +690,18 @@ export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POS
   for (const record of records) {
     const post = canonicalFacebookPostUrl(record.href);
     if (!post) continue;
-    const parsedValues = [...record.timestampValues, ...(structuredValues[post.postId] ?? [])].map((value) => parseFacebookTimestampValue(value, nowMs)).filter((value): value is string => value !== null);
-    const timestamps = [...new Set(parsedValues.map((value) => Date.parse(value)))].filter(Number.isFinite);
-    const publishedAt = timestamps.length > 0 && Math.max(...timestamps) - Math.min(...timestamps) <= 5 * 60_000 ? new Date(Math.min(...timestamps)).toISOString() : null;
-    const candidate = { ...post, discoveredPublishedAt: publishedAt, freshnessFailure: facebookPostFreshnessFailure(publishedAt, nowMs) };
+    const rawCandidates = [...record.candidates, ...(structuredValues[post.postId] ?? [])];
+    const resolved = resolveFeedTimestampCandidates(rawCandidates, nowMs);
+    const publishedAt = resolved.publishedAt; const freshnessFailure = facebookPostFreshnessFailure(publishedAt, nowMs);
+    const decision = freshnessFailure === null ? "PROCESS" : freshnessFailure === "FACEBOOK_POST_TOO_OLD" ? "TOO_OLD" : "UNKNOWN";
+    const ageHours = publishedAt ? Math.max(0, (nowMs - Date.parse(publishedAt)) / 3_600_000) : null;
+    const diagnosticRejection = resolved.rejectionReason === "NO_TIMESTAMP" && record.rejectionReason
+      ? record.rejectionReason
+      : resolved.rejectionReason ?? record.rejectionReason;
+    const diagnostic: FacebookFeedAgeDiagnostic = { postId: post.postId, candidatesFound: rawCandidates.length, selectedSource: resolved.selected?.source ?? null, bindingMethod: resolved.selected?.bindingMethod ?? null, machineReadable: resolved.selected?.machineReadable ?? false, ageHours: ageHours === null ? null : Math.round(ageHours * 100) / 100, decision, rejectionReason: diagnosticRejection ?? "NO_TIMESTAMP" };
+    const candidate = { ...post, discoveredPublishedAt: publishedAt, freshnessFailure, feedAgeDiagnostic: diagnostic };
     const existing = unique.get(post.postId);
-    if (!existing || existing.freshnessFailure && !candidate.freshnessFailure) unique.set(post.postId, candidate);
+    if (!existing || existing.freshnessFailure && !candidate.freshnessFailure || existing.freshnessFailure && candidate.feedAgeDiagnostic.candidatesFound > (existing.feedAgeDiagnostic?.candidatesFound ?? 0)) unique.set(post.postId, candidate);
   }
   return [...unique.values()].slice(0, limit);
 }
