@@ -50,11 +50,17 @@ test("image failure warning does not prevent listing persistence", async () => {
 });
 
 test("exposes persistence counters without double counting cache reuse", async () => {
-  const diagnostic = { postId: "obs", creationTime: "2026-08-23T10:00:00.000Z", timestampSource: "POST_PAGE_METADATA" as const, publishedAtCandidate: "2026-08-23T10:00:00.000Z", publishedAtPersistAttempted: true, publishedAtPersisted: true, exactBoundCandidates: 5, relevanceAccepted: 1, mirrorAttempted: 5, mirroredCount: 1, persistedImageCount: 1, reasonCodes: [] };
+  const diagnostic = { postId: "obs", creationTime: "2026-08-23T10:00:00.000Z", timestampSource: "POST_PAGE_METADATA" as const, publishedAtCandidate: "2026-08-23T10:00:00.000Z", publishedAtPersistAttempted: true, publishedAtPersisted: true, exactBoundCandidates: 5, relevanceAccepted: 1, mirrorAttempted: 5, mirroredCount: 1, persistedImageCount: 1, imageReasonCode: "NONE", reasonCodes: [] };
   const first = await processFacebookPostBatch([post("obs")], async () => outcome({ persistenceDiagnostics: diagnostic }));
   const reused = await processFacebookPostBatch([{ ...post("obs"), cacheHit: { sourceJobId: "job-1", listingId: "listing-1", analyzedAt: "2026-08-23T10:00:00.000Z", scope: "RUN", outcome: "SELL_PERSISTED" } }], async () => outcome({ status: "reused", listingCreated: false, matched: true, matchCreated: false, imagesMirrored: 0 }));
   assert.deepEqual(first.persistenceDiagnostics[0], diagnostic);
-  assert.equal(reused.persistenceDiagnostics.length, 0);
+  assert.equal(reused.persistenceDiagnostics.length, 1);
+  assert.deepEqual(reused.persistenceDiagnostics[0], {
+    postId: "obs", creationTime: "2026-08-16T10:00:00.000Z", timestampSource: "POST_PAGE",
+    publishedAtCandidate: "2026-08-16T10:00:00.000Z", publishedAtPersistAttempted: false, publishedAtPersisted: false,
+    exactBoundCandidates: 0, relevanceAccepted: 0, mirrorAttempted: 0, mirroredCount: 0, persistedImageCount: 0,
+    imageReasonCode: "NONE", reasonCodes: [],
+  });
 });
 
 test("keeps safe reason codes for persistence failures and count mismatches", async () => {
@@ -63,11 +69,23 @@ test("keeps safe reason codes for persistence failures and count mismatches", as
       postId: "mismatch", creationTime: null, timestampSource: "UNKNOWN", publishedAtCandidate: null,
       publishedAtPersistAttempted: true, publishedAtPersisted: false, exactBoundCandidates: 5,
       relevanceAccepted: 1, mirrorAttempted: 5, mirroredCount: 1, persistedImageCount: 0,
+      imageReasonCode: "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH",
       reasonCodes: ["FACEBOOK_PUBLISHED_AT_PERSIST_FAILED", "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH"],
     },
   }));
   assert.equal(result.persistenceDiagnostics[0].publishedAtPersisted, false);
   assert.deepEqual(result.persistenceDiagnostics[0].reasonCodes, ["FACEBOOK_PUBLISHED_AT_PERSIST_FAILED", "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH"]);
+  assert.equal(result.persistenceDiagnostics[0].imageReasonCode, "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH");
+});
+
+test("always serializes zero observability counters", async () => {
+  const result = await processFacebookPostBatch([post("zero")], async () => outcome());
+  assert.deepEqual(result.persistenceDiagnostics[0], {
+    postId: "zero", creationTime: "2026-08-16T10:00:00.000Z", timestampSource: "POST_PAGE",
+    publishedAtCandidate: "2026-08-16T10:00:00.000Z", publishedAtPersistAttempted: false, publishedAtPersisted: false,
+    exactBoundCandidates: 0, relevanceAccepted: 0, mirrorAttempted: 0, mirroredCount: 0, persistedImageCount: 0,
+    imageReasonCode: "NONE", reasonCodes: [],
+  });
 });
 
 test("matching listing is counted", async () => {

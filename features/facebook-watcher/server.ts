@@ -57,6 +57,7 @@ export type FacebookImportResult = {
     mirrorAttempted: number;
     mirroredCount: number;
     persistedImageCount: number;
+    imageReasonCode: string;
     reasonCodes: string[];
   };
   notProperty?: {
@@ -216,6 +217,7 @@ async function importAutomatedFacebook(input: {
     mirrorAttempted: boundImages.length,
     mirroredCount: imageMirror.stats.uploadedCount,
     persistedImageCount: imageMirror.images.length,
+    imageReasonCode: imageMirror.images.length < relevanceAccepted ? "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH" : "NONE",
     reasonCodes: imageMirror.images.length < relevanceAccepted ? ["FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH"] : [],
   };
   return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics };

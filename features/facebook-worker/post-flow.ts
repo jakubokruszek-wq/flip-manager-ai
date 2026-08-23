@@ -12,6 +12,7 @@ export type FacebookPersistenceDiagnostics = {
   mirrorAttempted: number;
   mirroredCount: number;
   persistedImageCount: number;
+  imageReasonCode: string;
   reasonCodes: string[];
 };
 
@@ -103,7 +104,7 @@ export async function processFacebookPostBatch(
       summary.imagesMirrored += result.imagesMirrored;
       summary.priceDrops += result.priceDrops;
       summary.warnings.push(...result.warnings);
-      if (result.persistenceDiagnostics) summary.persistenceDiagnostics.push(result.persistenceDiagnostics);
+      summary.persistenceDiagnostics.push(result.persistenceDiagnostics ?? createEmptyPersistenceDiagnostics(post));
       if (result.status === "skipped" && result.notProperty && context && summary.skippedDiagnostics.length < 3) {
         summary.skippedDiagnostics.push(createSkippedDiagnostic(post, result.notProperty, context));
       }
@@ -121,6 +122,24 @@ export async function processFacebookPostBatch(
     }
   }
   return summary;
+}
+
+function createEmptyPersistenceDiagnostics(post: FacebookPostSnapshot): FacebookPersistenceDiagnostics {
+  return {
+    postId: post.postId,
+    creationTime: post.publishedAt,
+    timestampSource: post.publishedAt ? "POST_PAGE" : "UNKNOWN",
+    publishedAtCandidate: post.publishedAt,
+    publishedAtPersistAttempted: false,
+    publishedAtPersisted: false,
+    exactBoundCandidates: 0,
+    relevanceAccepted: 0,
+    mirrorAttempted: 0,
+    mirroredCount: 0,
+    persistedImageCount: 0,
+    imageReasonCode: "NONE",
+    reasonCodes: [],
+  };
 }
 
 function isSafeDeterministicSkip(value: FacebookPostImportResult["notProperty"]): boolean {

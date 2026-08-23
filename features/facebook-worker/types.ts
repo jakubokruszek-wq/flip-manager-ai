@@ -259,6 +259,7 @@ export type FacebookCompletionResult = {
     mirrorAttempted: number;
     mirroredCount: number;
     persistedImageCount: number;
+    imageReasonCode: string;
     reasonCodes: string[];
   }>;
   postCache: FacebookPostCacheEntry[];

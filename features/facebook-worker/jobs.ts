@@ -143,7 +143,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
         postId: eligiblePost.postId,
         checkedAt: now,
       });
-      return { status: imported.status, listingId: imported.listingId, listingCreated: imported.listingCreated, listingUpdated: imported.listingUpdated, matched: imported.matched, matchCreated: imported.matchCreated, imagesMirrored: imported.imagesMirrored, priceDrops: imported.priceDrops, warnings: imported.warnings, notProperty: imported.notProperty };
+      return { status: imported.status, listingId: imported.listingId, listingCreated: imported.listingCreated, listingUpdated: imported.listingUpdated, matched: imported.matched, matchCreated: imported.matchCreated, imagesMirrored: imported.imagesMirrored, priceDrops: imported.priceDrops, warnings: imported.warnings, notProperty: imported.notProperty, persistenceDiagnostics: imported.persistenceDiagnostics };
     });
   }, { jobId: input.jobId, sourceScanId });
   if (summary.listingIds.length > 0) await getAlerts();
@@ -200,7 +200,12 @@ async function associateCachedFacebookListing(
   }, { onConflict: "source,source_post_url" });
   if (saved.error) throw new Error(`FACEBOOK_CACHE_METADATA_PERSIST_FAILED: ${saved.error.message}`);
   const matched = await readFacebookCachedMatch((columns) => supabase.from("listing_filter_matches").select(columns).eq("listing_id", input.listingId).eq("search_filter_id", input.filterId).eq("is_current_match", true).maybeSingle());
-  return { status: "reused" as const, listingId: input.listingId, listingCreated: false, listingUpdated: false, matched, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [] };
+  return { status: "reused" as const, listingId: input.listingId, listingCreated: false, listingUpdated: false, matched, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], persistenceDiagnostics: {
+    postId: input.postId, creationTime: input.publishedAt, timestampSource: input.publishedAt ? "POST_PAGE" as const : "UNKNOWN" as const,
+    publishedAtCandidate: input.publishedAt, publishedAtPersistAttempted: false, publishedAtPersisted: false,
+    exactBoundCandidates: 0, relevanceAccepted: 0, mirrorAttempted: 0, mirroredCount: 0, persistedImageCount: 0,
+    imageReasonCode: "CACHE_REUSE", reasonCodes: ["FACEBOOK_CACHE_REUSE"],
+  } };
 }
 
 export async function failFacebookJob(input: { jobId: string; leaseToken: string; workerId: string; errorCode: FacebookFailureCode | string; errorMessage: string }): Promise<void> {
