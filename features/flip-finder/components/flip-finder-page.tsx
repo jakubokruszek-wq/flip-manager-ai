@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
-import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { authenticatedApiFetch } from "@/lib/supabase/authenticated-fetch";
 
 import {
   canRunManualScan,
@@ -843,9 +843,7 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
-  const { data: { session } } = await createSupabaseBrowserClient().auth.getSession();
-  const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
-  const response = await fetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store", headers });
+  const response = await authenticatedApiFetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
   const payload = await readJson(response);
   if (!response.ok || !isScanProgressResponse(payload)) {
     throw new Error(readMessage(payload, "Nie udało się pobrać postępu skanu."));
