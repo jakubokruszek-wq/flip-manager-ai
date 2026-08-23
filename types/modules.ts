@@ -4,6 +4,7 @@ export type FeatureId =
   | "dashboard"
   | "properties"
   | "deals"
+  | "facebookWatcher"
   | "ai"
   | "market"
   | "renovations"

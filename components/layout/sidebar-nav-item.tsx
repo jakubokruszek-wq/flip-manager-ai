@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
+import { isNavigationItemActive } from "@/config/navigation";
 import type { NavItem } from "@/types/navigation";
 
 type SidebarNavItemProps = {
@@ -14,7 +15,7 @@ type SidebarNavItemProps = {
 export function SidebarNavItem({ item, onNavigate }: SidebarNavItemProps) {
   const pathname = usePathname();
   const Icon = item.icon;
-  const isActive = item.href ? pathname === item.href || pathname.startsWith(`${item.href}/`) : false;
+  const isActive = isNavigationItemActive(pathname, item.href);
 
   const itemClassName = cn(
     "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
@@ -34,6 +35,7 @@ export function SidebarNavItem({ item, onNavigate }: SidebarNavItemProps) {
         aria-hidden="true"
       />
       <span className="truncate">{item.title}</span>
+      {item.disabled ? <span className="ml-auto rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide">Wkrótce</span> : null}
     </>
   );
 

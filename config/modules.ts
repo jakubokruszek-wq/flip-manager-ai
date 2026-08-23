@@ -2,6 +2,7 @@ import {
   Brain,
   Building2,
   FileText,
+  Flame,
   Hammer,
   LayoutDashboard,
   LineChart,
@@ -30,6 +31,12 @@ export const modules: ModuleDefinition[] = [
     title: "Flip Finder",
     href: "/flip-finder",
     icon: Sparkles,
+  },
+  {
+    id: "facebookWatcher",
+    title: "Facebook Watcher",
+    href: "/facebook-watcher",
+    icon: Flame,
   },
   {
     id: "ai",
@@ -73,8 +80,10 @@ export function getModuleById(id: FeatureId): ModuleDefinition | undefined {
   return modules.find((module) => module.id === id);
 }
 
-export function getModuleByHref(href: string): ModuleDefinition | undefined {
-  return modules.find((module) => module.href === href);
+export function getModuleByHref(pathname: string): ModuleDefinition | undefined {
+  return modules
+    .filter((module) => pathname === module.href || pathname.startsWith(`${module.href}/`))
+    .sort((left, right) => right.href.length - left.href.length)[0];
 }
 
 export function getModuleTitle(href: string): string {

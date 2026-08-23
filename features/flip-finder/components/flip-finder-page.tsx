@@ -253,7 +253,7 @@ export function FlipFinderPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button nativeButton={false} render={<Link href="/flip-finder/facebook/groups" />} variant="outline">
+          <Button nativeButton={false} render={<Link href="/facebook-watcher/groups" />} variant="outline">
             Dodaj grupę Facebook
           </Button>
           <Button nativeButton={false} render={<Link href="/flip-finder/filters/new" />}>

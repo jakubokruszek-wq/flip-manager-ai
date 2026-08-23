@@ -140,12 +140,17 @@ export function WatchedGroupsPage() {
 
   return (
     <main className="space-y-6">
-      <header>
-        <p className="text-xs font-bold uppercase tracking-[.16em] text-gold">Facebook Group Watcher</p>
-        <h1 className="mt-2 text-3xl font-bold">Obserwowane grupy</h1>
-        <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          Zarządzaj grupami używanymi automatycznie przy następnym normalnym skanie Facebooka.
-        </p>
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[.16em] text-gold">Facebook Group Watcher</p>
+          <h1 className="mt-2 text-3xl font-bold">Obserwowane grupy</h1>
+          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+            Zarządzaj grupami używanymi automatycznie przy następnym normalnym skanie Facebooka.
+          </p>
+        </div>
+        <Button className="min-h-11" nativeButton={false} render={<Link href="/properties/new" />} variant="outline">
+          Import ręczny
+        </Button>
       </header>
 
       <section className="ui-section">
@@ -191,7 +196,7 @@ function GroupSection({ title, empty, groups, onToggle, onEdit, onRemove }: { ti
 }
 
 function GroupCard({ group, onToggle, onEdit, onRemove }: { group: WatchedFacebookGroup; onToggle: (group: WatchedFacebookGroup) => void; onEdit: (group: WatchedFacebookGroup) => void; onRemove: (group: WatchedFacebookGroup) => void }) {
-  return <article className="ui-section"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold">{group.name}</h3><Status value={group.accessStatus} /><span className="rounded-full border px-2 py-1 text-[10px] font-bold uppercase">{group.priority}</span></div><p className="mt-1 text-sm text-muted-foreground">{[group.neighborhood, group.district, group.city].filter(Boolean).join(" • ")}</p><p className="mt-1 break-all text-xs text-muted-foreground">{groupIdentifier(group.url)}</p></div><button aria-label={group.enabled ? "Wstrzymaj grupę" : "Aktywuj grupę"} className="min-h-11 rounded-xl border px-3 text-xs font-bold" onClick={() => onToggle(group)}>{group.enabled ? "Aktywna" : "Wstrzymana"}</button></div><div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4"><Metric label="Importy" value={group.importedPosts} /><Metric label="Nowe dziś" value={group.newToday} /><Metric label="Okazje" value={group.opportunities} /><Metric label="Ostatnie sprawdzenie" value={group.lastCheckedAt ? new Date(group.lastCheckedAt).toLocaleString("pl-PL") : "—"} /></div>{group.accessStatus !== "CONNECTED" ? <p className="mt-4 rounded-xl border border-warning/30 bg-warning/5 p-3 text-sm text-warning">Grupa oczekuje na sprawdzenie przez lokalny Facebook worker.</p> : null}{group.lastError ? <p className="mt-2 text-xs text-danger">{group.lastError}</p> : null}<div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" className="min-h-11" onClick={() => onEdit(group)}><Pencil className="size-4" />Edytuj</Button><Button variant="outline" className="min-h-11" onClick={() => onRemove(group)}><Trash2 className="size-4" />Usuń</Button><a className="flex min-h-11 items-center gap-2 px-2 text-sm font-semibold text-gold" href={group.url} target="_blank" rel="noopener noreferrer">Facebook<ExternalLink className="size-4" /></a><Link className="flex min-h-11 items-center gap-2 px-2 text-sm font-semibold" href="/properties/new">Import ręczny</Link></div></article>;
+  return <article className="ui-section"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="font-bold">{group.name}</h3><Status value={group.accessStatus} /><span className="rounded-full border px-2 py-1 text-[10px] font-bold uppercase">{group.priority}</span></div><p className="mt-1 text-sm text-muted-foreground">{[group.neighborhood, group.district, group.city].filter(Boolean).join(" • ")}</p><p className="mt-1 break-all text-xs text-muted-foreground">{groupIdentifier(group.url)}</p></div><button aria-label={group.enabled ? "Wstrzymaj grupę" : "Aktywuj grupę"} className="min-h-11 rounded-xl border px-3 text-xs font-bold" onClick={() => onToggle(group)}>{group.enabled ? "Aktywna" : "Wstrzymana"}</button></div><div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4"><Metric label="Importy" value={group.importedPosts} /><Metric label="Nowe dziś" value={group.newToday} /><Metric label="Okazje" value={group.opportunities} /><Metric label="Ostatnie sprawdzenie" value={group.lastCheckedAt ? new Date(group.lastCheckedAt).toLocaleString("pl-PL") : "—"} /></div>{group.accessStatus !== "CONNECTED" ? <p className="mt-4 rounded-xl border border-warning/30 bg-warning/5 p-3 text-sm text-warning">Grupa oczekuje na sprawdzenie przez lokalny Facebook worker.</p> : null}{group.lastError ? <p className="mt-2 text-xs text-danger">{group.lastError}</p> : null}<div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" className="min-h-11" onClick={() => onEdit(group)}><Pencil className="size-4" />Edytuj</Button><Button variant="outline" className="min-h-11" onClick={() => onRemove(group)}><Trash2 className="size-4" />Usuń</Button><a className="flex min-h-11 items-center gap-2 px-2 text-sm font-semibold text-gold" href={group.url} target="_blank" rel="noopener noreferrer">Facebook<ExternalLink className="size-4" /></a></div></article>;
 }
 
 function EditDialog({ group, busy, onClose, onSave }: { group: WatchedFacebookGroup; busy: boolean; onClose: () => void; onSave: (group: WatchedFacebookGroup, patch: FacebookGroupManagementPatch) => void }) {
