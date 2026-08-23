@@ -35,6 +35,8 @@ export type FacebookMediaBindingProvenance = (typeof FACEBOOK_MEDIA_BINDING_PROV
 export type FacebookMediaCandidate = {
   url: string;
   expectedPostId: string;
+  /** Canonical post id of the one exact DOM story root that contained this media. */
+  storyRootPostId?: string | null;
   boundPostId: string | null;
   bindingConfidence: number;
   bindingProvenance: FacebookMediaBindingProvenance;

@@ -199,6 +199,46 @@ test("a gallery region containing another post id cannot bind its media to the e
   } finally { await browser.close(); }
 });
 
+test("exact story root prevents neighbouring post media from contaminating the target", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 1200 } });
+    await page.goto("https://www.facebook.com/groups/1/posts/401/");
+    await page.setContent(`<script type="application/json">${JSON.stringify({ post_id: "401", actor: { id: "author-a" }, message: "Post A: Piotrkowska 30 m2" })}</script><main>
+      <article data-testid="story-a" style="width:590px;height:400px"><a href="/groups/1/posts/401/">source A</a><header data-testid="post-author"></header><div data-ad-comet-preview="message">Post A: Piotrkowska 30 m2</div><img src="https://scontent.xx.fbcdn.net/a.jpg" style="display:block;width:590px;height:300px"></article>
+      <article data-testid="story-b" style="width:590px;height:400px"><a href="/groups/1/posts/402/">source B</a><header data-testid="post-author"></header><div data-ad-comet-preview="message">Post B: Plantowa 45 m2</div><img src="https://scontent.xx.fbcdn.net/b.jpg" style="display:block;width:590px;height:300px"></article>
+    </main>`);
+    const region = await captureFacebookPostRegion(page, "401");
+    assert.match(region.authoritativePostText, /Post A/);
+    assert.deepEqual(region.imageUrls, ["https://scontent.xx.fbcdn.net/a.jpg"]);
+    assert.equal(region.mediaCandidates.every((candidate) => candidate.storyRootPostId === "401"), true);
+    await page.goto("https://www.facebook.com/groups/1/posts/402/");
+    await page.setContent(`<script type="application/json">${JSON.stringify({ post_id: "402", actor: { id: "author-b" }, message: "Post B: Plantowa 45 m2" })}</script><main>
+      <article data-testid="story-a" style="width:590px;height:400px"><a href="/groups/1/posts/401/">source A</a><header data-testid="post-author"></header><div data-ad-comet-preview="message">Post A: Piotrkowska 30 m2</div><img src="https://scontent.xx.fbcdn.net/a.jpg" style="display:block;width:590px;height:300px"></article>
+      <article data-testid="story-b" style="width:590px;height:400px"><a href="/groups/1/posts/402/">source B</a><header data-testid="post-author"></header><div data-ad-comet-preview="message">Post B: Plantowa 45 m2</div><img src="https://scontent.xx.fbcdn.net/b.jpg" style="display:block;width:590px;height:300px"></article>
+    </main>`);
+    const targetB = await captureFacebookPostRegion(page, "402");
+    assert.match(targetB.authoritativePostText, /Post B/);
+    assert.deepEqual(targetB.imageUrls, ["https://scontent.xx.fbcdn.net/b.jpg"]);
+  } finally { await browser.close(); }
+});
+
+test("post without media never inherits media from its neighbouring story", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 1000 } });
+    await page.goto("https://www.facebook.com/groups/1/posts/403/");
+    await page.setContent(`<script type="application/json">${JSON.stringify({ post_id: "403", actor: { id: "author-a" }, message: "Post A without images" })}</script><main>
+      <article style="width:590px;height:150px"><a href="/groups/1/posts/403/">source A</a><header data-testid="post-author"></header><div data-ad-comet-preview="message">Post A without images</div></article>
+      <article style="width:590px;height:400px"><a href="/groups/1/posts/404/">source B</a><header data-testid="post-author"></header><div data-ad-comet-preview="message">Post B with images</div><img src="https://scontent.xx.fbcdn.net/b.jpg" style="display:block;width:590px;height:300px"></article>
+    </main>`);
+    const region = await captureFacebookPostRegion(page, "403");
+    assert.match(region.authoritativePostText, /Post A/);
+    assert.deepEqual(region.imageUrls, []);
+    assert.equal(region.mediaCandidates.length, 0);
+  } finally { await browser.close(); }
+});
+
 test("accepts Facebook posts up to 72 hours and rejects older or unknown age", () => {
   const now = Date.UTC(2026, 7, 16, 12, 0, 0);
   const published = (ageMs: number) => new Date(now - ageMs).toISOString();

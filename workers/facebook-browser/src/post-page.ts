@@ -1038,6 +1038,27 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
       for (const signal of contentSignals) addAncestors(signal, main, 7);
       if (mediaAwareAncestor) addAncestors(mediaAwareAncestor, main, 12);
     }
+    // A dedicated page can still render neighbouring feed stories.  Select one
+    // structural root bound to the requested canonical permalink before any
+    // text, time or media candidate is considered.
+    const postIdsIn = (element: Element) => Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]'))
+      .concat(element instanceof HTMLAnchorElement ? [element] : [])
+      .flatMap((link) => new URL(link.href, location.href).pathname.match(/\/posts\/(\d+)/i)?.[1] ?? []);
+    const storyRootForLink = (link: HTMLAnchorElement): Element | null => {
+      let current: Element | null = link;
+      let selected: Element | null = null;
+      while (current && current !== main) {
+        const ids = [...new Set(postIdsIn(current))];
+        if (ids.some((id) => id !== targetPostId)) break;
+        if (ids.length === 1 && ids[0] === targetPostId) selected = current;
+        current = current.parentElement;
+      }
+      return selected;
+    };
+    const exactStoryRoots = [...new Set(links.map(storyRootForLink).filter((root): root is Element => root !== null))];
+    // More than one disjoint root for the exact canonical permalink is an
+    // ambiguity: do not merge data from either root.
+    roots.splice(0, roots.length, ...(exactStoryRoots.length === 1 ? [exactStoryRoots[0]] : []));
     let candidatesAfterSizeFilter = 0;
     let candidatesAfterContentFilter = 0;
     let candidatesAfterCommentFilter = 0;
@@ -1174,6 +1195,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         return [{
           url,
           expectedPostId: targetPostId,
+          storyRootPostId: rootStoryUnique ? targetPostId : null,
           boundPostId: exactRootBinding || unambiguousViewerBinding ? targetPostId : null,
           bindingConfidence: exactRootBinding ? 1 : unambiguousViewerBinding ? 0.95 : 0,
           bindingProvenance,
@@ -1183,7 +1205,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
           classificationConfidence: null,
         }];
       }).filter((candidate, index, all) => all.findIndex((item) => item.url === candidate.url) === index);
-      const imageUrls = mediaCandidates.filter((candidate) => candidate.boundPostId === targetPostId && candidate.rootStoryUnique).map((candidate) => candidate.url);
+      const imageUrls = mediaCandidates.filter((candidate) => candidate.storyRootPostId === targetPostId && candidate.boundPostId === targetPostId && candidate.rootStoryUnique).map((candidate) => candidate.url);
       const time = root.querySelector<HTMLTimeElement>("time[datetime]")?.dateTime ?? null;
       return [{
         rootIndex,
@@ -1548,7 +1570,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
     ? { x: selectedElementBox.x, y: selectedElementBox.y, width: selectedElementBox.width, height: selectedElementBox.height }
     : region.box;
   const mediaCandidates = region.mediaCandidates.slice(0, 5) as FacebookMediaCandidate[];
-  const exactBound = mediaCandidates.filter((candidate) => candidate.boundPostId === postId && candidate.rootStoryUnique);
+  const exactBound = mediaCandidates.filter((candidate) => candidate.storyRootPostId === postId && candidate.boundPostId === postId && candidate.rootStoryUnique);
   logFacebookWorker("FACEBOOK_MEDIA_BINDING_SUMMARY", {
     postId,
     candidates: mediaCandidates.length,
