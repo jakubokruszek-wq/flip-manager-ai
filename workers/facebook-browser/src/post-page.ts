@@ -1058,7 +1058,31 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
     const exactStoryRoots = [...new Set(links.map(storyRootForLink).filter((root): root is Element => root !== null))];
     // More than one disjoint root for the exact canonical permalink is an
     // ambiguity: do not merge data from either root.
-    roots.splice(0, roots.length, ...(exactStoryRoots.length === 1 ? [exactStoryRoots[0]] : []));
+    // On canonical post pages Facebook may omit the permalink anchor from the
+    // rendered story. In that layout the already-qualified media ancestor is
+    // the only safe root signal available. Accept it only when it contains no
+    // foreign post permalink; never fall back to the feed/main wrapper.
+    const targetLink = links.find((link) => {
+      const path = new URL(link.href, location.href).pathname;
+      return postPath.test(path) && !new URL(link.href, location.href).searchParams.has("comment_id");
+    }) ?? null;
+    const targetLinkAncestor = targetLink ? (() => {
+      let current: Element | null = targetLink;
+      let selected: Element | null = null;
+      while (current && current !== main) {
+        if (postIdsIn(current).includes(targetPostId)) selected = current;
+        current = current.parentElement;
+      }
+      return selected;
+    })() : null;
+    const canonicalMediaRoot = dedicatedPageUrlMatches
+      ? (mediaAwareAncestor && mediaAwareAncestor !== main ? mediaAwareAncestor : targetLinkAncestor)
+      : null;
+    roots.splice(0, roots.length, ...(exactStoryRoots.length === 1
+      ? [exactStoryRoots[0]]
+      : exactStoryRoots.length === 0 && canonicalMediaRoot && canonicalMediaRoot !== main
+        ? [canonicalMediaRoot]
+        : []));
     let candidatesAfterSizeFilter = 0;
     let candidatesAfterContentFilter = 0;
     let candidatesAfterCommentFilter = 0;
@@ -1076,7 +1100,9 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
       const containsToolbar = root.matches('[role="toolbar"]') || Boolean(root.querySelector('[role="toolbar"]'));
       const containsForm = root.matches("form") || Boolean(root.querySelector("form"));
       const excludedContainer = root.matches('nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"],form,[role="toolbar"]') || Boolean(root.closest('nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"]'));
-      const sizeAccepted = rect.width >= 280 && rect.width <= 1_200 && rect.height >= 100 && rect.height <= 1_600;
+      const canonicalSizeAccepted = dedicatedPageUrlMatches && root === canonicalMediaRoot
+        && rect.width >= 280 && rect.width <= 1_600 && rect.height > 0;
+      const sizeAccepted = canonicalSizeAccepted || (rect.width >= 280 && rect.width <= 1_200 && rect.height >= 100 && rect.height <= 1_600);
       const rawTextNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"],div[dir="auto"],p,[data-lexical-text="true"]'));
       const rawMedia = Array.from(dedupedPostMedia).filter(
         (element) => element !== root && root.contains(element),
@@ -1212,7 +1238,8 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         score,
         area: rect.width * rect.height,
         visible,
-        validBoundingBox: boxes.length > 0 && rect.width >= 120 && rect.height >= 40 && rect.height <= 1_200,
+        validBoundingBox: boxes.length > 0 && (canonicalSizeAccepted
+          || (rect.width >= 120 && rect.height >= 40 && rect.height <= 1_200)),
         hasContent: visualNodes.length > 0,
         containsCommentSection,
         containsToolbar,

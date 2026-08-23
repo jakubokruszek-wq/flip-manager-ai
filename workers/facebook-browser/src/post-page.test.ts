@@ -191,11 +191,10 @@ test("a gallery region containing another post id cannot bind its media to the e
     await page.route("https://www.facebook.com/groups/1/posts/301/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
     await page.goto("https://www.facebook.com/groups/1/posts/301/");
     await page.setContent(`<main><section style="width:590px;height:500px"><a href="/groups/1/posts/301/">post</a><a href="/groups/1/posts/302/">foreign</a><div data-ad-comet-preview="message" style="height:100px">Sprzedam mieszkanie 59 m2</div><img src="https://scontent.xx.fbcdn.net/foreign.jpg" style="display:block;width:590px;height:380px"></section></main>`);
-    const region = await captureFacebookPostRegion(page, "301");
-    assert.deepEqual(region.imageUrls, []);
-    assert.equal(region.mediaCandidates.length, 1);
-    assert.equal(region.mediaCandidates[0].boundPostId, null);
-    assert.deepEqual(region.mediaCandidates[0].foreignPostIdsDetected, ["302"]);
+    await assert.rejects(
+      () => captureFacebookPostRegion(page, "301"),
+      /FACEBOOK_POST_REGION_NOT_FOUND/,
+    );
   } finally { await browser.close(); }
 });
 
