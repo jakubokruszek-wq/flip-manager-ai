@@ -9,8 +9,11 @@ export type FacebookPersistenceDiagnostics = {
   publishedAtPersisted: boolean;
   exactBoundCandidates: number;
   relevanceAccepted: number;
+  relevanceRejected: number;
   mirrorAttempted: number;
   mirroredCount: number;
+  persistedNewImageCount: number;
+  finalListingImageCount: number;
   persistedImageCount: number;
   imageReasonCode: string;
   reasonCodes: string[];
@@ -134,8 +137,11 @@ function createEmptyPersistenceDiagnostics(post: FacebookPostSnapshot): Facebook
     publishedAtPersisted: false,
     exactBoundCandidates: 0,
     relevanceAccepted: 0,
+    relevanceRejected: 0,
     mirrorAttempted: 0,
     mirroredCount: 0,
+    persistedNewImageCount: 0,
+    finalListingImageCount: 0,
     persistedImageCount: 0,
     imageReasonCode: "NONE",
     reasonCodes: [],

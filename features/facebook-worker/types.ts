@@ -256,8 +256,11 @@ export type FacebookCompletionResult = {
     publishedAtPersisted: boolean;
     exactBoundCandidates: number;
     relevanceAccepted: number;
+    relevanceRejected: number;
     mirrorAttempted: number;
     mirroredCount: number;
+    persistedNewImageCount: number;
+    finalListingImageCount: number;
     persistedImageCount: number;
     imageReasonCode: string;
     reasonCodes: string[];

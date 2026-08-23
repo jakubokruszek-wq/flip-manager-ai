@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exactBoundPropertyImages, facebookMediaBindingSummary, preserveFacebookPublishedAt } from "./facebook-media-binding.ts";
+import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookMediaBindingSummary, preserveFacebookPublishedAt } from "./facebook-media-binding.ts";
 import type { FacebookListingInput } from "./types.ts";
 
 function input(candidates: NonNullable<FacebookListingInput["mediaCandidates"]>): FacebookListingInput {
@@ -30,4 +30,33 @@ test("a later scan without creation time preserves published_at", () => {
   const existing = "2026-08-17T13:18:00.000Z";
   assert.equal(preserveFacebookPublishedAt(null, existing), existing);
   assert.equal(preserveFacebookPublishedAt("2026-08-17T13:18:00.000Z", null), existing);
+});
+
+test("image persistence diagnostics distinguish candidates, new uploads and final listing count", () => {
+  const value = facebookImagePersistenceDiagnostics({
+    postId: "A", creationTime: null, timestampSource: "UNKNOWN", publishedAtCandidate: null,
+    publishedAtPersistAttempted: true, publishedAtPersisted: true, exactBoundCandidates: 5,
+    relevanceAccepted: 1, mirrorAttempted: 1, mirroredCount: 0,
+    existingImages: ["existing"], finalListingImages: ["existing"],
+  });
+  assert.deepEqual(value, {
+    postId: "A", creationTime: null, timestampSource: "UNKNOWN", publishedAtCandidate: null,
+    publishedAtPersistAttempted: true, publishedAtPersisted: true, exactBoundCandidates: 5,
+    relevanceAccepted: 1, relevanceRejected: 4, mirrorAttempted: 1, mirroredCount: 0,
+    persistedNewImageCount: 0, finalListingImageCount: 1, persistedImageCount: 1,
+    imageReasonCode: "NONE", reasonCodes: [],
+  });
+});
+
+test("all accepted images can be mirrored and persisted as new", () => {
+  const value = facebookImagePersistenceDiagnostics({
+    postId: "A", creationTime: null, timestampSource: "UNKNOWN", publishedAtCandidate: null,
+    publishedAtPersistAttempted: true, publishedAtPersisted: true, exactBoundCandidates: 5,
+    relevanceAccepted: 5, mirrorAttempted: 5, mirroredCount: 5,
+    existingImages: [], finalListingImages: ["1", "2", "3", "4", "5"],
+  });
+  assert.equal(value.relevanceRejected, 0);
+  assert.equal(value.persistedNewImageCount, 5);
+  assert.equal(value.finalListingImageCount, 5);
+  assert.equal(value.imageReasonCode, "NONE");
 });

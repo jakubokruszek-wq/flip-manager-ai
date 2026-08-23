@@ -203,7 +203,8 @@ async function associateCachedFacebookListing(
   return { status: "reused" as const, listingId: input.listingId, listingCreated: false, listingUpdated: false, matched, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], persistenceDiagnostics: {
     postId: input.postId, creationTime: input.publishedAt, timestampSource: input.publishedAt ? "POST_PAGE" as const : "UNKNOWN" as const,
     publishedAtCandidate: input.publishedAt, publishedAtPersistAttempted: false, publishedAtPersisted: false,
-    exactBoundCandidates: 0, relevanceAccepted: 0, mirrorAttempted: 0, mirroredCount: 0, persistedImageCount: 0,
+    exactBoundCandidates: 0, relevanceAccepted: 0, relevanceRejected: 0, mirrorAttempted: 0, mirroredCount: 0,
+    persistedNewImageCount: 0, finalListingImageCount: 0, persistedImageCount: 0,
     imageReasonCode: "CACHE_REUSE", reasonCodes: ["FACEBOOK_CACHE_REUSE"],
   } };
 }
