@@ -190,7 +190,7 @@ function parseSourceListing(value: unknown): SourceListing {
     source: "olx", externalListingId: requiredString(row.externalListingId, "externalListingId"), originalUrl, normalizedUrl,
     title: nullableString(row.title), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableString(row.floor),
     pricePerSqm: nullableNumber(row.pricePerSqm), city: nullableString(row.city), district: nullableString(row.district), locationText: nullableString(row.locationText),
-    images: stringArray(row.images).slice(0, 20), thumbnailUrl: nullableString(row.thumbnailUrl), buildingType: nullableString(row.buildingType), description: nullableString(row.description),
+    images: stringArray(row.images).slice(0, 20), thumbnailUrl: nullableString(row.thumbnailUrl), buildingType: nullableString(row.buildingType), description: nullableString(row.description), publishedAt: nullableString(row.publishedAt),
     rawPayload: requireRow(row.rawPayload), contentHash: requiredString(row.contentHash, "contentHash"),
   };
 }

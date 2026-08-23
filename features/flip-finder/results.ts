@@ -54,6 +54,7 @@ export function isFilterMissing<T>(filter: T | null): filter is null {
 
 type SortableResult = Pick<
   FilterResult,
+  | "publishedAt"
   | "lastSeenAt"
   | "price"
   | "pricePerSqm"
@@ -118,21 +119,26 @@ export function parseResultSort(value: string | null): ResultSort {
 }
 
 export function sortResults<T extends SortableResult>(items: T[], sort: ResultSort): T[] {
-  return [...items].sort((left, right) => {
+  return items.map((item, index) => ({ item, index })).sort((leftEntry, rightEntry) => {
+    const left = leftEntry.item;
+    const right = rightEntry.item;
+    let comparison = 0;
     if (sort === "price_asc") {
-      return numericSort(left.price, right.price);
+      comparison = positiveNumericSort(left.price, right.price);
+    } else if (sort === "price_per_sqm_asc") {
+      comparison = positiveNumericSort(left.pricePerSqm, right.pricePerSqm);
+    } else if (sort === "biggest_price_drop") {
+      comparison = descendingNumericSort(left.priceDropAmount, right.priceDropAmount);
+    } else {
+      comparison = publicationSort(left, right);
     }
+    return comparison || leftEntry.index - rightEntry.index;
+  }).map(({ item }) => item);
+}
 
-    if (sort === "price_per_sqm_asc") {
-      return numericSort(left.pricePerSqm, right.pricePerSqm);
-    }
-
-    if (sort === "biggest_price_drop") {
-      return descendingNumericSort(left.priceDropAmount, right.priceDropAmount);
-    }
-
-    return timestamp(right.lastSeenAt) - timestamp(left.lastSeenAt);
-  });
+export function publicationLabel(value: string | null | undefined): string {
+  if (!value || !Number.isFinite(Date.parse(value))) return "Data publikacji: nieznana";
+  return `Opublikowano: ${new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
 }
 
 export function resultLocation(
@@ -153,16 +159,26 @@ export function displayMetric(value: number | null, unit: string): string | null
     : null;
 }
 
-function numericSort(left: number | null, right: number | null): number {
-  if (!isFiniteNumber(left)) {
-    return isFiniteNumber(right) ? 1 : 0;
+function positiveNumericSort(left: number | null, right: number | null): number {
+  if (!isPositiveFiniteNumber(left)) {
+    return isPositiveFiniteNumber(right) ? 1 : 0;
   }
 
-  if (!isFiniteNumber(right)) {
+  if (!isPositiveFiniteNumber(right)) {
     return -1;
   }
 
   return left - right;
+}
+
+function publicationSort(left: SortableResult, right: SortableResult): number {
+  const leftPublished = nullableTimestamp(left.publishedAt);
+  const rightPublished = nullableTimestamp(right.publishedAt);
+  if (leftPublished === null) {
+    return rightPublished === null ? timestamp(right.lastSeenAt) - timestamp(left.lastSeenAt) : 1;
+  }
+  if (rightPublished === null) return -1;
+  return rightPublished - leftPublished;
 }
 
 function descendingNumericSort(left: number | null, right: number | null): number {
@@ -179,6 +195,16 @@ function descendingNumericSort(left: number | null, right: number | null): numbe
 
 function isFiniteNumber(value: number | null): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isPositiveFiniteNumber(value: number | null): value is number {
+  return isFiniteNumber(value) && value > 0;
+}
+
+function nullableTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function timestamp(value: string): number {

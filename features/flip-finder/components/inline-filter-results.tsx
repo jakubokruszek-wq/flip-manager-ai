@@ -17,11 +17,13 @@ import { getPurchaseRecommendation } from "@/features/purchase-recommendation/re
 import {
   filterResultsByText,
   parseResultSort,
+  publicationLabel,
   resultLocation,
   sortResults,
   type FilterResult,
   type ResultSort,
 } from "@/features/flip-finder/results";
+import { activeSourcesSummary, latestActiveScansText, sourceLabel } from "@/features/flip-finder/source-summary";
 import type { SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 
@@ -77,6 +79,8 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     [filteredResults, sort],
   );
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
+  const activeSources = data?.filter.sources ?? [];
+  const historicalSources = (["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
 
   if (error) {
     return <p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</p>;
@@ -84,7 +88,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
 
   return (
     <section aria-label="Oferty dopasowane do aktywnego filtra" className="space-y-4">
-      {data ? <><div className="flex items-center justify-between gap-3"><p className="font-semibold">Znalezione oferty: {renderedResults.length}</p><button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source ? <span className="size-2 rounded-full bg-primary" /> : null}</button><div className="hidden flex-wrap items-center gap-2 sm:flex"><SourceCount label="Razem" value={data.total} active={source === null} onClick={() => setSource(null)} />{(["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={item === "otodom" ? "Otodom" : item === "olx" ? "OLX" : item === "morizon" ? "Morizon" : "Facebook"} value={sourceCounts[item]} active={source === item} onClick={() => setSource(item)} />)}</div></div><p className="text-xs text-muted-foreground">{latestScansText(data.sourceScans)}</p>{filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><div className="mt-5 grid grid-cols-2 gap-2"><SourceCount label="Wszystkie" value={data.total} active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{(["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={item === "otodom" ? "Otodom" : item === "olx" ? "OLX" : item === "morizon" ? "Morizon" : "Facebook"} value={sourceCounts[item]} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />)}</div></div></div> : null}</> : null}
+      {data ? <><div className="flex items-center justify-between gap-3"><div><p className="font-semibold">Znalezione oferty: {renderedResults.length}</p><p className="mt-1 text-xs font-medium text-foreground/80">{activeSourcesSummary(activeSources)}</p></div><button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source ? <span className="size-2 rounded-full bg-primary" /> : null}</button><div className="hidden flex-wrap items-center gap-2 sm:flex"><SourceCount label="Razem" value={data.total} active={source === null} onClick={() => setSource(null)} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => setSource(item)} />)}</div></div><p className="text-xs text-muted-foreground">{latestActiveScansText(data.sourceScans, activeSources)}</p>{historicalSources.length ? <p className="text-xs text-muted-foreground/80">Historyczne wyniki z wyłączonych źródeł: {historicalSources.map((item) => `${sourceLabel(item)} (${sourceCounts[item]})`).join(", ")}</p> : null}{filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><p className="mt-3 text-xs text-muted-foreground">{activeSourcesSummary(activeSources)}</p><div className="mt-5 grid grid-cols-2 gap-2"><SourceCount label="Wszystkie" value={data.total} active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />)}</div></div></div> : null}</> : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <input
           aria-label="Szukaj ofert"
@@ -101,7 +105,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
             onChange={(event) => setSort(parseResultSort(event.target.value))}
             value={sort}
           >
-            <option value="newest">Najnowsze</option>
+            <option value="newest">Najnowsze ogłoszenia</option>
             <option value="price_asc">Najniższa cena</option>
             <option value="price_per_sqm_asc">Najniższa cena/m²</option>
             <option value="biggest_price_drop">Największa obniżka</option>
@@ -328,6 +332,7 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
           <div className="mt-4 space-y-2.5 text-sm text-muted-foreground">
             <p className="flex items-center gap-2 truncate"><MapPin aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span className="truncate">{location}</span></p>
             <p className="flex items-center gap-2"><BedDouble aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span>{measure(result.rooms, "pok.")} <span className="mx-1.5 text-border">•</span> {measure(result.area, "m²")}</span></p>
+            <p className="flex items-center gap-2"><Clock3 aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span className="truncate">{publicationLabel(result.publishedAt)}</span></p>
             <p className="flex items-center gap-2"><Clock3 aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span className="truncate">Ostatnie sprawdzenie: {dateTime(result.lastSeenAt)}</span></p>
           </div>
           <p className="mt-auto pt-4 text-xs font-medium text-muted-foreground/80">Kliknij kartę, aby zobaczyć szczegóły</p>
@@ -424,7 +429,6 @@ function CalculatorResult({ label, value, tone = "neutral" }: { label: string; v
 function AnalysisList({ label, values, empty, accent }: { label: string; values: string[]; empty: string; accent: "emerald" | "amber" | "rose" | "violet" }) { const accentClass = accent === "emerald" ? "border-emerald-500/20 bg-emerald-500/[0.05]" : accent === "amber" ? "border-amber-500/20 bg-amber-500/[0.05]" : accent === "rose" ? "border-rose-500/20 bg-rose-500/[0.05]" : "border-violet-500/20 bg-violet-500/[0.05]"; return <section className={`rounded-2xl border p-4 ${accentClass}`}><h3 className="text-sm font-bold">{label}</h3><ul className="mt-3 space-y-2 text-sm leading-5 text-foreground/80">{values.length ? values.map((value) => <li className="flex gap-2" key={value}><span className="mt-2 size-1.5 shrink-0 rounded-full bg-current/70" />{value}</li>) : <li className="text-muted-foreground">{empty}</li>}</ul></section>; }
 function SourceCount({ label, value, active, onClick }: { label: string; value: number; active: boolean; onClick: () => void }) { return <button aria-pressed={active} className={`min-h-11 rounded-xl border px-3 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary ${active ? "bg-primary text-primary-foreground" : "bg-card"}`} onClick={onClick} type="button">{label}: {value}</button>; }
 function countSources(results: FilterResult[]): Record<FilterResult["source"], number> { return results.reduce((counts, result) => ({ ...counts, [result.source]: counts[result.source] + 1 }), { otodom: 0, olx: 0, morizon: 0, facebook: 0 }); }
-function latestScansText(scans: SearchFilterScan[]): string { const latest = new Map<string, SearchFilterScan>(); for (const scan of scans) { const current = latest.get(scan.source); if (!current || scan.startedAt > current.startedAt) latest.set(scan.source, scan); } return [...latest.values()].map((scan) => { const label = scan.source === "otodom" ? "Otodom" : scan.source === "olx" ? "OLX" : scan.source === "morizon" ? "Morizon" : "Facebook"; if (scan.source === "olx" && scan.status === "pending") return "OLX: oczekuje na lokalny worker"; if (scan.status === "failed") return `${label}: błąd${scan.errorMessage ? ` — ${scan.errorMessage}` : ""}`; return `${label}: sprawdzono ${scan.scannedCount}, dopasowano ${scan.matchedCount}`; }).join(" · "); }
 function Metric({ label, value }: { label: string; value: string }) { return <div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 truncate font-medium">{value}</p></div>; }
 function DetailList({ label, values, empty }: { label: string; values: string[]; empty: string }) { return <div className="mt-4 text-sm"><p className="font-medium">{label}</p><p className="mt-1 text-muted-foreground">{values.length ? values.join(", ") : empty}</p></div>; }
 function SourceBadge({ source }: { source: FilterResult["source"] }) { return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{source === "otodom" ? "Otodom" : source === "olx" ? "OLX" : source === "morizon" ? "Morizon" : "Facebook"}</span>; }

@@ -124,6 +124,14 @@ export function evaluateListingAgainstFilter(
     reject,
   );
 
+  if (filter.city?.trim()) {
+    if (candidate.city === null) {
+      markUnknown("city");
+    } else {
+      reject(normalizeLocation(candidate.city) !== normalizeLocation(filter.city), "city");
+    }
+  }
+
   if (filter.privateOnly) {
     if (candidate.sellerType === null || candidate.sellerType === undefined) {
       markUnknown("sellerType");
@@ -202,4 +210,8 @@ function parseFloor(value: string | null): number | null {
 
 function isPositiveFinite(value: number | null): value is number {
   return value !== null && Number.isFinite(value) && value > 0;
+}
+
+function normalizeLocation(value: string): string {
+  return value.replace(/[łŁ]/g, "l").normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }

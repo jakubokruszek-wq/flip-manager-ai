@@ -13,6 +13,7 @@ import {
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import type { PropertyListing } from "@/features/properties/types/property";
+import { safeFacebookDisplayLocation } from "@/features/facebook-watcher/facebook-location-quality";
 import { createClient } from "@/lib/supabase/server";
 
 type Row = Record<string, unknown>;
@@ -62,6 +63,7 @@ type SnapshotRow = {
   listingId: string;
   price: number | null;
   capturedAt: string;
+  rawData: Row;
 };
 
 export async function getFilterResults(filterId: string): Promise<FilterResultsPayload | null> {
@@ -133,7 +135,7 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
       .in("id", listingIds),
     supabase
       .from("listing_snapshots")
-      .select("listing_id,price,captured_at")
+      .select("listing_id,price,captured_at,raw_data")
       .in("listing_id", listingIds)
       .order("captured_at", { ascending: false }),
   ]);
@@ -180,6 +182,8 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
       },
       latestCompletedScan,
     );
+    const safeLocation = safeFacebookDisplayLocation(listing);
+    const publishedAt = publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? []);
 
     return [
       {
@@ -195,15 +199,16 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
         description: listing.description,
         images: listing.images,
         pricePerSqm: reliablePricePerSqm(listing.pricePerSqm, listing.price, listing.area),
-        locationText: resultLocation(listing.address, listing.district, listing.city),
-        address: listing.address,
-        city: listing.city,
-        district: listing.district,
+        locationText: resultLocation(safeLocation.address, safeLocation.district, safeLocation.city),
+        address: safeLocation.address,
+        city: safeLocation.city,
+        district: safeLocation.district,
         thumbnailUrl: listing.images[0] ?? null,
         originalUrl: listing.originalUrl,
         source: listing.source,
         listingStatus: listing.status,
         isActive: listing.status === "active",
+        publishedAt,
         firstSeenAt: listing.firstSeenAt,
         lastSeenAt: listing.lastSeenAt,
         firstMatchedAt: match.firstMatchedAt,
@@ -299,6 +304,7 @@ function toSnapshotRow(row: Row): SnapshotRow | null {
         listingId,
         price: nullableNumber(row.price),
         capturedAt,
+        rawData: isRow(row.raw_data) ? row.raw_data : {},
       }
     : null;
 }
@@ -360,11 +366,28 @@ function reliablePricePerSqm(
   price: number | null,
   area: number | null,
 ): number | null {
+  if (price !== null && (!Number.isFinite(price) || price < 20_000 || price > 100_000_000)) return null;
   if (storedValue !== null && Number.isFinite(storedValue) && storedValue > 0) {
     return storedValue;
   }
 
   return price !== null && area !== null && price > 0 && area > 0 ? price / area : null;
+}
+
+function publishedAtFromSnapshots(snapshots: SnapshotRow[]): string | null {
+  for (const snapshot of snapshots) {
+    const publishedAt = rawPublishedAt(snapshot.rawData);
+    if (publishedAt) return publishedAt;
+  }
+  return null;
+}
+
+function rawPublishedAt(raw: Row): string | null {
+  for (const key of ["publishedAt", "published_at", "createdAt", "created_at", "createdTime", "creation_time", "postedAt", "posted_at"]) {
+    const parsed = validIsoDate(raw[key]);
+    if (parsed) return parsed;
+  }
+  return null;
 }
 
 function asRows(value: unknown): Row[] {
@@ -377,6 +400,16 @@ function isRow(value: unknown): value is Row {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function validIsoDate(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value < 10_000_000_000 ? value * 1_000 : value;
+    return Number.isFinite(new Date(milliseconds).getTime()) ? new Date(milliseconds).toISOString() : null;
+  }
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
 }
 
 function nullableNumber(value: unknown): number | null {

@@ -114,9 +114,21 @@ function toOlxListing(ad: Record<string, unknown>): PropertySourceListing | null
     thumbnailUrl: images[0] ?? null,
     buildingType: param("builttype"),
     description: text(ad, "description"),
+    publishedAt: dateValue(ad.createdTime ?? ad.createdAt ?? ad.created_at ?? ad.publishedAt ?? ad.creation_time),
     rawPayload: ad,
     contentHash: calculateContentHash(payload),
   };
+}
+
+function dateValue(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value < 10_000_000_000 ? value * 1_000 : value;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
 }
 
 function absoluteOlxUrl(value: string | null): string | null {

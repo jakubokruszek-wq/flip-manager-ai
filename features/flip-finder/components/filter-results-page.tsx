@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   displayMetric,
   parseResultSort,
+  publicationLabel,
   resultLocation,
   sortResults,
   type FilterResult,
@@ -110,7 +111,7 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
               onChange={(event) => setSort(parseResultSort(event.target.value))}
               value={sort}
             >
-              <option value="newest">Najnowsze dopasowania</option>
+              <option value="newest">Najnowsze ogłoszenia</option>
               <option value="price_asc">Najniższa cena</option>
               <option value="price_per_sqm_asc">Najniższa cena za m²</option>
               <option value="biggest_price_drop">Największa obniżka</option>
@@ -190,6 +191,10 @@ function ListingResultCard({ result }: { result: FilterResult }) {
           ) : null}
 
           <dl className="mt-4 grid gap-1 text-xs text-muted-foreground">
+            <div className="flex flex-wrap justify-between gap-x-3">
+              <dt>Data publikacji</dt>
+              <dd>{publicationLabel(result.publishedAt).replace("Opublikowano: ", "")}</dd>
+            </div>
             <div className="flex flex-wrap justify-between gap-x-3">
               <dt>Pierwsze dopasowanie</dt>
               <dd>{formatDateTime(result.firstMatchedAt)}</dd>

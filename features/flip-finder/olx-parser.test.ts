@@ -16,12 +16,14 @@ test("normalizes a minimal PRERENDERED_STATE fixture without storing an OLX page
     params: [{ key: "m", normalizedValue: "50" }, { key: "rooms", normalizedValue: "two" }],
     location: { cityName: "Łódź", districtName: "Bałuty" },
     photos: [],
+    createdTime: "2026-08-22T18:00:00Z",
   }] } } };
   const result = parseOlxHtml(prerenderedHtml(state));
   assert.equal(result.rawItems, 1);
   assert.equal(result.normalizedItems, 1);
   assert.equal(result.listings[0]?.area, 50);
   assert.equal(result.listings[0]?.rooms, 2);
+  assert.equal(result.listings[0]?.publishedAt, "2026-08-22T18:00:00.000Z");
 });
 
 test("accepts an empty ads array as a normal empty result", () => {

@@ -80,6 +80,7 @@ export type ImportedProperty = Pick<PropertyFields, "price" | "area" | "rooms" |
 export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "area" | "rooms" | "floor" | "pricePerSqm" | "city" | "district" | "locationText" | "thumbnailUrl" | "buildingType" | "description"> & {
   /** Optional to keep existing source adapters compatible while allowing gallery persistence. */
   images?: string[];
+  publishedAt?: string | null;
   source: Extract<PropertySource, "otodom" | "olx" | "morizon" | "facebook">;
   externalListingId: string;
   originalUrl: string;
@@ -124,6 +125,7 @@ export type NormalizedFacebookPropertyImport = FacebookCollectorPropertyPayload 
 /** Listing matched by a Flip Finder filter and ready for display. */
 export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "buildingType" | "ownership" | "description" | "images" | "pricePerSqm" | "locationText" | "address" | "city" | "district" | "thumbnailUrl"> & {
   id: string;
+  publishedAt?: string | null;
   originalUrl: string;
   source: PropertyFinderSource;
   listingStatus: PropertyListingStatus;

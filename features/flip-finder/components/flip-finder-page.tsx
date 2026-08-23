@@ -232,9 +232,14 @@ export function FlipFinderPage() {
             Oferty są wyszukiwane wyłącznie według zapisanych filtrów.
           </p>
         </div>
-        <Button nativeButton={false} render={<Link href="/flip-finder/filters/new" />}>
-          Nowy filtr
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button nativeButton={false} render={<Link href="/flip-finder/facebook/groups" />} variant="outline">
+            Dodaj grupę Facebook
+          </Button>
+          <Button nativeButton={false} render={<Link href="/flip-finder/filters/new" />}>
+            Nowy filtr
+          </Button>
+        </div>
       </header>
 
       {activeFilter ? (
@@ -250,7 +255,7 @@ export function FlipFinderPage() {
                 <span>Maks. cena/m²: {activeFilter.maxPricePerSqm !== null ? formatCurrency(activeFilter.maxPricePerSqm) : "Nie ustawiono"}</span>
                 <span>Powierzchnia: {formatAreaRange(activeFilter)}</span>
                 <span>Pokoje: {activeFilter.rooms.length ? activeFilter.rooms.join(", ") : "Nie ustawiono"}</span>
-                <span>Źródła: {activeFilter.sources.map(sourceLabel).join(", ")}</span>
+                <span>Aktywne źródła: {activeFilter.sources.map(sourceLabel).join(", ")}</span>
               </div>
             </div>
             <Button

@@ -120,13 +120,13 @@ function toMorizonListing(offer: Record<string, unknown>, fallbackCity: string |
   const price = number(offer.price); const area = number(atPath(item, ["floorSize", "value"]));
   if (price === null || price <= 0 || area === null || area <= 0 || /\/mieszkania\/[^/]+\/?$/i.test(new URL(url).pathname)) return null;
   const locality = text(address, "addressLocality"); const district = locality && ["bałuty", "górna", "polesie", "śródmieście", "widzew"].includes(normalize(locality)) ? locality : null;
-  return listing("morizon", idFromUrl(url) ?? hash(url), url, text(offer, "name"), price, area, number(item.numberOfRooms), text(item, "floorLevel"), district ? fallbackCity : locality ?? fallbackCity, district, text(item, "description"), imageValues(offer.image), null, offer);
+  return listing("morizon", idFromUrl(url) ?? hash(url), url, text(offer, "name"), price, area, number(item.numberOfRooms), text(item, "floorLevel"), district ? fallbackCity : locality ?? fallbackCity, district, text(item, "description"), imageValues(offer.image), null, offer, text(offer, "datePosted", "datePublished", "dateCreated"));
 }
 
-function listing(source: SourceListing["source"], id: string, url: string, title: string | null, price: number | null, area: number | null, roomCount: number | null, floor: string | null, city: string | null, district: string | null, description: string | null, images: string[], buildingType: string | null, rawPayload: Record<string, unknown>): SourceListing {
+function listing(source: SourceListing["source"], id: string, url: string, title: string | null, price: number | null, area: number | null, roomCount: number | null, floor: string | null, city: string | null, district: string | null, description: string | null, images: string[], buildingType: string | null, rawPayload: Record<string, unknown>, publishedAt: string | null = null): SourceListing {
   const locationText = [district, city].filter(Boolean).join(", ") || null; const normalizedUrl = normalizeOtodomUrl(url);
   const payload = { id, url: normalizedUrl, title, price, area, roomCount, floor, city, district };
-  return { source, externalListingId: id, originalUrl: url, normalizedUrl, title, price, area, rooms: roomCount, floor, pricePerSqm: price !== null && area ? price / area : null, city, district, locationText, images, thumbnailUrl: images[0] ?? null, buildingType, description, rawPayload, contentHash: calculateContentHash(payload) };
+  return { source, externalListingId: id, originalUrl: url, normalizedUrl, title, price, area, rooms: roomCount, floor, pricePerSqm: price !== null && area ? price / area : null, city, district, locationText, images, thumbnailUrl: images[0] ?? null, buildingType, description, publishedAt, rawPayload, contentHash: calculateContentHash(payload) };
 }
 
 function absoluteUrl(value: string | null, base: string, host: string): string | null { if (!value) return null; try { const url = new URL(value, base); return url.hostname === host || url.hostname.endsWith(`.${host}`) ? url.toString() : null; } catch { return null; } }
