@@ -132,7 +132,8 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
       .select(
         "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at",
       )
-      .in("id", listingIds),
+      .in("id", listingIds)
+      .eq("status", "active"),
     supabase
       .from("listing_snapshots")
       .select("listing_id,price,captured_at,raw_data")

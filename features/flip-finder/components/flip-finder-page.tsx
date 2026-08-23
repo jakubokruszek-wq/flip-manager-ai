@@ -343,10 +343,12 @@ export function FlipFinderPage() {
         <ScanDiagnosticsPanel filter={lastScanDiagnostics.filter} response={lastScanDiagnostics.response} />
       ) : null}
 
-      <section aria-label="Statystyki Flip Findera" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      <section aria-label="Statystyki Flip Findera" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-6">
         <StatisticCard label="Aktywne filtry" value={data.summary.activeFilters ?? 0} />
         <StatisticCard label="Wstrzymane filtry" value={data.summary.pausedFilters ?? 0} />
-        <StatisticCard label="Zapisane oferty" value={data.summary.listingsCount ?? 0} />
+        <StatisticCard label="Aktywne oferty" value={data.summary.activeListings ?? 0} />
+        <StatisticCard label="Usunięte / nieaktywne" value={data.summary.removedListings ?? 0} />
+        <StatisticCard label="Łączna historia" value={data.summary.listingsCount ?? 0} />
         <StatisticCard label="Nowe w ostatnim skanie" value={data.summary.newMatches ?? 0} />
       </section>
 

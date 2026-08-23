@@ -40,6 +40,8 @@ export type SearchFilterListResponse = {
     activeFilters: number;
     pausedFilters: number;
     listingsCount: number;
+    activeListings: number;
+    removedListings: number;
     newMatches: number;
   };
 };

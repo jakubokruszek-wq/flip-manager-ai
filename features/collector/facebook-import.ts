@@ -51,7 +51,8 @@ async function upsertListing(supabase: ReturnType<typeof createAdminClient>, pay
     if (isRecord(sameContent) && typeof sameContent.id === "string") return { id: sameContent.id, status: "updated" };
   }
   const title = payload.title ?? payload.content?.split(/\r?\n/, 1)[0].slice(0, 180) ?? "Oferta z Facebooka";
-  const { data, error } = await supabase.from("listings").upsert({ source: "facebook", external_listing_id: payload.externalListingId, original_url: payload.normalizedPostUrl, normalized_url: payload.normalizedPostUrl, title, price: payload.price, area: payload.area, price_per_sqm: payload.pricePerSqm, rooms: payload.rooms, address: payload.location, description: payload.content, images: payload.imageUrls, status: "active", last_seen_at: new Date().toISOString(), content_hash: payload.contentHash }, { onConflict: "source,external_listing_id" }).select("id").single();
+  const seenAt = new Date().toISOString();
+  const { data, error } = await supabase.from("listings").upsert({ source: "facebook", external_listing_id: payload.externalListingId, original_url: payload.normalizedPostUrl, normalized_url: payload.normalizedPostUrl, title, price: payload.price, area: payload.area, price_per_sqm: payload.pricePerSqm, rooms: payload.rooms, address: payload.location, description: payload.content, images: payload.imageUrls, status: "active", removed_at: null, last_seen_at: seenAt, content_hash: payload.contentHash }, { onConflict: "source,external_listing_id" }).select("id").single();
   if (error || !isRecord(data) || typeof data.id !== "string") throw new Error("Nie udało się zapisać oferty Facebooka.");
   return { id: data.id, status: isRecord(exact) && typeof exact.id === "string" ? "updated" : "created" };
 }

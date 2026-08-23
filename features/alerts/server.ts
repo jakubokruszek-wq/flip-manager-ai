@@ -11,7 +11,7 @@ const memoryReadState:Map<string,string>=(globalThis as typeof globalThis&{__fli
 export async function getAlerts():Promise<InvestmentAlert[]>{
   const supabase=createFacebookWatcherAdminClient(); const groups=await listWatchedFacebookGroups(); const priorities=new Map(groups.map(group=>[normalize(group.name),group.priority]));
   const [listingsResult,metadataResult,snapshotsResult]=await Promise.all([
-    supabase.from("listings").select("id,title,description,source,price,area,price_per_sqm,city,district,original_url,flip_score,created_at,first_seen_at").order("created_at",{ascending:false}).limit(500),
+    supabase.from("listings").select("id,title,description,source,price,area,price_per_sqm,city,district,original_url,flip_score,created_at,first_seen_at").eq("status","active").order("created_at",{ascending:false}).limit(500),
     supabase.from("listing_source_metadata").select("listing_id,source_post_url,group_name,collected_at,metadata").eq("source","facebook"),
     supabase.from("listing_snapshots").select("listing_id,price,captured_at").order("captured_at",{ascending:false}).limit(2000),
   ]);

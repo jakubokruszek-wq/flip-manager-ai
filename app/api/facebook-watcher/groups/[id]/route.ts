@@ -1,23 +1,21 @@
+import { createFacebookGroupsApi } from "@/features/facebook-groups/api-handlers";
 import { requireFacebookGroupsUser } from "@/features/facebook-groups/api-auth";
 import { removeWatchedFacebookGroup, updateWatchedFacebookGroupDetails } from "@/features/facebook-groups/server";
 
 type Context = { params: Promise<{ id: string }> };
 
+const api = createFacebookGroupsApi({
+  requireUser: requireFacebookGroupsUser,
+  list: async () => [],
+  add: async () => ({ success: false, duplicate: false, validationError: true, error: "METHOD_NOT_ALLOWED" }),
+  update: updateWatchedFacebookGroupDetails,
+  remove: removeWatchedFacebookGroup,
+});
+
 export async function PATCH(request: Request, { params }: Context) {
-  try {
-    await requireFacebookGroupsUser();
-    return Response.json({ group: await updateWatchedFacebookGroupDetails((await params).id, await request.json()) });
-  } catch (error) { return failure(error, "Aktualizacja grupy nie powiodła się."); }
+  return api.patch((await params).id, request);
 }
 
 export async function DELETE(_request: Request, { params }: Context) {
-  try {
-    await requireFacebookGroupsUser();
-    return Response.json({ group: await removeWatchedFacebookGroup((await params).id) });
-  } catch (error) { return failure(error, "Usunięcie grupy nie powiodło się."); }
-}
-
-function failure(error: unknown, fallback: string) {
-  const message = error instanceof Error ? error.message : fallback;
-  return Response.json({ error: message }, { status: message === "UNAUTHORIZED" ? 401 : 400 });
+  return api.delete((await params).id);
 }

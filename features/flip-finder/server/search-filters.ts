@@ -16,8 +16,8 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
   const supabase = await createClient();
   const [filtersResult, matchesResult, listingsResult, scansResult] = await Promise.all([
     supabase.from("search_filters").select("*").order("updated_at", { ascending: false }),
-    supabase.from("listing_filter_matches").select("search_filter_id"),
-    supabase.from("listings").select("id", { count: "exact", head: true }),
+    supabase.from("listing_filter_matches").select("search_filter_id").eq("is_current_match", true),
+    supabase.from("listings").select("id,status"),
     supabase.from("source_scans").select(
       "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message",
     ),
@@ -81,7 +81,9 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
     summary: {
       activeFilters,
       pausedFilters: filters.length - activeFilters,
-      listingsCount: listingsResult.count ?? 0,
+      listingsCount: asRows(listingsResult.data).length,
+      activeListings: asRows(listingsResult.data).filter((listing) => listing.status === "active").length,
+      removedListings: asRows(listingsResult.data).filter((listing) => listing.status === "removed").length,
       newMatches: filters.reduce((total, filter) => total + filter.newMatches, 0),
     },
   };

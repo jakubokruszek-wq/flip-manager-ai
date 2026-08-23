@@ -33,7 +33,8 @@ export async function proxy(request: NextRequest) {
     },
   );
 
-  await supabase.auth.getSession();
+  // Validate remotely and rotate cookies once before route handlers execute.
+  await supabase.auth.getUser();
 
   return response;
 }

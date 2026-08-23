@@ -98,11 +98,11 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
 
   if (!listingId) {
     const storedUrl = extracted.originalUrl ?? `https://www.facebook.com/flip-manager/manual/${hash}`;
-    const { data, error } = await supabase.from("listings").insert({ source: "facebook", external_listing_id: externalId, original_url: storedUrl, normalized_url: extracted.originalUrl, title: extracted.title, price: extracted.price, area: extracted.area, price_per_sqm: pricePerSqm, rooms: extracted.rooms, floor: extracted.floor === null ? null : String(extracted.floor), address: extracted.street, district: extracted.district, city: extracted.city, description: extracted.description, images: [], status: "active", content_hash: hash, flip_score: score, last_seen_at: now }).select("id").single();
+    const { data, error } = await supabase.from("listings").insert({ source: "facebook", external_listing_id: externalId, original_url: storedUrl, normalized_url: extracted.originalUrl, title: extracted.title, price: extracted.price, area: extracted.area, price_per_sqm: pricePerSqm, rooms: extracted.rooms, floor: extracted.floor === null ? null : String(extracted.floor), address: extracted.street, district: extracted.district, city: extracted.city, description: extracted.description, images: [], status: "active", removed_at: null, content_hash: hash, flip_score: score, last_seen_at: now }).select("id").single();
     if (error || !data?.id) throw new Error(`Nie udało się zapisać oferty Facebooka: ${error?.message ?? "brak ID"}`);
     listingId = String(data.id);
   } else if (!crossSourceMatch) {
-    const { error } = await supabase.from("listings").update({ title: extracted.title, price: extracted.price, area: extracted.area, price_per_sqm: pricePerSqm, rooms: extracted.rooms, district: extracted.district, city: extracted.city, description: extracted.description, flip_score: score, last_seen_at: now }).eq("id", listingId);
+    const { error } = await supabase.from("listings").update({ title: extracted.title, price: extracted.price, area: extracted.area, price_per_sqm: pricePerSqm, rooms: extracted.rooms, district: extracted.district, city: extracted.city, description: extracted.description, status: "active", removed_at: null, flip_score: score, last_seen_at: now }).eq("id", listingId);
     if (error) throw new Error(`Nie udało się zaktualizować oferty: ${error.message}`);
   }
   const imageMirror = await mirrorFacebookImages({ listingId, imageUrls: extracted.images, existingImages });
