@@ -49,6 +49,27 @@ test("image failure warning does not prevent listing persistence", async () => {
   assert.deepEqual(result.warnings, ["image fetch failed"]);
 });
 
+test("exposes persistence counters without double counting cache reuse", async () => {
+  const diagnostic = { postId: "obs", creationTime: "2026-08-23T10:00:00.000Z", timestampSource: "POST_PAGE_METADATA" as const, publishedAtCandidate: "2026-08-23T10:00:00.000Z", publishedAtPersistAttempted: true, publishedAtPersisted: true, exactBoundCandidates: 5, relevanceAccepted: 1, mirrorAttempted: 5, mirroredCount: 1, persistedImageCount: 1, reasonCodes: [] };
+  const first = await processFacebookPostBatch([post("obs")], async () => outcome({ persistenceDiagnostics: diagnostic }));
+  const reused = await processFacebookPostBatch([{ ...post("obs"), cacheHit: { sourceJobId: "job-1", listingId: "listing-1", analyzedAt: "2026-08-23T10:00:00.000Z", scope: "RUN", outcome: "SELL_PERSISTED" } }], async () => outcome({ status: "reused", listingCreated: false, matched: true, matchCreated: false, imagesMirrored: 0 }));
+  assert.deepEqual(first.persistenceDiagnostics[0], diagnostic);
+  assert.equal(reused.persistenceDiagnostics.length, 0);
+});
+
+test("keeps safe reason codes for persistence failures and count mismatches", async () => {
+  const result = await processFacebookPostBatch([post("mismatch")], async () => outcome({
+    persistenceDiagnostics: {
+      postId: "mismatch", creationTime: null, timestampSource: "UNKNOWN", publishedAtCandidate: null,
+      publishedAtPersistAttempted: true, publishedAtPersisted: false, exactBoundCandidates: 5,
+      relevanceAccepted: 1, mirrorAttempted: 5, mirroredCount: 1, persistedImageCount: 0,
+      reasonCodes: ["FACEBOOK_PUBLISHED_AT_PERSIST_FAILED", "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH"],
+    },
+  }));
+  assert.equal(result.persistenceDiagnostics[0].publishedAtPersisted, false);
+  assert.deepEqual(result.persistenceDiagnostics[0].reasonCodes, ["FACEBOOK_PUBLISHED_AT_PERSIST_FAILED", "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH"]);
+});
+
 test("matching listing is counted", async () => {
   const result = await processFacebookPostBatch([post("4")], async () => outcome({ matched: true }));
   assert.equal(result.matched, 1);

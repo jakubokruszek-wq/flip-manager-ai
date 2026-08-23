@@ -45,6 +45,20 @@ export type FacebookImportResult = {
   imagesMirrored: number;
   priceDrops: number;
   warnings: string[];
+  persistenceDiagnostics?: {
+    postId: string | null;
+    creationTime: string | null;
+    timestampSource: "POST_PAGE_METADATA" | "POST_PAGE" | "UNKNOWN";
+    publishedAtCandidate: string | null;
+    publishedAtPersistAttempted: boolean;
+    publishedAtPersisted: boolean;
+    exactBoundCandidates: number;
+    relevanceAccepted: number;
+    mirrorAttempted: number;
+    mirroredCount: number;
+    persistedImageCount: number;
+    reasonCodes: string[];
+  };
   notProperty?: {
     realEstateLanguage: boolean;
     structuredFieldCount: number;
@@ -188,7 +202,23 @@ async function importAutomatedFacebook(input: {
   console.info("FACEBOOK_MEDIA_BINDING_SUMMARY", { postId: externalId, ...bindingSummary, mirrored: imageMirror.images.length });
   console.info("FACEBOOK_PUBLICATION_DATE", { postId: externalId, source: normalized.publishedAt ? "FACEBOOK_CREATION_TIME" : previousSource.publishedAt ? "EXISTING_DATA" : "UNKNOWN", exact: Boolean(normalized.publishedAt), persisted: persistedPublishedAt });
   await recordFacebookGroupImport(context.groupName, listingCreated, score >= 85 || effective.sellerType === "private" && effective.condition === "renovation");
-  return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)] };
+  const exactBoundCandidates = normalized.mediaCandidates?.filter((candidate) => candidate.boundPostId === externalId && candidate.storyRootPostId === externalId && candidate.rootStoryUnique).length ?? boundImages.length;
+  const relevanceAccepted = normalized.imageAssessments?.filter((assessment) => assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8).length ?? effective.images.length;
+  const persistenceDiagnostics = {
+    postId: externalId,
+    creationTime: normalized.publishedAt ?? null,
+    timestampSource: normalized.publishedAt ? "POST_PAGE_METADATA" as const : "UNKNOWN" as const,
+    publishedAtCandidate: normalized.publishedAt ?? null,
+    publishedAtPersistAttempted: true,
+    publishedAtPersisted: !metadata.error,
+    exactBoundCandidates,
+    relevanceAccepted,
+    mirrorAttempted: boundImages.length,
+    mirroredCount: imageMirror.stats.uploadedCount,
+    persistedImageCount: imageMirror.images.length,
+    reasonCodes: imageMirror.images.length < relevanceAccepted ? ["FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH"] : [],
+  };
+  return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics };
 }
 
 async function upsertAutomatedMatch(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string, context: FacebookAutomatedImportContext, unknownFields: string[], matchedAt: string): Promise<boolean> {

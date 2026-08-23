@@ -1,5 +1,20 @@
 import type { FacebookIntentSource, FacebookListingIntent, FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
 
+export type FacebookPersistenceDiagnostics = {
+  postId: string | null;
+  creationTime: string | null;
+  timestampSource: "POST_PAGE_METADATA" | "POST_PAGE" | "UNKNOWN";
+  publishedAtCandidate: string | null;
+  publishedAtPersistAttempted: boolean;
+  publishedAtPersisted: boolean;
+  exactBoundCandidates: number;
+  relevanceAccepted: number;
+  mirrorAttempted: number;
+  mirroredCount: number;
+  persistedImageCount: number;
+  reasonCodes: string[];
+};
+
 export type FacebookPostImportResult = {
   status: "created" | "updated" | "reused" | "skipped";
   listingId: string | null;
@@ -10,6 +25,7 @@ export type FacebookPostImportResult = {
   imagesMirrored: number;
   priceDrops: number;
   warnings: string[];
+  persistenceDiagnostics?: FacebookPersistenceDiagnostics;
   notProperty?: {
     realEstateLanguage: boolean;
     structuredFieldCount: number;
@@ -52,6 +68,7 @@ export type FacebookPostFlowSummary = {
   listingIds: string[];
   warnings: string[];
   skippedDiagnostics: FacebookSkippedDiagnostic[];
+  persistenceDiagnostics: FacebookPersistenceDiagnostics[];
   reusablePosts: Array<
     | { postId: string; listingId: string; publishedAt: string; outcome: "SELL_PERSISTED" }
     | { postId: string; listingId: null; publishedAt: string; outcome: "DETERMINISTIC_SKIP"; reasonCode: FacebookSkipReasonCode; listingIntent: FacebookListingIntent; intentSource: FacebookIntentSource }
@@ -66,7 +83,7 @@ export async function processFacebookPostBatch(
   const summary: FacebookPostFlowSummary = {
     postsReceived: posts.length, postsProcessed: 0, listingsCreated: 0, listingsUpdated: 0,
     listingsSkipped: 0, matched: 0, newMatches: 0, extractionFailed: 0,
-    imagesMirrored: 0, priceDrops: 0, errors: 0, listingIds: [], warnings: [], skippedDiagnostics: [], reusablePosts: [],
+    imagesMirrored: 0, priceDrops: 0, errors: 0, listingIds: [], warnings: [], skippedDiagnostics: [], persistenceDiagnostics: [], reusablePosts: [],
   };
 
   for (const post of posts) {
@@ -86,6 +103,7 @@ export async function processFacebookPostBatch(
       summary.imagesMirrored += result.imagesMirrored;
       summary.priceDrops += result.priceDrops;
       summary.warnings.push(...result.warnings);
+      if (result.persistenceDiagnostics) summary.persistenceDiagnostics.push(result.persistenceDiagnostics);
       if (result.status === "skipped" && result.notProperty && context && summary.skippedDiagnostics.length < 3) {
         summary.skippedDiagnostics.push(createSkippedDiagnostic(post, result.notProperty, context));
       }

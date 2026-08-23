@@ -247,6 +247,20 @@ export type FacebookCompletionResult = {
     reason_code: FacebookSkipReasonCode;
     text_preview: string;
   }>;
+  persistenceDiagnostics: Array<{
+    postId: string | null;
+    creationTime: string | null;
+    timestampSource: "POST_PAGE_METADATA" | "POST_PAGE" | "UNKNOWN";
+    publishedAtCandidate: string | null;
+    publishedAtPersistAttempted: boolean;
+    publishedAtPersisted: boolean;
+    exactBoundCandidates: number;
+    relevanceAccepted: number;
+    mirrorAttempted: number;
+    mirroredCount: number;
+    persistedImageCount: number;
+    reasonCodes: string[];
+  }>;
   postCache: FacebookPostCacheEntry[];
   ageCache: FacebookAgeCacheEntry[];
   performance: FacebookPerformanceMetrics;
