@@ -25,6 +25,19 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
           {progress.facebook.totalGroups > 0 ? <ProgressDetail label="Facebook" value={`${progress.facebook.completedGroups}/${progress.facebook.totalGroups} grup · ${progress.facebook.processed}/${progress.facebook.discovered} postów`} /> : null}
           {progress.olx.status ? <ProgressDetail label="OLX" value={`${jobStatusLabel(progress.olx.status)} · raw ${progress.olx.raw} · normalized ${progress.olx.normalized}`} /> : null}
         </div>
+        {progress.facebook.groups.length > 0 ? (
+          <div className="mt-4 space-y-2" aria-label="Facebook group statuses">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Facebook — grupy</p>
+            {progress.facebook.groups.map((group) => (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-card/50 px-3 py-2 text-sm" key={group.jobId}>
+                <span className="min-w-0 truncate font-medium" title={group.groupName}>{group.groupName}</span>
+                <span className="rounded-full bg-muted px-2 py-1 text-xs font-semibold">{jobStatusLabel(group.status)}</span>
+                <span className="text-xs text-muted-foreground">{group.processed}/{group.discovered} posts</span>
+                {group.errorMessage ? <span className="basis-full text-xs text-destructive">{group.errorMessage}</span> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {progress.errors.length > 0 ? <div className="mt-4 rounded-xl border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive">{progress.errors.slice(0, 3).map((message) => <p key={message}>{message}</p>)}</div> : null}
       </div>
 

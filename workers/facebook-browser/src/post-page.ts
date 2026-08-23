@@ -577,6 +577,24 @@ export function resolveFacebookPostAgeFromCache(post: FreshDiscoveredFacebookPos
   return { post: resolvedPost, source: "AGE_CACHE", ageHours, decision: freshnessFailure === null ? "PROCESS" : freshnessFailure === "FACEBOOK_POST_TOO_OLD" ? "TOO_OLD" : "UNKNOWN" };
 }
 
+/**
+ * Debug-target runs deliberately inspect one explicit post.  Keep the normal
+ * freshness resolver and its cache semantics untouched; only the exact
+ * command-line target may continue past the age gate.
+ */
+export function applyFacebookTargetedFreshnessBypass(
+  resolution: FacebookPostAgeResolution,
+  debugPostId: string | null,
+): FacebookPostAgeResolution {
+  if (!debugPostId || resolution.post.postId !== debugPostId) return resolution;
+
+  return {
+    ...resolution,
+    post: { ...resolution.post, freshnessFailure: null },
+    decision: "PROCESS",
+  };
+}
+
 type FeedTimestampCandidate = { value: string; source: string; bindingMethod: string; machineReadable: boolean; priority: number };
 
 function isFeedDateWithoutTime(value: string): boolean {

@@ -16,6 +16,6 @@ export async function PATCH(request: Request, { params }: Context) {
   return api.patch((await params).id, request);
 }
 
-export async function DELETE(_request: Request, { params }: Context) {
-  return api.delete((await params).id);
+export async function DELETE(request: Request, { params }: Context) {
+  return api.delete((await params).id, request);
 }

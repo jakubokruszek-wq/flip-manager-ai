@@ -4,7 +4,7 @@ import { createCachedFacebookPostSnapshot, emptyFacebookPerformanceMetrics, part
 import { ControlledFacebookFailure } from "./errors.ts";
 import { assertWorkerFacebookGroupUrl } from "./group-reader.ts";
 import { logFacebookWorker } from "./logger.ts";
-import { captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
 
 export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false, debugPostId: string | null = null, lookupCache?: (postIds: string[], signal: AbortSignal) => Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }>) {
@@ -102,7 +102,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       logFacebookWorker("FACEBOOK_POST_DISCOVERED", { groupId: group.id, postId: post.postId, order, freshnessFailure: post.freshnessFailure });
       const cachedAge = !debugPostId && !post.discoveredPublishedAt ? ageCacheHits[post.postId] : undefined;
       let dedicatedPageOpenedForAge = false;
-      const age = cachedAge ? resolveFacebookPostAgeFromCache(post, cachedAge, ageReferenceMs) : await resolveFacebookPostAge(post, ageReferenceMs, async () => {
+      const resolvedAge = cachedAge ? resolveFacebookPostAgeFromCache(post, cachedAge, ageReferenceMs) : await resolveFacebookPostAge(post, ageReferenceMs, async () => {
           performance.agePageFallbacks += 1;
           performance.pageOpens += await openFacebookPostPage(page, post.permalink, group.id, post.postId) ? 1 : 0;
           dedicatedPageOpenedForAge = true;
@@ -111,9 +111,10 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
           await heartbeat?.();
           return detectedAge;
         });
+      const age = applyFacebookTargetedFreshnessBypass(resolvedAge, debugPostId);
       if (cachedAge) performance.ageCacheHits += 1;
       if (age.decision === "TOO_OLD" && (post.discoveredPublishedAt || cachedAge)) performance.oldPostsSkippedBeforePageOpen += 1;
-      ageCache.push({ postId: post.postId, checkedAt: cachedAge?.checkedAt ?? new Date(ageReferenceMs).toISOString(), publishedAt: age.post.discoveredPublishedAt, decision: age.decision === "PROCESS" ? "FRESH" : age.decision, source: cachedAge?.source ?? (age.source === "AGE_CACHE" ? "POST_PAGE" : age.source) });
+      if (!debugPostId) ageCache.push({ postId: post.postId, checkedAt: cachedAge?.checkedAt ?? new Date(ageReferenceMs).toISOString(), publishedAt: resolvedAge.post.discoveredPublishedAt, decision: resolvedAge.decision === "PROCESS" ? "FRESH" : resolvedAge.decision, source: cachedAge?.source ?? (resolvedAge.source === "AGE_CACHE" ? "POST_PAGE" : resolvedAge.source) });
       logFacebookWorker("FACEBOOK_POST_AGE_DETECTED", { postId: post.postId, source: age.source, ageHours: age.ageHours === null ? null : Math.round(age.ageHours * 100) / 100, decision: age.decision });
       if (age.post.freshnessFailure) {
         if (age.post.freshnessFailure === "FACEBOOK_POST_TOO_OLD") tooOldCount += 1;

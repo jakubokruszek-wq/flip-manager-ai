@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ExternalLink, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/lib/supabase/client";
 import {
   Dialog,
   DialogContent,
@@ -37,7 +38,7 @@ export function WatchedGroupsPage() {
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    const response = await fetch("/api/facebook-watcher/groups", { cache: "no-store" });
+    const response = await facebookGroupsFetch("/api/facebook-watcher/groups", { cache: "no-store" });
     const body = (await response.json()) as { groups?: WatchedFacebookGroup[]; error?: string };
     if (!response.ok) throw new Error(body.error ?? "Nie udało się pobrać grup.");
     setGroups(body.groups ?? []);
@@ -45,7 +46,7 @@ export function WatchedGroupsPage() {
 
   useEffect(() => {
     let active = true;
-    void fetch("/api/facebook-watcher/groups", { cache: "no-store" })
+    void facebookGroupsFetch("/api/facebook-watcher/groups", { cache: "no-store" })
       .then(async (response) => ({
         response,
         body: (await response.json()) as { groups?: WatchedFacebookGroup[]; error?: string },
@@ -66,7 +67,7 @@ export function WatchedGroupsPage() {
     setBusy(true);
     clearFeedback();
     try {
-      const response = await fetch("/api/facebook-watcher/groups", {
+      const response = await facebookGroupsFetch("/api/facebook-watcher/groups", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(form),
@@ -93,7 +94,7 @@ export function WatchedGroupsPage() {
     setBusy(true);
     clearFeedback();
     try {
-      const response = await fetch(`/api/facebook-watcher/groups/${group.id}`, {
+      const response = await facebookGroupsFetch(`/api/facebook-watcher/groups/${group.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
@@ -115,7 +116,7 @@ export function WatchedGroupsPage() {
     setBusy(true);
     clearFeedback();
     try {
-      const response = await fetch(`/api/facebook-watcher/groups/${removing.id}`, { method: "DELETE" });
+      const response = await facebookGroupsFetch(`/api/facebook-watcher/groups/${removing.id}`, { method: "DELETE" });
       const body = (await response.json()) as { group?: WatchedFacebookGroup; error?: string };
       if (!response.ok || !body.group) throw new Error(body.error ?? "Nie udało się usunąć grupy.");
       replaceGroup(body.group);
@@ -206,6 +207,12 @@ function EditDialog({ group, busy, onClose, onSave }: { group: WatchedFacebookGr
 
 function groupPatch(group: WatchedFacebookGroup, patch: Partial<FacebookGroupManagementPatch> = {}): FacebookGroupManagementPatch { return { name: group.name, city: group.city ?? "", priority: group.priority, enabled: group.enabled, ...patch }; }
 function groupIdentifier(value: string) { try { return new URL(value).pathname.match(/^\/groups\/([^/]+)/i)?.[1] ?? value; } catch { return value; } }
+async function facebookGroupsFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  const { data: { session } } = await createClient().auth.getSession();
+  const headers = new Headers(init.headers);
+  if (session?.access_token) headers.set("authorization", `Bearer ${session.access_token}`);
+  return fetch(input, { ...init, credentials: "include", headers });
+}
 function errorMessage(value: unknown, fallback: string) { return value instanceof Error ? value.message : fallback; }
 function Field({ label, value, onChange, placeholder, className = "", disabled = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; className?: string; disabled?: boolean }) { return <label className={`grid gap-1 text-sm ${className}`}>{label}<input className="h-11 rounded-xl border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-70" disabled={disabled} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} /></label>; }
 function SelectPriority({ value, onChange, create = false }: { value: "high" | "normal" | "low"; onChange: (value: "high" | "normal" | "low") => void; create?: boolean }) { return <select className="h-11 rounded-xl border bg-background px-3" value={value} onChange={(event) => onChange(event.target.value as "high" | "normal" | "low")}><option value="normal">Normal</option><option value="high">High</option>{create ? null : <option value="low">Low</option>}</select>; }

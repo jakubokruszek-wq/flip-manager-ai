@@ -67,6 +67,7 @@ export function FlipFinderPage() {
   const [resultsRevision, setResultsRevision] = useState(0);
   const [lastScanDiagnostics, setLastScanDiagnostics] = useState<{ filter: SearchFilterListItem; response: ScanResponse } | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgressResponse | null>(null);
+  const [activeScanRunId, setActiveScanRunId] = useState<string | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
 
   const load = useCallback(async () => {
@@ -101,9 +102,17 @@ export function FlipFinderPage() {
     const runId = filter?.lastScan?.scanRunId;
     if (!filter || !runId || scanningFilterIdsRef.current.has(filter.id)) return;
     let cancelled = false;
-    void fetchScanProgress(runId).then((progress) => {
-      if (!cancelled) setScanProgress(progress);
-    }).catch(() => undefined);
+    const refresh = async () => {
+      while (!cancelled) {
+        const progress = await fetchScanProgress(runId).catch(() => null);
+        if (!progress || cancelled) return;
+        setScanProgress(progress);
+        setActiveScanRunId((current) => current ?? runId);
+        if (isTerminalScanStatus(progress.status)) return;
+        await new Promise((resolve) => window.setTimeout(resolve, 2_500));
+      }
+    };
+    void refresh();
     return () => { cancelled = true; };
   }, [data, requestedFilterId]);
 
@@ -138,6 +147,7 @@ export function FlipFinderPage() {
 
       setLastScanDiagnostics({ filter, response: payload });
       if (payload.runId) {
+        setActiveScanRunId(payload.runId);
         const initialProgress = await fetchScanProgress(payload.runId).catch(() => null);
         if (initialProgress) setScanProgress(initialProgress);
       }
@@ -287,7 +297,7 @@ export function FlipFinderPage() {
             </Button>
             <FilterActions filter={activeFilter} onAction={manageFilter} />
           </div>
-          {scanProgress && (scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
+          {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
         </Card>
       ) : (

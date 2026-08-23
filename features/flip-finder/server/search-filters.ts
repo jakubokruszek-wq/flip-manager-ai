@@ -48,7 +48,9 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
 
   for (const scan of scans) {
     const latestScan = latestScans.get(scan.searchFilterId);
-    if (!latestScan || scan.startedAt > latestScan.startedAt) {
+    const scanIsActive = scan.status === "pending" || scan.status === "running";
+    const latestIsActive = latestScan?.status === "pending" || latestScan?.status === "running";
+    if (!latestScan || (scanIsActive && !latestIsActive) || (scanIsActive === latestIsActive && scan.startedAt > latestScan.startedAt)) {
       latestScans.set(scan.searchFilterId, scan);
     }
 

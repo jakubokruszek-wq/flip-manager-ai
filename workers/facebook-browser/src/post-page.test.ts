@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
-import { canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, extractFacebookAuthoritativeTextFromStructuredData, extractFacebookAuthoritativeTextResolutionFromStructuredData, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookPostIdArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookAuthoritativeTextSources, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { applyFacebookTargetedFreshnessBypass, canonicalFacebookPostUrl, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, detectFacebookPostPublishedAt, determineFacebookPostRegionFailureReason, discoverFacebookPosts, discoverPostLinksFromHrefs, extractFacebookAuthoritativeTextFromStructuredData, extractFacebookAuthoritativeTextResolutionFromStructuredData, facebookPostFreshnessFailure, freshFacebookPosts, limitFacebookVisionPosts, parseFacebookMaxPostsArgument, parseFacebookPostIdArgument, parseFacebookTimestampValue, processDedicatedFacebookPost, rankFacebookPostRegionCandidates, resolveFacebookAuthoritativeTextSources, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, runFacebookDiscoveryLoop, type FacebookPostRegionDiagnosticCounts, type FacebookPostRegionRankingCandidate, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 
 const vision: FacebookVisionExtraction = { isProperty: true, listingIntent: "SELL_PROPERTY", intentConfidence: 0.98, title: "Mieszkanie Łódź", description: "Sprzedam mieszkanie 50 m²", visibleText: "Sprzedam mieszkanie 50 m²", city: "Łódź", district: null, neighborhood: null, street: null, price: 400_000, area: 50, rooms: 2, floor: null, totalFloors: null, condition: null, sellerType: "private", confidence: 0.95, imageAssessments: [], usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 0, reasoningTokens: 0, model: "gpt-4o-mini", requestId: "req_test", estimatedCostUsd: 0.000027, pricingSourceModel: "gpt-4o-mini", pricingVersion: "2026-08-23", dataQuality: "EXACT", diagnosticsReason: null } };
 
@@ -215,6 +215,18 @@ test("accepts Facebook posts up to 72 hours and rejects older or unknown age", (
     { postId: "unknown", permalink: "https://www.facebook.com/groups/1/posts/3/", discoveredPublishedAt: null, freshnessFailure: "FACEBOOK_POST_AGE_UNKNOWN" },
   ];
   assert.deepEqual(freshFacebookPosts(posts).map((post) => post.postId), ["fresh"]);
+});
+
+test("targeted mode bypasses freshness only for its exact post without changing normal age decisions", async () => {
+  const now = Date.UTC(2026, 7, 23, 12, 0, 0);
+  const old = (postId: string): FreshDiscoveredFacebookPost => ({ postId, permalink: `https://www.facebook.com/groups/1/posts/${postId}/`, discoveredPublishedAt: new Date(now - 73 * 60 * 60_000).toISOString(), freshnessFailure: "FACEBOOK_POST_TOO_OLD" });
+  const resolvedTarget = await resolveFacebookPostAge(old("target"), now, async () => null);
+  const resolvedOther = await resolveFacebookPostAge(old("other"), now, async () => null);
+  assert.equal(resolvedTarget.decision, "TOO_OLD");
+  assert.equal(applyFacebookTargetedFreshnessBypass(resolvedTarget, "target").decision, "PROCESS");
+  assert.equal(applyFacebookTargetedFreshnessBypass(resolvedTarget, "target").post.freshnessFailure, null);
+  assert.equal(applyFacebookTargetedFreshnessBypass(resolvedOther, "target").decision, "TOO_OLD");
+  assert.equal(applyFacebookTargetedFreshnessBypass(resolvedTarget, null).decision, "TOO_OLD");
 });
 
 test("deduplicates age-aware discovery by post id before dedicated-page processing", async () => {

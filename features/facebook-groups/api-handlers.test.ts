@@ -16,19 +16,19 @@ function api(authenticated: boolean) {
 }
 
 test("authenticated GET returns all three groups", async () => {
-  const response = await api(true).get();
+  const response = await api(true).get(new Request("http://localhost"));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).groups.length, 3);
 });
 
-test("anonymous GET returns 401", async () => assert.equal((await api(false).get()).status, 401));
+test("anonymous GET returns 401", async () => assert.equal((await api(false).get(new Request("http://localhost"))).status, 401));
 
 test("authenticated PATCH and DELETE work", async () => {
   const handlers = api(true);
   const patch = await handlers.patch(group.id, new Request("http://localhost", { method: "PATCH", body: JSON.stringify({ enabled: false }) }));
   assert.equal(patch.status, 200);
   assert.equal((await patch.json()).group.enabled, false);
-  const remove = await handlers.delete(group.id);
+  const remove = await handlers.delete(group.id, new Request("http://localhost", { method: "DELETE" }));
   assert.equal(remove.status, 200);
   assert.equal((await remove.json()).group.enabled, false);
 });

@@ -1,7 +1,7 @@
 import type { AddWatchedFacebookGroupResult, WatchedFacebookGroup } from "./types";
 
 type Dependencies = {
-  requireUser: () => Promise<void>;
+  requireUser: (request?: Request) => Promise<void>;
   list: () => Promise<WatchedFacebookGroup[]>;
   add: (value: unknown) => Promise<AddWatchedFacebookGroupResult>;
   update: (id: string, value: unknown) => Promise<WatchedFacebookGroup>;
@@ -10,24 +10,24 @@ type Dependencies = {
 
 export function createFacebookGroupsApi(deps: Dependencies) {
   return {
-    async get() {
-      try { await deps.requireUser(); return Response.json({ groups: await deps.list() }); }
+    async get(request: Request) {
+      try { await deps.requireUser(request); return Response.json({ groups: await deps.list() }); }
       catch (error) { return failure(error); }
     },
     async post(request: Request) {
       try {
-        await deps.requireUser();
+        await deps.requireUser(request);
         const result = await deps.add(await request.json());
         if (result.success) return Response.json(result, { status: 201 });
         return Response.json(result, { status: result.duplicate ? 409 : 400 });
       } catch (error) { return failure(error); }
     },
     async patch(id: string, request: Request) {
-      try { await deps.requireUser(); return Response.json({ group: await deps.update(id, await request.json()) }); }
+      try { await deps.requireUser(request); return Response.json({ group: await deps.update(id, await request.json()) }); }
       catch (error) { return failure(error, 400); }
     },
-    async delete(id: string) {
-      try { await deps.requireUser(); return Response.json({ group: await deps.remove(id) }); }
+    async delete(id: string, request: Request) {
+      try { await deps.requireUser(request); return Response.json({ group: await deps.remove(id) }); }
       catch (error) { return failure(error, 400); }
     },
   };
