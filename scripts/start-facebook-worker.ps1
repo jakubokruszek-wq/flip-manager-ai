@@ -3,6 +3,7 @@ param()
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = "C:\Users\mokru\Desktop\flip-manager"
+$env:NODE_EXTRA_CA_CERTS = Join-Path $env:LOCALAPPDATA "FlipManager\norton-web-mail-shield-root.pem"
 $LogDirectory = Join-Path $RepoRoot "logs"
 $LogPath = Join-Path $LogDirectory "facebook-worker.log"
 $RestartWindow = [TimeSpan]::FromMinutes(2)
