@@ -1,11 +1,16 @@
-import { getOlxScanRunStatus } from "@/features/flip-finder/server/olx-jobs";
+import { getScanProgress } from "@/features/flip-finder/server/scan-progress";
+import { createClient } from "@/lib/supabase/server";
 
 type Context = { params: Promise<{ runId: string }> };
 
 export async function GET(_request: Request, { params }: Context) {
   try {
-    return Response.json(await getOlxScanRunStatus((await params).runId));
+    const supabase = await createClient();
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) return Response.json({ error: "UNAUTHORIZED" }, { status: 401 });
+    return Response.json(await getScanProgress((await params).runId));
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "SCAN_STATUS_FAILED" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "SCAN_STATUS_FAILED";
+    return Response.json({ error: message }, { status: message === "SCAN_RUN_NOT_FOUND" ? 404 : message === "INVALID_SCAN_RUN_ID" ? 400 : 500 });
   }
 }

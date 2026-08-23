@@ -19,7 +19,7 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
     supabase.from("listing_filter_matches").select("search_filter_id"),
     supabase.from("listings").select("id", { count: "exact", head: true }),
     supabase.from("source_scans").select(
-      "id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message",
+      "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message",
     ),
   ]);
 
@@ -358,6 +358,7 @@ function toSearchFilterScan(row: Row): SearchFilterScan | null {
 
   return {
     id,
+    scanRunId: nullableString(row.scan_run_id),
     searchFilterId,
     source,
     status,

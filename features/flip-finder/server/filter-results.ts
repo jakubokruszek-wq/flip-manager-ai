@@ -82,7 +82,7 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
     supabase
       .from("source_scans")
       .select(
-        "id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message",
+        "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message",
       )
       .eq("search_filter_id", filterId),
   ]);
@@ -330,6 +330,7 @@ function toSearchFilterScan(row: Row): SearchFilterScan | null {
 
   return {
     id,
+    scanRunId: nullableString(row.scan_run_id),
     searchFilterId,
     source,
     status,

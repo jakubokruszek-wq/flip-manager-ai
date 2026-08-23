@@ -16,6 +16,7 @@ export type SearchFilterListItem = SearchFilter & {
 
 export type SearchFilterScan = {
   id: string;
+  scanRunId?: string | null;
   searchFilterId: string;
   source: ListingSource;
   status: "pending" | "running" | "completed" | "failed" | "partial";

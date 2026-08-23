@@ -25,6 +25,8 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
+import { ScanProgressPanel } from "@/features/flip-finder/components/scan-progress-panel";
+import { isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 
 type ScanResponse = {
   runId?: string;
@@ -64,6 +66,7 @@ export function FlipFinderPage() {
   const [scanningFilterIds, setScanningFilterIds] = useState<Set<string>>(new Set());
   const [resultsRevision, setResultsRevision] = useState(0);
   const [lastScanDiagnostics, setLastScanDiagnostics] = useState<{ filter: SearchFilterListItem; response: ScanResponse } | null>(null);
+  const [scanProgress, setScanProgress] = useState<ScanProgressResponse | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
 
   const load = useCallback(async () => {
@@ -91,6 +94,18 @@ export function FlipFinderPage() {
 
     return () => window.clearTimeout(timeoutId);
   }, [load]);
+
+  useEffect(() => {
+    if (!data) return;
+    const filter = data.filters.find((item) => item.id === requestedFilterId) ?? data.filters.find((item) => item.isActive) ?? data.filters[0];
+    const runId = filter?.lastScan?.scanRunId;
+    if (!filter || !runId || scanningFilterIdsRef.current.has(filter.id)) return;
+    let cancelled = false;
+    void fetchScanProgress(runId).then((progress) => {
+      if (!cancelled) setScanProgress(progress);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [data, requestedFilterId]);
 
   const scanFilter = async (filter: SearchFilterListItem) => {
     if (
@@ -122,6 +137,10 @@ export function FlipFinderPage() {
       }
 
       setLastScanDiagnostics({ filter, response: payload });
+      if (payload.runId) {
+        const initialProgress = await fetchScanProgress(payload.runId).catch(() => null);
+        if (initialProgress) setScanProgress(initialProgress);
+      }
 
       if (payload.status === "running" && payload.runId) {
         waitingForWorker = true;
@@ -174,11 +193,12 @@ export function FlipFinderPage() {
   const monitorScanRun = async (filterId: string, runId: string) => {
     try {
       while (scanningFilterIdsRef.current.has(filterId)) {
-        await new Promise((resolve) => window.setTimeout(resolve, 4_000));
-        const response = await fetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
-        const payload: unknown = await readJson(response);
-        if (!response.ok || !isScanResponse(payload) || payload.status === "running") continue;
-        setNotice(payload.status === "partial" ? "Skan zakończył się częściowo. Jedno ze źródeł zgłosiło kontrolowany błąd; wcześniejsze oferty pozostały dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.newCount)} nowych dopasowań.`);
+        await new Promise((resolve) => window.setTimeout(resolve, 2_500));
+        const payload = await fetchScanProgress(runId).catch(() => null);
+        if (!payload) continue;
+        setScanProgress(payload);
+        if (!isTerminalScanStatus(payload.status)) continue;
+        setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami. Oferty z poprawnie zakończonych etapów pozostały dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
         await load();
         setResultsRevision((current) => current + 1);
         break;
@@ -267,6 +287,7 @@ export function FlipFinderPage() {
             </Button>
             <FilterActions filter={activeFilter} onAction={manageFilter} />
           </div>
+          {scanProgress && (scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
         </Card>
       ) : (
@@ -783,6 +804,19 @@ async function readJson(response: Response): Promise<unknown> {
   } catch {
     return null;
   }
+}
+
+async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
+  const response = await fetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
+  const payload = await readJson(response);
+  if (!response.ok || !isScanProgressResponse(payload)) {
+    throw new Error(readMessage(payload, "Nie udało się pobrać postępu skanu."));
+  }
+  return payload;
+}
+
+function isScanProgressResponse(value: unknown): value is ScanProgressResponse {
+  return Boolean(value && typeof value === "object" && "runId" in value && "status" in value && "overall" in value && "facebook" in value && "olx" in value && "openai" in value);
 }
 
 function readMessage(value: unknown, fallback: string): string {
