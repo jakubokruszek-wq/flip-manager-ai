@@ -26,7 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
 import { ScanProgressPanel } from "@/features/flip-finder/components/scan-progress-panel";
-import { isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
+import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 
 type ScanResponse = {
   runId?: string;
@@ -146,16 +146,24 @@ export function FlipFinderPage() {
       }
 
       setLastScanDiagnostics({ filter, response: payload });
+      let initialProgress: ScanProgressResponse | null = null;
       if (payload.runId) {
         setActiveScanRunId(payload.runId);
-        const initialProgress = await fetchScanProgress(payload.runId).catch(() => null);
+        initialProgress = await fetchScanProgress(payload.runId).catch(() => null);
         if (initialProgress) setScanProgress(initialProgress);
       }
 
       if (payload.status === "running" && payload.runId) {
+        if (initialProgress && !hasActiveBackendWork(initialProgress)) {
+          setNotice(`Skan zakończony. Znaleziono ${formatNumber(initialProgress.totals.matched)} dopasowań.`);
+          await load();
+          setResultsRevision((current) => current + 1);
+          return;
+        }
         waitingForWorker = true;
-        const pendingSources = payload.sourceResults?.filter((result) => result.status === "pending").map((result) => sourceDisplayLabel(result.source)).join(" i ");
-        setNotice(`${pendingSources || "Źródło"}: oczekuje na lokalny worker. Pozostałe źródła zakończyły swój bieżący przebieg.`);
+        if (initialProgress && hasQueuedOrRunningFacebookWork(initialProgress)) {
+          setNotice("Facebook: oczekuje na lokalny worker. Pozostałe źródła zakończyły swój bieżący przebieg.");
+        }
         void monitorScanRun(filter.id, payload.runId);
         await load();
         setResultsRevision((current) => current + 1);
@@ -201,12 +209,27 @@ export function FlipFinderPage() {
   };
 
   const monitorScanRun = async (filterId: string, runId: string) => {
+    let consecutiveFailures = 0;
     try {
       while (scanningFilterIdsRef.current.has(filterId)) {
         await new Promise((resolve) => window.setTimeout(resolve, 2_500));
         const payload = await fetchScanProgress(runId).catch(() => null);
-        if (!payload) continue;
+        if (!payload) {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 3) {
+            setError("Nie udało się odczytać postępu skanu. Stan skanowania został zakończony.");
+            break;
+          }
+          continue;
+        }
+        consecutiveFailures = 0;
         setScanProgress(payload);
+        if (!hasActiveBackendWork(payload)) {
+          setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
+          await load();
+          setResultsRevision((current) => current + 1);
+          break;
+        }
         if (!isTerminalScanStatus(payload.status)) continue;
         setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami. Oferty z poprawnie zakończonych etapów pozostały dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
         await load();

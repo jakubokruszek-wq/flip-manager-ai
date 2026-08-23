@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { budgetTone, buildOverallProgress, calculateBudget, isTerminalScanStatus, type ScanWorkUnit } from "./scan-progress.ts";
+import { budgetTone, buildOverallProgress, calculateBudget, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanWorkUnit } from "./scan-progress.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -49,6 +49,17 @@ test("monthly budget calculates remaining amount and thresholds", () => {
 test("missing monthly budget omits remaining amount without crashing", () => {
   assert.deepEqual(calculateBudget(12, null), { remainingBudgetUsd: null, budgetUsedPercent: null });
   assert.equal(budgetTone(null), "normal");
+});
+
+test("completed backend units clear active scanning invariant", () => {
+  const progress = { overall: { remainingUnits: 0 }, facebook: { groups: [{ status: "completed" }] }, olx: { status: "completed" } } as never;
+  assert.equal(hasActiveBackendWork(progress), false);
+  assert.equal(hasQueuedOrRunningFacebookWork(progress), false);
+});
+
+test("queued Facebook work is the only source for worker waiting state", () => {
+  const progress = { facebook: { groups: [{ status: "queued" }] } } as never;
+  assert.equal(hasQueuedOrRunningFacebookWork(progress), true);
 });
 
 function unit(index: number, status: ScanWorkUnit["status"], source: ScanWorkUnit["source"] = "facebook"): ScanWorkUnit {

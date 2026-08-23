@@ -118,6 +118,17 @@ export function isTerminalScanStatus(status: ScanProgressStatus): boolean {
   return status === "completed" || status === "partial" || status === "failed";
 }
 
+export function hasActiveBackendWork(progress: Pick<ScanProgressResponse, "overall" | "facebook" | "olx">): boolean {
+  return progress.overall.remainingUnits > 0
+    || progress.facebook.groups.some((group) => group.status === "queued" || group.status === "running")
+    || progress.olx.status === "queued"
+    || progress.olx.status === "running";
+}
+
+export function hasQueuedOrRunningFacebookWork(progress: Pick<ScanProgressResponse, "facebook">): boolean {
+  return progress.facebook.groups.some((group) => group.status === "queued" || group.status === "running");
+}
+
 export function isTerminalUnitStatus(status: ScanWorkUnit["status"]): boolean {
   return status === "completed" || status === "partial" || status === "failed";
 }
