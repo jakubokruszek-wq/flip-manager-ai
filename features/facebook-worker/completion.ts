@@ -1,4 +1,5 @@
-import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookAgeCacheEntry, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPerformanceMetrics, type FacebookPostSnapshot, type FacebookSkipReasonCode, type FacebookVisionExtraction } from "./types.ts";
+import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookAgeCacheEntry, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPerformanceMetrics, type FacebookPostSnapshot, type FacebookSkipReasonCode, type FacebookVisionExtraction, type FacebookVisionUsage } from "./types.ts";
+import { OPENAI_PRICING_VERSION } from "./openai-pricing.ts";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
 const MAX_POSTS = 20;
@@ -118,7 +119,21 @@ function parseVision(value: unknown): FacebookVisionExtraction | null {
   if (value === null || value === undefined) return null;
   const row = requireRow(value);
   if (typeof row.isProperty !== "boolean") throw new Error("INVALID_FACEBOOK_VISION");
-  return { isProperty: row.isProperty === true, listingIntent: FACEBOOK_LISTING_INTENTS.includes(row.listingIntent as never) ? row.listingIntent as FacebookVisionExtraction["listingIntent"] : "UNKNOWN", intentConfidence: boundedConfidence(row.intentConfidence), title: nullableString(row.title, 500), description: nullableString(row.description, 2_000), visibleText: nullableString(row.visibleText, 2_000), city: nullableString(row.city, 200), district: nullableString(row.district, 200), neighborhood: nullableString(row.neighborhood, 200), street: nullableString(row.street, 300), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableNumber(row.floor), totalFloors: nullableNumber(row.totalFloors), condition: row.condition === "renovation" || row.condition === "ready" ? row.condition : null, sellerType: row.sellerType === "private" || row.sellerType === "agency" ? row.sellerType : null, confidence: boundedConfidence(row.confidence), fieldConfidence: parseFieldConfidence(row.fieldConfidence), imageAssessments: parseImageAssessments(row.imageAssessments) };
+  return { isProperty: row.isProperty === true, listingIntent: FACEBOOK_LISTING_INTENTS.includes(row.listingIntent as never) ? row.listingIntent as FacebookVisionExtraction["listingIntent"] : "UNKNOWN", intentConfidence: boundedConfidence(row.intentConfidence), title: nullableString(row.title, 500), description: nullableString(row.description, 2_000), visibleText: nullableString(row.visibleText, 2_000), city: nullableString(row.city, 200), district: nullableString(row.district, 200), neighborhood: nullableString(row.neighborhood, 200), street: nullableString(row.street, 300), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableNumber(row.floor), totalFloors: nullableNumber(row.totalFloors), condition: row.condition === "renovation" || row.condition === "ready" ? row.condition : null, sellerType: row.sellerType === "private" || row.sellerType === "agency" ? row.sellerType : null, confidence: boundedConfidence(row.confidence), fieldConfidence: parseFieldConfidence(row.fieldConfidence), imageAssessments: parseImageAssessments(row.imageAssessments), usage: parseVisionUsage(row.usage) };
+}
+
+function parseVisionUsage(value: unknown): FacebookVisionUsage {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  if (!row) return { inputTokens: null, outputTokens: null, totalTokens: null, cachedInputTokens: null, reasoningTokens: null, model: "unknown", requestId: null, estimatedCostUsd: null, pricingSourceModel: null, pricingVersion: OPENAI_PRICING_VERSION, dataQuality: "UNAVAILABLE", diagnosticsReason: "OPENAI_USAGE_UNAVAILABLE" };
+  const dataQuality = row.dataQuality === "EXACT" || row.dataQuality === "PARTIAL" || row.dataQuality === "UNAVAILABLE" ? row.dataQuality : "UNAVAILABLE";
+  return {
+    inputTokens: nullableToken(row.inputTokens), outputTokens: nullableToken(row.outputTokens), totalTokens: nullableToken(row.totalTokens),
+    cachedInputTokens: nullableToken(row.cachedInputTokens), reasoningTokens: nullableToken(row.reasoningTokens),
+    model: requiredString(row.model, "MODEL", 200), requestId: nullableString(row.requestId, 300),
+    estimatedCostUsd: nullableNonnegativeNumber(row.estimatedCostUsd), pricingSourceModel: nullableString(row.pricingSourceModel, 200),
+    pricingVersion: requiredString(row.pricingVersion, "PRICING_VERSION", 100), dataQuality,
+    diagnosticsReason: row.diagnosticsReason === "OPENAI_USAGE_UNAVAILABLE" ? "OPENAI_USAGE_UNAVAILABLE" : null,
+  };
 }
 
 function parseImageAssessments(value: unknown): FacebookImageAssessment[] {
@@ -150,5 +165,7 @@ function optionalRate(value: unknown): number {
   return value;
 }
 function nullableNumber(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
+function nullableNonnegativeNumber(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null; }
+function nullableToken(value: unknown): number | null { return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null; }
 function boundedConfidence(value: unknown): number { return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0; }
 function stringArray(value: unknown, maxItems: number, maxLength: number): string[] { if (!Array.isArray(value) || value.length > maxItems || value.some((item) => typeof item !== "string" || item.length > maxLength)) throw new Error("INVALID_STRING_ARRAY"); return value.map(String); }

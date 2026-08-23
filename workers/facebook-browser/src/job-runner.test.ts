@@ -5,6 +5,7 @@ import { runFacebookJobCompletion, waitForFacebookTargetJob } from "./job-runner
 import type { FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 
 const vision: FacebookVisionExtraction = {
+  usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 0, reasoningTokens: 0, model: "gpt-4o-mini", requestId: "req_test", estimatedCostUsd: 0.000027, pricingSourceModel: "gpt-4o-mini", pricingVersion: "2026-08-23", dataQuality: "EXACT", diagnosticsReason: null },
   isProperty: true,
   listingIntent: "SELL_PROPERTY",
   intentConfidence: 1,

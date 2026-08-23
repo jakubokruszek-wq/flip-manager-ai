@@ -1,4 +1,5 @@
 import "server-only";
+import { captureOpenAIResponseUsage } from "@/features/facebook-worker/openai-pricing";
 import type { FacebookVisionExtraction } from "@/features/facebook-worker/types";
 
 type VisionExtraction = FacebookVisionExtraction;
@@ -27,10 +28,11 @@ export async function analyzeFacebookImages(images: string[], postText?: string,
   if (!validImages.length) return null;
   const contextImageCount = Math.max(0, Math.min(options?.contextImageCount ?? 0, validImages.length));
   const candidateImageCount = validImages.length - contextImageCount;
+  const requestedModel = process.env.OPENAI_FACEBOOK_VISION_MODEL ?? "gpt-4o-mini";
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, signal: AbortSignal.timeout(45_000),
     body: JSON.stringify({
-      model: process.env.OPENAI_FACEBOOK_VISION_MODEL ?? "gpt-4o-mini", store: false,
+      model: requestedModel, store: false,
       instructions: "Odczytaj dane wyłącznie z głównej treści posta Facebook widocznej na wycinku oraz opcjonalnego tekstu. Ignoruj autora, timestamp, reakcje, przyciski i komentarze. Najpierw niezależnie ustal listingIntent z całego kontekstu: SELL_PROPERTY (konkretna nieruchomość oferowana na sprzedaż), BUY_PROPERTY (ogłoszenie kupującego/szukającego), RENT_OFFER, RENT_WANTED, SERVICE, OTHER albo UNKNOWN. isProperty oznacza tylko temat nieruchomości i NIE oznacza automatycznie sprzedaży. Frazy typu „kupię”, „szukam mieszkania”, zakres 30-40 m2, 1-2 pokoje i „do 220 000 zł” opisują kryteria kupującego — nie mapuj ich na parametry konkretnego listingu. price, area i rooms wypełniaj wyłącznie dla SELL_PROPERTY lub RENT_OFFER i konkretnego lokalu. Wykonaj dokładny OCR regionu. Nie zgaduj brakujących cyfr ani danych z samego wyglądu mieszkania. Niepewne pola zwróć null. visibleText ma być wierną transkrypcją istotnej treści. Dla każdego pola podaj fieldConfidence 0-1; dla null ustaw 0. Klasyfikuj każde dodatkowe źródłowe zdjęcie osobno: PROPERTY_IMAGE tylko gdy z wysoką pewnością pokazuje lokal, budynek lub wnętrze związane z ofertą; NON_PROPERTY_IMAGE dla portretów, zdjęć profilowych/grupowych, memów, cytatów, wydarzeń, UI i niezwiązanych zdjęć lifestyle; w pozostałych przypadkach UNKNOWN. Nie identyfikuj osób ani nie opisuj danych biometrycznych.",
       input: [{ role: "user", content: [
         { type: "input_text", text: `Opcjonalny tekst użytkownika:\n${postText?.trim() || "(brak)"}\nPierwsze obrazy kontekstowe (nie zapisuj ich): ${contextImageCount}. Następne ${candidateImageCount} obrazy to kandydaci galerii; indeksuj je od 0 w imageAssessments.` },
@@ -43,7 +45,8 @@ export async function analyzeFacebookImages(images: string[], postText?: string,
   if (!response.ok) throw new Error(`Analiza screenshotu nie powiodła się (OpenAI HTTP ${response.status}).`);
   const text = outputText(payload); if (!text) throw new Error("OpenAI nie zwróciło danych ze screenshotu.");
   const value = JSON.parse(text) as VisionExtraction;
-  return { ...value, confidence: Math.max(0, Math.min(1, value.confidence)), intentConfidence: Math.max(0, Math.min(1, value.intentConfidence)), imageAssessments: value.imageAssessments.filter((item) => Number.isInteger(item.imageIndex) && item.imageIndex >= 0 && item.imageIndex < candidateImageCount).map((item) => ({ ...item, confidence: Math.max(0, Math.min(1, item.confidence)) })) };
+  const usage = captureOpenAIResponseUsage(payload, requestedModel, response.headers.get("x-request-id"));
+  return { ...value, usage, confidence: Math.max(0, Math.min(1, value.confidence)), intentConfidence: Math.max(0, Math.min(1, value.intentConfidence)), imageAssessments: value.imageAssessments.filter((item) => Number.isInteger(item.imageIndex) && item.imageIndex >= 0 && item.imageIndex < candidateImageCount).map((item) => ({ ...item, confidence: Math.max(0, Math.min(1, item.confidence)) })) };
 }
 
 function validImageInput(value: string): string | null {

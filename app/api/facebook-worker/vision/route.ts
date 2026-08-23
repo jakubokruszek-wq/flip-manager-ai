@@ -15,6 +15,17 @@ export async function POST(request: Request) {
     if (lease.error || !lease.data) return Response.json({ error: "FACEBOOK_JOB_LEASE_LOST" }, { status: 409 });
     const vision = await analyzeFacebookImages([input.screenshotDataUrl, ...input.imageUrls], undefined, { contextImageCount: 1 });
     if (!vision) return Response.json({ error: "FACEBOOK_VISION_UNAVAILABLE" }, { status: 503 });
+    console.info("FACEBOOK_VISION_USAGE", {
+      jobId: input.jobId,
+      postId: input.postId,
+      model: vision.usage.model,
+      inputTokens: vision.usage.inputTokens,
+      outputTokens: vision.usage.outputTokens,
+      totalTokens: vision.usage.totalTokens,
+      cachedInputTokens: vision.usage.cachedInputTokens ?? null,
+      costUsd: vision.usage.estimatedCostUsd,
+      dataQuality: vision.usage.dataQuality,
+    });
     return Response.json({ vision });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "FACEBOOK_VISION_FAILED" }, { status: 422 });

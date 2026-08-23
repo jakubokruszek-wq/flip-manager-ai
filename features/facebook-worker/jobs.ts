@@ -9,6 +9,7 @@ import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group"
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
 import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeFacebookGroupAssociationMetadata, readFacebookCachedMatch, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
+import { aggregateFacebookVisionRun, summarizeFacebookVisionUsage } from "./openai-pricing";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 
 type Row = Record<string, unknown>;
@@ -147,7 +148,10 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   }, { jobId: input.jobId, sourceScanId });
   if (summary.listingIds.length > 0) await getAlerts();
   const normalized = summary.postsProcessed - summary.listingsSkipped - summary.extractionFailed;
-  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now })), ageCache: input.ageCache, performance: input.performance };
+  const visionCost = summarizeFacebookVisionUsage(input.posts.map((post) => post.vision), input.performance.visionCalls);
+  const openaiVisionCalls = input.posts.flatMap((post) => post.vision?.usage ? [{ postId: post.postId, usage: post.vision.usage }] : []);
+  const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now })), ageCache: input.ageCache, performance: input.performance, ...visionCost, openaiVisionCalls };
+  console.info("FACEBOOK_VISION_COST_SUMMARY", { scope: "JOB", jobId: input.jobId, ...visionCost });
   const scan = await supabase.from("source_scans").update({
     status: "completed", finished_at: now, scanned_count: summary.postsProcessed, listings_found: normalized,
     matched_count: summary.matched, listings_created: summary.listingsCreated, new_count: summary.newMatches, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops,
@@ -158,7 +162,13 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("status", "running");
   if (job.error) throw new Error(`FACEBOOK_JOB_FINALIZE_FAILED: ${job.error.message}`);
   const completed = await supabase.from("facebook_scan_jobs").select("result_summary").eq("scan_run_id", existing.data.scan_run_id).eq("status", "completed");
-  if (!completed.error) console.info("FACEBOOK_PERF_RUN_SUMMARY", aggregateFacebookPerformance((completed.data ?? []).map((row) => row.result_summary), (completed.data ?? []).reduce((total, row) => total + (typeof (row.result_summary as Row | null)?.durationMs === "number" ? Number((row.result_summary as Row).durationMs) : 0), 0)));
+  if (!completed.error) {
+    const completedResults = (completed.data ?? []).map((row) => row.result_summary);
+    const durationMs = completedResults.reduce((total, value) => total + (typeof (value as Row | null)?.durationMs === "number" ? Number((value as Row).durationMs) : 0), 0);
+    const runVisionCost = aggregateFacebookVisionRun(completedResults);
+    console.info("FACEBOOK_PERF_RUN_SUMMARY", { ...aggregateFacebookPerformance(completedResults, durationMs), ...runVisionCost });
+    console.info("FACEBOOK_VISION_COST_SUMMARY", { scope: "RUN", runId: existing.data.scan_run_id, ...runVisionCost });
+  }
   await supabase.from("watched_facebook_groups").update({ access_status: "CONNECTED", last_checked_at: now, last_error: null }).eq("id", group.id);
   return result;
 }

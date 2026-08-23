@@ -138,6 +138,34 @@ export type FacebookVisionExtraction = {
   confidence: number;
   fieldConfidence?: FacebookFieldConfidence;
   imageAssessments: FacebookImageAssessment[];
+  usage: FacebookVisionUsage;
+};
+
+export type FacebookVisionCostDataQuality = "EXACT" | "PARTIAL" | "UNAVAILABLE";
+
+export type FacebookVisionUsage = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  cachedInputTokens?: number | null;
+  reasoningTokens?: number | null;
+  model: string;
+  requestId?: string | null;
+  estimatedCostUsd: number | null;
+  pricingSourceModel: string | null;
+  pricingVersion: string;
+  dataQuality: FacebookVisionCostDataQuality;
+  diagnosticsReason?: "OPENAI_USAGE_UNAVAILABLE" | null;
+};
+
+export type FacebookOpenAIVisionSummary = {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedInputTokens: number;
+  usageUnavailableCalls: number;
+  models: string[];
 };
 
 export const FACEBOOK_CONFIDENCE_FIELDS = [
@@ -205,6 +233,12 @@ export type FacebookCompletionResult = {
   postCache: FacebookPostCacheEntry[];
   ageCache: FacebookAgeCacheEntry[];
   performance: FacebookPerformanceMetrics;
+  openaiVision: FacebookOpenAIVisionSummary;
+  visionCostUsd: number | null;
+  visionCostDataQuality: FacebookVisionCostDataQuality;
+  visionPricingSourceModels: string[];
+  visionPricingVersion: string;
+  openaiVisionCalls: Array<{ postId: string | null; usage: FacebookVisionUsage }>;
 };
 
 export type FacebookSkipReasonCode =
