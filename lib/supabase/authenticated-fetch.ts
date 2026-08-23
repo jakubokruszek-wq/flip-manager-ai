@@ -14,7 +14,9 @@ const dependencies: AuthenticatedFetchDependencies = {
       return null;
     }
   },
-  fetch: globalThis.fetch,
+  // Keep the platform context intact. Browser implementations of fetch may
+  // reject an unbound reference with "Illegal invocation".
+  fetch: (...args) => globalThis.fetch(...args),
 };
 
 export async function authenticatedApiFetch(

@@ -25,3 +25,20 @@ test("missing session still performs a safe cookie request", async () => {
   assert.equal(new Headers(received?.headers).has("authorization"), false);
   assert.equal(received?.credentials, "include");
 });
+
+test("browser-like fetch keeps its required receiver context", async () => {
+  const browser = {
+    fetch(this: { fetch: typeof globalThis.fetch }, input: RequestInfo | URL, init?: RequestInit) {
+      assert.equal(this, browser);
+      void input;
+      void init;
+      return Promise.resolve(new Response(null, { status: 204 }));
+    },
+  };
+  const unbound = browser.fetch;
+  await authenticatedApiFetch("https://app.test/api", {}, {
+    getAccessToken: async () => null,
+    fetch: (...args) => browser.fetch(...args),
+  });
+  assert.equal(typeof unbound, "function");
+});
