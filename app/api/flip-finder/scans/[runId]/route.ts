@@ -3,10 +3,14 @@ import { createClient } from "@/lib/supabase/server";
 
 type Context = { params: Promise<{ runId: string }> };
 
-export async function GET(_request: Request, { params }: Context) {
+export async function GET(request: Request, { params }: Context) {
   try {
     const supabase = await createClient();
-    const { data: { user }, error } = await supabase.auth.getUser();
+    let { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) {
+      const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+      if (token) ({ data: { user }, error } = await supabase.auth.getUser(token));
+    }
     if (error || !user) return Response.json({ error: "UNAUTHORIZED" }, { status: 401 });
     return Response.json(await getScanProgress((await params).runId));
   } catch (error) {
