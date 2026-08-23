@@ -22,7 +22,8 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const explicitRooms = text.match(/(\d+)\s*(?:pok(?:oje|oi|ój|\.)?)/i);
   const floor = number(text.match(/(\d+)\s*(?:piętro|piętrze|p\.)/i)?.[1]);
   const fraction = text.match(/\b(\d+)\s*\/\s*(\d+)\s*(?:piętro|p\.)?/i);
-  const street = text.match(/\bul\.?\s+([\p{L}][\p{L}\s.-]{2,40}?)(?=,|\d|\.|$)/iu)?.[1]?.trim() ?? null;
+  const streetMatch = text.match(/\bul\.?\s+([\p{L}][\p{L}\s.-]{1,40}?)(?:\s+(\d+[\p{L}]?))?(?=,|\.|\n|$)/iu);
+  const street = streetMatch ? [streetMatch[1]?.trim(), streetMatch[2]].filter(Boolean).join(" ") : null;
   const flags = FLAG_PHRASES.filter((phrase) => lower.includes(phrase));
   const known = [priceThousands || priceFull, area, explicitRooms || mRooms, place || districtFound, floor].filter(Boolean).length;
   const explicitNeighborhood = place?.[1] ?? null;
@@ -48,9 +49,30 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     description: text || null, originalUrl: input.url ?? null, images: input.images ?? [],
     confidence, flags, listingIntent: intent.intent, intentConfidence: intent.confidence, intentSource: intent.intentSource,
     imageAssessments: input.imageAssessments ?? [],
+    sourceFacts: extractFacebookSourceFacts(text),
   };
   property.fieldConfidence = Object.fromEntries([
     "title", "description", "city", "district", "neighborhood", "street", "price", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",
   ].map((field) => [field, property[field as keyof FacebookProperty] === null ? 0 : confidence]));
   return property;
+}
+
+export function extractFacebookSourceFacts(text: string): NonNullable<FacebookProperty["sourceFacts"]> {
+  const rent = text.match(/(?:czynsz|op\u0142aty administracyjne)[^\d]{0,20}(?:ok\.?\s*)?(\d[\d\s]{2,5})\s*(?:z\u0142|pln)/i);
+  const equipment = text.match(/(?:wyposa\u017ceni|mebl)[^\d]{0,40}(?:ok\.?\s*)?(\d[\d\s]{3,6})\s*(?:z\u0142|pln)/i);
+  const refreshed = text.match(/(?:od\u015bwie\u017con\w*)[^\d]{0,30}(?:w\s+)?([\p{L}]+\s+20\d{2}|20\d{2})/iu)?.[1] ?? null;
+  const buildingRenovation = [
+    /remon\w*\s+dach/i.test(text) ? "roof" : null,
+    /(?:remon\w*\s+)?elewac/i.test(text) && /blok|budyn/i.test(text) ? "facade" : null,
+  ].filter((value): value is string => value !== null);
+  return {
+    administrativeRent: number(rent?.[1]),
+    basement: /(?:w\u0142asn\w*\s+)?piwnic/i.test(text) ? true : null,
+    dryingRoom: /suszarni/i.test(text) ? true : null,
+    refreshedAt: refreshed,
+    bathroomRenovated: /\u0142azienk\w*\s+(?:po\s+)?remoncie|remont\w*\s+\u0142azien/i.test(text) ? true : null,
+    buildingRenovation,
+    furnishingIncluded: /wyposa\u017ceni\w*\s+(?:w\s+cenie|wliczon)/i.test(text) ? true : /wyposa\u017ceni|mebl/i.test(text) ? false : null,
+    additionalEquipmentPrice: number(equipment?.[1]),
+  };
 }

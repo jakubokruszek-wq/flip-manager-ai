@@ -184,6 +184,21 @@ test("empty metadata and DOM keep authoritative text empty for Vision fallback",
   } finally { await browser.close(); }
 });
 
+test("a gallery region containing another post id cannot bind its media to the expected post", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    await page.route("https://www.facebook.com/groups/1/posts/301/", (route) => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
+    await page.goto("https://www.facebook.com/groups/1/posts/301/");
+    await page.setContent(`<main><section style="width:590px;height:500px"><a href="/groups/1/posts/301/">post</a><a href="/groups/1/posts/302/">foreign</a><div data-ad-comet-preview="message" style="height:100px">Sprzedam mieszkanie 59 m2</div><img src="https://scontent.xx.fbcdn.net/foreign.jpg" style="display:block;width:590px;height:380px"></section></main>`);
+    const region = await captureFacebookPostRegion(page, "301");
+    assert.deepEqual(region.imageUrls, []);
+    assert.equal(region.mediaCandidates.length, 1);
+    assert.equal(region.mediaCandidates[0].boundPostId, null);
+    assert.deepEqual(region.mediaCandidates[0].foreignPostIdsDetected, ["302"]);
+  } finally { await browser.close(); }
+});
+
 test("accepts Facebook posts up to 72 hours and rejects older or unknown age", () => {
   const now = Date.UTC(2026, 7, 16, 12, 0, 0);
   const published = (ageMs: number) => new Date(now - ageMs).toISOString();
@@ -516,16 +531,19 @@ test("time diagnostic exposes only safe structure and linked timestamp metadata"
   } finally { await browser.close(); }
 });
 
-test("opens the dedicated page before capture and Vision", async () => {
+test("opens the dedicated page before capture and Vision and preserves discovery creation time", async () => {
   const order: string[] = [];
-  const result = await processDedicatedFacebookPost({ postId: "99", permalink: "https://www.facebook.com/groups/1/posts/99/" }, "group-1", {
+  const discoveredPost: FreshDiscoveredFacebookPost = { postId: "99", permalink: "https://www.facebook.com/groups/1/posts/99/", discoveredPublishedAt: "2026-08-17T13:18:00.000Z", freshnessFailure: null };
+  const result = await processDedicatedFacebookPost(discoveredPost, "group-1", {
     open: async () => { order.push("open"); },
-    capture: async () => { order.push("capture"); return { screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: ["https://scontent.xx.fbcdn.net/property.jpg"], publishedAt: null, authoritativePostText: "", authoritativePostTextSource: "NONE", authoritativePostTextProvenance: "NONE", box: { x: 0, y: 0, width: 500, height: 300 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 300, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }; },
+    capture: async () => { order.push("capture"); return { screenshotDataUrl: "data:image/jpeg;base64,AA==", imageUrls: ["https://scontent.xx.fbcdn.net/property.jpg"], mediaCandidates: [{ url: "https://scontent.xx.fbcdn.net/property.jpg", expectedPostId: "99", boundPostId: "99", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "UNKNOWN", classificationConfidence: null }], publishedAt: null, authoritativePostText: "", authoritativePostTextSource: "NONE", authoritativePostTextProvenance: "NONE", box: { x: 0, y: 0, width: 500, height: 300 }, candidateCount: 1, screenshotWidth: 500, screenshotHeight: 300, captureMethod: "ELEMENT_SCREENSHOT", compressed: false }; },
     analyze: async () => { order.push("vision"); return vision; },
   });
   assert.deepEqual(order, ["open", "capture", "vision"]);
   assert.equal(result.text, vision.visibleText);
   assert.equal(result.vision, vision);
+  assert.equal(result.publishedAt, "2026-08-17T13:18:00.000Z");
+  assert.equal(result.mediaCandidates?.[0]?.boundPostId, "99");
 });
 
 const rankingCandidate = (changes: Partial<FacebookPostRegionRankingCandidate>): FacebookPostRegionRankingCandidate => ({

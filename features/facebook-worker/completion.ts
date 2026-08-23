@@ -1,4 +1,4 @@
-import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, type FacebookAgeCacheEntry, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookPerformanceMetrics, type FacebookPostSnapshot, type FacebookSkipReasonCode, type FacebookVisionExtraction, type FacebookVisionUsage } from "./types.ts";
+import { FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES, FACEBOOK_CONFIDENCE_FIELDS, FACEBOOK_IMAGE_RELEVANCE, FACEBOOK_LISTING_INTENTS, FACEBOOK_MEDIA_BINDING_PROVENANCE, type FacebookAgeCacheEntry, type FacebookCompletion, type FacebookFieldConfidence, type FacebookGroupSnapshot, type FacebookImageAssessment, type FacebookMediaCandidate, type FacebookPerformanceMetrics, type FacebookPostSnapshot, type FacebookSkipReasonCode, type FacebookVisionExtraction, type FacebookVisionUsage } from "./types.ts";
 import { OPENAI_PRICING_VERSION } from "./openai-pricing.ts";
 
 const FACEBOOK_HOST = /(^|\.)facebook\.com$/i;
@@ -54,10 +54,32 @@ function parsePost(value: unknown): FacebookPostSnapshot {
     authoritativePostTextSource: FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES.includes(row.authoritativePostTextSource as never) ? row.authoritativePostTextSource as FacebookPostSnapshot["authoritativePostTextSource"] : "NONE",
     text: typeof row.text === "string" ? row.text.slice(0, MAX_TEXT) : "",
     imageUrls: stringArray(row.imageUrls, MAX_IMAGES, 2_000).map(assertHttpsUrl),
+    mediaCandidates: parseMediaCandidates(row.mediaCandidates),
     publishedAt: nullableIsoDate(row.publishedAt),
     vision: parseVision(row.vision),
     cacheHit: parseCacheHit(row.cacheHit),
   };
+}
+
+function parseMediaCandidates(value: unknown): FacebookMediaCandidate[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_IMAGES) throw new Error("INVALID_FACEBOOK_MEDIA_CANDIDATES");
+  return value.map((item) => {
+    const row = requireRow(item);
+    const provenance = FACEBOOK_MEDIA_BINDING_PROVENANCE.includes(row.bindingProvenance as never) ? row.bindingProvenance as FacebookMediaCandidate["bindingProvenance"] : "AMBIGUOUS";
+    const classification = FACEBOOK_IMAGE_RELEVANCE.includes(row.classification as never) ? row.classification as FacebookMediaCandidate["classification"] : "UNKNOWN";
+    return {
+      url: assertHttpsUrl(requiredString(row.url, "MEDIA_URL", 2_000)),
+      expectedPostId: requiredString(row.expectedPostId, "EXPECTED_POST_ID", 300),
+      boundPostId: nullableString(row.boundPostId, 300),
+      bindingConfidence: boundedConfidence(row.bindingConfidence),
+      bindingProvenance: provenance,
+      rootStoryUnique: row.rootStoryUnique === true,
+      foreignPostIdsDetected: stringArray(row.foreignPostIdsDetected, 20, 300),
+      classification,
+      classificationConfidence: row.classificationConfidence === null || row.classificationConfidence === undefined ? null : boundedConfidence(row.classificationConfidence),
+    };
+  });
 }
 
 function parseCacheHit(value: unknown): FacebookPostSnapshot["cacheHit"] {

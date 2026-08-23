@@ -1,5 +1,5 @@
 import type { FacebookListingInput } from "../facebook-watcher/types.ts";
-import type { FacebookPostSnapshot, FacebookVisionExtraction } from "./types.ts";
+import type { FacebookMediaCandidate, FacebookPostSnapshot, FacebookVisionExtraction } from "./types.ts";
 import { inspectFacebookIntentSignals, resolveFacebookListingIntent } from "../facebook-watcher/facebook-intent.ts";
 import type { FacebookPostImportResult } from "./post-flow.ts";
 
@@ -61,12 +61,14 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
   const vision = post.vision;
   const intent = resolveFacebookPostIntent(post);
   const overrides: NonNullable<FacebookListingInput["overrides"]> = {};
+  const authoritativeDescription = post.authoritativePostText?.trim() || null;
   if (vision) {
-    assignKnown(overrides, "title", vision.title); assignKnown(overrides, "description", vision.description);
+    assignKnown(overrides, "title", vision.title); assignKnown(overrides, "description", authoritativeDescription ?? vision.description);
     assignKnown(overrides, "city", vision.city); assignKnown(overrides, "district", vision.district); assignKnown(overrides, "neighborhood", vision.neighborhood); assignKnown(overrides, "street", vision.street);
     assignKnown(overrides, "price", vision.price); assignKnown(overrides, "area", vision.area); assignKnown(overrides, "rooms", vision.rooms); assignKnown(overrides, "floor", vision.floor); assignKnown(overrides, "totalFloors", vision.totalFloors);
     assignKnown(overrides, "condition", vision.condition); assignKnown(overrides, "sellerType", vision.sellerType);
   }
+  const mediaCandidates = classifiedFacebookMediaCandidates(post, vision?.imageAssessments);
   return {
     url: post.permalink ?? undefined,
     postText: post.authoritativePostTextSource === "CONFLICT" || post.authoritativePostTextProvenance === "AMBIGUOUS_COMPOSITE"
@@ -74,16 +76,40 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
       : post.authoritativePostText?.trim() || post.vision?.visibleText?.trim() || undefined,
     groupName,
     publishedAt: post.publishedAt ?? undefined,
-    images: acceptedFacebookPropertyImages(post.imageUrls, vision?.imageAssessments),
+    images: mediaCandidates.filter(isMirrorableFacebookMedia).map((candidate) => candidate.url),
+    mediaCandidates,
     overrides: vision ? overrides : undefined,
     analysisConfidence: vision?.confidence,
-    analysisFieldConfidence: vision?.fieldConfidence,
+    analysisFieldConfidence: vision ? { ...vision.fieldConfidence, ...(authoritativeDescription ? { description: 1 } : {}) } : undefined,
     analysisFlags: vision ? ["vision_post_region"] : undefined,
     listingIntent: intent.intent,
     intentConfidence: intent.confidence,
     intentSource: intent.intentSource,
     imageAssessments: vision?.imageAssessments,
   };
+}
+
+export function classifiedFacebookMediaCandidates(post: FacebookPostSnapshot, assessments: FacebookVisionExtraction["imageAssessments"] | undefined): FacebookMediaCandidate[] {
+  const byIndex = new Map((assessments ?? []).map((assessment) => [assessment.imageIndex, assessment]));
+  return (post.mediaCandidates ?? []).map((candidate) => {
+    const imageIndex = post.imageUrls.indexOf(candidate.url);
+    const assessment = imageIndex >= 0 ? byIndex.get(imageIndex) : undefined;
+    return {
+      ...candidate,
+      classification: assessment?.relevance ?? "UNKNOWN",
+      classificationConfidence: assessment?.confidence ?? null,
+    };
+  });
+}
+
+export function isMirrorableFacebookMedia(candidate: FacebookMediaCandidate): boolean {
+  return candidate.boundPostId !== null
+    && candidate.boundPostId === candidate.expectedPostId
+    && candidate.rootStoryUnique
+    && candidate.foreignPostIdsDetected.length === 0
+    && candidate.bindingConfidence >= 0.9
+    && candidate.classification === "PROPERTY_IMAGE"
+    && (candidate.classificationConfidence ?? 0) >= MIN_PROPERTY_IMAGE_CONFIDENCE;
 }
 
 function logFacebookIntentSignals(postId: string | null, textSource: string, text: string, finalIntent: string | null): void {

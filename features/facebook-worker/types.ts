@@ -24,9 +24,24 @@ export type FacebookPostSnapshot = {
   authoritativePostTextProvenance?: FacebookAuthoritativePostTextProvenance;
   text: string;
   imageUrls: string[];
+  mediaCandidates?: FacebookMediaCandidate[];
   publishedAt: string | null;
   vision?: FacebookVisionExtraction | null;
   cacheHit?: FacebookPostCacheHit | null;
+};
+
+export const FACEBOOK_MEDIA_BINDING_PROVENANCE = ["EXACT_ROOT_STORY", "EXACT_POST_METADATA", "DEDICATED_POST_VIEWER", "AMBIGUOUS"] as const;
+export type FacebookMediaBindingProvenance = (typeof FACEBOOK_MEDIA_BINDING_PROVENANCE)[number];
+export type FacebookMediaCandidate = {
+  url: string;
+  expectedPostId: string;
+  boundPostId: string | null;
+  bindingConfidence: number;
+  bindingProvenance: FacebookMediaBindingProvenance;
+  rootStoryUnique: boolean;
+  foreignPostIdsDetected: string[];
+  classification: FacebookImageRelevance;
+  classificationConfidence: number | null;
 };
 
 export type FacebookPostCacheHit = {

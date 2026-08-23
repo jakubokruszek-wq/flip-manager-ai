@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { FacebookAgeCacheHit, FacebookAuthoritativePostTextProvenance, FacebookAuthoritativePostTextSource, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import type { FacebookAgeCacheHit, FacebookAuthoritativePostTextProvenance, FacebookAuthoritativePostTextSource, FacebookMediaCandidate, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { inspectFacebookIntentSignals, type FacebookIntentSignalName } from "../../../features/facebook-watcher/facebook-intent.ts";
 import { logFacebookWorker } from "./logger.ts";
 import { shouldStopForKnownOldSequence } from "../../../features/facebook-worker/performance.ts";
@@ -26,7 +26,7 @@ export type FacebookPostTimeDiagnostic = {
 };
 export type FacebookDiscoveryStopReason = "OLDER_THAN_72H" | "KNOWN_OLD_SEQUENCE" | "MAX_POSTS" | "MAX_SCROLLS" | "NO_NEW_POSTS" | "END_OF_FEED" | "DEBUG_TARGET";
 export type FacebookDiscoveryLoopResult = { posts: FreshDiscoveredFacebookPost[]; scrollCount: number; stopReason: FacebookDiscoveryStopReason };
-export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; publishedAt: string | null; authoritativePostText: string; authoritativePostTextSource: FacebookAuthoritativePostTextSource; authoritativePostTextProvenance: FacebookAuthoritativePostTextProvenance; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
+export type FacebookPostRegion = { screenshotDataUrl: string; imageUrls: string[]; mediaCandidates: FacebookMediaCandidate[]; publishedAt: string | null; authoritativePostText: string; authoritativePostTextSource: FacebookAuthoritativePostTextSource; authoritativePostTextProvenance: FacebookAuthoritativePostTextProvenance; box: { x: number; y: number; width: number; height: number }; candidateCount: number; selectedMediaCount?: number; screenshotWidth: number; screenshotHeight: number; captureMethod: "ELEMENT_SCREENSHOT" | "CLIP_FALLBACK"; compressed: boolean };
 export type FacebookPostRegionFailureReason = "POST_ANCHOR_NOT_FOUND" | "NO_ANCESTOR_CANDIDATES" | "ALL_TOO_SMALL" | "ALL_REJECTED_AS_COMMENTS" | "NO_CONTENT_NODES" | "INVALID_BOUNDING_BOX" | "AMBIGUOUS_CANDIDATES" | "UNKNOWN";
 export type FacebookPostRegionDiagnosticCounts = {
   dedicatedPageUrlMatches: boolean;
@@ -100,7 +100,7 @@ export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost,
   const region = await dependencies.capture(post.postId);
   const vision = await dependencies.analyze({ postId: post.postId, screenshotDataUrl: region.screenshotDataUrl, imageUrls: region.imageUrls });
   const discoveredPublishedAt = "discoveredPublishedAt" in post && typeof post.discoveredPublishedAt === "string" ? post.discoveredPublishedAt : null;
-  return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: vision.visibleText ?? "", imageUrls: region.imageUrls, publishedAt: region.publishedAt ?? discoveredPublishedAt, vision };
+  return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: vision.visibleText ?? "", imageUrls: region.imageUrls, mediaCandidates: region.mediaCandidates, publishedAt: region.publishedAt ?? discoveredPublishedAt, vision };
 }
 
 export type FacebookMetadataTextCandidateDiagnostic = {
@@ -1128,11 +1128,44 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
       if (commentBoundaryY !== null && safeCommentBoundary === null && mediaBottom !== null && commentBoundaryY < mediaBottom) cropReasons.push("COMMENT_BOUNDARY_INTERSECTS_MEDIA_IGNORED");
       if (candidateBox.height < rect.height || candidateBox.width < rect.width) cropReasons.push("DOCUMENT_BOUNDS_CLAMPED");
       const box = { x: candidateBox.x, y: candidateBox.y, width: candidateBox.width, height: finalBottom - candidateBox.y };
-      const imageUrls = media.flatMap((element) => {
-        if (element instanceof HTMLImageElement && element.src) return [element.src];
-        const nestedImage = element.querySelector<HTMLImageElement>("img[src]");
-        return nestedImage?.src ? [nestedImage.src] : [];
+      const postIdsInRoot = [...rootPostLink, ...descendantPostLinks].flatMap((link) => {
+        const match = new URL(link.href, location.href).pathname.match(/\/posts\/(\d+)/i);
+        return match?.[1] ? [match[1]] : [];
       });
+      const foreignPostIdsDetected = [...new Set(postIdsInRoot.filter((id) => id !== targetPostId))];
+      const rootStoryUnique = dedicatedPageUrlMatches && foreignPostIdsDetected.length === 0;
+      const mediaCandidates = media.flatMap((element) => {
+        const url = element instanceof HTMLImageElement && element.src ? element.src : element.querySelector<HTMLImageElement>("img[src]")?.src;
+        if (!url) return [];
+        let identityRoot: Element | null = element;
+        let boundIds: string[] = [];
+        while (identityRoot && main.contains(identityRoot)) {
+          boundIds = Array.from(identityRoot.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).flatMap((link) => {
+            const match = new URL(link.href, location.href).pathname.match(/\/posts\/(\d+)/i);
+            return match?.[1] ? [match[1]] : [];
+          });
+          if (boundIds.length > 0) break;
+          if (identityRoot === root || identityRoot === main) break;
+          identityRoot = identityRoot.parentElement;
+        }
+        const uniqueBoundIds = [...new Set(boundIds)];
+        const mediaForeignIds = uniqueBoundIds.filter((id) => id !== targetPostId);
+        const exactRootBinding = uniqueBoundIds.length === 1 && uniqueBoundIds[0] === targetPostId;
+        const unambiguousViewerBinding = uniqueBoundIds.length === 0 && rootStoryUnique;
+        const bindingProvenance = exactRootBinding ? "EXACT_ROOT_STORY" : unambiguousViewerBinding ? "DEDICATED_POST_VIEWER" : "AMBIGUOUS";
+        return [{
+          url,
+          expectedPostId: targetPostId,
+          boundPostId: exactRootBinding || unambiguousViewerBinding ? targetPostId : null,
+          bindingConfidence: exactRootBinding ? 1 : unambiguousViewerBinding ? 0.95 : 0,
+          bindingProvenance,
+          rootStoryUnique: exactRootBinding || unambiguousViewerBinding,
+          foreignPostIdsDetected: mediaForeignIds,
+          classification: "UNKNOWN",
+          classificationConfidence: null,
+        }];
+      }).filter((candidate, index, all) => all.findIndex((item) => item.url === candidate.url) === index);
+      const imageUrls = mediaCandidates.filter((candidate) => candidate.boundPostId === targetPostId && candidate.rootStoryUnique).map((candidate) => candidate.url);
       const time = root.querySelector<HTMLTimeElement>("time[datetime]")?.dateTime ?? null;
       return [{
         rootIndex,
@@ -1149,6 +1182,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         nestingDepth: nestingDepths.get(root) ?? null,
         box,
         imageUrls,
+        mediaCandidates,
         publishedAt: time,
         screenshotDiagnostic: {
           candidate_box: candidateBox,
@@ -1329,6 +1363,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         area: selected.area,
         box: selected.box,
         imageUrls: selected.imageUrls,
+        mediaCandidates: selected.mediaCandidates,
         publishedAt: selected.publishedAt,
         candidateCount: candidates.length,
         cleanPoolUsed,
@@ -1494,7 +1529,17 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
   const reportedBox = selectedElementBox && captureMethod === "ELEMENT_SCREENSHOT"
     ? { x: selectedElementBox.x, y: selectedElementBox.y, width: selectedElementBox.width, height: selectedElementBox.height }
     : region.box;
-  return { screenshotDataUrl, imageUrls: [...new Set(region.imageUrls)].slice(0, 5), publishedAt: region.publishedAt, authoritativePostText, authoritativePostTextSource, authoritativePostTextProvenance, box: reportedBox, candidateCount: region.candidateCount, selectedMediaCount: region.selectedMediaCount, screenshotWidth: screenshotDimensions.width, screenshotHeight: screenshotDimensions.height, captureMethod, compressed };
+  const mediaCandidates = region.mediaCandidates.slice(0, 5) as FacebookMediaCandidate[];
+  const exactBound = mediaCandidates.filter((candidate) => candidate.boundPostId === postId && candidate.rootStoryUnique);
+  logFacebookWorker("FACEBOOK_MEDIA_BINDING_SUMMARY", {
+    postId,
+    candidates: mediaCandidates.length,
+    exactBound: exactBound.length,
+    foreignRejected: mediaCandidates.filter((candidate) => candidate.foreignPostIdsDetected.length > 0).length,
+    ambiguousRejected: mediaCandidates.filter((candidate) => candidate.boundPostId === null).length,
+    mirrored: 0,
+  });
+  return { screenshotDataUrl, imageUrls: [...new Set(exactBound.map((candidate) => candidate.url))], mediaCandidates, publishedAt: region.publishedAt, authoritativePostText, authoritativePostTextSource, authoritativePostTextProvenance, box: reportedBox, candidateCount: region.candidateCount, selectedMediaCount: region.selectedMediaCount, screenshotWidth: screenshotDimensions.width, screenshotHeight: screenshotDimensions.height, captureMethod, compressed };
 }
 
 function facebookScreenshotDataUrlLength(screenshot: Buffer): number {

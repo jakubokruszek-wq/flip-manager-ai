@@ -90,6 +90,15 @@ test("a failed update never overwrites stable images with an empty array", async
   assert.equal(result.stats.failedCount, 1);
 });
 
+test("exact-post replacement does not carry forward unproven existing images", async () => {
+  const result = await mirrorFacebookImageUrls("post-1", [], {
+    existingImages: [STABLE],
+    preserveExistingImages: false,
+    upload: async () => { throw new Error("upload must not run"); },
+  });
+  assert.deepEqual(result.images, []);
+});
+
 function fetchReturning(bytes: Uint8Array, contentType: string): typeof fetch {
   return (async () => imageResponse(bytes, contentType)) as typeof fetch;
 }

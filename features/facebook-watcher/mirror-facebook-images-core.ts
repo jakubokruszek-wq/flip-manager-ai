@@ -26,6 +26,7 @@ type UploadImage = (input: {
 
 type MirrorOptions = {
   existingImages?: string[];
+  preserveExistingImages?: boolean;
   fetchImpl?: typeof fetch;
   maxBytes?: number;
   storageOrigin?: string;
@@ -43,7 +44,7 @@ export async function mirrorFacebookImageUrls(
   const timeoutMs = options.timeoutMs ?? 15_000;
   const stats: FacebookImageMirrorStats = { inputCount: inputUrls.length, uploadedCount: 0, skippedCount: 0, failedCount: 0 };
   const warnings: string[] = [];
-  const output = uniqueStableExistingImages(options.existingImages ?? []);
+  const output = options.preserveExistingImages === false ? [] : uniqueStableExistingImages(options.existingImages ?? []);
   const outputSet = new Set(output);
   const seenInputs = new Set<string>();
 

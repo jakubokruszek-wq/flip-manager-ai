@@ -1,4 +1,4 @@
-import type { FacebookFieldConfidence, FacebookImageAssessment, FacebookIntentSource, FacebookListingIntent } from "../facebook-worker/types";
+import type { FacebookFieldConfidence, FacebookImageAssessment, FacebookIntentSource, FacebookListingIntent, FacebookMediaCandidate } from "../facebook-worker/types";
 
 export type FacebookListingInput = {
   url?: string;
@@ -7,6 +7,7 @@ export type FacebookListingInput = {
   groupName?: string;
   publishedAt?: string;
   images?: string[];
+  mediaCandidates?: FacebookMediaCandidate[];
   overrides?: Partial<Pick<FacebookProperty, "title" | "city" | "district" | "neighborhood" | "street" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "marketType" | "condition" | "sellerType" | "description">>;
   analysisConfidence?: number;
   analysisFieldConfidence?: FacebookFieldConfidence;
@@ -15,6 +16,17 @@ export type FacebookListingInput = {
   intentConfidence?: number;
   intentSource?: FacebookIntentSource;
   imageAssessments?: FacebookImageAssessment[];
+};
+
+export type FacebookSourceFacts = {
+  administrativeRent: number | null;
+  basement: boolean | null;
+  dryingRoom: boolean | null;
+  refreshedAt: string | null;
+  bathroomRenovated: boolean | null;
+  buildingRenovation: string[];
+  furnishingIncluded: boolean | null;
+  additionalEquipmentPrice: number | null;
 };
 
 export type FacebookProperty = {
@@ -41,6 +53,7 @@ export type FacebookProperty = {
   intentConfidence?: number;
   intentSource?: FacebookIntentSource;
   imageAssessments?: FacebookImageAssessment[];
+  sourceFacts?: FacebookSourceFacts;
 };
 
 export type FacebookWatcherListing = FacebookProperty & {

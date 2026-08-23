@@ -105,9 +105,21 @@ test("unrelated portraits, group, quote and lifestyle images are not accepted", 
 
 test("sale passes gate and only confirmed interior images reach persistence", async () => {
   const sale = { ...vision(true), imageAssessments: [{ imageIndex: 0, relevance: "PROPERTY_IMAGE" as const, confidence: 0.97 }, { imageIndex: 1, relevance: "NON_PROPERTY_IMAGE" as const, confidence: 0.99 }] };
-  const item = { ...post(sale), imageUrls: ["interior", "profile"] };
+  const item = { ...post(sale), imageUrls: ["interior", "profile"], mediaCandidates: [
+    { url: "interior", expectedPostId: "99", boundPostId: "99", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "UNKNOWN" as const, classificationConfidence: null },
+    { url: "profile", expectedPostId: "99", boundPostId: "99", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "UNKNOWN" as const, classificationConfidence: null },
+  ] };
   let receivedImages: string[] = [];
   const result = await persistEligibleFacebookPost(item, async (eligible) => { receivedImages = facebookVisionToListingInput(eligible, "Group").images ?? []; return persisted(); });
   assert.equal(result.status, "created");
   assert.deepEqual(receivedImages, ["interior"]);
+});
+
+test("full authoritative post text is not replaced by a short Vision summary", () => {
+  const full = "Sprzedam mieszkanie 59,45 m2 przy ul. Sporna 72. Czynsz ok. 700 zł. Łazienka po remoncie, własna piwnica i suszarnia.";
+  const item = { ...post({ ...vision(true), description: "Mieszkanie 2 pokoje w Łodzi" }), authoritativePostText: full, authoritativePostTextSource: "POST_PAGE_METADATA" as const };
+  const input = facebookVisionToListingInput(item, "Group");
+  assert.equal(input.postText, full);
+  assert.equal(input.overrides?.description, full);
+  assert.equal(input.analysisFieldConfidence?.description, 1);
 });

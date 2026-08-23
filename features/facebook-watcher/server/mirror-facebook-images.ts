@@ -8,12 +8,14 @@ export async function mirrorFacebookImages(input: {
   listingId: string;
   imageUrls: string[];
   existingImages?: string[];
+  preserveExistingImages?: boolean;
 }): Promise<FacebookImageMirrorResult> {
   const supabase = createFacebookWatcherAdminClient();
   try {
     await ensureFacebookImageBucket(supabase);
     const result = await mirrorFacebookImageUrls(input.listingId, input.imageUrls, {
       existingImages: input.existingImages,
+      preserveExistingImages: input.preserveExistingImages,
       storageOrigin: process.env.NEXT_PUBLIC_SUPABASE_URL,
       upload: async ({ bytes, contentType, path }) => {
         const uploaded = await supabase.storage.from(FACEBOOK_IMAGE_BUCKET).upload(path, bytes, { contentType, upsert: false });
@@ -28,7 +30,7 @@ export async function mirrorFacebookImages(input: {
     for (const warning of result.warnings) developmentError(warning);
     return result;
   } catch (error) {
-    const existingImages = (input.existingImages ?? []).filter(isStableHttpsUrl);
+    const existingImages = input.preserveExistingImages === false ? [] : (input.existingImages ?? []).filter(isStableHttpsUrl);
     const result: FacebookImageMirrorResult = {
       images: existingImages,
       warnings: [error instanceof Error ? error.message : "Nie udało się uruchomić mirroringu obrazów."],

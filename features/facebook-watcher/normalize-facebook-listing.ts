@@ -14,11 +14,12 @@ export function normalizeFacebookUrl(value?: string): string | null {
 export function normalizeFacebookListing(input: FacebookListingInput): FacebookListingInput {
   return {
     url: normalizeFacebookUrl(input.url) ?? undefined,
-    postText: input.postText?.replace(/\s+/g, " ").trim() || undefined,
+    postText: input.postText?.trim() || undefined,
     authorName: input.authorName?.trim() || undefined,
     groupName: input.groupName?.trim() || undefined,
     publishedAt: input.publishedAt || undefined,
     images: [...new Set((input.images ?? []).map((image) => image.trim()).filter(Boolean))].slice(0, 12),
+    mediaCandidates: input.mediaCandidates?.slice(0, 12),
     overrides: input.overrides,
     analysisConfidence: input.analysisConfidence,
     analysisFieldConfidence: input.analysisFieldConfidence,
