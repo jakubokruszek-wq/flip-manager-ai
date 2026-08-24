@@ -35,5 +35,23 @@ export function createFacebookGroupsApi(deps: Dependencies) {
 
 function failure(error: unknown, fallbackStatus = 500) {
   const message = error instanceof Error ? error.message : "Operacja grupy nie powiodła się.";
-  return Response.json({ error: message }, { status: message === "UNAUTHORIZED" ? 401 : fallbackStatus });
+  const status = message === "UNAUTHORIZED" ? 401 : fallbackStatus;
+  const headers = status === 401 && error && typeof error === "object" && "diagnostics" in error
+    ? authDiagnosticHeaders((error as { diagnostics: Record<string, boolean | string> }).diagnostics)
+    : undefined;
+  return Response.json({ error: message }, { status, headers });
+}
+
+function authDiagnosticHeaders(diagnostics: Record<string, boolean | string>): Headers {
+  const headers = new Headers();
+  const names: Record<string, string> = {
+    cookieAuthAttempted: "X-Debug-Auth-Cookie-Attempted", cookieGetUserSuccess: "X-Debug-Auth-Cookie-User",
+    authorizationPresent: "X-Debug-Auth-Authorization-Present", bearerParseSuccess: "X-Debug-Auth-Bearer-Parsed",
+    bearerGetUserAttempted: "X-Debug-Auth-Bearer-Attempted", bearerGetUserSuccess: "X-Debug-Auth-Bearer-User",
+    userPresent: "X-Debug-Auth-User-Present", authSource: "X-Debug-Auth-Source",
+  };
+  for (const [key, header] of Object.entries(names)) headers.set(header, String(diagnostics[key]));
+  const ref = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").match(/^https?:\/\/([a-z0-9-]+)\.supabase\.co/i)?.[1];
+  if (ref) headers.set("X-Debug-Supabase-Project-Ref", ref);
+  return headers;
 }
