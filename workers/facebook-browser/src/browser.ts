@@ -1,11 +1,42 @@
 import { chromium } from "playwright";
-import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookGroupSnapshot, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookGroupSnapshot, FacebookImageRevalidationCandidate, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { createCachedFacebookPostSnapshot, emptyFacebookPerformanceMetrics, partitionFacebookPostsByCache } from "../../../features/facebook-worker/performance.ts";
 import { ControlledFacebookFailure } from "./errors.ts";
 import { assertWorkerFacebookGroupUrl } from "./group-reader.ts";
 import { logFacebookWorker } from "./logger.ts";
 import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
+
+export async function revalidateFacebookPostImages(
+  profileDir: string,
+  target: { postId: string; permalink: string },
+  signal: AbortSignal,
+  analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>,
+): Promise<{ candidates: FacebookImageRevalidationCandidate[]; verifiedCandidates: FacebookImageRevalidationCandidate[]; pageOpens: number; visionCalls: number }> {
+  const context = await chromium.launchPersistentContext(profileDir, { headless: true, locale: "pl-PL" });
+  let pageOpens = 0;
+  let visionCalls = 0;
+  try {
+    signal.throwIfAborted();
+    const page = context.pages()[0] ?? await context.newPage();
+    const opened = await openFacebookPostPage(page, target.permalink, "revalidation", target.postId);
+    if (opened) pageOpens += 1;
+    const region = await captureFacebookPostRegion(page, target.postId);
+    signal.throwIfAborted();
+    visionCalls += 1;
+    const vision = await analyzeRegion({ postId: target.postId, screenshotDataUrl: region.screenshotDataUrl, imageUrls: region.imageUrls }, signal);
+    const assessments = new Map(vision.imageAssessments.map((assessment) => [assessment.imageIndex, assessment]));
+    const candidates = region.mediaCandidates.map((candidate) => {
+      const index = region.imageUrls.indexOf(candidate.url);
+      const assessment = assessments.get(index);
+      return { ...candidate, classification: assessment?.relevance ?? "UNKNOWN", classificationConfidence: assessment?.confidence ?? null };
+    });
+    const verifiedCandidates = candidates.filter((candidate) => candidate.storyRootPostId === target.postId && candidate.boundPostId === target.postId && candidate.rootStoryUnique && candidate.foreignPostIdsDetected.length === 0 && candidate.bindingConfidence >= 0.9);
+    return { candidates, verifiedCandidates, pageOpens, visionCalls };
+  } finally {
+    await context.close();
+  }
+}
 
 export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false, debugPostId: string | null = null, lookupCache?: (postIds: string[], signal: AbortSignal) => Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }>) {
   const started = Date.now(); const url = assertWorkerFacebookGroupUrl(group.url).toString();

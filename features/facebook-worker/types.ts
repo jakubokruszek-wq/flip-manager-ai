@@ -51,6 +51,35 @@ export type FacebookMediaCandidate = {
   intrinsicHeight?: number | null;
 };
 
+export type FacebookImageRevalidationTarget = {
+  listingId: string;
+  postId: string;
+  permalink: string;
+  currentImages: string[];
+};
+
+export type FacebookImageRevalidationCandidate = Pick<FacebookMediaCandidate,
+  "url" | "expectedPostId" | "storyRootPostId" | "boundPostId" | "bindingConfidence" |
+  "bindingProvenance" | "rootStoryUnique" | "foreignPostIdsDetected" |
+  "classification" | "classificationConfidence" | "structuredPostMediaProvenance">
+  & { contentHash?: string | null; storageUrl?: string | null };
+
+export type FacebookImageRevalidationResult = {
+  listingId: string;
+  postId: string;
+  status: "SUCCESS" | "FAILED" | "UNKNOWN" | "DRY_RUN";
+  beforeCount: number;
+  afterCount: number;
+  candidates: number;
+  verifiedImages: number;
+  rejectedImages: number;
+  rejectionReasons: string[];
+  visionCalls: number;
+  pageOpens: number;
+  durationMs: number;
+  wouldReplaceGallery: boolean;
+};
+
 export type FacebookPostCacheHit = {
   sourceJobId: string;
   listingId: string | null;

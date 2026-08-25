@@ -1,5 +1,5 @@
 import { createFacebookWorkerAuthHeaders, FACEBOOK_WORKER_NONCE_HEADER, FACEBOOK_WORKER_SIGNATURE_HEADER, FACEBOOK_WORKER_TIMESTAMP_HEADER } from "../../../features/facebook-worker/protocol.ts";
-import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookVisionExtraction, FacebookWorkerJob } from "../../../features/facebook-worker/types.ts";
+import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookImageRevalidationCandidate, FacebookImageRevalidationResult, FacebookImageRevalidationTarget, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookVisionExtraction, FacebookWorkerJob } from "../../../features/facebook-worker/types.ts";
 import type { FacebookWorkerConfig } from "./config.ts";
 
 export function createFacebookApiClient(config: FacebookWorkerConfig) {
@@ -18,5 +18,8 @@ export function createFacebookApiClient(config: FacebookWorkerConfig) {
     vision: (job: FacebookWorkerJob, input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal?: AbortSignal) => post<{ vision: FacebookVisionExtraction }>("/api/facebook-worker/vision", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, ...input }, signal),
     complete: (job: FacebookWorkerJob, result: { posts: unknown[]; warnings: string[]; durationMs: number; performance: FacebookPerformanceMetrics; ageCache: FacebookAgeCacheEntry[] }, signal?: AbortSignal) => post("/api/facebook-worker/complete", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, ...result }, signal),
     fail: (job: FacebookWorkerJob, errorCode: string, errorMessage: string, signal?: AbortSignal) => post("/api/facebook-worker/fail", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, errorCode, errorMessage }, signal),
+    revalidationList: (input: { limit?: number; listingId?: string; postId?: string; dryRun?: boolean }, signal?: AbortSignal) => post<{ targets: FacebookImageRevalidationTarget[] }>("/api/facebook-worker/image-revalidation/list", input, signal),
+    revalidationVision: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal?: AbortSignal) => post<{ vision: FacebookVisionExtraction }>("/api/facebook-worker/image-revalidation/vision", input, signal),
+    revalidationPersist: (input: { listingId: string; postId: string; dryRun: boolean; candidates: FacebookImageRevalidationCandidate[]; verifiedCandidates: FacebookImageRevalidationCandidate[]; pageOpens: number; visionCalls: number; durationMs: number }, signal?: AbortSignal) => post<FacebookImageRevalidationResult>("/api/facebook-worker/image-revalidation/persist", input, signal),
   };
 }

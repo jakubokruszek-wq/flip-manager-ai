@@ -7,20 +7,27 @@ import { openFacebookLogin } from "./session.ts";
 import type { FacebookWorkerJob } from "../../../features/facebook-worker/types.ts";
 import { runFacebookJobCompletion, waitForFacebookTargetJob } from "./job-runner.ts";
 import { parseFacebookMaxPostsArgument, parseFacebookPostIdArgument } from "./post-page.ts";
+import { parseFacebookImageRevalidationArguments, runFacebookImageRevalidation } from "./image-revalidation.ts";
 
 const loginMode = process.argv.includes("--login");
 const timeDiagnosticMode = process.argv.includes("--time-diagnostic");
 const mediaDiagnosticMode = process.argv.includes("--media-diagnostic");
+const imageRevalidation = parseFacebookImageRevalidationArguments(process.argv);
 const debugMaxPosts = parseFacebookMaxPostsArgument(process.argv);
 const debugPostId = parseFacebookPostIdArgument(process.argv);
 if (debugPostId && (timeDiagnosticMode || mediaDiagnosticMode)) throw new Error("--facebook-post-id cannot be combined with diagnostic modes.");
+if (imageRevalidation.enabled && (loginMode || debugPostId || timeDiagnosticMode || mediaDiagnosticMode)) throw new Error("--revalidate-images cannot be combined with login, targeted or diagnostic modes.");
 if (loginMode) {
   await openFacebookLogin(resolveFacebookProfileDir());
 } else {
   const config = loadFacebookWorkerConfig(); const api = createFacebookApiClient(config); const shutdown = new AbortController(); let activeJob: FacebookWorkerJob | null = null;
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { logFacebookWorker("FACEBOOK_WORKER_SHUTDOWN", { signal, activeJobId: activeJob?.id ?? null }); shutdown.abort(); });
   logFacebookWorker("FACEBOOK_WORKER_START", { workerId: config.workerId, once: config.once, timeDiagnosticMode, mediaDiagnosticMode, debugMaxPosts, debugPostId });
-  while (!shutdown.signal.aborted) {
+  if (imageRevalidation.enabled) {
+    logFacebookWorker("FACEBOOK_IMAGE_REVALIDATION_START", { dryRun: imageRevalidation.dryRun, limit: imageRevalidation.limit, listingId: imageRevalidation.listingId, postId: imageRevalidation.postId });
+    await runFacebookImageRevalidation(config, api, imageRevalidation, shutdown.signal);
+    logFacebookWorker("FACEBOOK_WORKER_STOP", { workerId: config.workerId, mode: "IMAGE_REVALIDATION" });
+  } else while (!shutdown.signal.aborted) {
     try {
       const job = debugPostId
         ? await waitForFacebookTargetJob({
@@ -50,7 +57,7 @@ if (loginMode) {
     if (config.once) break;
     if (!debugPostId) await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
   }
-  logFacebookWorker("FACEBOOK_WORKER_STOP", { workerId: config.workerId });
+  if (!imageRevalidation.enabled) logFacebookWorker("FACEBOOK_WORKER_STOP", { workerId: config.workerId });
 }
 
 function safeMessage(error: unknown): string { return error instanceof Error ? error.message.slice(0, 1_000) : String(error).slice(0, 1_000); }
