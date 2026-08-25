@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, errors as playwrightErrors } from "playwright";
 import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookGroupSnapshot, FacebookImageRevalidationCandidate, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { createCachedFacebookPostSnapshot, emptyFacebookPerformanceMetrics, partitionFacebookPostsByCache } from "../../../features/facebook-worker/performance.ts";
 import { ControlledFacebookFailure } from "./errors.ts";
@@ -191,14 +191,36 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
   } finally { await context.close(); }
 }
 
-async function openFacebookPostPage(page: import("playwright").Page, permalink: string, groupId: string, postId: string): Promise<boolean> {
+const FACEBOOK_POST_NAVIGATION_MAX_ATTEMPTS = 2;
+const FACEBOOK_POST_NAVIGATION_RETRY_BACKOFF_MS = 1_000;
+
+export async function openFacebookPostPage(page: import("playwright").Page, permalink: string, groupId: string, postId: string): Promise<boolean> {
   if (isExpectedFacebookPostPage(page.url(), postId)) return false;
-  const postResponse = await page.goto(permalink, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  let postResponse: Awaited<ReturnType<typeof page.goto>>;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      postResponse = await page.goto(permalink, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      break;
+    } catch (error) {
+      if (!isFacebookNavigationTimeout(error) || attempt >= FACEBOOK_POST_NAVIGATION_MAX_ATTEMPTS) throw error;
+      try {
+        await assertAccessibleFacebookPage(page);
+      } catch (accessError) {
+        if (accessError instanceof ControlledFacebookFailure) throw accessError;
+      }
+      logFacebookWorker("FACEBOOK_POST_NAVIGATION_RETRY", { groupId, postId, attempt, maxAttempts: FACEBOOK_POST_NAVIGATION_MAX_ATTEMPTS, backoffMs: FACEBOOK_POST_NAVIGATION_RETRY_BACKOFF_MS });
+      await page.waitForTimeout(FACEBOOK_POST_NAVIGATION_RETRY_BACKOFF_MS);
+    }
+  }
   await assertAccessibleFacebookPage(page);
   if (postResponse && !postResponse.ok()) throw new ControlledFacebookFailure(postResponse.status() === 403 ? "FACEBOOK_ACCESS_DENIED" : "FACEBOOK_GROUP_UNAVAILABLE", `Facebook post returned HTTP ${postResponse.status()}`);
   logFacebookWorker("FACEBOOK_POST_PAGE_OPEN", { groupId, postId, status: postResponse?.status() ?? null, finalPath: new URL(page.url()).pathname });
   await page.waitForTimeout(1_000);
   return true;
+}
+
+function isFacebookNavigationTimeout(error: unknown): boolean {
+  return error instanceof playwrightErrors.TimeoutError || error instanceof Error && error.name === "TimeoutError";
 }
 
 async function assertAccessibleFacebookPage(page: import("playwright").Page): Promise<void> {
