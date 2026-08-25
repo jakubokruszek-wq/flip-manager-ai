@@ -19,11 +19,26 @@ function persisted(): FacebookPostImportResult {
 test("Vision output maps into the existing Facebook listing input", () => {
   const input = facebookVisionToListingInput(post(vision(true)), "Group");
   assert.equal(input.postText, "Sprzedam mieszkanie 45 m², 2 pokoje");
-  assert.equal(input.overrides?.price, 350_000);
+  assert.equal(input.overrides?.price, undefined);
   assert.equal(input.overrides?.area, 45);
   assert.equal(input.overrides?.rooms, 2);
   assert.equal(input.analysisFieldConfidence?.area, 0.94);
   assert.deepEqual(input.analysisFlags, ["vision_post_region"]);
+});
+
+test("authoritative price per m2 overrides a phone-like Vision price", () => {
+  const text = "Sprzedam 3 pokoje na Retkini‼️\n64 m2\n9200 zł/m2\n881 291 778";
+  const item = { ...post({ ...vision(true), price: 1778, area: 64, visibleText: text }), authoritativePostText: text };
+  const input = facebookVisionToListingInput(item, "Group");
+  assert.equal(input.overrides?.price, 588800);
+  assert.equal(input.overrides?.area, 64);
+});
+
+test("Vision cannot turn an unlabelled phone fragment into a price", () => {
+  const text = "Sprzedam mieszkanie 64 m2, kontakt 881 291 778";
+  const item = { ...post({ ...vision(true), price: 1778, area: 64, visibleText: text }), authoritativePostText: text };
+  const input = facebookVisionToListingInput(item, "Group");
+  assert.equal(input.overrides?.price, undefined);
 });
 
 test("Vision property continues through the persistence batch", async () => {

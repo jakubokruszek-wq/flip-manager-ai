@@ -10,14 +10,52 @@ const DISTRICTS = ["Bałuty", "Widzew", "Polesie", "Górna", "Śródmieście"];
 const FLAG_PHRASES = ["bezpośrednio", "bez pośredników", "do remontu", "generalny remont", "po babci", "pilnie", "okazja", "spadek", "do negocjacji", "prywatnie"];
 const number = (value?: string) => value ? Number(value.replace(",", ".").replace(/\s/g, "")) : null;
 
+export type FacebookPriceResolution = {
+  price: number | null;
+  pricePerM2: number | null;
+  source: "EXPLICIT_TOTAL" | "THOUSANDS_TOTAL" | "DERIVED_FROM_PRICE_PER_M2" | "NONE";
+};
+
+const AUXILIARY_PRICE_CONTEXT = /(?:czynsz|opłat|kaucj|wyposażeni|mebl|remont|prowizj|telefon|tel\.?)[^\n]{0,24}$/i;
+
+export function resolveFacebookPrice(text: string, area: number | null): FacebookPriceResolution {
+  const normalized = text.replace(/[\u00a0\u202f]/g, " ");
+  const perM2 = uniqueNumbers(Array.from(normalized.matchAll(/(\d{1,3}(?:\s\d{3})+|\d{3,6})(?:[.,](\d{1,2}))?\s*(?:zł|pln)\s*\/\s*m(?:2|²)(?![\p{L}\d])/giu)), (match) => decimalNumber(match[1], match[2]));
+  const explicitTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{1,3}(?:\s\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?\s*(?:zł|pln)(?!\p{L})/giu))
+    .filter((match) => !/^\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => decimalNumber(match[1], match[2]));
+  const thousandsTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*(?:tys\.?|tysi(?:ąc(?:e|y)?)?)/giu))
+    .filter((match) => !/^\s*(?:zł|pln)?\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
+
+  const explicit = singleValue(explicitTotals);
+  if (explicit !== null) return { price: explicit, pricePerM2: singleValue(perM2), source: "EXPLICIT_TOTAL" };
+  const thousands = singleValue(thousandsTotals);
+  if (thousands !== null) return { price: thousands, pricePerM2: singleValue(perM2), source: "THOUSANDS_TOTAL" };
+  const unitPrice = singleValue(perM2);
+  if (unitPrice !== null && area !== null && area > 0) {
+    return { price: Math.round(area * unitPrice), pricePerM2: unitPrice, source: "DERIVED_FROM_PRICE_PER_M2" };
+  }
+  return { price: null, pricePerM2: unitPrice, source: "NONE" };
+}
+
+function decimalNumber(integer: string, decimals: string | undefined): number {
+  return Number(`${integer.replace(/\s/g, "")}${decimals ? `.${decimals}` : ""}`);
+}
+
+function uniqueNumbers(matches: RegExpMatchArray[], convert: (match: RegExpMatchArray) => number): number[] {
+  return [...new Set(matches.map(convert).filter((value) => Number.isFinite(value) && value > 0))];
+}
+
+function singleValue(values: number[]): number | null {
+  return values.length === 1 ? values[0] : null;
+}
+
 export async function extractFacebookProperty(input: FacebookListingInput): Promise<FacebookProperty> {
   const text = input.postText ?? "";
   const lower = text.toLocaleLowerCase("pl-PL");
   const place = PLACES.find(([needle]) => lower.includes(needle));
   const districtFound = DISTRICTS.find((item) => lower.includes(item.toLocaleLowerCase("pl-PL"))) ?? null;
-  const priceThousands = text.match(/(\d{2,3}(?:[.,]\d+)?)\s*(?:tys\.?|tysi)/i);
-  const priceFull = text.match(/(\d[\d\s]{3,})\s*zł/i);
   const area = number(text.match(/(\d{1,3}(?:[.,]\d+)?)\s*m(?:²|2)\b/i)?.[1]);
+  const price = resolveFacebookPrice(text, area);
   const mRooms = text.match(/\bM(\d)\b/i);
   const explicitRooms = text.match(/(\d+)\s*(?:pok(?:oje|oi|ój|\.)?)/i);
   const floor = number(text.match(/(\d+)\s*(?:piętro|piętrze|p\.)/i)?.[1]);
@@ -25,7 +63,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const streetMatch = text.match(/\bul\.?\s+([\p{L}][\p{L}\s.-]{1,40}?)(?:\s+(\d+[\p{L}]?))?(?=,|\.|\n|$)/iu);
   const street = streetMatch ? [streetMatch[1]?.trim(), streetMatch[2]].filter(Boolean).join(" ") : null;
   const flags = FLAG_PHRASES.filter((phrase) => lower.includes(phrase));
-  const known = [priceThousands || priceFull, area, explicitRooms || mRooms, place || districtFound, floor].filter(Boolean).length;
+  const known = [price.price !== null, area, explicitRooms || mRooms, place || districtFound, floor].filter(Boolean).length;
   const explicitNeighborhood = place?.[1] ?? null;
   const explicitDistrict = place?.[2] ?? districtFound;
   const location = await resolveLocation({ address: street, street, district: explicitDistrict, city: explicitNeighborhood || explicitDistrict || /łódź/i.test(text) ? "Łódź" : null, locationText: text, title: text.split(/[.!?\n]/)[0] ?? null, description: text || null });
@@ -38,7 +76,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     neighborhood: explicitNeighborhood ?? location.neighborhood,
     district: explicitDistrict ?? location.district,
     street: street ?? location.street,
-    price: describesConcreteProperty ? priceThousands ? Math.round((number(priceThousands[1]) ?? 0) * 1000) : number(priceFull?.[1]) : null,
+    price: describesConcreteProperty ? price.price : null,
     area: describesConcreteProperty ? area : null,
     rooms: describesConcreteProperty ? number(explicitRooms?.[1]) ?? (mRooms ? Math.max(1, Number(mRooms[1]) - 1) : null) : null,
     floor: describesConcreteProperty ? fraction ? Number(fraction[1]) : floor : null,

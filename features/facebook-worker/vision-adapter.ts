@@ -2,6 +2,7 @@ import type { FacebookListingInput } from "../facebook-watcher/types.ts";
 import type { FacebookMediaCandidate, FacebookPostSnapshot, FacebookVisionExtraction } from "./types.ts";
 import { inspectFacebookIntentSignals, resolveFacebookListingIntent } from "../facebook-watcher/facebook-intent.ts";
 import type { FacebookPostImportResult } from "./post-flow.ts";
+import { resolveFacebookPrice } from "../facebook-watcher/extract-facebook-property.ts";
 
 const MIN_PROPERTY_IMAGE_CONFIDENCE = 0.8;
 
@@ -65,7 +66,9 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
   if (vision) {
     assignKnown(overrides, "title", vision.title); assignKnown(overrides, "description", authoritativeDescription ?? vision.description);
     assignKnown(overrides, "city", vision.city); assignKnown(overrides, "district", vision.district); assignKnown(overrides, "neighborhood", vision.neighborhood); assignKnown(overrides, "street", vision.street);
-    assignKnown(overrides, "price", vision.price); assignKnown(overrides, "area", vision.area); assignKnown(overrides, "rooms", vision.rooms); assignKnown(overrides, "floor", vision.floor); assignKnown(overrides, "totalFloors", vision.totalFloors);
+    const priceText = [authoritativeDescription, vision.visibleText].filter(Boolean).join("\n");
+    const resolvedPrice = resolveFacebookPrice(priceText, vision.area);
+    assignKnown(overrides, "price", resolvedPrice.price); assignKnown(overrides, "area", vision.area); assignKnown(overrides, "rooms", vision.rooms); assignKnown(overrides, "floor", vision.floor); assignKnown(overrides, "totalFloors", vision.totalFloors);
     assignKnown(overrides, "condition", vision.condition); assignKnown(overrides, "sellerType", vision.sellerType);
   }
   const mediaCandidates = classifiedFacebookMediaCandidates(post, vision?.imageAssessments);

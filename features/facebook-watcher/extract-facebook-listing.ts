@@ -1,7 +1,7 @@
 import "server-only";
 
 import { analyzeFacebookImages } from "./analyze-facebook-images";
-import { extractFacebookProperty } from "./extract-facebook-property";
+import { extractFacebookProperty, resolveFacebookPrice } from "./extract-facebook-property";
 import { FACEBOOK_CONFIDENCE_FIELDS, type FacebookFieldConfidence } from "../facebook-worker/types.ts";
 import type { FacebookListingInput, FacebookProperty } from "./types";
 import { resolveFacebookListingIntent } from "./facebook-intent";
@@ -18,6 +18,7 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     : base;
   const intent = resolveFacebookListingIntent(combinedText, vision.listingIntent, vision.intentConfidence);
   const acceptedImages = (input.images ?? []).filter((_, index) => vision.imageAssessments.some((assessment) => assessment.imageIndex === index && assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8));
+  const resolvedPrice = resolveFacebookPrice(combinedText, textResult.area ?? vision.area);
 
   return {
     ...textResult,
@@ -25,7 +26,7 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     district: textResult.district ?? vision.district,
     neighborhood: textResult.neighborhood ?? vision.neighborhood,
     street: textResult.street ?? vision.street,
-    price: textResult.price ?? vision.price,
+    price: resolvedPrice.price,
     area: textResult.area ?? vision.area,
     rooms: textResult.rooms ?? vision.rooms,
     floor: textResult.floor ?? vision.floor,
