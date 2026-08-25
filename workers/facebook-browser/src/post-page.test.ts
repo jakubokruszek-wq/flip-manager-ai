@@ -198,6 +198,27 @@ test("a gallery region containing another post id cannot bind its media to the e
   } finally { await browser.close(); }
 });
 
+test("structured exact post binding recovers a narrow region without a permalink anchor", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const postId of ["1648132990164429", "1647426910235037"]) {
+      const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+      await page.goto(`https://www.facebook.com/groups/1/posts/${postId}/`);
+      await page.setContent(`<script type="application/json">${JSON.stringify({ post_id: postId, actor: { id: "root-author" }, message: "Sprzedam mieszkanie" })}</script><main>
+        <section data-testid="local-post-region" style="width:590px;height:500px">
+          <div data-ad-comet-preview="message" style="height:100px">Sprzedam mieszkanie</div>
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='590' height='380'%3E%3C/svg%3E" style="display:block;width:590px;height:380px">
+        </section>
+      </main>`);
+      const region = await captureFacebookPostRegion(page, postId);
+      assert.equal(region.imageUrls.length, 1);
+      assert.equal(region.mediaCandidates[0].bindingProvenance, "EXACT_POST_METADATA");
+      assert.equal(region.mediaCandidates[0].structuredPostMediaProvenance, true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
 test("exact story root prevents neighbouring post media from contaminating the target", async () => {
   const browser = await chromium.launch({ headless: true });
   try {

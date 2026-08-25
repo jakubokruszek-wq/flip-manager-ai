@@ -934,7 +934,7 @@ export async function collectFacebookPostTimeDiagnostic(page: Page, postId: stri
 export async function captureFacebookPostRegion(page: Page, postId: string, options: { mediaDiagnostic?: boolean } = {}): Promise<FacebookPostRegion> {
   const metadataResolution = await extractFacebookAuthoritativeTextFromMetadata(page, postId);
   const captureToken = `flip-${postId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic }) => {
+  const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic, allowStructuredExactPostBinding }) => {
     const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
     const dedicatedPageUrlMatches = postPath.test(location.pathname);
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).filter((link) => { const url = new URL(link.href, location.href); return postPath.test(url.pathname) && !url.searchParams.has("comment_id"); });
@@ -1075,13 +1075,33 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
       }
       return selected;
     })() : null;
+    let structuredNarrowRoot: Element | null = null;
+    if (exactStoryRoots.length === 0 && allowStructuredExactPostBinding) {
+      const messageSignals = Array.from(main.querySelectorAll<HTMLElement>('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="post-message"]'))
+        .filter((element) => !element.closest(`${commentRegionSelector},${headerSidebarSelector},${interactiveTextSelector}`));
+      for (const signal of messageSignals) {
+        let current: Element | null = signal;
+        for (let depth = 0; current && depth < 8 && current !== main; depth += 1, current = current.parentElement) {
+          const ancestor = current;
+          const rect = ancestor.getBoundingClientRect();
+          if (rect.width < 280 || rect.width > 1_600 || rect.height < 100 || rect.height > 1_600) continue;
+          const foreignIds = postIdsIn(ancestor).filter((id) => id !== targetPostId);
+          const localMedia = [...dedupedPostMedia].filter((media) => ancestor.contains(media));
+          if (foreignIds.length === 0 && localMedia.length > 0) {
+            structuredNarrowRoot = ancestor;
+            break;
+          }
+        }
+        if (structuredNarrowRoot) break;
+      }
+    }
     const canonicalMediaRoot = dedicatedPageUrlMatches
       ? (mediaAwareAncestor && mediaAwareAncestor !== main ? mediaAwareAncestor : targetLinkAncestor)
       : null;
     roots.splice(0, roots.length, ...(exactStoryRoots.length === 1
       ? [exactStoryRoots[0]]
-      : exactStoryRoots.length === 0 && canonicalMediaRoot && canonicalMediaRoot !== main
-        ? [canonicalMediaRoot]
+      : exactStoryRoots.length === 0 && (structuredNarrowRoot || canonicalMediaRoot) && (structuredNarrowRoot || canonicalMediaRoot) !== main
+        ? [structuredNarrowRoot || canonicalMediaRoot!]
         : []));
     let candidatesAfterSizeFilter = 0;
     let candidatesAfterContentFilter = 0;
@@ -1228,21 +1248,23 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         // Dedicated-page fallback is allowed only for the selected candidate
         // subtree itself. A generic ancestor/viewer must never lend its media
         // to the requested post merely because it contains no permalink IDs.
-        const unambiguousViewerBinding = uniqueBoundIds.length === 0 && rootStoryUnique && identityRoot === root;
-        const bindingProvenance = exactRootBinding ? "EXACT_ROOT_STORY" : unambiguousViewerBinding ? "DEDICATED_POST_VIEWER" : "AMBIGUOUS";
+        const structuredPostMediaBinding = allowStructuredExactPostBinding && root === structuredNarrowRoot && uniqueBoundIds.length === 0 && rootStoryUnique;
+        const unambiguousViewerBinding = uniqueBoundIds.length === 0 && rootStoryUnique && identityRoot === root && !structuredPostMediaBinding;
+        const bindingProvenance = exactRootBinding ? "EXACT_ROOT_STORY" : structuredPostMediaBinding ? "EXACT_POST_METADATA" : unambiguousViewerBinding ? "DEDICATED_POST_VIEWER" : "AMBIGUOUS";
         return [{
           url,
           expectedPostId: targetPostId,
           storyRootPostId: rootStoryUnique ? targetPostId : null,
-          boundPostId: exactRootBinding || unambiguousViewerBinding ? targetPostId : null,
-          bindingConfidence: exactRootBinding ? 1 : unambiguousViewerBinding ? 0.95 : 0,
+          boundPostId: exactRootBinding || structuredPostMediaBinding || unambiguousViewerBinding ? targetPostId : null,
+          bindingConfidence: exactRootBinding ? 1 : structuredPostMediaBinding || unambiguousViewerBinding ? 0.95 : 0,
           bindingProvenance,
-          rootStoryUnique: exactRootBinding || unambiguousViewerBinding,
+          rootStoryUnique: exactRootBinding || structuredPostMediaBinding || unambiguousViewerBinding,
           foreignPostIdsDetected: mediaForeignIds,
           classification: "UNKNOWN",
           classificationConfidence: null,
           intrinsicWidth,
           intrinsicHeight,
+          structuredPostMediaProvenance: structuredPostMediaBinding,
         }];
       }).filter((candidate, index, all) => all.findIndex((item) => item.url === candidate.url) === index);
       const imageUrls = mediaCandidates.filter((candidate) => candidate.storyRootPostId === targetPostId && candidate.boundPostId === targetPostId && candidate.rootStoryUnique).map((candidate) => candidate.url);
@@ -1479,7 +1501,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
       mediaAwareBuildDiagnostic,
       mediaDiagnostic,
     };
-  }, { targetPostId: postId, captureToken, collectMediaDiagnostic: options.mediaDiagnostic === true });
+  }, { targetPostId: postId, captureToken, collectMediaDiagnostic: options.mediaDiagnostic === true, allowStructuredExactPostBinding: metadataResolution.rootStoryIdentified && metadataResolution.rootAuthorMessageIdentified });
   const counts: FacebookPostRegionDiagnosticCounts = {
     dedicatedPageUrlMatches: evaluated.diagnostic.dedicated_page_url_matches,
     canonicalAnchorCount: evaluated.diagnostic.canonical_anchor_count,
