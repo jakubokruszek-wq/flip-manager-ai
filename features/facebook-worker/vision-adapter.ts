@@ -108,6 +108,7 @@ export function isMirrorableFacebookMedia(candidate: FacebookMediaCandidate): bo
     && candidate.rootStoryUnique
     && candidate.foreignPostIdsDetected.length === 0
     && candidate.bindingConfidence >= 0.9
+    && (candidate.storyRootPostId === candidate.expectedPostId || candidate.structuredPostMediaProvenance === true)
     && candidate.classification === "PROPERTY_IMAGE"
     && (candidate.classificationConfidence ?? 0) >= MIN_PROPERTY_IMAGE_CONFIDENCE;
 }

@@ -44,6 +44,8 @@ export type FacebookMediaCandidate = {
   foreignPostIdsDetected: string[];
   classification: FacebookImageRelevance;
   classificationConfidence: number | null;
+  /** Explicit structured metadata binding can substitute for a DOM story root. */
+  structuredPostMediaProvenance?: boolean;
   /** Intrinsic media dimensions when the browser could read them. */
   intrinsicWidth?: number | null;
   intrinsicHeight?: number | null;

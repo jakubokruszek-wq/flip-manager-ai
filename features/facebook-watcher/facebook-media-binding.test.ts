@@ -7,7 +7,7 @@ function input(candidates: NonNullable<FacebookListingInput["mediaCandidates"]>)
   return { mediaCandidates: candidates };
 }
 
-const exact = { url: "https://scontent.xx.fbcdn.net/a.jpg", expectedPostId: "A", boundPostId: "A", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE" as const, classificationConfidence: 0.95 };
+const exact = { url: "https://scontent.xx.fbcdn.net/a.jpg", expectedPostId: "A", storyRootPostId: "A", boundPostId: "A", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE" as const, classificationConfidence: 0.95 };
 
 test("exact-bound property media is accepted only for its expected post", () => {
   assert.deepEqual(exactBoundPropertyImages(input([exact]), "A"), [exact.url]);
@@ -36,6 +36,16 @@ test("keeps a verified interior image with strong dimensions", () => {
   const interior = { ...exact, intrinsicWidth: 1_200, intrinsicHeight: 800 };
   assert.equal(isSuspiciousSmallSquare(interior), false);
   assert.deepEqual(exactBoundPropertyImages(input([interior]), "A"), [interior.url]);
+});
+
+test("rejects the confirmed post-fix hotel image without a story root", () => {
+  const hotel = { ...exact, url: "https://scontent.xx.fbcdn.net/hotel.jpg", storyRootPostId: null, bindingProvenance: "DEDICATED_POST_VIEWER" as const, bindingConfidence: 0.95, classificationConfidence: 0.9, intrinsicWidth: 90, intrinsicHeight: 160 };
+  assert.deepEqual(exactBoundPropertyImages(input([hotel]), "A"), []);
+});
+
+test("structured exact-post media provenance is an explicit safe exception", () => {
+  const structured = { ...exact, storyRootPostId: null, bindingProvenance: "EXACT_POST_METADATA" as const, structuredPostMediaProvenance: true };
+  assert.deepEqual(exactBoundPropertyImages(input([structured]), "A"), [structured.url]);
 });
 
 test("a later scan without creation time preserves published_at", () => {

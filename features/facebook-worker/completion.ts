@@ -78,6 +78,7 @@ function parseMediaCandidates(value: unknown): FacebookMediaCandidate[] {
       foreignPostIdsDetected: stringArray(row.foreignPostIdsDetected, 20, 300),
       classification,
       classificationConfidence: row.classificationConfidence === null || row.classificationConfidence === undefined ? null : boundedConfidence(row.classificationConfidence),
+      structuredPostMediaProvenance: row.structuredPostMediaProvenance === true,
     };
   });
 }

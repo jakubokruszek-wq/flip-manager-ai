@@ -19,7 +19,7 @@ import { recordFacebookGroupImport } from "@/features/facebook-groups/server";
 import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebookFieldConfidence } from "./facebook-data-quality";
 import { resolveFacebookListingIntent } from "./facebook-intent";
 import { reconcileFacebookLocation } from "./facebook-location-quality";
-import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookMediaBindingSummary, preserveFacebookPublishedAt } from "./facebook-media-binding";
+import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookMediaBindingSummary, hasApprovedFacebookImageProvenance, preserveFacebookPublishedAt } from "./facebook-media-binding";
 
 type Row = Record<string, unknown>;
 
@@ -167,6 +167,19 @@ async function importAutomatedFacebook(input: {
   const effective = locationResolution.property;
   if (effective.listingIntent !== "SELL_PROPERTY") throw new Error("FACEBOOK_INTENT_GATE_FAILED");
   const boundImages = exactBoundPropertyImages(normalized, externalId);
+  for (const candidate of normalized.mediaCandidates ?? []) {
+    if (candidate.classification === "PROPERTY_IMAGE" && !hasApprovedFacebookImageProvenance(candidate, externalId)) {
+      console.info("FACEBOOK_IMAGE_PROVENANCE_REJECTED", {
+        sourcePostId: candidate.expectedPostId,
+        storyRootPostIdPresent: candidate.storyRootPostId !== null && candidate.storyRootPostId !== undefined,
+        bindingMethod: candidate.bindingProvenance,
+        bindingConfidence: candidate.bindingConfidence,
+        classification: candidate.classification,
+        classificationConfidence: candidate.classificationConfidence,
+        rejectionReason: "FACEBOOK_IMAGE_PROVENANCE_INSUFFICIENT",
+      });
+    }
+  }
   effective.images = boundImages;
   // A verified extraction is authoritative for the current Facebook post. Never
   // carry forward unproven images from an older extraction/cache entry.

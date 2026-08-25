@@ -9,8 +9,14 @@ export function exactBoundPropertyImages(input: FacebookListingInput, expectedPo
       && candidate.bindingConfidence >= 0.9
       && candidate.classification === "PROPERTY_IMAGE"
       && (candidate.classificationConfidence ?? 0) >= 0.8
+      && hasApprovedFacebookImageProvenance(candidate, expectedPostId)
       && !isSuspiciousSmallSquare(candidate))
     .map((candidate) => candidate.url))];
+}
+
+export function hasApprovedFacebookImageProvenance(candidate: { expectedPostId: string; storyRootPostId?: string | null; structuredPostMediaProvenance?: boolean }, expectedPostId: string): boolean {
+  return candidate.expectedPostId === expectedPostId
+    && (candidate.storyRootPostId === expectedPostId || candidate.structuredPostMediaProvenance === true);
 }
 
 /** Conservative guard against avatars/profile tiles being treated as property photos. */

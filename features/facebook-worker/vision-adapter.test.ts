@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { processFacebookPostBatch, type FacebookPostImportResult } from "./post-flow.ts";
 import type { FacebookPostSnapshot, FacebookVisionExtraction } from "./types.ts";
-import { acceptedFacebookPropertyImages, detectedVisionFields, facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter.ts";
+import { acceptedFacebookPropertyImages, detectedVisionFields, facebookVisionToListingInput, isMirrorableFacebookMedia, persistEligibleFacebookPost } from "./vision-adapter.ts";
 
 function vision(isProperty: boolean): FacebookVisionExtraction {
   return { isProperty, listingIntent: isProperty ? "SELL_PROPERTY" : "OTHER", intentConfidence: 0.98, title: isProperty ? "Mieszkanie Łódź" : null, description: isProperty ? "Sprzedam mieszkanie 45 m²" : null, visibleText: isProperty ? "Sprzedam mieszkanie 45 m², 2 pokoje" : "Spotkanie grupy w sobotę", city: isProperty ? "Łódź" : null, district: null, neighborhood: null, street: null, price: isProperty ? 350_000 : null, area: isProperty ? 45 : null, rooms: isProperty ? 2 : null, floor: null, totalFloors: null, condition: null, sellerType: isProperty ? "private" : null, confidence: 0.95, fieldConfidence: { price: 0.96, area: 0.94, rooms: 0.93, city: 0.9 }, imageAssessments: [], usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 0, reasoningTokens: 0, model: "gpt-4o-mini", requestId: "req_test", estimatedCostUsd: 0.000027, pricingSourceModel: "gpt-4o-mini", pricingVersion: "2026-08-23", dataQuality: "EXACT", diagnosticsReason: null } };
@@ -106,13 +106,18 @@ test("unrelated portraits, group, quote and lifestyle images are not accepted", 
 test("sale passes gate and only confirmed interior images reach persistence", async () => {
   const sale = { ...vision(true), imageAssessments: [{ imageIndex: 0, relevance: "PROPERTY_IMAGE" as const, confidence: 0.97 }, { imageIndex: 1, relevance: "NON_PROPERTY_IMAGE" as const, confidence: 0.99 }] };
   const item = { ...post(sale), imageUrls: ["interior", "profile"], mediaCandidates: [
-    { url: "interior", expectedPostId: "99", boundPostId: "99", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "UNKNOWN" as const, classificationConfidence: null },
-    { url: "profile", expectedPostId: "99", boundPostId: "99", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "UNKNOWN" as const, classificationConfidence: null },
+    { url: "interior", expectedPostId: "99", storyRootPostId: "99", boundPostId: "99", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "UNKNOWN" as const, classificationConfidence: null },
+    { url: "profile", expectedPostId: "99", storyRootPostId: "99", boundPostId: "99", bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "UNKNOWN" as const, classificationConfidence: null },
   ] };
   let receivedImages: string[] = [];
   const result = await persistEligibleFacebookPost(item, async (eligible) => { receivedImages = facebookVisionToListingInput(eligible, "Group").images ?? []; return persisted(); });
   assert.equal(result.status, "created");
   assert.deepEqual(receivedImages, ["interior"]);
+});
+
+test("PROPERTY_IMAGE cannot override missing exact story provenance", () => {
+  const hotel = { url: "hotel", expectedPostId: "1575270320957778", storyRootPostId: null, boundPostId: "1575270320957778", bindingConfidence: 0.95, bindingProvenance: "DEDICATED_POST_VIEWER" as const, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE" as const, classificationConfidence: 1 };
+  assert.equal(isMirrorableFacebookMedia(hotel), false);
 });
 
 test("full authoritative post text is not replaced by a short Vision summary", () => {
