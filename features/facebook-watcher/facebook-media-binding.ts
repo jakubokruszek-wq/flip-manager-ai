@@ -8,8 +8,18 @@ export function exactBoundPropertyImages(input: FacebookListingInput, expectedPo
       && candidate.foreignPostIdsDetected.length === 0
       && candidate.bindingConfidence >= 0.9
       && candidate.classification === "PROPERTY_IMAGE"
-      && (candidate.classificationConfidence ?? 0) >= 0.8)
+      && (candidate.classificationConfidence ?? 0) >= 0.8
+      && !isSuspiciousSmallSquare(candidate))
     .map((candidate) => candidate.url))];
+}
+
+/** Conservative guard against avatars/profile tiles being treated as property photos. */
+export function isSuspiciousSmallSquare(candidate: { intrinsicWidth?: number | null; intrinsicHeight?: number | null }): boolean {
+  const width = candidate.intrinsicWidth ?? null;
+  const height = candidate.intrinsicHeight ?? null;
+  if (!width || !height || width > 200 || height > 200) return false;
+  const ratio = width / height;
+  return ratio >= 0.8 && ratio <= 1.25;
 }
 
 export function facebookMediaBindingSummary(input: FacebookListingInput, expectedPostId: string) {

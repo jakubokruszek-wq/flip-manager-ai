@@ -168,7 +168,9 @@ async function importAutomatedFacebook(input: {
   if (effective.listingIntent !== "SELL_PROPERTY") throw new Error("FACEBOOK_INTENT_GATE_FAILED");
   const boundImages = exactBoundPropertyImages(normalized, externalId);
   effective.images = boundImages;
-  const imageMirror = await mirrorFacebookImages({ listingId: externalId, imageUrls: boundImages, existingImages: existingState.images, preserveExistingImages: crossSourceMatch });
+  // A verified extraction is authoritative for the current Facebook post. Never
+  // carry forward unproven images from an older extraction/cache entry.
+  const imageMirror = await mirrorFacebookImages({ listingId: externalId, imageUrls: boundImages, existingImages: existingState.images, preserveExistingImages: false });
   effective.images = imageMirror.images;
   const pricePerSqm = effective.price && effective.area ? effective.price / effective.area : null;
   const score = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
@@ -201,7 +203,15 @@ async function importAutomatedFacebook(input: {
 
   const persistedPublishedAt = preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt);
   const bindingSummary = facebookMediaBindingSummary(normalized, externalId);
-  const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: persistedPublishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, locationProvenance: locationResolution.provenance, confidence: effective.confidence, fieldConfidence: effective.fieldConfidence, fieldProvenance: facebookFieldProvenance(normalized, effective), sourceFacts: effective.sourceFacts, authoritativeSourceText: normalized.postText ?? null, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, mediaBinding: bindingSummary, imageMirror: imageMirror.stats, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
+  const mediaProvenance = (normalized.mediaCandidates ?? []).map((candidate) => ({
+    sourcePostId: candidate.expectedPostId,
+    storyRootPostId: candidate.storyRootPostId ?? null,
+    bindingMethod: candidate.bindingProvenance,
+    bindingConfidence: candidate.bindingConfidence,
+    classification: candidate.classification,
+    classificationConfidence: candidate.classificationConfidence,
+  }));
+  const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: persistedPublishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, locationProvenance: locationResolution.provenance, confidence: effective.confidence, fieldConfidence: effective.fieldConfidence, fieldProvenance: facebookFieldProvenance(normalized, effective), sourceFacts: effective.sourceFacts, authoritativeSourceText: normalized.postText ?? null, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, mediaBinding: bindingSummary, mediaProvenance, imageExtractionVersion: 2, imageMirror: imageMirror.stats, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
   if (metadata.error) throw new Error(`FACEBOOK_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
   console.info("FACEBOOK_MEDIA_BINDING_SUMMARY", { postId: externalId, ...bindingSummary, mirrored: imageMirror.images.length });
   console.info("FACEBOOK_PUBLICATION_DATE", { postId: externalId, source: normalized.publishedAt ? "FACEBOOK_CREATION_TIME" : previousSource.publishedAt ? "EXISTING_DATA" : "UNKNOWN", exact: Boolean(normalized.publishedAt), persisted: persistedPublishedAt });

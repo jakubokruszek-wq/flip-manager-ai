@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookMediaBindingSummary, preserveFacebookPublishedAt } from "./facebook-media-binding.ts";
+import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookMediaBindingSummary, isSuspiciousSmallSquare, preserveFacebookPublishedAt } from "./facebook-media-binding.ts";
 import type { FacebookListingInput } from "./types.ts";
 
 function input(candidates: NonNullable<FacebookListingInput["mediaCandidates"]>): FacebookListingInput {
@@ -24,6 +24,18 @@ test("foreign and ambiguous gallery media are rejected", () => {
 
 test("zero confidently bound images remains an empty safe result", () => {
   assert.deepEqual(exactBoundPropertyImages(input([]), "A"), []);
+});
+
+test("rejects a small square avatar even when Vision calls it a property image", () => {
+  const avatar = { ...exact, intrinsicWidth: 160, intrinsicHeight: 159 };
+  assert.equal(isSuspiciousSmallSquare(avatar), true);
+  assert.deepEqual(exactBoundPropertyImages(input([avatar]), "A"), []);
+});
+
+test("keeps a verified interior image with strong dimensions", () => {
+  const interior = { ...exact, intrinsicWidth: 1_200, intrinsicHeight: 800 };
+  assert.equal(isSuspiciousSmallSquare(interior), false);
+  assert.deepEqual(exactBoundPropertyImages(input([interior]), "A"), [interior.url]);
 });
 
 test("a later scan without creation time preserves published_at", () => {

@@ -192,11 +192,18 @@ async function associateCachedFacebookListing(
   const prior = await supabase.from("listing_source_metadata").select("metadata").eq("source", "facebook").eq("source_post_url", input.sourceUrl).maybeSingle();
   if (prior.error) throw new Error(`FACEBOOK_CACHE_METADATA_READ_FAILED: ${prior.error.message}`);
   const metadata = asRow(prior.data?.metadata) ?? {};
+  // Image arrays from older cache entries have no per-image provenance and are
+  // not safe to reuse. Keep the listing/cache association, but quarantine the
+  // stale current gallery until a verified extraction repopulates it.
+  if (metadata.imageExtractionVersion !== 2) {
+    const cleared = await supabase.from("listings").update({ images: [] }).eq("id", input.listingId).eq("source", "facebook");
+    if (cleared.error) throw new Error(`FACEBOOK_CACHE_IMAGE_INVALIDATION_FAILED: ${cleared.error.message}`);
+  }
   const associatedMetadata = mergeFacebookGroupAssociationMetadata(metadata, { id: input.groupId, name: input.groupName });
   const saved = await supabase.from("listing_source_metadata").upsert({
     listing_id: input.listingId, source: "facebook", source_post_url: input.sourceUrl, group_name: input.groupName,
     author_name: null, published_at: input.publishedAt, collected_at: now,
-    metadata: { ...associatedMetadata, source: "facebook_worker_cache", postId: input.postId, checkedAt: now, cacheAnalyzedAt: input.analyzedAt },
+    metadata: { ...associatedMetadata, source: "facebook_worker_cache", postId: input.postId, checkedAt: now, cacheAnalyzedAt: input.analyzedAt, imageExtractionVersion: metadata.imageExtractionVersion === 2 ? 2 : null },
   }, { onConflict: "source,source_post_url" });
   if (saved.error) throw new Error(`FACEBOOK_CACHE_METADATA_PERSIST_FAILED: ${saved.error.message}`);
   const matched = await readFacebookCachedMatch((columns) => supabase.from("listing_filter_matches").select(columns).eq("listing_id", input.listingId).eq("search_filter_id", input.filterId).eq("is_current_match", true).maybeSingle());

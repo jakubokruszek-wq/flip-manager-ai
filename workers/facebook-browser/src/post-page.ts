@@ -1200,8 +1200,17 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
       const foreignPostIdsDetected = [...new Set(postIdsInRoot.filter((id) => id !== targetPostId))];
       const rootStoryUnique = dedicatedPageUrlMatches && foreignPostIdsDetected.length === 0;
       const mediaCandidates = media.flatMap((element) => {
-        const url = element instanceof HTMLImageElement && element.src ? element.src : element.querySelector<HTMLImageElement>("img[src]")?.src;
+        const imageElement = element instanceof HTMLImageElement ? element : element.querySelector<HTMLImageElement>("img[src]");
+        const url = imageElement?.src;
         if (!url) return [];
+        const intrinsicWidth = imageElement?.naturalWidth || Math.round(element.getBoundingClientRect().width) || null;
+        const intrinsicHeight = imageElement?.naturalHeight || Math.round(element.getBoundingClientRect().height) || null;
+        // Small near-square assets are overwhelmingly avatars/profile tiles or UI chrome.
+        // Reject them before they enter the post media candidate set.
+        if (intrinsicWidth && intrinsicHeight && intrinsicWidth <= 200 && intrinsicHeight <= 200) {
+          const ratio = intrinsicWidth / intrinsicHeight;
+          if (ratio >= 0.8 && ratio <= 1.25) return [];
+        }
         let identityRoot: Element | null = element;
         let boundIds: string[] = [];
         while (identityRoot && main.contains(identityRoot)) {
@@ -1229,6 +1238,8 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
           foreignPostIdsDetected: mediaForeignIds,
           classification: "UNKNOWN",
           classificationConfidence: null,
+          intrinsicWidth,
+          intrinsicHeight,
         }];
       }).filter((candidate, index, all) => all.findIndex((item) => item.url === candidate.url) === index);
       const imageUrls = mediaCandidates.filter((candidate) => candidate.storyRootPostId === targetPostId && candidate.boundPostId === targetPostId && candidate.rootStoryUnique).map((candidate) => candidate.url);

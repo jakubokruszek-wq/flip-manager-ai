@@ -44,6 +44,9 @@ export type FacebookMediaCandidate = {
   foreignPostIdsDetected: string[];
   classification: FacebookImageRelevance;
   classificationConfidence: number | null;
+  /** Intrinsic media dimensions when the browser could read them. */
+  intrinsicWidth?: number | null;
+  intrinsicHeight?: number | null;
 };
 
 export type FacebookPostCacheHit = {
