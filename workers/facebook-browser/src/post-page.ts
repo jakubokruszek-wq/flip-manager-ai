@@ -1225,7 +1225,10 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         const uniqueBoundIds = [...new Set(boundIds)];
         const mediaForeignIds = uniqueBoundIds.filter((id) => id !== targetPostId);
         const exactRootBinding = uniqueBoundIds.length === 1 && uniqueBoundIds[0] === targetPostId;
-        const unambiguousViewerBinding = uniqueBoundIds.length === 0 && rootStoryUnique;
+        // Dedicated-page fallback is allowed only for the selected candidate
+        // subtree itself. A generic ancestor/viewer must never lend its media
+        // to the requested post merely because it contains no permalink IDs.
+        const unambiguousViewerBinding = uniqueBoundIds.length === 0 && rootStoryUnique && identityRoot === root;
         const bindingProvenance = exactRootBinding ? "EXACT_ROOT_STORY" : unambiguousViewerBinding ? "DEDICATED_POST_VIEWER" : "AMBIGUOUS";
         return [{
           url,
