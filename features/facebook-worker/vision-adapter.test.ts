@@ -34,6 +34,14 @@ test("authoritative price per m2 overrides a phone-like Vision price", () => {
   assert.equal(input.overrides?.area, 64);
 });
 
+test("Vision visibleText price cannot override authoritative post price", () => {
+  const authoritativeText = "Sprzedam 3 pokoje na Retkini\n64 m2\n9200 zł/m2\n881 291 778";
+  const item = { ...post({ ...vision(true), price: 1778, area: 64, visibleText: "Cena 1778 zł" }), authoritativePostText: authoritativeText };
+  const input = facebookVisionToListingInput(item, "Group");
+  assert.equal(input.overrides?.price, 588800);
+  assert.equal(input.priceProvenance, "AUTHORITATIVE_TEXT");
+});
+
 test("Vision cannot turn an unlabelled phone fragment into a price", () => {
   const text = "Sprzedam mieszkanie 64 m2, kontakt 881 291 778";
   const item = { ...post({ ...vision(true), price: 1778, area: 64, visibleText: text }), authoritativePostText: text };

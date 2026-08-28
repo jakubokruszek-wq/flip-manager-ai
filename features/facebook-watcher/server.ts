@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-evaluation";
 import { calculateContentHash } from "@/features/flip-finder/otodom-search";
-import { persistListing } from "@/features/flip-finder/server/persist-listing";
+import { deactivateListingFilterMatch, persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import type { SearchFilter } from "@/features/flip-finder";
@@ -200,6 +200,7 @@ async function importAutomatedFacebook(input: {
     const imagesUpdate = await supabase.from("listings").update({ images: imageMirror.images }).eq("id", listingId);
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
     matchCreated = decision.matches ? await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now) : false;
+    if (!decision.matches) await deactivateListingFilterMatch(supabase, listingId, context.filter.id);
   } else {
     const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt), authoritativeTextSource: normalized.postText ? "AUTHOR_TEXT" : null, mediaBinding: facebookMediaBindingSummary(normalized, externalId), flags: effective.flags, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, locationProvenance: locationResolution.provenance };
     const contentHash = calculateContentHash({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor, locationText, images: imageMirror.images });
@@ -267,7 +268,7 @@ function facebookFieldProvenance(input: FacebookListingInput, property: Facebook
   const source = input.postText ? "AUTHOR_TEXT" : "VISION";
   return Object.fromEntries(["title", "description", "city", "district", "neighborhood", "street", "price", "area", "rooms", "floor", "totalFloors", "condition", "sellerType"]
     .filter((field) => property[field as keyof FacebookProperty] !== null && property[field as keyof FacebookProperty] !== undefined)
-    .map((field) => [field, field === "description" && input.postText ? "AUTHOR_TEXT" : source]));
+    .map((field) => [field, field === "price" && property.priceProvenance ? property.priceProvenance : field === "description" && input.postText ? "AUTHOR_TEXT" : source]));
 }
 
 async function readSourceMetadata(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, sourceUrl: string): Promise<{ metadata: Row; publishedAt: string | null }> {

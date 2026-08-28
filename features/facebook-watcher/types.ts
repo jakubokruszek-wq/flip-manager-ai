@@ -1,5 +1,7 @@
 import type { FacebookFieldConfidence, FacebookImageAssessment, FacebookIntentSource, FacebookListingIntent, FacebookMediaCandidate } from "../facebook-worker/types";
 
+export type FacebookPriceProvenance = "AUTHORITATIVE_TEXT" | "VISION" | "HISTORICAL";
+
 export type FacebookListingInput = {
   url?: string;
   postText?: string;
@@ -8,7 +10,8 @@ export type FacebookListingInput = {
   publishedAt?: string;
   images?: string[];
   mediaCandidates?: FacebookMediaCandidate[];
-  overrides?: Partial<Pick<FacebookProperty, "title" | "city" | "district" | "neighborhood" | "street" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "marketType" | "condition" | "sellerType" | "description">>;
+  overrides?: Partial<Pick<FacebookProperty, "title" | "city" | "district" | "neighborhood" | "street" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "marketType" | "condition" | "sellerType" | "description" | "priceProvenance">>;
+  priceProvenance?: FacebookPriceProvenance;
   analysisConfidence?: number;
   analysisFieldConfidence?: FacebookFieldConfidence;
   analysisFlags?: string[];
@@ -36,6 +39,7 @@ export type FacebookProperty = {
   neighborhood: string | null;
   street: string | null;
   price: number | null;
+  priceProvenance?: FacebookPriceProvenance;
   area: number | null;
   rooms: number | null;
   floor: number | null;

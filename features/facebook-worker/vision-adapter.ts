@@ -63,12 +63,17 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
   const intent = resolveFacebookPostIntent(post);
   const overrides: NonNullable<FacebookListingInput["overrides"]> = {};
   const authoritativeDescription = post.authoritativePostText?.trim() || null;
+  const authoritativePrice = authoritativeDescription ? resolveFacebookPrice(authoritativeDescription, vision?.area ?? null).price : null;
+  const visionPrice = vision?.visibleText ? resolveFacebookPrice(vision.visibleText, vision.area).price : null;
   if (vision) {
     assignKnown(overrides, "title", vision.title); assignKnown(overrides, "description", authoritativeDescription ?? vision.description);
     assignKnown(overrides, "city", vision.city); assignKnown(overrides, "district", vision.district); assignKnown(overrides, "neighborhood", vision.neighborhood); assignKnown(overrides, "street", vision.street);
-    const priceText = [authoritativeDescription, vision.visibleText].filter(Boolean).join("\n");
+    // Authoritative post text is the only allowed price source when present.
+    // Vision visibleText may contain UI/phone fragments and must not override it.
+    const priceText = authoritativeDescription ?? vision.visibleText ?? "";
     const resolvedPrice = resolveFacebookPrice(priceText, vision.area);
-    assignKnown(overrides, "price", resolvedPrice.price); assignKnown(overrides, "area", vision.area); assignKnown(overrides, "rooms", vision.rooms); assignKnown(overrides, "floor", vision.floor); assignKnown(overrides, "totalFloors", vision.totalFloors);
+    assignKnown(overrides, "price", resolvedPrice.price); if (resolvedPrice.price !== null) overrides.priceProvenance = authoritativeDescription ? "AUTHORITATIVE_TEXT" : "VISION";
+    assignKnown(overrides, "area", vision.area); assignKnown(overrides, "rooms", vision.rooms); assignKnown(overrides, "floor", vision.floor); assignKnown(overrides, "totalFloors", vision.totalFloors);
     assignKnown(overrides, "condition", vision.condition); assignKnown(overrides, "sellerType", vision.sellerType);
   }
   const mediaCandidates = classifiedFacebookMediaCandidates(post, vision?.imageAssessments);
@@ -78,6 +83,7 @@ export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupNa
       ? undefined
       : post.authoritativePostText?.trim() || post.vision?.visibleText?.trim() || undefined,
     groupName,
+    priceProvenance: authoritativePrice !== null ? "AUTHORITATIVE_TEXT" : visionPrice !== null ? "VISION" : undefined,
     publishedAt: post.publishedAt ?? undefined,
     images: mediaCandidates.filter(isMirrorableFacebookMedia).map((candidate) => candidate.url),
     mediaCandidates,

@@ -18,7 +18,8 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     : base;
   const intent = resolveFacebookListingIntent(combinedText, vision.listingIntent, vision.intentConfidence);
   const acceptedImages = (input.images ?? []).filter((_, index) => vision.imageAssessments.some((assessment) => assessment.imageIndex === index && assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8));
-  const resolvedPrice = resolveFacebookPrice(combinedText, textResult.area ?? vision.area);
+  const priceSourceText = input.postText?.trim() || vision.visibleText || "";
+  const resolvedPrice = resolveFacebookPrice(priceSourceText, textResult.area ?? vision.area);
 
   return {
     ...textResult,
@@ -27,6 +28,7 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     neighborhood: textResult.neighborhood ?? vision.neighborhood,
     street: textResult.street ?? vision.street,
     price: resolvedPrice.price,
+    priceProvenance: resolvedPrice.price !== null ? (input.priceProvenance ?? (input.postText ? "AUTHORITATIVE_TEXT" : "VISION")) : textResult.priceProvenance,
     area: textResult.area ?? vision.area,
     rooms: textResult.rooms ?? vision.rooms,
     floor: textResult.floor ?? vision.floor,

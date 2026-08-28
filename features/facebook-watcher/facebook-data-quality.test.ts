@@ -29,6 +29,16 @@ test("low-confidence OCR price cannot replace a strong price or create a price d
   assert.equal(result.priceChanged, false);
 });
 
+test("deterministic authoritative text price beats stale high-confidence history", () => {
+  const result = mergeFacebookPropertyByConfidence(
+    existing({ price: 1_778 }, 0.95),
+    property({ price: 588_800, area: 64, priceProvenance: "AUTHORITATIVE_TEXT", confidence: 0.8, fieldConfidence: { price: 0.8 } }),
+  );
+  assert.equal(result.property.price, 588_800);
+  assert.equal(result.property.priceProvenance, "AUTHORITATIVE_TEXT");
+  assert.equal(result.priceChanged, true);
+});
+
 test("high-confidence incoming value fills an empty field", () => {
   const result = mergeFacebookPropertyByConfidence(existing({ area: null }, 0), property({ area: 44.5, fieldConfidence: { area: 0.94 } }));
   assert.equal(result.property.area, 44.5);

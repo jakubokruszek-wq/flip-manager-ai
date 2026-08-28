@@ -56,9 +56,11 @@ export function mergeFacebookPropertyByConfidence(
 
     const confidenceAllowsUpdate = newConfidence >= minimumConfidence(field) && newConfidence >= oldConfidence;
     const safePrice = field !== "price" || !looksLikeOcrDigitLoss(oldValue, newValue);
-    if (!confidenceAllowsUpdate || !safePrice) {
+    const authoritativePrice = field === "price" && incoming.priceProvenance === "AUTHORITATIVE_TEXT" && !isMissing(newValue);
+    if (!authoritativePrice && (!confidenceAllowsUpdate || !safePrice)) {
       assign(property, field, oldValue);
       fieldConfidence[field] = oldConfidence;
+      if (field === "price" && !isMissing(oldValue)) property.priceProvenance = "HISTORICAL";
       continue;
     }
 

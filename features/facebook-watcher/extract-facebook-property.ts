@@ -77,6 +77,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     district: explicitDistrict ?? location.district,
     street: street ?? location.street,
     price: describesConcreteProperty ? price.price : null,
+    priceProvenance: describesConcreteProperty ? (input.priceProvenance ?? (price.price !== null ? "AUTHORITATIVE_TEXT" : undefined)) : undefined,
     area: describesConcreteProperty ? area : null,
     rooms: describesConcreteProperty ? number(explicitRooms?.[1]) ?? (mRooms ? Math.max(1, Number(mRooms[1]) - 1) : null) : null,
     floor: describesConcreteProperty ? fraction ? Number(fraction[1]) : floor : null,
