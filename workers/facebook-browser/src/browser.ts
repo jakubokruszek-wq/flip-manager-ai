@@ -1,5 +1,5 @@
 import { chromium, errors as playwrightErrors } from "playwright";
-import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookGroupSnapshot, FacebookImageRevalidationCandidate, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookGroupSnapshot, FacebookImageRevalidationCandidate, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookPostPerformanceTiming, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { createCachedFacebookPostSnapshot, emptyFacebookPerformanceMetrics, partitionFacebookPostsByCache } from "../../../features/facebook-worker/performance.ts";
 import { ControlledFacebookFailure } from "./errors.ts";
 import { assertWorkerFacebookGroupUrl } from "./group-reader.ts";
@@ -41,6 +41,9 @@ export async function revalidateFacebookPostImages(
 export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false, debugPostId: string | null = null, lookupCache?: (postIds: string[], signal: AbortSignal) => Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }>) {
   const started = Date.now(); const url = assertWorkerFacebookGroupUrl(group.url).toString();
   const performance: FacebookPerformanceMetrics = emptyFacebookPerformanceMetrics();
+  const postTimings = new Map<string, FacebookPostPerformanceTiming>();
+  const timingFor = (postId: string): FacebookPostPerformanceTiming => { const existing = postTimings.get(postId); if (existing) return existing; const created: FacebookPostPerformanceTiming = { postId, feedDiscoveryMs: 0, ageDetectionMs: 0, ageFallbackMs: 0, dedicatedPageNavigationMs: 0, extractionMs: 0, visionMs: 0, persistenceMs: 0, completionMs: 0, totalMs: 0, cacheHit: false }; postTimings.set(postId, created); return created; };
+  const finalizeTimings = () => { performance.postTimings = [...postTimings.values()].map((timing) => ({ ...timing, totalMs: timing.feedDiscoveryMs + timing.ageDetectionMs + timing.dedicatedPageNavigationMs + timing.extractionMs + timing.visionMs + timing.persistenceMs + timing.completionMs })); performance.totalNavigationMs = performance.postTimings.reduce((sum, item) => sum + item.dedicatedPageNavigationMs, 0); performance.totalVisionMs = performance.postTimings.reduce((sum, item) => sum + item.visionMs, 0); performance.totalAgeFallbackMs = performance.postTimings.reduce((sum, item) => sum + item.ageFallbackMs, 0); performance.cacheHitCount = performance.postTimings.filter((item) => item.cacheHit).length; performance.cacheMissCount = performance.postTimings.filter((item) => !item.cacheHit).length; };
   const ageCache: FacebookAgeCacheEntry[] = [];
   const cacheHits: Record<string, FacebookPostCacheHit & { publishedAt: string }> = {};
   const ageCacheHits: Record<string, FacebookAgeCacheHit> = {};
@@ -85,20 +88,22 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       await heartbeat?.();
       return { posts: [], warnings: ["FACEBOOK_TIME_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
-    const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discovered = discovery.posts; const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
+    const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discoveryDuration = Date.now() - discoveryStarted; const discovered = discovery.posts; discovered.forEach((post) => { timingFor(post.postId).feedDiscoveryMs = discoveryDuration; }); const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
     const visionCapacity = debugPostId ? 1 : debugMaxPosts ?? MAX_VISION_POSTS_PER_JOB;
     const processFreshPost = async (post: FreshDiscoveredFacebookPost) => {
       try {
         signal.throwIfAborted();
+        const extractionStarted = Date.now();
         const snapshot = await processDedicatedFacebookPost(post, group.id, {
           open: async (permalink) => {
             const alreadyOpen = isExpectedFacebookPostPage(page.url(), post.postId);
-            performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0;
+            const navigationStarted = Date.now(); performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0; timingFor(post.postId).dedicatedPageNavigationMs += Date.now() - navigationStarted;
             if (alreadyOpen) performance.dedicatedPageReuses += 1;
           },
           capture: async (postId) => { const region = await captureFacebookPostRegion(page, postId); logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
-          analyze: async (input) => { performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, signal); logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
+          analyze: async (input) => { const visionStarted = Date.now(); performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, signal); timingFor(input.postId).visionMs += Date.now() - visionStarted; logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
         });
+        timingFor(post.postId).extractionMs += Date.now() - extractionStarted;
         posts.push(snapshot); processedFreshPostIds.add(post.postId);
       } catch (error) {
         if (error instanceof ControlledFacebookFailure) throw error;
@@ -122,6 +127,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
     performance.fullExtractionCacheHits = partitioned.cached.length;
     performance.fullExtractionCacheMisses = partitioned.uncached.length;
     for (const { post, hit } of partitioned.cached) {
+      timingFor(post.postId).cacheHit = true;
       posts.push(createCachedFacebookPostSnapshot(post, group, hit));
       performance.visionCacheHits += 1; performance.knownPostSkips += 1;
       if (hit.scope === "RUN") {
@@ -133,15 +139,18 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       logFacebookWorker("FACEBOOK_POST_DISCOVERED", { groupId: group.id, postId: post.postId, order, freshnessFailure: post.freshnessFailure });
       const cachedAge = !debugPostId && !post.discoveredPublishedAt ? ageCacheHits[post.postId] : undefined;
       let dedicatedPageOpenedForAge = false;
+      const ageStarted = Date.now();
       const resolvedAge = cachedAge ? resolveFacebookPostAgeFromCache(post, cachedAge, ageReferenceMs) : await resolveFacebookPostAge(post, ageReferenceMs, async () => {
+          const fallbackStarted = Date.now();
           performance.agePageFallbacks += 1;
           performance.pageOpens += await openFacebookPostPage(page, post.permalink, group.id, post.postId) ? 1 : 0;
           dedicatedPageOpenedForAge = true;
           if (debugPostId && !debugSessionConfirmed) { logFacebookWorker("FACEBOOK_SESSION_OK", { groupId: group.id }); debugSessionConfirmed = true; }
           const detectedAge = await detectFacebookPostAgeOnDedicatedPage(page, post.postId, ageReferenceMs);
           await heartbeat?.();
-          return detectedAge;
+          timingFor(post.postId).ageFallbackMs += Date.now() - fallbackStarted; return detectedAge;
         });
+      timingFor(post.postId).ageDetectionMs += Date.now() - ageStarted;
       const age = applyFacebookTargetedFreshnessBypass(resolvedAge, debugPostId);
       if (cachedAge) performance.ageCacheHits += 1;
       if (age.decision === "TOO_OLD" && (post.discoveredPublishedAt || cachedAge)) performance.oldPostsSkippedBeforePageOpen += 1;
@@ -173,11 +182,13 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
     for (const post of visionLimit.selected) {
       try {
         signal.throwIfAborted();
+        const extractionStarted = Date.now();
         const snapshot = await processDedicatedFacebookPost(post, group.id, {
-          open: async (permalink) => { const alreadyOpen = isExpectedFacebookPostPage(page.url(), post.postId); performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0; if (alreadyOpen) performance.dedicatedPageReuses += 1; },
+          open: async (permalink) => { const navigationStarted = Date.now(); const alreadyOpen = isExpectedFacebookPostPage(page.url(), post.postId); performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0; timingFor(post.postId).dedicatedPageNavigationMs += Date.now() - navigationStarted; if (alreadyOpen) performance.dedicatedPageReuses += 1; },
           capture: async (postId) => { const region = await captureFacebookPostRegion(page, postId); logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
-          analyze: async (input) => { performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, signal); logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
+          analyze: async (input) => { const visionStarted = Date.now(); performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, signal); timingFor(input.postId).visionMs += Date.now() - visionStarted; logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
         });
+        timingFor(post.postId).extractionMs += Date.now() - extractionStarted;
         posts.push(snapshot);
       } catch (error) {
         if (error instanceof ControlledFacebookFailure) throw error;
@@ -187,7 +198,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       }
     }
     logFacebookWorker("FACEBOOK_GROUP_DONE", { groupId: group.id, posts: posts.length, durationMs: Date.now() - started });
-    return { posts, warnings: [...warnings, ...(discovered.length ? [] : ["FACEBOOK_POST_DISCOVERY_EMPTY"]), ...(posts.length || warnings.length ? [] : ["Facebook group returned no visible posts."])], durationMs: Date.now() - started, performance, ageCache };
+    finalizeTimings(); return { posts, warnings: [...warnings, ...(discovered.length ? [] : ["FACEBOOK_POST_DISCOVERY_EMPTY"]), ...(posts.length || warnings.length ? [] : ["Facebook group returned no visible posts."])], durationMs: Date.now() - started, performance, ageCache };
   } finally { await context.close(); }
 }
 

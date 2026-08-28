@@ -16,6 +16,15 @@ test("post with successful extraction creates a listing and match", async () => 
   assert.deepEqual({ created: result.listingsCreated, matched: result.matched, errors: result.errors }, { created: 1, matched: 1, errors: 0 });
 });
 
+test("post flow records persistence timing telemetry", async () => {
+  const result = await processFacebookPostBatch([post("timed")], async () => outcome());
+  assert.equal(result.postTimings.length, 1);
+  assert.equal(result.postTimings[0].postId, "timed");
+  assert.equal(result.postTimings[0].cacheHit, false);
+  assert.ok(result.postTimings[0].persistenceMs >= 0);
+  assert.equal(result.postTimings[0].totalMs, result.postTimings[0].persistenceMs);
+});
+
 test("the same post id seen in two groups keeps one listing identity", async () => {
   const seen = new Set<string>();
   const result = await processFacebookPostBatch([post("1"), { ...post("1"), groupId: "group-2", permalink: "https://www.facebook.com/groups/group-2/posts/1/" }], async (item) => {

@@ -97,7 +97,7 @@ function parseCacheHit(value: unknown): FacebookPostSnapshot["cacheHit"] {
 }
 
 function parsePerformance(value: unknown): FacebookPerformanceMetrics {
-  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0 };
+  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0, postTimings: [], totalNavigationMs: 0, totalVisionMs: 0, totalAgeFallbackMs: 0, cacheHitCount: 0, cacheMissCount: 0 };
   const row = requireRow(value);
   return {
     postsDiscovered: nonnegativeInteger(row.postsDiscovered),
@@ -123,6 +123,12 @@ function parsePerformance(value: unknown): FacebookPerformanceMetrics {
     dedicatedPageReuses: optionalNonnegativeInteger(row.dedicatedPageReuses),
     duplicateVisionCallsAvoided: optionalNonnegativeInteger(row.duplicateVisionCallsAvoided),
     duplicatePageOpensAvoided: optionalNonnegativeInteger(row.duplicatePageOpensAvoided),
+    postTimings: Array.isArray(row.postTimings) ? row.postTimings.filter((item): item is NonNullable<FacebookPerformanceMetrics["postTimings"]>[number] => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [],
+    totalNavigationMs: optionalNonnegativeInteger(row.totalNavigationMs),
+    totalVisionMs: optionalNonnegativeInteger(row.totalVisionMs),
+    totalAgeFallbackMs: optionalNonnegativeInteger(row.totalAgeFallbackMs),
+    cacheHitCount: optionalNonnegativeInteger(row.cacheHitCount),
+    cacheMissCount: optionalNonnegativeInteger(row.cacheMissCount),
   };
 }
 

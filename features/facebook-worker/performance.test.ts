@@ -198,3 +198,13 @@ test("run summary reports raw cross-group duplicates even when not all were reus
   assert.equal(summary.uniquePostIds, 3);
   assert.equal(summary.duplicatePostIdsAcrossGroups, 1);
 });
+
+test("run performance telemetry preserves per-post stage timings and job totals", () => {
+  const timing = { postId: "timed", feedDiscoveryMs: 10, ageDetectionMs: 20, ageFallbackMs: 20, dedicatedPageNavigationMs: 30, extractionMs: 40, visionMs: 50, persistenceMs: 60, completionMs: 0, totalMs: 210, cacheHit: false };
+  const summary = aggregateFacebookPerformance([{ performance: { ...aggregateFacebookPerformance([], 0), postsDiscovered: 1, discoveredPostIds: ["timed"], postTimings: [timing], totalNavigationMs: 30, totalVisionMs: 50, totalAgeFallbackMs: 20, cacheHitCount: 0, cacheMissCount: 1 } }], 210);
+  assert.equal(summary.postTimings?.[0].postId, "timed");
+  assert.equal(summary.postTimings?.[0].totalMs, 210);
+  assert.equal(summary.totalNavigationMs, 30);
+  assert.equal(summary.totalVisionMs, 50);
+  assert.equal(summary.cacheMissCount, 1);
+});

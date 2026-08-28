@@ -142,6 +142,26 @@ export type FacebookPerformanceMetrics = {
   dedicatedPageReuses: number;
   duplicateVisionCallsAvoided: number;
   duplicatePageOpensAvoided: number;
+  postTimings?: FacebookPostPerformanceTiming[];
+  totalNavigationMs?: number;
+  totalVisionMs?: number;
+  totalAgeFallbackMs?: number;
+  cacheHitCount?: number;
+  cacheMissCount?: number;
+};
+
+export type FacebookPostPerformanceTiming = {
+  postId: string;
+  feedDiscoveryMs: number;
+  ageDetectionMs: number;
+  ageFallbackMs: number;
+  dedicatedPageNavigationMs: number;
+  extractionMs: number;
+  visionMs: number;
+  persistenceMs: number;
+  completionMs: number;
+  totalMs: number;
+  cacheHit: boolean;
 };
 
 export const FACEBOOK_AUTHORITATIVE_POST_TEXT_SOURCES = ["POST_PAGE_METADATA", "POST_REGION_DOM", "SHARED_POST_FALLBACK", "CONFLICT", "NONE"] as const;

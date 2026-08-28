@@ -148,6 +148,14 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   }, { jobId: input.jobId, sourceScanId });
   if (summary.listingIds.length > 0) await getAlerts();
   const normalized = summary.postsProcessed - summary.listingsSkipped - summary.extractionFailed;
+  const browserTimings = Array.isArray(input.performance.postTimings) ? input.performance.postTimings : [];
+  const completionTimings = summary.postTimings.map((serverTiming) => { const browserTiming = browserTimings.find((timing) => timing.postId === serverTiming.postId); const merged = { ...(browserTiming ?? serverTiming), persistenceMs: serverTiming.persistenceMs, completionMs: serverTiming.completionMs, cacheHit: browserTiming?.cacheHit ?? serverTiming.cacheHit }; return { ...merged, totalMs: merged.feedDiscoveryMs + merged.ageDetectionMs + merged.dedicatedPageNavigationMs + merged.extractionMs + merged.visionMs + merged.persistenceMs + merged.completionMs }; });
+  input.performance.postTimings = completionTimings;
+  input.performance.totalNavigationMs = completionTimings.reduce((sum, timing) => sum + timing.dedicatedPageNavigationMs, 0);
+  input.performance.totalVisionMs = completionTimings.reduce((sum, timing) => sum + timing.visionMs, 0);
+  input.performance.totalAgeFallbackMs = completionTimings.reduce((sum, timing) => sum + timing.ageFallbackMs, 0);
+  input.performance.cacheHitCount = completionTimings.filter((timing) => timing.cacheHit).length;
+  input.performance.cacheMissCount = completionTimings.filter((timing) => !timing.cacheHit).length;
   const visionCost = summarizeFacebookVisionUsage(input.posts.map((post) => post.vision), input.performance.visionCalls);
   const openaiVisionCalls = input.posts.flatMap((post) => post.vision?.usage ? [{ postId: post.postId, usage: post.vision.usage }] : []);
   const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, persistenceDiagnostics: summary.persistenceDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now })), ageCache: input.ageCache, performance: input.performance, ...visionCost, openaiVisionCalls };

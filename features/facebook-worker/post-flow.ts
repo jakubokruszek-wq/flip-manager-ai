@@ -1,4 +1,4 @@
-import type { FacebookIntentSource, FacebookListingIntent, FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
+import type { FacebookIntentSource, FacebookListingIntent, FacebookPostPerformanceTiming, FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
 
 export type FacebookPersistenceDiagnostics = {
   postId: string | null;
@@ -89,6 +89,7 @@ export type FacebookPostFlowSummary = {
   warnings: string[];
   skippedDiagnostics: FacebookSkippedDiagnostic[];
   persistenceDiagnostics: FacebookPersistenceDiagnostics[];
+  postTimings: FacebookPostPerformanceTiming[];
   reusablePosts: Array<
     | { postId: string; listingId: string; publishedAt: string; outcome: "SELL_PERSISTED" }
     | { postId: string; listingId: null; publishedAt: string; outcome: "DETERMINISTIC_SKIP"; reasonCode: FacebookSkipReasonCode; listingIntent: FacebookListingIntent; intentSource: FacebookIntentSource }
@@ -103,11 +104,12 @@ export async function processFacebookPostBatch(
   const summary: FacebookPostFlowSummary = {
     postsReceived: posts.length, postsProcessed: 0, listingsCreated: 0, listingsUpdated: 0,
     listingsSkipped: 0, matched: 0, newMatches: 0, extractionFailed: 0,
-    imagesMirrored: 0, priceDrops: 0, errors: 0, listingIds: [], warnings: [], skippedDiagnostics: [], persistenceDiagnostics: [], reusablePosts: [],
+    imagesMirrored: 0, priceDrops: 0, errors: 0, listingIds: [], warnings: [], skippedDiagnostics: [], persistenceDiagnostics: [], postTimings: [], reusablePosts: [],
   };
 
   for (const post of posts) {
     summary.postsProcessed += 1;
+    const postStarted = Date.now();
     if (!post.postId && !post.permalink) {
       summary.listingsSkipped += 1;
       summary.warnings.push("Pominięto post bez stabilnego ID i permalinku.");
@@ -124,6 +126,8 @@ export async function processFacebookPostBatch(
       summary.priceDrops += result.priceDrops;
       summary.warnings.push(...result.warnings);
       summary.persistenceDiagnostics.push(result.persistenceDiagnostics ?? createEmptyPersistenceDiagnostics(post));
+      const persistenceMs = result.status === "reused" ? 0 : Date.now() - postStarted;
+      summary.postTimings.push({ postId: post.postId ?? post.permalink ?? "unknown", feedDiscoveryMs: 0, ageDetectionMs: 0, ageFallbackMs: 0, dedicatedPageNavigationMs: 0, extractionMs: 0, visionMs: 0, persistenceMs, completionMs: 0, totalMs: persistenceMs, cacheHit: result.status === "reused" });
       if (result.status === "skipped" && result.notProperty && context && summary.skippedDiagnostics.length < 3) {
         summary.skippedDiagnostics.push(createSkippedDiagnostic(post, result.notProperty, context));
       }
