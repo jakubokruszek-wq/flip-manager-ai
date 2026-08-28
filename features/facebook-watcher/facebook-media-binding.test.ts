@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookMediaBindingSummary, isSuspiciousSmallSquare, preserveFacebookPublishedAt } from "./facebook-media-binding.ts";
+import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookImageProvenanceDiagnostics, facebookMediaBindingSummary, isSuspiciousSmallSquare, preserveFacebookPublishedAt } from "./facebook-media-binding.ts";
 import type { FacebookListingInput } from "./types.ts";
 
 function input(candidates: NonNullable<FacebookListingInput["mediaCandidates"]>): FacebookListingInput {
@@ -66,7 +66,7 @@ test("image persistence diagnostics distinguish candidates, new uploads and fina
     publishedAtPersistAttempted: true, publishedAtPersisted: true, exactBoundCandidates: 5,
     relevanceAccepted: 1, relevanceRejected: 4, mirrorAttempted: 1, mirroredCount: 0,
     persistedNewImageCount: 0, finalListingImageCount: 1, persistedImageCount: 1,
-    imageReasonCode: "NONE", reasonCodes: [],
+    imageReasonCode: "NONE", reasonCodes: [], imageProvenance: [],
   });
 });
 
@@ -81,4 +81,24 @@ test("all accepted images can be mirrored and persisted as new", () => {
   assert.equal(value.persistedNewImageCount, 5);
   assert.equal(value.finalListingImageCount, 5);
   assert.equal(value.imageReasonCode, "NONE");
+});
+
+test("per-image provenance telemetry records accepted and rejected candidates", () => {
+  const foreign = { ...exact, url: "https://scontent.xx.fbcdn.net/foreign.jpg", expectedPostId: "B", boundPostId: "B", storyRootPostId: "B" };
+  const diagnostics = facebookImageProvenanceDiagnostics([exact, foreign], "A", new Set([exact.url]));
+  assert.deepEqual(diagnostics, [
+    {
+      structuredPostMediaProvenance: false, provenanceReasonCode: "EXACT_STORY_ROOT", expectedPostId: "A", detectedStoryRootPostId: "A",
+      bindingMethod: "EXACT_ROOT_STORY", bindingConfidence: 1, mediaId: null, normalizedMediaUrl: exact.url,
+      relevanceClassification: "PROPERTY_IMAGE", relevanceConfidence: 0.95, finalVerified: true, rejectionReason: null,
+    },
+    {
+      structuredPostMediaProvenance: false, provenanceReasonCode: "FACEBOOK_IMAGE_PROVENANCE_INSUFFICIENT", expectedPostId: "B", detectedStoryRootPostId: "B",
+      bindingMethod: "EXACT_ROOT_STORY", bindingConfidence: 1, mediaId: null, normalizedMediaUrl: foreign.url,
+      relevanceClassification: "PROPERTY_IMAGE", relevanceConfidence: 0.95, finalVerified: false, rejectionReason: "FACEBOOK_IMAGE_PROVENANCE_INSUFFICIENT",
+    },
+  ]);
+  const structured = facebookImageProvenanceDiagnostics([{ ...exact, bindingProvenance: "EXACT_POST_METADATA" as const, storyRootPostId: null, structuredPostMediaProvenance: true }], "A", new Set([exact.url]));
+  assert.equal(structured[0].structuredPostMediaProvenance, true);
+  assert.equal(structured[0].provenanceReasonCode, "STRUCTURED_EXACT_POST_MEDIA");
 });

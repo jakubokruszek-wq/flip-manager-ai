@@ -212,7 +212,7 @@ async function associateCachedFacebookListing(
     publishedAtCandidate: input.publishedAt, publishedAtPersistAttempted: false, publishedAtPersisted: false,
     exactBoundCandidates: 0, relevanceAccepted: 0, relevanceRejected: 0, mirrorAttempted: 0, mirroredCount: 0,
     persistedNewImageCount: 0, finalListingImageCount: 0, persistedImageCount: 0,
-    imageReasonCode: "CACHE_REUSE", reasonCodes: ["FACEBOOK_CACHE_REUSE"],
+    imageReasonCode: "CACHE_REUSE", reasonCodes: ["FACEBOOK_CACHE_REUSE"], imageProvenance: [],
   } };
 }
 

@@ -17,6 +17,22 @@ export type FacebookPersistenceDiagnostics = {
   persistedImageCount: number;
   imageReasonCode: string;
   reasonCodes: string[];
+  imageProvenance: FacebookImageProvenanceDiagnostic[];
+};
+
+export type FacebookImageProvenanceDiagnostic = {
+  structuredPostMediaProvenance: boolean;
+  provenanceReasonCode: string;
+  expectedPostId: string;
+  detectedStoryRootPostId: string | null;
+  bindingMethod: string;
+  bindingConfidence: number | null;
+  mediaId: string | null;
+  normalizedMediaUrl: string | null;
+  relevanceClassification: string;
+  relevanceConfidence: number | null;
+  finalVerified: boolean;
+  rejectionReason: string | null;
 };
 
 export type FacebookPostImportResult = {
@@ -145,6 +161,7 @@ function createEmptyPersistenceDiagnostics(post: FacebookPostSnapshot): Facebook
     persistedImageCount: 0,
     imageReasonCode: "NONE",
     reasonCodes: [],
+    imageProvenance: [],
   };
 }
 

@@ -1,4 +1,5 @@
 import type { FacebookListingInput } from "./types";
+import type { FacebookImageProvenanceDiagnostic } from "../facebook-worker/post-flow";
 
 export function exactBoundPropertyImages(input: FacebookListingInput, expectedPostId: string): string[] {
   return [...new Set((input.mediaCandidates ?? [])
@@ -51,6 +52,7 @@ export function facebookImagePersistenceDiagnostics(input: {
   mirroredCount: number;
   existingImages: string[];
   finalListingImages: string[];
+  imageProvenance?: FacebookImageProvenanceDiagnostic[];
 }) {
   const existing = new Set(input.existingImages);
   const persistedNewImageCount = input.finalListingImages.filter((image) => !existing.has(image)).length;
@@ -73,7 +75,44 @@ export function facebookImagePersistenceDiagnostics(input: {
     persistedImageCount: input.finalListingImages.length,
     imageReasonCode,
     reasonCodes: imageReasonCode === "NONE" ? [] : [imageReasonCode],
+    imageProvenance: input.imageProvenance ?? [],
   };
+}
+
+/** Read-only per-candidate provenance telemetry; this never decides acceptance. */
+export function facebookImageProvenanceDiagnostics(
+  candidates: NonNullable<FacebookListingInput["mediaCandidates"]>,
+  expectedPostId: string,
+  verifiedUrls: ReadonlySet<string>,
+): FacebookImageProvenanceDiagnostic[] {
+  return candidates.map((candidate) => {
+    const approved = hasApprovedFacebookImageProvenance(candidate, expectedPostId);
+    const relevanceAccepted = candidate.classification === "PROPERTY_IMAGE" && (candidate.classificationConfidence ?? 0) >= 0.8;
+    const finalVerified = verifiedUrls.has(candidate.url);
+    const provenanceReasonCode = approved
+      ? candidate.structuredPostMediaProvenance === true ? "STRUCTURED_EXACT_POST_MEDIA" : "EXACT_STORY_ROOT"
+      : "FACEBOOK_IMAGE_PROVENANCE_INSUFFICIENT";
+    const rejectionReason = !approved
+      ? "FACEBOOK_IMAGE_PROVENANCE_INSUFFICIENT"
+      : !relevanceAccepted
+        ? "FACEBOOK_IMAGE_RELEVANCE_REJECTED"
+        : !finalVerified ? "FACEBOOK_IMAGE_NOT_VERIFIED" : null;
+    const mediaId = (candidate as unknown as { mediaId?: unknown }).mediaId;
+    return {
+      structuredPostMediaProvenance: candidate.structuredPostMediaProvenance === true,
+      provenanceReasonCode,
+      expectedPostId: candidate.expectedPostId,
+      detectedStoryRootPostId: candidate.storyRootPostId ?? null,
+      bindingMethod: candidate.bindingProvenance,
+      bindingConfidence: candidate.bindingConfidence ?? null,
+      mediaId: typeof mediaId === "string" && mediaId.trim() ? mediaId : null,
+      normalizedMediaUrl: candidate.url || null,
+      relevanceClassification: candidate.classification,
+      relevanceConfidence: candidate.classificationConfidence ?? null,
+      finalVerified,
+      rejectionReason,
+    };
+  });
 }
 
 export function preserveFacebookPublishedAt(incoming: string | null | undefined, existing: string | null | undefined): string | null {

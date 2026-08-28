@@ -19,7 +19,7 @@ import { recordFacebookGroupImport } from "@/features/facebook-groups/server";
 import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebookFieldConfidence } from "./facebook-data-quality";
 import { resolveFacebookListingIntent } from "./facebook-intent";
 import { reconcileFacebookLocation } from "./facebook-location-quality";
-import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookMediaBindingSummary, hasApprovedFacebookImageProvenance, preserveFacebookPublishedAt } from "./facebook-media-binding";
+import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookImageProvenanceDiagnostics, facebookMediaBindingSummary, hasApprovedFacebookImageProvenance, preserveFacebookPublishedAt } from "./facebook-media-binding";
 
 type Row = Record<string, unknown>;
 
@@ -62,6 +62,7 @@ export type FacebookImportResult = {
     persistedImageCount: number;
     imageReasonCode: string;
     reasonCodes: string[];
+    imageProvenance: import("../facebook-worker/post-flow").FacebookImageProvenanceDiagnostic[];
   };
   notProperty?: {
     realEstateLanguage: boolean;
@@ -244,6 +245,7 @@ async function importAutomatedFacebook(input: {
     mirroredCount: imageMirror.stats.uploadedCount,
     existingImages: existingState.images,
     finalListingImages: imageMirror.images,
+    imageProvenance: facebookImageProvenanceDiagnostics(normalized.mediaCandidates ?? [], externalId, new Set(boundImages)),
   });
   return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics };
 }
