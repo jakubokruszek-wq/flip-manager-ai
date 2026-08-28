@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page, Response } from "playwright";
-import { openFacebookPostPage } from "./browser.ts";
+import { openFacebookPostPage, shouldEarlyRejectFacebookFeed } from "./browser.ts";
 
 function navigationTimeout(): Error {
   return Object.assign(new Error("page.goto: Timeout 60000ms exceeded."), { name: "TimeoutError" });
@@ -55,4 +55,13 @@ test("does not retry non-timeout navigation errors", async () => {
   await assert.rejects(() => openFacebookPostPage(fixture.page, "https://www.facebook.com/groups/1/posts/123/", "group-1", "123"), /ERR_NAME_NOT_RESOLVED/);
   assert.equal(fixture.gotoCalls(), 1);
   assert.deepEqual(fixture.waits, []);
+});
+
+test("early feed intent rejects deterministic BUY/RENT/SERVICE before a page open", () => {
+  assert.equal(shouldEarlyRejectFacebookFeed("Kupię mieszkanie 2 pokoje do 500000 zł"), true);
+  assert.equal(shouldEarlyRejectFacebookFeed("Szukam mieszkania do wynajęcia"), true);
+  assert.equal(shouldEarlyRejectFacebookFeed("Pośrednictwo nieruchomości"), true);
+  assert.equal(shouldEarlyRejectFacebookFeed("Sprzedam mieszkanie 2 pokoje"), false);
+  assert.equal(shouldEarlyRejectFacebookFeed("Mieszkanie 2 pokoje"), false);
+  assert.equal(shouldEarlyRejectFacebookFeed("Kupię mieszkanie"), true);
 });

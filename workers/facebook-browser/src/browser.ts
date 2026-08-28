@@ -4,6 +4,15 @@ import { createCachedFacebookPostSnapshot, emptyFacebookPerformanceMetrics, part
 import { ControlledFacebookFailure } from "./errors.ts";
 import { assertWorkerFacebookGroupUrl } from "./group-reader.ts";
 import { logFacebookWorker } from "./logger.ts";
+import { resolveFacebookListingIntent } from "../../../features/facebook-watcher/facebook-intent.ts";
+
+export function shouldEarlyRejectFacebookFeed(text: string | null | undefined): boolean {
+  if (!text?.trim()) return false;
+  const decision = resolveFacebookListingIntent(text, null, null);
+  return decision.visionIntent === "UNKNOWN"
+    && ["BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE"].includes(decision.intent)
+    && Boolean(decision.reasonCode);
+}
 import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
 
@@ -88,7 +97,17 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       await heartbeat?.();
       return { posts: [], warnings: ["FACEBOOK_TIME_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
-    const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discoveryDuration = Date.now() - discoveryStarted; const discovered = discovery.posts; discovered.forEach((post) => { timingFor(post.postId).feedDiscoveryMs = discoveryDuration; }); const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
+    const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discoveryDuration = Date.now() - discoveryStarted; const discovered = discovery.posts; const feedTexts = await page.evaluate(() => {
+      const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/\/groups\/[^/]+\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
+      const result: Record<string, string> = {};
+      for (const link of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]'))) {
+        const postId = postIdFromHref(link.href); const article = link.closest<HTMLElement>('[role="article"]');
+        if (!postId || !article || article.querySelector('[role="article"] [role="article"], [role="comment"], [data-testid*="comment" i]')) continue;
+        const ids = new Set(Array.from(article.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).map((anchor) => postIdFromHref(anchor.href)).filter((id): id is string => Boolean(id)));
+        if (ids.size === 1 && ids.has(postId) && !result[postId]) result[postId] = (article.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 4_000);
+      }
+      return result;
+    }); discovered.forEach((post) => { timingFor(post.postId).feedDiscoveryMs = discoveryDuration; }); const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
     const visionCapacity = debugPostId ? 1 : debugMaxPosts ?? MAX_VISION_POSTS_PER_JOB;
     const processFreshPost = async (post: FreshDiscoveredFacebookPost) => {
       try {
@@ -138,6 +157,15 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
     for (const [order, post] of partitioned.uncached.entries()) {
       logFacebookWorker("FACEBOOK_POST_DISCOVERED", { groupId: group.id, postId: post.postId, order, freshnessFailure: post.freshnessFailure });
       const cachedAge = !debugPostId && !post.discoveredPublishedAt ? ageCacheHits[post.postId] : undefined;
+      const feedText = feedTexts[post.postId] ?? null;
+      const feedIntent = feedText ? resolveFacebookListingIntent(feedText, null, null) : null;
+      const deterministicNonSell = shouldEarlyRejectFacebookFeed(feedText);
+      if (!debugPostId && deterministicNonSell) {
+        posts.push({ postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: feedText ?? "", authoritativePostTextSource: "POST_REGION_DOM", authoritativePostTextProvenance: "ROOT_AUTHOR_MESSAGE", text: feedText ?? "", imageUrls: [], mediaCandidates: [], publishedAt: post.discoveredPublishedAt, vision: null });
+        performance.knownPostSkips += 1;
+        logFacebookWorker("FACEBOOK_FEED_INTENT_EARLY_SKIP", { groupId: group.id, postId: post.postId, intent: feedIntent!.intent, reasonCode: feedIntent!.reasonCode });
+        continue;
+      }
       let dedicatedPageOpenedForAge = false;
       const ageStarted = Date.now();
       const resolvedAge = cachedAge ? resolveFacebookPostAgeFromCache(post, cachedAge, ageReferenceMs) : await resolveFacebookPostAge(post, ageReferenceMs, async () => {
