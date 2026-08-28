@@ -43,6 +43,14 @@ test("unlabelled numbers and phone fragments are never guessed as price", () => 
   const text = "3 pokoje, 2 klimatyzacje, piętro 4, kontakt 881 291 778";
   assert.deepEqual(resolveFacebookPrice(text, null), { price: null, pricePerM2: null, source: "NONE" });
 });
+test("contextual amount without currency is accepted", async () => {
+  assert.equal((await extractFacebookProperty({ postText: "Sprzedam mieszkanie. Kwota do negocjacji: 353000.00" })).price, 353000);
+  assert.equal((await extractFacebookProperty({ postText: "Sprzedam mieszkanie. Cena: 430000" })).price, 430000);
+});
+test("superscript square metre area is parsed safely", async () => {
+  assert.equal((await extractFacebookProperty({ postText: "Sprzedam mieszkanie, 47,22 m\u00b2" })).area, 47.22);
+  assert.equal((await extractFacebookProperty({ postText: "Sprzedam mieszkanie, 43.05 m2" })).area, 43.05);
+});
 test("Sporna listing keeps explicit fields and source facts without inventing floor or ownership", async()=>{
   const text = "Sprzedam mieszkanie przy ul. Sporna 72, Łódź. Cena 419 000 zł, 59,45 m2, 2 pokoje. Czynsz ok. 700 zł. Świeżo odświeżone w maju 2025. Łazienka po remoncie. Blok po remoncie dachu i elewacji. Suszarnia i własna piwnica. Opcjonalne wyposażenie ok. 20 000 zł.";
   const value = await extractFacebookProperty({ postText: text });
