@@ -13,8 +13,9 @@ export function shouldEarlyRejectFacebookFeed(text: string | null | undefined): 
     && ["BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE"].includes(decision.intent)
     && Boolean(decision.reasonCode);
 }
-import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_FACEBOOK_DISCOVERED_POSTS, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
+import { discoverFacebookStructuredFeedPosts } from "./structured-feed-discovery.ts";
 
 export async function revalidateFacebookPostImages(
   profileDir: string,
@@ -98,7 +99,13 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       await heartbeat?.();
       return { posts: [], warnings: ["FACEBOOK_TIME_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
-    const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: () => discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown) }); const discoveryDuration = Date.now() - discoveryStarted; const discovered = discovery.posts; const feedTexts = await page.evaluate(() => {
+    const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: async () => {
+      const result = await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown);
+      const structured = await discoverFacebookStructuredFeedPosts(page, ageReferenceMs, MAX_FACEBOOK_DISCOVERED_POSTS);
+      const posts = new Map(result.posts.map((post) => [post.postId, post]));
+      for (const post of structured) if (!posts.has(post.postId)) posts.set(post.postId, post);
+      return { ...result, posts: [...posts.values()].slice(0, MAX_FACEBOOK_DISCOVERED_POSTS) };
+    } }); const discoveryDuration = Date.now() - discoveryStarted; const discovered = discovery.posts; const feedTexts = await page.evaluate(() => {
       const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/\/groups\/[^/]+\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
       const result: Record<string, string> = {};
       for (const link of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]'))) {
@@ -293,6 +300,7 @@ export async function waitForFacebookGroupFeed(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await assertAccessibleFacebookPage(page);
     if (await page.locator(postLinkSelector).count() > 0) return true;
+    if ((await discoverFacebookStructuredFeedPosts(page, Date.now(), 1)).length > 0) return true;
     if (attempt + 1 < attempts) await page.waitForTimeout(pollIntervalMs);
   }
   await assertAccessibleFacebookPage(page);

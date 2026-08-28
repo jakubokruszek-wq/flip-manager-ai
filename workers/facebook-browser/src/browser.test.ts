@@ -24,13 +24,14 @@ function fakePage(gotoResults: Array<Response | null | Error>, session: { url?: 
   return { page, gotoCalls: () => gotoCalls, waits };
 }
 
-function fakeFeedPage(postLinkCounts: number[], text = "Public group") {
+function fakeFeedPage(postLinkCounts: number[], text = "Public group", structuredRecords: unknown[] = []) {
   const waits: number[] = [];
   let reads = 0;
   const page = {
     url: () => "https://www.facebook.com/groups/1/",
     title: async () => "Facebook group",
     waitForTimeout: async (milliseconds: number) => { waits.push(milliseconds); },
+    evaluate: async () => structuredRecords,
     locator: (selector: string) => selector === "body"
       ? { innerText: async () => text }
       : { count: async () => postLinkCounts[Math.min(reads++, postLinkCounts.length - 1)] ?? 0 },
@@ -75,6 +76,14 @@ test("waits boundedly for a Facebook group feed rendered after navigation", asyn
   const fixture = fakeFeedPage([0, 0, 1]);
   assert.equal(await waitForFacebookGroupFeed(fixture.page, { timeoutMs: 4_000, pollIntervalMs: 1_000 }), true);
   assert.deepEqual(fixture.waits, [1_000, 1_000]);
+});
+
+test("accepts an exact structured feed post when the authenticated DOM has no post anchor", async () => {
+  const fixture = fakeFeedPage([0], "Joined public group", [
+    { postId: "101", url: "https://www.facebook.com/groups/1/posts/101/", publishedAt: null, unsafeContext: false },
+  ]);
+  assert.equal(await waitForFacebookGroupFeed(fixture.page), true);
+  assert.deepEqual(fixture.waits, []);
 });
 
 test("stops a private group without membership instead of reporting zero posts", async () => {
