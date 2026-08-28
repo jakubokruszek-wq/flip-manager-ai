@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page, Response } from "playwright";
-import { openFacebookPostPage, shouldEarlyRejectFacebookFeed } from "./browser.ts";
+import { openFacebookPostPage, shouldEarlyRejectFacebookFeed, waitForFacebookGroupFeed } from "./browser.ts";
 
 function navigationTimeout(): Error {
   return Object.assign(new Error("page.goto: Timeout 60000ms exceeded."), { name: "TimeoutError" });
@@ -22,6 +22,20 @@ function fakePage(gotoResults: Array<Response | null | Error>, session: { url?: 
     title: async () => session.title ?? "Facebook",
   } as unknown as Page;
   return { page, gotoCalls: () => gotoCalls, waits };
+}
+
+function fakeFeedPage(postLinkCounts: number[], text = "Public group") {
+  const waits: number[] = [];
+  let reads = 0;
+  const page = {
+    url: () => "https://www.facebook.com/groups/1/",
+    title: async () => "Facebook group",
+    waitForTimeout: async (milliseconds: number) => { waits.push(milliseconds); },
+    locator: (selector: string) => selector === "body"
+      ? { innerText: async () => text }
+      : { count: async () => postLinkCounts[Math.min(reads++, postLinkCounts.length - 1)] ?? 0 },
+  } as unknown as Page;
+  return { page, waits };
 }
 
 test("retries one dedicated post navigation timeout and succeeds", async () => {
@@ -55,6 +69,24 @@ test("does not retry non-timeout navigation errors", async () => {
   await assert.rejects(() => openFacebookPostPage(fixture.page, "https://www.facebook.com/groups/1/posts/123/", "group-1", "123"), /ERR_NAME_NOT_RESOLVED/);
   assert.equal(fixture.gotoCalls(), 1);
   assert.deepEqual(fixture.waits, []);
+});
+
+test("waits boundedly for a Facebook group feed rendered after navigation", async () => {
+  const fixture = fakeFeedPage([0, 0, 1]);
+  assert.equal(await waitForFacebookGroupFeed(fixture.page, { timeoutMs: 4_000, pollIntervalMs: 1_000 }), true);
+  assert.deepEqual(fixture.waits, [1_000, 1_000]);
+});
+
+test("stops a private group without membership instead of reporting zero posts", async () => {
+  const fixture = fakeFeedPage([0], "Grupa Prywatna · 28 tys. członków Dołącz do grupy");
+  await assert.rejects(() => waitForFacebookGroupFeed(fixture.page), /FACEBOOK_ACCESS_DENIED/);
+  assert.deepEqual(fixture.waits, []);
+});
+
+test("ends an empty public feed wait after the configured bound", async () => {
+  const fixture = fakeFeedPage([0, 0, 0]);
+  assert.equal(await waitForFacebookGroupFeed(fixture.page, { timeoutMs: 3_000, pollIntervalMs: 1_000 }), false);
+  assert.deepEqual(fixture.waits, [1_000, 1_000]);
 });
 
 test("early feed intent rejects deterministic BUY/RENT/SERVICE before a page open", () => {

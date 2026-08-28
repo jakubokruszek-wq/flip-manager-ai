@@ -82,7 +82,8 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       await assertAccessibleFacebookPage(page);
       if (response && !response.ok()) throw new ControlledFacebookFailure(response.status() === 403 ? "FACEBOOK_ACCESS_DENIED" : "FACEBOOK_GROUP_UNAVAILABLE", `Facebook group returned HTTP ${response.status()}`);
       logFacebookWorker("FACEBOOK_SESSION_OK", { groupId: group.id });
-      await page.waitForTimeout(2_000);
+      const feedReady = await waitForFacebookGroupFeed(page);
+      logFacebookWorker("FACEBOOK_GROUP_FEED_READY", { groupId: group.id, postLinkFound: feedReady });
     } else {
       logFacebookWorker("FACEBOOK_DEBUG_TARGET_MODE", { groupId: group.id, postId: debugPostId });
     }
@@ -279,6 +280,23 @@ async function assertAccessibleFacebookPage(page: import("playwright").Page): Pr
   const visibleText = (await page.locator("body").innerText({ timeout: 10_000 })).slice(0, 20_000);
   const failure = classifyFacebookSession({ url: page.url(), title: await page.title(), visibleText });
   if (failure) throw new ControlledFacebookFailure(failure, `Facebook access stopped: ${failure}`);
+}
+
+export async function waitForFacebookGroupFeed(
+  page: import("playwright").Page,
+  options: { timeoutMs?: number; pollIntervalMs?: number } = {},
+): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? 8_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+  const attempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
+  const postLinkSelector = 'a[href*="/groups/"][href*="/posts/"]';
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await assertAccessibleFacebookPage(page);
+    if (await page.locator(postLinkSelector).count() > 0) return true;
+    if (attempt + 1 < attempts) await page.waitForTimeout(pollIntervalMs);
+  }
+  await assertAccessibleFacebookPage(page);
+  return false;
 }
 
 function controlledPostFailureCode(error: unknown): string {

@@ -7,6 +7,7 @@ export function classifyFacebookSession(input: { url: string; title: string; vis
   if (/captcha|security check|human verification|challenge/.test(haystack)) return "FACEBOOK_CHALLENGE";
   if (/\/login(?:\/|\?|$)/.test(input.url) || /log into facebook|zaloguj się do facebooka|email or phone/.test(haystack)) return "FACEBOOK_LOGIN_REQUIRED";
   if (/access denied|brak dostępu|you do not have permission|content isn't available/.test(haystack)) return "FACEBOOK_ACCESS_DENIED";
+  if (/(?:grupa prywatna[\s\S]{0,500}dołącz do grupy|private group[\s\S]{0,500}join group)/.test(haystack)) return "FACEBOOK_ACCESS_DENIED";
   return null;
 }
 
@@ -16,4 +17,3 @@ export async function openFacebookLogin(profileDir: string): Promise<void> {
   await page.goto("https://www.facebook.com/", { waitUntil: "domcontentloaded", timeout: 60_000 });
   await new Promise<void>((resolve) => context.once("close", () => resolve()));
 }
-
