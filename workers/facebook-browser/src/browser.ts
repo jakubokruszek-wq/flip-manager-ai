@@ -102,9 +102,22 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       const result: Record<string, string> = {};
       for (const link of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]'))) {
         const postId = postIdFromHref(link.href); const article = link.closest<HTMLElement>('[role="article"]');
-        if (!postId || !article || article.querySelector('[role="article"] [role="article"], [role="comment"], [data-testid*="comment" i]')) continue;
+        if (!postId || !article) continue;
         const ids = new Set(Array.from(article.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).map((anchor) => postIdFromHref(anchor.href)).filter((id): id is string => Boolean(id)));
-        if (ids.size === 1 && ids.has(postId) && !result[postId]) result[postId] = (article.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 4_000);
+        if (ids.size !== 1 || !ids.has(postId) || result[postId]) continue;
+        const textParts: string[] = [];
+        const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const parent = node.parentElement; const value = node.textContent?.replace(/\s+/g, " ").trim();
+          if (!parent || !value) continue;
+          const nestedArticle = parent.closest('[role="article"]');
+          if (nestedArticle && nestedArticle !== article) continue;
+          const markerPath = Array.from({ length: 8 }, (_, depth) => { let element: Element | null = parent; for (let index = 0; index < depth && element; index += 1) element = element.parentElement; return element; }).filter((element): element is Element => Boolean(element)).map((element) => [element.getAttribute("role"), element.getAttribute("data-testid"), element.getAttribute("data-pagelet"), element.getAttribute("aria-label")].filter(Boolean).join(" ")).join(" ");
+          if (/comment|reply|komentar|odpowied|shared|attachment|substory|reshar/i.test(markerPath)) continue;
+          textParts.push(value);
+        }
+        const safeText = textParts.join(" ").replace(/\s+/g, " ").trim().slice(0, 4_000);
+        if (safeText) result[postId] = safeText;
       }
       return result;
     }); discovered.forEach((post) => { timingFor(post.postId).feedDiscoveryMs = discoveryDuration; }); const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
