@@ -100,8 +100,13 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       return { posts: [], warnings: ["FACEBOOK_TIME_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
     const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: async () => {
-      const result = await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown);
       const structured = await discoverFacebookStructuredFeedPosts(page, ageReferenceMs, MAX_FACEBOOK_DISCOVERED_POSTS);
+      // Structured hydration is the fast, exact source on groups whose DOM
+      // anchors are delayed or absent. Avoid paying the full legacy scroll
+      // loop when it already yielded usable post records.
+      const result = structured.length > 0
+        ? { posts: [], scrollCount: 0, stopReason: "MAX_POSTS" as const }
+        : await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown);
       const posts = new Map(result.posts.map((post) => [post.postId, post]));
       for (const post of structured) if (!posts.has(post.postId)) posts.set(post.postId, post);
       return { ...result, posts: [...posts.values()].slice(0, MAX_FACEBOOK_DISCOVERED_POSTS) };
