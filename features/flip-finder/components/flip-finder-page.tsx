@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
-import { authenticatedApiFetch } from "@/lib/supabase/authenticated-fetch";
+import { apiFetch } from "@/lib/api-fetch";
 
 import {
   canRunManualScan,
@@ -843,7 +843,7 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
-  const response = await authenticatedApiFetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
+  const response = await apiFetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
   const payload = await readJson(response);
   if (!response.ok || !isScanProgressResponse(payload)) {
     throw new Error(readMessage(payload, "Nie udało się pobrać postępu skanu."));

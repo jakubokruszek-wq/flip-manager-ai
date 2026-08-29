@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ExternalLink, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { authenticatedApiFetch } from "@/lib/supabase/authenticated-fetch";
+import { apiFetch } from "@/lib/api-fetch";
 import {
   Dialog,
   DialogContent,
@@ -208,7 +208,7 @@ function EditDialog({ group, busy, onClose, onSave }: { group: WatchedFacebookGr
 function groupPatch(group: WatchedFacebookGroup, patch: Partial<FacebookGroupManagementPatch> = {}): FacebookGroupManagementPatch { return { name: group.name, city: group.city ?? "", priority: group.priority, enabled: group.enabled, ...patch }; }
 function groupIdentifier(value: string) { try { return new URL(value).pathname.match(/^\/groups\/([^/]+)/i)?.[1] ?? value; } catch { return value; } }
 async function facebookGroupsFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  return authenticatedApiFetch(input, init);
+  return apiFetch(input, init);
 }
 function errorMessage(value: unknown, fallback: string) { return value instanceof Error ? value.message : fallback; }
 function Field({ label, value, onChange, placeholder, className = "", disabled = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; className?: string; disabled?: boolean }) { return <label className={`grid gap-1 text-sm ${className}`}>{label}<input className="h-11 rounded-xl border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-70" disabled={disabled} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} /></label>; }

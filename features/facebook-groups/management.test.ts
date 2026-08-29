@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { planFacebookGroupJobs } from "../facebook-worker/multi-group.ts";
-import { applyManagementPatch, assertAuthenticatedFacebookGroupUser, parseFacebookGroupManagementPatch, partitionWatchedFacebookGroups, safeRemovePatch } from "./management.ts";
+import { applyManagementPatch, parseFacebookGroupManagementPatch, partitionWatchedFacebookGroups, safeRemovePatch } from "./management.ts";
 import type { WatchedFacebookGroup } from "./types.ts";
 
 test("four database records remain four visible UI records without pagination or canonical hiding", () => {
@@ -54,12 +54,6 @@ test("safe remove archives operationally by disabling only and preserves histori
   assert.equal("deleteListings" in safeRemovePatch(), false);
   assert.equal("deleteSnapshots" in safeRemovePatch(), false);
   assert.equal("deleteScans" in safeRemovePatch(), false);
-});
-
-test("unauthorized update and remove are rejected", () => {
-  assert.throws(() => assertAuthenticatedFacebookGroupUser(null), /UNAUTHORIZED/);
-  assert.throws(() => assertAuthenticatedFacebookGroupUser({}), /UNAUTHORIZED/);
-  assert.doesNotThrow(() => assertAuthenticatedFacebookGroupUser({ id: "user-1" }));
 });
 
 function group(id: string, enabled: boolean, url = `https://www.facebook.com/groups/${id}/`): WatchedFacebookGroup {

@@ -37,10 +37,6 @@ export function safeRemovePatch(): Pick<FacebookGroupManagementPatch, "enabled">
   return { enabled: false };
 }
 
-export function assertAuthenticatedFacebookGroupUser(user: unknown): asserts user is { id: string } {
-  if (!user || typeof user !== "object" || !("id" in user) || typeof user.id !== "string" || !user.id) throw new FacebookGroupManagementValidationError("UNAUTHORIZED");
-}
-
 function requiredText(value: unknown, label: string, maxLength: number): string {
   if (typeof value !== "string" || !value.trim()) throw new FacebookGroupManagementValidationError(`${label} jest wymagana.`);
   const result = value.trim();
