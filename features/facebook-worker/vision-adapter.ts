@@ -3,7 +3,6 @@ import type { FacebookMediaCandidate, FacebookPostSnapshot, FacebookVisionExtrac
 import { inspectFacebookIntentSignals, resolveFacebookListingIntent } from "../facebook-watcher/facebook-intent.ts";
 import type { FacebookPostImportResult } from "./post-flow.ts";
 import { resolveFacebookPrice } from "../facebook-watcher/extract-facebook-property.ts";
-import { resolveDeterministicFacebookSellFacts } from "../facebook-watcher/facebook-processing-policy.ts";
 
 const MIN_PROPERTY_IMAGE_CONFIDENCE = 0.8;
 
@@ -14,9 +13,14 @@ export function evaluateFacebookPersistenceGate(post: FacebookPostSnapshot) {
   logFacebookIntentSignals(post.postId, "AUTHORITATIVE_POST_TEXT", post.authoritativePostText ?? "", intent.intent);
   logFacebookIntentSignals(post.postId, "VISION_VISIBLE_TEXT", post.vision?.visibleText ?? "", intent.intent);
   logFacebookIntentSignals(post.postId, resolution.textSource, resolution.classifierText, intent.intent);
-  const deterministicTextSell = post.authoritativePostTextProvenance === "ROOT_AUTHOR_MESSAGE"
-    && resolveDeterministicFacebookSellFacts(post.authoritativePostText).complete;
-  return { ...intent, allowed: intent.intent === "SELL_PROPERTY" && (post.vision?.isProperty === true || deterministicTextSell) };
+  // An exact authoritative post message is sufficient to preserve a
+  // deterministic SELL even when dedicated-page enrichment timed out. The
+  // enrichment result (including Vision) must never be required to persist the
+  // feed-derived listing or downgrade its intent to UNKNOWN.
+  const deterministicAuthoritativeSell = post.authoritativePostTextProvenance === "ROOT_AUTHOR_MESSAGE"
+    && intent.intent === "SELL_PROPERTY"
+    && intent.intentSource === "DETERMINISTIC_SELL";
+  return { ...intent, allowed: intent.intent === "SELL_PROPERTY" && (post.vision?.isProperty === true || deterministicAuthoritativeSell) };
 }
 
 function resolveFacebookPostIntent(post: FacebookPostSnapshot) {

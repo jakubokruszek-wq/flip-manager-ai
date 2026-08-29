@@ -165,7 +165,7 @@ test("complete deterministic SELL persists without a Vision call", async () => {
   assert.equal(persistedCalls, 1);
 });
 
-test("unresolved SELL without Vision remains fail-closed", async () => {
+test("authoritative SELL without Vision remains terminal and persists feed-derived data", async () => {
   const item: FacebookPostSnapshot = {
     postId: "unresolved-sell", groupId: "group", permalink: null,
     authoritativePostText: "Sprzedam mieszkanie w \u0141odzi", authoritativePostTextSource: "POST_REGION_DOM",
@@ -174,6 +174,6 @@ test("unresolved SELL without Vision remains fail-closed", async () => {
   };
   let persistedCalls = 0;
   const result = await persistEligibleFacebookPost(item, async () => { persistedCalls += 1; return persisted(); });
-  assert.equal(result.status, "skipped");
-  assert.equal(persistedCalls, 0);
+  assert.equal(result.status, "created");
+  assert.equal(persistedCalls, 1);
 });

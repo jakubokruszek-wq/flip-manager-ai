@@ -39,6 +39,11 @@ test("deterministic sale overrides a conflicting Vision intent", () => {
   assert.deepEqual({ intent: result.intent, source: result.intentSource }, { intent: "SELL_PROPERTY", source: "DETERMINISTIC_SELL" });
 });
 
+test("Na sprzedaż authoritative text remains SELL despite weaker fallback", () => {
+  const result = resolveFacebookListingIntent("Na sprzedaż mieszkanie, 25,6 m², 268 500 zł", "UNKNOWN", 0.2);
+  assert.deepEqual({ intent: result.intent, source: result.intentSource }, { intent: "SELL_PROPERTY", source: "DETERMINISTIC_SELL" });
+});
+
 test("real buy and sell conflict is unknown and cannot persist", () => {
   const result = resolveFacebookListingIntent("Szukam mieszkania dla klienta, ale sprzedam też własne mieszkanie.", "SELL_PROPERTY", 0.99);
   assert.deepEqual({ intent: result.intent, source: result.intentSource, conflict: result.conflict }, { intent: "UNKNOWN", source: "CONFLICT", conflict: true });

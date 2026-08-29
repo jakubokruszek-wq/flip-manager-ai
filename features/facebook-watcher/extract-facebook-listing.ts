@@ -16,7 +16,10 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
   const textResult = vision.visibleText
     ? await extractFacebookProperty({ ...input, postText: combinedText })
     : base;
-  const intent = resolveFacebookListingIntent(combinedText, vision.listingIntent, vision.intentConfidence);
+  // Keep an unambiguous intent from the authoritative post text authoritative.
+  // OCR/Vision text can contain neighbouring UI or shared-post language and
+  // must not downgrade a deterministic SELL to UNKNOWN.
+  const intent = resolveFacebookExtractionIntent(input.postText, combinedText, vision.listingIntent, vision.intentConfidence);
   const acceptedImages = (input.images ?? []).filter((_, index) => vision.imageAssessments.some((assessment) => assessment.imageIndex === index && assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8));
   const priceSourceText = input.postText?.trim() || vision.visibleText || "";
   const resolvedPrice = resolveFacebookPrice(priceSourceText, textResult.area ?? vision.area);
@@ -43,6 +46,18 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     imageAssessments: vision.imageAssessments,
     images: acceptedImages,
   };
+}
+
+export function resolveFacebookExtractionIntent(
+  authoritativeText: string | undefined,
+  combinedText: string,
+  visionIntent: FacebookProperty["listingIntent"],
+  visionConfidence: number | undefined,
+) {
+  const authoritativeIntent = authoritativeText ? resolveFacebookListingIntent(authoritativeText, null, null) : null;
+  return authoritativeIntent && authoritativeIntent.intent !== "UNKNOWN"
+    ? authoritativeIntent
+    : resolveFacebookListingIntent(combinedText, visionIntent, visionConfidence);
 }
 
 function selectFieldConfidence(textResult: FacebookProperty, vision: NonNullable<Awaited<ReturnType<typeof analyzeFacebookImages>>>): FacebookFieldConfidence {

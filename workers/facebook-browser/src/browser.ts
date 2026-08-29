@@ -153,9 +153,18 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       return result;
     }); for (const post of discovered) if (!feedTexts[post.postId] && post.discoveredText) feedTexts[post.postId] = post.discoveredText; discovered.forEach((post) => { timingFor(post.postId).feedDiscoveryMs = discoveryDuration; }); const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
     const terminalFeedFallback = (post: FreshDiscoveredFacebookPost, feedText: string | null): FacebookPostSnapshot => ({ postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: feedText ?? "", authoritativePostTextSource: "POST_REGION_DOM", authoritativePostTextProvenance: feedText ? "ROOT_AUTHOR_MESSAGE" : "NONE", text: feedText ?? "", imageUrls: [], mediaCandidates: [], publishedAt: post.discoveredPublishedAt, vision: null });
+    const snapshotFromRegion = (post: FreshDiscoveredFacebookPost, region: Awaited<ReturnType<typeof captureFacebookPostRegion>>): FacebookPostSnapshot => ({
+      postId: post.postId, groupId: group.id, permalink: post.permalink,
+      authoritativePostText: region.authoritativePostText,
+      authoritativePostTextSource: region.authoritativePostTextSource,
+      authoritativePostTextProvenance: region.authoritativePostTextProvenance,
+      text: region.authoritativePostText, imageUrls: region.imageUrls,
+      mediaCandidates: region.mediaCandidates, publishedAt: region.publishedAt ?? post.discoveredPublishedAt, vision: null,
+    });
     const visionCapacity = debugPostId ? 1 : debugMaxPosts ?? MAX_VISION_POSTS_PER_JOB;
     const processFreshPost = async (post: FreshDiscoveredFacebookPost) => {
       const postStarted = Date.now();
+      let lastKnownSnapshot: FacebookPostSnapshot | null = null;
       try {
         signal.throwIfAborted();
         const snapshot = await runPostOperation(post.postId, () => processDedicatedFacebookPost(post, group.id, {
@@ -164,7 +173,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
             const navigationStarted = Date.now(); performance.pageOpens += await openFacebookPostPage(page, permalink, group.id, post.postId) ? 1 : 0; timingFor(post.postId).dedicatedPageNavigationMs += Date.now() - navigationStarted;
             if (alreadyOpen) performance.dedicatedPageReuses += 1;
           },
-          capture: async (postId) => { const extractionStarted = Date.now(); const region = await captureFacebookPostRegion(page, postId); timingFor(postId).extractionMs += Date.now() - extractionStarted; logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
+          capture: async (postId) => { const extractionStarted = Date.now(); const region = await captureFacebookPostRegion(page, postId); lastKnownSnapshot = snapshotFromRegion(post, region); timingFor(postId).extractionMs += Date.now() - extractionStarted; logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
           analyze: async (input) => { const visionStarted = Date.now(); performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, signal); timingFor(input.postId).visionMs += Date.now() - visionStarted; logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
         }));
         posts.push(snapshot); processedFreshPostIds.add(post.postId);
@@ -173,7 +182,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
         const reasonCode = error instanceof FacebookPostProcessingDeadlineError ? "FACEBOOK_POST_PROCESSING_DEADLINE_EXCEEDED" : controlledPostFailureCode(error);
         warnings.push(`${reasonCode}: post ${post.postId} nie zostaĹ‚ przetworzony.`);
         logFacebookWorker("FACEBOOK_POST_EXTRACTION_FAILED", { groupId: group.id, postId: post.postId, reasonCode });
-        posts.push(terminalFeedFallback(post, feedTexts[post.postId] ?? null));
+        posts.push(lastKnownSnapshot ?? terminalFeedFallback(post, feedTexts[post.postId] ?? null));
         processedFreshPostIds.add(post.postId);
       } finally {
         timingFor(post.postId).totalMs = Date.now() - postStarted;
@@ -207,6 +216,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       await mapFacebookPostsWithConcurrency(selected, FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY, async (post, order) => {
         const postStarted = Date.now();
         let taskPage: import("playwright").Page | null = null;
+        let lastKnownSnapshot: FacebookPostSnapshot | null = null;
         const taskAbort = new AbortController();
         const abortFromShutdown = () => taskAbort.abort(signal.reason);
         signal.addEventListener("abort", abortFromShutdown, { once: true });
@@ -253,7 +263,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
             const currentPage = await ensurePage();
             const snapshot = await processDedicatedFacebookPost(age.post, group.id, {
               open: async (permalink) => { const navigationStarted = Date.now(); const alreadyOpen = isExpectedFacebookPostPage(currentPage.url(), post.postId); performance.pageOpens += await openFacebookPostPage(currentPage, permalink, group.id, post.postId) ? 1 : 0; timingFor(post.postId).dedicatedPageNavigationMs += Date.now() - navigationStarted; if (alreadyOpen) performance.dedicatedPageReuses += 1; },
-              capture: async (postId) => { const extractionStarted = Date.now(); const region = await captureFacebookPostRegion(currentPage, postId); timingFor(postId).extractionMs += Date.now() - extractionStarted; logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
+              capture: async (postId) => { const extractionStarted = Date.now(); const region = await captureFacebookPostRegion(currentPage, postId); lastKnownSnapshot = { postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: region.authoritativePostText, imageUrls: region.imageUrls, mediaCandidates: region.mediaCandidates, publishedAt: region.publishedAt ?? post.discoveredPublishedAt, vision: null }; timingFor(postId).extractionMs += Date.now() - extractionStarted; logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
               analyze: async (input) => { const visionStarted = Date.now(); performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, taskAbort.signal); timingFor(input.postId).visionMs += Date.now() - visionStarted; logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
             });
             posts.push(snapshot);
@@ -266,7 +276,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
           const reasonCode = error instanceof FacebookPostProcessingDeadlineError ? "FACEBOOK_POST_PROCESSING_DEADLINE_EXCEEDED" : controlledPostFailureCode(error);
           warnings.push(`${reasonCode}: post ${post.postId} nie zosta\u0142 przetworzony.`);
           logFacebookWorker("FACEBOOK_POST_EXTRACTION_FAILED", { groupId: group.id, postId: post.postId, reasonCode });
-          posts.push(terminalFeedFallback(post, feedText));
+          posts.push(lastKnownSnapshot ?? terminalFeedFallback(post, feedText));
         } finally {
           signal.removeEventListener("abort", abortFromShutdown);
           if (taskPage !== null) await (taskPage as import("playwright").Page).close({ runBeforeUnload: false }).catch(() => undefined);
