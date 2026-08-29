@@ -1,5 +1,6 @@
-export const FACEBOOK_POST_PROCESSING_DEADLINE_MS = 25_000;
+export const FACEBOOK_POST_PROCESSING_DEADLINE_MS = 20_000;
 export const FACEBOOK_BOUNDED_PROCESSING_SOURCE_ID = "2928219830782023";
+export const FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY = 2;
 
 export class FacebookPostProcessingDeadlineError extends Error {
   readonly postId: string;
@@ -11,6 +12,23 @@ export class FacebookPostProcessingDeadlineError extends Error {
     this.postId = postId;
     this.deadlineMs = deadlineMs;
   }
+}
+
+export async function mapFacebookPostsWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  process: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("INVALID_FACEBOOK_POST_CONCURRENCY");
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await process(items[index]!, index);
+    }
+  });
+  await Promise.all(workers);
 }
 
 export function facebookPostDeadlineForSource(sourceUrl: string): number | null {

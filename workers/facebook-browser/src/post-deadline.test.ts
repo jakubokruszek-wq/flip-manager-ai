@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { facebookPostDeadlineForSource, FacebookPostProcessingDeadlineError, runFacebookPostWithDeadline } from "./post-deadline.ts";
+import { facebookPostDeadlineForSource, FacebookPostProcessingDeadlineError, mapFacebookPostsWithConcurrency, runFacebookPostWithDeadline } from "./post-deadline.ts";
 
 test("deadline is scoped to group 2928219830782023", () => {
-  assert.equal(facebookPostDeadlineForSource("https://www.facebook.com/groups/2928219830782023/"), 25_000);
+  assert.equal(facebookPostDeadlineForSource("https://www.facebook.com/groups/2928219830782023/"), 20_000);
   assert.equal(facebookPostDeadlineForSource("https://www.facebook.com/groups/123/"), null);
+});
+
+test("bounded processing never exceeds configured concurrency", async () => {
+  let active = 0;
+  let peak = 0;
+  await mapFacebookPostsWithConcurrency([1, 2, 3, 4, 5], 2, async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    active -= 1;
+  });
+  assert.equal(peak, 2);
 });
 
 test("slow post is skipped and the next post continues", async () => {

@@ -17,7 +17,7 @@ export function shouldEarlyRejectFacebookFeed(text: string | null | undefined): 
 import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_FACEBOOK_DISCOVERED_POSTS, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
 import { discoverFacebookStructuredFeedPosts } from "./structured-feed-discovery.ts";
-import { facebookPostDeadlineForSource, FacebookPostProcessingDeadlineError, runFacebookPostWithDeadline } from "./post-deadline.ts";
+import { facebookPostDeadlineForSource, FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY, FacebookPostProcessingDeadlineError, mapFacebookPostsWithConcurrency, runFacebookPostWithDeadline } from "./post-deadline.ts";
 
 export async function revalidateFacebookPostImages(
   profileDir: string,
@@ -199,7 +199,79 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
         performance.duplicateVisionCallsAvoided += 1; performance.duplicatePageOpensAvoided += 1;
       }
     }
-    for (const [order, post] of partitioned.uncached.entries()) {
+    if (postDeadlineMs !== null && !debugPostId) {
+      const selected = partitioned.uncached.slice(0, visionCapacity);
+      if (partitioned.uncached.length > selected.length) logFacebookWorker("FACEBOOK_VISION_JOB_LIMIT_REACHED", { remainingFreshCount: partitioned.uncached.length - selected.length });
+      await mapFacebookPostsWithConcurrency(selected, FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY, async (post, order) => {
+        const postStarted = Date.now();
+        let taskPage: import("playwright").Page | null = null;
+        const taskAbort = new AbortController();
+        const abortFromShutdown = () => taskAbort.abort(signal.reason);
+        signal.addEventListener("abort", abortFromShutdown, { once: true });
+        const ensurePage = async () => taskPage ??= await context.newPage();
+        try {
+          logFacebookWorker("FACEBOOK_POST_DISCOVERED", { groupId: group.id, postId: post.postId, order, freshnessFailure: post.freshnessFailure });
+          const feedText = feedTexts[post.postId] ?? null;
+          const feedIntent = feedText ? resolveFacebookListingIntent(feedText, null, null) : null;
+          if (shouldEarlyRejectFacebookFeed(feedText)) {
+            posts.push({ postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: feedText ?? "", authoritativePostTextSource: "POST_REGION_DOM", authoritativePostTextProvenance: "ROOT_AUTHOR_MESSAGE", text: feedText ?? "", imageUrls: [], mediaCandidates: [], publishedAt: post.discoveredPublishedAt, vision: null });
+            performance.knownPostSkips += 1;
+            logFacebookWorker("FACEBOOK_FEED_INTENT_EARLY_SKIP", { groupId: group.id, postId: post.postId, intent: feedIntent!.intent, reasonCode: feedIntent!.reasonCode });
+            return;
+          }
+          await runFacebookPostWithDeadline(post.postId, async () => {
+            const ageStarted = Date.now();
+            const cachedAge = !post.discoveredPublishedAt ? ageCacheHits[post.postId] : undefined;
+            const resolvedAge = cachedAge ? resolveFacebookPostAgeFromCache(post, cachedAge, ageReferenceMs) : await resolveFacebookPostAge(post, ageReferenceMs, async () => {
+              const fallbackStarted = Date.now();
+              const currentPage = await ensurePage();
+              performance.agePageFallbacks += 1;
+              performance.pageOpens += await openFacebookPostPage(currentPage, post.permalink, group.id, post.postId) ? 1 : 0;
+              const detectedAge = await detectFacebookPostAgeOnDedicatedPage(currentPage, post.postId, ageReferenceMs);
+              timingFor(post.postId).ageFallbackMs += Date.now() - fallbackStarted;
+              return detectedAge;
+            });
+            timingFor(post.postId).ageDetectionMs += Date.now() - ageStarted;
+            const age = applyFacebookTargetedFreshnessBypass(resolvedAge, debugPostId);
+            if (cachedAge) performance.ageCacheHits += 1;
+            if (!debugPostId) ageCache.push({ postId: post.postId, checkedAt: cachedAge?.checkedAt ?? new Date(ageReferenceMs).toISOString(), publishedAt: resolvedAge.post.discoveredPublishedAt, decision: resolvedAge.decision === "PROCESS" ? "FRESH" : resolvedAge.decision, source: cachedAge?.source ?? (resolvedAge.source === "AGE_CACHE" ? "POST_PAGE" : resolvedAge.source) });
+            logFacebookWorker("FACEBOOK_POST_AGE_DETECTED", { postId: post.postId, source: age.source, ageHours: age.ageHours === null ? null : Math.round(age.ageHours * 100) / 100, decision: age.decision });
+            if (age.post.freshnessFailure) {
+              if (age.post.freshnessFailure === "FACEBOOK_POST_TOO_OLD") tooOldCount += 1; else unknownCount += 1;
+              warnings.push(`${age.post.freshnessFailure}: post ${post.postId} nie zosta\u0142 przetworzony.`);
+              return;
+            }
+            freshPosts.push(age.post);
+            if (feedText && resolveDeterministicFacebookSellFacts(feedText).complete) {
+              posts.push({ postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: feedText, authoritativePostTextSource: "POST_REGION_DOM", authoritativePostTextProvenance: "ROOT_AUTHOR_MESSAGE", text: feedText, imageUrls: [], mediaCandidates: [], publishedAt: age.post.discoveredPublishedAt, vision: null });
+              performance.knownPostSkips += 1;
+              logFacebookWorker("FACEBOOK_POST_VISION_SKIPPED", { groupId: group.id, postId: post.postId, reason: "COMPLETE_AUTHORITATIVE_FEED_SELL", intent: "SELL_PROPERTY" });
+              return;
+            }
+            const currentPage = await ensurePage();
+            const snapshot = await processDedicatedFacebookPost(age.post, group.id, {
+              open: async (permalink) => { const navigationStarted = Date.now(); const alreadyOpen = isExpectedFacebookPostPage(currentPage.url(), post.postId); performance.pageOpens += await openFacebookPostPage(currentPage, permalink, group.id, post.postId) ? 1 : 0; timingFor(post.postId).dedicatedPageNavigationMs += Date.now() - navigationStarted; if (alreadyOpen) performance.dedicatedPageReuses += 1; },
+              capture: async (postId) => { const extractionStarted = Date.now(); const region = await captureFacebookPostRegion(currentPage, postId); timingFor(postId).extractionMs += Date.now() - extractionStarted; logFacebookWorker("FACEBOOK_POST_REGION_FOUND", { groupId: group.id, postId, candidateCount: region.candidateCount, width: Math.round(region.box.width), height: Math.round(region.box.height), imageCount: region.imageUrls.length }); return region; },
+              analyze: async (input) => { const visionStarted = Date.now(); performance.visionCalls += 1; logFacebookWorker("FACEBOOK_POST_VISION_START", { groupId: group.id, postId: input.postId }); const vision = await analyzeRegion(input, taskAbort.signal); timingFor(input.postId).visionMs += Date.now() - visionStarted; logFacebookWorker("FACEBOOK_POST_VISION_DONE", { groupId: group.id, postId: input.postId, isProperty: vision.isProperty, confidence: vision.confidence, detectedFieldCount: [vision.price, vision.area, vision.rooms, vision.street, vision.neighborhood, vision.district].filter((value) => value !== null).length }); return vision; },
+            });
+            posts.push(snapshot);
+          }, async () => {
+            taskAbort.abort(new FacebookPostProcessingDeadlineError(post.postId, postDeadlineMs));
+            await taskPage?.close({ runBeforeUnload: false }).catch(() => undefined);
+          }, postDeadlineMs);
+        } catch (error) {
+          if (error instanceof ControlledFacebookFailure) throw error;
+          const reasonCode = error instanceof FacebookPostProcessingDeadlineError ? "FACEBOOK_POST_PROCESSING_DEADLINE_EXCEEDED" : controlledPostFailureCode(error);
+          warnings.push(`${reasonCode}: post ${post.postId} nie zosta\u0142 przetworzony.`);
+          logFacebookWorker("FACEBOOK_POST_EXTRACTION_FAILED", { groupId: group.id, postId: post.postId, reasonCode });
+        } finally {
+          signal.removeEventListener("abort", abortFromShutdown);
+          if (taskPage !== null) await (taskPage as import("playwright").Page).close({ runBeforeUnload: false }).catch(() => undefined);
+          timingFor(post.postId).totalMs = Date.now() - postStarted;
+          processedFreshPostIds.add(post.postId);
+        }
+      });
+    } else for (const [order, post] of partitioned.uncached.entries()) {
       logFacebookWorker("FACEBOOK_POST_DISCOVERED", { groupId: group.id, postId: post.postId, order, freshnessFailure: post.freshnessFailure });
       const cachedAge = !debugPostId && !post.discoveredPublishedAt ? ageCacheHits[post.postId] : undefined;
       const feedText = feedTexts[post.postId] ?? null;
