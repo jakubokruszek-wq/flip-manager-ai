@@ -13,6 +13,7 @@ export type FacebookLocationProvenance = {
 type LocationContext = {
   authoritativeText: string | null | undefined;
   groupName?: string | null;
+  groupUrl?: string | null;
 };
 
 export function reconcileFacebookLocation(property: FacebookProperty, context: LocationContext): {
@@ -21,9 +22,12 @@ export function reconcileFacebookLocation(property: FacebookProperty, context: L
 } {
   const explicitCity = explicitPolishCity(context.authoritativeText);
   const currentCity = clean(property.city);
-  const conflict = Boolean(explicitCity && currentCity && normalizeCity(explicitCity) !== normalizeCity(currentCity));
-  const groupCity = !explicitCity && !currentCity ? explicitPolishCity(context.groupName) : null;
-  const city = explicitCity ?? currentCity ?? groupCity;
+  const groupCity = !explicitCity
+    ? explicitPolishGroupCity(context.groupUrl) ?? (!currentCity ? explicitPolishCity(context.groupName) : null)
+    : null;
+  const trustedCity = explicitCity ?? groupCity;
+  const conflict = Boolean(trustedCity && currentCity && normalizeCity(trustedCity) !== normalizeCity(currentCity));
+  const city = trustedCity ?? currentCity;
   const propertyResult: FacebookProperty = {
     ...property,
     city,
@@ -35,7 +39,7 @@ export function reconcileFacebookLocation(property: FacebookProperty, context: L
     property: propertyResult,
     provenance: {
       city,
-      citySource: explicitCity ? "AUTHORITATIVE_TEXT" : currentCity ? "VISION" : groupCity ? "GROUP_FALLBACK" : "UNKNOWN",
+      citySource: explicitCity ? "AUTHORITATIVE_TEXT" : groupCity ? "GROUP_FALLBACK" : currentCity ? "VISION" : "UNKNOWN",
       conflict,
       conflictReason: conflict ? "AUTHORITATIVE_CITY_CONFLICT" : null,
       districtCleared: conflict && Boolean(property.district),
@@ -66,6 +70,14 @@ export function explicitPolishCity(value: string | null | undefined): string | n
   if (/\blodz(?:i)?\b/u.test(normalized)) return "Łódź";
   if (/\bwarszaw(?:a|ie|y)\b/u.test(normalized)) return "Warszawa";
   return null;
+}
+
+function explicitPolishGroupCity(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = normalizeCity(value);
+  return /(?:^|[^a-z])lodz(?:i)?(?:[^a-z]|$)/u.test(normalized) || /lodz(?:i)?/u.test(normalized)
+    ? "Łódź"
+    : null;
 }
 
 export function normalizeCity(value: string | null | undefined): string {

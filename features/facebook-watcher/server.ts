@@ -83,7 +83,7 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   }
   const extractedBase = await extractFacebookListing(normalized);
   const extracted = { ...extractedBase, ...normalized.overrides, originalUrl: extractedBase.originalUrl, images: extractedBase.images, flags: normalized.analysisFlags ?? extractedBase.flags, confidence: typeof normalized.analysisConfidence === "number" ? Math.max(0, Math.min(1, normalized.analysisConfidence)) : extractedBase.confidence, fieldConfidence: { ...extractedBase.fieldConfidence, ...normalized.analysisFieldConfidence }, listingIntent: intent.intent, intentConfidence: intent.confidence, intentSource: intent.intentSource, imageAssessments: normalized.imageAssessments ?? extractedBase.imageAssessments };
-  let locationResolution = reconcileFacebookLocation(extracted, { authoritativeText: normalized.postText, groupName: normalized.groupName });
+  let locationResolution = reconcileFacebookLocation(extracted, { authoritativeText: normalized.postText, groupName: normalized.groupName, groupUrl: normalized.url });
   Object.assign(extracted, locationResolution.property);
   const classification = classifyFacebookProperty(extracted, normalized.postText);
   if (context && !classification.usable) {
@@ -108,7 +108,7 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
       confidence: num(previousMetadata.confidence) ?? 0,
       fieldConfidence: parseFacebookFieldConfidence(previousMetadata.fieldConfidence),
     }, extracted);
-    locationResolution = reconcileFacebookLocation(qualityMerge.property, { authoritativeText: normalized.postText, groupName: normalized.groupName });
+    locationResolution = reconcileFacebookLocation(qualityMerge.property, { authoritativeText: normalized.postText, groupName: normalized.groupName, groupUrl: normalized.url });
     Object.assign(extracted, locationResolution.property);
   }
   const existingImages = existingListingState.images;
@@ -164,7 +164,7 @@ async function importAutomatedFacebook(input: {
     confidence: num(previousMetadata.confidence) ?? 0,
     fieldConfidence: parseFacebookFieldConfidence(previousMetadata.fieldConfidence),
   } : null, extracted);
-  const locationResolution = reconcileFacebookLocation(qualityMerge.property, { authoritativeText: normalized.postText, groupName: context.groupName });
+  const locationResolution = reconcileFacebookLocation(qualityMerge.property, { authoritativeText: normalized.postText, groupName: context.groupName, groupUrl: normalized.url ?? context.groupUrl });
   const effective = locationResolution.property;
   if (effective.listingIntent !== "SELL_PROPERTY") throw new Error("FACEBOOK_INTENT_GATE_FAILED");
   const boundImages = exactBoundPropertyImages(normalized, externalId);

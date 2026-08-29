@@ -52,3 +52,13 @@ test("group city is only a weak fallback and does not overwrite a known city", (
   const known = reconcileFacebookLocation({ ...base, title: "Oferta", description: null }, { authoritativeText: null, groupName: "Łódź okazje" });
   assert.equal(known.property.city, "Warszawa");
 });
+
+test("configured Facebook group URL can override conflicting Vision city", () => {
+  const result = reconcileFacebookLocation(
+    { ...base, city: "Warszawa", district: null, neighborhood: null },
+    { authoritativeText: "Sprzedam mieszkanie przy ul. Pomorskiej 94", groupName: "Facebook group 2928219830782023", groupUrl: "https://www.facebook.com/groups/mieszkaniawlodzi/posts/4454910774779580" },
+  );
+  assert.equal(result.property.city, "Łódź");
+  assert.equal(result.provenance.citySource, "GROUP_FALLBACK");
+  assert.equal(result.provenance.conflict, true);
+});
