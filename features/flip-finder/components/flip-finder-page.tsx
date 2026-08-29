@@ -26,7 +26,7 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
-import { ScanProgressPanel } from "@/features/flip-finder/components/scan-progress-panel";
+import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
 import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 
 type ScanResponse = {
@@ -110,7 +110,7 @@ export function FlipFinderPage() {
         setScanProgress(progress);
         setActiveScanRunId((current) => current ?? runId);
         if (isTerminalScanStatus(progress.status)) return;
-        await new Promise((resolve) => window.setTimeout(resolve, 2_500));
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
       }
     };
     void refresh();
@@ -209,11 +209,32 @@ export function FlipFinderPage() {
     });
   };
 
+  const stopScan = async (filter: SearchFilterListItem) => {
+    const runId = activeScanRunId;
+    if (!runId || !scanningFilterIdsRef.current.has(filter.id)) return;
+    setNotice("Zatrzymywanie…");
+    try {
+      const response = await fetch(`/api/flip-finder/scans/${runId}/cancel`, { method: "POST" });
+      const payload: unknown = await readJson(response);
+      if (!response.ok) throw new Error(readMessage(payload, "Nie udało się zatrzymać skanu."));
+      setNotice("Zatrzymano");
+      finishScanning(filter.id);
+      const progress = await fetchScanProgress(runId).catch(() => null);
+      if (progress) setScanProgress(progress);
+      await load();
+      setResultsRevision((current) => current + 1);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Nie udało się zatrzymać skanu.");
+    }
+  };
+
   const monitorScanRun = async (filterId: string, runId: string) => {
     let consecutiveFailures = 0;
+    let firstPoll = true;
     try {
       while (scanningFilterIdsRef.current.has(filterId)) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2_500));
+        if (!firstPoll) await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        firstPoll = false;
         const payload = await fetchScanProgress(runId).catch(() => null);
         if (!payload) {
           consecutiveFailures += 1;
@@ -319,10 +340,16 @@ export function FlipFinderPage() {
             >
               {scanningFilterIds.has(activeFilter.id) ? "Skanowanie…" : "Skanuj oferty"}
             </Button>
+            {scanningFilterIds.has(activeFilter.id) ? (
+              <Button className="h-12 px-6 text-base" onClick={() => void stopScan(activeFilter)} variant="destructive">
+                Zatrzymaj skanowanie
+              </Button>
+            ) : null}
             <FilterActions filter={activeFilter} onAction={manageFilter} />
           </div>
           {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
+          {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
         </Card>
       ) : (
         <section className="rounded-xl border border-dashed bg-card p-6 text-center">

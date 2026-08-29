@@ -12,7 +12,7 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
   const tone = budgetTone(progress.openai.budgetUsedPercent);
 
   return (
-    <section aria-label="Postęp skanowania i koszt OpenAI" className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-4 lg:grid-cols-[1.35fr_1fr]">
+    <section aria-label="Postęp skanowania" className="rounded-2xl border border-border/70 bg-muted/20 p-4">
       <div className="min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><p className="text-sm font-semibold">{active ? "Skanowanie…" : statusLabel(progress.status)}</p><p className="mt-1 text-xs text-muted-foreground">{progress.overall.completedUnits}/{progress.overall.totalUnits} etapów · {formatDuration(progress.elapsedMs)}</p></div>
@@ -41,7 +41,8 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
         {progress.errors.length > 0 ? <div className="mt-4 rounded-xl border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive">{progress.errors.slice(0, 3).map((message) => <p key={message}>{message}</p>)}</div> : null}
       </div>
 
-      <div className="rounded-xl border border-border/60 bg-card p-4">
+      {/* Vision cost telemetry is rendered below the results by VisionCostPanel. */}
+      <div className="hidden" aria-hidden="true">
         <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">OpenAI Vision</h3><span className="text-xs text-muted-foreground">{qualityLabel(progress.openai.lastRun.dataQuality)}</span></div>
         <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
           <CostMetric label="Ostatni skan" value={formatUsd(progress.openai.lastRun.costUsd)} />
@@ -54,6 +55,25 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
         </dl>
         {progress.openai.monthlyBudgetUsd !== null && progress.openai.budgetUsedPercent !== null ? <div className="mt-4"><div className="mb-1.5 flex justify-between gap-3 text-xs text-muted-foreground"><span>Budżet miesięczny {formatUsd(progress.openai.monthlyBudgetUsd)}</span><span>{progress.openai.budgetUsedPercent.toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%</span></div><div className="h-2 overflow-hidden rounded-full bg-surface-muted"><div className={`h-full rounded-full ${budgetToneClass(tone)}`} style={{ width: `${Math.min(100, progress.openai.budgetUsedPercent)}%` }} /></div></div> : null}
       </div>
+    </section>
+  );
+}
+
+export function VisionCostPanel({ progress }: { progress: ScanProgressResponse }) {
+  const tone = budgetTone(progress.openai.budgetUsedPercent);
+  return (
+    <section aria-label="OpenAI Vision" className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+      <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">OpenAI Vision</h3><span className="text-xs text-muted-foreground">{qualityLabel(progress.openai.lastRun.dataQuality)}</span></div>
+      <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+        <CostMetric label="Ostatni skan" value={formatUsd(progress.openai.lastRun.costUsd)} />
+        <CostMetric label="Wywołania" value={formatNumber(progress.openai.lastRun.calls)} />
+        <CostMetric label="Tokeny" value={formatNumber(progress.openai.lastRun.totalTokens)} />
+        <CostMetric label="Dzisiaj" value={formatUsd(progress.openai.today.costUsd)} />
+        <CostMetric label="Ten miesiąc" value={formatUsd(progress.openai.month.costUsd)} />
+        <CostMetric label="Budżet miesięczny" value={progress.openai.monthlyBudgetUsd === null ? "Nie ustawiono" : formatUsd(progress.openai.monthlyBudgetUsd)} />
+        {progress.openai.remainingBudgetUsd !== null ? <CostMetric label="Pozostały budżet Flip Manager" value={formatUsd(progress.openai.remainingBudgetUsd)} /> : null}
+      </dl>
+      {progress.openai.monthlyBudgetUsd !== null && progress.openai.budgetUsedPercent !== null ? <div className="mt-4"><div className="mb-1.5 flex justify-between gap-3 text-xs text-muted-foreground"><span>Budżet miesięczny {formatUsd(progress.openai.monthlyBudgetUsd)}</span><span>{progress.openai.budgetUsedPercent.toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%</span></div><div className="h-2 overflow-hidden rounded-full bg-surface-muted"><div className={`h-full rounded-full ${budgetToneClass(tone)}`} style={{ width: `${Math.min(100, progress.openai.budgetUsedPercent)}%` }} /></div></div> : null}
     </section>
   );
 }
