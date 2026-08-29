@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { FacebookAgeCacheHit, FacebookAuthoritativePostTextProvenance, FacebookAuthoritativePostTextSource, FacebookMediaCandidate, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
+import { resolveDeterministicFacebookSellFacts } from "../../../features/facebook-watcher/facebook-processing-policy.ts";
 import { inspectFacebookIntentSignals, type FacebookIntentSignalName } from "../../../features/facebook-watcher/facebook-intent.ts";
 import { logFacebookWorker } from "./logger.ts";
 import { shouldStopForKnownOldSequence } from "../../../features/facebook-worker/performance.ts";
@@ -100,6 +101,10 @@ export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost,
   const region = await dependencies.capture(post.postId);
   const deterministic = inspectFacebookIntentSignals(region.authoritativePostText);
   if (deterministic.propertyContext && (deterministic.buySignals.length > 0 || /\b(?:wynajm|wynajem|uslugi|posrednictwo)\b/iu.test(region.authoritativePostText))) {
+    const discoveredPublishedAt = "discoveredPublishedAt" in post && typeof post.discoveredPublishedAt === "string" ? post.discoveredPublishedAt : null;
+    return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: region.authoritativePostText, imageUrls: region.imageUrls, mediaCandidates: region.mediaCandidates, publishedAt: region.publishedAt ?? discoveredPublishedAt, vision: null };
+  }
+  if (resolveDeterministicFacebookSellFacts(region.authoritativePostText).complete) {
     const discoveredPublishedAt = "discoveredPublishedAt" in post && typeof post.discoveredPublishedAt === "string" ? post.discoveredPublishedAt : null;
     return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: region.authoritativePostText, imageUrls: region.imageUrls, mediaCandidates: region.mediaCandidates, publishedAt: region.publishedAt ?? discoveredPublishedAt, vision: null };
   }

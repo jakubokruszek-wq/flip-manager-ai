@@ -3,6 +3,7 @@ import type { FacebookMediaCandidate, FacebookPostSnapshot, FacebookVisionExtrac
 import { inspectFacebookIntentSignals, resolveFacebookListingIntent } from "../facebook-watcher/facebook-intent.ts";
 import type { FacebookPostImportResult } from "./post-flow.ts";
 import { resolveFacebookPrice } from "../facebook-watcher/extract-facebook-property.ts";
+import { resolveDeterministicFacebookSellFacts } from "../facebook-watcher/facebook-processing-policy.ts";
 
 const MIN_PROPERTY_IMAGE_CONFIDENCE = 0.8;
 
@@ -13,7 +14,9 @@ export function evaluateFacebookPersistenceGate(post: FacebookPostSnapshot) {
   logFacebookIntentSignals(post.postId, "AUTHORITATIVE_POST_TEXT", post.authoritativePostText ?? "", intent.intent);
   logFacebookIntentSignals(post.postId, "VISION_VISIBLE_TEXT", post.vision?.visibleText ?? "", intent.intent);
   logFacebookIntentSignals(post.postId, resolution.textSource, resolution.classifierText, intent.intent);
-  return { ...intent, allowed: post.vision?.isProperty === true && intent.intent === "SELL_PROPERTY" };
+  const deterministicTextSell = post.authoritativePostTextProvenance === "ROOT_AUTHOR_MESSAGE"
+    && resolveDeterministicFacebookSellFacts(post.authoritativePostText).complete;
+  return { ...intent, allowed: intent.intent === "SELL_PROPERTY" && (post.vision?.isProperty === true || deterministicTextSell) };
 }
 
 function resolveFacebookPostIntent(post: FacebookPostSnapshot) {

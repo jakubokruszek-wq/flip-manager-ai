@@ -151,3 +151,29 @@ test("full authoritative post text is not replaced by a short Vision summary", (
   assert.equal(input.overrides?.description, full);
   assert.equal(input.analysisFieldConfidence?.description, 1);
 });
+
+test("complete deterministic SELL persists without a Vision call", async () => {
+  const item: FacebookPostSnapshot = {
+    postId: "complete-sell", groupId: "group", permalink: "https://www.facebook.com/groups/2928219830782023/posts/1/",
+    authoritativePostText: "Sprzedam mieszkanie M3, 64 m2, 9200 z\u0142/m2", authoritativePostTextSource: "POST_REGION_DOM",
+    authoritativePostTextProvenance: "ROOT_AUTHOR_MESSAGE", text: "Sprzedam mieszkanie M3, 64 m2, 9200 z\u0142/m2",
+    imageUrls: [], mediaCandidates: [], publishedAt: null, vision: null,
+  };
+  let persistedCalls = 0;
+  const result = await persistEligibleFacebookPost(item, async () => { persistedCalls += 1; return persisted(); });
+  assert.equal(result.status, "created");
+  assert.equal(persistedCalls, 1);
+});
+
+test("unresolved SELL without Vision remains fail-closed", async () => {
+  const item: FacebookPostSnapshot = {
+    postId: "unresolved-sell", groupId: "group", permalink: null,
+    authoritativePostText: "Sprzedam mieszkanie w \u0141odzi", authoritativePostTextSource: "POST_REGION_DOM",
+    authoritativePostTextProvenance: "ROOT_AUTHOR_MESSAGE", text: "Sprzedam mieszkanie w \u0141odzi",
+    imageUrls: [], mediaCandidates: [], publishedAt: null, vision: null,
+  };
+  let persistedCalls = 0;
+  const result = await persistEligibleFacebookPost(item, async () => { persistedCalls += 1; return persisted(); });
+  assert.equal(result.status, "skipped");
+  assert.equal(persistedCalls, 0);
+});
