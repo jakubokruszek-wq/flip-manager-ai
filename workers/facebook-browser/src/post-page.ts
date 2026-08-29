@@ -98,6 +98,11 @@ export function determineFacebookPostRegionFailureReason(counts: FacebookPostReg
 export async function processDedicatedFacebookPost(post: DiscoveredFacebookPost, groupId: string, dependencies: { open: (permalink: string) => Promise<void>; capture: (postId: string) => Promise<FacebookPostRegion>; analyze: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }) => Promise<FacebookVisionExtraction> }): Promise<FacebookPostSnapshot> {
   await dependencies.open(post.permalink);
   const region = await dependencies.capture(post.postId);
+  const deterministic = inspectFacebookIntentSignals(region.authoritativePostText);
+  if (deterministic.propertyContext && (deterministic.buySignals.length > 0 || /\b(?:wynajm|wynajem|uslugi|posrednictwo)\b/iu.test(region.authoritativePostText))) {
+    const discoveredPublishedAt = "discoveredPublishedAt" in post && typeof post.discoveredPublishedAt === "string" ? post.discoveredPublishedAt : null;
+    return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: region.authoritativePostText, imageUrls: region.imageUrls, mediaCandidates: region.mediaCandidates, publishedAt: region.publishedAt ?? discoveredPublishedAt, vision: null };
+  }
   const vision = await dependencies.analyze({ postId: post.postId, screenshotDataUrl: region.screenshotDataUrl, imageUrls: region.imageUrls });
   const discoveredPublishedAt = "discoveredPublishedAt" in post && typeof post.discoveredPublishedAt === "string" ? post.discoveredPublishedAt : null;
   return { postId: post.postId, groupId, permalink: post.permalink, authoritativePostText: region.authoritativePostText, authoritativePostTextSource: region.authoritativePostTextSource, authoritativePostTextProvenance: region.authoritativePostTextProvenance, text: vision.visibleText ?? "", imageUrls: region.imageUrls, mediaCandidates: region.mediaCandidates, publishedAt: region.publishedAt ?? discoveredPublishedAt, vision };
