@@ -15,7 +15,7 @@ export function shouldEarlyRejectFacebookFeed(text: string | null | undefined): 
     && ["BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE"].includes(decision.intent)
     && Boolean(decision.reasonCode);
 }
-import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_FACEBOOK_DISCOVERED_POSTS, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
+import { applyFacebookTargetedFreshnessBypass, captureFacebookPostRegion, collectFacebookPostTimeDiagnostic, detectFacebookPostAgeOnDedicatedPage, discoverFacebookPosts, discoverFacebookPostsByScrolling, forceFacebookNewestFeedMode, isExpectedFacebookPostPage, limitFacebookVisionPosts, MAX_FACEBOOK_DISCOVERED_POSTS, MAX_VISION_POSTS_PER_JOB, processDedicatedFacebookPost, resolveFacebookPostAge, resolveFacebookPostAgeFromCache, resolveFacebookPostDiscovery, type FreshDiscoveredFacebookPost } from "./post-page.ts";
 import { classifyFacebookSession } from "./session.ts";
 import { discoverFacebookStructuredFeedPosts } from "./structured-feed-discovery.ts";
 import { facebookPostDeadlineForSource, FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY, FacebookPostProcessingDeadlineError, mapFacebookPostsWithConcurrency, runFacebookPostWithDeadline } from "./post-deadline.ts";
@@ -92,6 +92,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
     const runPostOperation = <T>(postId: string, operation: () => Promise<T>): Promise<T> => postDeadlineMs === null
       ? operation()
       : runFacebookPostWithDeadline(postId, operation, recoverPostPage, postDeadlineMs);
+    let feedMode = "UNKNOWN";
     if (!debugPostId) {
       logFacebookWorker("FACEBOOK_GROUP_START", { groupId: group.id });
       const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 }); performance.pageOpens += 1;
@@ -101,6 +102,9 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       logFacebookWorker("FACEBOOK_SESSION_OK", { groupId: group.id });
       const feedReady = await waitForFacebookGroupFeed(page);
       logFacebookWorker("FACEBOOK_GROUP_FEED_READY", { groupId: group.id, postLinkFound: feedReady });
+      const mode = await forceFacebookNewestFeedMode(page, process.env.FACEBOOK_FORCE_NEWEST_FEED === "1").catch(() => ({ before: "UNKNOWN", available: [], clicked: null, after: "UNKNOWN", urlBefore: page.url(), urlAfter: page.url(), switched: false }));
+      feedMode = mode.after;
+      logFacebookWorker("FACEBOOK_FEED_MODE", { groupId: group.id, beforeFeedMode: mode.before, availableModes: mode.available, clickedMode: mode.clicked, afterFeedMode: mode.after, urlBefore: mode.urlBefore, urlAfter: mode.urlAfter, modeSwitchVerified: mode.switched ? "YES" : "NO" });
     } else {
       logFacebookWorker("FACEBOOK_DEBUG_TARGET_MODE", { groupId: group.id, postId: debugPostId });
     }
@@ -134,7 +138,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
           const network = networkTrace ? { postIds: [...networkTrace.postIds].slice(0, 20), responses: networkTrace.responses } : { postIds: [], responses: 0 };
           const viewport = await page.evaluate(() => ({ scrollTop: Math.round(window.scrollY), scrollHeight: Math.round(document.documentElement.scrollHeight), visibleCardCount: document.querySelectorAll('[role="article"]').length, url: location.href })).catch(() => ({ scrollTop: 0, scrollHeight: 0, visibleCardCount: 0, url: page.url() }));
           const previous = discoveryTrace[discoveryTrace.length - 1];
-          discoveryTrace.push({ iteration: discoveryTrace.length, domPostIds: anchors.map((post) => post.postId).slice(0, 20), hydrationPostIds: structured.map((post) => post.postId).slice(0, 20), networkPostIds: network.postIds, mergedPostIds: merged.map((post) => post.postId).slice(0, 20), visibleCardCount: viewport.visibleCardCount, scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, feedMode: "UNKNOWN", currentUrl: viewport.url.slice(0, 500), newIdsThisIteration: previous ? Math.max(0, merged.length - previous.mergedPostIds.length) : merged.length, networkResponsesSinceLastScroll: Math.max(0, network.responses - lastNetworkResponseCount), hydrationChanged: previous ? structured.map((post) => post.postId).join(",") !== previous.hydrationPostIds.join(",") : true, stopReason: "IN_PROGRESS" });
+          discoveryTrace.push({ iteration: discoveryTrace.length, domPostIds: anchors.map((post) => post.postId).slice(0, 20), hydrationPostIds: structured.map((post) => post.postId).slice(0, 20), networkPostIds: network.postIds, mergedPostIds: merged.map((post) => post.postId).slice(0, 20), visibleCardCount: viewport.visibleCardCount, scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, feedMode, currentUrl: viewport.url.slice(0, 500), newIdsThisIteration: previous ? Math.max(0, merged.length - previous.mergedPostIds.length) : merged.length, networkResponsesSinceLastScroll: Math.max(0, network.responses - lastNetworkResponseCount), hydrationChanged: previous ? structured.map((post) => post.postId).join(",") !== previous.hydrationPostIds.join(",") : true, stopReason: "IN_PROGRESS" });
           lastNetworkResponseCount = network.responses;
         }
         return merged;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page, Response } from "playwright";
 import { openFacebookPostPage, shouldEarlyRejectFacebookFeed, waitForFacebookGroupFeed } from "./browser.ts";
+import { classifyFacebookFeedModeLabel, selectFacebookNewestFeedMode } from "./post-page.ts";
 
 function navigationTimeout(): Error {
   return Object.assign(new Error("page.goto: Timeout 60000ms exceeded."), { name: "TimeoutError" });
@@ -115,4 +116,14 @@ test("early feed intent rejects deterministic BUY/RENT/SERVICE before a page ope
   assert.equal(shouldEarlyRejectFacebookFeed("Sprzedam mieszkanie 2 pokoje"), false);
   assert.equal(shouldEarlyRejectFacebookFeed("Mieszkanie 2 pokoje"), false);
   assert.equal(shouldEarlyRejectFacebookFeed("Kupię mieszkanie"), true);
+});
+
+test("selects an exact newest feed option when available", () => {
+  assert.equal(selectFacebookNewestFeedMode(["Najbardziej trafne", "Najnowsze posty"]), "Najnowsze posty");
+  assert.equal(classifyFacebookFeedModeLabel("Najnowsze posty"), "NEWEST");
+});
+
+test("falls back safely when no newest feed option is available", () => {
+  assert.equal(selectFacebookNewestFeedMode(["Najbardziej trafne", "Polecane"]), null);
+  assert.equal(classifyFacebookFeedModeLabel("Nieznany tryb"), "UNKNOWN");
 });

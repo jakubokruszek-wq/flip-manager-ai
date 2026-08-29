@@ -12,6 +12,42 @@ export const MAX_VISION_POSTS_PER_JOB = 15;
 export const MAX_FACEBOOK_POSTS_PER_JOB = MAX_FACEBOOK_DISCOVERED_POSTS;
 export const FACEBOOK_POST_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
 
+export type FacebookFeedMode = "NEWEST" | "MOST_RELEVANT" | "FEATURED" | "UNKNOWN";
+export type FacebookFeedModeDiagnostics = { before: FacebookFeedMode; available: string[]; clicked: FacebookFeedMode | null; after: FacebookFeedMode; urlBefore: string; urlAfter: string; switched: boolean };
+
+export function classifyFacebookFeedModeLabel(label: string | null | undefined): FacebookFeedMode {
+  const value = label?.replace(/\s+/g, " ").trim().toLocaleLowerCase("pl-PL") ?? "";
+  if (/^(najnowsze(?: posty)?|new posts?|recent activity|najnowsza aktywność)$/.test(value)) return "NEWEST";
+  if (/^(najbardziej trafne|most relevant|top posts?)$/.test(value)) return "MOST_RELEVANT";
+  if (/^(polecane|wyróżnione|featured)$/.test(value)) return "FEATURED";
+  return "UNKNOWN";
+}
+
+export function selectFacebookNewestFeedMode(labels: string[]): string | null {
+  return labels.find((label) => /(?:^|\s)(?:najnowsze(?:\s+posty)?|new posts?|recent activity|najnowsza aktywność)(?:\s|$)/iu.test(label.replace(/\s+/g, " ").trim())) ?? null;
+}
+
+export async function forceFacebookNewestFeedMode(page: Page, enabled: boolean): Promise<FacebookFeedModeDiagnostics> {
+  const urlBefore = page.url();
+  const controls = await page.locator('button,[role="button"],[role="menuitem"],[aria-haspopup]').evaluateAll((elements) => elements.map((element, index) => {
+    const rect = element.getBoundingClientRect();
+    const label = `${(element as HTMLElement).innerText ?? ""} ${element.getAttribute("aria-label") ?? ""}`.replace(/\s+/g, " ").trim();
+    return { index, label, visible: rect.width > 0 && rect.height > 0 };
+  })).catch(() => [] as Array<{ index: number; label: string; visible: boolean }>);
+  const visibleLabels = controls.filter((item) => item.visible).map((item) => item.label).filter(Boolean);
+  const before = visibleLabels.map(classifyFacebookFeedModeLabel).find((mode) => mode !== "UNKNOWN") ?? "UNKNOWN";
+  if (!enabled) return { before, available: visibleLabels.slice(0, 20), clicked: null, after: before, urlBefore, urlAfter: urlBefore, switched: false };
+  const newestLabel = selectFacebookNewestFeedMode(visibleLabels);
+  if (!newestLabel || before === "NEWEST") return { before, available: visibleLabels.slice(0, 20), clicked: null, after: before, urlBefore, urlAfter: urlBefore, switched: false };
+  const target = controls.find((item) => item.visible && item.label === newestLabel);
+  if (!target) return { before, available: visibleLabels.slice(0, 20), clicked: null, after: before, urlBefore, urlAfter: urlBefore, switched: false };
+  await page.locator('button,[role="button"],[role="menuitem"],[aria-haspopup]').nth(target.index).click({ timeout: 2_000 });
+  await page.waitForTimeout(750);
+  const afterControls = await page.locator('button,[role="button"],[role="menuitem"],[aria-haspopup]').evaluateAll((elements) => elements.map((element) => `${(element as HTMLElement).innerText ?? ""} ${element.getAttribute("aria-label") ?? ""}`.replace(/\s+/g, " ").trim())).catch(() => [] as string[]);
+  const after = afterControls.map(classifyFacebookFeedModeLabel).find((mode) => mode !== "UNKNOWN") ?? "UNKNOWN";
+  return { before, available: visibleLabels.slice(0, 20), clicked: "NEWEST", after, urlBefore, urlAfter: page.url(), switched: after === "NEWEST" };
+}
+
 export type DiscoveredFacebookPost = { postId: string; permalink: string };
 export type FacebookFeedAgeDiagnostic = { postId: string; candidatesFound: number; selectedSource: string | null; bindingMethod: string | null; machineReadable: boolean; ageHours: number | null; decision: "PROCESS" | "TOO_OLD" | "UNKNOWN"; rejectionReason: "NO_TIMESTAMP" | "COMMENT_CONTEXT" | "SHARED_OR_ATTACHMENT_CONTEXT" | "ADJACENT_POST_AMBIGUITY" | "AMBIGUOUS_TIMESTAMP" | "DATE_PRECISION_CROSSES_72H" | "INVALID_TIMESTAMP" | null };
 export type FreshDiscoveredFacebookPost = DiscoveredFacebookPost & { discoveredPublishedAt: string | null; freshnessFailure: FacebookPostFreshnessFailure | null; discoveredText?: string | null; feedAgeDiagnostic?: FacebookFeedAgeDiagnostic };
