@@ -1,6 +1,9 @@
 export const FACEBOOK_POST_PROCESSING_DEADLINE_MS = 30_000;
 export const FACEBOOK_BOUNDED_PROCESSING_SOURCE_ID = "2928219830782023";
-export const FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY = 3;
+// Keep post work bounded while allowing the slowest source to make progress
+// without serializing navigation/age/Vision waits behind only three slots.
+// This does not alter per-post deadlines or any selection/provenance gates.
+export const FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY = 5;
 
 export class FacebookPostProcessingDeadlineError extends Error {
   readonly postId: string;
