@@ -86,6 +86,16 @@ test("accepts an exact structured feed post when the authenticated DOM has no po
   assert.deepEqual(fixture.waits, []);
 });
 
+test("does not classify a rendered feed as access denied when a generic unavailable notice remains", async () => {
+  const fixture = fakeFeedPage([1], "Content isn't available right now");
+  assert.equal(await waitForFacebookGroupFeed(fixture.page, { timeoutMs: 1_000, pollIntervalMs: 1_000 }), true);
+});
+
+test("keeps access denied fail-closed when no post content is rendered", async () => {
+  const fixture = fakeFeedPage([0], "Content isn't available right now");
+  await assert.rejects(() => waitForFacebookGroupFeed(fixture.page, { timeoutMs: 1_000, pollIntervalMs: 1_000 }), /FACEBOOK_ACCESS_DENIED/);
+});
+
 test("stops a private group without membership instead of reporting zero posts", async () => {
   const fixture = fakeFeedPage([0], "Grupa Prywatna · 28 tys. członków Dołącz do grupy");
   await assert.rejects(() => waitForFacebookGroupFeed(fixture.page), /FACEBOOK_ACCESS_DENIED/);

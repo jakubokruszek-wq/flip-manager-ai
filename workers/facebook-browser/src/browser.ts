@@ -298,6 +298,11 @@ function isFacebookNavigationTimeout(error: unknown): boolean {
 async function assertAccessibleFacebookPage(page: import("playwright").Page): Promise<void> {
   const visibleText = (await page.locator("body").innerText({ timeout: 10_000 })).slice(0, 20_000);
   const failure = classifyFacebookSession({ url: page.url(), title: await page.title(), visibleText });
+  // Facebook occasionally leaves a generic “content isn't available” notice in
+  // the feed while real post links are already rendered. Treat that notice as
+  // an access error only when the page has no usable post content.
+  if (failure === "FACEBOOK_ACCESS_DENIED" && /content isn't available/i.test(visibleText)
+    && await page.locator('a[href*="/posts/"]').count() > 0) return;
   if (failure) throw new ControlledFacebookFailure(failure, `Facebook access stopped: ${failure}`);
 }
 
