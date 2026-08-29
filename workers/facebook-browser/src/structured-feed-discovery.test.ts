@@ -41,3 +41,10 @@ test("deduplicates the same exact structured post and keeps its timestamp", () =
   assert.equal(posts.length, 1);
   assert.equal(posts[0].discoveredPublishedAt, new Date(now - 60_000).toISOString());
 });
+
+test("preserves exact structured post text for deterministic feed filtering", () => {
+  const [post] = resolveFacebookStructuredFeedRecords([
+    { postId: "103", url: "https://www.facebook.com/groups/125/posts/103/", publishedAt: null, unsafeContext: false, text: "Szukam mieszkania do wynajęcia" },
+  ], "125", now);
+  assert.equal(post.discoveredText, "Szukam mieszkania do wynajęcia");
+});

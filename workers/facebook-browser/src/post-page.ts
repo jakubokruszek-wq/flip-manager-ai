@@ -13,7 +13,7 @@ export const FACEBOOK_POST_MAX_AGE_MS = 72 * 60 * 60 * 1_000;
 
 export type DiscoveredFacebookPost = { postId: string; permalink: string };
 export type FacebookFeedAgeDiagnostic = { postId: string; candidatesFound: number; selectedSource: string | null; bindingMethod: string | null; machineReadable: boolean; ageHours: number | null; decision: "PROCESS" | "TOO_OLD" | "UNKNOWN"; rejectionReason: "NO_TIMESTAMP" | "COMMENT_CONTEXT" | "SHARED_OR_ATTACHMENT_CONTEXT" | "ADJACENT_POST_AMBIGUITY" | "AMBIGUOUS_TIMESTAMP" | "DATE_PRECISION_CROSSES_72H" | "INVALID_TIMESTAMP" | null };
-export type FreshDiscoveredFacebookPost = DiscoveredFacebookPost & { discoveredPublishedAt: string | null; freshnessFailure: FacebookPostFreshnessFailure | null; feedAgeDiagnostic?: FacebookFeedAgeDiagnostic };
+export type FreshDiscoveredFacebookPost = DiscoveredFacebookPost & { discoveredPublishedAt: string | null; freshnessFailure: FacebookPostFreshnessFailure | null; discoveredText?: string | null; feedAgeDiagnostic?: FacebookFeedAgeDiagnostic };
 export type FacebookPostFreshnessFailure = "FACEBOOK_POST_TOO_OLD" | "FACEBOOK_POST_AGE_UNKNOWN";
 export type FacebookPostAgeSource = "FEED" | "POST_PAGE_METADATA" | "POST_PAGE" | "AGE_CACHE";
 export type FacebookPostAgeResolution = { post: FreshDiscoveredFacebookPost; source: FacebookPostAgeSource; ageHours: number | null; decision: "PROCESS" | "TOO_OLD" | "UNKNOWN" };
@@ -280,6 +280,40 @@ export function extractFacebookAuthoritativeTextResolutionFromStructuredData(val
 
 export function extractFacebookAuthoritativeTextFromStructuredData(values: unknown[], expectedPostId: string): string {
   return extractFacebookAuthoritativeTextResolutionFromStructuredData(values, expectedPostId).text;
+}
+
+export type FacebookStructuredMediaReference = { mediaId?: string | null; mediaUrl?: string | null };
+
+/** Conservative exact-post media binding for structured JSON. */
+export function hasStructuredExactPostMediaProvenance(values: unknown[], expectedPostId: string, reference: FacebookStructuredMediaReference): boolean {
+  const wantedId = reference.mediaId?.trim() || null;
+  const wantedUrl = reference.mediaUrl?.trim() || null;
+  if (!wantedId && !wantedUrl) return false;
+  const idKeys = /^(?:id|post_id|postid|story_fbid|top_level_post_id)$/i;
+  const mediaIdKeys = /^(?:media_id|photo_id|image_id|video_id|fbid)$/i;
+  const mediaUrlKeys = /^(?:url|src|image|image_url|media_url|photo_url|thumbnail_url)$/i;
+  const forbiddenPath = /(?:comment|reply|reaction|shared|attached_story|reshare|repost|gallery|feed)/i;
+  const seen = new Set<unknown>();
+  const walk = (value: unknown, path: string[], exactPost: boolean): boolean => {
+    if (value === null || value === undefined || seen.has(value)) return false;
+    if (typeof value === "string") return exactPost && wantedUrl !== null && value.trim() === wantedUrl;
+    if (typeof value !== "object") return false;
+    seen.add(value);
+    if (Array.isArray(value)) return value.some((item) => walk(item, path, exactPost));
+    const row = value as Record<string, unknown>;
+    const ownPostId = Object.entries(row).find(([key, item]) => idKeys.test(key) && (typeof item === "string" || typeof item === "number"));
+    const nextExactPost = exactPost || (ownPostId !== undefined && String(ownPostId[1]) === expectedPostId);
+    for (const [key, item] of Object.entries(row)) {
+      const nextPath = [...path, key];
+      if (forbiddenPath.test(key) || nextPath.some((part) => forbiddenPath.test(part))) continue;
+      const mediaContext = nextPath.some((part) => /media|photo|video|image|attachment/i.test(part));
+      if (nextExactPost && (mediaIdKeys.test(key) || (key === "id" && mediaContext)) && wantedId !== null && String(item) === wantedId) return true;
+      if (nextExactPost && mediaUrlKeys.test(key) && (mediaContext || /image_url|media_url|photo_url|thumbnail_url/i.test(key)) && wantedUrl !== null && typeof item === "string" && item.trim() === wantedUrl) return true;
+      if (walk(item, nextPath, nextExactPost)) return true;
+    }
+    return false;
+  };
+  return values.some((value) => walk(value, [], false));
 }
 
 export type FacebookAuthoritativeTextResolutionContext = {
@@ -933,8 +967,12 @@ export async function collectFacebookPostTimeDiagnostic(page: Page, postId: stri
 
 export async function captureFacebookPostRegion(page: Page, postId: string, options: { mediaDiagnostic?: boolean } = {}): Promise<FacebookPostRegion> {
   const metadataResolution = await extractFacebookAuthoritativeTextFromMetadata(page, postId);
+  const structuredValues = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"],script[type="application/json"]')).flatMap((script) => {
+    if ((script.textContent?.length ?? 0) > 2_000_000) return [];
+    try { const parsed = JSON.parse(script.textContent ?? ""); return [parsed]; } catch { return []; }
+  }));
   const captureToken = `flip-${postId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic, allowStructuredExactPostBinding }) => {
+  const evaluated = await page.evaluate(({ targetPostId, captureToken: targetCaptureToken, collectMediaDiagnostic, allowStructuredExactPostBinding, structuredValues: exactStructuredValues }) => {
     const postPath = new RegExp(`/groups/[^/]+/posts/${targetPostId}/?$`, "i");
     const dedicatedPageUrlMatches = postPath.test(location.pathname);
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).filter((link) => { const url = new URL(link.href, location.href); return postPath.test(url.pathname) && !url.searchParams.has("comment_id"); });
@@ -944,6 +982,31 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
     const headerSidebarSelector = 'nav,header,aside,[role="navigation"],[role="banner"],[role="complementary"]';
     const interactiveTextSelector = '[role="toolbar"],form,button,[role="button"]';
     const mediaUiExclusionSelector = '[role="toolbar"],form';
+    const structuredMediaMatches = (mediaUrl: string | null, mediaId: string | null): boolean => {
+      if (!mediaUrl && !mediaId) return false;
+      const seen = new Set<unknown>();
+      const forbidden = /(?:comment|reply|reaction|shared|attached_story|reshare|repost|gallery|feed)/i;
+      const walk = (value: unknown, path: string[], exactPost: boolean): boolean => {
+        if (value === null || value === undefined || seen.has(value)) return false;
+        if (typeof value === "string") return exactPost && mediaUrl !== null && value.trim() === mediaUrl;
+        if (typeof value !== "object") return false;
+        seen.add(value);
+        if (Array.isArray(value)) return value.some((item) => walk(item, path, exactPost));
+        const row = value as Record<string, unknown>;
+        const ownId = Object.entries(row).find(([key, item]) => /^(?:id|post_id|postid|story_fbid|top_level_post_id)$/i.test(key) && (typeof item === "string" || typeof item === "number"));
+        const nextExact = exactPost || (ownId !== undefined && String(ownId[1]) === targetPostId);
+        for (const [key, item] of Object.entries(row)) {
+          const nextPath = [...path, key];
+          if (forbidden.test(key) || nextPath.some((part) => forbidden.test(part))) continue;
+          const mediaContext = nextPath.some((part) => /media|photo|video|image|attachment/i.test(part));
+          if (nextExact && (/^(?:media_id|photo_id|image_id|video_id|fbid)$/i.test(key) || (key === "id" && mediaContext)) && mediaId !== null && String(item) === mediaId) return true;
+          if (nextExact && /^(?:url|src|image|image_url|media_url|photo_url|thumbnail_url)$/i.test(key) && (mediaContext || /image_url|media_url|photo_url|thumbnail_url/i.test(key)) && mediaUrl !== null && typeof item === "string" && item.trim() === mediaUrl) return true;
+          if (walk(item, nextPath, nextExact)) return true;
+        }
+        return false;
+      };
+      return exactStructuredValues.some((value) => walk(value, [], false));
+    };
     const rectDistance = (left: DOMRect, right: DOMRect) => {
       const horizontal = Math.max(left.left - right.right, right.left - left.right, 0);
       const vertical = Math.max(left.top - right.bottom, right.top - left.bottom, 0);
@@ -1225,6 +1288,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         if (!url) return [];
         const intrinsicWidth = imageElement?.naturalWidth || Math.round(element.getBoundingClientRect().width) || null;
         const intrinsicHeight = imageElement?.naturalHeight || Math.round(element.getBoundingClientRect().height) || null;
+        const mediaId = element.getAttribute("data-media-id") || element.getAttribute("data-id") || imageElement?.getAttribute("data-media-id") || imageElement?.getAttribute("data-id") || null;
         // Small near-square assets are overwhelmingly avatars/profile tiles or UI chrome.
         // Reject them before they enter the post media candidate set.
         if (intrinsicWidth && intrinsicHeight && intrinsicWidth <= 200 && intrinsicHeight <= 200) {
@@ -1248,7 +1312,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
         // Dedicated-page fallback is allowed only for the selected candidate
         // subtree itself. A generic ancestor/viewer must never lend its media
         // to the requested post merely because it contains no permalink IDs.
-        const structuredPostMediaBinding = allowStructuredExactPostBinding && root === structuredNarrowRoot && uniqueBoundIds.length === 0 && rootStoryUnique;
+        const structuredPostMediaBinding = allowStructuredExactPostBinding && root === structuredNarrowRoot && uniqueBoundIds.length === 0 && rootStoryUnique && structuredMediaMatches(url, mediaId);
         const unambiguousViewerBinding = uniqueBoundIds.length === 0 && rootStoryUnique && identityRoot === root && !structuredPostMediaBinding;
         const bindingProvenance = exactRootBinding ? "EXACT_ROOT_STORY" : structuredPostMediaBinding ? "EXACT_POST_METADATA" : unambiguousViewerBinding ? "DEDICATED_POST_VIEWER" : "AMBIGUOUS";
         return [{
@@ -1501,7 +1565,7 @@ export async function captureFacebookPostRegion(page: Page, postId: string, opti
       mediaAwareBuildDiagnostic,
       mediaDiagnostic,
     };
-  }, { targetPostId: postId, captureToken, collectMediaDiagnostic: options.mediaDiagnostic === true, allowStructuredExactPostBinding: metadataResolution.rootStoryIdentified && metadataResolution.rootAuthorMessageIdentified });
+  }, { targetPostId: postId, captureToken, collectMediaDiagnostic: options.mediaDiagnostic === true, allowStructuredExactPostBinding: metadataResolution.rootStoryIdentified && metadataResolution.rootAuthorMessageIdentified, structuredValues });
   const counts: FacebookPostRegionDiagnosticCounts = {
     dedicatedPageUrlMatches: evaluated.diagnostic.dedicated_page_url_matches,
     canonicalAnchorCount: evaluated.diagnostic.canonical_anchor_count,

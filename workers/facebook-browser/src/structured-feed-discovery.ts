@@ -6,6 +6,7 @@ export type FacebookStructuredFeedRecord = {
   url: string;
   publishedAt: string | number | null;
   unsafeContext: boolean;
+  text?: string | null;
 };
 
 function exactStructuredPostUrl(value: string, expectedGroupId: string, expectedPostId: string): string | null {
@@ -44,11 +45,12 @@ export function resolveFacebookStructuredFeedRecords(
     const permalink = exactStructuredPostUrl(record.url, expectedGroupId, record.postId);
     if (!permalink) continue;
     const discoveredPublishedAt = structuredTimestamp(record.publishedAt);
-    const candidate: FreshDiscoveredFacebookPost = {
+    const candidate: FreshDiscoveredFacebookPost & { discoveredText?: string | null } = {
       postId: record.postId,
       permalink,
       discoveredPublishedAt,
       freshnessFailure: facebookPostFreshnessFailure(discoveredPublishedAt, nowMs),
+      discoveredText: typeof record.text === "string" ? record.text.slice(0, 4_000) : null,
     };
     const existing = unique.get(record.postId);
     if (!existing || !existing.discoveredPublishedAt && candidate.discoveredPublishedAt) unique.set(record.postId, candidate);
@@ -68,7 +70,8 @@ export async function discoverFacebookStructuredFeedPosts(
     const result: FacebookStructuredFeedRecord[] = [];
     const postIdKey = /^(?:post_id|story_fbid|top_level_post_id|mf_story_key)$/i;
     const urlKey = /^(?:permalink_url|url|wwwURL)$/i;
-    const timestampKey = /^(?:creation_time|publish_time|timestamp)$/i;
+      const timestampKey = /^(?:creation_time|publish_time|timestamp)$/i;
+      const textKey = /^(?:message|story_message|text|description|body)$/i;
     const unsafePath = /comment|reply|attached_story|shared_story|reshar|recommend|sidebar/i;
     const visit = (value: unknown, path: string[], depth: number): void => {
       if (!value || typeof value !== "object" || depth > 28 || result.length >= 200) return;
@@ -80,8 +83,9 @@ export async function discoverFacebookStructuredFeedPosts(
       const postId = entries.find(([key, item]) => postIdKey.test(key) && (typeof item === "string" || typeof item === "number"))?.[1];
       const urls = entries.filter(([key, item]) => urlKey.test(key) && typeof item === "string").map(([, item]) => String(item));
       const publishedAt = entries.find(([key, item]) => timestampKey.test(key) && (typeof item === "string" || typeof item === "number"))?.[1] ?? null;
+      const text = entries.find(([key, item]) => textKey.test(key) && typeof item === "string" && String(item).trim().length > 0)?.[1] ?? null;
       if (postId !== undefined) {
-        for (const url of urls) result.push({ postId: String(postId), url, publishedAt: typeof publishedAt === "string" || typeof publishedAt === "number" ? publishedAt : null, unsafeContext: path.some((part) => unsafePath.test(part)) });
+        for (const url of urls) result.push({ postId: String(postId), url, publishedAt: typeof publishedAt === "string" || typeof publishedAt === "number" ? publishedAt : null, unsafeContext: path.some((part) => unsafePath.test(part)), text: typeof text === "string" ? text : null });
       }
       for (const [key, item] of entries) if (item && typeof item === "object") visit(item, [...path, key], depth + 1);
     };
