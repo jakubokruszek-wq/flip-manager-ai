@@ -100,11 +100,23 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       return { posts: [], warnings: ["FACEBOOK_TIME_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
     const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: async () => {
-      const result = await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown);
-      const structured = await discoverFacebookStructuredFeedPosts(page, ageReferenceMs, MAX_FACEBOOK_DISCOVERED_POSTS);
-      const posts = new Map(result.posts.map((post) => [post.postId, post]));
-      for (const post of structured) if (!posts.has(post.postId)) posts.set(post.postId, post);
-      return { ...result, posts: [...posts.values()].slice(0, MAX_FACEBOOK_DISCOVERED_POSTS) };
+      // Facebook can hydrate post records several scrolls after anchors appear. Collect
+      // structured records on every pass so an early anchor-only empty-stop cannot hide
+      // fresh posts that are already present in the page's JSON payload.
+      const collect = async () => {
+        const [anchors, structured] = await Promise.all([
+          discoverFacebookPosts(page, MAX_FACEBOOK_DISCOVERED_POSTS, ageReferenceMs),
+          discoverFacebookStructuredFeedPosts(page, ageReferenceMs, MAX_FACEBOOK_DISCOVERED_POSTS),
+        ]);
+        const posts = new Map(anchors.map((post) => [post.postId, post]));
+        for (const post of structured) {
+          const existing = posts.get(post.postId);
+          if (!existing || existing.freshnessFailure && !post.freshnessFailure) posts.set(post.postId, post);
+        }
+        return [...posts.values()].slice(0, MAX_FACEBOOK_DISCOVERED_POSTS);
+      };
+      const result = await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown, collect);
+      return result;
     } }); const discoveryDuration = Date.now() - discoveryStarted; const discovered = discovery.posts; const feedTexts = await page.evaluate(() => {
       const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/(?:\/groups\/[^/]+|\/[^/]+)\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
       const result: Record<string, string> = {};

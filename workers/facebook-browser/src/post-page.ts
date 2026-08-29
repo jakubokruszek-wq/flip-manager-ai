@@ -818,9 +818,9 @@ export async function runFacebookDiscoveryLoop(dependencies: {
   return { posts: [...unique.values()], scrollCount: maxScrolls, stopReason: "MAX_SCROLLS" };
 }
 
-export async function discoverFacebookPostsByScrolling(page: Page, nowMs = Date.now(), heartbeat?: () => Promise<void>, lookupKnown?: (postIds: string[]) => Promise<Record<string, { publishedAt: string }>>): Promise<FacebookDiscoveryLoopResult> {
+export async function discoverFacebookPostsByScrolling(page: Page, nowMs = Date.now(), heartbeat?: () => Promise<void>, lookupKnown?: (postIds: string[]) => Promise<Record<string, { publishedAt: string }>>, collectOverride?: () => Promise<FreshDiscoveredFacebookPost[]>): Promise<FacebookDiscoveryLoopResult> {
   return runFacebookDiscoveryLoop({
-    collect: () => discoverFacebookPosts(page, MAX_FACEBOOK_DISCOVERED_POSTS, nowMs),
+    collect: collectOverride ?? (() => discoverFacebookPosts(page, MAX_FACEBOOK_DISCOVERED_POSTS, nowMs)),
     scroll: async () => {
       const before = await page.evaluate(() => ({ y: window.scrollY, height: document.documentElement.scrollHeight }));
       await page.evaluate(() => window.scrollBy({ top: Math.max(600, window.innerHeight * 0.85), behavior: "auto" }));
