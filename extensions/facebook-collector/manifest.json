@@ -3,7 +3,7 @@
   "name": "Flip Manager Facebook Collector",
   "version": "0.1.0",
   "description": "Collects visible Facebook group/profile posts from the user's logged-in Chrome session.",
-  "permissions": ["activeTab", "storage", "tabs"],
+  "permissions": ["activeTab", "storage", "tabs", "scripting"],
   "host_permissions": [
     "https://www.facebook.com/*",
     "https://flip-manager-ai.vercel.app/*",

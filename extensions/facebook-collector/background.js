@@ -144,8 +144,15 @@ async function waitForTab(tabId, timeoutMs) {
   throw new Error("FACEBOOK_TAB_LOAD_TIMEOUT");
 }
 async function waitForContentScript(tabId) {
+  let injected = false;
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try { const response = await chrome.tabs.sendMessage(tabId, { type: "COLLECTOR_PING" }); if (response) return; } catch { /* loading */ }
+    if (!injected && attempt === 10) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ["collector-core.js", "content.js"] });
+        injected = true;
+      } catch { /* restricted page or injection race; continue bounded polling */ }
+    }
     await wait(250);
   }
   throw new Error("COLLECTOR_CONTENT_SCRIPT_UNAVAILABLE");
