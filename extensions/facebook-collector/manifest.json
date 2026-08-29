@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Flip Manager Facebook Collector",
+  "version": "0.1.0",
+  "description": "Collects visible Facebook group/profile posts from the user's logged-in Chrome session.",
+  "permissions": ["activeTab", "storage", "tabs"],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "https://flip-manager-ai.vercel.app/*",
+    "http://localhost:3000/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://www.facebook.com/groups/*", "https://www.facebook.com/*"],
+      "js": ["collector-core.js", "network-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.facebook.com/groups/*", "https://www.facebook.com/*"],
+      "js": ["collector-core.js", "content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

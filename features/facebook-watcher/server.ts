@@ -31,6 +31,7 @@ export type FacebookAutomatedImportContext = {
   groupUrl: string;
   postId: string | null;
   checkedAt: string;
+  preserveExistingImagesOnEmptyInput?: boolean;
 };
 
 export type FacebookImportResult = {
@@ -184,7 +185,8 @@ async function importAutomatedFacebook(input: {
   effective.images = boundImages;
   // A verified extraction is authoritative for the current Facebook post. Never
   // carry forward unproven images from an older extraction/cache entry.
-  const imageMirror = await mirrorFacebookImages({ listingId: externalId, imageUrls: boundImages, existingImages: existingState.images, preserveExistingImages: false });
+  const preserveExistingImages = context.preserveExistingImagesOnEmptyInput === true && boundImages.length === 0;
+  const imageMirror = await mirrorFacebookImages({ listingId: externalId, imageUrls: boundImages, existingImages: existingState.images, preserveExistingImages });
   effective.images = imageMirror.images;
   const pricePerSqm = effective.price && effective.area ? effective.price / effective.area : null;
   const score = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
