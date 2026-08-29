@@ -9,13 +9,13 @@ export type FacebookStructuredFeedRecord = {
   text?: string | null;
 };
 
-function exactStructuredPostUrl(value: string, expectedGroupId: string, expectedPostId: string): string | null {
+function exactStructuredPostUrl(value: string, expectedGroupId: string, expectedPostId: string, sourceType: "GROUP" | "PROFILE" = "GROUP"): string | null {
   try {
     const url = new URL(value, "https://www.facebook.com");
     if (url.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(url.hostname)) return null;
-    const match = url.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)\/?$/i);
+    const match = sourceType === "GROUP" ? url.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d+)\/?$/i) : url.pathname.match(/^\/([^/]+)\/posts\/(\d+)\/?$/i);
     if (!match || match[1] !== expectedGroupId || match[2] !== expectedPostId) return null;
-    return `https://www.facebook.com/groups/${expectedGroupId}/posts/${expectedPostId}/`;
+    return sourceType === "GROUP" ? `https://www.facebook.com/groups/${expectedGroupId}/posts/${expectedPostId}/` : `https://www.facebook.com/${expectedGroupId}/posts/${expectedPostId}/`;
   } catch {
     return null;
   }
@@ -38,11 +38,12 @@ export function resolveFacebookStructuredFeedRecords(
   expectedGroupId: string,
   nowMs = Date.now(),
   limit = 50,
+  sourceType: "GROUP" | "PROFILE" = "GROUP",
 ): FreshDiscoveredFacebookPost[] {
   const unique = new Map<string, FreshDiscoveredFacebookPost>();
   for (const record of records) {
     if (record.unsafeContext || !/^\d+$/.test(record.postId)) continue;
-    const permalink = exactStructuredPostUrl(record.url, expectedGroupId, record.postId);
+    const permalink = exactStructuredPostUrl(record.url, expectedGroupId, record.postId, sourceType);
     if (!permalink) continue;
     const discoveredPublishedAt = structuredTimestamp(record.publishedAt);
     const candidate: FreshDiscoveredFacebookPost & { discoveredText?: string | null } = {
@@ -64,7 +65,11 @@ export async function discoverFacebookStructuredFeedPosts(
   nowMs = Date.now(),
   limit = 50,
 ): Promise<FreshDiscoveredFacebookPost[]> {
-  const groupId = new URL(page.url()).pathname.match(/^\/groups\/([^/]+)/i)?.[1];
+  const currentPath = new URL(page.url()).pathname;
+  const groupMatch = currentPath.match(/^\/groups\/([^/]+)/i);
+  const currentUrl = new URL(page.url());
+  const groupId = groupMatch?.[1] ?? currentUrl.searchParams.get("id") ?? currentPath.match(/^\/([^/]+)\/?$/i)?.[1];
+  const sourceType = groupMatch ? "GROUP" : "PROFILE";
   if (!groupId) return [];
   const records = await page.evaluate(() => {
     const result: FacebookStructuredFeedRecord[] = [];
@@ -96,5 +101,5 @@ export async function discoverFacebookStructuredFeedPosts(
     }
     return result;
   });
-  return resolveFacebookStructuredFeedRecords(records, groupId, nowMs, limit);
+  return resolveFacebookStructuredFeedRecords(records, groupId, nowMs, limit, sourceType);
 }

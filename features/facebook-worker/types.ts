@@ -13,6 +13,8 @@ export type FacebookGroupSnapshot = {
   id: string;
   name: string;
   url: string;
+  type?: "GROUP" | "PROFILE";
+  sourceId?: string;
 };
 
 export type FacebookPostSnapshot = {

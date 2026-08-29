@@ -23,8 +23,8 @@ export function orderFacebookGroups(groups: WatchedFacebookGroup[]): WatchedFace
 }
 
 export function planFacebookGroupJobs(filterId: string, runId: string, groups: WatchedFacebookGroup[]): FacebookGroupJobPlan[] {
-  return orderFacebookGroups(groups).map(({ id, name, url }) => {
-    const group = { id, name, url };
+  return orderFacebookGroups(groups).map(({ id, name, url, type, sourceId }) => {
+    const group = { id, name, url, type, sourceId };
     return { filterId, runId, group, groupSnapshot: [group], idempotencyKey: facebookJobIdempotencyKey(filterId, runId, id) };
   });
 }

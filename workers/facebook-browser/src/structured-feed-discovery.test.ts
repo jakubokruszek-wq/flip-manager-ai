@@ -48,3 +48,13 @@ test("preserves exact structured post text for deterministic feed filtering", ()
   ], "125", now);
   assert.equal(post.discoveredText, "Szukam mieszkania do wynajęcia");
 });
+
+test("discovers profile posts and deduplicates exact post ids", () => {
+  const posts = resolveFacebookStructuredFeedRecords([
+    { postId: "501", url: "https://www.facebook.com/dawid.trojanowski/posts/501/", publishedAt: now / 1_000 - 60, unsafeContext: false },
+    { postId: "501", url: "https://www.facebook.com/dawid.trojanowski/posts/501/?ref=share", publishedAt: now / 1_000 - 30, unsafeContext: false },
+    { postId: "502", url: "https://www.facebook.com/other/posts/502/", publishedAt: now / 1_000 - 60, unsafeContext: false },
+  ], "dawid.trojanowski", now, 50, "PROFILE");
+  assert.deepEqual(posts.map((post) => post.postId), ["501"]);
+  assert.equal(posts[0].permalink, "https://www.facebook.com/dawid.trojanowski/posts/501/");
+});

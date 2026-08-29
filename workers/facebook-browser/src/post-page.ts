@@ -481,7 +481,7 @@ export function canonicalFacebookPostUrl(value: string, expectedPostId?: string)
   try {
     const url = new URL(value, "https://www.facebook.com");
     if (url.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(url.hostname)) return null;
-    const match = url.pathname.match(/^\/groups\/[^/]+\/posts\/(\d+)\/?$/i);
+    const match = url.pathname.match(/^(?:\/groups\/[^/]+|\/[^/]+)\/posts\/(\d+)\/?$/i);
     if (!match || expectedPostId && match[1] !== expectedPostId) return null;
     url.hostname = "www.facebook.com"; url.pathname = url.pathname.replace(/\/$/, "") + "/"; url.search = ""; url.hash = "";
     return { postId: match[1], permalink: url.toString() };
@@ -535,14 +535,15 @@ export function createFacebookDebugTarget(groupUrlValue: string, postId: string)
   const groupUrl = new URL(groupUrlValue);
   if (groupUrl.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(groupUrl.hostname)) throw new Error("Facebook debug target requires a Facebook group URL.");
   const groupPath = groupUrl.pathname.match(/^\/groups\/([^/]+)/i);
-  if (!groupPath) throw new Error("Facebook debug target requires a Facebook group URL.");
-  const post = canonicalFacebookPostUrl(`https://www.facebook.com/groups/${groupPath[1]}/posts/${postId}/`, postId);
+  const profilePath = groupUrl.pathname.match(/^\/([^/]+)\/?$/i);
+  if (!groupPath && !profilePath) throw new Error("Facebook debug target requires a Facebook source URL.");
+  const post = canonicalFacebookPostUrl(groupPath ? `https://www.facebook.com/groups/${groupPath[1]}/posts/${postId}/` : `https://www.facebook.com/${profilePath![1]}/posts/${postId}/`, postId);
   if (!post) throw new Error("Unable to create the Facebook debug target URL.");
   return { ...post, discoveredPublishedAt: null, freshnessFailure: "FACEBOOK_POST_AGE_UNKNOWN" };
 }
 
 export function isExpectedFacebookPostPage(pageUrl: string, postId: string): boolean {
-  try { return new RegExp(`/groups/[^/]+/posts/${postId}/?$`, "i").test(new URL(pageUrl).pathname); }
+  try { return new RegExp(`(?:/groups/[^/]+|/[^/]+)/posts/${postId}/?$`, "i").test(new URL(pageUrl).pathname); }
   catch { return false; }
 }
 
@@ -669,10 +670,10 @@ function resolveFeedTimestampCandidates(candidates: FeedTimestampCandidate[], no
 }
 
 export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POSTS_PER_JOB, nowMs = Date.now()): Promise<FreshDiscoveredFacebookPost[]> {
-  const records = await page.locator('a[href*="/groups/"][href*="/posts/"]').evaluateAll((links) => {
+  const records = await page.locator('a[href*="/posts/"]').evaluateAll((links) => {
     type Candidate = { value: string; source: string; bindingMethod: string; machineReadable: boolean; priority: number };
     type Record = { href: string; candidates: Candidate[]; rejectionReason: "COMMENT_CONTEXT" | "SHARED_OR_ATTACHMENT_CONTEXT" | "ADJACENT_POST_AMBIGUITY" | null };
-    const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/\/groups\/[^/]+\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
+    const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/(?:\/groups\/[^/]+|\/[^/]+)\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
     const marker = (element: Element) => [element.getAttribute("role"), element.getAttribute("data-testid"), element.getAttribute("data-pagelet"), element.getAttribute("aria-label")].filter(Boolean).join(" ").toLocaleLowerCase("pl-PL");
     const pathHas = (element: Element, pattern: RegExp) => { for (let current: Element | null = element, depth = 0; current && depth < 12; current = current.parentElement, depth += 1) if (pattern.test(marker(current))) return true; return false; };
     const nestedArticle = (element: Element) => { const article = element.closest('[role="article"]'); return Boolean(article?.parentElement?.closest('[role="article"]')); };
@@ -706,10 +707,10 @@ export async function discoverFacebookPosts(page: Page, limit = MAX_FACEBOOK_POS
       let foundExactRoot = false; let sawAdjacentPosts = false;
       for (let root = link.parentElement, depth = 0; root && depth < 10 && root !== document.body; root = root.parentElement, depth += 1) {
         if (commentContext(root) || sharedContext(root)) continue;
-        const ids = new Set(Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).filter((anchor) => { try { return !new URL(anchor.href, location.href).searchParams.has("comment_id"); } catch { return false; } }).map((anchor) => postIdFromHref(anchor.href)).filter((id): id is string => Boolean(id)));
+        const ids = new Set(Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href*="/posts/"]')).filter((anchor) => { try { return !new URL(anchor.href, location.href).searchParams.has("comment_id"); } catch { return false; } }).map((anchor) => postIdFromHref(anchor.href)).filter((id): id is string => Boolean(id)));
         if (ids.size !== 1 || !ids.has(postId)) { if (ids.size > 1) sawAdjacentPosts = true; continue; }
         const nodes = Array.from(root.querySelectorAll<HTMLElement>('time,abbr,[datetime],[data-utime],[data-timestamp],[data-time],[data-date],a[aria-label],a[title],span[aria-label],span[title],span[dir="auto"]')).slice(0, 80);
-        const safeNodes = nodes.filter((node) => !commentContext(node) && !sharedContext(node) && (!node.closest('a[href*="/groups/"][href*="/posts/"]') || postIdFromHref(node.closest<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')!.href) === postId));
+        const safeNodes = nodes.filter((node) => !commentContext(node) && !sharedContext(node) && (!node.closest('a[href*="/posts/"]') || postIdFromHref(node.closest<HTMLAnchorElement>('a[href*="/posts/"]')!.href) === postId));
         if (safeNodes.length === 0) continue;
         for (const node of safeNodes) collectFromNode(candidates, node, "ROOT_STORY", "EXACT_COMMON_ROOT_STORY", node.matches("time,abbr,span[dir=auto]") && (node.textContent?.trim().length ?? 0) <= 40);
         foundExactRoot = true; break;

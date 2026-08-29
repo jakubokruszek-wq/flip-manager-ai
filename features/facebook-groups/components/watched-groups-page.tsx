@@ -21,6 +21,7 @@ import {
 import type { AddWatchedFacebookGroupResult, WatchedFacebookGroup } from "../types";
 
 const initial: FacebookGroupCreatePayload = {
+  type: "GROUP",
   name: "",
   url: "",
   city: "Łódź",
@@ -157,7 +158,8 @@ export function WatchedGroupsPage() {
       <section className="ui-section">
         <h2 className="text-lg font-bold">Dodaj grupę przez link</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Field className="sm:col-span-2" label="Facebook group URL" placeholder="https://www.facebook.com/groups/..." value={form.url} onChange={(url) => setForm((value) => ({ ...value, url }))} />
+          <label className="grid gap-1 text-sm">Typ źródła<select className="h-11 rounded-xl border bg-background px-3" value={form.type ?? "GROUP"} onChange={(event) => setForm((value) => ({ ...value, type: event.target.value === "PROFILE" ? "PROFILE" : "GROUP" }))}><option value="GROUP">Grupa</option><option value="PROFILE">Profil</option></select></label>
+          <Field className="sm:col-span-2" label={form.type === "PROFILE" ? "Facebook profile URL" : "Facebook group URL"} placeholder={form.type === "PROFILE" ? "https://www.facebook.com/profile.php?id=..." : "https://www.facebook.com/groups/..."} value={form.url} onChange={(url) => setForm((value) => ({ ...value, url }))} />
           <Field label="Nazwa — opcjonalnie" placeholder="Facebook group …" value={form.name ?? ""} onChange={(name) => setForm((value) => ({ ...value, name }))} />
           <Field label="Miasto" value={form.city ?? "Łódź"} onChange={(city) => setForm((value) => ({ ...value, city }))} />
           <label className="grid gap-1 text-sm">Priorytet<SelectPriority value={form.priority ?? "normal"} onChange={(priority) => setForm((value) => ({ ...value, priority: priority === "low" ? "normal" : priority }))} create /></label>

@@ -1,4 +1,4 @@
-import type { FacebookGroupInput, FacebookGroupPriority, WatchedFacebookGroup } from "./types.ts";
+import type { FacebookGroupInput, FacebookGroupPriority, WatchedFacebookGroup, FacebookSourceType } from "./types.ts";
 
 export const FACEBOOK_GROUP_URL_MAX_LENGTH = 500;
 export const FACEBOOK_GROUP_IDENTIFIER_MAX_LENGTH = 200;
@@ -8,6 +8,7 @@ export class FacebookGroupValidationError extends Error {
 }
 
 export type FacebookGroupCreatePayload = {
+  type?: FacebookSourceType;
   url: string;
   name?: string;
   city?: string;
@@ -38,11 +39,23 @@ export function normalizeFacebookGroupUrl(value: string): { url: string; identif
   return { url: `https://www.facebook.com/groups/${identifier}/`, identifier: identifier.toLocaleLowerCase("en-US") };
 }
 
+export function normalizeFacebookSourceUrl(value: string, type: FacebookSourceType): { url: string; identifier: string } {
+  if (type === "GROUP") return normalizeFacebookGroupUrl(value);
+  const trimmed = value.trim();
+  let parsed: URL;
+  try { parsed = new URL(trimmed); } catch { throw new FacebookGroupValidationError("Podaj prawidłowy adres profilu Facebook."); }
+  if (parsed.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(parsed.hostname)) throw new FacebookGroupValidationError("Adres musi prowadzić do profilu na facebook.com.");
+  const id = parsed.searchParams.get("id") ?? parsed.pathname.match(/\/([0-9]{5,})\/?$/)?.[1] ?? parsed.pathname.match(/^\/([^/]+)\/?$/)?.[1];
+  if (!id || /^(share|groups|profile\.php)$/i.test(id)) throw new FacebookGroupValidationError("URL musi wskazywać bezpośrednio na profil Facebook.");
+  return { url: `https://www.facebook.com/profile.php?id=${encodeURIComponent(id)}`, identifier: id.toLowerCase() };
+}
+
 export function parseFacebookGroupCreatePayload(value: unknown): NormalizedFacebookGroupCreateInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new FacebookGroupValidationError("Nieprawidłowe dane grupy.");
   const row = value as Record<string, unknown>;
   if (typeof row.url !== "string") throw new FacebookGroupValidationError("Podaj URL grupy Facebook.");
-  const normalized = normalizeFacebookGroupUrl(row.url);
+  const type = row.type === "PROFILE" ? "PROFILE" : "GROUP";
+  const normalized = normalizeFacebookSourceUrl(row.url, type);
   const suppliedName = typeof row.name === "string" ? row.name.trim() : "";
   if (suppliedName.length > 200) throw new FacebookGroupValidationError("Nazwa grupy jest za długa.");
   const city = typeof row.city === "string" && row.city.trim() ? row.city.trim() : "Łódź";
@@ -53,6 +66,8 @@ export function parseFacebookGroupCreatePayload(value: unknown): NormalizedFaceb
     identifier: normalized.identifier,
     input: {
       url: normalized.url,
+      type,
+      sourceId: normalized.identifier,
       name: suppliedName || `Facebook group ${normalized.identifier}`,
       city,
       district: null,

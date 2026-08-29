@@ -4,7 +4,7 @@ import type { SearchFilter } from "@/features/flip-finder";
 import { getAlerts } from "@/features/alerts/server";
 import { importFacebookWatcher } from "@/features/facebook-watcher/server";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
-import { assertFacebookGroupUrl, assertFacebookPostsBelongToGroup, parseFacebookGroupSnapshot } from "./completion";
+import { assertFacebookSourceUrl, assertFacebookPostsBelongToGroup, parseFacebookGroupSnapshot } from "./completion";
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
@@ -26,7 +26,7 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): 
   const groups = await supabase.from("watched_facebook_groups").select("id,name,url,priority,created_at").eq("enabled", true);
   if (groups.error) throw new Error(`FACEBOOK_GROUP_QUERY_FAILED: ${groups.error.message}`);
   const watchedGroups: WatchedFacebookGroup[] = (groups.data ?? []).map((group) => ({
-    id: String(group.id), name: String(group.name), url: assertFacebookGroupUrl(String(group.url)).toString(),
+    id: String(group.id), name: String(group.name), url: assertFacebookSourceUrl(String(group.url), /^\/groups\//i.test(new URL(String(group.url)).pathname) ? "GROUP" : "PROFILE").toString(), type: /^\/groups\//i.test(new URL(String(group.url)).pathname) ? "GROUP" : "PROFILE",
     priority: group.priority === "high" || group.priority === "low" ? group.priority : "normal",
     createdAt: String(group.created_at),
   }));
@@ -49,7 +49,7 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): 
     const sourceScanId = String(scan.data.id);
     const job = await supabase.from("facebook_scan_jobs").insert({
       scan_run_id: runId, source_scan_id: sourceScanId, search_filter_id: filter.id,
-      group_snapshot: plan.groupSnapshot, idempotency_key: plan.idempotencyKey,
+    group_snapshot: plan.groupSnapshot, idempotency_key: plan.idempotencyKey,
     }).select("id").single();
     if (job.error || !job.data?.id) {
       const message = `FACEBOOK_JOB_ENQUEUE_FAILED: ${job.error?.message ?? "missing id"}`;

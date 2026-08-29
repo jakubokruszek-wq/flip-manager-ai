@@ -2,7 +2,7 @@ import { chromium, errors as playwrightErrors } from "playwright";
 import type { FacebookAgeCacheEntry, FacebookAgeCacheHit, FacebookGroupSnapshot, FacebookImageRevalidationCandidate, FacebookPerformanceMetrics, FacebookPostCacheHit, FacebookPostPerformanceTiming, FacebookPostSnapshot, FacebookVisionExtraction } from "../../../features/facebook-worker/types.ts";
 import { createCachedFacebookPostSnapshot, emptyFacebookPerformanceMetrics, partitionFacebookPostsByCache } from "../../../features/facebook-worker/performance.ts";
 import { ControlledFacebookFailure } from "./errors.ts";
-import { assertWorkerFacebookGroupUrl } from "./group-reader.ts";
+import { assertWorkerFacebookSourceUrl } from "./source-reader.ts";
 import { logFacebookWorker } from "./logger.ts";
 import { resolveFacebookListingIntent } from "../../../features/facebook-watcher/facebook-intent.ts";
 
@@ -49,7 +49,7 @@ export async function revalidateFacebookPostImages(
 }
 
 export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false, debugPostId: string | null = null, lookupCache?: (postIds: string[], signal: AbortSignal) => Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }>) {
-  const started = Date.now(); const url = assertWorkerFacebookGroupUrl(group.url).toString();
+  const started = Date.now(); const url = assertWorkerFacebookSourceUrl(group.url, group.type ?? "GROUP").toString();
   const performance: FacebookPerformanceMetrics = emptyFacebookPerformanceMetrics();
   const postTimings = new Map<string, FacebookPostPerformanceTiming>();
   const timingFor = (postId: string): FacebookPostPerformanceTiming => { const existing = postTimings.get(postId); if (existing) return existing; const created: FacebookPostPerformanceTiming = { postId, feedDiscoveryMs: 0, ageDetectionMs: 0, ageFallbackMs: 0, dedicatedPageNavigationMs: 0, extractionMs: 0, visionMs: 0, persistenceMs: 0, completionMs: 0, totalMs: 0, cacheHit: false }; postTimings.set(postId, created); return created; };
@@ -100,23 +100,18 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       return { posts: [], warnings: ["FACEBOOK_TIME_DIAGNOSTIC_COMPLETE"], durationMs: Date.now() - started, performance, ageCache };
     }
     const discoveryStarted = Date.now(); const discovery = await resolveFacebookPostDiscovery({ groupUrl: url, debugPostId, discover: async () => {
+      const result = await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown);
       const structured = await discoverFacebookStructuredFeedPosts(page, ageReferenceMs, MAX_FACEBOOK_DISCOVERED_POSTS);
-      // Structured hydration is the fast, exact source on groups whose DOM
-      // anchors are delayed or absent. Avoid paying the full legacy scroll
-      // loop when it already yielded usable post records.
-      const result = structured.length > 0
-        ? { posts: [], scrollCount: 0, stopReason: "MAX_POSTS" as const }
-        : await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown);
       const posts = new Map(result.posts.map((post) => [post.postId, post]));
       for (const post of structured) if (!posts.has(post.postId)) posts.set(post.postId, post);
       return { ...result, posts: [...posts.values()].slice(0, MAX_FACEBOOK_DISCOVERED_POSTS) };
     } }); const discoveryDuration = Date.now() - discoveryStarted; const discovered = discovery.posts; const feedTexts = await page.evaluate(() => {
-      const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/\/groups\/[^/]+\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
+      const postIdFromHref = (href: string) => { try { return new URL(href, location.href).pathname.match(/(?:\/groups\/[^/]+|\/[^/]+)\/posts\/(\d+)/i)?.[1] ?? null; } catch { return null; } };
       const result: Record<string, string> = {};
-      for (const link of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]'))) {
+      for (const link of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/posts/"]'))) {
         const postId = postIdFromHref(link.href); const article = link.closest<HTMLElement>('[role="article"]');
         if (!postId || !article) continue;
-        const ids = new Set(Array.from(article.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"][href*="/posts/"]')).map((anchor) => postIdFromHref(anchor.href)).filter((id): id is string => Boolean(id)));
+        const ids = new Set(Array.from(article.querySelectorAll<HTMLAnchorElement>('a[href*="/posts/"]')).map((anchor) => postIdFromHref(anchor.href)).filter((id): id is string => Boolean(id)));
         if (ids.size !== 1 || !ids.has(postId) || result[postId]) continue;
         const textParts: string[] = [];
         const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
@@ -301,7 +296,7 @@ export async function waitForFacebookGroupFeed(
   const timeoutMs = options.timeoutMs ?? 8_000;
   const pollIntervalMs = options.pollIntervalMs ?? 1_000;
   const attempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
-  const postLinkSelector = 'a[href*="/groups/"][href*="/posts/"]';
+  const postLinkSelector = 'a[href*="/posts/"]';
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await assertAccessibleFacebookPage(page);
     if (await page.locator(postLinkSelector).count() > 0) return true;

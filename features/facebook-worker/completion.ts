@@ -13,6 +13,14 @@ export function assertFacebookGroupUrl(value: string): URL {
   return url;
 }
 
+export function assertFacebookSourceUrl(value: string, type: "GROUP" | "PROFILE" = "GROUP"): URL {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || !FACEBOOK_HOST.test(url.hostname)) throw new Error("FACEBOOK_SOURCE_URL_NOT_ALLOWED");
+  if (type === "GROUP" && !/^\/groups\/[^/]+/i.test(url.pathname)) throw new Error("FACEBOOK_GROUP_URL_NOT_ALLOWED");
+  if (type === "PROFILE" && (/^\/groups\//i.test(url.pathname) || /^\/share\//i.test(url.pathname) || !/^\/profile\.php$|^\/[^/]+\/?$/i.test(url.pathname))) throw new Error("FACEBOOK_PROFILE_URL_NOT_ALLOWED");
+  return url;
+}
+
 export function assertFacebookPermalink(value: string): string {
   const url = new URL(value);
   if (url.protocol !== "https:" || !FACEBOOK_HOST.test(url.hostname)) throw new Error("FACEBOOK_POST_URL_NOT_ALLOWED");
@@ -22,7 +30,9 @@ export function assertFacebookPermalink(value: string): string {
 export function parseFacebookGroupSnapshot(value: unknown): FacebookGroupSnapshot {
   if (!Array.isArray(value) || value.length !== 1) throw new Error("FACEBOOK_GROUP_REQUIRED");
   const row = requireRow(value[0]);
-  return { id: requiredString(row.id, "GROUP_ID", 200), name: requiredString(row.name, "GROUP_NAME", 200), url: assertFacebookGroupUrl(requiredString(row.url, "GROUP_URL", 2_000)).toString() };
+  const type = row.type === "PROFILE" ? "PROFILE" : "GROUP";
+  const base = { id: requiredString(row.id, "GROUP_ID", 200), name: requiredString(row.name, "GROUP_NAME", 200), url: assertFacebookSourceUrl(requiredString(row.url, "GROUP_URL", 2_000), type).toString() };
+  return type === "PROFILE" ? { ...base, type, sourceId: typeof row.sourceId === "string" ? row.sourceId : undefined } : base;
 }
 
 export function assertFacebookPostsBelongToGroup(posts: Array<{ groupId: string }>, group: FacebookGroupSnapshot): void {

@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
-import { FacebookGroupValidationError, findDuplicateFacebookGroup, normalizeFacebookGroupUrl, parseFacebookGroupCreatePayload } from "./group-url";
+import { FacebookGroupValidationError, findDuplicateFacebookGroup, normalizeFacebookSourceUrl, parseFacebookGroupCreatePayload } from "./group-url";
 import { parseFacebookGroupManagementPatch, safeRemovePatch } from "./management";
 import type { AddWatchedFacebookGroupResult, FacebookGroupAccessStatus, FacebookGroupInput, WatchedFacebookGroup } from "./types";
 
@@ -50,7 +50,7 @@ export async function addWatchedFacebookGroup(value: unknown): Promise<AddWatche
 export async function updateWatchedFacebookGroup(id: string, patch: Partial<FacebookGroupInput> & { accessStatus?: FacebookGroupAccessStatus; lastCheckedAt?: string | null; lastError?: string | null }): Promise<WatchedFacebookGroup> {
   const supabase = createFacebookWatcherAdminClient();
   const values: Row = {};
-  if (patch.name !== undefined) values.name = patch.name.trim(); if (patch.url !== undefined) values.url = validateUrl(patch.url);
+  if (patch.name !== undefined) values.name = patch.name.trim(); if (patch.url !== undefined) values.url = validateUrl(patch.url, patch.type ?? "GROUP");
   if (patch.city !== undefined) values.city = patch.city.trim(); if (patch.district !== undefined) values.district = nullable(patch.district);
   if (patch.neighborhood !== undefined) values.neighborhood = nullable(patch.neighborhood); if (patch.priority !== undefined) values.priority = patch.priority;
   if (patch.keywords !== undefined) values.keywords = patch.keywords.map(value => value.trim()).filter(Boolean); if (patch.enabled !== undefined) values.enabled = patch.enabled;
@@ -80,12 +80,12 @@ export async function recordFacebookGroupImport(groupName: string | undefined, c
   memoryGroups.set(group.id, { ...group, importedPosts: next.imported_posts_count, newToday: next.new_today_count, opportunities: next.opportunities_count });
 }
 
-function normalize(value: WatchedFacebookGroup): WatchedFacebookGroup { return { ...value, name: value.name.trim(), url: validateUrl(value.url), city: value.city.trim(), district: nullable(value.district), neighborhood: nullable(value.neighborhood), keywords: value.keywords.map(item => item.trim()).filter(Boolean) }; }
-function validateUrl(value: string) { return normalizeFacebookGroupUrl(value).url; }
+function normalize(value: WatchedFacebookGroup): WatchedFacebookGroup { const type = value.type ?? "GROUP"; const normalized = normalizeFacebookSourceUrl(value.url, type); return { ...value, type, sourceId: value.sourceId ?? normalized.identifier, name: value.name.trim(), url: normalized.url, city: value.city.trim(), district: nullable(value.district), neighborhood: nullable(value.neighborhood), keywords: value.keywords.map(item => item.trim()).filter(Boolean) }; }
+function validateUrl(value: string, type: "GROUP" | "PROFILE") { return normalizeFacebookSourceUrl(value, type).url; }
 function nullable(value: string | null | undefined) { const result = value?.trim(); return result || null; }
 function missingTable(message: string) { return /does not exist|schema cache/i.test(message); }
 function validateGroupId(value: string) { if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new Error("Nieprawidłowy identyfikator grupy."); }
 function toRow(group: WatchedFacebookGroup) { return { id: group.id, name: group.name, url: group.url, city: group.city, district: group.district, neighborhood: group.neighborhood, priority: group.priority, keywords: group.keywords, enabled: group.enabled, access_status: group.accessStatus, last_checked_at: group.lastCheckedAt, imported_posts_count: group.importedPosts, new_today_count: group.newToday, opportunities_count: group.opportunities, last_error: group.lastError }; }
-function fromRow(row: Row): WatchedFacebookGroup { return { id: String(row.id), name: String(row.name), url: String(row.url), city: String(row.city), district: text(row.district), neighborhood: text(row.neighborhood), priority: row.priority as WatchedFacebookGroup["priority"], keywords: Array.isArray(row.keywords) ? row.keywords.filter((item): item is string => typeof item === "string") : [], enabled: row.enabled === true, accessStatus: row.access_status as FacebookGroupAccessStatus, lastCheckedAt: text(row.last_checked_at), importedPosts: number(row.imported_posts_count), newToday: number(row.new_today_count), opportunities: number(row.opportunities_count), lastError: text(row.last_error) }; }
+function fromRow(row: Row): WatchedFacebookGroup { const url = String(row.url); const type = /^\/groups\//i.test(new URL(url).pathname) ? "GROUP" : "PROFILE"; let sourceId: string | undefined; try { sourceId = normalizeFacebookSourceUrl(url, type).identifier; } catch { /* preserve legacy URL */ } return { id: String(row.id), type, sourceId, name: String(row.name), url, city: String(row.city), district: text(row.district), neighborhood: text(row.neighborhood), priority: row.priority as WatchedFacebookGroup["priority"], keywords: Array.isArray(row.keywords) ? row.keywords.filter((item): item is string => typeof item === "string") : [], enabled: row.enabled === true, accessStatus: row.access_status as FacebookGroupAccessStatus, lastCheckedAt: text(row.last_checked_at), importedPosts: number(row.imported_posts_count), newToday: number(row.new_today_count), opportunities: number(row.opportunities_count), lastError: text(row.last_error) }; }
 const text = (value: unknown) => typeof value === "string" ? value : null;
 const number = (value: unknown) => typeof value === "number" ? value : 0;
