@@ -152,6 +152,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
       }
       return result;
     }); for (const post of discovered) if (!feedTexts[post.postId] && post.discoveredText) feedTexts[post.postId] = post.discoveredText; discovered.forEach((post) => { timingFor(post.postId).feedDiscoveryMs = discoveryDuration; }); const posts: FacebookPostSnapshot[] = []; const warnings: string[] = []; const freshPosts: FreshDiscoveredFacebookPost[] = []; const processedFreshPostIds = new Set<string>(); let tooOldCount = 0; let unknownCount = 0; let debugSessionConfirmed = false;
+    const terminalFeedFallback = (post: FreshDiscoveredFacebookPost, feedText: string | null): FacebookPostSnapshot => ({ postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: feedText ?? "", authoritativePostTextSource: "POST_REGION_DOM", authoritativePostTextProvenance: feedText ? "ROOT_AUTHOR_MESSAGE" : "NONE", text: feedText ?? "", imageUrls: [], mediaCandidates: [], publishedAt: post.discoveredPublishedAt, vision: null });
     const visionCapacity = debugPostId ? 1 : debugMaxPosts ?? MAX_VISION_POSTS_PER_JOB;
     const processFreshPost = async (post: FreshDiscoveredFacebookPost) => {
       const postStarted = Date.now();
@@ -172,6 +173,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
         const reasonCode = error instanceof FacebookPostProcessingDeadlineError ? "FACEBOOK_POST_PROCESSING_DEADLINE_EXCEEDED" : controlledPostFailureCode(error);
         warnings.push(`${reasonCode}: post ${post.postId} nie zostaĹ‚ przetworzony.`);
         logFacebookWorker("FACEBOOK_POST_EXTRACTION_FAILED", { groupId: group.id, postId: post.postId, reasonCode });
+        posts.push(terminalFeedFallback(post, feedTexts[post.postId] ?? null));
         processedFreshPostIds.add(post.postId);
       } finally {
         timingFor(post.postId).totalMs = Date.now() - postStarted;
@@ -209,9 +211,9 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
         const abortFromShutdown = () => taskAbort.abort(signal.reason);
         signal.addEventListener("abort", abortFromShutdown, { once: true });
         const ensurePage = async () => taskPage ??= await context.newPage();
+        const feedText = feedTexts[post.postId] ?? null;
         try {
           logFacebookWorker("FACEBOOK_POST_DISCOVERED", { groupId: group.id, postId: post.postId, order, freshnessFailure: post.freshnessFailure });
-          const feedText = feedTexts[post.postId] ?? null;
           const feedIntent = feedText ? resolveFacebookListingIntent(feedText, null, null) : null;
           if (shouldEarlyRejectFacebookFeed(feedText)) {
             posts.push({ postId: post.postId, groupId: group.id, permalink: post.permalink, authoritativePostText: feedText ?? "", authoritativePostTextSource: "POST_REGION_DOM", authoritativePostTextProvenance: "ROOT_AUTHOR_MESSAGE", text: feedText ?? "", imageUrls: [], mediaCandidates: [], publishedAt: post.discoveredPublishedAt, vision: null });
@@ -264,6 +266,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
           const reasonCode = error instanceof FacebookPostProcessingDeadlineError ? "FACEBOOK_POST_PROCESSING_DEADLINE_EXCEEDED" : controlledPostFailureCode(error);
           warnings.push(`${reasonCode}: post ${post.postId} nie zosta\u0142 przetworzony.`);
           logFacebookWorker("FACEBOOK_POST_EXTRACTION_FAILED", { groupId: group.id, postId: post.postId, reasonCode });
+          posts.push(terminalFeedFallback(post, feedText));
         } finally {
           signal.removeEventListener("abort", abortFromShutdown);
           if (taskPage !== null) await (taskPage as import("playwright").Page).close({ runBeforeUnload: false }).catch(() => undefined);
