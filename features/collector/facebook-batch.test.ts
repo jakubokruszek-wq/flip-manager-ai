@@ -37,3 +37,9 @@ test("zero visible and zero captured posts never reports a false healthy complet
   assert.equal(health.status, "DEGRADED");
   assert.deepEqual(health.reasons, ["COLLECTOR_NO_VISIBLE_OR_CAPTURED_POSTS"]);
 });
+
+test("growing visible feed with stalled unique capture is degraded", () => {
+  const health = evaluateCollectorHealth({ visibleCardCount: 8, capturedPostCount: 5, scrolls: 5, durationMs: 20_000, feedGrew: true, newIdsAfterScroll: true, visibleFeedAdvanced: true, capturedAdvanced: false, stopReason: "MAX_SCROLLS" });
+  assert.equal(health.status, "DEGRADED");
+  assert.match(health.reasons.join(","), /COLLECTOR_VISIBLE_FEED_ADVANCED_WITHOUT_CAPTURE_GROWTH/);
+});

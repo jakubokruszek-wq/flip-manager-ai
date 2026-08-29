@@ -75,6 +75,8 @@ export function evaluateCollectorHealth(input: {
   durationMs: number;
   feedGrew: boolean;
   newIdsAfterScroll: boolean;
+  visibleFeedAdvanced?: boolean;
+  capturedAdvanced?: boolean;
   failed?: boolean;
   stopReason: string;
 }): CollectorSourceHealth {
@@ -87,6 +89,7 @@ export function evaluateCollectorHealth(input: {
   if (visible >= 3 && captured < 3) reasons.push("COLLECTOR_LOW_CAPTURE_COUNT");
   if (visible >= 4 && ratio < 0.6) reasons.push("COLLECTOR_LOW_CAPTURE_RATIO");
   if (input.feedGrew && !input.newIdsAfterScroll) reasons.push("COLLECTOR_GROWING_FEED_WITHOUT_NEW_IDS");
+  if (input.visibleFeedAdvanced && input.capturedAdvanced === false) reasons.push("COLLECTOR_VISIBLE_FEED_ADVANCED_WITHOUT_CAPTURE_GROWTH");
   const status: CollectorDiscoveryHealth = input.failed ? "FAILED" : reasons.length > 0 ? "DEGRADED" : "HEALTHY";
   return { status, visibleCardCount: visible, capturedPostCount: captured, captureRatio: ratio, scrolls: nonnegativeInteger(input.scrolls), durationMs: nonnegativeInteger(input.durationMs), stopReason: input.stopReason.slice(0, 120), reasons };
 }

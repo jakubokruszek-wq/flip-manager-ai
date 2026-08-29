@@ -25,8 +25,21 @@ test("extracts exact structured post-media binding and rejects foreign, avatar a
 });
 
 test("scroll contract requires three scrolls and three consecutive empty iterations", () => {
-  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 75000, uniqueCount: 2, maxPosts: 20, reliableAgeCutoff: false, scrolls: 1, maxScrolls: 10, minScrolls: 3, consecutiveNoNew: 1 }), null);
-  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 75000, uniqueCount: 2, maxPosts: 20, reliableAgeCutoff: false, scrolls: 3, maxScrolls: 10, minScrolls: 3, consecutiveNoNew: 3 }), "NO_NEW_POSTS_3_SCROLLS");
+  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 1, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 1, consecutiveNoVisibleGrowth: 1, consecutiveOldNewPosts: 0 }), null);
+  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 2, consecutiveOldNewPosts: 0 }), null);
+  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 3, consecutiveOldNewPosts: 0 }), "NO_NEW_POSTS_AND_CARDS_3_SCROLLS");
+});
+
+test("non-chronological fresh-old-fresh-old feed never triggers an early age cutoff", () => {
+  const now = Date.parse("2026-08-30T00:00:00Z");
+  const fresh = (id) => ({ postId: id, publishedAt: "2026-08-29T12:00:00Z" });
+  const old = (id) => ({ postId: id, publishedAt: "2026-08-20T12:00:00Z" });
+  let streak = core.updateAgeCutoffStreak(0, [fresh("1"), old("2"), fresh("3"), old("4")], now);
+  assert.equal(streak, 1);
+  assert.equal(core.shouldStopDiscovery({ durationMs: 20_000, budgetMs: 110_000, uniqueCount: 4, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, consecutiveOldNewPosts: streak }), null);
+  streak = core.updateAgeCutoffStreak(streak, [old("5"), old("6"), old("7"), old("8")], now);
+  assert.equal(streak, 5);
+  assert.equal(core.shouldStopDiscovery({ durationMs: 30_000, budgetMs: 110_000, uniqueCount: 8, maxPosts: 50, scrolls: 4, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, consecutiveOldNewPosts: streak }), "RELIABLE_AGE_CUTOFF");
 });
 
 test("health check prevents false completed status and enables bounded search fallback", () => {
@@ -35,6 +48,7 @@ test("health check prevents false completed status and enables bounded search fa
   assert.equal(core.needsSearchFallback(health, "GROUP"), true);
   assert.equal(core.needsSearchFallback(health, "PROFILE"), false);
   assert.equal(core.evaluateHealth({ visibleCardCount: 0, capturedPostCount: 0, scrolls: 3, durationMs: 1000, feedGrew: false, newIdsAfterScroll: false, stopReason: "NO_NEW_POSTS_3_SCROLLS" }).status, "DEGRADED");
+  assert.equal(core.evaluateHealth({ visibleCardCount: 8, capturedPostCount: 5, scrolls: 5, durationMs: 5000, feedGrew: true, newIdsAfterScroll: true, visibleFeedAdvanced: true, capturedAdvanced: false, stopReason: "MAX_SCROLLS" }).status, "DEGRADED");
 });
 
 test("ground-truth ids retain discovery layer and first iteration", () => {

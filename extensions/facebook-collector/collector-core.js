@@ -102,16 +102,27 @@
     if (visible >= 3 && captured < 3) reasons.push("COLLECTOR_LOW_CAPTURE_COUNT");
     if (visible >= 4 && ratio < 0.6) reasons.push("COLLECTOR_LOW_CAPTURE_RATIO");
     if (input.feedGrew && !input.newIdsAfterScroll) reasons.push("COLLECTOR_GROWING_FEED_WITHOUT_NEW_IDS");
+    if (input.visibleFeedAdvanced && !input.capturedAdvanced) reasons.push("COLLECTOR_VISIBLE_FEED_ADVANCED_WITHOUT_CAPTURE_GROWTH");
     return { status: input.failed ? "FAILED" : reasons.length ? "DEGRADED" : "HEALTHY", visibleCardCount: visible, capturedPostCount: captured, captureRatio: ratio, scrolls: finite(input.scrolls), durationMs: finite(input.durationMs), stopReason: String(input.stopReason || "UNKNOWN").slice(0, 120), reasons };
   }
 
   function shouldStopDiscovery(input) {
     if (input.durationMs >= input.budgetMs) return "SOURCE_TIME_BUDGET";
     if (input.uniqueCount >= input.maxPosts) return "MAX_POSTS";
-    if (input.reliableAgeCutoff) return "AGE_CUTOFF";
+    if (input.scrolls >= input.minScrolls && input.consecutiveOldNewPosts >= 5) return "RELIABLE_AGE_CUTOFF";
     if (input.scrolls >= input.maxScrolls) return "MAX_SCROLLS";
-    if (input.scrolls >= input.minScrolls && input.consecutiveNoNew >= 3) return "NO_NEW_POSTS_3_SCROLLS";
+    if (input.scrolls >= input.minScrolls && input.consecutiveNoNew >= 3 && input.consecutiveNoVisibleGrowth >= 3) return "NO_NEW_POSTS_AND_CARDS_3_SCROLLS";
     return null;
+  }
+
+  function updateAgeCutoffStreak(previous, newRecords, now = Date.now(), cutoffMs = 72 * 60 * 60 * 1000) {
+    let streak = Math.max(0, Number(previous) || 0);
+    for (const record of newRecords || []) {
+      const timestamp = typeof record?.publishedAt === "string" ? Date.parse(record.publishedAt) : Number.NaN;
+      if (!Number.isFinite(timestamp)) { streak = 0; continue; }
+      streak = now - timestamp > cutoffMs ? streak + 1 : 0;
+    }
+    return streak;
   }
 
   function needsSearchFallback(health, sourceType) {
@@ -243,5 +254,5 @@
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, extractStructuredRecordsFromText, evaluateHealth, shouldStopDiscovery, needsSearchFallback };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, extractStructuredRecordsFromText, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
 })(globalThis);

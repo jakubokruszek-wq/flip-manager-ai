@@ -57,19 +57,19 @@ async function collectConfiguredSources() {
 
 async function collectTabSource(tabId, sourceUrl, scanId) {
   await chrome.storage.local.set({ collectorState: { status: "collecting", sourceUrl, startedAt: new Date().toISOString() } });
-  const primary = await collectFromTab(tabId, { minScrolls: 3, maxScrolls: 10, maxPosts: 20, budgetMs: 75_000 });
+  const primary = await collectFromTab(tabId, { minScrolls: 3, maxScrolls: 18, maxPosts: 50, budgetMs: 110_000 });
   let posts = primary.posts;
   const searchRuns = [];
   if (primary.health.status === "DEGRADED" && primary.source.sourceType === "GROUP") {
     const searchStart = Date.now();
     for (const query of SEARCH_QUERIES) {
-      if (Date.now() - searchStart >= 60_000 || posts.length >= 20) break;
+      if (Date.now() - searchStart >= 60_000 || posts.length >= 50) break;
       const searchUrl = `https://www.facebook.com/groups/${primary.source.sourceId}/search/?q=${encodeURIComponent(query)}`;
       await chrome.tabs.update(tabId, { url: searchUrl });
       await waitForTab(tabId, 20_000);
-      const search = await collectFromTab(tabId, { minScrolls: 2, maxScrolls: 2, maxPosts: 20, budgetMs: Math.min(12_000, 60_000 - (Date.now() - searchStart)), searchMode: true });
+      const search = await collectFromTab(tabId, { minScrolls: 2, maxScrolls: 2, maxPosts: 50, budgetMs: Math.min(12_000, 60_000 - (Date.now() - searchStart)), searchMode: true });
       searchRuns.push({ query, ...search });
-      posts = mergePosts([...posts, ...search.posts]).slice(0, 20);
+      posts = mergePosts([...posts, ...search.posts]).slice(0, 50);
     }
     await chrome.tabs.update(tabId, { url: primary.source.sourceUrl });
   }

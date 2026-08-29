@@ -23,10 +23,10 @@
   async function collectSource(options) {
     const source = core.canonicalSource(location.href);
     if (!source) throw new Error("FACEBOOK_SOURCE_URL_REQUIRED");
-    const maxScrolls = clamp(options.maxScrolls, 0, 10, 10);
+    const maxScrolls = clamp(options.maxScrolls, 0, 20, 18);
     const minScrolls = clamp(options.minScrolls, 0, maxScrolls, 3);
-    const maxPosts = clamp(options.maxPosts, 1, 20, 20);
-    const budgetMs = clamp(options.budgetMs, 5_000, 90_000, 75_000);
+    const maxPosts = clamp(options.maxPosts, 1, 50, 50);
+    const budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
     const searchMode = options.searchMode === true;
     const layerPrefix = searchMode ? "SEARCH_" : "";
     const start = performance.now();
@@ -34,6 +34,10 @@
     let records = [];
     let scrolls = 0;
     let consecutiveNoNew = 0;
+    let consecutiveNoVisibleGrowth = 0;
+    let consecutiveOldNewPosts = 0;
+    let previousVisibleFingerprints = new Set();
+    let consecutiveVisibleAdvanceWithoutCapture = 0;
     const initialHeight = document.documentElement.scrollHeight;
     let previousNetworkResponses = networkResponses;
     let stopReason = "MAX_SCROLLS";
@@ -42,16 +46,25 @@
       const dom = collectDom(source, iteration, `${layerPrefix}DOM`);
       const hydration = collectHydration(source, iteration, `${layerPrefix}HYDRATION`);
       const network = [...networkRecords.values()].map((record) => ({ ...record, firstSeenIteration: record.firstSeenIteration ?? iteration, discoveryLayers: [`${layerPrefix}NETWORK`] }));
+      const beforeIds = new Set(records.map((record) => record.postId));
       const before = records.length;
       records = core.mergeRecords([...records, ...dom, ...hydration, ...network], maxPosts);
       const added = records.length - before;
+      const addedRecords = records.filter((record) => !beforeIds.has(record.postId));
+      consecutiveOldNewPosts = core.updateAgeCutoffStreak(consecutiveOldNewPosts, addedRecords);
       consecutiveNoNew = added === 0 ? consecutiveNoNew + 1 : 0;
+      const cards = visibleCards();
+      const visibleFingerprints = new Set(cards.map(cardFingerprint).filter(Boolean));
+      const newVisibleCards = [...visibleFingerprints].filter((fingerprint) => !previousVisibleFingerprints.has(fingerprint)).length;
+      if (iteration > 0) consecutiveNoVisibleGrowth = newVisibleCards === 0 ? consecutiveNoVisibleGrowth + 1 : 0;
+      if (iteration > 0) consecutiveVisibleAdvanceWithoutCapture = newVisibleCards > 0 && added === 0 ? consecutiveVisibleAdvanceWithoutCapture + 1 : added > 0 ? 0 : consecutiveVisibleAdvanceWithoutCapture;
+      previousVisibleFingerprints = visibleFingerprints;
       const container = findScrollContainer();
       const scrollTop = container === document.scrollingElement ? window.scrollY : container.scrollTop;
       const scrollHeight = container.scrollHeight;
-      iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: visibleCards().length, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses });
+      iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: cards.length, newVisibleCardsThisIteration: newVisibleCards, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, consecutiveOldNewPosts, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses });
       previousNetworkResponses = networkResponses;
-      const decision = core.shouldStopDiscovery({ durationMs: performance.now() - start, budgetMs, uniqueCount: records.length, maxPosts, reliableAgeCutoff: false, scrolls, maxScrolls, minScrolls, consecutiveNoNew });
+      const decision = core.shouldStopDiscovery({ durationMs: performance.now() - start, budgetMs, uniqueCount: records.length, maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, consecutiveOldNewPosts });
       if (decision) { stopReason = decision; break; }
       const moved = scrollContainer(container);
       scrolls += 1;
@@ -60,8 +73,10 @@
 
     const durationMs = Math.round(performance.now() - start);
     const maxVisibleCardCount = Math.max(0, ...iterations.map((item) => item.visibleCardCount));
-    const health = core.evaluateHealth({ visibleCardCount: maxVisibleCardCount, capturedPostCount: records.length, scrolls, durationMs, feedGrew: (iterations.at(-1)?.scrollHeight || 0) > initialHeight, newIdsAfterScroll: iterations.slice(1).some((item) => item.newIdsThisIteration > 0), stopReason });
-    return { source, collectedAt: new Date().toISOString(), posts: records, health, iterations: iterations.slice(0, 11) };
+    const capturedAdvanced = iterations.slice(1).some((item) => item.newIdsThisIteration > 0);
+    const visibleFeedAdvancedWithoutCapture = consecutiveVisibleAdvanceWithoutCapture > 0;
+    const health = core.evaluateHealth({ visibleCardCount: maxVisibleCardCount, capturedPostCount: records.length, scrolls, durationMs, feedGrew: (iterations.at(-1)?.scrollHeight || 0) > initialHeight, newIdsAfterScroll: capturedAdvanced, visibleFeedAdvanced: visibleFeedAdvancedWithoutCapture, capturedAdvanced: !visibleFeedAdvancedWithoutCapture, stopReason });
+    return { source, collectedAt: new Date().toISOString(), posts: records, health, iterations: iterations.slice(0, 21) };
   }
 
   function collectDom(source, iteration, layer) {
@@ -103,6 +118,7 @@
     });
   }
   function visibleText(node) { return node?.innerText?.replace(/\s+/g, " ").trim().slice(0, 20_000) || null; }
+  function cardFingerprint(card) { const link = card.querySelector('a[href*="/posts/"], a[href*="story_fbid="]')?.href || ""; const text = visibleText(card)?.slice(0, 160) || ""; return link || text ? `${link}|${text}` : null; }
   function findScrollContainer() {
     const candidates = [document.scrollingElement, ...document.querySelectorAll('[role="feed"], [data-pagelet*="Feed"]')].filter(Boolean);
     return candidates.sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || document.documentElement;
