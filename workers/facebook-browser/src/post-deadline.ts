@@ -1,6 +1,6 @@
-export const FACEBOOK_POST_PROCESSING_DEADLINE_MS = 20_000;
+export const FACEBOOK_POST_PROCESSING_DEADLINE_MS = 30_000;
 export const FACEBOOK_BOUNDED_PROCESSING_SOURCE_ID = "2928219830782023";
-export const FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY = 2;
+export const FACEBOOK_BOUNDED_PROCESSING_CONCURRENCY = 3;
 
 export class FacebookPostProcessingDeadlineError extends Error {
   readonly postId: string;

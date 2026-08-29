@@ -3,7 +3,7 @@ import test from "node:test";
 import { facebookPostDeadlineForSource, FacebookPostProcessingDeadlineError, mapFacebookPostsWithConcurrency, runFacebookPostWithDeadline } from "./post-deadline.ts";
 
 test("deadline is scoped to group 2928219830782023", () => {
-  assert.equal(facebookPostDeadlineForSource("https://www.facebook.com/groups/2928219830782023/"), 20_000);
+  assert.equal(facebookPostDeadlineForSource("https://www.facebook.com/groups/2928219830782023/"), 30_000);
   assert.equal(facebookPostDeadlineForSource("https://www.facebook.com/groups/123/"), null);
 });
 
