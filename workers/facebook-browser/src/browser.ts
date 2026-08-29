@@ -6,6 +6,7 @@ import { assertWorkerFacebookSourceUrl } from "./source-reader.ts";
 import { logFacebookWorker } from "./logger.ts";
 import { resolveFacebookListingIntent } from "../../../features/facebook-watcher/facebook-intent.ts";
 import { resolveDeterministicFacebookSellFacts } from "../../../features/facebook-watcher/facebook-processing-policy.ts";
+import { attachFacebookNetworkDiagnostics } from "./network-diagnostics.ts";
 
 export function shouldEarlyRejectFacebookFeed(text: string | null | undefined): boolean {
   if (!text?.trim()) return false;
@@ -50,7 +51,7 @@ export async function revalidateFacebookPostImages(
   }
 }
 
-export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false, debugPostId: string | null = null, lookupCache?: (postIds: string[], signal: AbortSignal) => Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }>) {
+export async function fetchFacebookGroupWithBrowser(profileDir: string, group: FacebookGroupSnapshot, signal: AbortSignal, analyzeRegion: (input: { postId: string; screenshotDataUrl: string; imageUrls: string[] }, signal: AbortSignal) => Promise<FacebookVisionExtraction>, heartbeat?: () => Promise<void>, timeDiagnosticMode = false, debugMaxPosts: number | null = null, mediaDiagnosticMode = false, debugPostId: string | null = null, lookupCache?: (postIds: string[], signal: AbortSignal) => Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }>, networkDiagnostics = false) {
   const started = Date.now(); const url = assertWorkerFacebookSourceUrl(group.url, group.type ?? "GROUP").toString();
   const performance: FacebookPerformanceMetrics = emptyFacebookPerformanceMetrics();
   const postTimings = new Map<string, FacebookPostPerformanceTiming>();
@@ -78,6 +79,10 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
   const context = await chromium.launchPersistentContext(profileDir, { headless: true, locale: "pl-PL" });
   try {
     signal.throwIfAborted(); let page = context.pages()[0] ?? await context.newPage();
+    const networkTrace = attachFacebookNetworkDiagnostics(page, networkDiagnostics || process.env.FACEBOOK_DISCOVERY_TRACE === "1");
+    const discoveryTrace: NonNullable<FacebookPerformanceMetrics["discoveryTrace"]> = [];
+    let lastNetworkResponseCount = 0;
+    const discoveryTraceEnabled = process.env.FACEBOOK_DISCOVERY_TRACE === "1";
     const postDeadlineMs = facebookPostDeadlineForSource(url);
     const recoverPostPage = async () => {
       const stalledPage = page;
@@ -124,7 +129,15 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
           const existing = posts.get(post.postId);
           if (!existing || existing.freshnessFailure && !post.freshnessFailure) posts.set(post.postId, post);
         }
-        return [...posts.values()].slice(0, MAX_FACEBOOK_DISCOVERED_POSTS);
+        const merged = [...posts.values()].slice(0, MAX_FACEBOOK_DISCOVERED_POSTS);
+        if (discoveryTraceEnabled) {
+          const network = networkTrace ? { postIds: [...networkTrace.postIds].slice(0, 20), responses: networkTrace.responses } : { postIds: [], responses: 0 };
+          const viewport = await page.evaluate(() => ({ scrollTop: Math.round(window.scrollY), scrollHeight: Math.round(document.documentElement.scrollHeight), visibleCardCount: document.querySelectorAll('[role="article"]').length, url: location.href })).catch(() => ({ scrollTop: 0, scrollHeight: 0, visibleCardCount: 0, url: page.url() }));
+          const previous = discoveryTrace[discoveryTrace.length - 1];
+          discoveryTrace.push({ iteration: discoveryTrace.length, domPostIds: anchors.map((post) => post.postId).slice(0, 20), hydrationPostIds: structured.map((post) => post.postId).slice(0, 20), networkPostIds: network.postIds, mergedPostIds: merged.map((post) => post.postId).slice(0, 20), visibleCardCount: viewport.visibleCardCount, scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, feedMode: "UNKNOWN", currentUrl: viewport.url.slice(0, 500), newIdsThisIteration: previous ? Math.max(0, merged.length - previous.mergedPostIds.length) : merged.length, networkResponsesSinceLastScroll: Math.max(0, network.responses - lastNetworkResponseCount), hydrationChanged: previous ? structured.map((post) => post.postId).join(",") !== previous.hydrationPostIds.join(",") : true, stopReason: "IN_PROGRESS" });
+          lastNetworkResponseCount = network.responses;
+        }
+        return merged;
       };
       const result = await discoverFacebookPostsByScrolling(page, ageReferenceMs, heartbeat, lookupKnown, collect);
       return result;
@@ -188,7 +201,7 @@ export async function fetchFacebookGroupWithBrowser(profileDir: string, group: F
         timingFor(post.postId).totalMs = Date.now() - postStarted;
       }
     };
-    performance.postsDiscovered = discovered.length; performance.discoveredPostIds = discovered.map((post) => post.postId); performance.discoveryScrolls = discovery.scrollCount;
+    performance.postsDiscovered = discovered.length; performance.discoveredPostIds = discovered.map((post) => post.postId); performance.discoveryScrolls = discovery.scrollCount; if (discoveryTraceEnabled && discoveryTrace.length > 0) { for (const entry of discoveryTrace) entry.stopReason = discovery.stopReason; performance.discoveryTrace = discoveryTrace; }
     performance.feedAgeHits = discovered.filter((post) => post.discoveredPublishedAt !== null).length;
     const feedDiagnostics = discovered.flatMap((post) => post.feedAgeDiagnostic ? [post.feedAgeDiagnostic] : []);
     performance.feedTimestampCandidates = feedDiagnostics.reduce((total, diagnostic) => total + diagnostic.candidatesFound, 0);

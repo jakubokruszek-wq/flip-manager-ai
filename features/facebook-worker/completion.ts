@@ -107,7 +107,7 @@ function parseCacheHit(value: unknown): FacebookPostSnapshot["cacheHit"] {
 }
 
 function parsePerformance(value: unknown): FacebookPerformanceMetrics {
-  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0, postTimings: [], totalNavigationMs: 0, totalVisionMs: 0, totalAgeFallbackMs: 0, cacheHitCount: 0, cacheMissCount: 0 };
+  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0, postTimings: [], totalNavigationMs: 0, totalVisionMs: 0, totalAgeFallbackMs: 0, cacheHitCount: 0, cacheMissCount: 0, discoveryTrace: [] };
   const row = requireRow(value);
   return {
     postsDiscovered: nonnegativeInteger(row.postsDiscovered),
@@ -139,6 +139,12 @@ function parsePerformance(value: unknown): FacebookPerformanceMetrics {
     totalAgeFallbackMs: optionalNonnegativeInteger(row.totalAgeFallbackMs),
     cacheHitCount: optionalNonnegativeInteger(row.cacheHitCount),
     cacheMissCount: optionalNonnegativeInteger(row.cacheMissCount),
+    discoveryTrace: Array.isArray(row.discoveryTrace) ? row.discoveryTrace.slice(0, 25).flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const trace = item as Record<string, unknown>;
+      const ids = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === "string").slice(0, 20) : [];
+      return [{ iteration: nonnegativeInteger(trace.iteration), domPostIds: ids(trace.domPostIds), hydrationPostIds: ids(trace.hydrationPostIds), networkPostIds: ids(trace.networkPostIds), mergedPostIds: ids(trace.mergedPostIds), visibleCardCount: nonnegativeInteger(trace.visibleCardCount), scrollTop: nonnegativeInteger(trace.scrollTop), scrollHeight: nonnegativeInteger(trace.scrollHeight), feedMode: typeof trace.feedMode === "string" ? trace.feedMode.slice(0, 100) : "UNKNOWN", currentUrl: typeof trace.currentUrl === "string" ? trace.currentUrl.slice(0, 500) : "", newIdsThisIteration: nonnegativeInteger(trace.newIdsThisIteration), networkResponsesSinceLastScroll: nonnegativeInteger(trace.networkResponsesSinceLastScroll), hydrationChanged: trace.hydrationChanged === true, stopReason: typeof trace.stopReason === "string" ? trace.stopReason.slice(0, 100) : "UNKNOWN" }];
+    }) : [],
   };
 }
 

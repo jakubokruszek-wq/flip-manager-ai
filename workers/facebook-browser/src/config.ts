@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 
-export type FacebookWorkerConfig = { apiUrl: URL; secret: string; workerId: string; profileDir: string; pollIntervalMs: number; once: boolean };
+export type FacebookWorkerConfig = { apiUrl: URL; secret: string; workerId: string; profileDir: string; pollIntervalMs: number; once: boolean; networkDiagnostics: boolean };
 
 export function resolveFacebookProfileDir(environment: NodeJS.ProcessEnv = process.env): string {
   const localAppData = environment.LOCALAPPDATA?.trim();
@@ -20,8 +20,7 @@ export function loadFacebookWorkerConfig(environment: NodeJS.ProcessEnv = proces
   if (secret.length < 32) throw new Error("FACEBOOK_WORKER_SECRET must contain at least 32 characters.");
   const pollIntervalMs = Number(environment.FACEBOOK_WORKER_POLL_INTERVAL_MS ?? 10_000);
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 2_000 || pollIntervalMs > 300_000) throw new Error("Invalid FACEBOOK_WORKER_POLL_INTERVAL_MS.");
-  return { apiUrl, secret, workerId: (environment.FACEBOOK_WORKER_ID?.trim() || `windows-${hostname()}`).slice(0, 100), profileDir: resolveFacebookProfileDir(environment), pollIntervalMs, once: environment.FACEBOOK_WORKER_ONCE === "1" };
+  return { apiUrl, secret, workerId: (environment.FACEBOOK_WORKER_ID?.trim() || `windows-${hostname()}`).slice(0, 100), profileDir: resolveFacebookProfileDir(environment), pollIntervalMs, once: environment.FACEBOOK_WORKER_ONCE === "1", networkDiagnostics: environment.FACEBOOK_NETWORK_DIAGNOSTICS === "1" };
 }
 
 function required(value: string | undefined, name: string): string { if (!value?.trim()) throw new Error(`${name} is required.`); return value.trim(); }
-

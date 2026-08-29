@@ -150,6 +150,24 @@ export type FacebookPerformanceMetrics = {
   totalAgeFallbackMs?: number;
   cacheHitCount?: number;
   cacheMissCount?: number;
+  discoveryTrace?: FacebookDiscoveryTraceEntry[];
+};
+
+export type FacebookDiscoveryTraceEntry = {
+  iteration: number;
+  domPostIds: string[];
+  hydrationPostIds: string[];
+  networkPostIds: string[];
+  mergedPostIds: string[];
+  visibleCardCount: number;
+  scrollTop: number;
+  scrollHeight: number;
+  feedMode: string;
+  currentUrl: string;
+  newIdsThisIteration: number;
+  networkResponsesSinceLastScroll: number;
+  hydrationChanged: boolean;
+  stopReason: string;
 };
 
 export type FacebookPostPerformanceTiming = {

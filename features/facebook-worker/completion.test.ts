@@ -25,3 +25,21 @@ test("completion accepts a server-verifiable cache reference and performance met
   assert.equal(completion.performance.feedAgeHitRate, 1);
   assert.equal(completion.ageCache[0].source, "FEED");
 });
+
+test("round-trips bounded discovery trace from browser payload", () => {
+  const completion = parseFacebookCompletionPayload({
+    jobId: "job-trace", leaseToken: "lease-trace", workerId: "worker-trace", warnings: [], durationMs: 100,
+    performance: {
+      postsDiscovered: 1, discoveredPostIds: ["123"], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0,
+      visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 1, discoveryTrace: [{
+        iteration: 0, domPostIds: ["123"], hydrationPostIds: ["123"], networkPostIds: ["123"], mergedPostIds: ["123"],
+        visibleCardCount: 1, scrollTop: 0, scrollHeight: 900, feedMode: "UNKNOWN", currentUrl: "https://www.facebook.com/groups/group-a/",
+        newIdsThisIteration: 1, networkResponsesSinceLastScroll: 2, hydrationChanged: true, stopReason: "MAX_SCROLLS",
+      }],
+    },
+    ageCache: [], posts: [],
+  });
+  assert.equal(completion.performance.discoveryTrace?.length, 1);
+  assert.deepEqual(completion.performance.discoveryTrace?.[0].mergedPostIds, ["123"]);
+  assert.equal(completion.performance.discoveryTrace?.[0].networkResponsesSinceLastScroll, 2);
+});
