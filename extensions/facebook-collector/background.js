@@ -23,6 +23,10 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     void chrome.storage.local.get(["collectorState", "collectorLastResult"]).then(respond);
     return true;
   }
+  if (message?.type === "SAVE_PAIRING_CONFIG" && message.config) {
+    void chrome.storage.local.set({ apiUrl: message.config.apiUrl, deviceId: message.config.deviceId, deviceToken: message.config.deviceToken }).then(() => respond({ ok: true }));
+    return true;
+  }
   return false;
 });
 

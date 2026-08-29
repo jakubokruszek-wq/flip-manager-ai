@@ -23,6 +23,11 @@
       "matches": ["https://www.facebook.com/groups/*", "https://www.facebook.com/*"],
       "js": ["collector-core.js", "content.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://flip-manager-ai.vercel.app/flip-finder/collector/setup"],
+      "js": ["pairing.js"],
+      "run_at": "document_start"
     }
   ]
 }
