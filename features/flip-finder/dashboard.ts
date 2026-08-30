@@ -8,6 +8,17 @@ export function dashboardCount(value: number | null | undefined): number {
 
 export const COLLECTOR_READINESS_ATTEMPTS = 3;
 export const COLLECTOR_READINESS_RETRY_DELAY_MS = 500;
+export const START_TRACE_ORDER = ["BUTTON_CLICKED", "READY_REQUEST_SENT", "BRIDGE_RECEIVED_READY", "EXTENSION_RECEIVED_READY", "EXTENSION_READY_RESULT", "BRIDGE_RETURNED_READY", "PAGE_RECEIVED_READY", "POST_SCAN_SENT", "POST_SCAN_RESPONSE", "NEW_SCAN_RUN_ID", "SCAN_COMMAND_SENT", "BRIDGE_RECEIVED_SCAN_COMMAND", "EXTENSION_RECEIVED_SCAN_COMMAND", "COLLECTOR_STARTED", "COLLECTOR_BATCH_CREATED"] as const;
+export type StartTraceDiagnosticStage = { stage: string; status: "PASS" | "FAIL" | "TIMEOUT"; errorCode?: string };
+
+export function summarizeStartTrace(stages: StartTraceDiagnosticStage[]) {
+  const real = stages.filter((item) => item.stage !== "START_FAILED");
+  const failed = real.find((item) => item.status !== "PASS") ?? null;
+  const passed = new Set(real.filter((item) => item.status === "PASS").map((item) => item.stage));
+  const firstMissing = failed ? null : START_TRACE_ORDER.find((stage) => !passed.has(stage)) ?? null;
+  const lastSuccessful = [...real].reverse().find((item) => item.status === "PASS")?.stage ?? null;
+  return { lastSuccessful, firstFailed: failed?.stage ?? null, firstMissing, errorCode: failed?.errorCode ?? null };
+}
 
 export async function retryCollectorReadiness<T extends { ok: boolean }>(request: () => Promise<T>, onRetry: (attempt: number) => void, sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))): Promise<T> {
   let last: T | null = null;

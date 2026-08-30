@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api-fetch";
 import {
   canRunManualScan,
   retryCollectorReadiness,
+  summarizeStartTrace,
   dashboardCount,
   filterResultsHref,
   hasLatestScan,
@@ -955,9 +956,9 @@ function readStartTrace(): StartTrace | null {
 }
 
 function StartTraceSummary({ trace }: { trace: StartTrace }) {
-  const failed = [...trace.stages].reverse().find((stage) => stage.status !== "PASS");
+  const summary = summarizeStartTrace(trace.stages);
   const last = trace.stages.at(-1);
-  return <div className="mt-2 rounded border p-2 text-xs"><div>requestId: {trace.requestId}</div><div>Last stage: {last?.stage || "—"}</div><div>Failed at: {failed?.stage || "—"}</div><div>Error: {failed?.errorCode || "—"}</div><div>Diagnosis: {traceDiagnosis(failed?.stage, failed?.errorCode)}</div></div>;
+  return <div className="mt-2 rounded border p-2 text-xs"><div>requestId: {trace.requestId}</div><div>Last stage: {last?.stage || "—"}</div><div>Last successful real stage: {summary.lastSuccessful || "—"}</div><div>First failed/missing: {summary.firstFailed || summary.firstMissing || "—"}</div><div>Error: {summary.errorCode || "—"}</div><div>Diagnosis: {traceDiagnosis(summary.firstFailed || summary.firstMissing || undefined, summary.errorCode || undefined)}</div></div>;
 }
 function traceDiagnosis(stage?: string, errorCode?: string): string {
   if (errorCode === "REQUEST_ID_MISMATCH") return "REQUEST_ID_MISMATCH";
