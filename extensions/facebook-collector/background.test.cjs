@@ -114,6 +114,7 @@ test("finder bridge is matched at document start and recovery is bounded to cano
   assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_PING/);
   assert.match(bootstrap, /RECOVER_COLLECTOR_BRIDGE/);
   assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_PONG/);
+  assert.match(bootstrap, /RECOVER_COLLECTOR_BRIDGE/);
   assert.match(bootstrap, /safeRequestId/);
   assert.doesNotMatch(bootstrap, /deviceToken|secret|hmac|cookie/i);
   assert.match(background, /COLLECTOR_BRIDGE_ORIGIN_NOT_ALLOWED/);
