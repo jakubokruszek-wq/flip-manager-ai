@@ -12,3 +12,13 @@ test("declares scripting permission for bounded fallback injection", () => {
   assert.match(background, /chrome\.scripting\.executeScript/);
   assert.match(background, /attempt === 10/);
 });
+
+test("production active-source flow is allowlisted, deep, single-click and bounded", () => {
+  assert.match(background, /lodzsprzedazzakupwynajem/);
+  assert.match(background, /minScrolls: 5/);
+  assert.match(background, /maxScrolls: 30/);
+  assert.match(background, /hardTimeBudgetMs: 110_000/);
+  assert.match(background, /ACTIVE_SEARCH_QUERIES/);
+  assert.match(background, /PRODUCTION_SOURCE_NOT_ALLOWED/);
+  assert.match(background, /importScripts\("collector-core\.js"\)/);
+});

@@ -30,6 +30,11 @@ export type FacebookPostSnapshot = {
   publishedAt: string | null;
   vision?: FacebookVisionExtraction | null;
   cacheHit?: FacebookPostCacheHit | null;
+  discoverySource?: "MAIN_FEED" | "SEARCH";
+  searchQuery?: string | null;
+  searchQueries?: string[];
+  foundInMainFeed?: boolean;
+  firstSeenPhase?: "MAIN_FEED" | "SEARCH";
 };
 
 export const FACEBOOK_MEDIA_BINDING_PROVENANCE = ["EXACT_ROOT_STORY", "EXACT_POST_METADATA", "DEDICATED_POST_VIEWER", "AMBIGUOUS"] as const;

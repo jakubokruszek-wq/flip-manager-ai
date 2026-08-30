@@ -19,6 +19,11 @@ export type FacebookListingInput = {
   intentConfidence?: number;
   intentSource?: FacebookIntentSource;
   imageAssessments?: FacebookImageAssessment[];
+  discoverySource?: "MAIN_FEED" | "SEARCH";
+  searchQuery?: string | null;
+  searchQueries?: string[];
+  foundInMainFeed?: boolean;
+  firstSeenPhase?: "MAIN_FEED" | "SEARCH";
 };
 
 export type FacebookSourceFacts = {

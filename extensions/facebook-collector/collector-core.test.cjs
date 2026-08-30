@@ -75,3 +75,11 @@ test("same canonical post id cannot inherit a different card author or text", ()
   assert.equal(record.text, null);
   assert.ok(record.identityReasons.includes("POST_IDENTITY_CONFLICT"));
 });
+
+test("merge retains main-feed and search discovery evidence", () => {
+  const base = { postId: "1577700267381450", permalink: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1577700267381450/", sourceId: source.sourceId, sourceType: "GROUP", author: "A", text: "Sprzedam mieszkanie", publishedAt: null, timestampText: null, media: [], firstSeenIteration: 0, identityConfidence: "EXACT", identityReasons: [], discoverySource: "MAIN_FEED", foundInMainFeed: true, firstSeenPhase: "MAIN_FEED" };
+  const [record] = core.mergeRecords([base, { ...base, discoverySource: "SEARCH", searchQuery: "mieszkanie", searchQueries: ["mieszkanie"], foundInMainFeed: false, firstSeenPhase: "SEARCH" }]);
+  assert.equal(record.foundInMainFeed, true);
+  assert.deepEqual(record.searchQueries, ["mieszkanie"]);
+  assert.equal(record.firstSeenPhase, "MAIN_FEED");
+});

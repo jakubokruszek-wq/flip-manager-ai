@@ -3,6 +3,8 @@ export type CollectorDiscoveryLayer = (typeof COLLECTOR_DISCOVERY_LAYERS)[number
 export type CollectorSourceType = "GROUP" | "PROFILE";
 export type CollectorDiscoveryHealth = "HEALTHY" | "DEGRADED" | "FAILED";
 export type CollectorIdentityConfidence = "EXACT" | "UNVERIFIED";
+export type CollectorDiscoverySource = "MAIN_FEED" | "SEARCH";
+export type CollectorFirstSeenPhase = "MAIN_FEED" | "SEARCH";
 
 export type CollectorMediaRecord = {
   url: string;
@@ -26,6 +28,11 @@ export type CollectorPostRecord = {
   firstSeenIteration: number;
   identityConfidence: CollectorIdentityConfidence;
   identityReasons: string[];
+  discoverySource: CollectorDiscoverySource;
+  searchQuery: string | null;
+  searchQueries: string[];
+  foundInMainFeed: boolean;
+  firstSeenPhase: CollectorFirstSeenPhase;
 };
 
 export type CollectorSourceHealth = {
@@ -118,6 +125,11 @@ function normalizePost(value: unknown, sourceId: string, sourceType: CollectorSo
     firstSeenIteration: nonnegativeInteger(value.firstSeenIteration),
     identityConfidence,
     identityReasons: identityReasons.length > 0 ? identityReasons : identityConfidence === "EXACT" ? [] : ["COLLECTOR_IDENTITY_EVIDENCE_MISSING"],
+    discoverySource: value.discoverySource === "SEARCH" ? "SEARCH" : "MAIN_FEED",
+    searchQuery: nullableString(value.searchQuery, 120),
+    searchQueries: Array.isArray(value.searchQueries) ? value.searchQueries.filter((item): item is string => typeof item === "string").map((item) => item.trim().slice(0, 120)).filter(Boolean).slice(0, 20) : [],
+    foundInMainFeed: value.foundInMainFeed === true || value.discoverySource !== "SEARCH",
+    firstSeenPhase: value.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED",
   };
 }
 

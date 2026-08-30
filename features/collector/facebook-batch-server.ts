@@ -10,6 +10,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { FacebookCollectorBatch } from "./facebook-batch";
 import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts } from "./facebook-batch-policy";
 
+export const FACEBOOK_PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
+export const FACEBOOK_PRODUCTION_SOURCE_ID = "lodzsprzedazzakupwynajem";
+
 export type CollectorBatchResult = {
   status: "completed" | "degraded" | "failed" | "duplicate";
   batchId: string;
@@ -24,6 +27,7 @@ export type CollectorBatchResult = {
 };
 
 export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
+  if (batch.sourceType !== "GROUP" || batch.sourceId !== FACEBOOK_PRODUCTION_SOURCE_ID || batch.sourceUrl !== FACEBOOK_PRODUCTION_SOURCE_URL) throw new Error("COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST");
   const supabase = createAdminClient();
   const existing = await supabase.from("collector_scan_batches").select("status,result").eq("device_id", deviceId).eq("batch_id", batch.batchId).maybeSingle();
   if (existing.error) throw new Error(`COLLECTOR_BATCH_LOOKUP_FAILED: ${existing.error.message}`);
@@ -73,7 +77,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       const sourceScan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "running", scan_run_id: batch.scanId, filter_snapshot: filter, diagnostics: [{ collectorBatchId: batch.batchId, discoveryHealth: batch.health.status }] }).select("id").single();
       if (sourceScan.error || !sourceScan.data?.id) throw new Error(`COLLECTOR_SOURCE_SCAN_CREATE_FAILED: ${sourceScan.error?.message ?? "missing id"}`);
       const sourceScanId = String(sourceScan.data.id); sourceScanIds.push(sourceScanId);
-      const summary = await processFacebookPostBatch(posts, (post) => importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: [], mediaCandidates: [] }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, ...COLLECTOR_IMAGE_IMPORT_OPTIONS }), { jobId: `collector:${batch.batchId}`, sourceScanId });
+      const summary = await processFacebookPostBatch(posts, (post) => importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: [], mediaCandidates: [], discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, ...COLLECTOR_IMAGE_IMPORT_OPTIONS }), { jobId: `collector:${batch.batchId}`, sourceScanId });
       processed = Math.max(processed, summary.postsProcessed);
       listingsCreated += summary.listingsCreated;
       listingsUpdated += summary.listingsUpdated;

@@ -23,7 +23,7 @@
   async function collectSource(options) {
     const source = core.canonicalSource(location.href);
     if (!source) throw new Error("FACEBOOK_SOURCE_URL_REQUIRED");
-    const maxScrolls = clamp(options.maxScrolls, 0, 20, 18);
+    const maxScrolls = clamp(options.maxScrolls, 0, 30, 30);
     const minScrolls = clamp(options.minScrolls, 0, maxScrolls, 3);
     const maxPosts = clamp(options.maxPosts, 1, 50, 50);
     const budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
@@ -76,7 +76,15 @@
     const capturedAdvanced = iterations.slice(1).some((item) => item.newIdsThisIteration > 0);
     const visibleFeedAdvancedWithoutCapture = consecutiveVisibleAdvanceWithoutCapture > 0;
     const health = core.evaluateHealth({ visibleCardCount: maxVisibleCardCount, capturedPostCount: records.length, scrolls, durationMs, feedGrew: (iterations.at(-1)?.scrollHeight || 0) > initialHeight, newIdsAfterScroll: capturedAdvanced, visibleFeedAdvanced: visibleFeedAdvancedWithoutCapture, capturedAdvanced: !visibleFeedAdvancedWithoutCapture, stopReason });
-    return { source, collectedAt: new Date().toISOString(), posts: records, health, iterations: iterations.slice(0, 21) };
+    const evidencedRecords = records.map((record) => ({
+      ...record,
+      discoverySource: searchMode ? "SEARCH" : "MAIN_FEED",
+      searchQuery: searchMode ? String(options.searchQuery || "").trim().slice(0, 120) || null : null,
+      searchQueries: searchMode && options.searchQuery ? [String(options.searchQuery).trim().slice(0, 120)] : [],
+      foundInMainFeed: !searchMode,
+      firstSeenPhase: searchMode ? "SEARCH" : "MAIN_FEED",
+    }));
+    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, maxPosts), health, iterations: iterations.slice(0, 31) };
   }
 
   function collectDom(source, iteration, layer) {

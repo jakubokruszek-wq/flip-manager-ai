@@ -59,9 +59,14 @@
         discoveryLayers: unique([...(current.discoveryLayers || []), ...(raw.discoveryLayers || [])]),
         firstSeenIteration: Math.min(current.firstSeenIteration ?? 999, raw.firstSeenIteration ?? 999),
         media: mergeMedia([...(current.media || []), ...(raw.media || [])], raw.postId),
+        discoverySource: current.discoverySource === "MAIN_FEED" || raw.discoverySource === "MAIN_FEED" ? "MAIN_FEED" : "SEARCH",
+        searchQuery: current.searchQuery || raw.searchQuery || null,
+        searchQueries: unique([...(current.searchQueries || []), ...(raw.searchQueries || []), ...(raw.searchQuery ? [raw.searchQuery] : [])]),
+        foundInMainFeed: current.foundInMainFeed === true || raw.foundInMainFeed === true,
+        firstSeenPhase: current.firstSeenPhase === "MAIN_FEED" || raw.firstSeenPhase === "MAIN_FEED" ? "MAIN_FEED" : "SEARCH",
         identityConfidence: conflict || (current.identityConfidence !== "EXACT" && raw.identityConfidence !== "EXACT") ? "UNVERIFIED" : "EXACT",
         identityReasons: unique([...(current.identityReasons || []), ...(raw.identityReasons || []), ...(conflict ? ["POST_IDENTITY_CONFLICT"] : [])]),
-      } : { ...raw, identityConfidence: raw.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED", identityReasons: unique(raw.identityReasons || []), discoveryLayers: unique(raw.discoveryLayers || []), media: mergeMedia(raw.media || [], raw.postId) };
+      } : { ...raw, discoverySource: raw.discoverySource === "SEARCH" ? "SEARCH" : "MAIN_FEED", searchQuery: raw.searchQuery || null, searchQueries: unique([...(raw.searchQueries || []), ...(raw.searchQuery ? [raw.searchQuery] : [])]), foundInMainFeed: raw.foundInMainFeed === true || raw.discoverySource !== "SEARCH", firstSeenPhase: raw.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED", identityConfidence: raw.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED", identityReasons: unique(raw.identityReasons || []), discoveryLayers: unique(raw.discoveryLayers || []), media: mergeMedia(raw.media || [], raw.postId) };
       merged.set(raw.postId, next);
       if (merged.size >= limit) break;
     }

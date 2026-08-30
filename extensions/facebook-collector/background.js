@@ -1,5 +1,12 @@
 "use strict";
 
+importScripts("collector-core.js");
+
+const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
+const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
+const SEARCH_BUDGET_RESERVE_MS = 40_000;
+const SEARCH_QUERY_BUDGET_MS = 6_000;
+
 const DEFAULT_SOURCES = [
   "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
   "https://www.facebook.com/groups/402796264871862/",
@@ -9,6 +16,15 @@ const DEFAULT_SOURCES = [
   "https://www.facebook.com/groups/1689328011096404/"
 ];
 const SEARCH_QUERIES = ["sprzedam", "na sprzedaż", "mieszkanie", "2 pokoje", "3 pokoje"];
+
+const PRODUCTION_SEARCH_QUERIES = ["sprzedam", "na sprzedaż", "mieszkanie", "Łódź", "2 pokoje", "3 pokoje"];
+void DEFAULT_SOURCES;
+void SEARCH_QUERIES;
+void PRODUCTION_SEARCH_QUERIES;
+const ACTIVE_SEARCH_QUERIES = ["sprzedam", "na sprzeda\u017c", "mieszkanie", "\u0141\u00f3d\u017a", "2 pokoje", "3 pokoje"];
+const PHASE_MAIN_FEED = "Skanowanie feedu\u2026";
+const PHASE_FINALIZE = "Scalanie wynikow i analiza ofert\u2026";
+const PHASE_DONE = "Zakonczono";
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "COLLECT_ACTIVE_SOURCE") {
@@ -32,56 +48,66 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
 
 async function collectActiveSource() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !isFacebookSource(tab.url)) throw new Error("OPEN_FACEBOOK_GROUP_OR_PROFILE");
+  if (!tab?.id || !isProductionSource(tab.url)) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
   const scanId = crypto.randomUUID();
   return collectTabSource(tab.id, tab.url, scanId);
 }
 
 async function collectConfiguredSources() {
-  const config = await configValue();
-  const sources = Array.isArray(config.sources) && config.sources.length ? config.sources : DEFAULT_SOURCES;
   const scanId = crypto.randomUUID();
-  const results = [];
-  for (const sourceUrl of sources.slice(0, 20)) {
-    let tab;
-    try {
-      tab = await chrome.tabs.create({ url: sourceUrl, active: false });
-      await waitForTab(tab.id, 30_000);
-      results.push(await collectTabSource(tab.id, sourceUrl, scanId));
-    } catch (error) {
-      results.push({ sourceUrl, status: "FAILED", error: safeError(error) });
-    } finally {
-      if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
-    }
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: PRODUCTION_SOURCE_URL, active: false });
+    await waitForTab(tab.id, 30_000);
+    return await collectTabSource(tab.id, PRODUCTION_SOURCE_URL, scanId);
+  } catch (error) {
+    return { sourceUrl: PRODUCTION_SOURCE_URL, status: "FAILED", error: safeError(error) };
+  } finally {
+    if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
   }
-  const result = { scanId, sources: results, finishedAt: new Date().toISOString() };
-  await chrome.storage.local.set({ collectorLastResult: result, collectorState: { status: "idle", finishedAt: result.finishedAt } });
-  return result;
 }
 
 async function collectTabSource(tabId, sourceUrl, scanId) {
-  await chrome.storage.local.set({ collectorState: { status: "collecting", sourceUrl, startedAt: new Date().toISOString() } });
-  const primary = await collectFromTab(tabId, { minScrolls: 3, maxScrolls: 18, maxPosts: 50, budgetMs: 110_000 });
+  const startedAtMs = Date.now();
+  await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, startedAt: new Date().toISOString() });
+  const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
+  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED" });
   let posts = primary.posts;
   const searchRuns = [];
-  if (primary.health.status === "DEGRADED" && primary.source.sourceType === "GROUP") {
-    const searchStart = Date.now();
-    for (const query of SEARCH_QUERIES) {
-      if (Date.now() - searchStart >= 60_000 || posts.length >= 50) break;
+  if (primary.source.sourceType === "GROUP") {
+    for (const query of ACTIVE_SEARCH_QUERIES) {
+      const remaining = PRODUCTION_LIMITS.hardTimeBudgetMs - (Date.now() - startedAtMs);
+      if (remaining < 5_000 || posts.length >= PRODUCTION_LIMITS.maxPosts) break;
+      await setCollectorState({ status: "collecting", phase: "SEARCH", query, progress: `Przeszukiwanie: ${query}…`, sourceUrl, startedAt: new Date(startedAtMs).toISOString() });
       const searchUrl = `https://www.facebook.com/groups/${primary.source.sourceId}/search/?q=${encodeURIComponent(query)}`;
       await chrome.tabs.update(tabId, { url: searchUrl });
-      await waitForTab(tabId, 20_000);
-      const search = await collectFromTab(tabId, { minScrolls: 2, maxScrolls: 2, maxPosts: 50, budgetMs: Math.min(12_000, 60_000 - (Date.now() - searchStart)), searchMode: true });
-      searchRuns.push({ query, ...search });
-      posts = mergePosts([...posts, ...search.posts]).slice(0, 50);
+      try {
+        await waitForTab(tabId, Math.min(20_000, remaining));
+        const search = await collectFromTab(tabId, { minScrolls: 1, maxScrolls: 2, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: Math.min(SEARCH_QUERY_BUDGET_MS, remaining), searchMode: true, discoverySource: "SEARCH", searchQuery: query });
+        const beforeIds = new Set(posts.map((post) => post.postId));
+        const mergedSearch = mergePosts([...posts, ...search.posts]);
+        searchRuns.push({ query, captured: search.posts.length, uniqueContribution: mergedSearch.filter((post) => !beforeIds.has(post.postId)).length, sellContribution: search.posts.filter(isLikelySellText).length, durationMs: search.health.durationMs, health: search.health });
+        posts = mergedSearch.slice(0, PRODUCTION_LIMITS.maxPosts);
+      } catch (error) {
+        searchRuns.push({ query, captured: 0, uniqueContribution: 0, sellContribution: 0, durationMs: Date.now() - (startedAtMs + (PRODUCTION_LIMITS.hardTimeBudgetMs - remaining)), health: { status: "FAILED", reasons: [safeError(error)] } });
+      }
     }
-    await chrome.tabs.update(tabId, { url: primary.source.sourceUrl });
+    if (Date.now() - startedAtMs < PRODUCTION_LIMITS.hardTimeBudgetMs) {
+      await chrome.tabs.update(tabId, { url: primary.source.sourceUrl });
+    }
   }
-  const health = healthAfterSearch(primary.health, posts.length, searchRuns);
+  const durationMs = Date.now() - startedAtMs;
+  await setCollectorState({ status: "collecting", phase: "FINALIZE", progress: PHASE_FINALIZE, sourceUrl, startedAt: new Date(startedAtMs).toISOString() });
+  const health = healthAfterSearch(primary.health, posts.length, searchRuns, durationMs);
+  const duplicateCount = primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0) - posts.length;
+  const identity = { verified: posts.filter((post) => post.identityConfidence === "EXACT").length, unverified: posts.filter((post) => post.identityConfidence !== "EXACT").length, conflictsBlocked: posts.filter((post) => (post.identityReasons || []).includes("POST_IDENTITY_CONFLICT")).length };
+  const images = { rawCandidates: posts.reduce((sum, post) => sum + (post.media || []).length, 0), verifiedProvenance: posts.reduce((sum, post) => sum + (post.media || []).filter((media) => media.exactAssociation === true && media.exactPostId === post.postId).length, 0), imported: 0 };
+  const targets = ["1577700267381450", "1578068947344582", "1577710350713775"];
   const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, posts };
   const upload = await uploadBatch(batch);
-  const result = { sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, health, captured: posts.length, searchFallbackUsed: searchRuns.length > 0, upload, iterations: primary.iterations };
-  await chrome.storage.local.set({ collectorLastResult: result, collectorState: { status: "idle", finishedAt: new Date().toISOString() } });
+  images.imported = upload?.listingsCreated ? images.verifiedProvenance : 0;
+  const result = { scanId, sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, health, captured: posts.length, searchFallbackUsed: searchRuns.length > 0, upload, mainFeed: { captured: primary.posts.length, unique: primary.posts.length, scrolls: primary.health.scrolls, durationMs: primary.health.durationMs, stopReason: primary.health.stopReason }, search: searchRuns, merged: { totalCaptured: primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0), totalUnique: posts.length, duplicatesRemoved: Math.max(0, duplicateCount) }, identity, images, targetsFound: targets.filter((target) => posts.some((post) => post.postId === target)), iterations: primary.iterations, finishedAt: new Date().toISOString() };
+  await chrome.storage.local.set({ collectorLastResult: result, collectorState: { status: "idle", phase: "DONE", progress: PHASE_DONE, finishedAt: result.finishedAt } });
   return result;
 }
 
@@ -116,23 +142,19 @@ async function signedPost(urlValue, body) {
   return payload;
 }
 
-function healthAfterSearch(primary, captured, searchRuns) {
-  if (!searchRuns.length) return primary;
+function healthAfterSearch(primary, captured, searchRuns, durationMs) {
+  if (!searchRuns.length && durationMs === primary.durationMs) return primary;
   const improved = captured > primary.capturedPostCount;
   const reasons = improved ? primary.reasons.filter((reason) => !["COLLECTOR_LOW_CAPTURE_COUNT", "COLLECTOR_LOW_CAPTURE_RATIO", "COLLECTOR_GROWING_FEED_WITHOUT_NEW_IDS"].includes(reason)) : primary.reasons;
-  return { ...primary, status: reasons.length ? "DEGRADED" : "HEALTHY", capturedPostCount: captured, captureRatio: primary.visibleCardCount ? Math.min(1, captured / primary.visibleCardCount) : captured ? 1 : 0, durationMs: primary.durationMs + searchRuns.reduce((sum, run) => sum + run.health.durationMs, 0), stopReason: improved ? "SEARCH_FALLBACK_COMPLETED" : primary.stopReason, reasons };
+  if (durationMs >= PRODUCTION_LIMITS.hardTimeBudgetMs) reasons.push("COLLECTOR_HARD_TIME_BUDGET");
+  return { ...primary, status: reasons.length ? "DEGRADED" : "HEALTHY", capturedPostCount: captured, captureRatio: primary.visibleCardCount ? Math.min(1, captured / primary.visibleCardCount) : captured ? 1 : 0, durationMs, stopReason: improved ? "SEARCH_FALLBACK_COMPLETED" : primary.stopReason, reasons: [...new Set(reasons)] };
 }
 
 function mergePosts(posts) {
-  const map = new Map();
-  for (const post of posts) {
-    const current = map.get(post.postId);
-    map.set(post.postId, current ? { ...current, author: current.author || post.author, text: longer(current.text, post.text), publishedAt: current.publishedAt || post.publishedAt, timestampText: current.timestampText || post.timestampText, discoveryLayers: [...new Set([...(current.discoveryLayers || []), ...(post.discoveryLayers || [])])], firstSeenIteration: Math.min(current.firstSeenIteration, post.firstSeenIteration), media: mergeMedia([...(current.media || []), ...(post.media || [])]) } : post);
-  }
-  return [...map.values()];
+  return globalThis.FlipFacebookCollectorCore.mergeRecords(posts, PRODUCTION_LIMITS.maxPosts);
 }
-function mergeMedia(media) { return [...new Map(media.map((item) => [item.mediaId || item.url, item])).values()]; }
-function longer(a, b) { return !a ? b : !b ? a : b.length > a.length ? b : a; }
+function isLikelySellText(post) { return /\b(?:sprzedam|na\s+sprzedaz|do\s+sprzedania|off\s*market|mam\s+do\s+zaoferowania)\b/i.test(String(post?.text || "")); }
+async function setCollectorState(state) { await chrome.storage.local.set({ collectorState: { ...state } }).catch(() => {}); }
 async function configValue() { return chrome.storage.local.get(["apiUrl", "deviceId", "deviceToken", "sources"]); }
 async function waitForTab(tabId, timeoutMs) {
   const start = Date.now();
@@ -159,6 +181,6 @@ async function waitForContentScript(tabId) {
 }
 async function sha256Hex(value) { return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))); }
 function hex(buffer) { return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
-function isFacebookSource(value) { try { const url = new URL(value); return url.hostname === "www.facebook.com" && !/\/login|\/checkpoint/i.test(url.pathname); } catch { return false; } }
+function isProductionSource(value) { try { const url = new URL(value); url.search = ""; url.hash = ""; url.pathname = `${url.pathname.replace(/\/+$/, "")}/`; return url.protocol === "https:" && url.hostname === "www.facebook.com" && url.toString() === PRODUCTION_SOURCE_URL; } catch { return false; } }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function safeError(error) { return error instanceof Error ? error.message.slice(0, 400) : "COLLECTOR_FAILED"; }

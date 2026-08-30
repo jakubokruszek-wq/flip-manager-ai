@@ -17,6 +17,11 @@ export function collectorPostsForProcessing(batch: FacebookCollectorBatch, now =
     mediaCandidates: [],
     publishedAt: post.publishedAt,
     vision: null,
+    discoverySource: post.discoverySource,
+    searchQuery: post.searchQuery,
+    searchQueries: post.searchQueries,
+    foundInMainFeed: post.foundInMainFeed,
+    firstSeenPhase: post.firstSeenPhase,
   }));
 }
 
