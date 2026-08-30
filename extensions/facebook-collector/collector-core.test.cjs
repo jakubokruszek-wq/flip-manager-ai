@@ -59,6 +59,78 @@ test("ground-truth ids retain discovery layer and first iteration", () => {
   assert.equal(core.parsePostLink("https://www.facebook.com/groups/foreign/posts/1577700267381450/", source), null);
 });
 
+test("photo media fbid is never promoted to a canonical post id", () => {
+  assert.equal(core.parsePostLink("https://www.facebook.com/photo/?fbid=28074641558832168&set=pcb.1576413074176836", source), null);
+  assert.equal(core.parsePostLink("https://www.facebook.com/photo.php?fbid=28074641558832168", source), null);
+});
+
+test("search media resolver binds five tiles to five distinct exact container stories", () => {
+  const photos = Array.from({ length: 5 }, (_, index) => {
+    const mediaId = `2807464155883216${index}`;
+    const postId = `157641307417683${index}`;
+    return { __typename: "Photo", id: mediaId, image: { uri: `https://scontent.xx.fbcdn.net/${mediaId}.jpg` }, container_story: { __typename: "Story", post_id: postId, url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/${postId}/`, actors: [{ name: `Author ${index}` }], message: { text: `Exact text ${index}` } } };
+  });
+  const body = JSON.stringify({ data: { photos } });
+  const records = photos.flatMap((photo) => core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, photo.id));
+  assert.deepEqual(records.map((record) => record.postId), photos.map((photo) => photo.container_story.post_id));
+  assert.equal(new Set(records.map((record) => record.postId)).size, 5);
+  records.forEach((record, index) => {
+    assert.equal(record.author, `Author ${index}`);
+    assert.equal(record.text, `Exact text ${index}`);
+    assert.equal(record.identityConfidence, "EXACT");
+    assert.equal(record.media[0].mediaId, photos[index].id);
+    assert.equal(record.media[0].exactPostId, record.postId);
+    assert.equal(record.media[0].exactAssociation, true);
+  });
+});
+
+test("search media resolver cannot leak a neighboring story and fails closed without full identity", () => {
+  const body = JSON.stringify({ data: [
+    { __typename: "Photo", id: "28074641558832168", image: { uri: "https://scontent.xx.fbcdn.net/expected.jpg" }, container_story: { __typename: "Story", post_id: "1576413074176836", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/1576413074176836/", actors: [{ name: "Expected Author" }], message: { text: "Expected text" } } },
+    { __typename: "Photo", id: "28074642035498787", image: { uri: "https://scontent.xx.fbcdn.net/neighbor.jpg" }, container_story: { __typename: "Story", post_id: "1576413094176834", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/1576413094176834/", actors: [{ name: "Neighbor Author" }], message: { text: "Neighbor text" } } },
+  ] });
+  const [record] = core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, "28074641558832168");
+  assert.equal(record.postId, "1576413074176836");
+  assert.equal(record.author, "Expected Author");
+  assert.equal(record.text, "Expected text");
+  assert.equal(core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, "99999999999999999").length, 0);
+
+  const [unverified] = core.resolveSearchMediaParentFromText(JSON.stringify({ __typename: "Photo", id: "28074641558832168", image: { uri: "https://scontent.xx.fbcdn.net/expected.jpg" }, container_story: { __typename: "Story", post_id: "1576413074176836", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/1576413074176836/", message: { text: "No author" } } }), "SEARCH_MEDIA_RESOLVE", source, "28074641558832168");
+  assert.equal(unverified.identityConfidence, "UNVERIFIED");
+  assert.equal(unverified.media[0].exactAssociation, false);
+});
+
+test("search media resolver accepts explicit top-level tracking binding without importing unverified media", () => {
+  const story = { __typename: "Story", post_id: "1576413074176836", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/1576413074176836/", actors: [{ name: "Anna" }], message: { text: "Sprzedam mieszkanie" }, tracking: JSON.stringify({ top_level_post_id: "1576413074176836", photo_attachments_list: ["28074641558832168", "28074642035498787"] }) };
+  const [record] = core.resolveSearchMediaParentFromText(JSON.stringify(story), "SEARCH_MEDIA_RESOLVE", source, "28074642035498787");
+  assert.equal(record.postId, "1576413074176836");
+  assert.equal(record.identityConfidence, "EXACT");
+  assert.deepEqual(record.identityReasons, ["STRUCTURED_EXACT_MEDIA_TRACKING_TO_STORY"]);
+  assert.deepEqual(record.media, []);
+  assert.equal(core.resolveSearchMediaParentFromText(JSON.stringify(story), "SEARCH_MEDIA_RESOLVE", source, "99999999999999999").length, 0);
+});
+
+test("verified media parent gate rejects ambiguity and wrong association", () => {
+  const record = (postId, mediaId, exactPostId = postId) => ({ postId, permalink: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`, sourceId: source.sourceId, sourceType: "GROUP", author: "Anna", text: "Sprzedam mieszkanie", media: [{ url: `https://scontent.xx.fbcdn.net/${mediaId}.jpg`, mediaId, exactPostId, exactAssociation: exactPostId === postId }], identityConfidence: "EXACT", identityReasons: ["STRUCTURED_EXACT_MEDIA_CONTAINER_STORY"], discoveryLayers: ["SEARCH_MEDIA_RESOLVE"], firstSeenIteration: 0 });
+  const expectedMediaId = "28074641558832168";
+  assert.equal(core.verifySearchMediaParent([record("1576413074176836", expectedMediaId), record("1576413080843502", expectedMediaId)], expectedMediaId).status, "UNVERIFIED");
+  assert.equal(core.verifySearchMediaParent([record("1576413074176836", expectedMediaId, "1576413080843502")], expectedMediaId).status, "UNVERIFIED");
+  const verified = core.verifySearchMediaParent([record("1576413074176836", expectedMediaId)], expectedMediaId);
+  assert.equal(verified.status, "VERIFIED");
+  assert.equal(verified.records[0].resolvedFromMediaTile, true);
+  assert.deepEqual(verified.records[0].media, []);
+});
+
+test("five resolved media tiles collapse to one parent with complete discovery provenance", () => {
+  const postId = "1576413074176836";
+  const records = Array.from({ length: 5 }, (_, index) => ({ postId, permalink: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`, sourceId: source.sourceId, sourceType: "GROUP", author: "Anna Balcerek", text: "Sprzedam 3 pokoje, 46,77 m2", media: [], identityConfidence: "EXACT", identityReasons: ["STRUCTURED_EXACT_MEDIA_CONTAINER_STORY"], discoveryLayers: ["SEARCH_MEDIA_RESOLVE"], firstSeenIteration: 0, discoverySource: "SEARCH", searchQuery: "sprzedam", searchQueries: ["sprzedam"], foundInMainFeed: false, firstSeenPhase: "SEARCH", resolvedFromMediaTile: true, mediaIds: [`2807464155883216${index}`], parentResolutionEvidence: ["STRUCTURED_EXACT_MEDIA_CONTAINER_STORY"] }));
+  const merged = core.mergeRecords(records);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].mediaIds.length, 5);
+  assert.deepEqual(merged[0].media, []);
+  assert.equal(merged[0].identityConfidence, "EXACT");
+});
+
 test("structured records without an exact source permalink fail closed", () => {
   const records = core.extractStructuredRecordsFromText(JSON.stringify({ __typename: "Story", post_id: "1577700267381450", message: { text: "Sprzedam mieszkanie" } }), "NETWORK", source, 0);
   assert.deepEqual(records, []);

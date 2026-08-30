@@ -12,6 +12,43 @@ test("normalizes a healthy exact-source collector batch and deduplicates posts",
   assert.equal(batch.posts[0]?.media[0]?.exactAssociation, true);
 });
 
+test("normalizes bounded per-query search telemetry without affecting post identity", () => {
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111",
+    batchId: "22222222-2222-4222-8222-222222222222",
+    sourceId,
+    sourceType: "GROUP",
+    sourceUrl: `https://www.facebook.com/groups/${sourceId}/`,
+    collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "DEGRADED", visibleCardCount: 0, capturedPostCount: 0, scrolls: 5, durationMs: 90_000, stopReason: "SEARCH_GLOBAL_TIME_BUDGET", reasons: ["COLLECTOR_SEARCH_GLOBAL_TIME_BUDGET"] },
+    searchTelemetry: {
+      hardTimeBudgetMs: 90_000,
+      durationMs: 90_000,
+      queriesPlanned: 6,
+      queriesExecuted: 5,
+      budgetExhausted: true,
+      queries: [{ query: "sprzedam", executed: true, status: "HEALTHY", scrolls: 3, visibleCards: 12, captured: 1, unique: 1, duplicatesVsMainFeed: 0, uniqueContribution: 1, sellContribution: 1, tilesSeen: 5, tilesOpened: 5, tilesResolved: 5, tilesUnverified: 0, uniqueParentPosts: 1, verifiedParentPosts: 1, duplicatesByMedia: 4, durationMs: 14_500, stopReason: "MAX_SCROLLS" }],
+    },
+    posts: [],
+  });
+  assert.equal(batch.searchTelemetry?.hardTimeBudgetMs, 90_000);
+  assert.equal(batch.searchTelemetry?.budgetExhausted, true);
+  assert.deepEqual(batch.searchTelemetry?.queries[0], { query: "sprzedam", executed: true, status: "HEALTHY", scrolls: 3, visibleCards: 12, captured: 1, unique: 1, duplicatesVsMainFeed: 0, uniqueContribution: 1, sellContribution: 1, tilesSeen: 5, tilesOpened: 5, tilesResolved: 5, tilesUnverified: 0, uniqueParentPosts: 1, verifiedParentPosts: 1, duplicatesByMedia: 4, durationMs: 14_500, stopReason: "MAX_SCROLLS" });
+});
+
+test("preserves verified media-tile discovery provenance without gallery media", () => {
+  const postId = "1576413074176836";
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "HEALTHY", visibleCardCount: 0, capturedPostCount: 1, scrolls: 3, durationMs: 14_000, stopReason: "SEARCH_FALLBACK_COMPLETED", reasons: [] },
+    posts: [{ postId, permalink: `https://www.facebook.com/groups/${sourceId}/posts/${postId}/`, sourceId, sourceType: "GROUP", author: "Anna Balcerek", text: "Sprzedam 3 pokoje, 46,77 m2", media: [], discoveryLayers: ["SEARCH_MEDIA_RESOLVE"], firstSeenIteration: 0, identityConfidence: "EXACT", identityReasons: ["STRUCTURED_EXACT_MEDIA_CONTAINER_STORY"], discoverySource: "SEARCH", searchQuery: "sprzedam", searchQueries: ["sprzedam"], foundInMainFeed: false, firstSeenPhase: "SEARCH", resolvedFromMediaTile: true, mediaIds: ["28074641558832168"], parentResolutionEvidence: ["STRUCTURED_EXACT_MEDIA_CONTAINER_STORY"] }],
+  });
+  assert.equal(batch.posts[0]?.resolvedFromMediaTile, true);
+  assert.deepEqual(batch.posts[0]?.mediaIds, ["28074641558832168"]);
+  assert.deepEqual(batch.posts[0]?.media, []);
+  assert.equal(batch.posts[0]?.identityConfidence, "EXACT");
+});
+
 test("fails closed on source mismatch and forged media association", () => {
   const raw = { scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z", health: { status: "HEALTHY", visibleCardCount: 1, capturedPostCount: 1, scrolls: 3, durationMs: 5000, stopReason: "MAX_POSTS", reasons: [] }, posts: [{ postId: "1577700267381450", permalink: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, sourceId, sourceType: "GROUP", media: [{ url: "https://scontent.example/image.jpg", exactPostId: "foreign", exactAssociation: true }], discoveryLayers: ["DOM"], firstSeenIteration: 0 }] };
   const batch = normalizeFacebookCollectorBatch(raw);

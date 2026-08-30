@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"));
 const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8");
+const content = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
 const popup = fs.readFileSync(path.join(__dirname, "popup.js"), "utf8");
 const pairing = fs.readFileSync(path.join(__dirname, "pairing.js"), "utf8");
 const options = fs.readFileSync(path.join(__dirname, "options.js"), "utf8");
@@ -15,7 +16,7 @@ const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
   assert.match(background, /chrome\.scripting\.executeScript/);
-  assert.match(background, /attempt === 10/);
+  assert.match(background, /Math\.min\(10,/);
 });
 
 test("production active-source flow is allowlisted, deep, single-click and bounded", () => {
@@ -26,6 +27,34 @@ test("production active-source flow is allowlisted, deep, single-click and bound
   assert.match(background, /ACTIVE_SEARCH_QUERIES/);
   assert.match(background, /PRODUCTION_SOURCE_NOT_ALLOWED/);
   assert.match(background, /importScripts\("collector-core\.js"\)/);
+});
+
+test("search fallback has bounded media-tile resolution budgets", () => {
+  assert.match(background, /SEARCH_LIMITS = \{ minScrolls: 0, maxScrolls: 3, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 15_000, discoveryBudgetMs: 5_000, hardTimeBudgetMs: 90_000 \}/);
+  assert.match(background, /minScrolls: SEARCH_LIMITS\.minScrolls/);
+  assert.match(background, /maxScrolls: SEARCH_LIMITS\.maxScrolls/);
+  assert.match(background, /maxPosts: SEARCH_LIMITS\.maxUniquePerQuery/);
+  assert.match(background, /maxMediaTiles: SEARCH_LIMITS\.maxTilesToOpen/);
+  assert.match(background, /COLLECTOR_SEARCH_GLOBAL_TIME_BUDGET/);
+  assert.match(background, /COLLECTOR_SEARCH_QUERY_DEGRADED/);
+  assert.match(background, /appendUnexecutedSearchRuns/);
+  assert.match(background, /resolveSearchMediaTiles/);
+  assert.match(background, /RESOLVE_SEARCH_MEDIA_TILE/);
+  assert.match(background, /Math\.min\(SEARCH_LIMITS\.tileConcurrency, selected\.length\)/);
+  assert.doesNotMatch(background, /Promise\.all\(selected\.map/);
+});
+
+test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {
+  for (const field of ["query", "scrolls", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "durationMs", "stopReason"]) {
+    assert.match(background, new RegExp(`\\b${field}\\b`));
+  }
+  assert.match(background, /searchTelemetry: searchTelemetrySummary/);
+});
+
+test("media tile resolver is exact, fail-closed and never forwards tile media as gallery provenance", () => {
+  assert.match(content, /current\.searchParams\.get\("fbid"\) !== mediaId/);
+  assert.match(content, /verifySearchMediaParent/);
+  assert.doesNotMatch(content, /postId:\s*mediaId/);
 });
 
 test("Flip Finder bridge starts the production collector after readiness verification", () => {

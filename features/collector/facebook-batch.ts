@@ -1,4 +1,4 @@
-export const COLLECTOR_DISCOVERY_LAYERS = ["DOM", "HYDRATION", "NETWORK", "SEARCH_DOM", "SEARCH_HYDRATION", "SEARCH_NETWORK"] as const;
+export const COLLECTOR_DISCOVERY_LAYERS = ["DOM", "HYDRATION", "NETWORK", "SEARCH_DOM", "SEARCH_HYDRATION", "SEARCH_NETWORK", "SEARCH_MEDIA_RESOLVE"] as const;
 export type CollectorDiscoveryLayer = (typeof COLLECTOR_DISCOVERY_LAYERS)[number];
 export type CollectorSourceType = "GROUP" | "PROFILE";
 export type CollectorDiscoveryHealth = "HEALTHY" | "DEGRADED" | "FAILED";
@@ -33,6 +33,9 @@ export type CollectorPostRecord = {
   searchQueries: string[];
   foundInMainFeed: boolean;
   firstSeenPhase: CollectorFirstSeenPhase;
+  resolvedFromMediaTile: boolean;
+  mediaIds: string[];
+  parentResolutionEvidence: string[];
 };
 
 export type CollectorSourceHealth = {
@@ -46,6 +49,37 @@ export type CollectorSourceHealth = {
   reasons: string[];
 };
 
+export type CollectorSearchQueryTelemetry = {
+  query: string;
+  executed: boolean;
+  status: CollectorDiscoveryHealth;
+  scrolls: number;
+  visibleCards: number;
+  captured: number;
+  unique: number;
+  duplicatesVsMainFeed: number;
+  uniqueContribution: number;
+  sellContribution: number;
+  tilesSeen: number;
+  tilesOpened: number;
+  tilesResolved: number;
+  tilesUnverified: number;
+  uniqueParentPosts: number;
+  verifiedParentPosts: number;
+  duplicatesByMedia: number;
+  durationMs: number;
+  stopReason: string;
+};
+
+export type CollectorSearchTelemetry = {
+  hardTimeBudgetMs: number;
+  durationMs: number;
+  queriesPlanned: number;
+  queriesExecuted: number;
+  budgetExhausted: boolean;
+  queries: CollectorSearchQueryTelemetry[];
+};
+
 export type FacebookCollectorBatch = {
   scanId: string;
   batchId: string;
@@ -54,6 +88,7 @@ export type FacebookCollectorBatch = {
   sourceUrl: string;
   collectedAt: string;
   health: CollectorSourceHealth;
+  searchTelemetry: CollectorSearchTelemetry | null;
   posts: CollectorPostRecord[];
 };
 
@@ -74,6 +109,7 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
     sourceUrl,
     collectedAt: isoDate(value.collectedAt, "COLLECTOR_COLLECTED_AT_INVALID"),
     health,
+    searchTelemetry: normalizeSearchTelemetry(value.searchTelemetry),
     posts: deduped,
   };
 }
@@ -130,6 +166,9 @@ function normalizePost(value: unknown, sourceId: string, sourceType: CollectorSo
     searchQueries: Array.isArray(value.searchQueries) ? value.searchQueries.filter((item): item is string => typeof item === "string").map((item) => item.trim().slice(0, 120)).filter(Boolean).slice(0, 20) : [],
     foundInMainFeed: value.foundInMainFeed === true || value.discoverySource !== "SEARCH",
     firstSeenPhase: value.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED",
+    resolvedFromMediaTile: value.resolvedFromMediaTile === true,
+    mediaIds: Array.isArray(value.mediaIds) ? value.mediaIds.filter((item): item is string => typeof item === "string" && /^\d{5,30}$/.test(item)).slice(0, 30) : [],
+    parentResolutionEvidence: Array.isArray(value.parentResolutionEvidence) ? value.parentResolutionEvidence.filter((item): item is string => typeof item === "string").map((item) => item.slice(0, 120)).slice(0, 10) : [],
   };
 }
 
@@ -149,6 +188,45 @@ function normalizeHealth(value: unknown, captured: number): CollectorSourceHealt
   const count = nonnegativeInteger(value.capturedPostCount);
   if (count !== captured) throw new Error("COLLECTOR_CAPTURE_COUNT_MISMATCH");
   return { status, visibleCardCount: visible, capturedPostCount: count, captureRatio: visible === 0 ? (count > 0 ? 1 : 0) : Math.min(1, count / visible), scrolls: nonnegativeInteger(value.scrolls), durationMs: nonnegativeInteger(value.durationMs), stopReason: requiredString(value.stopReason, "COLLECTOR_STOP_REASON_REQUIRED").slice(0, 120), reasons: Array.isArray(value.reasons) ? value.reasons.filter((item): item is string => typeof item === "string").slice(0, 20) : [] };
+}
+
+function normalizeSearchTelemetry(value: unknown): CollectorSearchTelemetry | null {
+  if (value === null || value === undefined) return null;
+  if (!isRecord(value)) throw new Error("COLLECTOR_SEARCH_TELEMETRY_INVALID");
+  const queries = Array.isArray(value.queries) ? value.queries.slice(0, 20).map(normalizeSearchQueryTelemetry) : [];
+  return {
+    hardTimeBudgetMs: boundedInteger(value.hardTimeBudgetMs, 1_000, 90_000),
+    durationMs: boundedInteger(value.durationMs, 0, 120_000),
+    queriesPlanned: boundedInteger(value.queriesPlanned, 0, 20),
+    queriesExecuted: boundedInteger(value.queriesExecuted, 0, queries.length),
+    budgetExhausted: value.budgetExhausted === true,
+    queries,
+  };
+}
+
+function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTelemetry {
+  if (!isRecord(value)) throw new Error("COLLECTOR_SEARCH_QUERY_TELEMETRY_INVALID");
+  return {
+    query: requiredString(value.query, "COLLECTOR_SEARCH_QUERY_REQUIRED").slice(0, 120),
+    executed: value.executed === true,
+    status: enumValue(value.status, ["HEALTHY", "DEGRADED", "FAILED"] as const, "COLLECTOR_SEARCH_QUERY_STATUS_INVALID"),
+    scrolls: boundedInteger(value.scrolls, 0, 30),
+    visibleCards: boundedInteger(value.visibleCards, 0, 10_000),
+    captured: boundedInteger(value.captured, 0, 100),
+    unique: boundedInteger(value.unique, 0, 100),
+    duplicatesVsMainFeed: boundedInteger(value.duplicatesVsMainFeed, 0, 100),
+    uniqueContribution: boundedInteger(value.uniqueContribution, 0, 100),
+    sellContribution: boundedInteger(value.sellContribution, 0, 100),
+    tilesSeen: boundedInteger(value.tilesSeen, 0, 10_000),
+    tilesOpened: boundedInteger(value.tilesOpened, 0, 10),
+    tilesResolved: boundedInteger(value.tilesResolved, 0, 10),
+    tilesUnverified: boundedInteger(value.tilesUnverified, 0, 10_000),
+    uniqueParentPosts: boundedInteger(value.uniqueParentPosts, 0, 10),
+    verifiedParentPosts: boundedInteger(value.verifiedParentPosts, 0, 10),
+    duplicatesByMedia: boundedInteger(value.duplicatesByMedia, 0, 10),
+    durationMs: boundedInteger(value.durationMs, 0, 120_000),
+    stopReason: requiredString(value.stopReason, "COLLECTOR_SEARCH_QUERY_STOP_REASON_REQUIRED").slice(0, 120),
+  };
 }
 
 function facebookSourceUrl(value: string, type: CollectorSourceType): string {
@@ -184,6 +262,7 @@ function nullableIsoDate(value: unknown): string | null { return value === null 
 function requiredString(value: unknown, code: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(code); return value.trim(); }
 function nullableString(value: unknown, max: number): string | null { return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null; }
 function nonnegativeInteger(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
+function boundedInteger(value: unknown, min: number, max: number): number { return Math.min(max, Math.max(min, nonnegativeInteger(value))); }
 function safeHttpsUrl(value: unknown): string | null { if (typeof value !== "string") return null; try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password ? url.toString() : null; } catch { return null; } }
 function enumValue<const T extends readonly string[]>(value: unknown, options: T, code: string): T[number] { if (typeof value !== "string" || !options.includes(value)) throw new Error(code); return value as T[number]; }
 function isRecord(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }

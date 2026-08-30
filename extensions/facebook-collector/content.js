@@ -15,10 +15,31 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (message?.type === "COLLECTOR_PING") { respond({ ready: true }); return false; }
+    if (message?.type === "RESOLVE_SEARCH_MEDIA_TILE") { respond({ ok: true, result: resolveSearchMediaTile(message.options || {}) }); return false; }
     if (message?.type !== "COLLECT_SOURCE") return false;
     void collectSource(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
   });
+
+  function resolveSearchMediaTile(options) {
+    const mediaId = String(options.mediaId || "");
+    const source = core.canonicalSource(options.sourceUrl);
+    const current = new URL(location.href);
+    if (!source || source.sourceType !== "GROUP" || !/^\d{5,30}$/.test(mediaId)) return { status: "UNVERIFIED", records: [], reasons: ["SEARCH_MEDIA_RESOLVE_INPUT_INVALID"] };
+    if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("fbid") !== mediaId) return { status: "UNVERIFIED", records: [], reasons: ["SEARCH_MEDIA_TILE_CONTEXT_MISMATCH"] };
+    const candidates = [];
+    let bytes = 0;
+    for (const script of [...document.scripts].slice(0, 250)) {
+      const body = script.textContent || "";
+      if (!body || bytes + body.length > 4_000_000) continue;
+      bytes += body.length;
+      candidates.push(...core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId, 0));
+    }
+    const verified = core.verifySearchMediaParent(candidates, mediaId);
+    if (verified.status !== "VERIFIED") return verified;
+    const records = verified.records.map((record) => ({ ...record, discoverySource: "SEARCH", foundInMainFeed: false, firstSeenPhase: "SEARCH", searchQuery: String(options.searchQuery || "").slice(0, 120) || null, searchQueries: options.searchQuery ? [String(options.searchQuery).slice(0, 120)] : [] }));
+    return { ...verified, records };
+  }
 
   async function collectSource(options) {
     const source = core.canonicalSource(location.href);
@@ -26,12 +47,14 @@
     const maxScrolls = clamp(options.maxScrolls, 0, 30, 30);
     const minScrolls = clamp(options.minScrolls, 0, maxScrolls, 3);
     const maxPosts = clamp(options.maxPosts, 1, 50, 50);
+    const maxMediaTiles = clamp(options.maxMediaTiles, 1, 100, 10);
     const budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
     const searchMode = options.searchMode === true;
     const layerPrefix = searchMode ? "SEARCH_" : "";
     const start = performance.now();
     const iterations = [];
     let records = [];
+    const searchMediaTiles = new Map();
     let scrolls = 0;
     let consecutiveNoNew = 0;
     let consecutiveNoVisibleGrowth = 0;
@@ -43,6 +66,7 @@
     let stopReason = "MAX_SCROLLS";
 
     for (let iteration = 0; ; iteration += 1) {
+      if (searchMode) for (const tile of collectSearchMediaTiles()) searchMediaTiles.set(tile.mediaId, tile);
       const dom = collectDom(source, iteration, `${layerPrefix}DOM`);
       const hydration = collectHydration(source, iteration, `${layerPrefix}HYDRATION`);
       const network = [...networkRecords.values()].map((record) => ({ ...record, firstSeenIteration: record.firstSeenIteration ?? iteration, discoveryLayers: [`${layerPrefix}NETWORK`] }));
@@ -64,7 +88,7 @@
       const scrollHeight = container.scrollHeight;
       iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: cards.length, newVisibleCardsThisIteration: newVisibleCards, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, consecutiveOldNewPosts, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses });
       previousNetworkResponses = networkResponses;
-      const decision = core.shouldStopDiscovery({ durationMs: performance.now() - start, budgetMs, uniqueCount: records.length, maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, consecutiveOldNewPosts });
+      const decision = searchMode && scrolls >= minScrolls && searchMediaTiles.size >= maxMediaTiles ? "MAX_SEARCH_MEDIA_TILES" : core.shouldStopDiscovery({ durationMs: performance.now() - start, budgetMs, uniqueCount: records.length, maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, consecutiveOldNewPosts });
       if (decision) { stopReason = decision; break; }
       const moved = scrollContainer(container);
       scrolls += 1;
@@ -84,7 +108,25 @@
       foundInMainFeed: !searchMode,
       firstSeenPhase: searchMode ? "SEARCH" : "MAIN_FEED",
     }));
-    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, maxPosts), health, iterations: iterations.slice(0, 31) };
+    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, 100), health, iterations: iterations.slice(0, 31) };
+  }
+
+  function collectSearchMediaTiles() {
+    const tiles = [];
+    for (const anchor of document.querySelectorAll('a[href*="/photo/"][href*="fbid="], a[href*="/photo.php"][href*="fbid="]')) {
+      const rect = anchor.getBoundingClientRect();
+      if (rect.width < 20 || rect.height < 20 || rect.bottom < -500 || rect.top > innerHeight + 2000) continue;
+      let url;
+      try { url = new URL(anchor.href); } catch { continue; }
+      const mediaId = url.searchParams.get("fbid");
+      if (url.hostname !== "www.facebook.com" || !/^\d{5,30}$/.test(mediaId || "")) continue;
+      const photoUrl = new URL("/photo/", "https://www.facebook.com");
+      photoUrl.searchParams.set("fbid", mediaId);
+      const mediaSet = url.searchParams.get("set");
+      if (/^pcb\.\d{5,30}$/.test(mediaSet || "")) photoUrl.searchParams.set("set", mediaSet);
+      tiles.push({ mediaId, photoUrl: photoUrl.toString() });
+    }
+    return tiles;
   }
 
   function collectDom(source, iteration, layer) {

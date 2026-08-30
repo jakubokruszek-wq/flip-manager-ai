@@ -24,7 +24,12 @@
   function parsePostLink(value, source) {
     const url = safeUrl(value);
     if (!url || url.hostname !== "www.facebook.com") return null;
-    let postId = url.searchParams.get("story_fbid") || url.searchParams.get("fbid");
+    // A photo URL's `fbid` identifies media, not the enclosing post. Treating
+    // it as a post id creates an invented canonical identity. Only accept
+    // `fbid` on non-photo routes; photo results require an exact post permalink
+    // or structured story id bound to the same card.
+    const isPhotoRoute = /^\/photo(?:\.php)?(?:\/|$)/i.test(url.pathname);
+    let postId = url.searchParams.get("story_fbid") || (!isPhotoRoute ? url.searchParams.get("fbid") : null);
     let sourceId = url.searchParams.get("id") || source?.sourceId || null;
     for (const pattern of POST_PATHS) {
       const match = url.pathname.match(pattern);
@@ -64,9 +69,12 @@
         searchQueries: unique([...(current.searchQueries || []), ...(raw.searchQueries || []), ...(raw.searchQuery ? [raw.searchQuery] : [])]),
         foundInMainFeed: current.foundInMainFeed === true || raw.foundInMainFeed === true,
         firstSeenPhase: current.firstSeenPhase === "MAIN_FEED" || raw.firstSeenPhase === "MAIN_FEED" ? "MAIN_FEED" : "SEARCH",
+        resolvedFromMediaTile: current.resolvedFromMediaTile === true || raw.resolvedFromMediaTile === true,
+        mediaIds: unique([...(current.mediaIds || []), ...(raw.mediaIds || [])]),
+        parentResolutionEvidence: unique([...(current.parentResolutionEvidence || []), ...(raw.parentResolutionEvidence || [])]),
         identityConfidence: conflict || (current.identityConfidence !== "EXACT" && raw.identityConfidence !== "EXACT") ? "UNVERIFIED" : "EXACT",
         identityReasons: unique([...(current.identityReasons || []), ...(raw.identityReasons || []), ...(conflict ? ["POST_IDENTITY_CONFLICT"] : [])]),
-      } : { ...raw, discoverySource: raw.discoverySource === "SEARCH" ? "SEARCH" : "MAIN_FEED", searchQuery: raw.searchQuery || null, searchQueries: unique([...(raw.searchQueries || []), ...(raw.searchQuery ? [raw.searchQuery] : [])]), foundInMainFeed: raw.foundInMainFeed === true || raw.discoverySource !== "SEARCH", firstSeenPhase: raw.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED", identityConfidence: raw.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED", identityReasons: unique(raw.identityReasons || []), discoveryLayers: unique(raw.discoveryLayers || []), media: mergeMedia(raw.media || [], raw.postId) };
+      } : { ...raw, discoverySource: raw.discoverySource === "SEARCH" ? "SEARCH" : "MAIN_FEED", searchQuery: raw.searchQuery || null, searchQueries: unique([...(raw.searchQueries || []), ...(raw.searchQuery ? [raw.searchQuery] : [])]), foundInMainFeed: raw.foundInMainFeed === true || raw.discoverySource !== "SEARCH", firstSeenPhase: raw.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED", resolvedFromMediaTile: raw.resolvedFromMediaTile === true, mediaIds: unique(raw.mediaIds || []), parentResolutionEvidence: unique(raw.parentResolutionEvidence || []), identityConfidence: raw.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED", identityReasons: unique(raw.identityReasons || []), discoveryLayers: unique(raw.discoveryLayers || []), media: mergeMedia(raw.media || [], raw.postId) };
       merged.set(raw.postId, next);
       if (merged.size >= limit) break;
     }
@@ -101,6 +109,89 @@
       });
     });
     return mergeRecords(records);
+  }
+
+  function hasExactMediaTracking(story, postId, mediaId) {
+    let exact = false;
+    walk(story, (node) => {
+      if (exact || !isObject(node) || typeof node.tracking !== "string" || !node.tracking.includes(mediaId)) return;
+      try {
+        const tracking = JSON.parse(node.tracking);
+        exact = scalarId(tracking.top_level_post_id) === postId
+          && Array.isArray(tracking.photo_attachments_list)
+          && tracking.photo_attachments_list.some((id) => scalarId(id) === mediaId);
+      } catch { /* fail closed on non-JSON tracking */ }
+    }, 7);
+    return exact;
+  }
+
+  function resolveSearchMediaParentFromText(text, layer, source, expectedMediaId, iteration = 0) {
+    const mediaId = scalarId(expectedMediaId);
+    if (!text || !source || !mediaId) return [];
+    const roots = parseJsonBodies(String(text).slice(0, 4_000_000));
+    const records = [];
+    for (const root of roots) walk(root, (node) => {
+      if (!isObject(node) || scalarId(node.id) !== mediaId || String(node.__typename || node.typename || "").toLowerCase() !== "photo") return;
+      const story = node.container_story;
+      if (!isObject(story)) return;
+      const postId = exactStoryRootPostId(story);
+      if (!postId) return;
+      const link = findPermalink(story, postId, source);
+      if (!link || link.postId !== postId) return;
+      const author = findAuthor(story);
+      const message = findRootMessage(story);
+      const url = mediaUrl(node);
+      const exactIdentity = Boolean(author && message && url);
+      records.push({
+        postId,
+        permalink: link.permalink,
+        sourceId: source.sourceId,
+        sourceType: source.sourceType,
+        author,
+        text: message,
+        publishedAt: findTimestamp(story),
+        timestampText: null,
+        media: url ? [{ url, mediaId, exactPostId: exactIdentity ? postId : null, exactAssociation: exactIdentity, discoveryLayers: [layer] }] : [],
+        discoveryLayers: [layer],
+        firstSeenIteration: iteration,
+        identityConfidence: exactIdentity ? "EXACT" : "UNVERIFIED",
+        identityReasons: exactIdentity ? ["STRUCTURED_EXACT_MEDIA_CONTAINER_STORY"] : ["MEDIA_CONTAINER_STORY_WITHOUT_AUTHOR_TEXT_OR_URL"],
+      });
+    }, 16);
+    for (const root of roots) walk(root, (story) => {
+      const postId = exactStoryRootPostId(story);
+      if (!postId || !hasExactMediaTracking(story, postId, mediaId)) return;
+      const link = findPermalink(story, postId, source);
+      if (!link || link.postId !== postId) return;
+      const author = findAuthor(story);
+      const message = findRootMessage(story);
+      const exactIdentity = Boolean(author && message);
+      records.push({
+        postId,
+        permalink: link.permalink,
+        sourceId: source.sourceId,
+        sourceType: source.sourceType,
+        author,
+        text: message,
+        publishedAt: findTimestamp(story),
+        timestampText: null,
+        media: [],
+        discoveryLayers: [layer],
+        firstSeenIteration: iteration,
+        identityConfidence: exactIdentity ? "EXACT" : "UNVERIFIED",
+        identityReasons: exactIdentity ? ["STRUCTURED_EXACT_MEDIA_TRACKING_TO_STORY"] : ["MEDIA_TRACKING_STORY_WITHOUT_AUTHOR_OR_TEXT"],
+      });
+    }, 16);
+    return mergeRecords(records);
+  }
+
+  function verifySearchMediaParent(records, expectedMediaId) {
+    const mediaId = scalarId(expectedMediaId);
+    if (!mediaId) return { status: "UNVERIFIED", records: [], reasons: ["SEARCH_MEDIA_RESOLVE_INPUT_INVALID"] };
+    const exact = mergeRecords(records).filter((record) => record.identityConfidence === "EXACT" && (record.media || []).some((media) => media.mediaId === mediaId && media.exactAssociation === true && media.exactPostId === record.postId));
+    if (exact.length !== 1) return { status: "UNVERIFIED", records: [], reasons: [exact.length ? "SEARCH_MEDIA_MULTIPLE_PARENT_POSTS" : "SEARCH_MEDIA_EXACT_PARENT_NOT_PROVEN"] };
+    const record = exact[0];
+    return { status: "VERIFIED", records: [{ ...record, media: [], resolvedFromMediaTile: true, mediaIds: [mediaId], parentResolutionEvidence: record.identityReasons || [] }], reasons: ["SEARCH_MEDIA_EXACT_PARENT_PROVEN"] };
   }
 
   function evaluateHealth(input) {
@@ -275,5 +366,5 @@
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, extractStructuredRecordsFromText, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, extractStructuredRecordsFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
 })(globalThis);
