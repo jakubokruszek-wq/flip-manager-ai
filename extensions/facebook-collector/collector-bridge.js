@@ -14,6 +14,7 @@ window.addEventListener("message", (event) => {
   if (event.data?.type === "FLIP_COLLECTOR_BRIDGE_PING") {
     const requestId = safeRequestId(event.data.requestId);
     window.postMessage({ type: "FLIP_COLLECTOR_BRIDGE_PONG", requestId, ok: requestId !== "unknown" }, event.origin);
+    void trace(requestId, "BRIDGE_PING_RECEIVED").then(() => trace(requestId, "BRIDGE_PONG_SENT"));
     return;
   }
   if (event.data?.type === "FLIP_COLLECTOR_READY_REQUEST") {

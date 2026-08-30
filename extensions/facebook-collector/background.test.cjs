@@ -91,6 +91,8 @@ test("start trace uses request ids, bounded safe stages and never stores credent
 test("bridge exposes an independent request-id ping and explicit runtime error path", () => {
   assert.match(bridge, /FLIP_COLLECTOR_BRIDGE_PING/);
   assert.match(bridge, /FLIP_COLLECTOR_BRIDGE_PONG/);
+  assert.match(bridge, /BRIDGE_PING_RECEIVED/);
+  assert.match(bridge, /BRIDGE_PONG_SENT/);
   assert.match(bridge, /requestId/);
   assert.match(bridge, /catch/);
   assert.match(bridge, /chrome\.runtime\.sendMessage/);
