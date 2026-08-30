@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api-fetch";
 
 import {
   canRunManualScan,
+  retryCollectorReadiness,
   dashboardCount,
   filterResultsHref,
   hasLatestScan,
@@ -128,15 +129,20 @@ export function FlipFinderPage() {
     scanningFilterIdsRef.current.add(filter.id);
     setScanningFilterIds((current) => new Set(current).add(filter.id));
     setError(null);
-    setNotice(null);
+    setNotice(filter.sources.includes("facebook") ? "Łączenie z Flip Collectorem..." : null);
     setRetryFilterId(null);
+    setActiveScanRunId(null);
+    setScanProgress(null);
 
     let waitingForWorker = false;
     try {
       const usesFacebookCollector = filter.sources.includes("facebook");
       if (usesFacebookCollector) {
-        const readiness = await requestCollectorReady();
-        if (!readiness.ok) throw new Error(collectorReadinessMessage(readiness));
+        const readiness = await retryCollectorReadiness(() => requestCollectorReady(), (attempt) => {
+          if (attempt > 1) setNotice("Ponawianie połączenia z Collectorem...");
+        });
+        if (!readiness.ok) throw new Error("Nie udało się połączyć z Flip Collectorem. Otwórz rozszerzenie i sprawdź status Połączono.");
+        setNotice("Collector połączony — uruchamiam skan...");
       }
       const response = await fetch(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
@@ -913,13 +919,6 @@ function requestCollectorMessage(requestType: string, responseType: string, payl
     window.addEventListener("message", listener);
     window.postMessage({ type: requestType, ...payload }, window.location.origin);
   });
-}
-
-function collectorReadinessMessage(value: CollectorBridgeResult): string {
-  if (value.status === "RECONNECT_REQUIRED") return "Flip Collector wymaga ponownego połączenia.";
-  if (value.status === "DISCONNECTED") return "Flip Collector nie jest połączony.";
-  if (value.status === "UNVERIFIED") return "Nie udało się zweryfikować połączenia Flip Collector.";
-  return value.error || "Flip Collector jest niedostępny.";
 }
 
 function isScanProgressResponse(value: unknown): value is ScanProgressResponse {

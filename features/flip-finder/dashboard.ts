@@ -6,6 +6,19 @@ export function dashboardCount(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+export const COLLECTOR_READINESS_ATTEMPTS = 3;
+export const COLLECTOR_READINESS_RETRY_DELAY_MS = 500;
+
+export async function retryCollectorReadiness<T extends { ok: boolean }>(request: () => Promise<T>, onRetry: (attempt: number) => void, sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))): Promise<T> {
+  let last: T | null = null;
+  for (let attempt = 1; attempt <= COLLECTOR_READINESS_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) { onRetry(attempt); await sleep(COLLECTOR_READINESS_RETRY_DELAY_MS); }
+    last = await request();
+    if (last.ok) return last;
+  }
+  return last as T;
+}
+
 export function latestScanCounters(
   scan: Pick<SearchFilterScan, "listingsUpdated" | "priceDropCount">,
 ): { updatedCount: number; priceDropCount: number } {
