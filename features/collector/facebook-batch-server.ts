@@ -4,14 +4,15 @@ import { createHash } from "node:crypto";
 
 import { processFacebookPostBatch } from "@/features/facebook-worker/post-flow";
 import { importFacebookWatcher } from "@/features/facebook-watcher/server";
+import type { SearchFilter } from "@/features/flip-finder";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import type { FacebookCollectorBatch } from "./facebook-batch";
 import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts } from "./facebook-batch-policy";
+import { FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL } from "./facebook-production";
 
-export const FACEBOOK_PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
-export const FACEBOOK_PRODUCTION_SOURCE_ID = "lodzsprzedazzakupwynajem";
+export { FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL } from "./facebook-production";
 
 export type CollectorBatchResult = {
   status: "completed" | "degraded" | "failed" | "duplicate";
@@ -63,8 +64,20 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
   if (batch.health.status === "FAILED") return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), "COLLECTOR_DISCOVERY_FAILED");
 
   try {
-    const filters = await getActiveSearchFiltersForSource("facebook");
-    if (filters.length === 0) return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), "COLLECTOR_NO_ACTIVE_FACEBOOK_FILTER");
+    const existingScan = await supabase.from("source_scans")
+      .select("id,search_filter_id,filter_snapshot,status")
+      .eq("scan_run_id", batch.scanId)
+      .eq("source", "facebook")
+      .in("status", ["pending", "running"])
+      .order("started_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (existingScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_LOOKUP_FAILED: ${existingScan.error.message}`);
+    const existingScanRow = record(existingScan.data);
+    const targets: Array<{ filter: SearchFilter; sourceScanId: string | null }> = existingScanRow
+      ? [{ filter: filterFromSnapshot(existingScanRow.filter_snapshot, String(existingScanRow.search_filter_id)), sourceScanId: String(existingScanRow.id) }]
+      : (await getActiveSearchFiltersForSource("facebook")).map((filter) => ({ filter, sourceScanId: null }));
+    if (targets.length === 0) return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), "COLLECTOR_NO_ACTIVE_FACEBOOK_FILTER");
     const history = await supabase.from("collector_scan_batches").select("payload").eq("source_id", batch.sourceId).neq("id", batchRowId).order("received_at", { ascending: false }).limit(50);
     if (history.error) throw new Error(`COLLECTOR_IDENTITY_HISTORY_QUERY_FAILED: ${history.error.message}`);
     const historicalIdentityConflicts = findHistoricalCollectorIdentityConflicts(batch, (history.data ?? []).map((row) => row.payload));
@@ -73,10 +86,18 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     const posts = collectorPostsForProcessing(batch, Date.now(), historicalIdentityConflicts);
     const unverifiedIdentityCount = batch.posts.filter((post) => post.identityConfidence !== "EXACT" || historicalIdentityConflicts.has(post.postId)).length;
     const authors = new Map(batch.posts.map((post) => [post.postId, post.author]));
-    for (const filter of filters) {
-      const sourceScan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "running", scan_run_id: batch.scanId, filter_snapshot: filter, diagnostics: [{ collectorBatchId: batch.batchId, discoveryHealth: batch.health.status }] }).select("id").single();
-      if (sourceScan.error || !sourceScan.data?.id) throw new Error(`COLLECTOR_SOURCE_SCAN_CREATE_FAILED: ${sourceScan.error?.message ?? "missing id"}`);
-      const sourceScanId = String(sourceScan.data.id); sourceScanIds.push(sourceScanId);
+    for (const target of targets) {
+      const filter = target.filter;
+      let sourceScanId = target.sourceScanId;
+      if (!sourceScanId) {
+        const sourceScan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "running", scan_run_id: batch.scanId, filter_snapshot: filter, diagnostics: [{ collectorBatchId: batch.batchId, discoveryHealth: batch.health.status }] }).select("id").single();
+        if (sourceScan.error || !sourceScan.data?.id) throw new Error(`COLLECTOR_SOURCE_SCAN_CREATE_FAILED: ${sourceScan.error?.message ?? "missing id"}`);
+        sourceScanId = String(sourceScan.data.id);
+      } else {
+        const sourceScan = await supabase.from("source_scans").update({ status: "running", error_message: null, diagnostics: [{ collectorBatchId: batch.batchId, discoveryHealth: batch.health.status }] }).eq("id", sourceScanId).in("status", ["pending", "running"]);
+        if (sourceScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_START_FAILED: ${sourceScan.error.message}`);
+      }
+      sourceScanIds.push(sourceScanId);
       const summary = await processFacebookPostBatch(posts, (post) => importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: [], mediaCandidates: [], discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, ...COLLECTOR_IMAGE_IMPORT_OPTIONS }), { jobId: `collector:${batch.batchId}`, sourceScanId });
       processed = Math.max(processed, summary.postsProcessed);
       listingsCreated += summary.listingsCreated;
@@ -110,4 +131,9 @@ function batchForStorage(batch: FacebookCollectorBatch): Record<string, unknown>
 
 function emptyResult(batch: FacebookCollectorBatch, status: CollectorBatchResult["status"]): CollectorBatchResult { return { status, batchId: batch.batchId, captured: batch.posts.length, processed: 0, listingsCreated: 0, listingsUpdated: 0, skipped: 0, errors: status === "failed" ? 1 : 0, sourceScanIds: [], health: batch.health }; }
 function record(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
+function filterFromSnapshot(value: unknown, expectedId: string): SearchFilter {
+  const snapshot = record(value);
+  if (!snapshot || snapshot.id !== expectedId || !Array.isArray(snapshot.sources) || !snapshot.sources.includes("facebook")) throw new Error("COLLECTOR_FILTER_SNAPSHOT_INVALID");
+  return value as SearchFilter;
+}
 function safeMessage(value: unknown): string { return value instanceof Error ? value.message.slice(0, 500) : "COLLECTOR_BATCH_FAILED"; }

@@ -28,6 +28,11 @@
       "matches": ["https://flip-manager-ai.vercel.app/flip-finder/collector/setup*"],
       "js": ["pairing.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://flip-manager-ai.vercel.app/flip-finder*", "http://localhost:3000/flip-finder*"],
+      "js": ["collector-bridge.js"],
+      "run_at": "document_start"
     }
   ]
 }

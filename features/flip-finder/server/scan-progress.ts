@@ -4,6 +4,7 @@ import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/su
 import { buildOpenAICostDashboard } from "@/features/flip-finder/scan-cost";
 import {
   buildOverallProgress,
+  collectorProgressGroupFromSourceScan,
   type FacebookGroupProgress,
   type ScanProgressResponse,
   type ScanWorkUnit,
@@ -31,9 +32,13 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
   const scanRows = rows(scansResult.data);
   if (scanRows.length === 0) throw new Error("SCAN_RUN_NOT_FOUND");
   const facebookRows = rows(facebookResult.data);
+  const jobSourceScanIds = new Set(facebookRows.map((item) => string(item.source_scan_id)).filter((value): value is string => Boolean(value)));
+  const collectorSourceScans = scanRows
+    .filter((item) => item.source === "facebook" && typeof item.id === "string" && !jobSourceScanIds.has(String(item.id)))
+    .map(toCollectorGroup);
   const olxRow = row(olxResult.data);
   const units = scanRows.map(toWorkUnit).filter((value): value is ScanWorkUnit => value !== null);
-  const facebookGroups = facebookRows.map(toFacebookGroup);
+  const facebookGroups = [...facebookRows.map(toFacebookGroup), ...collectorSourceScans];
   const jobStatuses = [...facebookGroups.map((group) => group.status), ...(olxRow ? [jobStatus(olxRow.status)] : [])].filter((status): status is WorkerJobStatus => status !== null);
   const overall = buildOverallProgress(units, jobStatuses);
   const startedAt = units.map((unit) => unit.startedAt).sort()[0];
@@ -144,6 +149,10 @@ function toFacebookGroup(value: Row): FacebookGroupProgress {
     discovered: number(row(summary?.performance)?.postsDiscovered ?? summary?.postsReceived),
     processed: number(summary?.postsProcessed), errorMessage: string(value.error_message),
   };
+}
+
+function toCollectorGroup(value: Row): FacebookGroupProgress {
+  return collectorProgressGroupFromSourceScan({ id: String(value.id), status: String(value.status), scannedCount: number(value.scanned_count), errorMessage: string(value.error_message) });
 }
 
 function configuredBudget(): number | null {

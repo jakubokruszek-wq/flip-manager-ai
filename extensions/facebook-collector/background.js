@@ -36,6 +36,17 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     void collectConfiguredSources().then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
   }
+  if (message?.type === "CHECK_COLLECTOR_READY") {
+    void checkCollectorReady().then(respond).catch((error) => respond({ ok: false, status: "UNVERIFIED", error: safeError(error) }));
+    return true;
+  }
+  if (message?.type === "COLLECT_PRODUCTION_SOURCE") {
+    const scanId = typeof message.scanId === "string" && isUuid(message.scanId) ? message.scanId : null;
+    if (!scanId) { respond({ ok: false, error: "COLLECTOR_SCAN_ID_INVALID" }); return false; }
+    void collectConfiguredSources(scanId).catch(() => {});
+    respond({ ok: true, accepted: true, scanId });
+    return false;
+  }
   if (message?.type === "GET_COLLECTOR_STATE") {
     void chrome.storage.local.get(["collectorState", "collectorLastResult"]).then(respond);
     return true;
@@ -63,15 +74,16 @@ async function collectActiveSource() {
   return collectTabSource(tab.id, tab.url, scanId);
 }
 
-async function collectConfiguredSources() {
-  const scanId = crypto.randomUUID();
+async function collectConfiguredSources(scanId = crypto.randomUUID()) {
   let tab;
   try {
     tab = await chrome.tabs.create({ url: PRODUCTION_SOURCE_URL, active: false });
     await waitForTab(tab.id, 30_000);
     return await collectTabSource(tab.id, PRODUCTION_SOURCE_URL, scanId);
   } catch (error) {
-    return { sourceUrl: PRODUCTION_SOURCE_URL, status: "FAILED", error: safeError(error) };
+    await failCollectorScan(scanId, error);
+    await setCollectorState({ status: "failed", phase: "FAILED", progress: safeError(error), sourceUrl: PRODUCTION_SOURCE_URL, scanId, finishedAt: new Date().toISOString() });
+    return { sourceUrl: PRODUCTION_SOURCE_URL, status: "FAILED", error: safeError(error), scanId };
   } finally {
     if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
   }
@@ -79,7 +91,7 @@ async function collectConfiguredSources() {
 
 async function collectTabSource(tabId, sourceUrl, scanId) {
   const startedAtMs = Date.now();
-  await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, startedAt: new Date().toISOString() });
+  await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, scanId, startedAt: new Date().toISOString() });
   const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
   const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED" });
   let posts = primary.posts;
@@ -88,7 +100,7 @@ async function collectTabSource(tabId, sourceUrl, scanId) {
     for (const query of ACTIVE_SEARCH_QUERIES) {
       const remaining = PRODUCTION_LIMITS.hardTimeBudgetMs - (Date.now() - startedAtMs);
       if (remaining < 5_000 || posts.length >= PRODUCTION_LIMITS.maxPosts) break;
-      await setCollectorState({ status: "collecting", phase: "SEARCH", query, progress: `Przeszukiwanie: ${query}…`, sourceUrl, startedAt: new Date(startedAtMs).toISOString() });
+      await setCollectorState({ status: "collecting", phase: "SEARCH", query, progress: `Przeszukiwanie: ${query}…`, sourceUrl, scanId, startedAt: new Date(startedAtMs).toISOString() });
       const searchUrl = `https://www.facebook.com/groups/${primary.source.sourceId}/search/?q=${encodeURIComponent(query)}`;
       await chrome.tabs.update(tabId, { url: searchUrl });
       try {
@@ -107,7 +119,7 @@ async function collectTabSource(tabId, sourceUrl, scanId) {
     }
   }
   const durationMs = Date.now() - startedAtMs;
-  await setCollectorState({ status: "collecting", phase: "FINALIZE", progress: PHASE_FINALIZE, sourceUrl, startedAt: new Date(startedAtMs).toISOString() });
+  await setCollectorState({ status: "collecting", phase: "FINALIZE", progress: PHASE_FINALIZE, sourceUrl, scanId, startedAt: new Date(startedAtMs).toISOString() });
   const health = healthAfterSearch(primary.health, posts.length, searchRuns, durationMs);
   const duplicateCount = primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0) - posts.length;
   const identity = { verified: posts.filter((post) => post.identityConfidence === "EXACT").length, unverified: posts.filter((post) => post.identityConfidence !== "EXACT").length, conflictsBlocked: posts.filter((post) => (post.identityReasons || []).includes("POST_IDENTITY_CONFLICT")).length };
@@ -117,7 +129,7 @@ async function collectTabSource(tabId, sourceUrl, scanId) {
   const upload = await uploadBatch(batch);
   images.imported = upload?.listingsCreated ? images.verifiedProvenance : 0;
   const result = { scanId, sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, health, captured: posts.length, searchFallbackUsed: searchRuns.length > 0, upload, mainFeed: { captured: primary.posts.length, unique: primary.posts.length, scrolls: primary.health.scrolls, durationMs: primary.health.durationMs, stopReason: primary.health.stopReason }, search: searchRuns, merged: { totalCaptured: primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0), totalUnique: posts.length, duplicatesRemoved: Math.max(0, duplicateCount) }, identity, images, targetsFound: targets.filter((target) => posts.some((post) => post.postId === target)), iterations: primary.iterations, finishedAt: new Date().toISOString() };
-  await chrome.storage.local.set({ collectorLastResult: result, collectorState: { status: "idle", phase: "DONE", progress: PHASE_DONE, finishedAt: result.finishedAt } });
+  await chrome.storage.local.set({ collectorLastResult: result, collectorState: { status: "idle", phase: "DONE", progress: PHASE_DONE, scanId, finishedAt: result.finishedAt } });
   return result;
 }
 
@@ -140,6 +152,28 @@ async function uploadBatch(batch) {
     throw error;
   }
   return signedPost(`${apiUrl}/api/collector/facebook/batches`, JSON.stringify(batch));
+}
+
+async function checkCollectorReady() {
+  const value = await pairingStorageValue();
+  const local = globalThis.FlipCollectorPairingStatus.localPairingStatus(value);
+  if (local.status === "DISCONNECTED" || local.status === "RECONNECT_REQUIRED") return { ok: false, status: local.status, label: local.label, error: local.label };
+  try {
+    await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/heartbeat`, "{}");
+    const verified = await persistPairingVerification(value, { kind: "VALID" });
+    return { ok: true, status: verified.status, label: verified.label, lastHeartbeatAt: verified.lastHeartbeatAt, health: verified.health };
+  } catch (error) {
+    const verified = await persistPairingVerification(value, verificationOutcome(error));
+    return { ok: false, status: verified.status, label: verified.label, error: verified.reason || safeError(error) };
+  }
+}
+
+async function failCollectorScan(scanId, error) {
+  const config = await configValue();
+  if (!config.apiUrl || !config.deviceId || !config.deviceToken) return;
+  try {
+    await signedPost(`${String(config.apiUrl).replace(/\/+$/, "")}/api/collector/facebook/scans/${scanId}/fail`, JSON.stringify({ error: safeError(error) }));
+  } catch { /* preserve the original collector failure */ }
 }
 
 async function signedPost(urlValue, body) {
@@ -198,6 +232,7 @@ async function persistPairingVerification(value, outcome) {
   return { status: result.status, label: result.label, shouldVerify: result.shouldVerify, deviceLabel: result.deviceLabel, verifiedAt: result.verifiedAt, lastHeartbeatAt: result.lastHeartbeatAt, lastSuccessfulScanAt: result.lastSuccessfulScanAt, health: result.health, reason: result.reason };
 }
 function verificationOutcome(error) { const message = safeError(error); return /^COLLECTOR_UPLOAD_(?:401|403):/.test(message) ? { kind: "REVOKED", reason: message.split(":").at(-1) } : { kind: "TEMPORARY_FAILURE", reason: message }; }
+function isUuid(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 async function waitForTab(tabId, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {

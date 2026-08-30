@@ -24,7 +24,8 @@ export function latestActiveScansText(scans: SearchFilterScan[], sources: Listin
 
   return sources.map((source) => latest.get(source)).filter((scan): scan is SearchFilterScan => Boolean(scan)).map((scan) => {
     const label = sourceLabel(scan.source);
-    if (scan.status === "pending" && (scan.source === "olx" || scan.source === "facebook")) return `${label}: oczekuje na lokalny worker`;
+    if (scan.status === "pending" && scan.source === "facebook") return "Facebook: oczekuje na production Collector";
+    if (scan.status === "pending" && scan.source === "olx") return "OLX: oczekuje na lokalny worker";
     if (scan.status === "failed") return `${label}: błąd${scan.errorMessage ? ` — ${scan.errorMessage}` : ""}`;
     return `${label}: sprawdzono ${scan.scannedCount}, dopasowano ${scan.matchedCount}`;
   }).join(" · ");

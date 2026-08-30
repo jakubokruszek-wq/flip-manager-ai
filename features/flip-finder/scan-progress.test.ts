@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { budgetTone, buildOverallProgress, calculateBudget, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanWorkUnit } from "./scan-progress.ts";
+import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanWorkUnit } from "./scan-progress.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -60,6 +60,13 @@ test("completed backend units clear active scanning invariant", () => {
 test("queued Facebook work is the only source for worker waiting state", () => {
   const progress = { facebook: { groups: [{ status: "queued" }] } } as never;
   assert.equal(hasQueuedOrRunningFacebookWork(progress), true);
+});
+
+test("collector source scan is rendered as one active Facebook group", () => {
+  const group = collectorProgressGroupFromSourceScan({ id: "scan-1", status: "pending", scannedCount: 0, errorMessage: null });
+  assert.equal(group.groupId, "lodzsprzedazzakupwynajem");
+  assert.equal(group.status, "queued");
+  assert.equal(group.sourceScanId, "scan-1");
 });
 
 function unit(index: number, status: ScanWorkUnit["status"], source: ScanWorkUnit["source"] = "facebook"): ScanWorkUnit {

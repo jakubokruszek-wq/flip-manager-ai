@@ -10,6 +10,7 @@ const popup = fs.readFileSync(path.join(__dirname, "popup.js"), "utf8");
 const pairing = fs.readFileSync(path.join(__dirname, "pairing.js"), "utf8");
 const options = fs.readFileSync(path.join(__dirname, "options.js"), "utf8");
 const optionsHtml = fs.readFileSync(path.join(__dirname, "options.html"), "utf8");
+const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf8");
 
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
@@ -25,6 +26,16 @@ test("production active-source flow is allowlisted, deep, single-click and bound
   assert.match(background, /ACTIVE_SEARCH_QUERIES/);
   assert.match(background, /PRODUCTION_SOURCE_NOT_ALLOWED/);
   assert.match(background, /importScripts\("collector-core\.js"\)/);
+});
+
+test("Flip Finder bridge starts the production collector after readiness verification", () => {
+  assert.ok(manifest.content_scripts.map((item) => item.js || []).flat().includes("collector-bridge.js"));
+  assert.match(bridge, /FLIP_COLLECTOR_READY_REQUEST/);
+  assert.match(bridge, /CHECK_COLLECTOR_READY/);
+  assert.match(bridge, /FLIP_COLLECTOR_SCAN_REQUEST/);
+  assert.match(bridge, /COLLECT_PRODUCTION_SOURCE/);
+  assert.match(background, /COLLECT_PRODUCTION_SOURCE/);
+  assert.match(background, /CHECK_COLLECTOR_READY/);
 });
 
 test("pairing status autoload uses signed backend verification in popup and setup", () => {

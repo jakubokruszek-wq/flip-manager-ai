@@ -129,6 +129,19 @@ export function hasQueuedOrRunningFacebookWork(progress: Pick<ScanProgressRespon
   return progress.facebook.groups.some((group) => group.status === "queued" || group.status === "running");
 }
 
+export function collectorProgressGroupFromSourceScan(input: { id: string; status: string; scannedCount: number; errorMessage: string | null }): FacebookGroupProgress {
+  return {
+    groupId: "lodzsprzedazzakupwynajem",
+    groupName: "Łódź sprzedaż zakup wynajem",
+    jobId: `collector:${input.id}`,
+    sourceScanId: input.id,
+    status: input.status === "running" ? "running" : input.status === "completed" || input.status === "partial" ? "completed" : input.status === "failed" ? "failed" : "queued",
+    discovered: input.scannedCount,
+    processed: input.scannedCount,
+    errorMessage: input.errorMessage,
+  };
+}
+
 export function isTerminalUnitStatus(status: ScanWorkUnit["status"]): boolean {
   return status === "completed" || status === "partial" || status === "failed";
 }

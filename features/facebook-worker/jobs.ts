@@ -11,6 +11,7 @@ import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vis
 import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeFacebookGroupAssociationMetadata, readFacebookCachedMatch, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
 import { aggregateFacebookVisionRun, summarizeFacebookVisionUsage } from "./openai-pricing";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
+import { isFacebookProductionSource } from "@/features/collector/facebook-production";
 
 type Row = Record<string, unknown>;
 const LEASE_SECONDS = 180;
@@ -18,7 +19,7 @@ const LEASE_SECONDS = 180;
 export type FacebookEnqueueResult = {
   jobs: Array<{ jobId: string; sourceScanId: string; groupId: string; status: "queued" }>;
   failedGroups: Array<{ groupId: string; error: string }>;
-  reasonCode: "FACEBOOK_NO_ENABLED_GROUP" | null;
+  reasonCode: "FACEBOOK_NO_ENABLED_GROUP" | "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED" | null;
 };
 
 export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): Promise<FacebookEnqueueResult> {
@@ -26,18 +27,18 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): 
   const groups = await supabase.from("watched_facebook_groups").select("id,name,url,priority,created_at").eq("enabled", true);
   if (groups.error) throw new Error(`FACEBOOK_GROUP_QUERY_FAILED: ${groups.error.message}`);
   const watchedGroups: WatchedFacebookGroup[] = (groups.data ?? []).map((group) => ({
-    id: String(group.id), name: String(group.name), url: assertFacebookSourceUrl(String(group.url), /^\/groups\//i.test(new URL(String(group.url)).pathname) ? "GROUP" : "PROFILE").toString(), type: /^\/groups\//i.test(new URL(String(group.url)).pathname) ? "GROUP" : "PROFILE",
+    id: String(group.id), name: String(group.name), url: assertFacebookSourceUrl(String(group.url), /^\/groups\//i.test(new URL(String(group.url)).pathname) ? "GROUP" : "PROFILE").toString(), type: (/^\/groups\//i.test(new URL(String(group.url)).pathname) ? "GROUP" : "PROFILE") as "GROUP" | "PROFILE", sourceId: new URL(String(group.url)).pathname.match(/^\/groups\/([^/]+)/i)?.[1],
     priority: group.priority === "high" || group.priority === "low" ? group.priority : "normal",
     createdAt: String(group.created_at),
-  }));
+  })).filter((group) => isFacebookProductionSource(group));
   const plans = planFacebookGroupJobs(filter.id, runId, watchedGroups);
   if (plans.length === 0) {
     const terminal = await supabase.from("source_scans").insert({
       search_filter_id: filter.id, source: "facebook", status: "completed", scan_run_id: runId,
-      filter_snapshot: filter, finished_at: new Date().toISOString(), warnings: ["FACEBOOK_NO_ENABLED_GROUP"], error_message: null,
+      filter_snapshot: filter, finished_at: new Date().toISOString(), warnings: ["FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED"], error_message: null,
     });
     if (terminal.error) throw new Error(`FACEBOOK_NO_ENABLED_GROUP; SOURCE_SCAN_CREATE_FAILED: ${terminal.error.message}`);
-    return { jobs: [], failedGroups: [], reasonCode: "FACEBOOK_NO_ENABLED_GROUP" };
+    return { jobs: [], failedGroups: [], reasonCode: "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED" };
   }
   const result: FacebookEnqueueResult = { jobs: [], failedGroups: [], reasonCode: null };
   for (const plan of plans) {

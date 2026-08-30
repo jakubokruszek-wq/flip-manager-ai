@@ -133,6 +133,11 @@ export function FlipFinderPage() {
 
     let waitingForWorker = false;
     try {
+      const usesFacebookCollector = filter.sources.includes("facebook");
+      if (usesFacebookCollector) {
+        const readiness = await requestCollectorReady();
+        if (!readiness.ok) throw new Error(collectorReadinessMessage(readiness));
+      }
       const response = await fetch(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
       });
@@ -162,7 +167,15 @@ export function FlipFinderPage() {
           return;
         }
         waitingForWorker = true;
-        if (initialProgress && hasQueuedOrRunningFacebookWork(initialProgress)) {
+        if (usesFacebookCollector) {
+          const dispatch = await requestCollectorScan(payload.runId);
+          if (!dispatch.ok || dispatch.accepted !== true) {
+            waitingForWorker = false;
+            await fetch(`/api/flip-finder/scans/${payload.runId}/cancel`, { method: "POST" }).catch(() => {});
+            throw new Error(dispatch.error || "Collector nie przyjął zadania skanu.");
+          }
+          setNotice("Facebook: uruchomiono production Collector.");
+        } else if (initialProgress && hasQueuedOrRunningFacebookWork(initialProgress)) {
           setNotice("Facebook: oczekuje na lokalny worker. Pozostałe źródła zakończyły swój bieżący przebieg.");
         }
         void monitorScanRun(filter.id, payload.runId);
@@ -686,7 +699,7 @@ function LatestScanPanel({
       </dl>
 
       {scan.status === "pending" && (scan.source === "olx" || scan.source === "facebook") ? (
-        <p className="mt-5 text-sm text-muted-foreground" role="status">{sourceLabel(scan.source)}: oczekuje na lokalny worker</p>
+        <p className="mt-5 text-sm text-muted-foreground" role="status">{scan.source === "facebook" ? "Facebook: oczekuje na production Collector" : "OLX: oczekuje na lokalny worker"}</p>
       ) : null}
       {scan.status === "running" ? (
         <p className="mt-5 flex items-center gap-2 text-sm text-muted-foreground" role="status">
@@ -876,6 +889,37 @@ async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
     throw new Error(readMessage(payload, "Nie udało się pobrać postępu skanu."));
   }
   return payload;
+}
+
+type CollectorBridgeResult = { ok: boolean; accepted?: boolean; status?: string; label?: string; error?: string };
+
+function requestCollectorReady(): Promise<CollectorBridgeResult> {
+  return requestCollectorMessage("FLIP_COLLECTOR_READY_REQUEST", "FLIP_COLLECTOR_READY_RESULT");
+}
+
+function requestCollectorScan(runId: string): Promise<CollectorBridgeResult> {
+  return requestCollectorMessage("FLIP_COLLECTOR_SCAN_REQUEST", "FLIP_COLLECTOR_SCAN_RESULT", { scanId: runId });
+}
+
+function requestCollectorMessage(requestType: string, responseType: string, payload: Record<string, unknown> = {}): Promise<CollectorBridgeResult> {
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); resolve({ ok: false, error: "Nie wykryto rozszerzenia Flip Collector." }); }, 5_000);
+    function listener(event: MessageEvent) {
+      if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== responseType) return;
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", listener);
+      resolve({ ok: event.data.ok === true, accepted: event.data.accepted === true, status: typeof event.data.status === "string" ? event.data.status : undefined, label: typeof event.data.label === "string" ? event.data.label : undefined, error: typeof event.data.error === "string" ? event.data.error : undefined });
+    }
+    window.addEventListener("message", listener);
+    window.postMessage({ type: requestType, ...payload }, window.location.origin);
+  });
+}
+
+function collectorReadinessMessage(value: CollectorBridgeResult): string {
+  if (value.status === "RECONNECT_REQUIRED") return "Flip Collector wymaga ponownego połączenia.";
+  if (value.status === "DISCONNECTED") return "Flip Collector nie jest połączony.";
+  if (value.status === "UNVERIFIED") return "Nie udało się zweryfikować połączenia Flip Collector.";
+  return value.error || "Flip Collector jest niedostępny.";
 }
 
 function isScanProgressResponse(value: unknown): value is ScanProgressResponse {
