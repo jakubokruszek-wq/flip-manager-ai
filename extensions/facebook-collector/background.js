@@ -30,6 +30,19 @@ const PHASE_FINALIZE = "Scalanie wynikow i analiza ofert\u2026";
 const PHASE_DONE = "Zakonczono";
 
 const FINDER_ORIGIN = "https://flip-manager-ai.vercel.app";
+const RUNTIME_GENERATION = crypto.randomUUID();
+
+void recoverFinderBootstraps().catch(() => {});
+chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
+chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
+
+async function recoverFinderBootstraps() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id || !isFinderUrl(tab.url)) continue;
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["bootstrap.js"] }).catch(() => {});
+  }
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "RECORD_START_TRACE") {
@@ -49,8 +62,13 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_READY", status: "PASS" }).then(() => checkCollectorReady(requestId)).then(respond).catch((error) => respond({ ok: false, status: "UNVERIFIED", error: safeError(error) }));
     return true;
   }
-  if (message?.type === "BOOTSTRAP_LOADED") {
+  if (message?.type === "BOOTSTRAP_CONTEXT_HEALTH") {
     if (!isFinderUrl(_sender?.tab?.url) || message.origin !== FINDER_ORIGIN) { respond({ ok: false, error: "BOOTSTRAP_ORIGIN_NOT_ALLOWED" }); return false; }
+    respond({ ok: true, runtimeGeneration: RUNTIME_GENERATION });
+    return false;
+  }
+  if (message?.type === "BOOTSTRAP_LOADED") {
+    if (!isFinderUrl(_sender?.tab?.url) || message.origin !== FINDER_ORIGIN || message.runtimeGeneration !== RUNTIME_GENERATION) { respond({ ok: false, error: "BOOTSTRAP_CONTEXT_STALE" }); return false; }
     void chrome.storage.local.set({ collectorBootstrapRuntime: { loadedAt: new Date().toISOString(), origin: FINDER_ORIGIN, tabId: _sender.tab.id } }).then(() => respond({ ok: true }));
     return true;
   }
