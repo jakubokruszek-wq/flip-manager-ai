@@ -96,6 +96,19 @@ test("bridge exposes an independent request-id ping and explicit runtime error p
   assert.match(bridge, /chrome\.runtime\.sendMessage/);
 });
 
+test("finder bridge is matched at document start and recovery is bounded to canonical origin", () => {
+  const finder = manifest.content_scripts.find((item) => (item.js || []).includes("collector-bridge.js"));
+  assert.ok(finder);
+  assert.ok(finder.matches.includes("https://flip-manager-ai.vercel.app/flip-finder*"));
+  assert.equal(finder.run_at, "document_start");
+  assert.match(background, /chrome\.runtime\.onInstalled/);
+  assert.match(background, /chrome\.runtime\.onStartup/);
+  assert.match(background, /recoverFinderBridges/);
+  assert.match(background, /isFinderUrl/);
+  assert.match(background, /FIND-ER_ORIGIN|FINDER_ORIGIN/);
+  assert.match(bridge, /__flipCollectorBridgeInstalled/);
+});
+
 test("extension UI never reads or renders the device token", () => {
   assert.doesNotMatch(popup, /deviceToken/);
   assert.doesNotMatch(options, /deviceToken/);

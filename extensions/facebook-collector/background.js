@@ -29,6 +29,24 @@ const PHASE_MAIN_FEED = "Skanowanie feedu\u2026";
 const PHASE_FINALIZE = "Scalanie wynikow i analiza ofert\u2026";
 const PHASE_DONE = "Zakonczono";
 
+const FINDER_ORIGIN = "https://flip-manager-ai.vercel.app";
+
+chrome.runtime.onInstalled.addListener(() => { void recoverFinderBridges(); });
+chrome.runtime.onStartup.addListener(() => { void recoverFinderBridges(); });
+
+async function recoverFinderBridges() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id || !isFinderUrl(tab.url)) continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["collector-bridge.js"] });
+    } catch {
+      // Restricted tabs and closed tabs are expected; the page will show the
+      // explicit refresh guidance if the bridge remains unavailable.
+    }
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "RECORD_START_TRACE") {
     void recordStartTrace(message).then(() => respond({ ok: true })).catch(() => respond({ ok: false }));
@@ -384,5 +402,6 @@ async function waitForContentScript(tabId, timeoutMs = 10_000) {
 async function sha256Hex(value) { return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))); }
 function hex(buffer) { return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function isProductionSource(value) { try { const url = new URL(value); url.search = ""; url.hash = ""; url.pathname = `${url.pathname.replace(/\/+$/, "")}/`; return url.protocol === "https:" && url.hostname === "www.facebook.com" && url.toString() === PRODUCTION_SOURCE_URL; } catch { return false; } }
+function isFinderUrl(value) { try { const url = new URL(String(value || "")); return url.origin === FINDER_ORIGIN && url.pathname.startsWith("/flip-finder"); } catch { return false; } }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function safeError(error) { return error instanceof Error ? error.message.slice(0, 400) : "COLLECTOR_FAILED"; }

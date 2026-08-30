@@ -2,6 +2,13 @@
 
 const ALLOWED_ORIGINS = new Set(["https://flip-manager-ai.vercel.app", "http://localhost:3000"]);
 
+// A service-worker restart or extension update may reinject this file into an
+// already open tab. Keep the page listener idempotent in that case.
+if (globalThis.__flipCollectorBridgeInstalled) {
+  // The existing listener owns this page; do not register a second one.
+} else {
+globalThis.__flipCollectorBridgeInstalled = true;
+
 window.addEventListener("message", (event) => {
   if (event.source !== window || !ALLOWED_ORIGINS.has(event.origin)) return;
   if (event.data?.type === "FLIP_COLLECTOR_BRIDGE_PING") {
@@ -23,6 +30,7 @@ window.addEventListener("message", (event) => {
     window.postMessage({ type: "FLIP_COLLECTOR_SCAN_RESULT", requestId, ...publicResult(result), scanId }, event.origin);
   }).catch((error) => window.postMessage({ type: "FLIP_COLLECTOR_SCAN_RESULT", requestId, ok: false, scanId, error: safeError(error) }, event.origin));
 });
+}
 
 function publicResult(value) {
   return { ok: value?.ok === true, accepted: value?.accepted === true, status: value?.status, label: value?.label, lastHeartbeatAt: value?.lastHeartbeatAt, health: value?.health, error: value?.error };
