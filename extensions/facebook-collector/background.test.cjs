@@ -27,6 +27,7 @@ test("production active-source flow is allowlisted, deep, single-click and bound
   assert.match(background, /ACTIVE_SEARCH_QUERIES/);
   assert.match(background, /PRODUCTION_SOURCE_NOT_ALLOWED/);
   assert.match(background, /importScripts\("collector-core\.js"\)/);
+  assert.match(background, /do remontu/);
 });
 
 test("search fallback has bounded media-tile resolution budgets", () => {
@@ -65,6 +66,9 @@ test("Flip Finder bridge starts the production collector after readiness verific
   assert.match(bridge, /COLLECT_PRODUCTION_SOURCE/);
   assert.match(background, /COLLECT_PRODUCTION_SOURCE/);
   assert.match(background, /CHECK_COLLECTOR_READY/);
+  assert.match(bridge, /requestId/);
+  assert.match(background, /RECORD_START_TRACE/);
+  assert.match(background, /collectorStartTraces/);
 });
 
 test("pairing status autoload uses signed backend verification in popup and setup", () => {
@@ -74,6 +78,14 @@ test("pairing status autoload uses signed backend verification in popup and setu
   assert.match(popup, /void loadPairingStatus\(\)/);
   assert.match(pairing, /FLIP_COLLECTOR_STATUS_REQUEST/);
   assert.match(pairing, /FLIP_COLLECTOR_STATUS_RESULT/);
+});
+
+test("start trace uses request ids, bounded safe stages and never stores credentials", () => {
+  for (const stage of ["EXTENSION_RECEIVED_READY", "EXTENSION_READY_RESULT", "EXTENSION_RECEIVED_SCAN_COMMAND", "COLLECTOR_STARTED", "COLLECTOR_BATCH_CREATED"]) assert.match(background + content + bridge, new RegExp(stage));
+  assert.match(background, /safeRequestId/);
+  assert.match(background, /collectorStartTraces/);
+  assert.match(bridge, /requestId/);
+  assert.doesNotMatch(background, /collectorStartTraces[\s\S]{0,200}deviceToken/);
 });
 
 test("extension UI never reads or renders the device token", () => {

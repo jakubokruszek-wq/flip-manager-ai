@@ -30,6 +30,10 @@ const PHASE_FINALIZE = "Scalanie wynikow i analiza ofert\u2026";
 const PHASE_DONE = "Zakonczono";
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+  if (message?.type === "RECORD_START_TRACE") {
+    void recordStartTrace(message).then(() => respond({ ok: true })).catch(() => respond({ ok: false }));
+    return true;
+  }
   if (message?.type === "COLLECT_ACTIVE_SOURCE") {
     void collectActiveSource().then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
@@ -39,13 +43,15 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return true;
   }
   if (message?.type === "CHECK_COLLECTOR_READY") {
-    void checkCollectorReady().then(respond).catch((error) => respond({ ok: false, status: "UNVERIFIED", error: safeError(error) }));
+    const requestId = safeRequestId(message.requestId);
+    void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_READY", status: "PASS" }).then(() => checkCollectorReady(requestId)).then(respond).catch((error) => respond({ ok: false, status: "UNVERIFIED", error: safeError(error) }));
     return true;
   }
   if (message?.type === "COLLECT_PRODUCTION_SOURCE") {
     const scanId = typeof message.scanId === "string" && isUuid(message.scanId) ? message.scanId : null;
     if (!scanId) { respond({ ok: false, error: "COLLECTOR_SCAN_ID_INVALID" }); return false; }
-    void collectConfiguredSources(scanId).catch(() => {});
+    const requestId = safeRequestId(message.requestId);
+    void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_SCAN_COMMAND", status: "PASS" }).then(() => collectConfiguredSources(scanId, requestId)).catch(() => {});
     respond({ ok: true, accepted: true, scanId });
     return false;
   }
@@ -76,13 +82,14 @@ async function collectActiveSource() {
   return collectTabSource(tab.id, tab.url, scanId);
 }
 
-async function collectConfiguredSources(scanId = crypto.randomUUID()) {
+async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId = "unknown") {
   let tab;
   try {
     tab = await chrome.tabs.create({ url: PRODUCTION_SOURCE_URL, active: false });
     await waitForTab(tab.id, 30_000);
-    return await collectTabSource(tab.id, PRODUCTION_SOURCE_URL, scanId);
+    return await collectTabSource(tab.id, PRODUCTION_SOURCE_URL, scanId, requestId);
   } catch (error) {
+    await recordStartTrace({ requestId, stage: "COLLECTOR_START_FAILED", status: "FAIL", errorCode: safeError(error) });
     await failCollectorScan(scanId, error);
     await setCollectorState({ status: "failed", phase: "FAILED", progress: safeError(error), sourceUrl: PRODUCTION_SOURCE_URL, scanId, finishedAt: new Date().toISOString() });
     return { sourceUrl: PRODUCTION_SOURCE_URL, status: "FAILED", error: safeError(error), scanId };
@@ -91,7 +98,8 @@ async function collectConfiguredSources(scanId = crypto.randomUUID()) {
   }
 }
 
-async function collectTabSource(tabId, sourceUrl, scanId) {
+async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown") {
+  await recordStartTrace({ requestId, stage: "COLLECTOR_STARTED", status: "PASS" });
   const startedAtMs = Date.now();
   await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, scanId, startedAt: new Date().toISOString() });
   const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
@@ -163,6 +171,7 @@ async function collectTabSource(tabId, sourceUrl, scanId) {
   const images = { rawCandidates: posts.reduce((sum, post) => sum + (post.media || []).length, 0), verifiedProvenance: posts.reduce((sum, post) => sum + (post.media || []).filter((media) => media.exactAssociation === true && media.exactPostId === post.postId).length, 0), imported: 0 };
   const targets = ["1577700267381450", "1578068947344582", "1577710350713775"];
   const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, posts };
+  await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
   const upload = await uploadBatch(batch);
   images.imported = upload?.listingsCreated ? images.verifiedProvenance : 0;
   const result = { scanId, sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, health, captured: posts.length, searchFallbackUsed: searchRuns.some((run) => run.executed), upload, mainFeed: { captured: primary.posts.length, unique: primary.posts.length, scrolls: primary.health.scrolls, durationMs: primary.health.durationMs, stopReason: primary.health.stopReason }, search: searchRuns, searchTelemetry: searchTelemetrySummary, merged: { totalCaptured: primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0), totalUnique: posts.length, duplicatesRemoved: Math.max(0, duplicateCount) }, identity, images, targetsFound: targets.filter((target) => posts.some((post) => post.postId === target)), iterations: primary.iterations, finishedAt: new Date().toISOString() };
@@ -239,16 +248,21 @@ async function uploadBatch(batch) {
   return signedPost(`${apiUrl}/api/collector/facebook/batches`, JSON.stringify(batch));
 }
 
-async function checkCollectorReady() {
+async function checkCollectorReady(requestId = "unknown") {
   const value = await pairingStorageValue();
   const local = globalThis.FlipCollectorPairingStatus.localPairingStatus(value);
-  if (local.status === "DISCONNECTED" || local.status === "RECONNECT_REQUIRED") return { ok: false, status: local.status, label: local.label, error: local.label };
+  if (local.status === "DISCONNECTED" || local.status === "RECONNECT_REQUIRED") {
+    await recordStartTrace({ requestId, stage: "EXTENSION_READY_RESULT", status: "FAIL", errorCode: local.status === "DISCONNECTED" ? "PAIRING_MISSING" : "PAIRING_RECONNECT_REQUIRED" });
+    return { ok: false, status: local.status, label: local.label, error: local.label };
+  }
   try {
     await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/heartbeat`, "{}");
     const verified = await persistPairingVerification(value, { kind: "VALID" });
+    await recordStartTrace({ requestId, stage: "EXTENSION_READY_RESULT", status: "PASS" });
     return { ok: true, status: verified.status, label: verified.label, lastHeartbeatAt: verified.lastHeartbeatAt, health: verified.health };
   } catch (error) {
     const verified = await persistPairingVerification(value, verificationOutcome(error));
+    await recordStartTrace({ requestId, stage: "EXTENSION_READY_RESULT", status: "FAIL", errorCode: verified.reason || safeError(error) });
     return { ok: false, status: verified.status, label: verified.label, error: verified.reason || safeError(error) };
   }
 }
@@ -329,6 +343,18 @@ async function persistPairingVerification(value, outcome) {
   return { status: result.status, label: result.label, shouldVerify: result.shouldVerify, deviceLabel: result.deviceLabel, verifiedAt: result.verifiedAt, lastHeartbeatAt: result.lastHeartbeatAt, lastSuccessfulScanAt: result.lastSuccessfulScanAt, health: result.health, reason: result.reason };
 }
 function verificationOutcome(error) { const message = safeError(error); return /^COLLECTOR_UPLOAD_(?:401|403):/.test(message) ? { kind: "REVOKED", reason: message.split(":").at(-1) } : { kind: "TEMPORARY_FAILURE", reason: message }; }
+async function recordStartTrace(message) {
+  const requestId = safeRequestId(message.requestId);
+  if (requestId === "unknown") return;
+  const stored = await chrome.storage.local.get("collectorStartTraces");
+  const traces = stored.collectorStartTraces && typeof stored.collectorStartTraces === "object" ? stored.collectorStartTraces : {};
+  const trace = Array.isArray(traces[requestId]) ? traces[requestId] : [];
+  trace.push({ requestId, stage: String(message.stage || "UNKNOWN").slice(0, 80), timestamp: new Date().toISOString(), status: ["PASS", "FAIL", "TIMEOUT"].includes(message.status) ? message.status : "PASS", ...(typeof message.errorCode === "string" ? { errorCode: message.errorCode.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120) } : {}) });
+  traces[requestId] = trace.slice(-80);
+  const keys = Object.keys(traces).slice(-50);
+  await chrome.storage.local.set({ collectorStartTraces: Object.fromEntries(keys.map((key) => [key, traces[key]])) });
+}
+function safeRequestId(value) { return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? value : "unknown"; }
 function isUuid(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 async function waitForTab(tabId, timeoutMs) {
   const start = Date.now();

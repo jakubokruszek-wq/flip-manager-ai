@@ -70,6 +70,8 @@ export function FlipFinderPage() {
   const [lastScanDiagnostics, setLastScanDiagnostics] = useState<{ filter: SearchFilterListItem; response: ScanResponse } | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgressResponse | null>(null);
   const [activeScanRunId, setActiveScanRunId] = useState<string | null>(null);
+  const [startTrace, setStartTrace] = useState<StartTrace | null>(null);
+  const [showStartTrace, setShowStartTrace] = useState(false);
   const scanningFilterIdsRef = useRef(new Set<string>());
 
   const load = useCallback(async () => {
@@ -133,20 +135,25 @@ export function FlipFinderPage() {
     setRetryFilterId(null);
     setActiveScanRunId(null);
     setScanProgress(null);
+    const requestId = crypto.randomUUID();
+    traceStage(requestId, "BUTTON_CLICKED", "PASS");
 
     let waitingForWorker = false;
     try {
       const usesFacebookCollector = filter.sources.includes("facebook");
       if (usesFacebookCollector) {
-        const readiness = await retryCollectorReadiness(() => requestCollectorReady(), (attempt) => {
+        let readinessAttempt = 0;
+        const readiness = await retryCollectorReadiness(() => requestCollectorReady(requestId, ++readinessAttempt), (attempt) => {
           if (attempt > 1) setNotice("Ponawianie połączenia z Collectorem...");
         });
         if (!readiness.ok) throw new Error("Nie udało się połączyć z Flip Collectorem. Otwórz rozszerzenie i sprawdź status Połączono.");
         setNotice("Collector połączony — uruchamiam skan...");
       }
+      traceStage(requestId, "POST_SCAN_SENT", "PASS");
       const response = await fetch(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
       });
+      traceStage(requestId, "POST_SCAN_RESPONSE", response.ok ? "PASS" : "FAIL", response.ok ? undefined : `HTTP_${response.status}`);
       const payload: unknown = await readJson(response);
 
       if (response.status === 429) {
@@ -160,6 +167,7 @@ export function FlipFinderPage() {
       setLastScanDiagnostics({ filter, response: payload });
       let initialProgress: ScanProgressResponse | null = null;
       if (payload.runId) {
+        traceStage(requestId, "NEW_SCAN_RUN_ID", "PASS");
         setActiveScanRunId(payload.runId);
         initialProgress = await fetchScanProgress(payload.runId).catch(() => null);
         if (initialProgress) setScanProgress(initialProgress);
@@ -174,7 +182,8 @@ export function FlipFinderPage() {
         }
         waitingForWorker = true;
         if (usesFacebookCollector) {
-          const dispatch = await requestCollectorScan(payload.runId);
+          traceStage(requestId, "SCAN_COMMAND_SENT", "PASS");
+          const dispatch = await requestCollectorScan(payload.runId, requestId);
           if (!dispatch.ok || dispatch.accepted !== true) {
             waitingForWorker = false;
             await fetch(`/api/flip-finder/scans/${payload.runId}/cancel`, { method: "POST" }).catch(() => {});
@@ -210,6 +219,8 @@ export function FlipFinderPage() {
       setResultsRevision((current) => current + 1);
     } catch (reason) {
       const scanMessage = reason instanceof Error ? reason.message : "";
+      traceStage(requestId, "START_FAILED", "FAIL", safeTraceError(scanMessage));
+      setStartTrace(readStartTrace());
       setRetryFilterId(
         scanMessage === OTODOM_AUTOMATION_BLOCKED_MESSAGE ? filter.id : null,
       );
@@ -391,6 +402,8 @@ export function FlipFinderPage() {
           className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           <p>{error}</p>
+          {startTrace ? <Button className="mt-2" onClick={() => setShowStartTrace((value) => !value)} size="sm" variant="outline">Pokaż diagnostykę</Button> : null}
+          {showStartTrace && startTrace ? <StartTraceSummary trace={startTrace} /> : null}
           {retryFilterId ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
@@ -898,27 +911,62 @@ async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
 }
 
 type CollectorBridgeResult = { ok: boolean; accepted?: boolean; status?: string; label?: string; error?: string };
+type StartTraceStage = { requestId: string; stage: string; timestamp: string; status: "PASS" | "FAIL" | "TIMEOUT"; errorCode?: string; attempt?: number };
+type StartTrace = { requestId: string; stages: StartTraceStage[] };
+const START_TRACE_KEY = "flip-finder-start-trace";
 
-function requestCollectorReady(): Promise<CollectorBridgeResult> {
-  return requestCollectorMessage("FLIP_COLLECTOR_READY_REQUEST", "FLIP_COLLECTOR_READY_RESULT");
+function requestCollectorReady(requestId: string, attempt: number): Promise<CollectorBridgeResult> {
+  traceStage(requestId, "READY_REQUEST_SENT", "PASS", undefined, attempt);
+  return requestCollectorMessage("FLIP_COLLECTOR_READY_REQUEST", "FLIP_COLLECTOR_READY_RESULT", requestId, {}, "PAGE_RECEIVED_READY");
 }
 
-function requestCollectorScan(runId: string): Promise<CollectorBridgeResult> {
-  return requestCollectorMessage("FLIP_COLLECTOR_SCAN_REQUEST", "FLIP_COLLECTOR_SCAN_RESULT", { scanId: runId });
+function requestCollectorScan(runId: string, requestId: string): Promise<CollectorBridgeResult> {
+  return requestCollectorMessage("FLIP_COLLECTOR_SCAN_REQUEST", "FLIP_COLLECTOR_SCAN_RESULT", requestId, { scanId: runId }, "PAGE_RECEIVED_SCAN_COMMAND");
 }
 
-function requestCollectorMessage(requestType: string, responseType: string, payload: Record<string, unknown> = {}): Promise<CollectorBridgeResult> {
+function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string): Promise<CollectorBridgeResult> {
   return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); resolve({ ok: false, error: "Nie wykryto rozszerzenia Flip Collector." }); }, 5_000);
+    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); traceStage(requestId, responseStage, "TIMEOUT", "COLLECTOR_BRIDGE_NO_RESPONSE"); resolve({ ok: false, error: "Nie wykryto rozszerzenia Flip Collector." }); }, 5_000);
     function listener(event: MessageEvent) {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== responseType) return;
+      if (event.data.requestId !== requestId) { traceStage(requestId, responseStage, "FAIL", "REQUEST_ID_MISMATCH"); return; }
       window.clearTimeout(timeout);
       window.removeEventListener("message", listener);
+      traceStage(requestId, responseStage, event.data.ok === true ? "PASS" : "FAIL", event.data.ok === true ? undefined : safeTraceError(String(event.data.error || "READY_FAILED")));
       resolve({ ok: event.data.ok === true, accepted: event.data.accepted === true, status: typeof event.data.status === "string" ? event.data.status : undefined, label: typeof event.data.label === "string" ? event.data.label : undefined, error: typeof event.data.error === "string" ? event.data.error : undefined });
     }
     window.addEventListener("message", listener);
-    window.postMessage({ type: requestType, ...payload }, window.location.origin);
+    window.postMessage({ type: requestType, requestId, ...payload }, window.location.origin);
   });
+}
+
+function traceStage(requestId: string, stage: string, status: StartTraceStage["status"], errorCode?: string, attempt?: number): void {
+  try {
+    const current = JSON.parse(window.sessionStorage.getItem(START_TRACE_KEY) || "null") as StartTrace | null;
+    const trace = current?.requestId === requestId ? current : { requestId, stages: [] };
+    trace.stages.push({ requestId, stage, timestamp: new Date().toISOString(), status, ...(errorCode ? { errorCode: safeTraceError(errorCode) } : {}), ...(attempt ? { attempt } : {}) });
+    window.sessionStorage.setItem(START_TRACE_KEY, JSON.stringify({ requestId, stages: trace.stages.slice(-80) }));
+  } catch { /* diagnostics must never block scan start */ }
+}
+function safeTraceError(value: string): string { return value.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120).replace(/[^A-Za-z0-9_.:-]/g, "_"); }
+
+function readStartTrace(): StartTrace | null {
+  try { return JSON.parse(window.sessionStorage.getItem(START_TRACE_KEY) || "null") as StartTrace | null; } catch { return null; }
+}
+
+function StartTraceSummary({ trace }: { trace: StartTrace }) {
+  const failed = [...trace.stages].reverse().find((stage) => stage.status !== "PASS");
+  const last = trace.stages.at(-1);
+  return <div className="mt-2 rounded border p-2 text-xs"><div>requestId: {trace.requestId}</div><div>Last stage: {last?.stage || "—"}</div><div>Failed at: {failed?.stage || "—"}</div><div>Error: {failed?.errorCode || "—"}</div><div>Diagnosis: {traceDiagnosis(failed?.stage, failed?.errorCode)}</div></div>;
+}
+function traceDiagnosis(stage?: string, errorCode?: string): string {
+  if (errorCode === "REQUEST_ID_MISMATCH") return "REQUEST_ID_MISMATCH";
+  if (stage === "BUTTON_CLICKED") return "BUTTON_HANDLER_FAILED";
+  if (stage === "READY_REQUEST_SENT") return "BRIDGE_NOT_INJECTED";
+  if (stage === "PAGE_RECEIVED_READY") return "READY_RESPONSE_TIMEOUT";
+  if (stage === "POST_SCAN_RESPONSE") return "POST_SCAN_FAILED";
+  if (stage === "SCAN_COMMAND_SENT" || stage === "PAGE_RECEIVED_SCAN_COMMAND") return "SCAN_COMMAND_NOT_RECEIVED";
+  return "COLLECTOR_START_FAILED";
 }
 
 function isScanProgressResponse(value: unknown): value is ScanProgressResponse {
