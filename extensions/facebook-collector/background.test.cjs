@@ -88,6 +88,14 @@ test("start trace uses request ids, bounded safe stages and never stores credent
   assert.doesNotMatch(background, /collectorStartTraces[\s\S]{0,200}deviceToken/);
 });
 
+test("bridge exposes an independent request-id ping and explicit runtime error path", () => {
+  assert.match(bridge, /FLIP_COLLECTOR_BRIDGE_PING/);
+  assert.match(bridge, /FLIP_COLLECTOR_BRIDGE_PONG/);
+  assert.match(bridge, /requestId/);
+  assert.match(bridge, /catch/);
+  assert.match(bridge, /chrome\.runtime\.sendMessage/);
+});
+
 test("extension UI never reads or renders the device token", () => {
   assert.doesNotMatch(popup, /deviceToken/);
   assert.doesNotMatch(options, /deviceToken/);

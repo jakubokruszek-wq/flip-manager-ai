@@ -143,6 +143,8 @@ export function FlipFinderPage() {
     try {
       const usesFacebookCollector = filter.sources.includes("facebook");
       if (usesFacebookCollector) {
+        const bridge = await requestCollectorBridgePing(requestId);
+        if (!bridge.ok) throw new Error("Nie wykryto aktywnego bridge Flip Collectora. Odśwież stronę i spróbuj ponownie.");
         let readinessAttempt = 0;
         const readiness = await retryCollectorReadiness(() => requestCollectorReady(requestId, ++readinessAttempt), (attempt) => {
           if (attempt > 1) setNotice("Ponawianie połączenia z Collectorem...");
@@ -921,13 +923,18 @@ function requestCollectorReady(requestId: string, attempt: number): Promise<Coll
   return requestCollectorMessage("FLIP_COLLECTOR_READY_REQUEST", "FLIP_COLLECTOR_READY_RESULT", requestId, {}, "PAGE_RECEIVED_READY");
 }
 
+function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
+  traceStage(requestId, "BRIDGE_PING_SENT", "PASS");
+  return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
+}
+
 function requestCollectorScan(runId: string, requestId: string): Promise<CollectorBridgeResult> {
   return requestCollectorMessage("FLIP_COLLECTOR_SCAN_REQUEST", "FLIP_COLLECTOR_SCAN_RESULT", requestId, { scanId: runId }, "PAGE_RECEIVED_SCAN_COMMAND");
 }
 
-function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string): Promise<CollectorBridgeResult> {
+function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string, timeoutMs = 5_000): Promise<CollectorBridgeResult> {
   return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); traceStage(requestId, responseStage, "TIMEOUT", "COLLECTOR_BRIDGE_NO_RESPONSE"); resolve({ ok: false, error: "Nie wykryto rozszerzenia Flip Collector." }); }, 5_000);
+    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); traceStage(requestId, responseStage, "TIMEOUT", responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : "COLLECTOR_BRIDGE_NO_RESPONSE"); resolve({ ok: false, error: "Nie wykryto aktywnego bridge Flip Collectora." }); }, timeoutMs);
     function listener(event: MessageEvent) {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== responseType) return;
       if (event.data.requestId !== requestId) { traceStage(requestId, responseStage, "FAIL", "REQUEST_ID_MISMATCH"); return; }
@@ -964,6 +971,7 @@ function traceDiagnosis(stage?: string, errorCode?: string): string {
   if (errorCode === "REQUEST_ID_MISMATCH") return "REQUEST_ID_MISMATCH";
   if (stage === "BUTTON_CLICKED") return "BUTTON_HANDLER_FAILED";
   if (stage === "READY_REQUEST_SENT") return "BRIDGE_NOT_INJECTED";
+  if (stage === "BRIDGE_PONG_RECEIVED") return "BRIDGE_NOT_INJECTED_OR_INACTIVE";
   if (stage === "PAGE_RECEIVED_READY") return "READY_RESPONSE_TIMEOUT";
   if (stage === "POST_SCAN_RESPONSE") return "POST_SCAN_FAILED";
   if (stage === "SCAN_COMMAND_SENT" || stage === "PAGE_RECEIVED_SCAN_COMMAND") return "SCAN_COMMAND_NOT_RECEIVED";

@@ -4,6 +4,11 @@ const ALLOWED_ORIGINS = new Set(["https://flip-manager-ai.vercel.app", "http://l
 
 window.addEventListener("message", (event) => {
   if (event.source !== window || !ALLOWED_ORIGINS.has(event.origin)) return;
+  if (event.data?.type === "FLIP_COLLECTOR_BRIDGE_PING") {
+    const requestId = safeRequestId(event.data.requestId);
+    window.postMessage({ type: "FLIP_COLLECTOR_BRIDGE_PONG", requestId, ok: requestId !== "unknown" }, event.origin);
+    return;
+  }
   if (event.data?.type === "FLIP_COLLECTOR_READY_REQUEST") {
     const requestId = safeRequestId(event.data.requestId);
     void trace(requestId, "BRIDGE_RECEIVED_READY").then(() => chrome.runtime.sendMessage({ type: "CHECK_COLLECTOR_READY", requestId })).then((result) => {

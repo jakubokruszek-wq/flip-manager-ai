@@ -50,3 +50,11 @@ test("start trace ignores START_FAILED summary and identifies the first real bro
   assert.equal(pairing.firstFailed, "EXTENSION_READY_RESULT");
   assert.equal(pairing.errorCode, "PAIRING_MISSING");
 });
+
+test("bridge ping timeout is classified separately from READY timeout", () => {
+  assert.equal(summarizeStartTrace([
+    { stage: "BUTTON_CLICKED", status: "PASS" },
+    { stage: "BRIDGE_PING_SENT", status: "PASS" },
+    { stage: "BRIDGE_PONG_RECEIVED", status: "TIMEOUT", errorCode: "BRIDGE_NOT_INJECTED_OR_INACTIVE" },
+  ]).firstFailed, "BRIDGE_PONG_RECEIVED");
+});
