@@ -356,6 +356,7 @@ export type FacebookSkipReasonCode =
   | "FACEBOOK_RENT_REQUEST"
   | "FACEBOOK_SERVICE_POST"
   | "FACEBOOK_NON_SALE_POST"
+  | "FACEBOOK_PROPERTY_FILTER_REJECTED"
   | "FACEBOOK_INTENT_UNKNOWN";
 
 export type FacebookJobState = {

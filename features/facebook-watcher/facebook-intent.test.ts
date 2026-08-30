@@ -69,3 +69,14 @@ test("normalizes hidden Unicode and non-breaking spaces", () => {
   const signals = inspectFacebookIntentSignals("Ku\u200Bpię\u00a0za\u00a0gotówkę mieszkanie w Łodzi");
   assert.deepEqual(signals.buySignals, ["BUY_KUPIE"]);
 });
+
+test("known authoritative SELL variants remain deterministic", () => {
+  for (const text of [
+    "Na sprzedaż, dwa rozkładowe pokoje w Łodzi",
+    "OFF MARKET mieszkanie 51 m² w Łodzi",
+    "Mieszkanie przy Płockiej 4 w Łodzi, 80,53 m2 za 630 tys.",
+  ]) {
+    const result = resolveFacebookListingIntent(text, "UNKNOWN", 0);
+    assert.deepEqual({ intent: result.intent, source: result.intentSource }, { intent: "SELL_PROPERTY", source: "DETERMINISTIC_SELL" });
+  }
+});

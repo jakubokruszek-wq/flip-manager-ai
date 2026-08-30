@@ -9,6 +9,7 @@ const PLACES = [
 const DISTRICTS = ["Bałuty", "Widzew", "Polesie", "Górna", "Śródmieście"];
 const FLAG_PHRASES = ["bezpośrednio", "bez pośredników", "do remontu", "generalny remont", "po babci", "pilnie", "okazja", "spadek", "do negocjacji", "prywatnie"];
 const number = (value?: string) => value ? Number(value.replace(",", ".").replace(/\s/g, "")) : null;
+const boundedFloor = (value: number | null) => value !== null && value >= 0 && value <= 30 ? value : null;
 
 export type FacebookPriceResolution = {
   price: number | null;
@@ -55,16 +56,20 @@ function singleValue(values: number[]): number | null {
 export async function extractFacebookProperty(input: FacebookListingInput): Promise<FacebookProperty> {
   const text = input.postText ?? "";
   const lower = text.toLocaleLowerCase("pl-PL");
+  const normalizedText = text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l");
   const place = PLACES.find(([needle]) => lower.includes(needle));
   const districtFound = DISTRICTS.find((item) => lower.includes(item.toLocaleLowerCase("pl-PL"))) ?? null;
   const area = number(text.match(/(\d{1,3}(?:[.,]\d+)?)\s*m(?:²|2)\b/i)?.[1]);
   const unicodeArea = number(text.match(/(\d{1,3}(?:[.,]\d+)?)\s*m\u00b2(?![\p{L}\d])/iu)?.[1]);
   const effectiveArea = unicodeArea ?? area;
   const price = resolveFacebookPrice(text, effectiveArea);
-  const mRooms = text.match(/\bM(\d)\b/i);
-  const explicitRooms = text.match(/(\d+)\s*(?:pok(?:oje|oi|ój|\.)?)/i);
-  const floor = number(text.match(/(\d+)\s*(?:piętro|piętrze|p\.)/i)?.[1]);
-  const fraction = text.match(/\b(\d+)\s*\/\s*(\d+)\s*(?:piętro|p\.)?/i);
+  const mRoomValues = [...normalizedText.matchAll(/\bm([2-6])\b/gu)]
+    .filter((match) => !/[#\d]\s*$/u.test(normalizedText.slice(Math.max(0, (match.index ?? 0) - 4), match.index)))
+    .map((match) => Number(match[1]));
+  const mRooms = new Set(mRoomValues).size === 1 ? mRoomValues[0] : null;
+  const explicitRooms = normalizedText.match(/\b(\d{1,2})\s*[-–]?\s*pokoj(?:e|owy|owe|owych)?\b/u);
+  const floor = boundedFloor(number(normalizedText.match(/\b(\d{1,2})\.?\s*(?:pietro|pietrze|p\.)\b/u)?.[1]));
+  const fraction = normalizedText.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:pietro|p\.)\b/u);
   const streetMatch = text.match(/\bul\.?\s+([\p{L}][\p{L}\s.-]{1,40}?)(?:\s+(\d+[\p{L}]?))?(?=,|\.|\n|$)/iu);
   const street = streetMatch ? [streetMatch[1]?.trim(), streetMatch[2]].filter(Boolean).join(" ") : null;
   const flags = FLAG_PHRASES.filter((phrase) => lower.includes(phrase));
@@ -84,12 +89,18 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     price: describesConcreteProperty ? price.price : null,
     priceProvenance: describesConcreteProperty ? (input.priceProvenance ?? (price.price !== null ? "AUTHORITATIVE_TEXT" : undefined)) : undefined,
     area: describesConcreteProperty ? effectiveArea : null,
-    rooms: describesConcreteProperty ? number(explicitRooms?.[1]) ?? (mRooms ? Math.max(1, Number(mRooms[1]) - 1) : null) : null,
-    floor: describesConcreteProperty ? fraction ? Number(fraction[1]) : floor : null,
+    rooms: describesConcreteProperty ? number(explicitRooms?.[1]) ?? (mRooms ? Math.max(1, mRooms - 1) : null) : null,
+    floor: describesConcreteProperty ? fraction ? boundedFloor(Number(fraction[1])) : floor : null,
     totalFloors: describesConcreteProperty && fraction ? Number(fraction[2]) : null,
     marketType: describesConcreteProperty ? /rynek pierwotny|deweloper/i.test(text) ? "primary" : /sprzedam|po babci|do remontu/i.test(text) ? "secondary" : null : null,
     sellerType: describesConcreteProperty ? /bez pośrednik|bezpośrednio|prywatnie/i.test(text) ? "private" : /biuro|agencj|pośrednik/i.test(text) ? "agency" : null : null,
-    condition: describesConcreteProperty ? /remont|po babci/i.test(text) ? "renovation" : /po remoncie|do wejścia/i.test(text) ? "ready" : null : null,
+    condition: describesConcreteProperty
+      ? /po\s+remoncie|gotow\w*\s+do\s+(?:wprowadzenia|zamieszkania)|do\s+wejscia/u.test(normalizedText)
+        ? "ready"
+        : /do\s+(?:generalnego\s+)?remontu|po\s+babci/u.test(normalizedText)
+          ? "renovation"
+          : null
+      : null,
     description: text || null, originalUrl: input.url ?? null, images: input.images ?? [],
     confidence, flags, listingIntent: intent.intent, intentConfidence: intent.confidence, intentSource: intent.intentSource,
     imageAssessments: input.imageAssessments ?? [],

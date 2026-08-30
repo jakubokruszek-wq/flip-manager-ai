@@ -20,6 +20,7 @@ import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebo
 import { resolveFacebookListingIntent } from "./facebook-intent";
 import { reconcileFacebookLocation } from "./facebook-location-quality";
 import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookImageProvenanceDiagnostics, facebookMediaBindingSummary, hasApprovedFacebookImageProvenance, preserveFacebookPublishedAt } from "./facebook-media-binding";
+import { evaluateFacebookApartmentSafety } from "./facebook-apartment-safety";
 
 type Row = Record<string, unknown>;
 
@@ -90,13 +91,17 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   if (context && !classification.usable) {
     return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: classification.realEstateLanguage, structuredFieldCount: classification.structuredFieldCount, detectedFields: classification.detectedFields } };
   }
+  const apartmentSafety = context ? evaluateFacebookApartmentSafety({ authoritativeText: normalized.postText, property: extracted, filter: context.filter }) : null;
+  if (context && apartmentSafety && !apartmentSafety.passes) {
+    return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: apartmentSafety.reasons, notProperty: { realEstateLanguage: true, structuredFieldCount: classification.structuredFieldCount, detectedFields: classification.detectedFields, classification: "non_sale_intent", reasonCode: "FACEBOOK_PROPERTY_FILTER_REJECTED" } };
+  }
   const hash = createHash("sha256").update([normalized.postText, extracted.price, extracted.area, extracted.neighborhood].join("|")).digest("hex");
   const sourceUrl = extracted.originalUrl ?? (context ? facebookPostUrl(context.groupUrl, context.postId) : `manual:${hash}`);
   const externalId = context?.postId ?? extracted.originalUrl?.match(/(?:posts|videos)\/(\d+)/)?.[1] ?? hash.slice(0, 32);
   const supabase = createFacebookWatcherAdminClient();
   const existing = await findExisting(supabase, extracted, sourceUrl, externalId, hash);
   const now = context?.checkedAt ?? new Date().toISOString();
-  if (context) return importAutomatedFacebook({ supabase, normalized, extracted, context, sourceUrl, externalId, existing, now });
+  if (context) return importAutomatedFacebook({ supabase, normalized, extracted, context, sourceUrl, externalId, existing, now, buildingType: apartmentSafety?.buildingType ?? null });
   let listingId = existing?.id;
   const status: "created" | "updated" = existing ? "updated" : "created";
   const crossSourceMatch = Boolean(existing && existing.source !== "facebook");
@@ -154,8 +159,9 @@ async function importAutomatedFacebook(input: {
   externalId: string;
   existing: { id: string; source: string } | null;
   now: string;
+  buildingType: string | null;
 }): Promise<FacebookImportResult> {
-  const { supabase, normalized, extracted, context, sourceUrl, externalId, existing, now } = input;
+  const { supabase, normalized, extracted, context, sourceUrl, externalId, existing, now, buildingType } = input;
   const crossSourceMatch = Boolean(existing && existing.source !== "facebook");
   const existingState = existing ? await readListingState(supabase, existing.id) : emptyListingState();
   const previousSource = await readSourceMetadata(supabase, sourceUrl);
@@ -191,7 +197,7 @@ async function importAutomatedFacebook(input: {
   const pricePerSqm = effective.price && effective.area ? effective.price / effective.area : null;
   const score = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
   const locationText = [effective.street, effective.neighborhood, effective.district, effective.city].filter(Boolean).join(", ") || null;
-  const decision = evaluateListingAgainstFilter({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText, buildingType: null, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
+  const decision = evaluateListingAgainstFilter({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
   let listingId: string;
   let listingCreated = false;
   let listingUpdated = false;
@@ -207,7 +213,7 @@ async function importAutomatedFacebook(input: {
   } else {
     const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt), authoritativeTextSource: normalized.postText ? "AUTHOR_TEXT" : null, mediaBinding: facebookMediaBindingSummary(normalized, externalId), flags: effective.flags, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, locationProvenance: locationResolution.provenance };
     const contentHash = calculateContentHash({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor, locationText, images: imageMirror.images });
-    const listing: SourceListing = { source: "facebook", externalListingId: externalId, originalUrl: sourceUrl, normalizedUrl: sourceUrl, title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), pricePerSqm, city: effective.city, district: effective.district, locationText, images: imageMirror.images, thumbnailUrl: imageMirror.images[0] ?? null, buildingType: null, description: effective.description, rawPayload, contentHash };
+    const listing: SourceListing = { source: "facebook", externalListingId: externalId, originalUrl: sourceUrl, normalizedUrl: sourceUrl, title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), pricePerSqm, city: effective.city, district: effective.district, locationText, images: imageMirror.images, thumbnailUrl: imageMirror.images[0] ?? null, buildingType, description: effective.description, rawPayload, contentHash };
     const saved = await persistListing(supabase, context.filter.id, listing, decision.matches, decision.unknownFields, context.sourceScanId, now, AbortSignal.timeout(75_000));
     listingId = saved.listingId;
     listingCreated = saved.listingCreated;

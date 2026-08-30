@@ -10,7 +10,6 @@
   const MEDIA_ID_KEYS = new Set(["media_id", "mediaId", "photo_id", "photoId", "video_id", "videoId"]);
   const PERMALINK_KEYS = new Set(["permalink", "permalink_url", "url"]);
   const TIME_KEYS = new Set(["creation_time", "publish_time", "timestamp", "created_time"]);
-  const TEXT_KEYS = new Set(["message", "text", "body"]);
 
   function canonicalSource(urlValue) {
     const url = safeUrl(urlValue);
@@ -50,16 +49,19 @@
     for (const raw of records || []) {
       if (!raw?.postId || !raw?.permalink || !raw?.sourceId) continue;
       const current = merged.get(raw.postId);
+      const conflict = current ? identityConflict(current, raw) : false;
       const next = current ? {
         ...current,
-        author: current.author || raw.author || null,
-        text: longest(current.text, raw.text),
+        author: conflict ? null : current.author || raw.author || null,
+        text: conflict ? null : longest(current.text, raw.text),
         publishedAt: current.publishedAt || raw.publishedAt || null,
         timestampText: current.timestampText || raw.timestampText || null,
         discoveryLayers: unique([...(current.discoveryLayers || []), ...(raw.discoveryLayers || [])]),
         firstSeenIteration: Math.min(current.firstSeenIteration ?? 999, raw.firstSeenIteration ?? 999),
         media: mergeMedia([...(current.media || []), ...(raw.media || [])], raw.postId),
-      } : { ...raw, discoveryLayers: unique(raw.discoveryLayers || []), media: mergeMedia(raw.media || [], raw.postId) };
+        identityConfidence: conflict || (current.identityConfidence !== "EXACT" && raw.identityConfidence !== "EXACT") ? "UNVERIFIED" : "EXACT",
+        identityReasons: unique([...(current.identityReasons || []), ...(raw.identityReasons || []), ...(conflict ? ["POST_IDENTITY_CONFLICT"] : [])]),
+      } : { ...raw, identityConfidence: raw.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED", identityReasons: unique(raw.identityReasons || []), discoveryLayers: unique(raw.discoveryLayers || []), media: mergeMedia(raw.media || [], raw.postId) };
       merged.set(raw.postId, next);
       if (merged.size >= limit) break;
     }
@@ -71,22 +73,26 @@
     const roots = parseJsonBodies(String(text).slice(0, 4_000_000));
     const records = [];
     for (const root of roots) walk(root, (node) => {
-      const postId = exactPostId(node);
+      const postId = exactStoryRootPostId(node);
       if (!postId) return;
       const link = findPermalink(node, postId, source);
       if (!link || link.postId !== postId) return;
+      const author = findAuthor(node);
+      const message = findRootMessage(node);
       records.push({
         postId,
         permalink: link.permalink,
         sourceId: source.sourceId,
         sourceType: source.sourceType,
-        author: findAuthor(node),
-        text: findText(node),
+        author,
+        text: message,
         publishedAt: findTimestamp(node),
         timestampText: null,
         media: findMedia(node, postId, layer),
         discoveryLayers: [layer],
         firstSeenIteration: iteration,
+        identityConfidence: message && author ? "EXACT" : "UNVERIFIED",
+        identityReasons: message && author ? ["STRUCTURED_EXACT_STORY_ROOT"] : ["STRUCTURED_STORY_WITHOUT_ROOT_AUTHOR_OR_TEXT"],
       });
     });
     return mergeRecords(records);
@@ -139,6 +145,14 @@
     return /(?:story|post)/.test(type) ? scalarId(node.id) : null;
   }
 
+  function exactStoryRootPostId(node) {
+    if (!isObject(node)) return null;
+    const direct = scalarId(node.post_id) || scalarId(node.postId) || scalarId(node.story_fbid) || scalarId(node.story_id) || scalarId(node.storyId);
+    const type = String(node.__typename || node.typename || "").toLowerCase();
+    if (direct && (!type || /(?:story|post)/.test(type))) return direct;
+    return /(?:story|post)/.test(type) ? scalarId(node.id) : null;
+  }
+
   function findPermalink(node, postId, source) {
     let answer = null;
     walk(node, (child) => {
@@ -152,19 +166,14 @@
     return answer;
   }
 
-  function findText(node) {
-    const candidates = [];
-    walkPath(node, (child, path) => {
-      if (!isObject(child)) return;
-      if (/(?:comment|feedback|actor|author|profile)/i.test(path.join("."))) return false;
-      for (const key of TEXT_KEYS) {
-        const value = child[key];
-        const text = typeof value === "string" ? value : isObject(value) && typeof value.text === "string" ? value.text : null;
-        if (text && text.length <= 20_000) candidates.push({ text, depth: path.length });
-      }
-    }, 5);
-    candidates.sort((a, b) => a.depth - b.depth || b.text.length - a.text.length);
-    return clean(candidates[0]?.text || null);
+  function findRootMessage(node) {
+    for (const key of ["message", "text", "body"]) {
+      const value = node[key];
+      const text = typeof value === "string" ? value : isObject(value) && typeof value.text === "string" ? value.text : null;
+      const cleaned = clean(text);
+      if (cleaned && cleaned.length <= 20_000) return cleaned;
+    }
+    return null;
   }
 
   function findAuthor(node) {
@@ -251,6 +260,13 @@
   function longest(a, b) { return !a ? b || null : !b ? a : b.length > a.length ? b : a; }
   function clean(value) { return typeof value === "string" ? value.replace(/\s+/g, " ").trim() || null : null; }
   function unique(values) { return [...new Set(values)]; }
+  function identityConflict(a, b) {
+    const authorA = comparable(a.author); const authorB = comparable(b.author);
+    if (authorA && authorB && authorA !== authorB) return true;
+    const textA = comparable(a.text); const textB = comparable(b.text);
+    return Boolean(textA && textB && !textA.includes(textB) && !textB.includes(textA));
+  }
+  function comparable(value) { return clean(value)?.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL") || ""; }
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 

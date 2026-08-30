@@ -20,7 +20,10 @@ export type FacebookIntentSignalName =
   | "SELL_SPRZEDAM"
   | "SELL_NA_SPRZEDAZ"
   | "SELL_DO_SPRZEDANIA"
-  | "SELL_OFERUJE_NA_SPRZEDAZ";
+  | "SELL_OFERUJE_NA_SPRZEDAZ"
+  | "SELL_OFF_MARKET"
+  | "SELL_MAM_DO_ZAOFEROWANIA"
+  | "SELL_STRUCTURED_OFFER";
 
 export type FacebookIntentSignals = {
   normalizedLength: number;
@@ -43,6 +46,8 @@ const SELL_PATTERNS: ReadonlyArray<{ name: FacebookIntentSignalName; pattern: Re
   { name: "SELL_NA_SPRZEDAZ", pattern: /\bna\s+sprzedaz\b/u },
   { name: "SELL_DO_SPRZEDANIA", pattern: /\bdo\s+sprzedania\b/u },
   { name: "SELL_OFERUJE_NA_SPRZEDAZ", pattern: /\boferuje\s+na\s+sprzedaz\b/u },
+  { name: "SELL_OFF_MARKET", pattern: /\boff\s*market\b/u },
+  { name: "SELL_MAM_DO_ZAOFEROWANIA", pattern: /\bmam\s+do\s+zaoferowania\b/u },
 ];
 
 export function resolveFacebookListingIntent(
@@ -93,17 +98,25 @@ function decision(intent: FacebookListingIntent, confidence: number, determinist
 }
 
 function normalizeIntentText(value: string): string {
-  return value.normalize("NFKD").replace(/\p{M}/gu, "").replace(/\p{Cf}/gu, "").toLocaleLowerCase("pl-PL").replace(/\s+/g, " ").trim();
+  return value.normalize("NFKD").replace(/\p{M}/gu, "").replace(/\p{Cf}/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l").replace(/\s+/g, " ").trim();
 }
 
 function inspectNormalizedFacebookIntentSignals(normalized: string): FacebookIntentSignals {
-  const propertyContext = /\b(mieszkan[\p{L}\d]*|nieruchomo[\p{L}\d]*|kawalerk[\p{L}\d]*|apartament[\p{L}\d]*|dom[\p{L}\d]*|lokal[\p{L}\d]*)\b/u.test(normalized);
+  const propertyContext = /\b(mieszkan[\p{L}\d]*|nieruchomo[\p{L}\d]*|kawalerk[\p{L}\d]*|apartament[\p{L}\d]*|pokoj[\p{L}\d]*|dom[\p{L}\d]*|lokal[\p{L}\d]*)\b/u.test(normalized);
   const buySignals = BUY_PATTERNS
     .filter(({ pattern, requiresPropertyContext }) => (!requiresPropertyContext || propertyContext) && pattern.test(normalized))
     .map(({ name }) => name);
   const sellSignals = propertyContext
     ? SELL_PATTERNS.filter(({ pattern }) => pattern.test(normalized)).map(({ name }) => name)
     : [];
+  if (
+    propertyContext
+    && buySignals.length === 0
+    && /\b\d{1,3}(?:[.,]\d+)?\s*m(?:2)?\b/u.test(normalized)
+    && /\b\d{2,7}(?:[\s.]\d{3})*(?:[.,]\d+)?\s*(?:tys(?:\.|iecy)?|zl|pln)\b/u.test(normalized)
+  ) {
+    sellSignals.push("SELL_STRUCTURED_OFFER");
+  }
   return { normalizedLength: normalized.length, propertyContext, buySignals, sellSignals };
 }
 

@@ -68,3 +68,21 @@ test("Sporna listing keeps explicit fields and source facts without inventing fl
   assert.equal(value.sourceFacts?.additionalEquipmentPrice, 20_000);
   assert.equal(value.description, text);
 });
+
+test("rooms, floor and condition require exact semantic evidence", async () => {
+  const noRooms = await extractFacebookProperty({ postText: "Sprzedam mieszkanie 45 m2 w bloku z lat 80/90, po remoncie" });
+  assert.deepEqual({ rooms: noRooms.rooms, floor: noRooms.floor, condition: noRooms.condition }, { rooms: null, floor: null, condition: "ready" });
+  const exact = await extractFacebookProperty({ postText: "Sprzedam mieszkanie 2-pokojowe, 3. piętro, Łódź" });
+  assert.deepEqual({ rooms: exact.rooms, floor: exact.floor }, { rooms: 2, floor: 3 });
+});
+
+test("area token M2 is never converted into one room", async () => {
+  const value = await extractFacebookProperty({ postText: "Sprzedam mieszkanie 30 M2 w Łodzi" });
+  assert.equal(value.area, 30);
+  assert.equal(value.rooms, null);
+});
+
+test("hashtags and conflicting M-layout labels never invent rooms", async () => {
+  const value = await extractFacebookProperty({ postText: "Mieszkanie 80,53 m2 #M5 #M4 #apartament" });
+  assert.equal(value.rooms, null);
+});

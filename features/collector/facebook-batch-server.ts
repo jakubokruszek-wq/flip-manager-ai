@@ -8,7 +8,7 @@ import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/s
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import type { FacebookCollectorBatch } from "./facebook-batch";
-import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing } from "./facebook-batch-policy";
+import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts } from "./facebook-batch-policy";
 
 export type CollectorBatchResult = {
   status: "completed" | "degraded" | "failed" | "duplicate";
@@ -61,9 +61,13 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
   try {
     const filters = await getActiveSearchFiltersForSource("facebook");
     if (filters.length === 0) return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), "COLLECTOR_NO_ACTIVE_FACEBOOK_FILTER");
+    const history = await supabase.from("collector_scan_batches").select("payload").eq("source_id", batch.sourceId).neq("id", batchRowId).order("received_at", { ascending: false }).limit(50);
+    if (history.error) throw new Error(`COLLECTOR_IDENTITY_HISTORY_QUERY_FAILED: ${history.error.message}`);
+    const historicalIdentityConflicts = findHistoricalCollectorIdentityConflicts(batch, (history.data ?? []).map((row) => row.payload));
     const sourceScanIds: string[] = [];
     let processed = 0; let listingsCreated = 0; let listingsUpdated = 0; let skipped = 0; let errors = 0;
-    const posts = collectorPostsForProcessing(batch);
+    const posts = collectorPostsForProcessing(batch, Date.now(), historicalIdentityConflicts);
+    const unverifiedIdentityCount = batch.posts.filter((post) => post.identityConfidence !== "EXACT" || historicalIdentityConflicts.has(post.postId)).length;
     const authors = new Map(batch.posts.map((post) => [post.postId, post.author]));
     for (const filter of filters) {
       const sourceScan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "running", scan_run_id: batch.scanId, filter_snapshot: filter, diagnostics: [{ collectorBatchId: batch.batchId, discoveryHealth: batch.health.status }] }).select("id").single();
@@ -75,11 +79,12 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       listingsUpdated += summary.listingsUpdated;
       skipped += summary.listingsSkipped;
       errors += summary.errors;
-      const sourceStatus = batch.health.status === "DEGRADED" || summary.errors > 0 ? "partial" : "completed";
-      const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...batch.health.reasons, ...summary.warnings].slice(0, 100) }).eq("id", sourceScanId);
+      const sourceStatus = batch.health.status === "DEGRADED" || summary.errors > 0 || unverifiedIdentityCount > 0 ? "partial" : "completed";
+      const identityWarnings = unverifiedIdentityCount > 0 ? [`FACEBOOK_IDENTITY_UNVERIFIED:${unverifiedIdentityCount}`, ...[...historicalIdentityConflicts].slice(0, 20).map((postId) => `FACEBOOK_IDENTITY_HISTORY_CONFLICT:${postId}`)] : [];
+      const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100) }).eq("id", sourceScanId);
       if (sourceUpdate.error) throw new Error(`COLLECTOR_SOURCE_SCAN_FINISH_FAILED: ${sourceUpdate.error.message}`);
     }
-    const status = batch.health.status === "DEGRADED" || errors > 0 ? "degraded" : "completed";
+    const status = batch.health.status === "DEGRADED" || errors > 0 || unverifiedIdentityCount > 0 ? "degraded" : "completed";
     return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health });
   } catch (error) {
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));

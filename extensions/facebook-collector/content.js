@@ -82,19 +82,24 @@
   function collectDom(source, iteration, layer) {
     const output = [];
     for (const card of visibleCards()) {
+      if (card.parentElement?.closest('[role="article"]')) continue;
       const links = [...card.querySelectorAll('a[href]')].map((anchor) => core.parsePostLink(anchor.href, source)).filter(Boolean);
       const uniqueLinks = [...new Map(links.map((link) => [link.postId, link])).values()];
       if (uniqueLinks.length !== 1) continue;
       const link = uniqueLinks[0];
-      const text = visibleText(card);
-      const author = [...card.querySelectorAll('h2 a, h3 a, strong a, a[role="link"]')].map((node) => visibleText(node)).find(Boolean) || null;
-      const timestamp = card.querySelector('abbr, time, a[aria-label*="godz" i], a[aria-label*="min" i], a[aria-label*="dzie" i]');
+      const exactElements = (selector) => [...card.querySelectorAll(selector)].filter((node) => node.closest('[role="article"]') === card);
+      const messageCandidates = exactElements('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]').map((node) => visibleText(node)).filter(Boolean);
+      const text = messageCandidates.length === 1 ? messageCandidates[0] : null;
+      const authorCandidates = exactElements('h2 a, h3 a, strong a').map((node) => visibleText(node)).filter(Boolean);
+      const author = authorCandidates[0] || null;
+      const timestamp = exactElements('abbr, time, a[aria-label*="godz" i], a[aria-label*="min" i], a[aria-label*="dzie" i]')[0] || null;
       const media = [...card.querySelectorAll('img[src], video[poster]')].flatMap((node) => {
         const url = node.currentSrc || node.src || node.poster;
         if (!url || !/^https:\/\//.test(url)) return [];
         return [{ url, mediaId: mediaIdFromUrl(url), exactPostId: null, exactAssociation: false, discoveryLayers: [layer] }];
       });
-      output.push({ ...link, author, text, publishedAt: timestamp?.dateTime || null, timestampText: visibleText(timestamp), media, discoveryLayers: [layer], firstSeenIteration: iteration });
+      const exactIdentity = Boolean(text && author);
+      output.push({ ...link, author, text, publishedAt: timestamp?.dateTime || null, timestampText: visibleText(timestamp), media, discoveryLayers: [layer], firstSeenIteration: iteration, identityConfidence: exactIdentity ? "EXACT" : "UNVERIFIED", identityReasons: exactIdentity ? ["DOM_EXACT_TOP_LEVEL_POST_CARD"] : ["DOM_EXACT_AUTHOR_MESSAGE_NOT_PROVEN"] });
     }
     return core.mergeRecords(output);
   }

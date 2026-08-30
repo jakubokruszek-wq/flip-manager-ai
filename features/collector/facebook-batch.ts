@@ -2,6 +2,7 @@ export const COLLECTOR_DISCOVERY_LAYERS = ["DOM", "HYDRATION", "NETWORK", "SEARC
 export type CollectorDiscoveryLayer = (typeof COLLECTOR_DISCOVERY_LAYERS)[number];
 export type CollectorSourceType = "GROUP" | "PROFILE";
 export type CollectorDiscoveryHealth = "HEALTHY" | "DEGRADED" | "FAILED";
+export type CollectorIdentityConfidence = "EXACT" | "UNVERIFIED";
 
 export type CollectorMediaRecord = {
   url: string;
@@ -23,6 +24,8 @@ export type CollectorPostRecord = {
   media: CollectorMediaRecord[];
   discoveryLayers: CollectorDiscoveryLayer[];
   firstSeenIteration: number;
+  identityConfidence: CollectorIdentityConfidence;
+  identityReasons: string[];
 };
 
 export type CollectorSourceHealth = {
@@ -99,6 +102,8 @@ function normalizePost(value: unknown, sourceId: string, sourceType: CollectorSo
   const postId = requiredString(value.postId, "COLLECTOR_POST_ID_REQUIRED");
   const permalink = facebookPostUrl(requiredString(value.permalink, "COLLECTOR_PERMALINK_REQUIRED"), postId, sourceId, sourceType);
   if (requiredString(value.sourceId, "COLLECTOR_POST_SOURCE_ID_REQUIRED") !== sourceId || value.sourceType !== sourceType) throw new Error("COLLECTOR_POST_SOURCE_MISMATCH");
+  const identityConfidence: CollectorIdentityConfidence = value.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED";
+  const identityReasons = Array.isArray(value.identityReasons) ? value.identityReasons.filter((item): item is string => typeof item === "string").slice(0, 10) : [];
   return {
     postId,
     permalink,
@@ -111,6 +116,8 @@ function normalizePost(value: unknown, sourceId: string, sourceType: CollectorSo
     media: Array.isArray(value.media) ? value.media.slice(0, 30).flatMap((media) => normalizeMedia(media, postId)) : [],
     discoveryLayers: layers(value.discoveryLayers),
     firstSeenIteration: nonnegativeInteger(value.firstSeenIteration),
+    identityConfidence,
+    identityReasons: identityReasons.length > 0 ? identityReasons : identityConfidence === "EXACT" ? [] : ["COLLECTOR_IDENTITY_EVIDENCE_MISSING"],
   };
 }
 

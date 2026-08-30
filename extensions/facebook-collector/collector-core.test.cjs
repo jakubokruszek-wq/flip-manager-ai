@@ -63,3 +63,15 @@ test("structured records without an exact source permalink fail closed", () => {
   const records = core.extractStructuredRecordsFromText(JSON.stringify({ __typename: "Story", post_id: "1577700267381450", message: { text: "Sprzedam mieszkanie" } }), "NETWORK", source, 0);
   assert.deepEqual(records, []);
 });
+
+test("same canonical post id cannot inherit a different card author or text", () => {
+  const base = { postId: "1565561595261984", permalink: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1565561595261984/", sourceId: source.sourceId, sourceType: "GROUP", publishedAt: null, timestampText: null, media: [], firstSeenIteration: 0, discoveryLayers: ["DOM"], identityConfidence: "EXACT", identityReasons: [] };
+  const [record] = core.mergeRecords([
+    { ...base, author: "Autor BUY", text: "Kupię mieszkanie w Łodzi" },
+    { ...base, author: "Autor SELL", text: "Sprzedam mieszkanie w Łodzi" },
+  ]);
+  assert.equal(record.identityConfidence, "UNVERIFIED");
+  assert.equal(record.author, null);
+  assert.equal(record.text, null);
+  assert.ok(record.identityReasons.includes("POST_IDENTITY_CONFLICT"));
+});
