@@ -923,13 +923,15 @@ function requestCollectorReady(requestId: string, attempt: number): Promise<Coll
   return requestCollectorMessage("FLIP_COLLECTOR_READY_REQUEST", "FLIP_COLLECTOR_READY_RESULT", requestId, {}, "PAGE_RECEIVED_READY");
 }
 
-function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
+async function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
+  const bootstrapLoaded = document.documentElement.dataset.flipCollectorBootstrap === "1";
+  traceStage(requestId, "BOOTSTRAP_SCRIPT_EXECUTED", bootstrapLoaded ? "PASS" : "FAIL", bootstrapLoaded ? undefined : "BOOTSTRAP_MARKER_MISSING");
+  if (!bootstrapLoaded) return { ok: false, error: "Rozszerzenie Flip Collector nie jest aktywne na tej karcie." };
   traceStage(requestId, "BOOTSTRAP_PING_SENT", "PASS");
+  const bootstrap = await requestCollectorMessage("FLIP_COLLECTOR_BOOTSTRAP_PING", "FLIP_COLLECTOR_BOOTSTRAP_PONG", requestId, {}, "BOOTSTRAP_PONG_RECEIVED", 3_000);
+  if (!bootstrap.ok) return bootstrap;
   traceStage(requestId, "BRIDGE_PING_SENT", "PASS");
-  return requestCollectorMessage("FLIP_COLLECTOR_BOOTSTRAP_PING", "FLIP_COLLECTOR_BOOTSTRAP_PONG", requestId, {}, "BOOTSTRAP_PONG_RECEIVED", 3_000).then((bootstrap) => {
-    if (!bootstrap.ok) return bootstrap;
-    return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
-  });
+  return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
 }
 
 function requestCollectorScan(runId: string, requestId: string): Promise<CollectorBridgeResult> {
@@ -938,7 +940,7 @@ function requestCollectorScan(runId: string, requestId: string): Promise<Collect
 
 function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string, timeoutMs = 5_000): Promise<CollectorBridgeResult> {
   return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); traceStage(requestId, responseStage, "TIMEOUT", responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : "COLLECTOR_BRIDGE_NO_RESPONSE"); resolve({ ok: false, error: "Nie wykryto aktywnego bridge Flip Collectora." }); }, timeoutMs);
+    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); traceStage(requestId, responseStage, "TIMEOUT", responseStage === "BOOTSTRAP_PONG_RECEIVED" ? "BOOTSTRAP_NO_RESPONSE" : responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : "COLLECTOR_BRIDGE_NO_RESPONSE"); resolve({ ok: false, error: "Nie wykryto aktywnego Flip Collectora." }); }, timeoutMs);
     function listener(event: MessageEvent) {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== responseType) return;
       if (event.data.requestId !== requestId) { traceStage(requestId, responseStage, "FAIL", "REQUEST_ID_MISMATCH"); return; }

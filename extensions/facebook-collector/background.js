@@ -31,29 +31,6 @@ const PHASE_DONE = "Zakonczono";
 
 const FINDER_ORIGIN = "https://flip-manager-ai.vercel.app";
 
-chrome.runtime.onInstalled.addListener(() => { void recoverFinderBridges(); });
-chrome.runtime.onStartup.addListener(() => { void recoverFinderBridges(); });
-
-async function recoverFinderBridges() {
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (!tab.id || !isFinderUrl(tab.url)) continue;
-    try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["collector-bridge.js"] });
-    } catch {
-      // Restricted tabs and closed tabs are expected; the page will show the
-      // explicit refresh guidance if the bridge remains unavailable.
-    }
-  }
-}
-
-async function recoverCollectorBridge(tabId) {
-  if (!tabId) throw new Error("COLLECTOR_BRIDGE_TAB_REQUIRED");
-  const tab = await chrome.tabs.get(tabId);
-  if (!isFinderUrl(tab.url)) throw new Error("COLLECTOR_BRIDGE_ORIGIN_NOT_ALLOWED");
-  await chrome.scripting.executeScript({ target: { tabId }, files: ["collector-bridge.js"] });
-}
-
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "RECORD_START_TRACE") {
     void recordStartTrace(message).then(() => respond({ ok: true })).catch(() => respond({ ok: false }));
@@ -72,9 +49,15 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_READY", status: "PASS" }).then(() => checkCollectorReady(requestId)).then(respond).catch((error) => respond({ ok: false, status: "UNVERIFIED", error: safeError(error) }));
     return true;
   }
-  if (message?.type === "RECOVER_COLLECTOR_BRIDGE") {
+  if (message?.type === "BOOTSTRAP_LOADED") {
+    if (!isFinderUrl(_sender?.tab?.url) || message.origin !== FINDER_ORIGIN) { respond({ ok: false, error: "BOOTSTRAP_ORIGIN_NOT_ALLOWED" }); return false; }
+    void chrome.storage.local.set({ collectorBootstrapRuntime: { loadedAt: new Date().toISOString(), origin: FINDER_ORIGIN, tabId: _sender.tab.id } }).then(() => respond({ ok: true }));
+    return true;
+  }
+  if (message?.type === "BOOTSTRAP_RUNTIME_PING") {
     const requestId = safeRequestId(message.requestId);
-    void recoverCollectorBridge(_sender?.tab?.id).then(() => respond({ ok: true, requestId })).catch((error) => respond({ ok: false, requestId, error: safeError(error) }));
+    if (requestId === "unknown" || !isFinderUrl(_sender?.tab?.url)) { respond({ ok: false, requestId, error: "BOOTSTRAP_ORIGIN_NOT_ALLOWED" }); return false; }
+    void recordStartTrace({ requestId, stage: "BOOTSTRAP_BACKGROUND_REACHED", status: "PASS" }).then(() => respond({ ok: true, requestId }));
     return true;
   }
   if (message?.type === "COLLECT_PRODUCTION_SOURCE") {

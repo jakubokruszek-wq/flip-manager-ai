@@ -31,7 +31,7 @@
     },
     {
       "matches": ["https://flip-manager-ai.vercel.app/flip-finder*", "http://localhost:3000/flip-finder*"],
-      "js": ["bootstrap.js", "collector-bridge.js"],
+      "js": ["bootstrap.js"],
       "run_at": "document_start"
     }
   ]

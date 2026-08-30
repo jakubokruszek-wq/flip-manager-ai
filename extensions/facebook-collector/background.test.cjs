@@ -2,6 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const vm = require("node:vm");
 
 const path = require("node:path");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"));
@@ -59,15 +60,15 @@ test("media tile resolver is exact, fail-closed and never forwards tile media as
   assert.doesNotMatch(content, /postId:\s*mediaId/);
 });
 
-test("Flip Finder bridge starts the production collector after readiness verification", () => {
-  assert.ok(manifest.content_scripts.map((item) => item.js || []).flat().includes("collector-bridge.js"));
-  assert.match(bridge, /FLIP_COLLECTOR_READY_REQUEST/);
-  assert.match(bridge, /CHECK_COLLECTOR_READY/);
-  assert.match(bridge, /FLIP_COLLECTOR_SCAN_REQUEST/);
-  assert.match(bridge, /COLLECT_PRODUCTION_SOURCE/);
+test("Flip Finder bootstrap starts the production collector after readiness verification", () => {
+  assert.ok(manifest.content_scripts.map((item) => item.js || []).flat().includes("bootstrap.js"));
+  assert.match(bootstrap, /FLIP_COLLECTOR_READY_REQUEST/);
+  assert.match(bootstrap, /CHECK_COLLECTOR_READY/);
+  assert.match(bootstrap, /FLIP_COLLECTOR_SCAN_REQUEST/);
+  assert.match(bootstrap, /COLLECT_PRODUCTION_SOURCE/);
   assert.match(background, /COLLECT_PRODUCTION_SOURCE/);
   assert.match(background, /CHECK_COLLECTOR_READY/);
-  assert.match(bridge, /requestId/);
+  assert.match(bootstrap, /requestId/);
   assert.match(background, /RECORD_START_TRACE/);
   assert.match(background, /collectorStartTraces/);
 });
@@ -99,25 +100,44 @@ test("bridge exposes an independent request-id ping and explicit runtime error p
   assert.match(bridge, /chrome\.runtime\.sendMessage/);
 });
 
-test("finder bridge is matched at document start and recovery is bounded to canonical origin", () => {
-  const finder = manifest.content_scripts.find((item) => (item.js || []).includes("collector-bridge.js"));
+test("finder bootstrap is matched at document start and owns the direct runtime path", () => {
+  const finder = manifest.content_scripts.find((item) => (item.js || []).includes("bootstrap.js"));
   assert.ok(finder);
   assert.ok(finder.matches.includes("https://flip-manager-ai.vercel.app/flip-finder*"));
   assert.equal(finder.run_at, "document_start");
-  assert.match(background, /chrome\.runtime\.onInstalled/);
-  assert.match(background, /chrome\.runtime\.onStartup/);
-  assert.match(background, /recoverFinderBridges/);
   assert.match(background, /isFinderUrl/);
   assert.match(background, /FIND-ER_ORIGIN|FINDER_ORIGIN/);
-  assert.match(bridge, /__flipCollectorBridgeInstalled/);
-  assert.ok(finder.js.includes("bootstrap.js"));
+  assert.deepEqual(finder.js, ["bootstrap.js"]);
   assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_PING/);
-  assert.match(bootstrap, /RECOVER_COLLECTOR_BRIDGE/);
   assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_PONG/);
-  assert.match(bootstrap, /RECOVER_COLLECTOR_BRIDGE/);
+  assert.match(bootstrap, /BOOTSTRAP_RUNTIME_PING/);
+  assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_LOADED/);
+  assert.match(bootstrap, /flipCollectorBootstrap/);
   assert.match(bootstrap, /safeRequestId/);
   assert.doesNotMatch(bootstrap, /deviceToken|secret|hmac|cookie/i);
-  assert.match(background, /COLLECTOR_BRIDGE_ORIGIN_NOT_ALLOWED/);
+  assert.match(background, /BOOTSTRAP_ORIGIN_NOT_ALLOWED/);
+});
+
+test("bootstrap executes, is idempotent and round-trips exact request ids", async () => {
+  const listeners = [];
+  const posted = [];
+  const runtimeMessages = [];
+  const document = { documentElement: { dataset: {} }, addEventListener() {} };
+  const window = { addEventListener(type, listener) { if (type === "message") listeners.push(listener); }, postMessage(message, origin) { posted.push({ message, origin }); } };
+  const context = vm.createContext({ globalThis: {}, window, document, location: { origin: "https://flip-manager-ai.vercel.app" }, console: { debug() {} }, chrome: { runtime: { lastError: null, sendMessage(message, callback) { runtimeMessages.push(message); callback({ ok: true, requestId: message.requestId }); } } }, Promise, Error, Set });
+  vm.runInContext(bootstrap, context);
+  vm.runInContext(bootstrap, context);
+  assert.equal(document.documentElement.dataset.flipCollectorBootstrap, "1");
+  assert.equal(listeners.length, 1);
+  const requestId = "10da2d3e-23be-4e39-9625-02d33984692d";
+  listeners[0]({ source: window, origin: "https://flip-manager-ai.vercel.app", data: { type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(runtimeMessages.some((message) => message.type === "BOOTSTRAP_RUNTIME_PING" && message.requestId === requestId));
+  assert.ok(posted.some(({ message }) => message.type === "FLIP_COLLECTOR_BOOTSTRAP_PONG" && message.requestId === requestId));
+  const before = posted.length;
+  listeners[0]({ source: window, origin: "https://evil.example", data: { type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posted.length, before);
 });
 
 test("extension UI never reads or renders the device token", () => {
