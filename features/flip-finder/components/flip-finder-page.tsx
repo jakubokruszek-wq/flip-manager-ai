@@ -925,7 +925,10 @@ function requestCollectorReady(requestId: string, attempt: number): Promise<Coll
 
 function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
   traceStage(requestId, "BRIDGE_PING_SENT", "PASS");
-  return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
+  return requestCollectorMessage("FLIP_COLLECTOR_BOOTSTRAP_PING", "FLIP_COLLECTOR_BOOTSTRAP_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000).then((bootstrap) => {
+    if (!bootstrap.ok) return bootstrap;
+    return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
+  });
 }
 
 function requestCollectorScan(runId: string, requestId: string): Promise<CollectorBridgeResult> {

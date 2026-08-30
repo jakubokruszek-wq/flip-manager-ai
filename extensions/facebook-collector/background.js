@@ -47,6 +47,13 @@ async function recoverFinderBridges() {
   }
 }
 
+async function recoverCollectorBridge(tabId) {
+  if (!tabId) throw new Error("COLLECTOR_BRIDGE_TAB_REQUIRED");
+  const tab = await chrome.tabs.get(tabId);
+  if (!isFinderUrl(tab.url)) throw new Error("COLLECTOR_BRIDGE_ORIGIN_NOT_ALLOWED");
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["collector-bridge.js"] });
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "RECORD_START_TRACE") {
     void recordStartTrace(message).then(() => respond({ ok: true })).catch(() => respond({ ok: false }));
@@ -63,6 +70,11 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "CHECK_COLLECTOR_READY") {
     const requestId = safeRequestId(message.requestId);
     void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_READY", status: "PASS" }).then(() => checkCollectorReady(requestId)).then(respond).catch((error) => respond({ ok: false, status: "UNVERIFIED", error: safeError(error) }));
+    return true;
+  }
+  if (message?.type === "RECOVER_COLLECTOR_BRIDGE") {
+    const requestId = safeRequestId(message.requestId);
+    void recoverCollectorBridge(_sender?.tab?.id).then(() => respond({ ok: true, requestId })).catch((error) => respond({ ok: false, requestId, error: safeError(error) }));
     return true;
   }
   if (message?.type === "COLLECT_PRODUCTION_SOURCE") {

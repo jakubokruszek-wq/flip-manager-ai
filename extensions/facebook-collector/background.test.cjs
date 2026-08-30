@@ -12,6 +12,7 @@ const pairing = fs.readFileSync(path.join(__dirname, "pairing.js"), "utf8");
 const options = fs.readFileSync(path.join(__dirname, "options.js"), "utf8");
 const optionsHtml = fs.readFileSync(path.join(__dirname, "options.html"), "utf8");
 const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf8");
+const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
 
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
@@ -109,6 +110,13 @@ test("finder bridge is matched at document start and recovery is bounded to cano
   assert.match(background, /isFinderUrl/);
   assert.match(background, /FIND-ER_ORIGIN|FINDER_ORIGIN/);
   assert.match(bridge, /__flipCollectorBridgeInstalled/);
+  assert.ok(finder.js.includes("bootstrap.js"));
+  assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_PING/);
+  assert.match(bootstrap, /RECOVER_COLLECTOR_BRIDGE/);
+  assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_PONG/);
+  assert.match(bootstrap, /safeRequestId/);
+  assert.doesNotMatch(bootstrap, /deviceToken|secret|hmac|cookie/i);
+  assert.match(background, /COLLECTOR_BRIDGE_ORIGIN_NOT_ALLOWED/);
 });
 
 test("extension UI never reads or renders the device token", () => {
