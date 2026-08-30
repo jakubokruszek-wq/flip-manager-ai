@@ -1,6 +1,7 @@
 "use strict";
 
 importScripts("collector-core.js");
+importScripts("pairing-status.js");
 
 const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
 const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
@@ -39,8 +40,17 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     void chrome.storage.local.get(["collectorState", "collectorLastResult"]).then(respond);
     return true;
   }
+  if (message?.type === "GET_PAIRING_STATUS") {
+    void getPairingStatus().then(respond).catch(() => respond({ status: "UNVERIFIED", label: "Po\u0142\u0105czenie niezweryfikowane", shouldVerify: true }));
+    return true;
+  }
+  if (message?.type === "VERIFY_PAIRING_STATUS") {
+    void verifyPairingStatus().then(respond).catch(() => respond({ status: "UNVERIFIED", label: "Po\u0142\u0105czenie niezweryfikowane", shouldVerify: true }));
+    return true;
+  }
   if (message?.type === "SAVE_PAIRING_CONFIG" && message.config) {
-    void chrome.storage.local.set({ apiUrl: message.config.apiUrl, deviceId: message.config.deviceId, deviceToken: message.config.deviceToken }).then(() => respond({ ok: true }));
+    const now = new Date().toISOString();
+    void chrome.storage.local.set({ apiUrl: message.config.apiUrl, deviceId: message.config.deviceId, deviceToken: message.config.deviceToken, collectorPairingState: { status: "CONNECTED", apiUrl: message.config.apiUrl, deviceId: message.config.deviceId, verifiedAt: now, lastHeartbeatAt: now } }).then(() => respond({ ok: true }));
     return true;
   }
   return false;
@@ -122,7 +132,13 @@ async function uploadBatch(batch) {
   const config = await configValue();
   if (!config.apiUrl || !config.deviceId || !config.deviceToken) return { status: "LOCAL_ONLY", reason: "COLLECTOR_NOT_PAIRED" };
   const apiUrl = String(config.apiUrl).replace(/\/+$/, "");
-  await signedPost(`${apiUrl}/api/collector/heartbeat`, "{}");
+  try {
+    await signedPost(`${apiUrl}/api/collector/heartbeat`, "{}");
+    await persistPairingVerification(config, { kind: "VALID" });
+  } catch (error) {
+    await persistPairingVerification(config, verificationOutcome(error));
+    throw error;
+  }
   return signedPost(`${apiUrl}/api/collector/facebook/batches`, JSON.stringify(batch));
 }
 
@@ -156,6 +172,32 @@ function mergePosts(posts) {
 function isLikelySellText(post) { return /\b(?:sprzedam|na\s+sprzedaz|do\s+sprzedania|off\s*market|mam\s+do\s+zaoferowania)\b/i.test(String(post?.text || "")); }
 async function setCollectorState(state) { await chrome.storage.local.set({ collectorState: { ...state } }).catch(() => {}); }
 async function configValue() { return chrome.storage.local.get(["apiUrl", "deviceId", "deviceToken", "sources"]); }
+async function pairingStorageValue() { return chrome.storage.local.get(["apiUrl", "deviceId", "deviceToken", "collectorPairingState", "collectorLastResult"]); }
+async function getPairingStatus() { return globalThis.FlipCollectorPairingStatus.localPairingStatus(await pairingStorageValue()); }
+let pairingVerification = null;
+async function verifyPairingStatus() {
+  if (pairingVerification) return pairingVerification;
+  pairingVerification = verifyPairingStatusOnce().finally(() => { pairingVerification = null; });
+  return pairingVerification;
+}
+async function verifyPairingStatusOnce() {
+  const value = await pairingStorageValue();
+  const local = globalThis.FlipCollectorPairingStatus.localPairingStatus(value);
+  if (local.status === "DISCONNECTED" || local.status === "RECONNECT_REQUIRED") return local;
+  try {
+    const apiUrl = String(value.apiUrl).replace(/\/+$/, "");
+    await signedPost(`${apiUrl}/api/collector/heartbeat`, "{}");
+    return persistPairingVerification(value, { kind: "VALID" });
+  } catch (error) {
+    return persistPairingVerification(value, verificationOutcome(error));
+  }
+}
+async function persistPairingVerification(value, outcome) {
+  const result = globalThis.FlipCollectorPairingStatus.verifiedPairingStatus({ ...value, collectorLastResult: (await chrome.storage.local.get("collectorLastResult")).collectorLastResult }, outcome);
+  if (result.storageState) await chrome.storage.local.set({ collectorPairingState: result.storageState });
+  return { status: result.status, label: result.label, shouldVerify: result.shouldVerify, deviceLabel: result.deviceLabel, verifiedAt: result.verifiedAt, lastHeartbeatAt: result.lastHeartbeatAt, lastSuccessfulScanAt: result.lastSuccessfulScanAt, health: result.health, reason: result.reason };
+}
+function verificationOutcome(error) { const message = safeError(error); return /^COLLECTOR_UPLOAD_(?:401|403):/.test(message) ? { kind: "REVOKED", reason: message.split(":").at(-1) } : { kind: "TEMPORARY_FAILURE", reason: message }; }
 async function waitForTab(tabId, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {

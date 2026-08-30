@@ -1,1 +1,25 @@
-<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Flip Collector — konfiguracja</title><link rel="stylesheet" href="ui.css"></head><body><main class="wide"><h1>Konfiguracja kolektora</h1><label>Flip Manager URL<input id="apiUrl" type="url" value="https://flip-manager-ai.vercel.app"></label><label>Device ID<input id="deviceId" autocomplete="off"></label><label>Device token<input id="deviceToken" type="password" autocomplete="off"></label><label>Źródła (jeden URL na linię)<textarea id="sources" rows="9"></textarea></label><button id="save">Zapisz lokalnie</button><p id="status"></p><p class="hint">Token pozostaje w chrome.storage.local. Rozszerzenie nie zawiera service-role ani klucza Supabase.</p></main><script src="options.js"></script></body></html>
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Flip Collector — konfiguracja</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <main class="wide">
+    <h1>Konfiguracja kolektora</h1>
+    <section class="connection" aria-live="polite">
+      <strong id="connection-status">Sprawdzanie połączenia…</strong>
+      <span id="connection-details" class="hint"></span>
+      <button id="pairing" class="secondary" hidden>Połącz Flip Collector</button>
+    </section>
+    <label>Flip Manager URL<input id="apiUrl" type="url" value="https://flip-manager-ai.vercel.app"></label>
+    <label>Źródła (jeden URL na linię)<textarea id="sources" rows="9"></textarea></label>
+    <button id="save">Zapisz lokalnie</button>
+    <p id="status"></p>
+    <p class="hint">Dane uwierzytelniające pozostają w chronionym magazynie rozszerzenia i nie są wyświetlane w UI.</p>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,1 +1,24 @@
-<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Flip Collector</title><link rel="stylesheet" href="ui.css"></head><body><main><h1>Facebook Collector</h1><p id="status">Gotowy</p><button id="active">Zbierz aktywne źródło</button><button id="all" class="secondary">Zbierz skonfigurowane źródła</button><button id="options" class="link">Konfiguracja</button><pre id="result"></pre></main><script src="popup.js"></script></body></html>
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Flip Collector</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <main>
+    <h1>Facebook Collector</h1>
+    <section class="connection" aria-live="polite">
+      <strong id="connection-status">Sprawdzanie połączenia…</strong>
+      <span id="connection-details" class="hint"></span>
+      <button id="pairing" class="secondary" hidden>Połącz Flip Collector</button>
+    </section>
+    <p id="status">Gotowy</p>
+    <button id="active">Zbierz aktywne źródło</button>
+    <button id="options" class="link">Konfiguracja</button>
+    <pre id="result"></pre>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
