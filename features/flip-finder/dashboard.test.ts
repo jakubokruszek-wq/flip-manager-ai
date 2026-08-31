@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { COLLECTOR_READINESS_ATTEMPTS, COLLECTOR_READINESS_RETRY_DELAY_MS, latestScanCounters, retryCollectorReadiness, summarizeStartTrace } from "./dashboard.ts";
+import { COLLECTOR_BOOTSTRAP_MAX_WAIT_MS, COLLECTOR_BOOTSTRAP_POLL_INTERVAL_MS, COLLECTOR_READINESS_ATTEMPTS, COLLECTOR_READINESS_RETRY_DELAY_MS, latestScanCounters, retryCollectorReadiness, summarizeStartTrace, waitForCollectorBootstrap } from "./dashboard.ts";
 
 test("maps persisted scan update and price-drop counters to the UI", () => {
   assert.deepEqual(
@@ -27,6 +27,46 @@ test("collector readiness retries until first ACK and stops at three attempts", 
   const failed = await retryCollectorReadiness(async () => ({ ok: ++calls > 3 }), () => {}, async () => {});
   assert.equal(failed.ok, false);
   assert.equal(calls, 3);
+});
+
+async function bootstrapScenario({ markerAt = null, pongAt = null, stale = false }: { markerAt?: number | null; pongAt?: number | null; stale?: boolean }) {
+  let elapsedMs = 0;
+  const pingTimes: number[] = [];
+  const result = await waitForCollectorBootstrap({
+    readMarker: () => stale ? "stale" : markerAt !== null && elapsedMs >= markerAt ? "runtime-generation" : null,
+    ping: () => { pingTimes.push(elapsedMs); return pongAt !== null && elapsedMs >= pongAt; },
+    now: () => elapsedMs,
+    sleep: async (ms) => { elapsedMs += ms; },
+  });
+  return { result, elapsedMs, pingTimes };
+}
+
+test("bootstrap accepts markers delayed by 100, 700 and 1500 ms", async () => {
+  for (const markerAt of [100, 700, 1_500]) {
+    const scenario = await bootstrapScenario({ markerAt });
+    assert.deepEqual(scenario.result, { ok: true, source: "marker" });
+    assert.ok(scenario.elapsedMs >= markerAt);
+    assert.ok(scenario.elapsedMs <= markerAt + COLLECTOR_BOOTSTRAP_POLL_INTERVAL_MS * 2);
+  }
+});
+
+test("bootstrap accepts an exact PONG before the DOM marker", async () => {
+  const scenario = await bootstrapScenario({ markerAt: 1_500, pongAt: 250 });
+  assert.deepEqual(scenario.result, { ok: true, source: "pong" });
+  assert.equal(scenario.elapsedMs, 250);
+});
+
+test("bootstrap briefly retries PING after a marker appears", async () => {
+  const scenario = await bootstrapScenario({ markerAt: 700 });
+  assert.deepEqual(scenario.result, { ok: true, source: "marker" });
+  assert.ok(scenario.pingTimes.filter((time) => time >= 700).length >= 2);
+});
+
+test("stale or absent bootstrap times out only after the full budget", async () => {
+  for (const scenario of [await bootstrapScenario({ stale: true }), await bootstrapScenario({})]) {
+    assert.deepEqual(scenario.result, { ok: false, source: null, error: "BOOTSTRAP_START_TIMEOUT" });
+    assert.equal(scenario.elapsedMs, COLLECTOR_BOOTSTRAP_MAX_WAIT_MS);
+  }
 });
 
 test("start trace ignores START_FAILED summary and identifies the first real broken hop", () => {

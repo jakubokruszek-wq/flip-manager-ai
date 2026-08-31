@@ -125,9 +125,10 @@ test("finder bootstrap is matched at document start and owns the direct runtime 
   assert.match(background, /recoverFinderBootstraps\(\)\.catch/);
   assert.doesNotMatch(bootstrap, /deviceToken|secret|hmac|cookie/i);
   assert.match(background, /BOOTSTRAP_ORIGIN_NOT_ALLOWED/);
-  assert.match(finderPage, /waitForBootstrapMarker\(timeoutMs = 1_500\)/);
+  assert.match(finderPage, /waitForCollectorBootstrap/);
   assert.match(finderPage, /getAttribute\("data-flip-collector-bootstrap"\)/);
-  assert.match(finderPage, /marker !== "stale"/);
+  assert.doesNotMatch(finderPage, /BOOTSTRAP_MARKER_MISSING/);
+  assert.match(finderPage, /BOOTSTRAP_START_TIMEOUT/);
 });
 
 test("bootstrap executes, is idempotent and round-trips exact request ids", async () => {

@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api-fetch";
 
 import {
   canRunManualScan,
+  waitForCollectorBootstrap,
   retryCollectorReadiness,
   summarizeStartTrace,
   dashboardCount,
@@ -144,7 +145,7 @@ export function FlipFinderPage() {
       const usesFacebookCollector = filter.sources.includes("facebook");
       if (usesFacebookCollector) {
         const bridge = await requestCollectorBridgePing(requestId);
-        if (!bridge.ok) throw new Error("Nie wykryto aktywnego bridge Flip Collectora. Odśwież stronę i spróbuj ponownie.");
+        if (!bridge.ok) throw new Error(bridge.error || "Nie wykryto aktywnego bridge Flip Collectora. Odśwież stronę i spróbuj ponownie.");
         let readinessAttempt = 0;
         const readiness = await retryCollectorReadiness(() => requestCollectorReady(requestId, ++readinessAttempt), (attempt) => {
           if (attempt > 1) setNotice("Ponawianie połączenia z Collectorem...");
@@ -924,24 +925,32 @@ function requestCollectorReady(requestId: string, attempt: number): Promise<Coll
 }
 
 async function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
-  const bootstrapLoaded = await waitForBootstrapMarker();
-  traceStage(requestId, "BOOTSTRAP_SCRIPT_EXECUTED", bootstrapLoaded ? "PASS" : "FAIL", bootstrapLoaded ? undefined : "BOOTSTRAP_MARKER_MISSING");
-  if (!bootstrapLoaded) return { ok: false, error: "Rozszerzenie Flip Collector nie jest aktywne na tej karcie." };
   traceStage(requestId, "BOOTSTRAP_PING_SENT", "PASS");
-  const bootstrap = await requestCollectorMessage("FLIP_COLLECTOR_BOOTSTRAP_PING", "FLIP_COLLECTOR_BOOTSTRAP_PONG", requestId, {}, "BOOTSTRAP_PONG_RECEIVED", 3_000);
-  if (!bootstrap.ok) return bootstrap;
+  let pongReceived = false;
+  function listener(event: MessageEvent) {
+    if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== "FLIP_COLLECTOR_BOOTSTRAP_PONG") return;
+    if (event.data.requestId !== requestId) {
+      traceStage(requestId, "BOOTSTRAP_PONG_RECEIVED", "FAIL", "REQUEST_ID_MISMATCH");
+      return;
+    }
+    pongReceived = true;
+  }
+  window.addEventListener("message", listener);
+  const bootstrap = await waitForCollectorBootstrap({
+    readMarker: () => document.documentElement?.getAttribute("data-flip-collector-bootstrap") ?? null,
+    ping: () => {
+      window.postMessage({ type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId }, window.location.origin);
+      return pongReceived;
+    },
+  }).finally(() => window.removeEventListener("message", listener));
+  traceStage(requestId, "BOOTSTRAP_SCRIPT_EXECUTED", bootstrap.ok ? "PASS" : "TIMEOUT", bootstrap.error);
+  if (!bootstrap.ok) {
+    traceStage(requestId, "BOOTSTRAP_PONG_RECEIVED", "TIMEOUT", "BOOTSTRAP_START_TIMEOUT");
+    return { ok: false, error: "Nie udało się uruchomić Flip Collectora przed upływem limitu czasu." };
+  }
+  if (bootstrap.source === "pong") traceStage(requestId, "BOOTSTRAP_PONG_RECEIVED", "PASS");
   traceStage(requestId, "BRIDGE_PING_SENT", "PASS");
   return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
-}
-
-async function waitForBootstrapMarker(timeoutMs = 1_500): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  do {
-    const marker = document.documentElement?.getAttribute("data-flip-collector-bootstrap");
-    if (marker && marker !== "stale") return true;
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
-  } while (Date.now() < deadline);
-  return false;
 }
 
 function requestCollectorScan(runId: string, requestId: string): Promise<CollectorBridgeResult> {
