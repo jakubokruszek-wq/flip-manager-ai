@@ -18,7 +18,7 @@ async function initializeBootstrap() {
   window.addEventListener("message", state.listener);
   state.status = "HEALTHY";
   globalThis.FLIP_COLLECTOR_BOOTSTRAP_LOADED = true;
-  markBootstrapLoaded("1");
+  markBootstrapLoaded(health.runtimeGeneration, state);
   console.debug("FLIP_COLLECTOR_BOOTSTRAP_LOADED");
   await sendRuntime({ type: "BOOTSTRAP_LOADED", origin: location.origin, runtimeGeneration: health.runtimeGeneration });
 }
@@ -54,10 +54,16 @@ function createMessageListener(state) {
   };
 }
 
-function markBootstrapLoaded(value) {
-  const mark = () => { if (document.documentElement) document.documentElement.dataset.flipCollectorBootstrap = value; };
+function markBootstrapLoaded(value, state) {
+  const mark = () => { if (state?.status !== "HEALTHY" || !document.documentElement) return false; document.documentElement.setAttribute("data-flip-collector-bootstrap", value); return true; };
   mark();
   if (!document.documentElement) document.addEventListener("DOMContentLoaded", mark, { once: true });
+  if (!document.documentElement && typeof MutationObserver === "function") {
+    const observer = new MutationObserver(() => { if (mark()) observer.disconnect(); });
+    observer.observe(document, { childList: true, subtree: true });
+    setTimeout(() => observer.disconnect(), 1_000);
+  }
+  for (const delay of [0, 50, 250]) setTimeout(mark, delay);
 }
 
 function respond(origin, type, requestId, value) { window.postMessage({ type, requestId, ...publicResult(value) }, origin); }
@@ -67,6 +73,6 @@ function trace(requestId, stage, status = "PASS", errorCode) { return sendRuntim
 function safeRequestId(value) { return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? value : "unknown"; }
 function normalizeRuntimeError(error) { const message = error instanceof Error ? error.message : typeof error?.message === "string" ? error.message : String(error || ""); return new Error(/extension context invalidated/i.test(message) ? "EXTENSION_CONTEXT_INVALIDATED" : message.slice(0, 300) || "EXTENSION_RUNTIME_FAILED"); }
 function handleRuntimeFailure(state, error) { if (safeError(error) !== "EXTENSION_CONTEXT_INVALIDATED") return false; invalidateBootstrap(state, error); return true; }
-function invalidateBootstrap(state, error) { if (!state || globalThis[BOOTSTRAP_STATE_KEY] !== state) return; state.status = "STALE"; if (typeof state.listener === "function") window.removeEventListener("message", state.listener); globalThis.FLIP_COLLECTOR_BOOTSTRAP_LOADED = false; markBootstrapLoaded("stale"); console.debug("FLIP_COLLECTOR_BOOTSTRAP_STALE", safeError(error)); }
+function invalidateBootstrap(state, error) { if (!state || globalThis[BOOTSTRAP_STATE_KEY] !== state) return; state.status = "STALE"; if (typeof state.listener === "function") window.removeEventListener("message", state.listener); globalThis.FLIP_COLLECTOR_BOOTSTRAP_LOADED = false; if (document.documentElement) document.documentElement.setAttribute("data-flip-collector-bootstrap", "stale"); console.debug("FLIP_COLLECTOR_BOOTSTRAP_STALE", safeError(error)); }
 function safeError(error) { return error instanceof Error ? error.message.slice(0, 300) : "COLLECTOR_FAILED"; }
 })();

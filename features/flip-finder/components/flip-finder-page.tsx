@@ -924,7 +924,7 @@ function requestCollectorReady(requestId: string, attempt: number): Promise<Coll
 }
 
 async function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
-  const bootstrapLoaded = document.documentElement.dataset.flipCollectorBootstrap === "1";
+  const bootstrapLoaded = await waitForBootstrapMarker();
   traceStage(requestId, "BOOTSTRAP_SCRIPT_EXECUTED", bootstrapLoaded ? "PASS" : "FAIL", bootstrapLoaded ? undefined : "BOOTSTRAP_MARKER_MISSING");
   if (!bootstrapLoaded) return { ok: false, error: "Rozszerzenie Flip Collector nie jest aktywne na tej karcie." };
   traceStage(requestId, "BOOTSTRAP_PING_SENT", "PASS");
@@ -932,6 +932,16 @@ async function requestCollectorBridgePing(requestId: string): Promise<CollectorB
   if (!bootstrap.ok) return bootstrap;
   traceStage(requestId, "BRIDGE_PING_SENT", "PASS");
   return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
+}
+
+async function waitForBootstrapMarker(timeoutMs = 1_500): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const marker = document.documentElement?.getAttribute("data-flip-collector-bootstrap");
+    if (marker && marker !== "stale") return true;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  return false;
 }
 
 function requestCollectorScan(runId: string, requestId: string): Promise<CollectorBridgeResult> {

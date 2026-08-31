@@ -14,6 +14,7 @@ const options = fs.readFileSync(path.join(__dirname, "options.js"), "utf8");
 const optionsHtml = fs.readFileSync(path.join(__dirname, "options.html"), "utf8");
 const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf8");
 const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
+const finderPage = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/components/flip-finder-page.tsx"), "utf8");
 
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
@@ -113,6 +114,8 @@ test("finder bootstrap is matched at document start and owns the direct runtime 
   assert.match(bootstrap, /BOOTSTRAP_RUNTIME_PING/);
   assert.match(bootstrap, /FLIP_COLLECTOR_BOOTSTRAP_LOADED/);
   assert.match(bootstrap, /flipCollectorBootstrap/);
+  assert.match(bootstrap, /setAttribute\("data-flip-collector-bootstrap"/);
+  assert.match(bootstrap, /\[0, 50, 250\]/);
   assert.match(bootstrap, /safeRequestId/);
   assert.match(bootstrap, /EXTENSION_CONTEXT_INVALIDATED/);
   assert.match(bootstrap, /\.catch\(\(error\) => invalidateBootstrap/);
@@ -122,20 +125,27 @@ test("finder bootstrap is matched at document start and owns the direct runtime 
   assert.match(background, /recoverFinderBootstraps\(\)\.catch/);
   assert.doesNotMatch(bootstrap, /deviceToken|secret|hmac|cookie/i);
   assert.match(background, /BOOTSTRAP_ORIGIN_NOT_ALLOWED/);
+  assert.match(finderPage, /waitForBootstrapMarker\(timeoutMs = 1_500\)/);
+  assert.match(finderPage, /getAttribute\("data-flip-collector-bootstrap"\)/);
+  assert.match(finderPage, /marker !== "stale"/);
 });
 
 test("bootstrap executes, is idempotent and round-trips exact request ids", async () => {
   const listeners = [];
   const posted = [];
   const runtimeMessages = [];
-  const document = { documentElement: { dataset: {} }, addEventListener() {} };
+  const attributes = {};
+  const document = { documentElement: { dataset: {}, setAttribute(name, value) { attributes[name] = value; this.dataset.flipCollectorBootstrap = value; }, getAttribute(name) { return attributes[name] || null; } }, addEventListener() {} };
   const window = { addEventListener(type, listener) { if (type === "message") listeners.push(listener); }, removeEventListener(type, listener) { if (type === "message") { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); } }, postMessage(message, origin) { posted.push({ message, origin }); } };
-  const context = vm.createContext({ globalThis: {}, window, document, location: { origin: "https://flip-manager-ai.vercel.app" }, console: { debug() {} }, chrome: { runtime: { lastError: null, sendMessage(message, callback) { runtimeMessages.push(message); callback(message.type === "BOOTSTRAP_CONTEXT_HEALTH" ? { ok: true, runtimeGeneration: "generation-1" } : { ok: true, requestId: message.requestId }); } } }, Promise, Error, Set });
+  const context = vm.createContext({ globalThis: {}, window, document, location: { origin: "https://flip-manager-ai.vercel.app" }, console: { debug() {} }, chrome: { runtime: { lastError: null, sendMessage(message, callback) { runtimeMessages.push(message); callback(message.type === "BOOTSTRAP_CONTEXT_HEALTH" ? { ok: true, runtimeGeneration: "generation-1" } : { ok: true, requestId: message.requestId }); } } }, Promise, Error, Set, setTimeout });
   vm.runInContext(bootstrap, context);
   vm.runInContext(bootstrap, context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(document.documentElement.dataset.flipCollectorBootstrap, "1");
+  assert.equal(document.documentElement.getAttribute("data-flip-collector-bootstrap"), "generation-1");
   assert.equal(listeners.length, 1);
+  delete attributes["data-flip-collector-bootstrap"];
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(document.documentElement.getAttribute("data-flip-collector-bootstrap"), "generation-1");
   const requestId = "10da2d3e-23be-4e39-9625-02d33984692d";
   listeners[0]({ source: window, origin: "https://flip-manager-ai.vercel.app", data: { type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId } });
   await new Promise((resolve) => setImmediate(resolve));
@@ -150,28 +160,29 @@ test("bootstrap executes, is idempotent and round-trips exact request ids", asyn
 test("invalidated bootstrap becomes stale and a new runtime generation replaces it", async () => {
   const listeners = [];
   const posted = [];
-  const document = { documentElement: { dataset: {} }, addEventListener() {} };
+  const attributes = {};
+  const document = { documentElement: { dataset: {}, setAttribute(name, value) { attributes[name] = value; this.dataset.flipCollectorBootstrap = value; }, getAttribute(name) { return attributes[name] || null; } }, addEventListener() {} };
   const window = { addEventListener(type, listener) { if (type === "message") listeners.push(listener); }, removeEventListener(type, listener) { if (type === "message") { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); } }, postMessage(message) { posted.push(message); } };
   let generation = "generation-1";
   let invalidated = false;
   const runtime = { lastError: null, sendMessage(message, callback) { if (invalidated) throw new Error("Extension context invalidated."); if (message.type === "BOOTSTRAP_CONTEXT_HEALTH") callback({ ok: true, runtimeGeneration: generation }); else if (message.type === "CHECK_COLLECTOR_READY") callback({ ok: true, status: "CONNECTED" }); else callback({ ok: true, requestId: message.requestId }); } };
-  const context = vm.createContext({ globalThis: {}, window, document, location: { origin: "https://flip-manager-ai.vercel.app" }, console: { debug() {} }, chrome: { runtime }, Promise, Error, Set });
+  const context = vm.createContext({ globalThis: {}, window, document, location: { origin: "https://flip-manager-ai.vercel.app" }, console: { debug() {} }, chrome: { runtime }, Promise, Error, Set, setTimeout });
   vm.runInContext(bootstrap, context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(document.documentElement.dataset.flipCollectorBootstrap, "1");
+  assert.equal(document.documentElement.getAttribute("data-flip-collector-bootstrap"), "generation-1");
   assert.equal(listeners.length, 1);
 
   invalidated = true;
   vm.runInContext(bootstrap, context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(document.documentElement.dataset.flipCollectorBootstrap, "stale");
+  assert.equal(document.documentElement.getAttribute("data-flip-collector-bootstrap"), "stale");
   assert.equal(listeners.length, 0);
 
   invalidated = false;
   generation = "generation-2";
   vm.runInContext(bootstrap, context);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(document.documentElement.dataset.flipCollectorBootstrap, "1");
+  assert.equal(document.documentElement.getAttribute("data-flip-collector-bootstrap"), "generation-2");
   assert.equal(listeners.length, 1);
   const requestId = "10da2d3e-23be-4e39-9625-02d33984692d";
   listeners[0]({ source: window, origin: "https://flip-manager-ai.vercel.app", data: { type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId } });
