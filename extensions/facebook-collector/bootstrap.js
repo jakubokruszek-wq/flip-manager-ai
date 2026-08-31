@@ -4,18 +4,28 @@
 const ALLOWED_ORIGINS = new Set(["https://flip-manager-ai.vercel.app", "http://localhost:3000"]);
 const BOOTSTRAP_STATE_KEY = "__flipCollectorBootstrapState";
 
-void initializeBootstrap().catch((error) => invalidateBootstrap(globalThis[BOOTSTRAP_STATE_KEY], error));
+const bootstrapState = ensureMessageListener();
+void initializeBootstrap(bootstrapState).catch((error) => invalidateBootstrap(bootstrapState, error));
 
-async function initializeBootstrap() {
-  const health = await sendRuntime({ type: "BOOTSTRAP_CONTEXT_HEALTH", origin: location.origin });
-  if (health?.ok !== true || typeof health.runtimeGeneration !== "string") throw new Error(health?.error || "EXTENSION_RUNTIME_UNHEALTHY");
+function ensureMessageListener() {
   const existing = globalThis[BOOTSTRAP_STATE_KEY];
-  if (existing?.status === "HEALTHY" && existing.runtimeGeneration === health.runtimeGeneration) return;
+  if (existing?.status !== "STALE" && typeof existing?.listener === "function") return existing;
   if (typeof existing?.listener === "function") window.removeEventListener("message", existing.listener);
-  const state = { status: "INSTALLING", runtimeGeneration: health.runtimeGeneration, listener: null };
+  const state = { status: "INSTALLING", runtimeGeneration: null, listener: null };
   globalThis[BOOTSTRAP_STATE_KEY] = state;
   state.listener = createMessageListener(state);
   window.addEventListener("message", state.listener);
+  markListenerRegistered();
+  recordBootstrapBeacon("LISTENER_REGISTERED");
+  console.debug("FLIP_COLLECTOR_BOOTSTRAP_LISTENER_REGISTERED");
+  return state;
+}
+
+async function initializeBootstrap(state) {
+  const health = await sendRuntime({ type: "BOOTSTRAP_CONTEXT_HEALTH", origin: location.origin });
+  if (health?.ok !== true || typeof health.runtimeGeneration !== "string") throw new Error(health?.error || "EXTENSION_RUNTIME_UNHEALTHY");
+  if (globalThis[BOOTSTRAP_STATE_KEY] !== state || state.status === "STALE") return;
+  state.runtimeGeneration = health.runtimeGeneration;
   state.status = "HEALTHY";
   globalThis.FLIP_COLLECTOR_BOOTSTRAP_LOADED = true;
   markBootstrapLoaded(health.runtimeGeneration, state);
@@ -25,33 +35,58 @@ async function initializeBootstrap() {
 
 function createMessageListener(state) {
   return (event) => {
-    if (state.status !== "HEALTHY") return;
+    if (state.status === "STALE") return;
     if (event.source !== window || event.origin !== location.origin || !ALLOWED_ORIGINS.has(event.origin)) return;
     const requestId = safeRequestId(event.data?.requestId);
     if (requestId === "unknown") return;
+    const eventType = typeof event.data?.type === "string" ? event.data.type.slice(0, 80) : "UNKNOWN";
 
     if (event.data?.type === "FLIP_COLLECTOR_BOOTSTRAP_PING") {
-      void trace(requestId, "BOOTSTRAP_RECEIVED_PING").then(() => sendRuntime({ type: "BOOTSTRAP_RUNTIME_PING", requestId })).then((result) => {
-        return trace(requestId, "BOOTSTRAP_SENT_PONG", result?.ok === true ? "PASS" : "FAIL", result?.error).then(() => respond(event.origin, "FLIP_COLLECTOR_BOOTSTRAP_PONG", requestId, result));
-      }).catch((error) => { if (!handleRuntimeFailure(state, error)) respond(event.origin, "FLIP_COLLECTOR_BOOTSTRAP_PONG", requestId, { ok: false, error: safeError(error) }); });
+      recordBootstrapBeacon("PAGE_MESSAGE_RECEIVED", requestId, eventType);
+      respond(event.origin, "FLIP_COLLECTOR_BOOTSTRAP_PONG", requestId, { ok: true, status: state.status });
+      recordBootstrapBeacon("BOOTSTRAP_PONG_SENT", requestId, eventType);
+      void trace(requestId, "BOOTSTRAP_RECEIVED_PING").then(() => trace(requestId, "BOOTSTRAP_SENT_PONG")).then(() => sendRuntime({ type: "BOOTSTRAP_RUNTIME_PING", requestId })).catch((error) => { handleRuntimeFailure(state, error); });
       return;
     }
 
     if (event.data?.type === "FLIP_COLLECTOR_BRIDGE_PING") {
+      recordBootstrapBeacon("PAGE_MESSAGE_RECEIVED", requestId, eventType);
       respond(event.origin, "FLIP_COLLECTOR_BRIDGE_PONG", requestId, { ok: true });
       return;
     }
 
     if (event.data?.type === "FLIP_COLLECTOR_READY_REQUEST") {
+      recordBootstrapBeacon("PAGE_MESSAGE_RECEIVED", requestId, eventType);
       void sendRuntime({ type: "CHECK_COLLECTOR_READY", requestId }).then((result) => respond(event.origin, "FLIP_COLLECTOR_READY_RESULT", requestId, result)).catch((error) => { if (!handleRuntimeFailure(state, error)) respond(event.origin, "FLIP_COLLECTOR_READY_RESULT", requestId, { ok: false, status: "UNVERIFIED", error: safeError(error) }); });
       return;
     }
 
     if (event.data?.type === "FLIP_COLLECTOR_SCAN_REQUEST") {
+      recordBootstrapBeacon("PAGE_MESSAGE_RECEIVED", requestId, eventType);
       const scanId = typeof event.data.scanId === "string" ? event.data.scanId : "";
       void sendRuntime({ type: "COLLECT_PRODUCTION_SOURCE", scanId, requestId }).then((result) => respond(event.origin, "FLIP_COLLECTOR_SCAN_RESULT", requestId, { ...result, scanId })).catch((error) => { if (!handleRuntimeFailure(state, error)) respond(event.origin, "FLIP_COLLECTOR_SCAN_RESULT", requestId, { ok: false, scanId, error: safeError(error) }); });
     }
   };
+}
+
+function markListenerRegistered() {
+  const mark = () => { if (!document.documentElement) return false; document.documentElement.setAttribute("data-flip-collector-bootstrap-listener", "registered"); return true; };
+  mark();
+  if (!document.documentElement) document.addEventListener("DOMContentLoaded", mark, { once: true });
+  if (!document.documentElement && typeof MutationObserver === "function") {
+    const observer = new MutationObserver(() => { if (mark()) observer.disconnect(); });
+    observer.observe(document, { childList: true, subtree: true });
+    setTimeout(() => observer.disconnect(), 1_000);
+  }
+}
+
+function recordBootstrapBeacon(stage, requestId, eventType) {
+  const beacon = { stage, timestamp: new Date().toISOString(), ...(requestId ? { requestId } : {}), ...(eventType ? { eventType } : {}) };
+  const storageKey = stage === "LISTENER_REGISTERED" ? "collectorBootstrapListenerBeacon" : stage === "PAGE_MESSAGE_RECEIVED" ? "collectorBootstrapPageMessageBeacon" : "collectorBootstrapPongBeacon";
+  try {
+    const write = chrome.storage?.local?.set?.({ [storageKey]: beacon });
+    if (write && typeof write.catch === "function") void write.catch(() => {});
+  } catch {}
 }
 
 function markBootstrapLoaded(value, state) {

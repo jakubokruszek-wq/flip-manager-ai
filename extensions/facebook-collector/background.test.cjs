@@ -125,10 +125,44 @@ test("finder bootstrap is matched at document start and owns the direct runtime 
   assert.match(background, /recoverFinderBootstraps\(\)\.catch/);
   assert.doesNotMatch(bootstrap, /deviceToken|secret|hmac|cookie/i);
   assert.match(background, /BOOTSTRAP_ORIGIN_NOT_ALLOWED/);
+  assert.match(bootstrap, /LISTENER_REGISTERED/);
+  assert.match(bootstrap, /PAGE_MESSAGE_RECEIVED/);
   assert.match(finderPage, /waitForCollectorBootstrap/);
   assert.match(finderPage, /getAttribute\("data-flip-collector-bootstrap"\)/);
   assert.doesNotMatch(finderPage, /BOOTSTRAP_MARKER_MISSING/);
   assert.match(finderPage, /BOOTSTRAP_START_TIMEOUT/);
+});
+
+test("page and bootstrap use the same literal PING and PONG event names", () => {
+  for (const eventName of ["FLIP_COLLECTOR_BOOTSTRAP_PING", "FLIP_COLLECTOR_BOOTSTRAP_PONG"]) {
+    assert.match(finderPage, new RegExp(eventName));
+    assert.match(bootstrap, new RegExp(eventName));
+  }
+});
+
+test("bootstrap registers synchronously and answers PING before background health resolves", async () => {
+  const listeners = [];
+  const posted = [];
+  const beacons = [];
+  let resolveHealth;
+  const document = { documentElement: { setAttribute() {} }, addEventListener() {} };
+  const window = { addEventListener(type, listener) { if (type === "message") listeners.push(listener); }, removeEventListener() {}, postMessage(message, origin) { posted.push({ message, origin }); } };
+  const runtime = { lastError: null, sendMessage(message, callback) { if (message.type === "BOOTSTRAP_CONTEXT_HEALTH") resolveHealth = callback; else callback({ ok: true, requestId: message.requestId }); } };
+  const storage = { local: { set(value) { beacons.push(...Object.values(value)); return Promise.resolve(); } } };
+  const context = vm.createContext({ globalThis: {}, window, document, location: { origin: "https://flip-manager-ai.vercel.app" }, console: { debug() {} }, chrome: { runtime, storage }, Promise, Error, Set, Date, setTimeout });
+
+  vm.runInContext(bootstrap, context);
+  assert.equal(listeners.length, 1);
+  assert.equal(typeof resolveHealth, "function");
+  assert.equal(beacons[0].stage, "LISTENER_REGISTERED");
+
+  const requestId = "22e13376-771d-4a9a-aee7-61189d71d62e";
+  listeners[0]({ source: window, origin: "https://flip-manager-ai.vercel.app", data: { type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId } });
+  assert.ok(posted.some(({ message }) => message.type === "FLIP_COLLECTOR_BOOTSTRAP_PONG" && message.requestId === requestId && message.ok === true));
+  assert.ok(beacons.some((beacon) => beacon.stage === "PAGE_MESSAGE_RECEIVED" && beacon.requestId === requestId && beacon.eventType === "FLIP_COLLECTOR_BOOTSTRAP_PING"));
+
+  resolveHealth({ ok: true, runtimeGeneration: "generation-delayed" });
+  await new Promise((resolve) => setImmediate(resolve));
 });
 
 test("bootstrap executes, is idempotent and round-trips exact request ids", async () => {
