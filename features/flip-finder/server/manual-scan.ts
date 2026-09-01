@@ -10,6 +10,7 @@ import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
+export { scanStatus } from "./scan-start-errors";
 
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; matchDiagnostics: MatchDiagnosticSummary };
 export type ScanSummary = { runId: string; status: "running" | "completed" | "partial"; sourcesRun: number; sourcesCompleted: number; sourcesFailed: number; fetched: number; normalized: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; actualErrors: number; sourceResults: SourceScanResult[]; matchDiagnostics: MatchDiagnosticSummary; scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number; warnings: string[] };
@@ -69,7 +70,14 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
     const completed = sourceResults.filter((result) => result.status === "completed");
     const pending = sourceResults.filter((result) => result.status === "pending");
     const failed = sourceResults.filter((result) => result.status === "failed").length;
-    if (!completed.length && !pending.length) throw statusError(502, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
+    if (!completed.length && !pending.length) {
+      const facebookFailure = sourceResults.find((result) => result.source === "facebook" && result.status === "failed");
+      if (facebookFailure && /COLLECTOR_(?:OFFLINE|READINESS_QUERY_FAILED)/.test(facebookFailure.errorMessage ?? "")) {
+        const failureMessage = facebookFailure.errorMessage ?? "";
+        throw statusError(503, failureMessage.startsWith("COLLECTOR_OFFLINE") ? "COLLECTOR_OFFLINE" : "COLLECTOR_READINESS_UNAVAILABLE");
+      }
+      throw statusError(500, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
+    }
     const sum = (key: keyof Pick<SourceScanResult, "fetched" | "normalized" | "matched" | "listingsCreated" | "newMatches" | "updated" | "priceDrops" | "rejected">) => sourceResults.reduce((total, result) => total + result[key], 0);
     const warnings = sourceResults.filter((result) => result.errorMessage).map((result) => `${result.source}: ${result.errorMessage}`);
     const matchDiagnostics = mergeMatchDiagnosticSummaries(sourceResults.map((result) => result.matchDiagnostics));
@@ -173,4 +181,3 @@ function addOtodomFilterDecision(summary: OtodomFilterSummary, listing: SourceLi
 
 type StatusError = Error & { status: number };
 function statusError(status: number, message: string): StatusError { return Object.assign(new Error(message), { status }); }
-export function scanStatus(error: unknown): number { return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number" ? error.status : 502; }
