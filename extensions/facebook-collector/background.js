@@ -1,6 +1,7 @@
 "use strict";
 
 importScripts("collector-core.js");
+importScripts("collector-runtime.js");
 importScripts("pairing-status.js");
 
 const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
@@ -9,6 +10,10 @@ const SEARCH_BUDGET_RESERVE_MS = 40_000;
 const SEARCH_LIMITS = { minScrolls: 0, maxScrolls: 3, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 15_000, discoveryBudgetMs: 5_000, hardTimeBudgetMs: 90_000 };
 const SEARCH_BUDGET_SAFETY_MS = 2_000;
 const SEARCH_QUERY_CLEANUP_RESERVE_MS = 1_500;
+const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 25_000;
+const COLLECT_SOURCE_RESPONSE_GRACE_MS = 20_000;
+const SOURCE_COLLECTION_DEADLINE_MS = 180_000;
+const FAIL_REPORT_TIMEOUT_MS = 10_000;
 
 const DEFAULT_SOURCES = [
   "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
@@ -115,26 +120,41 @@ async function collectActiveSource() {
 
 async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId = "unknown") {
   let tab;
-  try {
+  const runtime = globalThis.FlipCollectorRuntime;
+  const deadline = runtime.createDeadline(SOURCE_COLLECTION_DEADLINE_MS);
+  const context = { deadline, lastStage: "FACEBOOK_TAB_CREATE", query: null, source: "lodzsprzedazzakupwynajem" };
+  const collection = (async () => {
     tab = await chrome.tabs.create({ url: PRODUCTION_SOURCE_URL, active: false });
-    await waitForTab(tab.id, 30_000);
-    return await collectTabSource(tab.id, PRODUCTION_SOURCE_URL, scanId, requestId);
+    context.lastStage = "FACEBOOK_TAB_LOAD";
+    deadline.assertActive(failureDiagnostics(context, tab?.id));
+    await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline.remainingMs())));
+    deadline.assertActive(failureDiagnostics(context, tab.id));
+    return collectTabSource(tab.id, PRODUCTION_SOURCE_URL, scanId, requestId, context);
+  })();
+  try {
+    return await Promise.race([collection, deadline.timeout]);
   } catch (error) {
-    await recordStartTrace({ requestId, stage: "COLLECTOR_START_FAILED", status: "FAIL", errorCode: safeError(error) });
-    await failCollectorScan(scanId, error);
-    await setCollectorState({ status: "failed", phase: "FAILED", progress: safeError(error), sourceUrl: PRODUCTION_SOURCE_URL, scanId, finishedAt: new Date().toISOString() });
-    return { sourceUrl: PRODUCTION_SOURCE_URL, status: "FAILED", error: safeError(error), scanId };
+    const errorCode = collectorErrorCode(error);
+    const diagnostics = { ...failureDiagnostics(context, tab?.id), ...runtime.safeDiagnostics(error?.diagnostics || {}), errorCode };
+    const traceStage = errorCode === "SOURCE_COLLECTION_DEADLINE_EXCEEDED" ? "SOURCE_COLLECTION_TIMEOUT" : "COLLECTOR_START_FAILED";
+    await recordStartTrace({ requestId, stage: traceStage, status: "FAIL", errorCode, ...diagnostics });
+    if (tab?.id) { await chrome.tabs.remove(tab.id).catch(() => {}); tab = null; }
+    await failCollectorScan(scanId, error, diagnostics);
+    await setCollectorState({ status: "failed", phase: "FAILED", progress: errorCode, errorCode, lastStage: diagnostics.stage, query: diagnostics.query, sourceUrl: PRODUCTION_SOURCE_URL, scanId, finishedAt: new Date().toISOString() });
+    return { sourceUrl: PRODUCTION_SOURCE_URL, status: "FAILED", error: errorCode, diagnostics, scanId };
   } finally {
+    deadline.cancel();
     if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
   }
 }
 
-async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown") {
+async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown", collectionContext = null) {
   await recordStartTrace({ requestId, stage: "COLLECTOR_STARTED", status: "PASS" });
   const startedAtMs = Date.now();
   await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, scanId, startedAt: new Date().toISOString() });
   const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
-  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED" });
+  updateCollectionContext(collectionContext, "MAIN_FEED", null);
+  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED" }, { requestId, source: "lodzsprzedazzakupwynajem", collectionContext });
   let posts = primary.posts;
   const searchRuns = [];
   const mainFeedIds = new Set(primary.posts.map((post) => post.postId));
@@ -156,15 +176,17 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown")
         break;
       }
       await setCollectorState({ status: "collecting", phase: "SEARCH", query, progress: `Przeszukiwanie: ${query}…`, sourceUrl, scanId, startedAt: new Date(startedAtMs).toISOString() });
+      updateCollectionContext(collectionContext, "SEARCH", query);
       const searchUrl = `https://www.facebook.com/groups/${primary.source.sourceId}/search/?q=${encodeURIComponent(query)}`;
       await chrome.tabs.update(tabId, { url: searchUrl });
       try {
         await waitForTab(tabId, Math.min(10_000, searchRemaining));
+        collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
         const remainingAfterLoad = SEARCH_LIMITS.hardTimeBudgetMs - (Date.now() - searchStartedAtMs);
         if (remainingAfterLoad < 5_000 + SEARCH_BUDGET_SAFETY_MS) throw new Error("SEARCH_GLOBAL_TIME_BUDGET");
         const queryBudgetMs = Math.min(SEARCH_LIMITS.discoveryBudgetMs, remainingAfterLoad - SEARCH_BUDGET_SAFETY_MS, queryDeadlineMs - Date.now() - SEARCH_BUDGET_SAFETY_MS);
         if (queryBudgetMs < 5_000) throw new Error("SEARCH_QUERY_TIME_BUDGET");
-        const search = await collectFromTab(tabId, { minScrolls: SEARCH_LIMITS.minScrolls, maxScrolls: SEARCH_LIMITS.maxScrolls, maxPosts: SEARCH_LIMITS.maxUniquePerQuery, maxMediaTiles: SEARCH_LIMITS.maxTilesToOpen, budgetMs: queryBudgetMs, searchMode: true, discoverySource: "SEARCH", searchQuery: query });
+        const search = await collectFromTab(tabId, { minScrolls: SEARCH_LIMITS.minScrolls, maxScrolls: SEARCH_LIMITS.maxScrolls, maxPosts: SEARCH_LIMITS.maxUniquePerQuery, maxMediaTiles: SEARCH_LIMITS.maxTilesToOpen, budgetMs: queryBudgetMs, searchMode: true, discoverySource: "SEARCH", searchQuery: query }, { requestId, source: primary.source.sourceId, collectionContext });
         const tileResolution = await resolveSearchMediaTiles({ tiles: search.mediaTiles, source: primary.source, query, deadlineMs: queryDeadlineMs });
         const queryPosts = globalThis.FlipFacebookCollectorCore.mergeRecords([...search.posts, ...tileResolution.posts], SEARCH_LIMITS.maxUniquePerQuery);
         const beforeIds = new Set(posts.map((post) => post.postId));
@@ -175,6 +197,7 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown")
       } catch (error) {
         const reason = safeError(error);
         searchRuns.push(failedSearchTelemetry(query, Date.now() - queryStartedAtMs, reason));
+        if (reason === "COLLECT_SOURCE_RESPONSE_TIMEOUT" || reason === "SOURCE_COLLECTION_DEADLINE_EXCEEDED") throw error;
         if (reason === "SEARCH_GLOBAL_TIME_BUDGET" || Date.now() - searchStartedAtMs >= SEARCH_LIMITS.hardTimeBudgetMs) {
           searchBudgetExhausted = true;
           appendUnexecutedSearchRuns(searchRuns, queryIndex + 1, "SEARCH_GLOBAL_TIME_BUDGET");
@@ -195,12 +218,15 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown")
     queries: searchRuns,
   };
   const durationMs = Date.now() - startedAtMs;
+  collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
+  updateCollectionContext(collectionContext, "FINALIZE", null);
   await setCollectorState({ status: "collecting", phase: "FINALIZE", progress: PHASE_FINALIZE, sourceUrl, scanId, startedAt: new Date(startedAtMs).toISOString() });
   const health = healthAfterSearch(primary.health, posts.length, searchTelemetrySummary, durationMs);
   const duplicateCount = primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0) - posts.length;
   const identity = { verified: posts.filter((post) => post.identityConfidence === "EXACT").length, unverified: posts.filter((post) => post.identityConfidence !== "EXACT").length, conflictsBlocked: posts.filter((post) => (post.identityReasons || []).includes("POST_IDENTITY_CONFLICT")).length };
   const images = { rawCandidates: posts.reduce((sum, post) => sum + (post.media || []).length, 0), verifiedProvenance: posts.reduce((sum, post) => sum + (post.media || []).filter((media) => media.exactAssociation === true && media.exactPostId === post.postId).length, 0), imported: 0 };
   const targets = ["1577700267381450", "1578068947344582", "1577710350713775"];
+  collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
   const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, posts };
   await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
   const upload = await uploadBatch(batch);
@@ -210,9 +236,32 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown")
   return result;
 }
 
-async function collectFromTab(tabId, options) {
+async function collectFromTab(tabId, options, traceContext = {}) {
   await waitForContentScript(tabId);
-  const response = await chrome.tabs.sendMessage(tabId, { type: "COLLECT_SOURCE", options });
+  const runtime = globalThis.FlipCollectorRuntime;
+  const collectionContext = traceContext.collectionContext;
+  const query = options.searchQuery || "MAIN_FEED";
+  const diagnostics = { query, tabId, source: traceContext.source || "facebook", stage: options.searchMode ? "SEARCH_COLLECT_SOURCE" : "MAIN_FEED_COLLECT_SOURCE" };
+  collectionContext?.deadline.assertActive(diagnostics);
+  const desiredTimeoutMs = Math.max(COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS, Number(options.budgetMs || 0) + COLLECT_SOURCE_RESPONSE_GRACE_MS);
+  const remainingMs = collectionContext?.deadline.remainingMs() ?? desiredTimeoutMs;
+  const timeoutMs = Math.max(1, Math.min(desiredTimeoutMs, remainingMs));
+  const timeoutCode = remainingMs <= desiredTimeoutMs ? "SOURCE_COLLECTION_DEADLINE_EXCEEDED" : "COLLECT_SOURCE_RESPONSE_TIMEOUT";
+  const sentAt = Date.now();
+  await recordStartTrace({ requestId: traceContext.requestId, stage: "COLLECT_SOURCE_SENT", status: "PASS", ...diagnostics });
+  let responseResult;
+  try {
+    responseResult = await runtime.sendMessageWithTimeout(
+      () => chrome.tabs.sendMessage(tabId, { type: "COLLECT_SOURCE", options }),
+      { timeoutMs, timeoutCode, diagnostics },
+    );
+  } catch (error) {
+    const errorCode = collectorErrorCode(error);
+    await recordStartTrace({ requestId: traceContext.requestId, stage: "COLLECT_SOURCE_TIMEOUT", status: "TIMEOUT", errorCode, ...diagnostics, elapsedMs: Date.now() - sentAt });
+    throw error;
+  }
+  const response = responseResult.response;
+  await recordStartTrace({ requestId: traceContext.requestId, stage: "COLLECT_SOURCE_RESPONSE", status: "PASS", ...diagnostics, elapsedMs: responseResult.elapsedMs });
   if (!response?.ok) throw new Error(response?.error || "COLLECT_SOURCE_FAILED");
   return response.result;
 }
@@ -298,15 +347,15 @@ async function checkCollectorReady(requestId = "unknown") {
   }
 }
 
-async function failCollectorScan(scanId, error) {
+async function failCollectorScan(scanId, error, diagnostics = {}) {
   const config = await configValue();
   if (!config.apiUrl || !config.deviceId || !config.deviceToken) return;
   try {
-    await signedPost(`${String(config.apiUrl).replace(/\/+$/, "")}/api/collector/facebook/scans/${scanId}/fail`, JSON.stringify({ error: safeError(error) }));
+    await signedPost(`${String(config.apiUrl).replace(/\/+$/, "")}/api/collector/facebook/scans/${scanId}/fail`, JSON.stringify({ error: collectorErrorCode(error), ...globalThis.FlipCollectorRuntime.safeDiagnostics(diagnostics) }), FAIL_REPORT_TIMEOUT_MS);
   } catch { /* preserve the original collector failure */ }
 }
 
-async function signedPost(urlValue, body) {
+async function signedPost(urlValue, body, timeoutMs = null) {
   const config = await configValue();
   const url = new URL(urlValue);
   const timestamp = Date.now().toString();
@@ -316,7 +365,7 @@ async function signedPost(urlValue, body) {
   const signingKeyHex = await sha256Hex(config.deviceToken);
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(signingKeyHex), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const signature = hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical)));
-  const response = await fetch(url.toString(), { method: "POST", headers: { "Content-Type": "application/json", "X-Flip-Collector-Device-Id": config.deviceId, "X-Flip-Collector-Timestamp": timestamp, "X-Flip-Collector-Nonce": nonce, "X-Flip-Collector-Signature": signature }, body });
+  const response = await fetch(url.toString(), { method: "POST", headers: { "Content-Type": "application/json", "X-Flip-Collector-Device-Id": config.deviceId, "X-Flip-Collector-Timestamp": timestamp, "X-Flip-Collector-Nonce": nonce, "X-Flip-Collector-Signature": signature }, body, ...(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}) });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`COLLECTOR_UPLOAD_${response.status}:${payload.code || "FAILED"}`);
   return payload;
@@ -380,13 +429,17 @@ async function recordStartTrace(message) {
   const stored = await chrome.storage.local.get("collectorStartTraces");
   const traces = stored.collectorStartTraces && typeof stored.collectorStartTraces === "object" ? stored.collectorStartTraces : {};
   const trace = Array.isArray(traces[requestId]) ? traces[requestId] : [];
-  trace.push({ requestId, stage: String(message.stage || "UNKNOWN").slice(0, 80), timestamp: new Date().toISOString(), status: ["PASS", "FAIL", "TIMEOUT"].includes(message.status) ? message.status : "PASS", ...(typeof message.errorCode === "string" ? { errorCode: message.errorCode.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120) } : {}) });
+  const diagnostics = globalThis.FlipCollectorRuntime?.safeDiagnostics(message) || {};
+  trace.push({ requestId, stage: String(message.stage || "UNKNOWN").slice(0, 80), timestamp: new Date().toISOString(), status: ["PASS", "FAIL", "TIMEOUT"].includes(message.status) ? message.status : "PASS", ...(typeof message.errorCode === "string" ? { errorCode: message.errorCode.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120) } : {}), ...diagnostics });
   traces[requestId] = trace.slice(-80);
   const keys = Object.keys(traces).slice(-50);
   await chrome.storage.local.set({ collectorStartTraces: Object.fromEntries(keys.map((key) => [key, traces[key]])) });
 }
 function safeRequestId(value) { return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? value : "unknown"; }
 function isUuid(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
+function collectorErrorCode(error) { return typeof error?.code === "string" ? error.code.slice(0, 120) : safeError(error).split(":", 1)[0]; }
+function updateCollectionContext(context, stage, query) { if (!context) return; context.lastStage = stage; context.query = query; }
+function failureDiagnostics(context, tabId) { return { stage: context?.lastStage || "SOURCE_COLLECTION", query: context?.query || undefined, tabId, source: context?.source || "facebook", elapsedMs: context?.deadline ? Date.now() - context.deadline.startedAt : undefined }; }
 async function waitForTab(tabId, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {

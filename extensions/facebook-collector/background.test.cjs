@@ -7,6 +7,7 @@ const vm = require("node:vm");
 const path = require("node:path");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"));
 const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8");
+const runtime = fs.readFileSync(path.join(__dirname, "collector-runtime.js"), "utf8");
 const content = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
 const popup = fs.readFileSync(path.join(__dirname, "popup.js"), "utf8");
 const pairing = fs.readFileSync(path.join(__dirname, "pairing.js"), "utf8");
@@ -15,6 +16,7 @@ const optionsHtml = fs.readFileSync(path.join(__dirname, "options.html"), "utf8"
 const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf8");
 const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
 const finderPage = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/components/flip-finder-page.tsx"), "utf8");
+const failRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/facebook/scans/[scanId]/fail/route.ts"), "utf8");
 
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
@@ -84,11 +86,25 @@ test("pairing status autoload uses signed backend verification in popup and setu
 });
 
 test("start trace uses request ids, bounded safe stages and never stores credentials", () => {
-  for (const stage of ["EXTENSION_RECEIVED_READY", "EXTENSION_READY_RESULT", "EXTENSION_RECEIVED_SCAN_COMMAND", "COLLECTOR_STARTED", "COLLECTOR_BATCH_CREATED"]) assert.match(background + content + bridge, new RegExp(stage));
+  for (const stage of ["EXTENSION_RECEIVED_READY", "EXTENSION_READY_RESULT", "EXTENSION_RECEIVED_SCAN_COMMAND", "COLLECTOR_STARTED", "COLLECT_SOURCE_SENT", "COLLECT_SOURCE_RESPONSE", "COLLECT_SOURCE_TIMEOUT", "COLLECTOR_BATCH_CREATED"]) assert.match(background + content + bridge, new RegExp(stage));
   assert.match(background, /safeRequestId/);
   assert.match(background, /collectorStartTraces/);
   assert.match(bridge, /requestId/);
   assert.doesNotMatch(background, /collectorStartTraces[\s\S]{0,200}deviceToken/);
+});
+
+test("COLLECT_SOURCE response and whole-source deadlines are hard, terminal and fail-closed", () => {
+  assert.match(background, /importScripts\("collector-runtime\.js"\)/);
+  assert.match(background, /COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 25_000/);
+  assert.match(background, /SOURCE_COLLECTION_DEADLINE_MS = 180_000/);
+  assert.match(background, /sendMessageWithTimeout/);
+  assert.match(background + runtime, /COLLECT_SOURCE_RESPONSE_TIMEOUT/);
+  assert.match(background + runtime, /SOURCE_COLLECTION_DEADLINE_EXCEEDED/);
+  assert.match(background, /chrome\.tabs\.remove\(tab\.id\)/);
+  assert.match(background, /failCollectorScan\(scanId, error, diagnostics\)/);
+  assert.match(failRoute, /collectorScanFailurePatch/);
+  assert.match(failRoute, /\.in\("status", \["pending", "running"\]\)/);
+  assert.doesNotMatch(runtime, /deviceToken|hmac|cookie/i);
 });
 
 test("bridge exposes an independent request-id ping and explicit runtime error path", () => {
