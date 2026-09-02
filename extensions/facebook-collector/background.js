@@ -37,10 +37,13 @@ const PHASE_DONE = "Zakonczono";
 
 const FINDER_ORIGIN = "https://flip-manager-ai.vercel.app";
 const RUNTIME_GENERATION = crypto.randomUUID();
+let collectorJobPollInFlight = false;
 
 void recoverFinderBootstraps().catch(() => {});
 chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
+chrome.alarms.create("collector-job-poll", { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === "collector-job-poll") void pollCollectorJobs().catch(() => {}); });
 
 chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
   if (message?.type !== "FLIP_COLLECTOR_EXTERNAL_PING" || !isAllowedExternalSender(sender) || safeRequestId(message.requestId) === "unknown") {
@@ -168,6 +171,22 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
     deadline.cancel();
     if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
   }
+}
+
+async function pollCollectorJobs() {
+  if (collectorJobPollInFlight) return;
+  collectorJobPollInFlight = true;
+  try {
+    const value = await pairingStorageValue();
+    if (!value.apiUrl || !value.deviceId || !value.deviceToken) return;
+    const claimed = await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/claim`, "{}", 8_000);
+    if (!claimed?.job?.id || !claimed.job.leaseToken || !claimed.job.runId) return;
+    const requestId = crypto.randomUUID();
+    await setCollectorState({ status: "collecting", phase: "CLAIMED", progress: "Collector odebrał zlecenie", scanId: claimed.job.runId, jobId: claimed.job.id });
+    const result = await collectConfiguredSources(claimed.job.runId, requestId);
+    const completedBody = JSON.stringify({ jobId: claimed.job.id, leaseToken: claimed.job.leaseToken, status: result.status === "FAILED" ? "failed" : "completed", errorCode: result.error || null });
+    await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/complete`, completedBody, 8_000);
+  } finally { collectorJobPollInFlight = false; }
 }
 
 async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown", collectionContext = null) {

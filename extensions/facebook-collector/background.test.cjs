@@ -18,6 +18,7 @@ const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf
 const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
 const finderPage = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/components/flip-finder-page.tsx"), "utf8");
 const failRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/facebook/scans/[scanId]/fail/route.ts"), "utf8");
+const collectorClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/jobs/claim/route.ts"), "utf8");
 
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
@@ -337,4 +338,13 @@ test("external proof-of-concept channel is origin-bound and harmless", () => {
   assert.match(background, /isAllowedExternalSender/);
   assert.match(finderPage, /koaaacaocmeohmajkpmblkmleedjeeih/);
   assert.match(finderPage, /Test kanału bezpośredniego/);
+});
+
+test("backend collector queue polling is bounded and independent of page messaging", () => {
+  assert.match(background, /collector-job-poll/);
+  assert.match(background, /api\/collector\/jobs\/claim/);
+  assert.match(background, /COLLECTOR_SELF_TEST/);
+  assert.match(background, /pollCollectorJobs/);
+  assert.match(collectorClaimRoute, /FACEBOOK_COLLECTOR_QUEUE_ENABLED/);
+  assert.match(collectorClaimRoute, /NO_PENDING_JOB/);
 });
