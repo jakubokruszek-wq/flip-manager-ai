@@ -21,6 +21,8 @@ const manualScan = fs.readFileSync(path.join(__dirname, "../../features/flip-fin
 const scanProgressServer = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/server/scan-progress.ts"), "utf8");
 const failRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/facebook/scans/[scanId]/fail/route.ts"), "utf8");
 const collectorClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/jobs/claim/route.ts"), "utf8");
+const legacyClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/facebook-worker/claim/route.ts"), "utf8");
+const workerJobs = fs.readFileSync(path.join(__dirname, "../../features/facebook-worker/jobs.ts"), "utf8");
 
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
@@ -345,4 +347,7 @@ test("backend collector queue polling is bounded and independent of page messagi
   assert.match(background, /pollCollectorJobs/);
   assert.match(collectorClaimRoute, /FACEBOOK_COLLECTOR_QUEUE_ENABLED/);
   assert.match(collectorClaimRoute, /NO_PENDING_JOB/);
+  assert.match(collectorClaimRoute, /BROWSER_EXTENSION/);
+  assert.match(legacyClaimRoute, /LEGACY_WORKER/);
+  assert.match(workerJobs, /p_consumer_type/);
 });

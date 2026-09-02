@@ -21,6 +21,7 @@ export type FacebookEnqueueResult = {
   failedGroups: Array<{ groupId: string; error: string }>;
   reasonCode: "FACEBOOK_NO_ENABLED_GROUP" | "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED" | null;
 };
+export type FacebookJobConsumerType = "BROWSER_EXTENSION" | "LEGACY_WORKER";
 
 export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): Promise<FacebookEnqueueResult> {
   const supabase = createFacebookWatcherAdminClient();
@@ -50,7 +51,8 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): 
     const sourceScanId = String(scan.data.id);
     const job = await supabase.from("facebook_scan_jobs").insert({
       scan_run_id: runId, source_scan_id: sourceScanId, search_filter_id: filter.id,
-    group_snapshot: plan.groupSnapshot, idempotency_key: plan.idempotencyKey,
+      group_snapshot: plan.groupSnapshot, idempotency_key: plan.idempotencyKey,
+      consumer_type: "BROWSER_EXTENSION",
     }).select("id").single();
     if (job.error || !job.data?.id) {
       const message = `FACEBOOK_JOB_ENQUEUE_FAILED: ${job.error?.message ?? "missing id"}`;
@@ -63,10 +65,11 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string): 
   return result;
 }
 
-export async function claimFacebookJob(workerId: string): Promise<FacebookWorkerJob | null> {
+export async function claimFacebookJob(workerId: string, consumerType: FacebookJobConsumerType = "LEGACY_WORKER"): Promise<FacebookWorkerJob | null> {
   if (workerId.trim().length < 3 || workerId.length > 100) throw new Error("INVALID_WORKER_ID");
+  if (consumerType !== "BROWSER_EXTENSION" && consumerType !== "LEGACY_WORKER") throw new Error("INVALID_CONSUMER_TYPE");
   const supabase = createFacebookWatcherAdminClient();
-  const result = await supabase.rpc("claim_facebook_scan_job", { p_worker_id: workerId.trim(), p_lease_seconds: LEASE_SECONDS });
+  const result = await supabase.rpc("claim_facebook_scan_job", { p_worker_id: workerId.trim(), p_lease_seconds: LEASE_SECONDS, p_consumer_type: consumerType });
   if (result.error) throw new Error(`FACEBOOK_JOB_CLAIM_FAILED: ${result.error.message}`);
   const row = Array.isArray(result.data) ? asRow(result.data[0]) : asRow(result.data);
   if (!row) return null;

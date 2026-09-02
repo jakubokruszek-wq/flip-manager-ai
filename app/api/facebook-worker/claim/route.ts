@@ -8,7 +8,6 @@ export async function POST(request: Request) {
   try {
     const body = JSON.parse(auth.body) as unknown;
     if (!body || typeof body !== "object" || !("workerId" in body) || typeof body.workerId !== "string") throw new Error("INVALID_PAYLOAD");
-    return Response.json({ job: await claimFacebookJob(body.workerId) });
+    return Response.json({ job: await claimFacebookJob(body.workerId, "LEGACY_WORKER") });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "FACEBOOK_JOB_CLAIM_FAILED" }, { status: 400 }); }
 }
-
