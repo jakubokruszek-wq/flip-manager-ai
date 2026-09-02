@@ -17,6 +17,8 @@ const optionsHtml = fs.readFileSync(path.join(__dirname, "options.html"), "utf8"
 const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf8");
 const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
 const finderPage = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/components/flip-finder-page.tsx"), "utf8");
+const manualScan = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/server/manual-scan.ts"), "utf8");
+const scanProgressServer = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/server/scan-progress.ts"), "utf8");
 const failRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/facebook/scans/[scanId]/fail/route.ts"), "utf8");
 const collectorClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/jobs/claim/route.ts"), "utf8");
 
@@ -78,19 +80,15 @@ test("Flip Finder bootstrap starts the production collector after readiness veri
   assert.match(background, /collectorStartTraces/);
 });
 
-test("scan start performs a bounded signed health refresh before POST /scan", () => {
-  for (const eventName of ["FLIP_COLLECTOR_HEALTH_REFRESH_REQUEST", "FLIP_COLLECTOR_HEALTH_REFRESH_RESULT"]) {
-    assert.match(finderPage, new RegExp(eventName));
-    assert.match(bootstrap, new RegExp(eventName));
-  }
-  assert.match(background, /REFRESH_COLLECTOR_HEALTH/);
-  assert.match(background, /collector-preflight\.js/);
-  assert.match(finderPage, /HEALTH_REFRESH_SENT/);
-  assert.match(finderPage, /HEALTH_REFRESH_RESPONSE/);
-  assert.match(finderPage, /HEARTBEAT_UPDATED/);
-  assert.match(finderPage, /8_000/);
-  assert.ok(finderPage.indexOf("await requestCollectorHealthRefresh") < finderPage.indexOf("POST_SCAN_SENT"));
-  assert.ok(finderPage.indexOf("if (!healthRefresh.ok") < finderPage.indexOf("POST_SCAN_SENT"));
+test("production scan start uses only the backend Facebook queue", () => {
+  const scanHandler = finderPage.slice(finderPage.indexOf("const scanFilter = async"), finderPage.indexOf("const validateCollector = async"));
+  assert.match(scanHandler, /POST_SCAN_SENT/);
+  assert.match(scanHandler, /oczekiwanie na odebranie zlecenia przez Collector/);
+  assert.doesNotMatch(scanHandler, /requestCollectorBridgePing|requestCollectorReady|requestCollectorHealthRefresh|requestCollectorScan|SCAN_COMMAND_SENT/);
+  assert.match(manualScan, /enqueueFacebookJobs\(filter, runId\)/);
+  assert.doesNotMatch(manualScan, /enqueueFacebookCollectorScan/);
+  assert.match(scanProgressServer, /FACEBOOK_PENDING_TIMEOUT_MS = 90_000/);
+  assert.match(scanProgressServer, /COLLECTOR_NOT_AVAILABLE/);
 });
 
 test("health preflight always refreshes stale or healthy pairing and fails closed", async () => {

@@ -8,7 +8,6 @@ import { apiFetch } from "@/lib/api-fetch";
 import {
   canRunManualScan,
   waitForCollectorBootstrap,
-  retryCollectorReadiness,
   summarizeStartTrace,
   dashboardCount,
   filterResultsHref,
@@ -148,7 +147,7 @@ export function FlipFinderPage() {
     scanningFilterIdsRef.current.add(filter.id);
     setScanningFilterIds((current) => new Set(current).add(filter.id));
     setError(null);
-    setNotice(filter.sources.includes("facebook") ? "Łączenie z Flip Collectorem..." : null);
+    setNotice(filter.sources.includes("facebook") ? "Tworzenie zlecenia dla Flip Collectora..." : null);
     setRetryFilterId(null);
     setActiveScanRunId(null);
     setScanProgress(null);
@@ -158,23 +157,6 @@ export function FlipFinderPage() {
     let waitingForWorker = false;
     try {
       const usesFacebookCollector = filter.sources.includes("facebook");
-      if (usesFacebookCollector) {
-        const bridge = await requestCollectorBridgePing(requestId);
-        if (!bridge.ok) throw new Error(bridge.error || "Nie wykryto aktywnego bridge Flip Collectora. Odśwież stronę i spróbuj ponownie.");
-        let readinessAttempt = 0;
-        const readiness = await retryCollectorReadiness(() => requestCollectorReady(requestId, ++readinessAttempt), (attempt) => {
-          if (attempt > 1) setNotice("Ponawianie połączenia z Collectorem...");
-        });
-        if (!readiness.ok) {
-          if (readiness.error === "PAIRING_MISSING" || readiness.error === "PAIRING_RECONNECT_REQUIRED") throw new Error(readiness.error);
-          throw new Error("Nie udało się połączyć z Flip Collectorem. Otwórz rozszerzenie i sprawdź status Połączono.");
-        }
-        setNotice("Odświeżanie statusu Flip Collectora...");
-        const healthRefresh = await requestCollectorHealthRefresh(requestId);
-        if (!healthRefresh.ok || healthRefresh.heartbeatUpdated !== true) throw new Error(healthRefresh.error || "COLLECTOR_HEALTH_REFRESH_FAILED");
-        traceStage(requestId, "HEARTBEAT_UPDATED", "PASS");
-        setNotice("Collector połączony — uruchamiam skan...");
-      }
       traceStage(requestId, "POST_SCAN_SENT", "PASS");
       const response = await fetch(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
@@ -208,14 +190,7 @@ export function FlipFinderPage() {
         }
         waitingForWorker = true;
         if (usesFacebookCollector) {
-          traceStage(requestId, "SCAN_COMMAND_SENT", "PASS");
-          const dispatch = await requestCollectorScan(payload.runId, requestId);
-          if (!dispatch.ok || dispatch.accepted !== true) {
-            waitingForWorker = false;
-            await fetch(`/api/flip-finder/scans/${payload.runId}/cancel`, { method: "POST" }).catch(() => {});
-            throw new Error(dispatch.error || "Collector nie przyjął zadania skanu.");
-          }
-          setNotice("Facebook: uruchomiono production Collector.");
+          setNotice("Facebook: oczekiwanie na odebranie zlecenia przez Collector.");
         } else if (initialProgress && hasQueuedOrRunningFacebookWork(initialProgress)) {
           setNotice("Facebook: oczekuje na lokalny worker. Pozostałe źródła zakończyły swój bieżący przebieg.");
         }
@@ -1002,16 +977,6 @@ type StartTraceStage = { requestId: string; stage: string; timestamp: string; st
 type StartTrace = { requestId: string; stages: StartTraceStage[] };
 const START_TRACE_KEY = "flip-finder-start-trace";
 
-function requestCollectorReady(requestId: string, attempt: number): Promise<CollectorBridgeResult> {
-  traceStage(requestId, "READY_REQUEST_SENT", "PASS", undefined, attempt);
-  return requestCollectorMessage("FLIP_COLLECTOR_READY_REQUEST", "FLIP_COLLECTOR_READY_RESULT", requestId, {}, "PAGE_RECEIVED_READY");
-}
-
-function requestCollectorHealthRefresh(requestId: string): Promise<CollectorBridgeResult> {
-  traceStage(requestId, "HEALTH_REFRESH_SENT", "PASS");
-  return requestCollectorMessage("FLIP_COLLECTOR_HEALTH_REFRESH_REQUEST", "FLIP_COLLECTOR_HEALTH_REFRESH_RESULT", requestId, {}, "HEALTH_REFRESH_RESPONSE", 8_000);
-}
-
 async function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
   traceStage(requestId, "BOOTSTRAP_PING_SENT", "PASS");
   let pongReceived = false;
@@ -1043,10 +1008,6 @@ async function requestCollectorBridgePing(requestId: string): Promise<CollectorB
   if (bootstrap.source === "pong") traceStage(requestId, "BOOTSTRAP_PONG_RECEIVED", "PASS");
   traceStage(requestId, "BRIDGE_PING_SENT", "PASS");
   return requestCollectorMessage("FLIP_COLLECTOR_BRIDGE_PING", "FLIP_COLLECTOR_BRIDGE_PONG", requestId, {}, "BRIDGE_PONG_RECEIVED", 3_000);
-}
-
-function requestCollectorScan(runId: string, requestId: string): Promise<CollectorBridgeResult> {
-  return requestCollectorMessage("FLIP_COLLECTOR_SCAN_REQUEST", "FLIP_COLLECTOR_SCAN_RESULT", requestId, { scanId: runId }, "PAGE_RECEIVED_SCAN_COMMAND");
 }
 
 function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string, timeoutMs = 5_000): Promise<CollectorBridgeResult> {

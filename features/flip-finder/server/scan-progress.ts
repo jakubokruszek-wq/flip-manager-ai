@@ -13,10 +13,12 @@ import {
 import type { ListingSource } from "@/features/flip-finder";
 
 type Row = Record<string, unknown>;
+const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
 
 export async function getScanProgress(runId: string): Promise<ScanProgressResponse> {
   if (!isUuid(runId)) throw new Error("INVALID_SCAN_RUN_ID");
   const supabase = createFacebookWatcherAdminClient();
+  await expireUnclaimedFacebookJobs(supabase, runId);
   const monthStart = zonedPeriodStart("month");
   const todayStart = zonedPeriodStart("day");
   const [scansResult, facebookResult, olxResult, monthJobsResult] = await Promise.all([
@@ -124,6 +126,26 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
       balanceStatus: "UNAVAILABLE",
     },
   };
+}
+
+async function expireUnclaimedFacebookJobs(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, runId: string): Promise<void> {
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - FACEBOOK_PENDING_TIMEOUT_MS).toISOString();
+  const expired = await supabase.from("facebook_scan_jobs").update({
+    status: "failed",
+    finished_at: now,
+    error_code: "COLLECTOR_NOT_AVAILABLE",
+    error_message: "Facebook Collector did not claim the queued job within 90 seconds",
+  }).eq("scan_run_id", runId).eq("status", "queued").lt("created_at", cutoff).select("source_scan_id");
+  if (expired.error) throw new Error(`FACEBOOK_PENDING_WATCHDOG_FAILED: ${expired.error.message}`);
+  const sourceScanIds = rows(expired.data).map((item) => string(item.source_scan_id)).filter((value): value is string => Boolean(value));
+  if (sourceScanIds.length === 0) return;
+  const scans = await supabase.from("source_scans").update({
+    status: "failed",
+    finished_at: now,
+    error_message: "COLLECTOR_NOT_AVAILABLE: Facebook Collector did not claim the queued job within 90 seconds",
+  }).in("id", sourceScanIds).eq("status", "pending");
+  if (scans.error) throw new Error(`FACEBOOK_PENDING_SOURCE_FINALIZE_FAILED: ${scans.error.message}`);
 }
 
 function toWorkUnit(value: Row): ScanWorkUnit | null {

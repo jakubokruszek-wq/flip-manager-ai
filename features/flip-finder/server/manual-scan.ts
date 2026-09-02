@@ -5,7 +5,7 @@ import { addMatchDiagnostic, createMatchDiagnostic, emptyMatchDiagnosticSummary,
 import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/scan-counters";
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
 import { enqueueOlxJob } from "@/features/flip-finder/server/olx-jobs";
-import { enqueueFacebookCollectorScan } from "@/features/collector/facebook-dispatch";
+import { enqueueFacebookJobs } from "@/features/facebook-worker/jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { createClient } from "@/lib/supabase/server";
@@ -61,10 +61,13 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
     }
     if (facebookEnabled) {
       try {
-        await enqueueFacebookCollectorScan(filter, runId);
-        sourceResults.push(pendingResult("facebook", "Facebook: oczekuje na production Collector"));
+        const queued = await enqueueFacebookJobs(filter, runId);
+        if (queued.jobs.length !== 1 || queued.failedGroups.length > 0) {
+          throw new Error(queued.failedGroups.map((item) => item.error).join("; ") || queued.reasonCode || "FACEBOOK_QUEUE_JOB_NOT_CREATED");
+        }
+        sourceResults.push(pendingResult("facebook", "Facebook: oczekiwanie na Collector"));
       } catch (error) {
-        sourceResults.push(failedResult("facebook", 0, "FACEBOOK_COLLECTOR_DISPATCH_FAILED", error instanceof Error ? error.message : "Facebook Collector dispatch failed."));
+        sourceResults.push(failedResult("facebook", 0, "FACEBOOK_QUEUE_ENQUEUE_FAILED", error instanceof Error ? error.message : "Facebook queue enqueue failed."));
       }
     }
     const completed = sourceResults.filter((result) => result.status === "completed");
