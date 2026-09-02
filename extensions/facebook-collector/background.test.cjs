@@ -328,3 +328,13 @@ test("collector validator is explicit, bounded and does not start collection", (
   assert.match(finderPage, /Waliduj Collector/);
   assert.match(finderPage, /COLLECTOR_VALIDATION_RESPONSE/);
 });
+
+test("external proof-of-concept channel is origin-bound and harmless", () => {
+  assert.deepEqual(manifest.externally_connectable.matches, ["https://flip-manager-ai.vercel.app/*", "http://localhost:3000/*"]);
+  assert.match(background, /onMessageExternal/);
+  assert.match(background, /FLIP_COLLECTOR_EXTERNAL_PING/);
+  assert.match(background, /FLIP_COLLECTOR_EXTERNAL_PONG/);
+  assert.match(background, /isAllowedExternalSender/);
+  assert.match(finderPage, /koaaacaocmeohmajkpmblkmleedjeeih/);
+  assert.match(finderPage, /Test kanału bezpośredniego/);
+});

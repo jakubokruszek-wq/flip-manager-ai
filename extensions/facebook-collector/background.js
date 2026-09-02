@@ -42,6 +42,15 @@ void recoverFinderBootstraps().catch(() => {});
 chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
 
+chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
+  if (message?.type !== "FLIP_COLLECTOR_EXTERNAL_PING" || !isAllowedExternalSender(sender) || safeRequestId(message.requestId) === "unknown") {
+    respond({ ok: false, type: "FLIP_COLLECTOR_EXTERNAL_PONG", requestId: safeRequestId(message?.requestId), error: "EXTERNAL_ORIGIN_REJECTED" });
+    return false;
+  }
+  respond({ ok: true, type: "FLIP_COLLECTOR_EXTERNAL_PONG", requestId: message.requestId });
+  return false;
+});
+
 async function recoverFinderBootstraps() {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
@@ -548,6 +557,7 @@ async function waitForContentScript(tabId, timeoutMs = 10_000) {
 async function sha256Hex(value) { return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))); }
 function hex(buffer) { return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function isProductionSource(value) { try { const url = new URL(value); url.search = ""; url.hash = ""; url.pathname = `${url.pathname.replace(/\/+$/, "")}/`; return url.protocol === "https:" && url.hostname === "www.facebook.com" && url.toString() === PRODUCTION_SOURCE_URL; } catch { return false; } }
+function isAllowedExternalSender(sender) { try { const url = new URL(String(sender?.url || "")); return (url.origin === FINDER_ORIGIN || url.origin === "http://localhost:3000") && (url.pathname === "/" || url.pathname.startsWith("/flip-finder")); } catch { return false; } }
 function isFinderUrl(value) { try { const url = new URL(String(value || "")); return url.origin === FINDER_ORIGIN && url.pathname.startsWith("/flip-finder"); } catch { return false; } }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function safeError(error) { return error instanceof Error ? error.message.slice(0, 400) : "COLLECTOR_FAILED"; }

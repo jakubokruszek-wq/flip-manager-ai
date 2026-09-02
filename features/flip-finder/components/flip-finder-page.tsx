@@ -88,6 +88,7 @@ export function FlipFinderPage() {
   const [showStartTrace, setShowStartTrace] = useState(false);
   const [validatingCollector, setValidatingCollector] = useState(false);
   const [collectorValidation, setCollectorValidation] = useState<{ requestId: string; pageBootstrap: boolean; bootstrapBackground: boolean; result: CollectorValidation | null; error: string | null } | null>(null);
+  const [externalPingResult, setExternalPingResult] = useState<{ requestId: string; ok: boolean; error?: string } | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
 
   const load = useCallback(async () => {
@@ -289,6 +290,20 @@ export function FlipFinderPage() {
     }
   };
 
+  const testDirectExternalChannel = async () => {
+    const requestId = crypto.randomUUID();
+    const runtime = (globalThis as typeof globalThis & { chrome?: { runtime?: { sendMessage?: (id: string, message: unknown, callback: (response?: { ok?: boolean; requestId?: string; error?: string }) => void) => void } } }).chrome?.runtime;
+    if (!runtime?.sendMessage) { setExternalPingResult({ requestId, ok: false, error: "EXTERNAL_RUNTIME_UNAVAILABLE" }); return; }
+    await new Promise<void>((resolve) => {
+      const timer = window.setTimeout(() => { setExternalPingResult({ requestId, ok: false, error: "EXTERNAL_PING_TIMEOUT" }); resolve(); }, 3_000);
+      runtime.sendMessage!("koaaacaocmeohmajkpmblkmleedjeeih", { type: "FLIP_COLLECTOR_EXTERNAL_PING", requestId }, (response) => {
+        window.clearTimeout(timer);
+        setExternalPingResult({ requestId, ok: response?.ok === true && response.requestId === requestId, error: response?.ok === true ? undefined : response?.error || "EXTERNAL_PING_FAILED" });
+        resolve();
+      });
+    });
+  };
+
   const finishScanning = (filterId: string) => {
     scanningFilterIdsRef.current.delete(filterId);
     setScanningFilterIds((current) => {
@@ -437,6 +452,9 @@ export function FlipFinderPage() {
             >
               {validatingCollector ? "Walidacja…" : "Waliduj Collector"}
             </Button>
+            <Button className="h-12 px-6 text-base" onClick={() => void testDirectExternalChannel()} variant="ghost">
+              Test kanału bezpośredniego
+            </Button>
             {scanningFilterIds.has(activeFilter.id) ? (
               <Button className="h-12 px-6 text-base" onClick={() => void stopScan(activeFilter)} variant="destructive">
                 Zatrzymaj skanowanie
@@ -445,6 +463,7 @@ export function FlipFinderPage() {
             <FilterActions filter={activeFilter} onAction={manageFilter} />
           </div>
           {collectorValidation ? <CollectorValidationPanel validation={collectorValidation} /> : null}
+          {externalPingResult ? <div className="text-xs text-muted-foreground" aria-live="polite">Direct background ping: {externalPingResult.ok ? "PASS" : `FAIL (${externalPingResult.error})`} · requestId: {externalPingResult.requestId}</div> : null}
           {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
           {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}

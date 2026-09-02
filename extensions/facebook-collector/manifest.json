@@ -10,6 +10,9 @@
     "http://localhost:3000/*"
   ],
   "background": { "service_worker": "background.js" },
+  "externally_connectable": {
+    "matches": ["https://flip-manager-ai.vercel.app/*", "http://localhost:3000/*"]
+  },
   "action": { "default_popup": "popup.html" },
   "options_page": "options.html",
   "content_scripts": [
