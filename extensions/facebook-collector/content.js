@@ -15,6 +15,7 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (message?.type === "COLLECTOR_PING") { respond({ ready: true }); return false; }
+    if (message?.type === "COLLECTOR_SELF_TEST") { respond({ ok: true, requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 80) : null, href: location.href, documentReadyState: document.readyState, collectorVersion: "0.1.0" }); return false; }
     if (message?.type === "RESOLVE_SEARCH_MEDIA_TILE") { respond({ ok: true, result: resolveSearchMediaTile(message.options || {}) }); return false; }
     if (message?.type !== "COLLECT_SOURCE") return false;
     void collectSource(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));

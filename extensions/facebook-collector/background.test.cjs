@@ -315,3 +315,15 @@ test("extension UI never reads or renders the device token", () => {
   assert.match(pairing, /deviceToken: data\.deviceToken/);
   assert.doesNotMatch(pairing, /FLIP_COLLECTOR_STATUS_RESULT[\s\S]{0,500}deviceToken/);
 });
+
+test("collector validator is explicit, bounded and does not start collection", () => {
+  assert.match(background, /VALIDATE_COLLECTOR/);
+  assert.match(background, /COLLECTOR_SELF_TEST/);
+  assert.match(background, /api\/collector\/readiness/);
+  assert.match(background, /CONTENT_SCRIPT_RESPONSE_TIMEOUT/);
+  assert.match(background, /waitForContentScript\(tabId, 10_000\)/);
+  assert.match(content, /COLLECTOR_SELF_TEST/);
+  assert.match(content, /documentReadyState/);
+  assert.match(finderPage, /Waliduj Collector/);
+  assert.match(finderPage, /COLLECTOR_VALIDATION_RESPONSE/);
+});

@@ -61,6 +61,18 @@ type MatchDiagnostics = {
   matched: number;
 };
 
+type CollectorValidationCheck = { ok: boolean; status?: string; error?: string; [key: string]: unknown };
+type CollectorValidation = {
+  ok: boolean;
+  pairing: CollectorValidationCheck;
+  heartbeat: CollectorValidationCheck;
+  backendReadiness: CollectorValidationCheck;
+  backgroundToContentScript: CollectorValidationCheck;
+  contentScriptResponse: CollectorValidationCheck;
+  firstFailedHop: string | null;
+  error: string | null;
+};
+
 export function FlipFinderPage() {
   const [requestedFilterId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("activeFilter"));
   const [data, setData] = useState<SearchFilterListResponse | null>(null);
@@ -74,6 +86,8 @@ export function FlipFinderPage() {
   const [activeScanRunId, setActiveScanRunId] = useState<string | null>(null);
   const [startTrace, setStartTrace] = useState<StartTrace | null>(null);
   const [showStartTrace, setShowStartTrace] = useState(false);
+  const [validatingCollector, setValidatingCollector] = useState(false);
+  const [collectorValidation, setCollectorValidation] = useState<{ requestId: string; pageBootstrap: boolean; bootstrapBackground: boolean; result: CollectorValidation | null; error: string | null } | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
 
   const load = useCallback(async () => {
@@ -241,6 +255,40 @@ export function FlipFinderPage() {
     }
   };
 
+  const validateCollector = async (filter: SearchFilterListItem) => {
+    if (validatingCollector) return;
+    setValidatingCollector(true);
+    setCollectorValidation(null);
+    setError(null);
+    setNotice("Łączenie z Flip Collectorem i sprawdzanie gotowości...");
+    const requestId = crypto.randomUUID();
+    traceStage(requestId, "VALIDATE_CLICKED", "PASS");
+    if (!filter.sources.includes("facebook")) {
+      setCollectorValidation({ requestId, pageBootstrap: false, bootstrapBackground: false, result: null, error: "FILTER_HAS_NO_FACEBOOK_SOURCE" });
+      setNotice("Collector validation: NOT READY");
+      setValidatingCollector(false);
+      return;
+    }
+    try {
+      const bootstrap = await requestCollectorBridgePing(requestId);
+      if (!bootstrap.ok) {
+        setCollectorValidation({ requestId, pageBootstrap: false, bootstrapBackground: false, result: null, error: bootstrap.error || "BOOTSTRAP_NOT_READY" });
+        setNotice("Collector validation: NOT READY");
+        return;
+      }
+      const response = await requestCollectorMessage("FLIP_COLLECTOR_VALIDATE_REQUEST", "FLIP_COLLECTOR_VALIDATE_RESULT", requestId, {}, "COLLECTOR_VALIDATION_RESPONSE", 30_000);
+      const validation = response.validation || null;
+      const ready = response.ok === true && validation?.ok === true;
+      setCollectorValidation({ requestId, pageBootstrap: true, bootstrapBackground: response.ok === true, result: validation, error: ready ? null : validation?.error || response.error || "COLLECTOR_VALIDATION_FAILED" });
+      setNotice(ready ? "Collector validation: READY FOR SCAN" : "Collector validation: NOT READY");
+    } catch (reason) {
+      setCollectorValidation({ requestId, pageBootstrap: true, bootstrapBackground: false, result: null, error: reason instanceof Error ? reason.message : "COLLECTOR_VALIDATION_FAILED" });
+      setNotice("Collector validation: NOT READY");
+    } finally {
+      setValidatingCollector(false);
+    }
+  };
+
   const finishScanning = (filterId: string) => {
     scanningFilterIdsRef.current.delete(filterId);
     setScanningFilterIds((current) => {
@@ -381,6 +429,14 @@ export function FlipFinderPage() {
             >
               {scanningFilterIds.has(activeFilter.id) ? "Skanowanie…" : "Skanuj oferty"}
             </Button>
+            <Button
+              className="h-12 px-6 text-base"
+              disabled={validatingCollector || scanningFilterIds.has(activeFilter.id)}
+              onClick={() => void validateCollector(activeFilter)}
+              variant="outline"
+            >
+              {validatingCollector ? "Walidacja…" : "Waliduj Collector"}
+            </Button>
             {scanningFilterIds.has(activeFilter.id) ? (
               <Button className="h-12 px-6 text-base" onClick={() => void stopScan(activeFilter)} variant="destructive">
                 Zatrzymaj skanowanie
@@ -388,6 +444,7 @@ export function FlipFinderPage() {
             ) : null}
             <FilterActions filter={activeFilter} onAction={manageFilter} />
           </div>
+          {collectorValidation ? <CollectorValidationPanel validation={collectorValidation} /> : null}
           {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
           {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
@@ -921,7 +978,7 @@ async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
   return payload;
 }
 
-type CollectorBridgeResult = { ok: boolean; accepted?: boolean; heartbeatUpdated?: boolean; status?: string; label?: string; error?: string };
+type CollectorBridgeResult = { ok: boolean; accepted?: boolean; heartbeatUpdated?: boolean; validation?: CollectorValidation; status?: string; label?: string; error?: string };
 type StartTraceStage = { requestId: string; stage: string; timestamp: string; status: "PASS" | "FAIL" | "TIMEOUT"; errorCode?: string; attempt?: number };
 type StartTrace = { requestId: string; stages: StartTraceStage[] };
 const START_TRACE_KEY = "flip-finder-start-trace";
@@ -971,14 +1028,14 @@ function requestCollectorScan(runId: string, requestId: string): Promise<Collect
 
 function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string, timeoutMs = 5_000): Promise<CollectorBridgeResult> {
   return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); const timeoutCode = responseStage === "BOOTSTRAP_PONG_RECEIVED" ? "BOOTSTRAP_NO_RESPONSE" : responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : responseStage === "HEALTH_REFRESH_RESPONSE" ? "COLLECTOR_HEALTH_REFRESH_FAILED" : "COLLECTOR_BRIDGE_NO_RESPONSE"; traceStage(requestId, responseStage, "TIMEOUT", timeoutCode); resolve({ ok: false, error: timeoutCode }); }, timeoutMs);
+    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); const timeoutCode = responseStage === "BOOTSTRAP_PONG_RECEIVED" ? "BOOTSTRAP_NO_RESPONSE" : responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : responseStage === "HEALTH_REFRESH_RESPONSE" ? "COLLECTOR_HEALTH_REFRESH_FAILED" : responseStage === "COLLECTOR_VALIDATION_RESPONSE" ? "COLLECTOR_VALIDATION_TIMEOUT" : "COLLECTOR_BRIDGE_NO_RESPONSE"; traceStage(requestId, responseStage, "TIMEOUT", timeoutCode); resolve({ ok: false, error: timeoutCode }); }, timeoutMs);
     function listener(event: MessageEvent) {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== responseType) return;
       if (event.data.requestId !== requestId) { traceStage(requestId, responseStage, "FAIL", "REQUEST_ID_MISMATCH"); return; }
       window.clearTimeout(timeout);
       window.removeEventListener("message", listener);
       traceStage(requestId, responseStage, event.data.ok === true ? "PASS" : "FAIL", event.data.ok === true ? undefined : safeTraceError(String(event.data.error || "READY_FAILED")));
-      resolve({ ok: event.data.ok === true, accepted: event.data.accepted === true, heartbeatUpdated: event.data.heartbeatUpdated === true, status: typeof event.data.status === "string" ? event.data.status : undefined, label: typeof event.data.label === "string" ? event.data.label : undefined, error: typeof event.data.error === "string" ? event.data.error : undefined });
+      resolve({ ok: event.data.ok === true, accepted: event.data.accepted === true, heartbeatUpdated: event.data.heartbeatUpdated === true, validation: isCollectorValidation(event.data.validation) ? event.data.validation : undefined, status: typeof event.data.status === "string" ? event.data.status : undefined, label: typeof event.data.label === "string" ? event.data.label : undefined, error: typeof event.data.error === "string" ? event.data.error : undefined });
     }
     window.addEventListener("message", listener);
     window.postMessage({ type: requestType, requestId, ...payload }, window.location.origin);
@@ -1003,6 +1060,39 @@ function StartTraceSummary({ trace }: { trace: StartTrace }) {
   const summary = summarizeStartTrace(trace.stages);
   const last = trace.stages.at(-1);
   return <div className="mt-2 rounded border p-2 text-xs"><div>requestId: {trace.requestId}</div><div>Last stage: {last?.stage || "—"}</div><div>Last successful real stage: {summary.lastSuccessful || "—"}</div><div>First failed/missing: {summary.firstFailed || summary.firstMissing || "—"}</div><div>Error: {summary.errorCode || "—"}</div><div>Diagnosis: {traceDiagnosis(summary.firstFailed || summary.firstMissing || undefined, summary.errorCode || undefined)}</div></div>;
+}
+
+function CollectorValidationPanel({ validation }: { validation: { requestId: string; pageBootstrap: boolean; bootstrapBackground: boolean; result: CollectorValidation | null; error: string | null } }) {
+  const result = validation.result;
+  const checks = [
+    ["PAGE -> BOOTSTRAP", validation.pageBootstrap],
+    ["BOOTSTRAP -> BACKGROUND", validation.bootstrapBackground],
+    ["PAIRING", result?.pairing.ok === true],
+    ["HEARTBEAT", result?.heartbeat.ok === true],
+    ["BACKEND READINESS", result?.backendReadiness.ok === true],
+    ["BACKGROUND -> CONTENT SCRIPT", result?.backgroundToContentScript.ok === true],
+    ["CONTENT SCRIPT RESPONSE", result?.contentScriptResponse.ok === true],
+  ] as const;
+  const firstFailed = !validation.pageBootstrap ? "PAGE -> BOOTSTRAP" : !validation.bootstrapBackground ? "BOOTSTRAP -> BACKGROUND" : result?.firstFailedHop || checks.find(([, ok]) => !ok)?.[0] || null;
+  return <div className="rounded-lg border bg-muted/20 p-4 text-sm" aria-live="polite">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">COLLECTOR VALIDATION</h3><span className={result?.ok === true ? "text-emerald-600" : "text-destructive"}>{result?.ok === true ? "READY FOR SCAN" : "NOT READY"}</span></div>
+    <div className="mt-3 grid gap-1 sm:grid-cols-2">{checks.map(([label, ok]) => <div key={label} className="flex justify-between gap-3"><span>{label}</span><span className={ok ? "text-emerald-600" : "text-destructive"}>{ok ? "PASS" : "FAIL"}</span></div>)}</div>
+    {firstFailed ? <div className="mt-3 border-t pt-3 text-xs"><div>FIRST FAILED HOP: {firstFailed}</div><div>ERROR: {result?.error || validation.error || "UNKNOWN"}</div><div>requestId: {validation.requestId}</div></div> : null}
+    {result?.contentScriptResponse.href ? <div className="mt-2 text-xs text-muted-foreground">Test tab: {String(result.contentScriptResponse.href)}</div> : null}
+  </div>;
+}
+
+function isCollectorValidation(value: unknown): value is CollectorValidation {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  const hasCheck = (key: string) => {
+    const check = item[key];
+    return Boolean(check && typeof check === "object" && typeof (check as Record<string, unknown>).ok === "boolean");
+  };
+  return typeof item.ok === "boolean"
+    && (item.firstFailedHop === null || typeof item.firstFailedHop === "string")
+    && (item.error === null || typeof item.error === "string")
+    && ["pairing", "heartbeat", "backendReadiness", "backgroundToContentScript", "contentScriptResponse"].every(hasCheck);
 }
 function traceDiagnosis(stage?: string, errorCode?: string): string {
   if (errorCode === "REQUEST_ID_MISMATCH") return "REQUEST_ID_MISMATCH";

@@ -74,6 +74,12 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_HEALTH_REFRESH", status: "PASS" }).catch(() => {}).then(() => refreshCollectorHealth(requestId)).then(respond).catch(() => respond({ ok: false, heartbeatUpdated: false, error: "COLLECTOR_HEALTH_REFRESH_FAILED" }));
     return true;
   }
+  if (message?.type === "VALIDATE_COLLECTOR") {
+    const requestId = safeRequestId(message.requestId);
+    if (requestId === "unknown" || !isFinderUrl(_sender?.tab?.url)) { respond({ ok: false, error: "VALIDATOR_ORIGIN_REJECTED" }); return false; }
+    void validateCollector(requestId).then((validation) => respond({ ok: true, validation, error: validation.error })).catch(() => respond({ ok: false, error: "COLLECTOR_VALIDATION_FAILED" }));
+    return true;
+  }
   if (message?.type === "BOOTSTRAP_CONTEXT_HEALTH") {
     if (!isFinderUrl(_sender?.tab?.url) || message.origin !== FINDER_ORIGIN) { respond({ ok: false, error: "BOOTSTRAP_ORIGIN_NOT_ALLOWED" }); return false; }
     respond({ ok: true, runtimeGeneration: RUNTIME_GENERATION });
@@ -369,6 +375,56 @@ async function refreshCollectorHealth(requestId) {
   });
   await recordStartTrace({ requestId, stage: "HEALTH_REFRESH_RESPONSE", status: result.ok ? "PASS" : "FAIL", errorCode: result.ok ? undefined : result.error }).catch(() => {});
   return result;
+}
+
+async function validateCollector(requestId) {
+  const validation = { ok: false, pairing: { ok: false }, heartbeat: { ok: false }, backendReadiness: { ok: false }, backgroundToContentScript: { ok: false }, contentScriptResponse: { ok: false }, firstFailedHop: null, error: null };
+  const value = await pairingStorageValue();
+  const local = globalThis.FlipCollectorPairingStatus.localPairingStatus(value);
+  validation.pairing = { ok: local.status === "CONNECTED" || local.status === "UNVERIFIED", deviceIdPresent: Boolean(value.deviceId), tokenPresent: Boolean(value.deviceToken), status: local.status };
+  if (!validation.pairing.ok) { validation.firstFailedHop = "PAIRING"; validation.error = local.status === "DISCONNECTED" ? "PAIRING_MISSING" : "PAIRING_RECONNECT_REQUIRED"; return validation; }
+
+  const health = await refreshCollectorHealth(requestId);
+  validation.heartbeat = { ok: health.ok && health.heartbeatUpdated === true, lastHeartbeatAt: health.lastHeartbeatAt || null, health: health.health || null };
+  if (!validation.heartbeat.ok) { validation.firstFailedHop = "HEARTBEAT"; validation.error = health.error || "COLLECTOR_HEALTH_REFRESH_FAILED"; return validation; }
+
+  try {
+    const config = await configValue();
+    const readiness = await signedPost(`${String(config.apiUrl).replace(/\/+$/, "")}/api/collector/readiness`, "{}", 3_000);
+    validation.backendReadiness = { ok: readiness?.ok === true && readiness?.ready === true, lastHeartbeatAt: typeof readiness?.lastHeartbeatAt === "string" ? readiness.lastHeartbeatAt : null, health: typeof readiness?.health === "string" ? readiness.health : null };
+  } catch (error) {
+    validation.backendReadiness = { ok: false };
+    validation.firstFailedHop = "BACKEND_READINESS";
+    validation.error = safeError(error) || "COLLECTOR_READINESS_UNAVAILABLE";
+    return validation;
+  }
+  if (!validation.backendReadiness.ok) { validation.firstFailedHop = "BACKEND_READINESS"; validation.error = "COLLECTOR_NOT_READY"; return validation; }
+
+  let tabId = null;
+  try {
+    const tab = await chrome.tabs.create({ url: PRODUCTION_SOURCE_URL, active: false });
+    tabId = tab.id;
+    if (!tabId) throw new Error("FACEBOOK_TEST_TAB_CREATE_FAILED");
+    await waitForTab(tabId, 10_000);
+    await waitForContentScript(tabId, 10_000);
+    validation.backgroundToContentScript = { ok: true };
+    const response = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
+      () => chrome.tabs.sendMessage(tabId, { type: "COLLECTOR_SELF_TEST", requestId }),
+      { timeoutMs: 10_000, timeoutCode: "CONTENT_SCRIPT_RESPONSE_TIMEOUT", diagnostics: { tabId, source: "facebook" } },
+    );
+    const selfTest = response.response;
+    validation.contentScriptResponse = { ok: selfTest?.ok === true && selfTest?.requestId === requestId, requestId: selfTest?.requestId === requestId ? requestId : null, href: typeof selfTest?.href === "string" ? selfTest.href.slice(0, 300) : null, documentReadyState: typeof selfTest?.documentReadyState === "string" ? selfTest.documentReadyState : null, collectorVersion: typeof selfTest?.collectorVersion === "string" ? selfTest.collectorVersion : null };
+    if (!validation.contentScriptResponse.ok) { validation.firstFailedHop = "CONTENT_SCRIPT_RESPONSE"; validation.error = "CONTENT_SCRIPT_SELF_TEST_FAILED"; return validation; }
+  } catch (error) {
+    if (!validation.backgroundToContentScript.ok) validation.firstFailedHop = "BACKGROUND_TO_CONTENT_SCRIPT";
+    else validation.firstFailedHop = "CONTENT_SCRIPT_RESPONSE";
+    validation.error = safeError(error) || "CONTENT_SCRIPT_RESPONSE_TIMEOUT";
+    return validation;
+  } finally {
+    if (tabId) await chrome.tabs.remove(tabId).catch(() => {});
+  }
+  validation.ok = true;
+  return validation;
 }
 
 async function failCollectorScan(scanId, error, diagnostics = {}) {

@@ -21,16 +21,17 @@ export type FacebookCollectorScan = {
   deviceId: string;
 };
 
-export async function readCollectorReadiness(now = Date.now()): Promise<CollectorReadiness> {
+export async function readCollectorReadiness(now = Date.now(), deviceId?: string): Promise<CollectorReadiness> {
   const supabase = createAdminClient();
-  const result = await supabase
+  let query = supabase
     .from("collector_devices")
     .select("id,last_heartbeat_at,health_status,revoked_at")
     .is("revoked_at", null)
     .not("last_heartbeat_at", "is", null)
     .order("last_heartbeat_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  if (deviceId) query = query.eq("id", deviceId);
+  const result = await query.maybeSingle();
   if (result.error) throw new Error(`COLLECTOR_READINESS_QUERY_FAILED: ${result.error.message}`);
   const row = result.data;
   const lastHeartbeatAt = typeof row?.last_heartbeat_at === "string" ? row.last_heartbeat_at : null;
