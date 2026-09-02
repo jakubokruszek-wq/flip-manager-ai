@@ -8,12 +8,12 @@ importScripts("collector-preflight.js");
 const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
 const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
 const SEARCH_BUDGET_RESERVE_MS = 40_000;
-const SEARCH_LIMITS = { minScrolls: 0, maxScrolls: 3, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 15_000, discoveryBudgetMs: 5_000, hardTimeBudgetMs: 90_000 };
+const SEARCH_LIMITS = { minScrolls: 0, maxScrolls: 3, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 240_000 };
 const SEARCH_BUDGET_SAFETY_MS = 2_000;
 const SEARCH_QUERY_CLEANUP_RESERVE_MS = 1_500;
-const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 25_000;
+const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000;
 const COLLECT_SOURCE_RESPONSE_GRACE_MS = 20_000;
-const SOURCE_COLLECTION_DEADLINE_MS = 180_000;
+const SOURCE_COLLECTION_DEADLINE_MS = 360_000;
 const FAIL_REPORT_TIMEOUT_MS = 10_000;
 
 const DEFAULT_SOURCES = [
@@ -30,7 +30,7 @@ const PRODUCTION_SEARCH_QUERIES = ["sprzedam", "na sprzedaż", "mieszkanie", "Ł
 void DEFAULT_SOURCES;
 void SEARCH_QUERIES;
 void PRODUCTION_SEARCH_QUERIES;
-const ACTIVE_SEARCH_QUERIES = ["sprzedam", "na sprzeda\u017c", "mieszkanie", "\u0141\u00f3d\u017a", "2 pokoje", "3 pokoje"];
+const ACTIVE_SEARCH_QUERIES = ["sprzedam", "na sprzeda\u017c", "mieszkanie", "do remontu", "\u0141\u00f3d\u017a", "2 pokoje", "3 pokoje"];
 const PHASE_MAIN_FEED = "Skanowanie feedu\u2026";
 const PHASE_FINALIZE = "Scalanie wynikow i analiza ofert\u2026";
 const PHASE_DONE = "Zakonczono";
@@ -284,7 +284,9 @@ async function collectFromTab(tabId, options, traceContext = {}) {
   const query = options.searchQuery || "MAIN_FEED";
   const diagnostics = { query, tabId, source: traceContext.source || "facebook", stage: options.searchMode ? "SEARCH_COLLECT_SOURCE" : "MAIN_FEED_COLLECT_SOURCE" };
   collectionContext?.deadline.assertActive(diagnostics);
-  const desiredTimeoutMs = Math.max(COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS, Number(options.budgetMs || 0) + COLLECT_SOURCE_RESPONSE_GRACE_MS);
+  const desiredTimeoutMs = options.searchMode
+    ? COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS
+    : Math.max(COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS, Number(options.budgetMs || 0) + COLLECT_SOURCE_RESPONSE_GRACE_MS);
   const remainingMs = collectionContext?.deadline.remainingMs() ?? desiredTimeoutMs;
   const timeoutMs = Math.max(1, Math.min(desiredTimeoutMs, remainingMs));
   const timeoutCode = remainingMs <= desiredTimeoutMs ? "SOURCE_COLLECTION_DEADLINE_EXCEEDED" : "COLLECT_SOURCE_RESPONSE_TIMEOUT";
