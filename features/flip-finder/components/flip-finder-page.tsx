@@ -996,22 +996,26 @@ function requestCollectorHealthRefresh(requestId: string): Promise<CollectorBrid
 async function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
   traceStage(requestId, "BOOTSTRAP_PING_SENT", "PASS");
   let pongReceived = false;
-  function listener(event: MessageEvent) {
-    if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== "FLIP_COLLECTOR_BOOTSTRAP_PONG") return;
-    if (event.data.requestId !== requestId) {
+  const eventName = collectorDomEventName("FLIP_COLLECTOR_BOOTSTRAP_PONG");
+  function listener(event: Event) {
+    const detail = (event as CustomEvent).detail;
+    if (event.target !== document || detail?.type !== "FLIP_COLLECTOR_BOOTSTRAP_PONG") return;
+    if (detail.requestId !== requestId) {
       traceStage(requestId, "BOOTSTRAP_PONG_RECEIVED", "FAIL", "REQUEST_ID_MISMATCH");
       return;
     }
     pongReceived = true;
+    traceStage(requestId, "PAGE_PONG_RECEIVED", "PASS");
   }
-  window.addEventListener("message", listener);
+  document.addEventListener(eventName, listener);
   const bootstrap = await waitForCollectorBootstrap({
     readMarker: () => document.documentElement?.getAttribute("data-flip-collector-bootstrap") ?? null,
     ping: () => {
-      window.postMessage({ type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId }, window.location.origin);
+      traceStage(requestId, "PAGE_EVENT_DISPATCHED", "PASS");
+      document.dispatchEvent(new CustomEvent(collectorDomEventName("FLIP_COLLECTOR_BOOTSTRAP_PING"), { detail: { type: "FLIP_COLLECTOR_BOOTSTRAP_PING", requestId } }));
       return pongReceived;
     },
-  }).finally(() => window.removeEventListener("message", listener));
+  }).finally(() => document.removeEventListener(eventName, listener));
   traceStage(requestId, "BOOTSTRAP_SCRIPT_EXECUTED", bootstrap.ok ? "PASS" : "TIMEOUT", bootstrap.error);
   if (!bootstrap.ok) {
     traceStage(requestId, "BOOTSTRAP_PONG_RECEIVED", "TIMEOUT", "BOOTSTRAP_START_TIMEOUT");
@@ -1028,19 +1032,25 @@ function requestCollectorScan(runId: string, requestId: string): Promise<Collect
 
 function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string, timeoutMs = 5_000): Promise<CollectorBridgeResult> {
   return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); const timeoutCode = responseStage === "BOOTSTRAP_PONG_RECEIVED" ? "BOOTSTRAP_NO_RESPONSE" : responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : responseStage === "HEALTH_REFRESH_RESPONSE" ? "COLLECTOR_HEALTH_REFRESH_FAILED" : responseStage === "COLLECTOR_VALIDATION_RESPONSE" ? "COLLECTOR_VALIDATION_TIMEOUT" : "COLLECTOR_BRIDGE_NO_RESPONSE"; traceStage(requestId, responseStage, "TIMEOUT", timeoutCode); resolve({ ok: false, error: timeoutCode }); }, timeoutMs);
-    function listener(event: MessageEvent) {
-      if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== responseType) return;
-      if (event.data.requestId !== requestId) { traceStage(requestId, responseStage, "FAIL", "REQUEST_ID_MISMATCH"); return; }
+    const eventName = collectorDomEventName(responseType);
+    const timeout = window.setTimeout(() => { document.removeEventListener(eventName, listener); const timeoutCode = responseStage === "BOOTSTRAP_PONG_RECEIVED" ? "BOOTSTRAP_NO_RESPONSE" : responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : responseStage === "HEALTH_REFRESH_RESPONSE" ? "COLLECTOR_HEALTH_REFRESH_FAILED" : responseStage === "COLLECTOR_VALIDATION_RESPONSE" ? "COLLECTOR_VALIDATION_TIMEOUT" : "COLLECTOR_BRIDGE_NO_RESPONSE"; traceStage(requestId, responseStage, "TIMEOUT", timeoutCode); resolve({ ok: false, error: timeoutCode }); }, timeoutMs);
+    function listener(event: Event) {
+      const detail = (event as CustomEvent).detail;
+      if (event.target !== document || detail?.type !== responseType) return;
+      if (detail.requestId !== requestId) { traceStage(requestId, responseStage, "FAIL", "REQUEST_ID_MISMATCH"); return; }
       window.clearTimeout(timeout);
-      window.removeEventListener("message", listener);
-      traceStage(requestId, responseStage, event.data.ok === true ? "PASS" : "FAIL", event.data.ok === true ? undefined : safeTraceError(String(event.data.error || "READY_FAILED")));
-      resolve({ ok: event.data.ok === true, accepted: event.data.accepted === true, heartbeatUpdated: event.data.heartbeatUpdated === true, validation: isCollectorValidation(event.data.validation) ? event.data.validation : undefined, status: typeof event.data.status === "string" ? event.data.status : undefined, label: typeof event.data.label === "string" ? event.data.label : undefined, error: typeof event.data.error === "string" ? event.data.error : undefined });
+      document.removeEventListener(eventName, listener);
+      traceStage(requestId, responseStage, detail.ok === true ? "PASS" : "FAIL", detail.ok === true ? undefined : safeTraceError(String(detail.error || "READY_FAILED")));
+      resolve({ ok: detail.ok === true, accepted: detail.accepted === true, heartbeatUpdated: detail.heartbeatUpdated === true, validation: isCollectorValidation(detail.validation) ? detail.validation : undefined, status: typeof detail.status === "string" ? detail.status : undefined, label: typeof detail.label === "string" ? detail.label : undefined, error: typeof detail.error === "string" ? detail.error : undefined });
     }
-    window.addEventListener("message", listener);
-    window.postMessage({ type: requestType, requestId, ...payload }, window.location.origin);
+    document.addEventListener(eventName, listener);
+    traceStage(requestId, "PAGE_EVENT_DISPATCHED", "PASS");
+    document.dispatchEvent(new CustomEvent(eventNameForRequest(requestType), { detail: { type: requestType, requestId, ...payload } }));
   });
 }
+
+function collectorDomEventName(type: string): string { return `flip-collector-${type.replace(/^FLIP_COLLECTOR_/, "").toLowerCase().replaceAll("_", "-")}`; }
+function eventNameForRequest(type: string): string { return collectorDomEventName(type); }
 
 function traceStage(requestId: string, stage: string, status: StartTraceStage["status"], errorCode?: string, attempt?: number): void {
   try {
