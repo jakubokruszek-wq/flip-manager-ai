@@ -150,7 +150,14 @@ export function FlipFinderPage() {
         const readiness = await retryCollectorReadiness(() => requestCollectorReady(requestId, ++readinessAttempt), (attempt) => {
           if (attempt > 1) setNotice("Ponawianie połączenia z Collectorem...");
         });
-        if (!readiness.ok) throw new Error("Nie udało się połączyć z Flip Collectorem. Otwórz rozszerzenie i sprawdź status Połączono.");
+        if (!readiness.ok) {
+          if (readiness.error === "PAIRING_MISSING" || readiness.error === "PAIRING_RECONNECT_REQUIRED") throw new Error(readiness.error);
+          throw new Error("Nie udało się połączyć z Flip Collectorem. Otwórz rozszerzenie i sprawdź status Połączono.");
+        }
+        setNotice("Odświeżanie statusu Flip Collectora...");
+        const healthRefresh = await requestCollectorHealthRefresh(requestId);
+        if (!healthRefresh.ok || healthRefresh.heartbeatUpdated !== true) throw new Error(healthRefresh.error || "COLLECTOR_HEALTH_REFRESH_FAILED");
+        traceStage(requestId, "HEARTBEAT_UPDATED", "PASS");
         setNotice("Collector połączony — uruchamiam skan...");
       }
       traceStage(requestId, "POST_SCAN_SENT", "PASS");
@@ -914,7 +921,7 @@ async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
   return payload;
 }
 
-type CollectorBridgeResult = { ok: boolean; accepted?: boolean; status?: string; label?: string; error?: string };
+type CollectorBridgeResult = { ok: boolean; accepted?: boolean; heartbeatUpdated?: boolean; status?: string; label?: string; error?: string };
 type StartTraceStage = { requestId: string; stage: string; timestamp: string; status: "PASS" | "FAIL" | "TIMEOUT"; errorCode?: string; attempt?: number };
 type StartTrace = { requestId: string; stages: StartTraceStage[] };
 const START_TRACE_KEY = "flip-finder-start-trace";
@@ -922,6 +929,11 @@ const START_TRACE_KEY = "flip-finder-start-trace";
 function requestCollectorReady(requestId: string, attempt: number): Promise<CollectorBridgeResult> {
   traceStage(requestId, "READY_REQUEST_SENT", "PASS", undefined, attempt);
   return requestCollectorMessage("FLIP_COLLECTOR_READY_REQUEST", "FLIP_COLLECTOR_READY_RESULT", requestId, {}, "PAGE_RECEIVED_READY");
+}
+
+function requestCollectorHealthRefresh(requestId: string): Promise<CollectorBridgeResult> {
+  traceStage(requestId, "HEALTH_REFRESH_SENT", "PASS");
+  return requestCollectorMessage("FLIP_COLLECTOR_HEALTH_REFRESH_REQUEST", "FLIP_COLLECTOR_HEALTH_REFRESH_RESULT", requestId, {}, "HEALTH_REFRESH_RESPONSE", 8_000);
 }
 
 async function requestCollectorBridgePing(requestId: string): Promise<CollectorBridgeResult> {
@@ -959,14 +971,14 @@ function requestCollectorScan(runId: string, requestId: string): Promise<Collect
 
 function requestCollectorMessage(requestType: string, responseType: string, requestId: string, payload: Record<string, unknown>, responseStage: string, timeoutMs = 5_000): Promise<CollectorBridgeResult> {
   return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); traceStage(requestId, responseStage, "TIMEOUT", responseStage === "BOOTSTRAP_PONG_RECEIVED" ? "BOOTSTRAP_NO_RESPONSE" : responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : "COLLECTOR_BRIDGE_NO_RESPONSE"); resolve({ ok: false, error: "Nie wykryto aktywnego Flip Collectora." }); }, timeoutMs);
+    const timeout = window.setTimeout(() => { window.removeEventListener("message", listener); const timeoutCode = responseStage === "BOOTSTRAP_PONG_RECEIVED" ? "BOOTSTRAP_NO_RESPONSE" : responseStage === "BRIDGE_PONG_RECEIVED" ? "BRIDGE_NOT_INJECTED_OR_INACTIVE" : responseStage === "HEALTH_REFRESH_RESPONSE" ? "COLLECTOR_HEALTH_REFRESH_FAILED" : "COLLECTOR_BRIDGE_NO_RESPONSE"; traceStage(requestId, responseStage, "TIMEOUT", timeoutCode); resolve({ ok: false, error: timeoutCode }); }, timeoutMs);
     function listener(event: MessageEvent) {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== responseType) return;
       if (event.data.requestId !== requestId) { traceStage(requestId, responseStage, "FAIL", "REQUEST_ID_MISMATCH"); return; }
       window.clearTimeout(timeout);
       window.removeEventListener("message", listener);
       traceStage(requestId, responseStage, event.data.ok === true ? "PASS" : "FAIL", event.data.ok === true ? undefined : safeTraceError(String(event.data.error || "READY_FAILED")));
-      resolve({ ok: event.data.ok === true, accepted: event.data.accepted === true, status: typeof event.data.status === "string" ? event.data.status : undefined, label: typeof event.data.label === "string" ? event.data.label : undefined, error: typeof event.data.error === "string" ? event.data.error : undefined });
+      resolve({ ok: event.data.ok === true, accepted: event.data.accepted === true, heartbeatUpdated: event.data.heartbeatUpdated === true, status: typeof event.data.status === "string" ? event.data.status : undefined, label: typeof event.data.label === "string" ? event.data.label : undefined, error: typeof event.data.error === "string" ? event.data.error : undefined });
     }
     window.addEventListener("message", listener);
     window.postMessage({ type: requestType, requestId, ...payload }, window.location.origin);
@@ -998,6 +1010,7 @@ function traceDiagnosis(stage?: string, errorCode?: string): string {
   if (stage === "READY_REQUEST_SENT") return "BRIDGE_NOT_INJECTED";
   if (stage === "BRIDGE_PONG_RECEIVED") return "BRIDGE_NOT_INJECTED_OR_INACTIVE";
   if (stage === "PAGE_RECEIVED_READY") return "READY_RESPONSE_TIMEOUT";
+  if (stage === "HEALTH_REFRESH_RESPONSE" || stage === "HEARTBEAT_UPDATED") return "COLLECTOR_HEALTH_REFRESH_FAILED";
   if (stage === "POST_SCAN_RESPONSE") return "POST_SCAN_FAILED";
   if (stage === "SCAN_COMMAND_SENT" || stage === "PAGE_RECEIVED_SCAN_COMMAND") return "SCAN_COMMAND_NOT_RECEIVED";
   return "COLLECTOR_START_FAILED";

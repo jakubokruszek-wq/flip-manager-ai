@@ -6,6 +6,7 @@ import {
   verifyCollectorAuth,
   type CollectorAuthResult,
 } from "./protocol";
+import { collectorDeviceActivityPatch } from "./device-heartbeat";
 
 export type SignedCollectorDevice = { id: string; deviceName: string; signingKey: string };
 
@@ -14,6 +15,7 @@ export async function authenticateSignedCollectorRequest(input: {
   pathname: string;
   body: string;
   now?: number;
+  markHealthy?: boolean;
 }): Promise<{ device: SignedCollectorDevice; auth: Extract<CollectorAuthResult, { ok: true }> }> {
   const deviceId = input.request.headers.get(COLLECTOR_DEVICE_HEADER)?.trim();
   if (!deviceId) throw new SignedCollectorAuthError(401, "MISSING_AUTH");
@@ -38,7 +40,7 @@ export async function authenticateSignedCollectorRequest(input: {
   });
   if (!auth.ok) throw new SignedCollectorAuthError(401, auth.code);
   const now = new Date(input.now ?? Date.now()).toISOString();
-  const updated = await supabase.from("collector_devices").update({ last_used_at: now, last_heartbeat_at: now }).eq("id", row.id);
+  const updated = await supabase.from("collector_devices").update(collectorDeviceActivityPatch(now, input.markHealthy === true)).eq("id", row.id);
   if (updated.error) throw new SignedCollectorAuthError(503, "DEVICE_HEARTBEAT_FAILED");
   return { device: { id: row.id, deviceName: typeof row.device_name === "string" ? row.device_name : "Collector", signingKey: row.token_hash }, auth };
 }

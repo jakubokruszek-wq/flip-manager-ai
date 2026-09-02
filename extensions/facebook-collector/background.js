@@ -3,6 +3,7 @@
 importScripts("collector-core.js");
 importScripts("collector-runtime.js");
 importScripts("pairing-status.js");
+importScripts("collector-preflight.js");
 
 const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
 const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
@@ -65,6 +66,12 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "CHECK_COLLECTOR_READY") {
     const requestId = safeRequestId(message.requestId);
     void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_READY", status: "PASS" }).then(() => checkCollectorReady(requestId)).then(respond).catch((error) => respond({ ok: false, status: "UNVERIFIED", error: safeError(error) }));
+    return true;
+  }
+  if (message?.type === "REFRESH_COLLECTOR_HEALTH") {
+    const requestId = safeRequestId(message.requestId);
+    if (requestId === "unknown" || !isFinderUrl(_sender?.tab?.url)) { respond({ ok: false, heartbeatUpdated: false, error: "COLLECTOR_HEALTH_REFRESH_ORIGIN_REJECTED" }); return false; }
+    void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_HEALTH_REFRESH", status: "PASS" }).catch(() => {}).then(() => refreshCollectorHealth(requestId)).then(respond).catch(() => respond({ ok: false, heartbeatUpdated: false, error: "COLLECTOR_HEALTH_REFRESH_FAILED" }));
     return true;
   }
   if (message?.type === "BOOTSTRAP_CONTEXT_HEALTH") {
@@ -333,7 +340,7 @@ async function checkCollectorReady(requestId = "unknown") {
   const local = globalThis.FlipCollectorPairingStatus.localPairingStatus(value);
   if (local.status === "DISCONNECTED" || local.status === "RECONNECT_REQUIRED") {
     await recordStartTrace({ requestId, stage: "EXTENSION_READY_RESULT", status: "FAIL", errorCode: local.status === "DISCONNECTED" ? "PAIRING_MISSING" : "PAIRING_RECONNECT_REQUIRED" });
-    return { ok: false, status: local.status, label: local.label, error: local.label };
+    return { ok: false, status: local.status, label: local.label, error: local.status === "DISCONNECTED" ? "PAIRING_MISSING" : "PAIRING_RECONNECT_REQUIRED" };
   }
   try {
     await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/heartbeat`, "{}");
@@ -345,6 +352,23 @@ async function checkCollectorReady(requestId = "unknown") {
     await recordStartTrace({ requestId, stage: "EXTENSION_READY_RESULT", status: "FAIL", errorCode: verified.reason || safeError(error) });
     return { ok: false, status: verified.status, label: verified.label, error: verified.reason || safeError(error) };
   }
+}
+
+async function refreshCollectorHealth(requestId) {
+  const result = await globalThis.FlipCollectorStartPreflight.refreshCollectorHealth({
+    requestId,
+    readPairing: pairingStorageValue,
+    localPairingStatus: globalThis.FlipCollectorPairingStatus.localPairingStatus,
+    heartbeat: async (timeoutMs) => {
+      const value = await pairingStorageValue();
+      await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/heartbeat`, "{}", timeoutMs);
+    },
+    persistVerification: persistPairingVerification,
+    verificationOutcome,
+    trace: (id, stage, status, errorCode) => recordStartTrace({ requestId: id, stage, status, errorCode }),
+  });
+  await recordStartTrace({ requestId, stage: "HEALTH_REFRESH_RESPONSE", status: result.ok ? "PASS" : "FAIL", errorCode: result.ok ? undefined : result.error }).catch(() => {});
+  return result;
 }
 
 async function failCollectorScan(scanId, error, diagnostics = {}) {

@@ -61,6 +61,12 @@ function createMessageListener(state) {
       return;
     }
 
+    if (event.data?.type === "FLIP_COLLECTOR_HEALTH_REFRESH_REQUEST") {
+      recordBootstrapBeacon("PAGE_MESSAGE_RECEIVED", requestId, eventType);
+      void sendRuntime({ type: "REFRESH_COLLECTOR_HEALTH", requestId }).then((result) => respond(event.origin, "FLIP_COLLECTOR_HEALTH_REFRESH_RESULT", requestId, result)).catch((error) => { if (!handleRuntimeFailure(state, error)) respond(event.origin, "FLIP_COLLECTOR_HEALTH_REFRESH_RESULT", requestId, { ok: false, heartbeatUpdated: false, error: "COLLECTOR_HEALTH_REFRESH_FAILED" }); });
+      return;
+    }
+
     if (event.data?.type === "FLIP_COLLECTOR_SCAN_REQUEST") {
       recordBootstrapBeacon("PAGE_MESSAGE_RECEIVED", requestId, eventType);
       const scanId = typeof event.data.scanId === "string" ? event.data.scanId : "";
@@ -102,7 +108,7 @@ function markBootstrapLoaded(value, state) {
 }
 
 function respond(origin, type, requestId, value) { window.postMessage({ type, requestId, ...publicResult(value) }, origin); }
-function publicResult(value) { return { ok: value?.ok === true, accepted: value?.accepted === true, status: value?.status, label: value?.label, lastHeartbeatAt: value?.lastHeartbeatAt, health: value?.health, error: value?.error, scanId: value?.scanId }; }
+function publicResult(value) { return { ok: value?.ok === true, accepted: value?.accepted === true, heartbeatUpdated: value?.heartbeatUpdated === true, status: value?.status, label: value?.label, lastHeartbeatAt: value?.lastHeartbeatAt, health: value?.health, error: value?.error, scanId: value?.scanId }; }
 function sendRuntime(message) { return new Promise((resolve, reject) => { try { chrome.runtime.sendMessage(message, (result) => { try { const runtimeError = chrome.runtime.lastError; if (runtimeError) reject(normalizeRuntimeError(runtimeError)); else resolve(result || { ok: false, error: "EXTENSION_NO_RESPONSE" }); } catch (error) { reject(normalizeRuntimeError(error)); } }); } catch (error) { reject(normalizeRuntimeError(error)); } }); }
 function trace(requestId, stage, status = "PASS", errorCode) { return sendRuntime({ type: "RECORD_START_TRACE", requestId, stage, status, errorCode }); }
 function safeRequestId(value) { return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? value : "unknown"; }

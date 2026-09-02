@@ -5,7 +5,7 @@ const PATHNAME = "/api/collector/heartbeat";
 export async function POST(request: Request) {
   const body = await request.text();
   try {
-    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body });
+    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, markHealthy: true });
     return cors(Response.json({ ok: true, deviceId: device.id }), request);
   } catch (error) {
     const status = error instanceof SignedCollectorAuthError ? error.status : 400;

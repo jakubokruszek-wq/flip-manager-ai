@@ -8,6 +8,7 @@ const path = require("node:path");
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"));
 const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8");
 const runtime = fs.readFileSync(path.join(__dirname, "collector-runtime.js"), "utf8");
+const preflight = fs.readFileSync(path.join(__dirname, "collector-preflight.js"), "utf8");
 const content = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
 const popup = fs.readFileSync(path.join(__dirname, "popup.js"), "utf8");
 const pairing = fs.readFileSync(path.join(__dirname, "pairing.js"), "utf8");
@@ -74,6 +75,70 @@ test("Flip Finder bootstrap starts the production collector after readiness veri
   assert.match(bootstrap, /requestId/);
   assert.match(background, /RECORD_START_TRACE/);
   assert.match(background, /collectorStartTraces/);
+});
+
+test("scan start performs a bounded signed health refresh before POST /scan", () => {
+  for (const eventName of ["FLIP_COLLECTOR_HEALTH_REFRESH_REQUEST", "FLIP_COLLECTOR_HEALTH_REFRESH_RESULT"]) {
+    assert.match(finderPage, new RegExp(eventName));
+    assert.match(bootstrap, new RegExp(eventName));
+  }
+  assert.match(background, /REFRESH_COLLECTOR_HEALTH/);
+  assert.match(background, /collector-preflight\.js/);
+  assert.match(finderPage, /HEALTH_REFRESH_SENT/);
+  assert.match(finderPage, /HEALTH_REFRESH_RESPONSE/);
+  assert.match(finderPage, /HEARTBEAT_UPDATED/);
+  assert.match(finderPage, /8_000/);
+  assert.ok(finderPage.indexOf("await requestCollectorHealthRefresh") < finderPage.indexOf("POST_SCAN_SENT"));
+  assert.ok(finderPage.indexOf("if (!healthRefresh.ok") < finderPage.indexOf("POST_SCAN_SENT"));
+});
+
+test("health preflight always refreshes stale or healthy pairing and fails closed", async () => {
+  const context = vm.createContext({ globalThis: {}, Promise, Error });
+  vm.runInContext(preflight, context);
+  const api = context.globalThis.FlipCollectorStartPreflight;
+  for (const lastHeartbeatAt of ["2026-09-01T19:45:00.000Z", "2026-09-01T19:59:59.000Z"]) {
+    let heartbeatCalls = 0;
+    const traces = [];
+    const result = await api.refreshCollectorHealth({
+      requestId: "ba21143f-d803-4a8c-aa4c-462d76d765f7",
+      readPairing: async () => ({ collectorPairingState: { lastHeartbeatAt } }),
+      localPairingStatus: () => ({ status: "CONNECTED", label: "Połączono" }),
+      heartbeat: async (timeoutMs) => { heartbeatCalls += 1; assert.equal(timeoutMs, 6_000); },
+      persistVerification: async () => ({ status: "CONNECTED", label: "Połączono", lastHeartbeatAt: "2026-09-01T20:00:00.000Z" }),
+      verificationOutcome: () => ({ kind: "TEMPORARY_FAILURE" }),
+      trace: async (...args) => { traces.push(args); },
+    });
+    assert.equal(heartbeatCalls, 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.heartbeatUpdated, true);
+    assert.ok(traces.some((trace) => trace[1] === "HEARTBEAT_UPDATED" && trace[2] === "PASS"));
+  }
+
+  let missingHeartbeatCalls = 0;
+  const missing = await api.refreshCollectorHealth({
+    requestId: "ba21143f-d803-4a8c-aa4c-462d76d765f7",
+    readPairing: async () => ({}),
+    localPairingStatus: () => ({ status: "DISCONNECTED", label: "Niepołączono" }),
+    heartbeat: async () => { missingHeartbeatCalls += 1; },
+    persistVerification: async () => ({}),
+    verificationOutcome: () => ({ kind: "TEMPORARY_FAILURE" }),
+    trace: async () => {},
+  });
+  assert.equal(missingHeartbeatCalls, 0);
+  assert.equal(missing.error, "PAIRING_MISSING");
+
+  const backendFailure = await api.refreshCollectorHealth({
+    requestId: "ba21143f-d803-4a8c-aa4c-462d76d765f7",
+    readPairing: async () => ({}),
+    localPairingStatus: () => ({ status: "CONNECTED", label: "Połączono" }),
+    heartbeat: async () => { throw new Error("backend unavailable"); },
+    persistVerification: async () => ({ status: "UNVERIFIED", label: "Połączenie niezweryfikowane" }),
+    verificationOutcome: () => ({ kind: "TEMPORARY_FAILURE" }),
+    trace: async () => {},
+  });
+  assert.equal(backendFailure.ok, false);
+  assert.equal(backendFailure.heartbeatUpdated, false);
+  assert.equal(backendFailure.error, "COLLECTOR_HEALTH_REFRESH_FAILED");
 });
 
 test("pairing status autoload uses signed backend verification in popup and setup", () => {

@@ -98,3 +98,20 @@ test("bridge ping timeout is classified separately from READY timeout", () => {
     { stage: "BRIDGE_PONG_RECEIVED", status: "TIMEOUT", errorCode: "BRIDGE_NOT_INJECTED_OR_INACTIVE" },
   ]).firstFailed, "BRIDGE_PONG_RECEIVED");
 });
+
+test("start trace requires health refresh before POST scan", () => {
+  const result = summarizeStartTrace([
+    { stage: "BUTTON_CLICKED", status: "PASS" },
+    { stage: "READY_REQUEST_SENT", status: "PASS" },
+    { stage: "BRIDGE_RECEIVED_READY", status: "PASS" },
+    { stage: "EXTENSION_RECEIVED_READY", status: "PASS" },
+    { stage: "EXTENSION_READY_RESULT", status: "PASS" },
+    { stage: "BRIDGE_RETURNED_READY", status: "PASS" },
+    { stage: "PAGE_RECEIVED_READY", status: "PASS" },
+    { stage: "HEALTH_REFRESH_SENT", status: "PASS" },
+    { stage: "HEALTH_REFRESH_RESPONSE", status: "FAIL", errorCode: "COLLECTOR_HEALTH_REFRESH_FAILED" },
+  ]);
+  assert.equal(result.lastSuccessful, "HEALTH_REFRESH_SENT");
+  assert.equal(result.firstFailed, "HEALTH_REFRESH_RESPONSE");
+  assert.equal(result.errorCode, "COLLECTOR_HEALTH_REFRESH_FAILED");
+});
