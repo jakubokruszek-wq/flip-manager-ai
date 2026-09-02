@@ -33,13 +33,19 @@ import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanSta
 
 type ScanResponse = {
   runId?: string;
-  status?: "running" | "completed" | "partial";
+  status?: "queued" | "running" | "completed" | "partial" | "failed";
   scannedCount: number;
   matchedCount: number;
   newCount: number;
   updatedCount: number;
   priceDropCount: number;
   matchDiagnostics?: MatchDiagnostics;
+  rejectionBreakdown?: RejectionBreakdown;
+  warnings?: string[];
+  partialReason?: string | null;
+  exactCount?: number;
+  sellPropertyCount?: number;
+  persistedCount?: number;
   sourceResults?: Array<{
     source: string;
     status: "pending" | "completed" | "failed";
@@ -48,6 +54,18 @@ type ScanResponse = {
     errorMessage: string | null;
     matchDiagnostics?: MatchDiagnostics;
   }>;
+};
+
+type RejectionBreakdown = {
+  identityUnverified?: number;
+  searchParentUnverified?: number;
+  buildingTypeUnverified?: number;
+  rent?: number;
+  ageCutoff?: number;
+  outsideLodz?: number;
+  tenement?: number;
+  duplicate?: number;
+  other?: number;
 };
 
 type MatchDiagnostics = {
@@ -84,7 +102,6 @@ export function FlipFinderPage() {
   const [scanProgress, setScanProgress] = useState<ScanProgressResponse | null>(null);
   const [activeScanRunId, setActiveScanRunId] = useState<string | null>(null);
   const [startTrace, setStartTrace] = useState<StartTrace | null>(null);
-  const [showStartTrace, setShowStartTrace] = useState(false);
   const [validatingCollector, setValidatingCollector] = useState(false);
   const [collectorValidation, setCollectorValidation] = useState<{ requestId: string; pageBootstrap: boolean; bootstrapBackground: boolean; result: CollectorValidation | null; error: string | null } | null>(null);
   const [externalPingResult, setExternalPingResult] = useState<{ requestId: string; ok: boolean; error?: string } | null>(null);
@@ -278,6 +295,8 @@ export function FlipFinderPage() {
       });
     });
   };
+  void validateCollector;
+  void testDirectExternalChannel;
 
   const finishScanning = (filterId: string) => {
     scanningFilterIdsRef.current.delete(filterId);
@@ -376,6 +395,8 @@ export function FlipFinderPage() {
   }
 
   const activeFilter = data.filters.find((filter) => filter.id === requestedFilterId) ?? data.filters.find((filter) => filter.isActive) ?? data.filters[0] ?? null;
+  void collectorValidation;
+  void externalPingResult;
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -419,17 +440,6 @@ export function FlipFinderPage() {
             >
               {scanningFilterIds.has(activeFilter.id) ? "Skanowanie…" : "Skanuj oferty"}
             </Button>
-            <Button
-              className="h-12 px-6 text-base"
-              disabled={validatingCollector || scanningFilterIds.has(activeFilter.id)}
-              onClick={() => void validateCollector(activeFilter)}
-              variant="outline"
-            >
-              {validatingCollector ? "Walidacja…" : "Waliduj Collector"}
-            </Button>
-            <Button className="h-12 px-6 text-base" onClick={() => void testDirectExternalChannel()} variant="ghost">
-              Test kanału bezpośredniego
-            </Button>
             {scanningFilterIds.has(activeFilter.id) ? (
               <Button className="h-12 px-6 text-base" onClick={() => void stopScan(activeFilter)} variant="destructive">
                 Zatrzymaj skanowanie
@@ -437,8 +447,6 @@ export function FlipFinderPage() {
             ) : null}
             <FilterActions filter={activeFilter} onAction={manageFilter} />
           </div>
-          {collectorValidation ? <CollectorValidationPanel validation={collectorValidation} /> : null}
-          {externalPingResult ? <div className="text-xs text-muted-foreground" aria-live="polite">Direct background ping: {externalPingResult.ok ? "PASS" : `FAIL (${externalPingResult.error})`} · requestId: {externalPingResult.requestId}</div> : null}
           {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
           {scanProgress && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
@@ -464,8 +472,7 @@ export function FlipFinderPage() {
           className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           <p>{error}</p>
-          {startTrace ? <Button className="mt-2" onClick={() => setShowStartTrace((value) => !value)} size="sm" variant="outline">Pokaż diagnostykę</Button> : null}
-          {showStartTrace && startTrace ? <StartTraceSummary trace={startTrace} /> : null}
+          {startTrace ? <details className="mt-3 text-xs"><summary className="cursor-pointer font-semibold">Szczegóły diagnostyczne</summary><StartTraceSummary trace={startTrace} /></details> : null}
           {retryFilterId ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
@@ -495,7 +502,7 @@ export function FlipFinderPage() {
       ) : null}
 
       {lastScanDiagnostics ? (
-        <ScanDiagnosticsPanel filter={lastScanDiagnostics.filter} response={lastScanDiagnostics.response} />
+        <ScanResultPanel filter={lastScanDiagnostics.filter} response={lastScanDiagnostics.response} />
       ) : null}
 
       <section aria-label="Statystyki Flip Findera" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-6">
@@ -650,6 +657,43 @@ function ScanDiagnosticsPanel({ filter, response }: { filter: SearchFilterListIt
     </Card>
   );
 }
+void ScanDiagnosticsPanel;
+
+function ScanResultPanel({ filter, response }: { filter: SearchFilterListItem; response: ScanResponse }) {
+  const funnel = scanFunnel(response);
+  const status = response.status === "partial" ? "PARTIAL" : response.status === "failed" ? "FAILED" : response.status === "queued" ? "QUEUED" : response.status === "running" ? "RUNNING" : "COMPLETED";
+  const partialReason = response.partialReason || response.warnings?.[0] || response.sourceResults?.find((source) => source.status === "failed")?.errorMessage;
+  const noOffers = funnel.matched === 0 && funnel.collected > 0;
+  return <Card aria-label="Wynik skanu" className="overflow-hidden border-gold/20 bg-gradient-to-br from-gold/[0.07] via-card to-card p-5 sm:p-6">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-gold">WYNIK SKANU</p><h2 className="mt-1 text-xl font-semibold tracking-tight">{filter.name}</h2></div><span className={`ui-badge ${status === "PARTIAL" ? "border-warning/30 bg-warning/10 text-warning" : status === "FAILED" ? "border-danger/20 bg-danger/10 text-danger" : status === "RUNNING" || status === "QUEUED" ? "border-gold/30 bg-gold/10 text-gold" : "border-success/20 bg-success/10 text-success"}`}>{status}</span></div>
+    {status === "PARTIAL" || status === "FAILED" ? <div className="mt-4 rounded-xl border border-warning/25 bg-warning/10 p-4 text-sm"><p className="font-semibold text-warning">{status === "PARTIAL" ? "Częściowo zakończony" : "Skan zakończony błędem"}</p><p className="mt-1 text-muted-foreground">{partialReason || "Nie wszystkie źródła zakończyły pracę."}</p></div> : null}
+    <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"><DiagnosticMetric label="Zebrane posty" value={funnel.collected} /><DiagnosticMetric label="Zweryfikowane EXACT" value={funnel.exact} /><DiagnosticMetric label="SELL_PROPERTY" value={funnel.sell} tone="gold" /><DiagnosticMetric label="Odrzucone" value={funnel.rejected} /><DiagnosticMetric label="Dopasowane" value={funnel.matched} tone="gold" /><DiagnosticMetric label="Zapisane" value={funnel.saved} /></div>
+    {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground">Nie zapisano ofert. Najwięcej rekordów odpadło na: <strong className="text-foreground">{funnel.topRejection}</strong>.</p> : null}
+    <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">ODRZUCONE</h3><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
+    <details className="mt-6 border-t border-border/60 pt-4 text-sm"><summary className="cursor-pointer font-semibold">Szczegóły diagnostyczne</summary><div className="mt-4 space-y-4"><p className="text-xs text-muted-foreground">Statusy źródeł i techniczne kody są dostępne tutaj; nie wpływają na decyzję filtra.</p><div className="grid gap-3 lg:grid-cols-3">{(response.sourceResults ?? []).map((source) => <SourceDiagnosticCard key={source.source} source={source} />)}</div>{response.matchDiagnostics ? <div className="space-y-3">{technicalDiagnosticBars(response.matchDiagnostics, funnel.collected).map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div> : null}</div></details>
+  </Card>;
+}
+
+type ScanFunnel = { collected: number; exact: number; sell: number; rejected: number; matched: number; saved: number; topRejection: string; rejections: Array<{ key: string; label: string; count: number }> };
+
+function scanFunnel(response: ScanResponse): ScanFunnel {
+  const raw = response as ScanResponse & Record<string, unknown>;
+  const breakdown = isRecord(raw.rejectionBreakdown) ? raw.rejectionBreakdown as Record<string, unknown> : {};
+  const collected = Math.max(0, response.scannedCount);
+  const matched = Math.max(0, response.matchedCount || response.matchDiagnostics?.matched || 0);
+  const rejected = numberFrom(raw.rejected, Math.max(0, collected - matched));
+  const rejections = [["identity", "Identity unverified", numberFromAny(breakdown, ["identityUnverified", "identity_unverified"])], ["search", "Search parent unverified", numberFromAny(breakdown, ["searchParentUnverified", "search_parent_unverified"])], ["building", "Building type unverified", numberFromAny(breakdown, ["buildingTypeUnverified", "building_type_unverified"])], ["rent", "Rent", numberFromAny(breakdown, ["rent", "rent_listing"])], ["age", "Age cutoff", numberFromAny(breakdown, ["ageCutoff", "age_cutoff"])], ["location", "Outside Łódź", numberFromAny(breakdown, ["outsideLodz", "outside_lodz"])], ["tenement", "Kamienica", numberFromAny(breakdown, ["tenement", "kamienica"])], ["duplicate", "Duplicate", numberFromAny(breakdown, ["duplicate", "duplicates"])], ["other", "Other", numberFromAny(breakdown, ["other"], rejected)]].map(([key, label, count]) => ({ key: String(key), label: String(label), count: Number(count) || 0 }));
+  const exact = numberFromAny(raw, ["exactCount", "verifiedExact", "identityExact"]);
+  const sell = numberFromAny(raw, ["sellPropertyCount", "sellProperty", "sell"]);
+  const saved = numberFrom(raw.persistedCount, Math.max(0, response.newCount + response.updatedCount));
+  const top = rejections.filter((reason) => reason.count > 0).sort((a, b) => b.count - a.count)[0];
+  return { collected, exact, sell, rejected, matched, saved, topRejection: top ? `${top.label} — ${formatNumber(top.count)}` : "Brak danych o odrzuceniach", rejections };
+}
+
+function technicalDiagnosticBars(diagnostics: MatchDiagnostics, analyzed: number) { return [{ key: "price", label: "Cena", count: diagnostics.rejectedByPrice }, { key: "pricePerSqm", label: "Cena/m²", count: diagnostics.rejectedByPricePerSqm }, { key: "rooms", label: "Pokoje", count: diagnostics.rejectedByRooms }, { key: "area", label: "Metraż", count: diagnostics.rejectedByArea }, { key: "district", label: "Dzielnica", count: diagnostics.rejectedByDistrict }, { key: "buildingType", label: "Typ budynku", count: diagnostics.rejectedByBuildingType }].map((item) => ({ ...item, count: Math.min(analyzed, Math.max(0, item.count)) })); }
+function numberFrom(value: unknown, fallback: number): number { return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback; }
+function numberFromAny(value: Record<string, unknown>, keys: string[], fallback = 0): number { for (const key of keys) { if (typeof value[key] === "number" && Number.isFinite(value[key])) return Math.max(0, value[key] as number); } return fallback; }
+function isRecord(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
 function DiagnosticMetric({ label, value, tone }: { label: string; value: number; tone?: "gold" }) {
   return <div className="rounded-xl border border-border/60 bg-surface-elevated/70 p-3"><p className="text-xs text-muted-foreground">{label}</p><p className={`mt-1 font-mono text-2xl font-semibold ${tone === "gold" ? "text-gold" : ""}`}>{formatNumber(value)}</p></div>;
@@ -1071,6 +1115,7 @@ function CollectorValidationPanel({ validation }: { validation: { requestId: str
     {result?.contentScriptResponse.href ? <div className="mt-2 text-xs text-muted-foreground">Test tab: {String(result.contentScriptResponse.href)}</div> : null}
   </div>;
 }
+void CollectorValidationPanel;
 
 function isCollectorValidation(value: unknown): value is CollectorValidation {
   if (!value || typeof value !== "object") return false;
