@@ -126,7 +126,7 @@ async function finishBatch(supabase: ReturnType<typeof createAdminClient>, devic
 }
 
 function batchForStorage(batch: FacebookCollectorBatch): Record<string, unknown> {
-  return { scanId: batch.scanId, batchId: batch.batchId, sourceId: batch.sourceId, sourceType: batch.sourceType, sourceUrl: batch.sourceUrl, collectedAt: batch.collectedAt, health: batch.health, searchTelemetry: batch.searchTelemetry, posts: batch.posts.map((post) => ({ ...post, textHash: post.text ? createHash("sha256").update(post.text).digest("hex") : null, text: post.text?.slice(0, 20_000) ?? null, media: post.media.map((media) => ({ ...media, url: media.url.slice(0, 2_000) })) })) };
+  return { scanId: batch.scanId, batchId: batch.batchId, sourceId: batch.sourceId, sourceType: batch.sourceType, sourceUrl: batch.sourceUrl, collectedAt: batch.collectedAt, health: batch.health, searchTelemetry: batch.searchTelemetry, mainFeedTelemetry: batch.mainFeedTelemetry ?? [], posts: batch.posts.map((post) => ({ ...post, textHash: post.text ? createHash("sha256").update(post.text).digest("hex") : null, text: post.text?.slice(0, 20_000) ?? null, media: post.media.map((media) => ({ ...media, url: media.url.slice(0, 2_000) })) })) };
 }
 
 function emptyResult(batch: FacebookCollectorBatch, status: CollectorBatchResult["status"]): CollectorBatchResult { return { status, batchId: batch.batchId, captured: batch.posts.length, processed: 0, listingsCreated: 0, listingsUpdated: 0, skipped: 0, errors: status === "failed" ? 1 : 0, sourceScanIds: [], health: batch.health }; }

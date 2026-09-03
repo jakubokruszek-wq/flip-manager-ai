@@ -148,6 +148,39 @@ test("same canonical post id cannot inherit a different card author or text", ()
   assert.ok(record.identityReasons.includes("POST_IDENTITY_CONFLICT"));
 });
 
+test("root story author and message are exact-bound with explicit provenance", () => {
+  const verified = core.resolveRootStoryIdentity({ rootPostId: "1579666997184777", author: "Oleh Zaitsev", text: "Na sprzedaż mieszkanie 52 m²", rootAuthorSource: "ROOT_CARD_AUTHOR", rootTextSource: "ROOT_CARD_MESSAGE", rootTextVerified: true }, "1579666997184777");
+  assert.equal(verified.identityConfidence, "EXACT");
+  assert.equal(verified.rootTextVerified, true);
+  assert.ok(verified.identityReasons.includes("ROOT_TEXT_VERIFIED"));
+});
+
+test("root story resolver fails closed for comment, neighboring and media-only text", () => {
+  for (const input of [
+    { rootPostId: "1579666997184777", author: "Oleh Zaitsev", text: "Komentarz sąsiada", rootAuthorSource: "COMMENT", rootTextSource: "COMMENT", rootTextVerified: false },
+    { rootPostId: "1579666997184777", author: "Inny autor", text: "Sąsiednia karta", rootAuthorSource: "NEIGHBOR", rootTextSource: "NEIGHBOR", rootTextVerified: false },
+    { rootPostId: "1579666997184777", author: "Oleh Zaitsev", text: "Caption zdjęcia", rootAuthorSource: "ROOT_CARD_AUTHOR", rootTextSource: "MEDIA_CAPTION", rootTextVerified: false },
+  ]) assert.equal(core.resolveRootStoryIdentity(input, "1579666997184777").identityConfidence, "UNVERIFIED");
+  const expanded = core.resolveRootStoryIdentity({ rootPostId: "1579666997184777", author: "Oleh Zaitsev", text: "Pełna treść po Zobacz więcej", rootAuthorSource: "ROOT_CARD_AUTHOR", rootTextSource: "ROOT_CARD_MESSAGE_EXPANDED", rootTextVerified: true }, "1579666997184777");
+  assert.equal(expanded.identityConfidence, "EXACT");
+});
+
+test("diagnostic search inspection reports evidence without inventing a parent id", () => {
+  const mediaId = "28074641558832168";
+  const postId = "1576413074176836";
+  const body = JSON.stringify({ __typename: "Photo", id: mediaId, container_story: { __typename: "Story", post_id: postId, url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/${postId}/`, actors: [{ name: "Anna" }], message: { text: "Sprzedam mieszkanie" } } });
+  const diagnostic = core.inspectSearchMediaParentFromText(body, source, mediaId);
+  assert.equal(diagnostic.currMediaId, mediaId);
+  assert.equal(diagnostic.containerStoryPostId, postId);
+  assert.equal(diagnostic.parentPostId, postId);
+  assert.equal(diagnostic.rootAuthorFound, true);
+  assert.equal(diagnostic.rootTextFound, true);
+  assert.equal(diagnostic.identityResult, "EXACT");
+  const missing = core.inspectSearchMediaParentFromText(body, source, "28074641558832169");
+  assert.equal(missing.parentPostId, null);
+  assert.equal(missing.identityResult, "UNVERIFIED");
+});
+
 test("merge retains main-feed and search discovery evidence", () => {
   const base = { postId: "1577700267381450", permalink: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1577700267381450/", sourceId: source.sourceId, sourceType: "GROUP", author: "A", text: "Sprzedam mieszkanie", publishedAt: null, timestampText: null, media: [], firstSeenIteration: 0, identityConfidence: "EXACT", identityReasons: [], discoverySource: "MAIN_FEED", foundInMainFeed: true, firstSeenPhase: "MAIN_FEED" };
   const [record] = core.mergeRecords([base, { ...base, discoverySource: "SEARCH", searchQuery: "mieszkanie", searchQueries: ["mieszkanie"], foundInMainFeed: false, firstSeenPhase: "SEARCH" }]);

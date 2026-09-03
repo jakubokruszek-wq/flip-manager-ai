@@ -26,20 +26,34 @@
     const mediaId = String(options.mediaId || "");
     const source = core.canonicalSource(options.sourceUrl);
     const current = new URL(location.href);
-    if (!source || source.sourceType !== "GROUP" || !/^\d{5,30}$/.test(mediaId)) return { status: "UNVERIFIED", records: [], reasons: ["SEARCH_MEDIA_RESOLVE_INPUT_INVALID"] };
-    if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("fbid") !== mediaId) return { status: "UNVERIFIED", records: [], reasons: ["SEARCH_MEDIA_TILE_CONTEXT_MISMATCH"] };
+    const invalid = (reason) => ({ status: "UNVERIFIED", records: [], reasons: [reason], diagnostics: { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId, photoOpened: false, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: reason } });
+    if (!source || source.sourceType !== "GROUP" || !/^\d{5,30}$/.test(mediaId)) return invalid("SEARCH_MEDIA_RESOLVE_INPUT_INVALID");
+    if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("fbid") !== mediaId) return invalid("SEARCH_MEDIA_TILE_CONTEXT_MISMATCH");
     const candidates = [];
+    const diagnostics = { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId, photoOpened: true, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_PAYLOAD_NOT_FOUND" };
     let bytes = 0;
     for (const script of [...document.scripts].slice(0, 250)) {
       const body = script.textContent || "";
       if (!body || bytes + body.length > 4_000_000) continue;
       bytes += body.length;
+      const inspected = core.inspectSearchMediaParentFromText(body, source, mediaId);
+      diagnostics.structuredPayloadFound ||= inspected.structuredPayloadFound;
+      diagnostics.currMediaId ||= inspected.currMediaId;
+      diagnostics.containerStoryPostId ||= inspected.containerStoryPostId;
+      diagnostics.topLevelPostId ||= inspected.topLevelPostId;
+      diagnostics.mediaAttachmentCrosscheck ||= inspected.mediaAttachmentCrosscheck;
+      diagnostics.parentPostId ||= inspected.parentPostId;
+      diagnostics.parentPermalink ||= inspected.parentPermalink;
+      diagnostics.rootAuthorFound ||= inspected.rootAuthorFound;
+      diagnostics.rootTextFound ||= inspected.rootTextFound;
+      if (inspected.identityResult === "EXACT") diagnostics.identityResult = "EXACT";
+      if (inspected.failSubstep && diagnostics.failSubstep === "SEARCH_PAYLOAD_NOT_FOUND") diagnostics.failSubstep = inspected.failSubstep;
       candidates.push(...core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId, 0));
     }
     const verified = core.verifySearchMediaParent(candidates, mediaId);
-    if (verified.status !== "VERIFIED") return verified;
+    if (verified.status !== "VERIFIED") return { ...verified, diagnostics: { ...diagnostics, identityResult: "UNVERIFIED", failSubstep: diagnostics.failSubstep || verified.reasons?.[0] || "SEARCH_PARENT_UNVERIFIED" } };
     const records = verified.records.map((record) => ({ ...record, discoverySource: "SEARCH", foundInMainFeed: false, firstSeenPhase: "SEARCH", searchQuery: String(options.searchQuery || "").slice(0, 120) || null, searchQueries: options.searchQuery ? [String(options.searchQuery).slice(0, 120)] : [] }));
-    return { ...verified, records };
+    return { ...verified, records, diagnostics: { ...diagnostics, identityResult: "EXACT", failSubstep: null, parentPostId: records[0]?.postId || diagnostics.parentPostId, parentPermalink: records[0]?.permalink || diagnostics.parentPermalink, rootAuthorFound: true, rootTextFound: true } };
   }
 
   async function collectSource(options) {
@@ -55,6 +69,7 @@
     const start = performance.now();
     const iterations = [];
     let records = [];
+    const mainFeedDiagnostics = new Map();
     const searchMediaTiles = new Map();
     let scrolls = 0;
     let consecutiveNoNew = 0;
@@ -71,6 +86,11 @@
       const dom = collectDom(source, iteration, `${layerPrefix}DOM`);
       const hydration = collectHydration(source, iteration, `${layerPrefix}HYDRATION`);
       const network = [...networkRecords.values()].map((record) => ({ ...record, firstSeenIteration: record.firstSeenIteration ?? iteration, discoveryLayers: [`${layerPrefix}NETWORK`] }));
+      if (!searchMode) {
+        updateMainFeedDiagnostics(mainFeedDiagnostics, dom, "DOM");
+        updateMainFeedDiagnostics(mainFeedDiagnostics, hydration, "NETWORK");
+        updateMainFeedDiagnostics(mainFeedDiagnostics, network, "NETWORK");
+      }
       const beforeIds = new Set(records.map((record) => record.postId));
       const before = records.length;
       records = core.mergeRecords([...records, ...dom, ...hydration, ...network], maxPosts);
@@ -109,7 +129,16 @@
       foundInMainFeed: !searchMode,
       firstSeenPhase: searchMode ? "SEARCH" : "MAIN_FEED",
     }));
-    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, 100), health, iterations: iterations.slice(0, 31) };
+    if (!searchMode) {
+      for (const post of records) {
+        const diagnostic = mainFeedDiagnostics.get(post.postId);
+        if (diagnostic) {
+          diagnostic.finalIdentity = post.identityConfidence;
+          if (post.identityConfidence === "EXACT") diagnostic.failSubstep = null;
+        }
+      }
+    }
+    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, 100), health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {
@@ -138,9 +167,14 @@
       const uniqueLinks = [...new Map(links.map((link) => [link.postId, link])).values()];
       if (uniqueLinks.length !== 1) continue;
       const link = uniqueLinks[0];
-      const exactElements = (selector) => [...card.querySelectorAll(selector)].filter((node) => node.closest('[role="article"]') === card);
-      const messageCandidates = exactElements('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]').map((node) => visibleText(node)).filter(Boolean);
+      const exactElements = (selector) => [...card.querySelectorAll(selector)].filter((node) => node.closest('[role="article"]') === card && !isCommentDescendant(node));
+      let messageNodes = exactElements('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]');
+      const seeMorePresent = hasSeeMore(card);
+      const seeMoreClicked = !messageNodes.length && seeMorePresent ? expandRootMessage(card) : false;
+      const expandedMessageNodes = exactElements('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]');
+      const messageCandidates = messageNodes.map((node) => visibleText(node)).filter(Boolean);
       const text = messageCandidates.length === 1 ? messageCandidates[0] : null;
+      const rootTextAfterExpand = expandedMessageNodes.map((node) => visibleText(node)).filter(Boolean).length === 1;
       const authorCandidates = exactElements('h2 a, h3 a, strong a').map((node) => visibleText(node)).filter(Boolean);
       const author = authorCandidates[0] || null;
       const timestamp = exactElements('abbr, time, a[aria-label*="godz" i], a[aria-label*="min" i], a[aria-label*="dzie" i]')[0] || null;
@@ -149,11 +183,53 @@
         if (!url || !/^https:\/\//.test(url)) return [];
         return [{ url, mediaId: mediaIdFromUrl(url), exactPostId: null, exactAssociation: false, discoveryLayers: [layer] }];
       });
-      const exactIdentity = Boolean(text && author);
-      output.push({ ...link, author, text, publishedAt: timestamp?.dateTime || null, timestampText: visibleText(timestamp), media, discoveryLayers: [layer], firstSeenIteration: iteration, identityConfidence: exactIdentity ? "EXACT" : "UNVERIFIED", identityReasons: exactIdentity ? ["DOM_EXACT_TOP_LEVEL_POST_CARD"] : ["DOM_EXACT_AUTHOR_MESSAGE_NOT_PROVEN"] });
+      const rootIdentity = core.resolveRootStoryIdentity({ rootPostId: link.postId, author, text, rootAuthorSource: author ? "ROOT_CARD_AUTHOR" : null, rootTextSource: text ? "ROOT_CARD_MESSAGE" : null, rootTextVerified: Boolean(text && author) }, link.postId);
+      output.push({ ...link, author: rootIdentity.author || null, text: rootIdentity.text || null, publishedAt: timestamp?.dateTime || null, timestampText: visibleText(timestamp), media, discoveryLayers: [layer], firstSeenIteration: iteration, rootPostId: rootIdentity.rootPostId || link.postId, rootAuthorSource: rootIdentity.rootAuthorSource || null, rootTextSource: rootIdentity.rootTextSource || null, rootTextVerified: rootIdentity.rootTextVerified === true, identityConfidence: rootIdentity.identityConfidence, identityReasons: rootIdentity.identityReasons, __mainFeedDiagnostic: { sourceLayer: "DOM", structuredAuthorPresent: false, structuredTextPresent: false, structuredTextPath: null, rootCardFound: true, rootCardPostIdBound: Boolean(link.postId && uniqueLinks.length === 1), rootCardPermalink: link.permalink, rootAuthorFound: Boolean(author), rootTextFound: Boolean(text), seeMorePresent, seeMoreClicked, rootTextAfterExpand, authorMatch: Boolean(rootIdentity.author && rootIdentity.author === author), postIdMatch: Boolean(rootIdentity.rootPostId === link.postId), finalIdentity: rootIdentity.identityConfidence, failSubstep: rootIdentity.identityConfidence === "EXACT" ? null : !author ? "ROOT_AUTHOR_FOUND" : !text ? "ROOT_TEXT_FOUND" : "IDENTITY_CROSSCHECK" } });
     }
     return core.mergeRecords(output);
   }
+
+  function updateMainFeedDiagnostics(target, records, layer) {
+    for (const record of records || []) {
+      if (!record?.postId) continue;
+      const prior = target.get(record.postId) || emptyMainFeedDiagnostic(record.postId);
+      const incoming = record.__mainFeedDiagnostic || {};
+      const structured = record.__structuredDiagnostics || {};
+      prior.sourceLayer = mergeSourceLayer(prior.sourceLayer, layer);
+      prior.structuredAuthorPresent ||= structured.structuredAuthorPresent === true;
+      prior.structuredTextPresent ||= structured.structuredTextPresent === true;
+      prior.structuredTextPath ||= typeof structured.structuredTextPath === "string" ? structured.structuredTextPath : null;
+      prior.rootCardFound ||= incoming.rootCardFound === true;
+      prior.rootCardPostIdBound ||= incoming.rootCardPostIdBound === true;
+      prior.rootCardPermalink ||= incoming.rootCardPermalink || record.permalink || null;
+      prior.rootAuthorFound ||= incoming.rootAuthorFound === true || Boolean(record.author);
+      prior.rootTextFound ||= incoming.rootTextFound === true || Boolean(record.text);
+      prior.seeMorePresent ||= incoming.seeMorePresent === true;
+      prior.seeMoreClicked ||= incoming.seeMoreClicked === true;
+      prior.rootTextAfterExpand ||= incoming.rootTextAfterExpand === true;
+      prior.authorMatch ||= incoming.authorMatch === true;
+      prior.postIdMatch ||= incoming.postIdMatch === true || record.postId === record.rootPostId;
+      prior.finalIdentity = record.identityConfidence || incoming.finalIdentity || prior.finalIdentity;
+      prior.failSubstep = incoming.failSubstep || record.identityReasons?.[0] || prior.failSubstep;
+      target.set(record.postId, prior);
+    }
+  }
+
+  function emptyMainFeedDiagnostic(postId) { return { postId, sourceLayer: "NETWORK", structuredAuthorPresent: false, structuredTextPresent: false, structuredTextPath: null, rootCardFound: false, rootCardPostIdBound: false, rootCardPermalink: null, rootAuthorFound: false, rootTextFound: false, seeMorePresent: false, seeMoreClicked: false, rootTextAfterExpand: false, authorMatch: false, postIdMatch: false, finalIdentity: "UNVERIFIED", failSubstep: "STRUCTURED_STORY_WITHOUT_ROOT_AUTHOR_OR_TEXT" }; }
+  function mergeSourceLayer(previous, current) { if (!previous) return current; if (previous === current) return previous; if (previous === "BOTH" || current === "BOTH") return "BOTH"; return "BOTH"; }
+
+  function isCommentDescendant(node) {
+    return Boolean(node.closest('[data-testid*="comment" i], [aria-label*="comment" i], [aria-label*="komentarz" i]'));
+  }
+
+  function expandRootMessage(card) {
+    const buttons = [...card.querySelectorAll('div[role="button"], button, a[role="button"]')]
+      .filter((node) => node.closest('[role="article"]') === card)
+      .filter((node) => /zobacz wi[eę]cej|see more/i.test(visibleText(node) || node.getAttribute('aria-label') || ''));
+    if (buttons.length === 1) { buttons[0].click(); return true; }
+    return false;
+  }
+  function hasSeeMore(card) { return [...card.querySelectorAll('div[role="button"], button, a[role="button"]')].some((node) => node.closest('[role="article"]') === card && /zobacz wi[eÄ™]cej|see more/i.test(visibleText(node) || node.getAttribute('aria-label') || '')); }
 
   function collectHydration(source, iteration, layer) {
     const records = [];

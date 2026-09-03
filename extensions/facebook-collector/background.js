@@ -8,7 +8,7 @@ importScripts("collector-preflight.js");
 const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
 const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
 const SEARCH_BUDGET_RESERVE_MS = 40_000;
-const SEARCH_LIMITS = { minScrolls: 0, maxScrolls: 3, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 240_000 };
+const SEARCH_LIMITS = { minScrolls: 3, maxScrolls: 10, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 240_000 };
 const SEARCH_BUDGET_SAFETY_MS = 2_000;
 const SEARCH_QUERY_CLEANUP_RESERVE_MS = 1_500;
 const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000;
@@ -268,7 +268,7 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   const images = { rawCandidates: posts.reduce((sum, post) => sum + (post.media || []).length, 0), verifiedProvenance: posts.reduce((sum, post) => sum + (post.media || []).filter((media) => media.exactAssociation === true && media.exactPostId === post.postId).length, 0), imported: 0 };
   const targets = ["1577700267381450", "1578068947344582", "1577710350713775"];
   collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
-  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, posts };
+  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], posts };
   await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
   const upload = await uploadBatch(batch);
   images.imported = upload?.listingsCreated ? images.verifiedProvenance : 0;
@@ -314,6 +314,7 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
   const selected = uniqueTiles.slice(0, SEARCH_LIMITS.maxTilesToOpen);
   const parentPosts = new Map();
   const resolvedRecords = [];
+  const tileDiagnostics = [];
   let tilesOpened = 0;
   let duplicatesByMedia = 0;
   let nextTileIndex = 0;
@@ -324,10 +325,13 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
       const tile = selected[nextTileIndex];
       nextTileIndex += 1;
       let resolverTabId = null;
+      const tileStartedAt = Date.now();
+      const tileDiagnostic = { query, mediaId: String(tile.mediaId), photoOpened: false, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_TILE_NOT_OPENED", elapsedMs: 0 };
       try {
         resolverTabId = (await chrome.tabs.create({ url: tile.photoUrl, active: false })).id;
         if (!resolverTabId) throw new Error("SEARCH_MEDIA_RESOLVER_TAB_MISSING");
         tilesOpened += 1;
+        tileDiagnostic.photoOpened = true;
         const remainingMs = deadlineMs - Date.now();
         if (remainingMs < 500) { deadlineReached = true; return; }
         await waitForTab(resolverTabId, Math.min(4_000, remainingMs));
@@ -336,10 +340,12 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
         await waitForContentScript(resolverTabId, Math.min(4_000, contentRemainingMs));
         if (deadlineMs - Date.now() < 100) { deadlineReached = true; return; }
         const response = await chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query } });
+        Object.assign(tileDiagnostic, response?.result?.diagnostics || {});
         const records = response?.ok && response.result?.status === "VERIFIED" && Array.isArray(response.result.records) ? response.result.records : [];
-        if (records.length === 1 && records[0].identityConfidence === "EXACT" && records[0].resolvedFromMediaTile === true) resolvedRecords.push({ ...records[0], media: [] });
-      } catch { /* an individual tile remains UNVERIFIED */ }
-      finally { if (resolverTabId !== null) await chrome.tabs.remove(resolverTabId).catch(() => {}); }
+        if (records.length === 1 && records[0].identityConfidence === "EXACT" && records[0].resolvedFromMediaTile === true) { resolvedRecords.push({ ...records[0], media: [] }); tileDiagnostic.identityResult = "EXACT"; tileDiagnostic.parentPostId = records[0].postId; tileDiagnostic.parentPermalink = records[0].permalink; tileDiagnostic.rootAuthorFound = true; tileDiagnostic.rootTextFound = true; tileDiagnostic.failSubstep = null; }
+        else if (!tileDiagnostic.failSubstep || tileDiagnostic.failSubstep === "SEARCH_TILE_NOT_OPENED") tileDiagnostic.failSubstep = response?.result?.reasons?.[0] || "SEARCH_PARENT_UNVERIFIED";
+      } catch (error) { tileDiagnostic.failSubstep = searchTileErrorCode(error); }
+      finally { tileDiagnostic.elapsedMs = Date.now() - tileStartedAt; tileDiagnostics.push(tileDiagnostic); if (resolverTabId !== null) await chrome.tabs.remove(resolverTabId).catch(() => {}); }
     }
   }
   await Promise.all(Array.from({ length: Math.min(SEARCH_LIMITS.tileConcurrency, selected.length) }, () => resolveWorker()));
@@ -354,7 +360,14 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
   const tilesResolved = posts.reduce((sum, post) => sum + Math.max(1, post.mediaIds?.length || 0), 0);
   const tilesUnverified = Math.max(0, tilesOpened - tilesResolved);
   const expectedOpens = Math.min(tilesSeen, SEARCH_LIMITS.maxTilesToOpen);
-  return { posts, tilesSeen, tilesOpened, tilesResolved, tilesUnverified, uniqueParentPosts: posts.length, verifiedParentPosts: posts.length, duplicatesByMedia, budgetExhausted: deadlineReached || ((tilesOpened < expectedOpens || tilesUnverified > 0) && Date.now() >= deadlineMs) };
+  return { posts, tilesSeen, tilesOpened, tilesResolved, tilesUnverified, uniqueParentPosts: posts.length, verifiedParentPosts: posts.length, duplicatesByMedia, tileDiagnostics, budgetExhausted: deadlineReached || ((tilesOpened < expectedOpens || tilesUnverified > 0) && Date.now() >= deadlineMs) };
+}
+
+function searchTileErrorCode(error) {
+  const message = safeError(error);
+  if (/timeout/i.test(message)) return "SEARCH_TIMEOUT";
+  if (/content.?script|receiving end|message channel/i.test(message)) return "SEARCH_CONTENT_SCRIPT_UNAVAILABLE";
+  return message.split(":", 1)[0].slice(0, 120) || "SEARCH_RESOLVE_FAILED";
 }
 
 async function uploadBatch(batch) {
@@ -496,10 +509,10 @@ function healthAfterSearch(primary, captured, searchTelemetrySummary, durationMs
 function searchTelemetry({ query, search, tileResolution, mainFeedIds, newUnique, durationMs }) {
   const incompleteTiles = tileResolution.tilesOpened < Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen) || tileResolution.tilesUnverified > 0;
   const status = search.health.status === "FAILED" ? "FAILED" : incompleteTiles || tileResolution.budgetExhausted ? "DEGRADED" : search.posts.length || tileResolution.tilesSeen === 0 ? "HEALTHY" : "DEGRADED";
-  return { query, executed: true, status, scrolls: search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: tileResolution.tilesSeen, tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, durationMs, stopReason: tileResolution.budgetExhausted ? "SEARCH_QUERY_TIME_BUDGET" : search.health.stopReason };
+  return { query, executed: true, status, scrolls: search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: tileResolution.tilesSeen, tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, tileDiagnostics: tileResolution.tileDiagnostics, durationMs, stopReason: tileResolution.budgetExhausted ? "SEARCH_QUERY_TIME_BUDGET" : search.health.stopReason };
 }
-function failedSearchTelemetry(query, durationMs, stopReason) { return { query, executed: true, status: "FAILED", scrolls: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, durationMs, stopReason }; }
-function appendUnexecutedSearchRuns(searchRuns, fromIndex, stopReason) { for (const query of ACTIVE_SEARCH_QUERIES.slice(fromIndex)) searchRuns.push({ query, executed: false, status: "DEGRADED", scrolls: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, durationMs: 0, stopReason }); }
+function failedSearchTelemetry(query, durationMs, stopReason) { return { query, executed: true, status: "FAILED", scrolls: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs, stopReason }; }
+function appendUnexecutedSearchRuns(searchRuns, fromIndex, stopReason) { for (const query of ACTIVE_SEARCH_QUERIES.slice(fromIndex)) searchRuns.push({ query, executed: false, status: "DEGRADED", scrolls: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs: 0, stopReason }); }
 
 function mergePosts(posts) {
   return globalThis.FlipFacebookCollectorCore.mergeRecords(posts, PRODUCTION_LIMITS.maxPosts);

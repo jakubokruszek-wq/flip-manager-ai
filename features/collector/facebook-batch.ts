@@ -36,6 +36,10 @@ export type CollectorPostRecord = {
   resolvedFromMediaTile: boolean;
   mediaIds: string[];
   parentResolutionEvidence: string[];
+  rootPostId?: string | null;
+  rootAuthorSource?: string | null;
+  rootTextSource?: string | null;
+  rootTextVerified?: boolean;
 };
 
 export type CollectorSourceHealth = {
@@ -69,6 +73,45 @@ export type CollectorSearchQueryTelemetry = {
   duplicatesByMedia: number;
   durationMs: number;
   stopReason: string;
+  tileDiagnostics?: CollectorSearchTileDiagnostic[];
+};
+
+export type CollectorSearchTileDiagnostic = {
+  query: string;
+  mediaId: string;
+  photoOpened: boolean;
+  structuredPayloadFound: boolean;
+  currMediaId: string | null;
+  containerStoryPostId: string | null;
+  topLevelPostId: string | null;
+  mediaAttachmentCrosscheck: boolean;
+  parentPostId: string | null;
+  parentPermalink: string | null;
+  rootAuthorFound: boolean;
+  rootTextFound: boolean;
+  identityResult: CollectorIdentityConfidence;
+  failSubstep: string | null;
+  elapsedMs: number;
+};
+
+export type CollectorMainFeedDiagnostic = {
+  postId: string;
+  sourceLayer: "NETWORK" | "DOM" | "BOTH";
+  structuredAuthorPresent: boolean;
+  structuredTextPresent: boolean;
+  structuredTextPath: string | null;
+  rootCardFound: boolean;
+  rootCardPostIdBound: boolean;
+  rootCardPermalink: string | null;
+  rootAuthorFound: boolean;
+  rootTextFound: boolean;
+  seeMorePresent: boolean;
+  seeMoreClicked: boolean;
+  rootTextAfterExpand: boolean;
+  authorMatch: boolean;
+  postIdMatch: boolean;
+  finalIdentity: CollectorIdentityConfidence;
+  failSubstep: string | null;
 };
 
 export type CollectorSearchTelemetry = {
@@ -89,6 +132,7 @@ export type FacebookCollectorBatch = {
   collectedAt: string;
   health: CollectorSourceHealth;
   searchTelemetry: CollectorSearchTelemetry | null;
+  mainFeedTelemetry?: CollectorMainFeedDiagnostic[];
   posts: CollectorPostRecord[];
 };
 
@@ -110,6 +154,7 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
     collectedAt: isoDate(value.collectedAt, "COLLECTOR_COLLECTED_AT_INVALID"),
     health,
     searchTelemetry: normalizeSearchTelemetry(value.searchTelemetry),
+    mainFeedTelemetry: normalizeMainFeedTelemetry(value.mainFeedTelemetry),
     posts: deduped,
   };
 }
@@ -169,6 +214,10 @@ function normalizePost(value: unknown, sourceId: string, sourceType: CollectorSo
     resolvedFromMediaTile: value.resolvedFromMediaTile === true,
     mediaIds: Array.isArray(value.mediaIds) ? value.mediaIds.filter((item): item is string => typeof item === "string" && /^\d{5,30}$/.test(item)).slice(0, 30) : [],
     parentResolutionEvidence: Array.isArray(value.parentResolutionEvidence) ? value.parentResolutionEvidence.filter((item): item is string => typeof item === "string").map((item) => item.slice(0, 120)).slice(0, 10) : [],
+    rootPostId: nullableString(value.rootPostId, 128),
+    rootAuthorSource: nullableString(value.rootAuthorSource, 120),
+    rootTextSource: nullableString(value.rootTextSource, 120),
+    rootTextVerified: value.rootTextVerified === true,
   };
 }
 
@@ -226,7 +275,40 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     duplicatesByMedia: boundedInteger(value.duplicatesByMedia, 0, 10),
     durationMs: boundedInteger(value.durationMs, 0, 120_000),
     stopReason: requiredString(value.stopReason, "COLLECTOR_SEARCH_QUERY_STOP_REASON_REQUIRED").slice(0, 120),
+    ...(Array.isArray(value.tileDiagnostics) ? { tileDiagnostics: value.tileDiagnostics.slice(0, 10).map(normalizeSearchTileDiagnostic) } : {}),
   };
+}
+
+function normalizeSearchTileDiagnostic(value: unknown): CollectorSearchTileDiagnostic {
+  if (!isRecord(value)) throw new Error("COLLECTOR_SEARCH_TILE_DIAGNOSTIC_INVALID");
+  const id = nullableString(value.mediaId, 30);
+  return {
+    query: requiredString(value.query, "COLLECTOR_SEARCH_TILE_QUERY_REQUIRED").slice(0, 120),
+    mediaId: id && /^\d{5,30}$/.test(id) ? id : "0",
+    photoOpened: value.photoOpened === true,
+    structuredPayloadFound: value.structuredPayloadFound === true,
+    currMediaId: nullableString(value.currMediaId, 30),
+    containerStoryPostId: nullableString(value.containerStoryPostId, 30),
+    topLevelPostId: nullableString(value.topLevelPostId, 30),
+    mediaAttachmentCrosscheck: value.mediaAttachmentCrosscheck === true,
+    parentPostId: nullableString(value.parentPostId, 30),
+    parentPermalink: safeHttpsUrl(value.parentPermalink),
+    rootAuthorFound: value.rootAuthorFound === true,
+    rootTextFound: value.rootTextFound === true,
+    identityResult: value.identityResult === "EXACT" ? "EXACT" : "UNVERIFIED",
+    failSubstep: nullableString(value.failSubstep, 120),
+    elapsedMs: boundedInteger(value.elapsedMs, 0, 120_000),
+  };
+}
+
+function normalizeMainFeedTelemetry(value: unknown): CollectorMainFeedDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 100).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const postId = nullableString(item.postId, 30);
+    if (!postId || !/^\d{5,30}$/.test(postId)) return [];
+    return [{ postId, sourceLayer: item.sourceLayer === "DOM" || item.sourceLayer === "BOTH" ? item.sourceLayer : "NETWORK", structuredAuthorPresent: item.structuredAuthorPresent === true, structuredTextPresent: item.structuredTextPresent === true, structuredTextPath: nullableString(item.structuredTextPath, 120), rootCardFound: item.rootCardFound === true, rootCardPostIdBound: item.rootCardPostIdBound === true, rootCardPermalink: safeHttpsUrl(item.rootCardPermalink), rootAuthorFound: item.rootAuthorFound === true, rootTextFound: item.rootTextFound === true, seeMorePresent: item.seeMorePresent === true, seeMoreClicked: item.seeMoreClicked === true, rootTextAfterExpand: item.rootTextAfterExpand === true, authorMatch: item.authorMatch === true, postIdMatch: item.postIdMatch === true, finalIdentity: item.finalIdentity === "EXACT" ? "EXACT" : "UNVERIFIED", failSubstep: nullableString(item.failSubstep, 120) }];
+  });
 }
 
 function facebookSourceUrl(value: string, type: CollectorSourceType): string {

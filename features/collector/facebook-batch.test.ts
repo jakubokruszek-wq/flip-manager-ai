@@ -49,6 +49,19 @@ test("preserves verified media-tile discovery provenance without gallery media",
   assert.equal(batch.posts[0]?.identityConfidence, "EXACT");
 });
 
+test("normalizes bounded diagnostic telemetry without accepting raw DOM or secrets", () => {
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "DEGRADED", visibleCardCount: 1, capturedPostCount: 0, scrolls: 3, durationMs: 5000, stopReason: "ROOT_TEXT_FOUND", reasons: [] }, posts: [],
+    mainFeedTelemetry: [{ postId: "1577700267381450", sourceLayer: "DOM", structuredAuthorPresent: false, structuredTextPresent: false, structuredTextPath: null, rootCardFound: true, rootCardPostIdBound: true, rootCardPermalink: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, rootAuthorFound: true, rootTextFound: false, seeMorePresent: true, seeMoreClicked: true, rootTextAfterExpand: false, authorMatch: true, postIdMatch: true, finalIdentity: "UNVERIFIED", failSubstep: "ROOT_TEXT_FOUND", token: "must-not-survive" }],
+    searchTelemetry: { hardTimeBudgetMs: 90000, durationMs: 100, queriesPlanned: 1, queriesExecuted: 1, budgetExhausted: false, queries: [{ query: "mieszkanie", executed: true, status: "DEGRADED", scrolls: 1, visibleCards: 1, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 1, tilesOpened: 1, tilesResolved: 0, tilesUnverified: 1, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, durationMs: 100, stopReason: "SEARCH_ROOT_TEXT_MISSING", tileDiagnostics: [{ query: "mieszkanie", mediaId: "28074641558832168", photoOpened: true, structuredPayloadFound: true, currMediaId: "28074641558832168", containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_CONTAINER_STORY_MISSING", elapsedMs: 30, secret: "must-not-survive" }] }] },
+  });
+  assert.equal(batch.mainFeedTelemetry?.[0]?.failSubstep, "ROOT_TEXT_FOUND");
+  assert.equal((batch.mainFeedTelemetry?.[0] as Record<string, unknown>).token, undefined);
+  assert.equal(batch.searchTelemetry?.queries[0]?.tileDiagnostics?.[0]?.failSubstep, "SEARCH_CONTAINER_STORY_MISSING");
+  assert.equal((batch.searchTelemetry?.queries[0]?.tileDiagnostics?.[0] as Record<string, unknown>).secret, undefined);
+});
+
 test("fails closed on source mismatch and forged media association", () => {
   const raw = { scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z", health: { status: "HEALTHY", visibleCardCount: 1, capturedPostCount: 1, scrolls: 3, durationMs: 5000, stopReason: "MAX_POSTS", reasons: [] }, posts: [{ postId: "1577700267381450", permalink: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, sourceId, sourceType: "GROUP", media: [{ url: "https://scontent.example/image.jpg", exactPostId: "foreign", exactAssociation: true }], discoveryLayers: ["DOM"], firstSeenIteration: 0 }] };
   const batch = normalizeFacebookCollectorBatch(raw);

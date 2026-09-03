@@ -42,7 +42,7 @@ test("production active-source flow is allowlisted, deep, single-click and bound
 });
 
 test("search fallback has bounded media-tile resolution budgets", () => {
-  assert.match(background, /SEARCH_LIMITS = \{ minScrolls: 0, maxScrolls: 3, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 15_000, discoveryBudgetMs: 5_000, hardTimeBudgetMs: 90_000 \}/);
+  assert.match(background, /SEARCH_LIMITS = \{ minScrolls: 3, maxScrolls: 10, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 240_000 \}/);
   assert.match(background, /minScrolls: SEARCH_LIMITS\.minScrolls/);
   assert.match(background, /maxScrolls: SEARCH_LIMITS\.maxScrolls/);
   assert.match(background, /maxPosts: SEARCH_LIMITS\.maxUniquePerQuery/);
@@ -161,8 +161,8 @@ test("start trace uses request ids, bounded safe stages and never stores credent
 
 test("COLLECT_SOURCE response and whole-source deadlines are hard, terminal and fail-closed", () => {
   assert.match(background, /importScripts\("collector-runtime\.js"\)/);
-  assert.match(background, /COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 25_000/);
-  assert.match(background, /SOURCE_COLLECTION_DEADLINE_MS = 180_000/);
+  assert.match(background, /COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000/);
+  assert.match(background, /SOURCE_COLLECTION_DEADLINE_MS = 360_000/);
   assert.match(background, /sendMessageWithTimeout/);
   assert.match(background + runtime, /COLLECT_SOURCE_RESPONSE_TIMEOUT/);
   assert.match(background + runtime, /SOURCE_COLLECTION_DEADLINE_EXCEEDED/);
@@ -326,7 +326,8 @@ test("collector validator is explicit, bounded and does not start collection", (
   assert.match(background, /waitForContentScript\(tabId, 10_000\)/);
   assert.match(content, /COLLECTOR_SELF_TEST/);
   assert.match(content, /documentReadyState/);
-  assert.match(finderPage, /Waliduj Collector/);
+  assert.doesNotMatch(finderPage, /onClick=\{\(\) => void validateCollector\(activeFilter\)\}/);
+  assert.match(finderPage, /Szczegóły diagnostyczne/);
   assert.match(finderPage, /COLLECTOR_VALIDATION_RESPONSE/);
 });
 
@@ -337,7 +338,7 @@ test("external proof-of-concept channel is origin-bound and harmless", () => {
   assert.match(background, /FLIP_COLLECTOR_EXTERNAL_PONG/);
   assert.match(background, /isAllowedExternalSender/);
   assert.match(finderPage, /koaaacaocmeohmajkpmblkmleedjeeih/);
-  assert.match(finderPage, /Test kanału bezpośredniego/);
+  assert.doesNotMatch(finderPage, /onClick=\{\(\) => void testDirectExternalChannel\(\)\}/);
 });
 
 test("backend collector queue polling is bounded and independent of page messaging", () => {

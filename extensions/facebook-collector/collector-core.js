@@ -72,6 +72,10 @@
         resolvedFromMediaTile: current.resolvedFromMediaTile === true || raw.resolvedFromMediaTile === true,
         mediaIds: unique([...(current.mediaIds || []), ...(raw.mediaIds || [])]),
         parentResolutionEvidence: unique([...(current.parentResolutionEvidence || []), ...(raw.parentResolutionEvidence || [])]),
+        rootPostId: current.rootPostId || raw.rootPostId || null,
+        rootAuthorSource: current.rootAuthorSource || raw.rootAuthorSource || null,
+        rootTextSource: current.rootTextSource || raw.rootTextSource || null,
+        rootTextVerified: current.rootTextVerified === true || raw.rootTextVerified === true,
         identityConfidence: conflict || (current.identityConfidence !== "EXACT" && raw.identityConfidence !== "EXACT") ? "UNVERIFIED" : "EXACT",
         identityReasons: unique([...(current.identityReasons || []), ...(raw.identityReasons || []), ...(conflict ? ["POST_IDENTITY_CONFLICT"] : [])]),
       } : { ...raw, discoverySource: raw.discoverySource === "SEARCH" ? "SEARCH" : "MAIN_FEED", searchQuery: raw.searchQuery || null, searchQueries: unique([...(raw.searchQueries || []), ...(raw.searchQuery ? [raw.searchQuery] : [])]), foundInMainFeed: raw.foundInMainFeed === true || raw.discoverySource !== "SEARCH", firstSeenPhase: raw.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED", resolvedFromMediaTile: raw.resolvedFromMediaTile === true, mediaIds: unique(raw.mediaIds || []), parentResolutionEvidence: unique(raw.parentResolutionEvidence || []), identityConfidence: raw.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED", identityReasons: unique(raw.identityReasons || []), discoveryLayers: unique(raw.discoveryLayers || []), media: mergeMedia(raw.media || [], raw.postId) };
@@ -79,6 +83,33 @@
       if (merged.size >= limit) break;
     }
     return [...merged.values()];
+  }
+
+  // Root-story identity is deliberately explicit. Callers must provide values
+  // extracted from the same card/story boundary; this helper never searches
+  // neighbouring nodes or promotes a media/caption id.
+  function resolveRootStoryIdentity(input, expectedPostId) {
+    const postId = scalarId(expectedPostId);
+    if (!postId || !isObject(input) || scalarId(input.rootPostId) !== postId) {
+      return { identityConfidence: "UNVERIFIED", identityReasons: ["ROOT_STORY_POST_ID_MISMATCH"] };
+    }
+    const author = clean(input.author);
+    const text = clean(input.text);
+    const authorSource = clean(input.rootAuthorSource);
+    const textSource = clean(input.rootTextSource);
+    if (!author || !text || !authorSource || !textSource || input.rootTextVerified !== true) {
+      return { identityConfidence: "UNVERIFIED", identityReasons: ["ROOT_STORY_AUTHOR_OR_TEXT_NOT_EXACT"] };
+    }
+    return {
+      author: author.slice(0, 200),
+      text: text.slice(0, 20_000),
+      rootPostId: postId,
+      rootAuthorSource: authorSource.slice(0, 120),
+      rootTextSource: textSource.slice(0, 120),
+      rootTextVerified: true,
+      identityConfidence: "EXACT",
+      identityReasons: ["ROOT_POST_ID", `ROOT_AUTHOR_SOURCE:${authorSource}`, `ROOT_TEXT_SOURCE:${textSource}`, "ROOT_TEXT_VERIFIED"],
+    };
   }
 
   function extractStructuredRecordsFromText(text, layer, source, iteration = 0) {
@@ -106,9 +137,66 @@
         firstSeenIteration: iteration,
         identityConfidence: message && author ? "EXACT" : "UNVERIFIED",
         identityReasons: message && author ? ["STRUCTURED_EXACT_STORY_ROOT"] : ["STRUCTURED_STORY_WITHOUT_ROOT_AUTHOR_OR_TEXT"],
+        __structuredDiagnostics: { structuredAuthorPresent: Boolean(author), structuredTextPresent: Boolean(message), structuredTextPath: findRootMessagePath(node) },
       });
     });
     return mergeRecords(records);
+  }
+
+  // Diagnostic-only inspection. It reports evidence already bound to the
+  // requested media id; it never creates or promotes a canonical record.
+  function inspectSearchMediaParentFromText(text, source, expectedMediaId) {
+    const mediaId = scalarId(expectedMediaId);
+    const result = {
+      structuredPayloadFound: false,
+      currMediaId: null,
+      containerStoryPostId: null,
+      topLevelPostId: null,
+      mediaAttachmentCrosscheck: false,
+      parentPostId: null,
+      parentPermalink: null,
+      rootAuthorFound: false,
+      rootTextFound: false,
+      identityResult: "UNVERIFIED",
+      failSubstep: "SEARCH_PAYLOAD_NOT_FOUND",
+    };
+    if (!text || !source || !mediaId) return result;
+    const roots = parseJsonBodies(String(text).slice(0, 4_000_000));
+    result.structuredPayloadFound = roots.length > 0;
+    for (const root of roots) walk(root, (node) => {
+      if (!isObject(node)) return;
+      if (scalarId(node.id) === mediaId && String(node.__typename || node.typename || "").toLowerCase() === "photo") {
+        result.currMediaId = mediaId;
+        const story = node.container_story;
+        if (!isObject(story)) { result.failSubstep = "SEARCH_CONTAINER_STORY_MISSING"; return; }
+        const postId = exactStoryRootPostId(story);
+        if (!postId) { result.failSubstep = "SEARCH_PARENT_POST_ID_MISSING"; return; }
+        result.containerStoryPostId = postId;
+        const link = findPermalink(story, postId, source);
+        if (link) { result.parentPostId = postId; result.parentPermalink = link.permalink; }
+        result.rootAuthorFound = Boolean(findAuthor(story));
+        result.rootTextFound = Boolean(findRootMessage(story));
+        result.mediaAttachmentCrosscheck = Boolean(mediaUrl(node));
+        result.identityResult = result.parentPermalink && result.rootAuthorFound && result.rootTextFound && result.mediaAttachmentCrosscheck ? "EXACT" : "UNVERIFIED";
+        result.failSubstep = result.identityResult === "EXACT" ? null : !result.parentPermalink ? "SEARCH_PARENT_PERMALINK_MISSING" : !result.rootAuthorFound || !result.rootTextFound ? "SEARCH_ROOT_TEXT_MISSING" : "SEARCH_MEDIA_CROSSCHECK_FAILED";
+      }
+      if (result.currMediaId || !isObject(node)) return;
+      const postId = exactStoryRootPostId(node);
+      if (postId && hasExactMediaTracking(node, postId, mediaId)) {
+        result.topLevelPostId = postId;
+        result.mediaAttachmentCrosscheck = true;
+        result.parentPostId = postId;
+        const link = findPermalink(node, postId, source);
+        result.parentPermalink = link?.permalink || null;
+        result.rootAuthorFound = Boolean(findAuthor(node));
+        result.rootTextFound = Boolean(findRootMessage(node));
+        result.identityResult = result.parentPermalink && result.rootAuthorFound && result.rootTextFound ? "EXACT" : "UNVERIFIED";
+        result.failSubstep = result.identityResult === "EXACT" ? null : !result.parentPermalink ? "SEARCH_PARENT_PERMALINK_MISSING" : "SEARCH_ROOT_TEXT_MISSING";
+      }
+    }, 16);
+    if (!result.structuredPayloadFound) result.failSubstep = "SEARCH_PAYLOAD_NOT_FOUND";
+    else if (!result.currMediaId && !result.topLevelPostId) result.failSubstep = "SEARCH_MEDIA_ID_NOT_FOUND";
+    return result;
   }
 
   function hasExactMediaTracking(story, postId, mediaId) {
@@ -272,6 +360,27 @@
     return null;
   }
 
+  function findRootMessagePath(node) {
+    for (const key of ["message", "text", "body"]) {
+      const value = node?.[key];
+      const text = typeof value === "string" ? value : isObject(value) && typeof value.text === "string" ? value.text : null;
+      if (clean(text)) return key;
+    }
+    let pathFound = null;
+    walkPath(node, (child, path) => {
+      if (pathFound || !isObject(child)) return false;
+      const location = path.join(".");
+      if (/(?:comment|feedback|attachment|media|caption)/i.test(location)) return false;
+      for (const key of ["message", "text", "body"]) {
+        const value = child[key];
+        const text = typeof value === "string" ? value : isObject(value) && typeof value.text === "string" ? value.text : null;
+        if (clean(text)) { pathFound = [...path, key].join("."); return false; }
+      }
+      return true;
+    }, 6);
+    return pathFound;
+  }
+
   function findAuthor(node) {
     const actor = node.actors?.[0] || node.actor || node.author || node.owner;
     return clean(actor?.name || actor?.short_name || null)?.slice(0, 200) || null;
@@ -366,5 +475,5 @@
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, extractStructuredRecordsFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
 })(globalThis);
