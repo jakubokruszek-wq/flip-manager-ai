@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { claimFacebookJobState, facebookJobIdempotencyKey, heartbeatFacebookJobState, renewBrowserExtensionJobState, settleFacebookJobState, type FacebookJobState } from "./types.ts";
+import { claimFacebookJobState, facebookJobIdempotencyKey, facebookLeaseRenewalFailureCode, heartbeatFacebookJobState, renewBrowserExtensionJobState, settleFacebookJobState, type FacebookJobState } from "./types.ts";
 
 const queued: FacebookJobState = { status: "queued", attempts: 0, maxAttempts: 3, leaseToken: null, leasedUntil: null, heartbeatAt: null };
 
@@ -11,9 +11,12 @@ test("browser-extension renewal requires the exact running owner and token", () 
   const running = { ...claimFacebookJobState(queued, 1_000), consumerType: "BROWSER_EXTENSION" as const, workerId: "extension-1" };
   const renewed = renewBrowserExtensionJobState(running, 31_000, "extension-1", "lease-1");
   assert.equal(renewed.leasedUntil, 211_000);
-  assert.throws(() => renewBrowserExtensionJobState(running, 31_000, "other-worker", "lease-1"), /FACEBOOK_JOB_LEASE_LOST/);
-  assert.throws(() => renewBrowserExtensionJobState({ ...running, consumerType: "LEGACY_WORKER" }, 31_000, "extension-1", "lease-1"), /FACEBOOK_JOB_LEASE_LOST/);
-  assert.throws(() => renewBrowserExtensionJobState({ ...running, status: "completed" }, 31_000, "extension-1", "lease-1"), /FACEBOOK_JOB_LEASE_LOST/);
+  assert.equal(facebookLeaseRenewalFailureCode(running, 31_000, "other-worker", "lease-1"), "FACEBOOK_JOB_WORKER_MISMATCH");
+  assert.equal(facebookLeaseRenewalFailureCode(running, 31_000, "extension-1", "wrong-token"), "FACEBOOK_JOB_LEASE_TOKEN_MISMATCH");
+  assert.equal(facebookLeaseRenewalFailureCode({ ...running, consumerType: "LEGACY_WORKER" }, 31_000, "extension-1", "lease-1"), "FACEBOOK_JOB_CONSUMER_MISMATCH");
+  assert.equal(facebookLeaseRenewalFailureCode({ ...running, status: "completed" }, 31_000, "extension-1", "lease-1"), "FACEBOOK_JOB_STATUS_NOT_RUNNING");
+  assert.equal(facebookLeaseRenewalFailureCode({ ...running, leasedUntil: 30_999 }, 31_000, "extension-1", "lease-1"), "FACEBOOK_JOB_LEASE_EXPIRED");
+  assert.throws(() => renewBrowserExtensionJobState(running, 31_000, "other-worker", "lease-1"), /FACEBOOK_JOB_WORKER_MISMATCH/);
 });
 test("expired lease can be claimed again", () => { const first = claimFacebookJobState(queued, 1_000, 100); const second = claimFacebookJobState(first, 1_101, 100); assert.equal(second.attempts, 2); });
 test("complete and fail settle running jobs", () => { const running = claimFacebookJobState(queued, 1_000); assert.equal(settleFacebookJobState(running, "completed").status, "completed"); assert.equal(settleFacebookJobState(running, "failed").status, "failed"); });
@@ -35,4 +38,12 @@ test("lease lifecycle scopes recovery and renewal to browser-extension ownership
   assert.match(migration, /lease_token = p_lease_token/);
   assert.match(migration, /worker_id = p_worker_id/);
   assert.match(migration, /for update skip locked/i);
+});
+
+test("lease renewal SQL qualifies columns that collide with output parameters", () => {
+  const migration = readFileSync("supabase/migrations/20260903223000_fix_facebook_extension_lease_renewal.sql", "utf8");
+  assert.match(migration, /update public\.facebook_scan_jobs as jobs/i);
+  assert.match(migration, /jobs\.leased_until >= now\(\)/i);
+  assert.match(migration, /returning jobs\.id, jobs\.leased_until/i);
+  assert.doesNotMatch(migration, /returning id, leased_until/i);
 });

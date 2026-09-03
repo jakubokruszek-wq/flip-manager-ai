@@ -1,5 +1,5 @@
 import { authenticateSignedCollectorRequest, SignedCollectorAuthError } from "@/features/collector/signed-device-auth";
-import { renewFacebookExtensionJobLease } from "@/features/facebook-worker/jobs";
+import { FacebookLeaseRenewalError, renewFacebookExtensionJobLease } from "@/features/facebook-worker/jobs";
 
 export const runtime = "nodejs";
 const PATHNAME = "/api/collector/jobs/heartbeat";
@@ -14,8 +14,10 @@ export async function POST(request: Request) {
     return cors(Response.json({ ok: true, leasedUntil }), request);
   } catch (error) {
     const status = error instanceof SignedCollectorAuthError ? error.status : 409;
-    const code = error instanceof SignedCollectorAuthError ? error.code : error instanceof Error ? error.message.split(":", 1)[0] : "FACEBOOK_JOB_LEASE_RENEW_FAILED";
-    return cors(Response.json({ ok: false, code }, { status }), request);
+    const code = error instanceof SignedCollectorAuthError ? error.code : error instanceof FacebookLeaseRenewalError ? error.code : "FACEBOOK_JOB_LEASE_RENEW_FAILED";
+    const diagnostics = error instanceof FacebookLeaseRenewalError ? error.diagnostics : null;
+    if (diagnostics) console.warn("FACEBOOK_JOB_LEASE_RENEW_REJECTED", diagnostics);
+    return cors(Response.json({ ok: false, code, diagnostics }, { status }), request);
   }
 }
 

@@ -22,6 +22,24 @@ export type FacebookEnqueueResult = {
   reasonCode: "FACEBOOK_NO_ENABLED_GROUP" | "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED" | null;
 };
 export type FacebookJobConsumerType = "BROWSER_EXTENSION" | "LEGACY_WORKER";
+export type FacebookLeaseRenewalDiagnostics = {
+  jobId: string;
+  jobFound: boolean;
+  workerMatch: boolean | null;
+  tokenMatch: boolean | null;
+  consumerType: string | null;
+  currentStatus: string | null;
+  leasedUntil: string | null;
+  currentTime: string;
+  failedPredicate: string;
+};
+
+export class FacebookLeaseRenewalError extends Error {
+  constructor(public readonly code: string, public readonly diagnostics: FacebookLeaseRenewalDiagnostics | null = null) {
+    super(code);
+    this.name = "FacebookLeaseRenewalError";
+  }
+}
 
 export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, requestedSourceId = FACEBOOK_PRODUCTION_SOURCE_ID): Promise<FacebookEnqueueResult> {
   const supabase = createFacebookWatcherAdminClient();
@@ -103,17 +121,50 @@ export async function heartbeatFacebookJob(input: { jobId: string; leaseToken: s
  */
 export async function renewFacebookExtensionJobLease(input: { jobId: string; leaseToken: string; workerId: string }): Promise<string> {
   const supabase = createFacebookWatcherAdminClient();
-  const result = await supabase.rpc("renew_facebook_scan_job", {
-    p_job_id: input.jobId,
-    p_worker_id: input.workerId,
-    p_lease_token: input.leaseToken,
-    p_lease_seconds: LEASE_SECONDS,
-  });
-  if (result.error) throw new Error(`FACEBOOK_JOB_LEASE_RENEW_FAILED: ${result.error.message}`);
-  const row = Array.isArray(result.data) ? asRow(result.data[0]) : asRow(result.data);
-  if (!row || typeof row.leased_until !== "string" || !row.leased_until) throw new Error("FACEBOOK_JOB_LEASE_LOST");
+  const currentTime = new Date();
+  const currentTimeIso = currentTime.toISOString();
+  const nextLeaseUntil = new Date(currentTime.getTime() + LEASE_SECONDS * 1_000).toISOString();
+  const result = await supabase.from("facebook_scan_jobs")
+    .update({ heartbeat_at: currentTimeIso, leased_until: nextLeaseUntil })
+    .eq("id", input.jobId)
+    .eq("consumer_type", "BROWSER_EXTENSION")
+    .eq("status", "running")
+    .eq("lease_token", input.leaseToken)
+    .eq("worker_id", input.workerId)
+    .gte("leased_until", currentTimeIso)
+    .select("id,leased_until")
+    .maybeSingle();
+  if (result.error) throw new FacebookLeaseRenewalError("FACEBOOK_JOB_LEASE_RENEW_UPDATE_FAILED");
+  const row = asRow(result.data);
+  if (!row || typeof row.leased_until !== "string" || !row.leased_until) {
+    const diagnostics = await diagnoseFacebookExtensionLease({ ...input, currentTime: currentTimeIso });
+    throw new FacebookLeaseRenewalError(diagnostics.failedPredicate, diagnostics);
+  }
   const leasedUntil = row.leased_until;
   return leasedUntil;
+}
+
+async function diagnoseFacebookExtensionLease(input: { jobId: string; leaseToken: string; workerId: string; currentTime: string }): Promise<FacebookLeaseRenewalDiagnostics> {
+  const supabase = createFacebookWatcherAdminClient();
+  const result = await supabase.from("facebook_scan_jobs")
+    .select("id,consumer_type,status,lease_token,worker_id,leased_until")
+    .eq("id", input.jobId)
+    .maybeSingle();
+  if (result.error) throw new FacebookLeaseRenewalError("FACEBOOK_JOB_LEASE_DIAGNOSTIC_FAILED");
+  const row = asRow(result.data);
+  if (!row) return { jobId: input.jobId, jobFound: false, workerMatch: null, tokenMatch: null, consumerType: null, currentStatus: null, leasedUntil: null, currentTime: input.currentTime, failedPredicate: "FACEBOOK_JOB_ID_MISMATCH" };
+  const consumerType = typeof row.consumer_type === "string" ? row.consumer_type : null;
+  const currentStatus = typeof row.status === "string" ? row.status : null;
+  const leasedUntil = typeof row.leased_until === "string" ? row.leased_until : null;
+  const tokenMatch = typeof row.lease_token === "string" && row.lease_token === input.leaseToken;
+  const workerMatch = typeof row.worker_id === "string" && row.worker_id === input.workerId;
+  let failedPredicate = "FACEBOOK_JOB_LEASE_LOST";
+  if (consumerType !== "BROWSER_EXTENSION") failedPredicate = "FACEBOOK_JOB_CONSUMER_MISMATCH";
+  else if (currentStatus !== "running") failedPredicate = "FACEBOOK_JOB_STATUS_NOT_RUNNING";
+  else if (!tokenMatch) failedPredicate = "FACEBOOK_JOB_LEASE_TOKEN_MISMATCH";
+  else if (!workerMatch) failedPredicate = "FACEBOOK_JOB_WORKER_MISMATCH";
+  else if (!leasedUntil || Date.parse(leasedUntil) < Date.parse(input.currentTime)) failedPredicate = "FACEBOOK_JOB_LEASE_EXPIRED";
+  return { jobId: input.jobId, jobFound: true, workerMatch, tokenMatch, consumerType, currentStatus, leasedUntil, currentTime: input.currentTime, failedPredicate };
 }
 
 export async function getFacebookWorkerCache(input: { jobId: string; leaseToken: string; workerId: string; postIds: string[] }): Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }> {

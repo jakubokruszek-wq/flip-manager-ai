@@ -375,6 +375,13 @@ export type FacebookJobState = {
   workerId?: string | null;
 };
 
+export type FacebookLeaseRenewalFailureCode =
+  | "FACEBOOK_JOB_CONSUMER_MISMATCH"
+  | "FACEBOOK_JOB_STATUS_NOT_RUNNING"
+  | "FACEBOOK_JOB_LEASE_TOKEN_MISMATCH"
+  | "FACEBOOK_JOB_WORKER_MISMATCH"
+  | "FACEBOOK_JOB_LEASE_EXPIRED";
+
 export function facebookJobIdempotencyKey(filterId: string, scanRunId: string, groupId: string): string {
   return `${filterId}:facebook:${scanRunId}:${groupId}`;
 }
@@ -392,8 +399,18 @@ export function heartbeatFacebookJobState(state: FacebookJobState, now: number, 
 }
 
 export function renewBrowserExtensionJobState(state: FacebookJobState, now: number, workerId: string, leaseToken: string, leaseMs = 180_000): FacebookJobState {
-  if (state.consumerType !== "BROWSER_EXTENSION" || state.status !== "running" || state.workerId !== workerId || state.leaseToken !== leaseToken || state.leasedUntil === null || state.leasedUntil < now) throw new Error("FACEBOOK_JOB_LEASE_LOST");
+  const failure = facebookLeaseRenewalFailureCode(state, now, workerId, leaseToken);
+  if (failure) throw new Error(failure);
   return { ...state, heartbeatAt: now, leasedUntil: now + leaseMs };
+}
+
+export function facebookLeaseRenewalFailureCode(state: FacebookJobState, now: number, workerId: string, leaseToken: string): FacebookLeaseRenewalFailureCode | null {
+  if (state.consumerType !== "BROWSER_EXTENSION") return "FACEBOOK_JOB_CONSUMER_MISMATCH";
+  if (state.status !== "running") return "FACEBOOK_JOB_STATUS_NOT_RUNNING";
+  if (state.leaseToken !== leaseToken) return "FACEBOOK_JOB_LEASE_TOKEN_MISMATCH";
+  if (state.workerId !== workerId) return "FACEBOOK_JOB_WORKER_MISMATCH";
+  if (state.leasedUntil === null || state.leasedUntil < now) return "FACEBOOK_JOB_LEASE_EXPIRED";
+  return null;
 }
 
 export function settleFacebookJobState(state: FacebookJobState, status: "completed" | "failed"): FacebookJobState {
