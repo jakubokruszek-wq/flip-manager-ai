@@ -46,6 +46,7 @@ type ScanResponse = {
   exactCount?: number;
   sellPropertyCount?: number;
   persistedCount?: number;
+  search?: { tilesSeen: number };
   sourceResults?: Array<{
     source: string;
     status: "pending" | "completed" | "failed";
@@ -675,7 +676,8 @@ function ScanResultPanel({ filter, response }: { filter: SearchFilterListItem; r
     {status === "PARTIAL" || status === "FAILED" ? <div className="mt-4 rounded-xl border border-warning/25 bg-warning/10 p-4 text-sm"><p className="font-semibold text-warning">{status === "PARTIAL" ? "Częściowo zakończony" : "Skan zakończony błędem"}</p><p className="mt-1 text-muted-foreground">{partialReason || "Nie wszystkie źródła zakończyły pracę."}</p></div> : null}
     <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4"><DiagnosticMetric label="Zebrane posty" value={funnel.collected} /><DiagnosticMetric label="Zweryfikowane EXACT" value={funnel.exact} /><DiagnosticMetric label="SELL_PROPERTY" value={funnel.sell} tone="gold" /><DiagnosticMetric label="Odrzucone" value={funnel.rejected} /><DiagnosticMetric label="Dopasowane" value={funnel.matched} tone="gold" /><DiagnosticMetric label="Nowe zapisane oferty" value={response.newCount} /><DiagnosticMetric label="Zaktualizowane" value={response.updatedCount} /></div>
     {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground"><strong className="text-foreground">Ten skan nie dodał nowych ofert.</strong> Najwięcej rekordów odpadło na: <strong className="text-foreground">{funnel.topRejection}</strong>.</p> : null}
-    <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">ODRZUCONE</h3><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
+    <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">ODRZUCONE — MAIN FEED</h3><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
+    {funnel.searchTiles > 0 ? <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">DIAGNOSTYKA SEARCH</h3><p className="mt-1 text-xs text-muted-foreground">Osobny mianownik: {formatNumber(funnel.searchTiles)} otwartych/widocznych kafelków.</p><div className="mt-3"><DiagnosticBar analyzed={funnel.searchTiles} count={funnel.searchParentUnverified} label="Search parent unverified" /></div></div> : null}
     <details className="mt-6 border-t border-border/60 pt-4 text-sm"><summary className="cursor-pointer font-semibold">Szczegóły diagnostyczne</summary><div className="mt-4 space-y-4"><p className="text-xs text-muted-foreground">Statusy źródeł i techniczne kody są dostępne tutaj; nie wpływają na decyzję filtra.</p><div className="grid gap-3 lg:grid-cols-3">{(response.sourceResults ?? []).map((source) => <SourceDiagnosticCard key={source.source} source={source} />)}</div>{response.matchDiagnostics ? <div className="space-y-3">{technicalDiagnosticBars(response.matchDiagnostics, funnel.collected).map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div> : null}</div></details>
   </Card>;
 }
@@ -694,11 +696,12 @@ function scanResponseFromProgress(progress: ScanProgressResponse): ScanResponse 
     sellPropertyCount: collector?.sellProperty,
     persistedCount: (collector?.listingsCreated ?? progress.totals.created) + (collector?.listingsUpdated ?? progress.totals.updated),
     rejectionBreakdown: collector?.rejections,
+    search: collector ? { tilesSeen: collector.search.queries.reduce((total, query) => total + query.tilesSeen, 0) } : undefined,
     partialReason: progress.partialReason,
   };
 }
 
-type ScanFunnel = { collected: number; exact: number; sell: number; rejected: number; matched: number; saved: number; topRejection: string; rejections: Array<{ key: string; label: string; count: number }> };
+type ScanFunnel = { collected: number; exact: number; sell: number; rejected: number; matched: number; saved: number; searchTiles: number; searchParentUnverified: number; topRejection: string; rejections: Array<{ key: string; label: string; count: number }> };
 
 function scanFunnel(response: ScanResponse): ScanFunnel {
   const raw = response as ScanResponse & Record<string, unknown>;
@@ -706,12 +709,14 @@ function scanFunnel(response: ScanResponse): ScanFunnel {
   const collected = Math.max(0, response.scannedCount);
   const matched = Math.max(0, response.matchedCount || response.matchDiagnostics?.matched || 0);
   const rejected = numberFrom(raw.rejected, Math.max(0, collected - matched));
-  const rejections = [["identity", "Identity unverified", numberFromAny(breakdown, ["identityUnverified", "identity_unverified"])], ["search", "Search parent unverified", numberFromAny(breakdown, ["searchParentUnverified", "search_parent_unverified"])], ["building", "Building type unverified", numberFromAny(breakdown, ["buildingTypeUnverified", "building_type_unverified"])], ["rent", "Rent", numberFromAny(breakdown, ["rent", "rent_listing"])], ["age", "Age cutoff", numberFromAny(breakdown, ["ageCutoff", "age_cutoff"])], ["location", "Outside Łódź", numberFromAny(breakdown, ["outsideLodz", "outside_lodz"])], ["tenement", "Kamienica", numberFromAny(breakdown, ["tenement", "kamienica"])], ["duplicate", "Duplicate", numberFromAny(breakdown, ["duplicate", "duplicates"])], ["other", "Other", numberFromAny(breakdown, ["other"], rejected)]].map(([key, label, count]) => ({ key: String(key), label: String(label), count: Number(count) || 0 }));
+  const searchTiles = numberFromAny(breakdown, ["searchTiles", "tilesSeen", "tiles_seen"], numberFrom((response as ScanResponse).search?.tilesSeen, 0));
+  const searchParentUnverified = numberFromAny(breakdown, ["searchParentUnverified", "search_parent_unverified"]);
+  const rejections = [["identity", "Identity unverified", numberFromAny(breakdown, ["identityUnverified", "identity_unverified"])], ["building", "Building type unverified", numberFromAny(breakdown, ["buildingTypeUnverified", "building_type_unverified"])], ["rent", "Rent", numberFromAny(breakdown, ["rent", "rent_listing"])], ["age", "Age cutoff", numberFromAny(breakdown, ["ageCutoff", "age_cutoff"])], ["location", "Outside Łódź", numberFromAny(breakdown, ["outsideLodz", "outside_lodz"])], ["tenement", "Kamienica", numberFromAny(breakdown, ["tenement", "kamienica"])], ["duplicate", "Duplicate", numberFromAny(breakdown, ["duplicate", "duplicates"])], ["other", "Other", numberFromAny(breakdown, ["other"], rejected)]].map(([key, label, count]) => ({ key: String(key), label: String(label), count: Number(count) || 0 }));
   const exact = numberFromAny(raw, ["exactCount", "verifiedExact", "identityExact"]);
   const sell = numberFromAny(raw, ["sellPropertyCount", "sellProperty", "sell"]);
   const saved = numberFrom(raw.persistedCount, Math.max(0, response.newCount + response.updatedCount));
   const top = rejections.filter((reason) => reason.count > 0).sort((a, b) => b.count - a.count)[0];
-  return { collected, exact, sell, rejected, matched, saved, topRejection: top ? `${top.label} — ${formatNumber(top.count)}` : "Brak danych o odrzuceniach", rejections };
+  return { collected, exact, sell, rejected, matched, saved, searchTiles, searchParentUnverified, topRejection: top ? `${top.label} — ${formatNumber(top.count)}` : "Brak danych o odrzuceniach", rejections };
 }
 
 function technicalDiagnosticBars(diagnostics: MatchDiagnostics, analyzed: number) { return [{ key: "price", label: "Cena", count: diagnostics.rejectedByPrice }, { key: "pricePerSqm", label: "Cena/m²", count: diagnostics.rejectedByPricePerSqm }, { key: "rooms", label: "Pokoje", count: diagnostics.rejectedByRooms }, { key: "area", label: "Metraż", count: diagnostics.rejectedByArea }, { key: "district", label: "Dzielnica", count: diagnostics.rejectedByDistrict }, { key: "buildingType", label: "Typ budynku", count: diagnostics.rejectedByBuildingType }].map((item) => ({ ...item, count: Math.min(analyzed, Math.max(0, item.count)) })); }

@@ -1,11 +1,13 @@
 import type { SearchFilter } from "@/features/flip-finder";
 import type { FacebookProperty } from "./types";
+import type { FacebookBuildingEvidence } from "./facebook-building-evidence";
 
 export type FacebookApartmentSafetyDecision = {
   passes: boolean;
   reasons: string[];
   buildingType: string | null;
   locationVerified: boolean;
+  buildingEvidence: FacebookBuildingEvidence;
 };
 
 const LODZ_CONTEXT = /\b(lodz|balut\w*|teofil\w*|widzew\w*|retkini\w*|polesi\w*|gorn\w*|srodmies\w*|radogoszcz\w*|zubardz\w*|chojn\w*|doly|dabrow\w*|rokici\w*|janow\w*)\b/u;
@@ -15,16 +17,19 @@ export function evaluateFacebookApartmentSafety(input: {
   authoritativeText: string | null | undefined;
   property: Pick<FacebookProperty, "city">;
   filter: SearchFilter;
+  buildingEvidence?: FacebookBuildingEvidence;
 }): FacebookApartmentSafetyDecision {
   const text = normalize(input.authoritativeText ?? "");
   const reasons: string[] = [];
-  const buildingType = inferBuildingType(text);
+  const buildingEvidence = input.buildingEvidence ?? unverifiedBuildingEvidence();
+  const buildingType = buildingEvidence.buildingType ?? inferBuildingType(text);
 
   if (/\bkamienic\w*\b/u.test(text)) reasons.push("FACEBOOK_BUILDING_KAMIENICA");
   if (/\b(blizniak\w*|dom(?:u|em|y|ow)?\s+(?:wolnostojac\w*|jednorodzinn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dom\b)\b/u.test(text)) reasons.push("FACEBOOK_PROPERTY_HOUSE");
   if (/\b(dzialk\w*\s+(?:budowlan\w*|rekreacyjn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dzialk\w*)\b/u.test(text)) reasons.push("FACEBOOK_PROPERTY_PLOT");
 
-  if (buildingType === null) reasons.push("FACEBOOK_BUILDING_TYPE_UNVERIFIED");
+  if (buildingEvidence.status === "TENEMENT_CONFIRMED") reasons.push("FACEBOOK_BUILDING_KAMIENICA");
+  else if (buildingEvidence.status === "UNVERIFIED" && buildingType === null) reasons.push("FACEBOOK_BUILDING_TYPE_UNVERIFIED");
   else if (input.filter.buildingTypes.length > 0 && !input.filter.buildingTypes.some((value) => normalize(value) === buildingType)) {
     reasons.push("FACEBOOK_BUILDING_TYPE_EXCLUDED");
   }
@@ -36,7 +41,11 @@ export function evaluateFacebookApartmentSafety(input: {
   if (explicitOutside) reasons.push("FACEBOOK_LOCATION_OUTSIDE_LODZ");
   else if (!locationVerified) reasons.push("FACEBOOK_LOCATION_UNVERIFIED");
 
-  return { passes: reasons.length === 0, reasons: [...new Set(reasons)], buildingType, locationVerified };
+  return { passes: reasons.length === 0, reasons: [...new Set(reasons)], buildingType, locationVerified, buildingEvidence };
+}
+
+function unverifiedBuildingEvidence(): FacebookBuildingEvidence {
+  return { addressMatched: false, normalizedAddress: null, status: "UNVERIFIED", buildingType: null, buildingEvidenceSource: null, buildingEvidenceType: null, buildingEvidenceValue: null, buildingEvidenceConfidence: 0, sourceUrls: [] };
 }
 
 function inferBuildingType(text: string): string | null {
