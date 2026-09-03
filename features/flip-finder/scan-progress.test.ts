@@ -79,6 +79,30 @@ test("completed collector source scan is the authoritative post count when a job
   assert.equal(group.status, "completed");
 });
 
+test("failed job is not masked by a partially finalized source scan", () => {
+  const group = collectorProgressGroupFromJobAndSourceScan({
+    job: { id: "job-1", sourceScanId: "scan-1", status: "failed", groupId: "402796264871862", groupName: "Facebook group", discovered: 31, processed: 31, errorMessage: "COLLECTOR_NOT_AVAILABLE" },
+    sourceScan: { scannedCount: 31, status: "partial", errorMessage: "COLLECTOR_NOT_AVAILABLE: Facebook Collector did not claim the queued job within 90 seconds" },
+  });
+  assert.equal(group.status, "failed");
+  assert.equal(group.errorMessage, "COLLECTOR_NOT_AVAILABLE");
+});
+
+test("successful job clears stale source-scan watchdog error from reporting", () => {
+  const group = collectorProgressGroupFromJobAndSourceScan({
+    job: { id: "job-1", sourceScanId: "scan-1", status: "completed", groupId: "402796264871862", groupName: "Facebook group", discovered: 31, processed: 31, errorMessage: null },
+    sourceScan: { scannedCount: 31, status: "partial", errorMessage: "COLLECTOR_NOT_AVAILABLE: Facebook Collector did not claim the queued job within 90 seconds" },
+  });
+  assert.equal(group.status, "completed");
+  assert.equal(group.errorMessage, null);
+});
+
+test("failed queue job makes the overall run non-healthy even when its source scan is partial", () => {
+  const progress = buildOverallProgress([unit(0, "partial")], ["failed"]);
+  assert.equal(progress.status, "failed");
+  assert.equal(progress.failedUnits, 1);
+});
+
 function unit(index: number, status: ScanWorkUnit["status"], source: ScanWorkUnit["source"] = "facebook"): ScanWorkUnit {
   return {
     id: `unit-${index}`, source, status, startedAt: "2026-08-23T10:00:00.000Z",

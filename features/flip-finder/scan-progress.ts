@@ -162,7 +162,10 @@ export type ScanProgressResponse = {
 
 export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJobStatus[]): ScanProgressResponse["overall"] & { status: ScanProgressStatus } {
   const terminalUnits = units.filter((unit) => isTerminalUnitStatus(unit.status)).length;
-  const failedUnits = units.filter((unit) => unit.status === "failed").length;
+  // A queue job can fail after its source scan has already been finalized by a
+  // concurrent batch request. Count the job failure as terminal even when the
+  // source row says completed/partial, so the run cannot be reported healthy.
+  const failedUnits = Math.max(units.filter((unit) => unit.status === "failed").length, jobStatuses.filter((status) => status === "failed").length);
   const totalUnits = units.length;
   const allQueued = totalUnits > 0 && terminalUnits === 0 && units.every((unit) => unit.status === "pending") && jobStatuses.length > 0 && jobStatuses.every((status) => status === "queued");
   const hasActive = units.some((unit) => unit.status === "pending" || unit.status === "running");
@@ -221,15 +224,19 @@ export function collectorProgressGroupFromJobAndSourceScan(input: {
   const sourceCount = input.sourceScan?.scannedCount ?? 0;
   const sourceStatus = input.sourceScan?.status;
   const jobStatus = input.job.status === "running" ? "running" : input.job.status === "completed" || input.job.status === "partial" ? "completed" : input.job.status === "failed" ? "failed" : "queued";
+  const terminalJobFailed = input.job.status === "failed";
+  const terminalSourceFailed = sourceStatus === "failed";
+  const status = terminalJobFailed || terminalSourceFailed ? "failed" : sourceStatus === "completed" || sourceStatus === "partial" ? "completed" : jobStatus;
+  const errorMessage = (terminalJobFailed ? input.job.errorMessage ?? input.sourceScan?.errorMessage : terminalSourceFailed ? input.sourceScan?.errorMessage ?? input.job.errorMessage : null) ?? null;
   return {
     groupId: input.job.groupId,
     groupName: input.job.groupName ?? "Grupa Facebook",
     jobId: input.job.id,
     sourceScanId: input.job.sourceScanId ?? "",
-    status: sourceStatus === "failed" ? "failed" : sourceStatus === "completed" || sourceStatus === "partial" ? "completed" : jobStatus,
+    status,
     discovered: Math.max(input.job.discovered, sourceCount),
     processed: Math.max(input.job.processed, sourceCount),
-    errorMessage: input.sourceScan?.errorMessage ?? input.job.errorMessage,
+    errorMessage,
   };
 }
 
