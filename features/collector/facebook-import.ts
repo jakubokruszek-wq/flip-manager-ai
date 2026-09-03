@@ -69,10 +69,12 @@ async function applyFilters(supabase: ReturnType<typeof createAdminClient>, list
   const matchedFilters: string[] = []; const rejectedFilters: Array<{ filterId: string; reasons: string[] }> = [];
   for (const filter of await getActiveSearchFiltersForSource("facebook")) {
     const decision = evaluateListingAgainstFilter({ price: payload.price, area: payload.area, pricePerSqm: payload.pricePerSqm, rooms: payload.rooms, floor: null, city: null, district: null, title: payload.title ?? payload.content, locationText: payload.location, buildingType: null }, filter);
-    if (!decision.matches) { rejectedFilters.push({ filterId: filter.id, reasons: decision.reasons }); continue; }
-    const { error } = await supabase.from("listing_filter_matches").insert({ listing_id: listingId, search_filter_id: filter.id, last_matched_at: new Date().toISOString(), is_current_match: true, match_score: null, match_reasons: ["collector_import", ...decision.unknownFields.map((field) => `unknown_${field}`)], match_origin: "collector_import", source_scan_id: null });
+    if (!decision.matches && decision.bucket !== "REVIEW") { rejectedFilters.push({ filterId: filter.id, reasons: decision.reasons }); continue; }
+    const bucket = decision.bucket;
+    await supabase.from("listings").update({ lifecycle_status: bucket === "MATCHED" ? "ACTIVE" : "REVIEW", review_reason: bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: bucket === "REVIEW" ? decision.unknownFields : [] }).eq("id", listingId);
+    const { error } = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: filter.id, last_matched_at: new Date().toISOString(), is_current_match: bucket === "MATCHED", match_score: null, match_reasons: bucket === "REVIEW" ? ["review", ...decision.unknownFields.map((field) => `unknown_${field}`)] : ["collector_import", ...decision.unknownFields.map((field) => `unknown_${field}`)], match_origin: "collector_import", source_scan_id: null }, { onConflict: "listing_id,search_filter_id" });
     if (error && error.code !== "23505") throw new Error("Nie udało się zapisać dopasowania Collectora.");
-    if (!error) matchedFilters.push(filter.id);
+    if (!error && bucket === "MATCHED") matchedFilters.push(filter.id);
   }
   return { matchedFilters, rejectedFilters };
 }
