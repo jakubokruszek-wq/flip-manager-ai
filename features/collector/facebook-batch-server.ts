@@ -10,7 +10,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 import type { FacebookCollectorBatch } from "./facebook-batch";
 import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts } from "./facebook-batch-policy";
-import { FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL } from "./facebook-production";
+import { isFacebookProductionSource } from "./facebook-production";
 
 export { FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL } from "./facebook-production";
 
@@ -28,7 +28,7 @@ export type CollectorBatchResult = {
 };
 
 export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
-  if (batch.sourceType !== "GROUP" || batch.sourceId !== FACEBOOK_PRODUCTION_SOURCE_ID || batch.sourceUrl !== FACEBOOK_PRODUCTION_SOURCE_URL) throw new Error("COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST");
+  if (!isFacebookProductionSource({ sourceId: batch.sourceId, type: batch.sourceType, url: batch.sourceUrl })) throw new Error("COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST");
   const supabase = createAdminClient();
   const existing = await supabase.from("collector_scan_batches").select("status,result").eq("device_id", deviceId).eq("batch_id", batch.batchId).maybeSingle();
   if (existing.error) throw new Error(`COLLECTOR_BATCH_LOOKUP_FAILED: ${existing.error.message}`);

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FACEBOOK_COLLECTOR_HEARTBEAT_MAX_AGE_MS, FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL, isCollectorHeartbeatFresh, isFacebookProductionSource } from "./facebook-production.ts";
+import { FACEBOOK_COLLECTOR_HEARTBEAT_MAX_AGE_MS, FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL, FACEBOOK_PRODUCTION_SOURCES, isCollectorHeartbeatFresh, isFacebookProductionSource } from "./facebook-production.ts";
 
-test("production dispatch accepts only the one allowlisted Facebook group", () => {
+test("production dispatch accepts all explicitly allowlisted Facebook sources", () => {
   assert.equal(isFacebookProductionSource({ sourceId: FACEBOOK_PRODUCTION_SOURCE_ID, type: "GROUP", url: FACEBOOK_PRODUCTION_SOURCE_URL }), true);
-  assert.equal(isFacebookProductionSource({ sourceId: "402796264871862", type: "GROUP", url: "https://www.facebook.com/groups/402796264871862/" }), false);
+  for (const source of FACEBOOK_PRODUCTION_SOURCES) {
+    assert.equal(isFacebookProductionSource({ sourceId: source.sourceId, type: source.sourceType, url: source.sourceUrl }), true, source.sourceId);
+  }
+  assert.equal(isFacebookProductionSource({ sourceId: "not-allowlisted", type: "GROUP", url: "https://www.facebook.com/groups/not-allowlisted/" }), false);
+  assert.equal(isFacebookProductionSource({ sourceId: "61563667387467", type: "GROUP", url: "https://www.facebook.com/profile.php?id=61563667387467" }), false);
 });
 
 test("stale or failed collector heartbeat is not ready", () => {

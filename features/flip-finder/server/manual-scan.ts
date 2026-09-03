@@ -28,7 +28,7 @@ export function sourceScanMetrics(result: SourceFetchResult, matchedCount: numbe
   return { scannedCount: result.fetched, listingsFound: result.fetched, matchedCount };
 }
 
-export async function runManualOtodomScan(filterId: string): Promise<ScanSummary> {
+export async function runManualOtodomScan(filterId: string, facebookSourceId?: string): Promise<ScanSummary> {
   const runId = crypto.randomUUID();
   const scanStarted = Date.now();
   const ownedScans = new Map<string, ScanClock>();
@@ -61,7 +61,7 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
     }
     if (facebookEnabled) {
       try {
-        const queued = await enqueueFacebookJobs(filter, runId);
+        const queued = await enqueueFacebookJobs(filter, runId, facebookSourceId);
         if (queued.jobs.length !== 1 || queued.failedGroups.length > 0) {
           throw new Error(queued.failedGroups.map((item) => item.error).join("; ") || queued.reasonCode || "FACEBOOK_QUEUE_JOB_NOT_CREATED");
         }

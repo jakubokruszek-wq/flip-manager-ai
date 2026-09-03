@@ -6,6 +6,15 @@ importScripts("pairing-status.js");
 importScripts("collector-preflight.js");
 
 const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
+const PRODUCTION_SOURCES = [
+  { sourceId: "lodzsprzedazzakupwynajem", sourceType: "GROUP", sourceUrl: PRODUCTION_SOURCE_URL },
+  { sourceId: "402796264871862", sourceType: "GROUP", sourceUrl: "https://www.facebook.com/groups/402796264871862/" },
+  { sourceId: "2928219830782023", sourceType: "GROUP", sourceUrl: "https://www.facebook.com/groups/2928219830782023/" },
+  { sourceId: "1253809205540869", sourceType: "GROUP", sourceUrl: "https://www.facebook.com/groups/1253809205540869/" },
+  { sourceId: "1424921570856189", sourceType: "GROUP", sourceUrl: "https://www.facebook.com/groups/1424921570856189/" },
+  { sourceId: "1689328011096404", sourceType: "GROUP", sourceUrl: "https://www.facebook.com/groups/1689328011096404/" },
+  { sourceId: "61563667387467", sourceType: "PROFILE", sourceUrl: "https://www.facebook.com/profile.php?id=61563667387467" },
+];
 const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
 const SEARCH_BUDGET_RESERVE_MS = 40_000;
 const SEARCH_LIMITS = { minScrolls: 3, maxScrolls: 10, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 240_000 };
@@ -147,23 +156,26 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
 
 async function collectActiveSource() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !isProductionSource(tab.url)) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
+  const source = productionSource(tab?.url);
+  if (!tab?.id || !source) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
   const scanId = crypto.randomUUID();
-  return collectTabSource(tab.id, tab.url, scanId);
+  return collectTabSource(tab.id, source.sourceUrl, scanId, "unknown", null, source);
 }
 
-async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId = "unknown") {
+async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId = "unknown", sourceInput = null) {
+  const selectedSource = productionSource(sourceInput) || (sourceInput ? null : productionSource(PRODUCTION_SOURCE_URL));
+  if (!selectedSource) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
   let tab;
   const runtime = globalThis.FlipCollectorRuntime;
   const deadline = runtime.createDeadline(SOURCE_COLLECTION_DEADLINE_MS);
-  const context = { deadline, lastStage: "FACEBOOK_TAB_CREATE", query: null, source: "lodzsprzedazzakupwynajem" };
+  const context = { deadline, lastStage: "FACEBOOK_TAB_CREATE", query: null, source: selectedSource.sourceId };
   const collection = (async () => {
-    tab = await chrome.tabs.create({ url: PRODUCTION_SOURCE_URL, active: false });
+    tab = await chrome.tabs.create({ url: selectedSource.sourceUrl, active: false });
     context.lastStage = "FACEBOOK_TAB_LOAD";
     deadline.assertActive(failureDiagnostics(context, tab?.id));
     await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline.remainingMs())));
     deadline.assertActive(failureDiagnostics(context, tab.id));
-    return collectTabSource(tab.id, PRODUCTION_SOURCE_URL, scanId, requestId, context);
+    return collectTabSource(tab.id, selectedSource.sourceUrl, scanId, requestId, context, selectedSource);
   })();
   try {
     return await Promise.race([collection, deadline.timeout]);
@@ -174,8 +186,8 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
     await recordStartTrace({ requestId, stage: traceStage, status: "FAIL", errorCode, ...diagnostics });
     if (tab?.id) { await chrome.tabs.remove(tab.id).catch(() => {}); tab = null; }
     await failCollectorScan(scanId, error, diagnostics);
-    await setCollectorState({ status: "failed", phase: "FAILED", progress: errorCode, errorCode, lastStage: diagnostics.stage, query: diagnostics.query, sourceUrl: PRODUCTION_SOURCE_URL, scanId, finishedAt: new Date().toISOString() });
-    return { sourceUrl: PRODUCTION_SOURCE_URL, status: "FAILED", error: errorCode, diagnostics, scanId };
+    await setCollectorState({ status: "failed", phase: "FAILED", progress: errorCode, errorCode, lastStage: diagnostics.stage, query: diagnostics.query, sourceUrl: selectedSource.sourceUrl, scanId, finishedAt: new Date().toISOString() });
+    return { sourceUrl: selectedSource.sourceUrl, status: "FAILED", error: errorCode, diagnostics, scanId };
   } finally {
     deadline.cancel();
     if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
@@ -201,19 +213,21 @@ async function pollCollectorJobs() {
     await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: "JOB_CLAIMED", elapsedMs: Date.now() - pollStartedAt } }).catch(() => {});
     const requestId = crypto.randomUUID();
     await setCollectorState({ status: "collecting", phase: "CLAIMED", progress: "Collector odebrał zlecenie", scanId: claimed.job.runId, jobId: claimed.job.id });
-    const result = await collectConfiguredSources(claimed.job.runId, requestId);
+    const result = await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group);
     const completedBody = JSON.stringify({ jobId: claimed.job.id, leaseToken: claimed.job.leaseToken, status: result.status === "FAILED" ? "failed" : "completed", errorCode: result.error || null });
     await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/complete`, completedBody, 8_000);
   } finally { collectorJobPollInFlight = false; }
 }
 
-async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown", collectionContext = null) {
+async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown", collectionContext = null, sourceDescriptor = null) {
+  const source = sourceDescriptor || productionSource(sourceUrl);
+  if (!source) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
   await recordStartTrace({ requestId, stage: "COLLECTOR_STARTED", status: "PASS" });
   const startedAtMs = Date.now();
   await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, scanId, startedAt: new Date().toISOString() });
   const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
   updateCollectionContext(collectionContext, "MAIN_FEED", null);
-  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED" }, { requestId, source: "lodzsprzedazzakupwynajem", collectionContext });
+  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED" }, { requestId, source: source.sourceId, collectionContext });
   let posts = primary.posts;
   const searchRuns = [];
   const mainFeedIds = new Set(primary.posts.map((post) => post.postId));
@@ -608,7 +622,34 @@ async function waitForContentScript(tabId, timeoutMs = 10_000) {
 }
 async function sha256Hex(value) { return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))); }
 function hex(buffer) { return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
-function isProductionSource(value) { try { const url = new URL(value); url.search = ""; url.hash = ""; url.pathname = `${url.pathname.replace(/\/+$/, "")}/`; return url.protocol === "https:" && url.hostname === "www.facebook.com" && url.toString() === PRODUCTION_SOURCE_URL; } catch { return false; } }
+function productionSource(value) {
+  try {
+    if (value && typeof value === "object") {
+      const sourceId = typeof value.sourceId === "string" ? value.sourceId : null;
+      const sourceType = value.type === "PROFILE" || value.sourceType === "PROFILE" ? "PROFILE" : value.type === "GROUP" || value.sourceType === "GROUP" ? "GROUP" : null;
+      const sourceUrl = typeof value.url === "string" ? value.url : typeof value.sourceUrl === "string" ? value.sourceUrl : null;
+      if (!sourceId || !sourceType || !sourceUrl) return null;
+      const normalized = normalizeProductionSourceUrl(sourceUrl, sourceType);
+      return normalized && normalized.sourceId === sourceId ? PRODUCTION_SOURCES.find((source) => source.sourceId === sourceId && source.sourceType === sourceType && source.sourceUrl === normalized.sourceUrl) || null : null;
+    }
+    const normalized = normalizeProductionSourceUrl(String(value || ""));
+    return normalized ? PRODUCTION_SOURCES.find((source) => source.sourceId === normalized.sourceId && source.sourceType === normalized.sourceType && source.sourceUrl === normalized.sourceUrl) || null : null;
+  } catch { return null; }
+}
+function normalizeProductionSourceUrl(value, typeHint = null) {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.hostname !== "www.facebook.com") return null;
+  const group = url.pathname.match(/^\/groups\/([^/?#]+)\/?$/i);
+  if (group) {
+    if (typeHint && typeHint !== "GROUP") return null;
+    return { sourceId: group[1], sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${group[1]}/` };
+  }
+  if (typeHint && typeHint !== "PROFILE") return null;
+  const profileId = url.searchParams.get("id") || url.pathname.match(/\/([0-9]{5,})\/?$/)?.[1] || url.pathname.match(/^\/([0-9]{5,})\/?$/)?.[1];
+  if (!profileId || !/^\d{5,30}$/.test(profileId)) return null;
+  return { sourceId: profileId, sourceType: "PROFILE", sourceUrl: `https://www.facebook.com/profile.php?id=${profileId}` };
+}
+function isProductionSource(value) { return Boolean(productionSource(value)); }
 function isAllowedExternalSender(sender) { try { const url = new URL(String(sender?.url || "")); return (url.origin === FINDER_ORIGIN || url.origin === "http://localhost:3000") && (url.pathname === "/" || url.pathname.startsWith("/flip-finder")); } catch { return false; } }
 function isFinderUrl(value) { try { const url = new URL(String(value || "")); return url.origin === FINDER_ORIGIN && url.pathname.startsWith("/flip-finder"); } catch { return false; } }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
