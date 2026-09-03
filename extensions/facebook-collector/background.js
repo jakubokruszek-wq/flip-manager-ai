@@ -51,12 +51,12 @@ const COLLECTOR_JOB_POLL_ALARM = "collector-job-poll";
 const COLLECTOR_JOB_POLL_PERIOD_MINUTES = 0.5;
 
 void recoverFinderBootstraps().catch(() => {});
-void ensureCollectorJobPollAlarm();
-chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm(); });
-chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm(); });
+void ensureCollectorJobPollAlarm().then(() => pollCollectorJobs()).catch(() => {});
+chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().then(() => pollCollectorJobs()).catch(() => {}); });
+chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().then(() => pollCollectorJobs()).catch(() => {}); });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== COLLECTOR_JOB_POLL_ALARM) return;
-  void pollCollectorJobs().catch(() => {}).finally(() => { void ensureCollectorJobPollAlarm(); });
+  void pollCollectorJobs().catch(() => {}).finally(() => { void ensureCollectorJobPollAlarm().catch(() => {}); });
 });
 
 chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
@@ -77,7 +77,15 @@ async function recoverFinderBootstraps() {
 }
 
 async function ensureCollectorJobPollAlarm() {
-  await chrome.alarms.create(COLLECTOR_JOB_POLL_ALARM, { periodInMinutes: COLLECTOR_JOB_POLL_PERIOD_MINUTES });
+  const existing = await chrome.alarms.get(COLLECTOR_JOB_POLL_ALARM).catch(() => null);
+  if (existing) {
+    await chrome.storage.local.set({ collectorPollDiagnostics: { ...(await chrome.storage.local.get("collectorPollDiagnostics")).collectorPollDiagnostics, alarmPresent: true, alarmNextFire: existing.scheduledTime, alarmPeriodMinutes: existing.periodInMinutes } }).catch(() => {});
+    return existing;
+  }
+  await chrome.alarms.create(COLLECTOR_JOB_POLL_ALARM, { delayInMinutes: 0.01, periodInMinutes: COLLECTOR_JOB_POLL_PERIOD_MINUTES });
+  const created = await chrome.alarms.get(COLLECTOR_JOB_POLL_ALARM).catch(() => null);
+  await chrome.storage.local.set({ collectorPollDiagnostics: { ...(await chrome.storage.local.get("collectorPollDiagnostics")).collectorPollDiagnostics, alarmPresent: Boolean(created), alarmNextFire: created?.scheduledTime ?? null, alarmPeriodMinutes: created?.periodInMinutes ?? COLLECTOR_JOB_POLL_PERIOD_MINUTES } }).catch(() => {});
+  return created;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
@@ -198,19 +206,28 @@ async function pollCollectorJobs() {
   if (collectorJobPollInFlight) return;
   collectorJobPollInFlight = true;
   const pollStartedAt = Date.now();
-  await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: "STARTED" } }).catch(() => {});
+  await updateCollectorPollDiagnostics({ alarmFiredAt: new Date(pollStartedAt).toISOString(), status: "STARTED", lastError: null });
   try {
     const value = await pairingStorageValue();
     if (!value.apiUrl || !value.deviceId || !value.deviceToken) {
-      await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: "PAIRING_MISSING", elapsedMs: Date.now() - pollStartedAt } }).catch(() => {});
+      await updateCollectorPollDiagnostics({ status: "PAIRING_MISSING", elapsedMs: Date.now() - pollStartedAt });
       return;
     }
-    const claimed = await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/claim`, "{}", 8_000);
+    const claimAttemptAt = new Date().toISOString();
+    await updateCollectorPollDiagnostics({ claimAttemptAt, claimHttpStatus: null, claimResponseKind: null });
+    let claimed;
+    try {
+      claimed = await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/claim`, "{}", 8_000);
+    } catch (error) {
+      const errorCode = collectorErrorCode(error);
+      await updateCollectorPollDiagnostics({ status: "CLAIM_FAILED", claimHttpStatus: Number(errorCode.match(/_(\d{3})/)?.[1]) || null, claimResponseKind: "ERROR", lastError: errorCode, elapsedMs: Date.now() - pollStartedAt });
+      return;
+    }
     if (!claimed?.job?.id || !claimed.job.leaseToken || !claimed.job.runId) {
-      await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: claimed?.code === "NO_PENDING_JOB" ? "NO_PENDING_JOB" : "INVALID_CLAIM_RESPONSE", elapsedMs: Date.now() - pollStartedAt } }).catch(() => {});
+      await updateCollectorPollDiagnostics({ status: claimed?.code === "NO_PENDING_JOB" ? "NO_PENDING_JOB" : "INVALID_CLAIM_RESPONSE", claimHttpStatus: 200, claimResponseKind: claimed?.code || "INVALID_CLAIM_RESPONSE", elapsedMs: Date.now() - pollStartedAt });
       return;
     }
-    await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: "JOB_CLAIMED", elapsedMs: Date.now() - pollStartedAt } }).catch(() => {});
+    await updateCollectorPollDiagnostics({ status: "JOB_CLAIMED", claimHttpStatus: 200, claimResponseKind: "JOB_CLAIMED", elapsedMs: Date.now() - pollStartedAt });
     const requestId = crypto.randomUUID();
     await setCollectorState({ status: "collecting", phase: "CLAIMED", progress: "Collector odebrał zlecenie", scanId: claimed.job.runId, jobId: claimed.job.id });
     const result = await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group);
@@ -551,6 +568,10 @@ function mergePosts(posts) {
 }
 function isLikelySellText(post) { return /\b(?:sprzedam|na\s+sprzeda[zż]|do\s+sprzedania|off\s*market|mam\s+do\s+zaoferowania)\b/i.test(String(post?.text || "")); }
 async function setCollectorState(state) { await chrome.storage.local.set({ collectorState: { ...state } }).catch(() => {}); }
+async function updateCollectorPollDiagnostics(patch) {
+  const stored = await chrome.storage.local.get("collectorPollDiagnostics").catch(() => ({}));
+  await chrome.storage.local.set({ collectorPollDiagnostics: { ...(stored.collectorPollDiagnostics || {}), ...patch } }).catch(() => {});
+}
 async function configValue() { return chrome.storage.local.get(["apiUrl", "deviceId", "deviceToken", "sources"]); }
 async function pairingStorageValue() { return chrome.storage.local.get(["apiUrl", "deviceId", "deviceToken", "collectorPairingState", "collectorLastResult"]); }
 async function getPairingStatus() { return globalThis.FlipCollectorPairingStatus.localPairingStatus(await pairingStorageValue()); }

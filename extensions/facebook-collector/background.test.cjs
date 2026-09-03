@@ -355,6 +355,16 @@ test("backend collector queue polling is bounded and independent of page messagi
   assert.match(workerJobs, /p_consumer_type/);
 });
 
+test("queue poller performs an immediate startup pass and records alarm/claim diagnostics", () => {
+  assert.match(background, /ensureCollectorJobPollAlarm\(\)\.then\(\(\) => pollCollectorJobs\(\)\)/);
+  assert.match(background, /delayInMinutes: 0\.01/);
+  assert.match(background, /alarmFiredAt/);
+  assert.match(background, /claimAttemptAt/);
+  assert.match(background, /claimHttpStatus/);
+  assert.match(background, /claimResponseKind/);
+  assert.match(background, /updateCollectorPollDiagnostics/);
+});
+
 test("claimed GROUP snapshots without a type field resolve their source type from the canonical URL", () => {
   assert.match(background, /const normalized = normalizeProductionSourceUrl\(sourceUrl\);/);
   assert.match(background, /normalized\?\.sourceType \|\| null/);
