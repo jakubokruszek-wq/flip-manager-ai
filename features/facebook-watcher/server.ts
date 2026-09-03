@@ -215,7 +215,8 @@ async function importAutomatedFacebook(input: {
     listingId = existing.id;
     const imagesUpdate = await supabase.from("listings").update({ images: imageMirror.images }).eq("id", listingId);
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
-    const lifecycleUpdate = await supabase.from("listings").update({ lifecycle_status: decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket, review_reason: decision.bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: decision.bucket === "REVIEW" ? decision.unknownFields : [], last_seen_at: now, status: "active", archived_at: null }).eq("id", listingId);
+    let lifecycleUpdate = await supabase.from("listings").update({ lifecycle_status: decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket, review_reason: decision.bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: decision.bucket === "REVIEW" ? decision.unknownFields : [], last_seen_at: now, status: "active", archived_at: null }).eq("id", listingId);
+    if (lifecycleUpdate.error?.code === "42703") lifecycleUpdate = await supabase.from("listings").update({ last_seen_at: now, status: "active" }).eq("id", listingId);
     if (lifecycleUpdate.error) throw new Error(`FACEBOOK_LIFECYCLE_PERSIST_FAILED: ${lifecycleUpdate.error.message}`);
     if (decision.matches) matchCreated = await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now);
     else if (decision.bucket === "REVIEW") {

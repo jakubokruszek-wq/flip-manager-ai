@@ -132,7 +132,7 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
   }
 
   const listingIds = matches.map((match) => match.listingId);
-  const [listingsResult, snapshotsResult] = await Promise.all([
+  const [listingsResultRaw, snapshotsResult] = await Promise.all([
     supabase
       .from("listings")
       .select(
@@ -147,6 +147,11 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
       .in("listing_id", listingIds)
       .order("captured_at", { ascending: false }),
   ]);
+
+  let listingsResult: typeof listingsResultRaw = listingsResultRaw;
+  if (listingsResult.error?.code === "42703") {
+    listingsResult = await supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at") .in("id", listingIds).eq("status", "active") as typeof listingsResultRaw;
+  }
 
   if (listingsResult.error || snapshotsResult.error) {
     console.error(
