@@ -143,20 +143,39 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
 async function expireUnclaimedFacebookJobs(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, runId: string): Promise<void> {
   const now = new Date().toISOString();
   const cutoff = new Date(Date.now() - FACEBOOK_PENDING_TIMEOUT_MS).toISOString();
-  const expired = await supabase.from("facebook_scan_jobs").update({
+  // Only jobs with no claim history are eligible for the "collector did not
+  // claim" watchdog. A job that was claimed and later re-queued has a
+  // different lifecycle and must never be reported as never claimed.
+  const neverClaimed = await supabase.from("facebook_scan_jobs").update({
     status: "failed",
     finished_at: now,
     error_code: "COLLECTOR_NOT_AVAILABLE",
     error_message: "Facebook Collector did not claim the queued job within 90 seconds",
-  }).eq("scan_run_id", runId).eq("status", "queued").lt("created_at", cutoff).select("source_scan_id");
-  if (expired.error) throw new Error(`FACEBOOK_PENDING_WATCHDOG_FAILED: ${expired.error.message}`);
-  const sourceScanIds = rows(expired.data).map((item) => string(item.source_scan_id)).filter((value): value is string => Boolean(value));
-  if (sourceScanIds.length === 0) return;
-  const scans = await supabase.from("source_scans").update({
+  }).eq("scan_run_id", runId).eq("status", "queued").eq("attempts", 0).is("started_at", null).is("worker_id", null).lt("created_at", cutoff).select("source_scan_id");
+  if (neverClaimed.error) throw new Error(`FACEBOOK_PENDING_WATCHDOG_FAILED: ${neverClaimed.error.message}`);
+  await finalizeWatchdogSourceScans(supabase, neverClaimed.data, "COLLECTOR_NOT_AVAILABLE: Facebook Collector did not claim the queued job within 90 seconds");
+
+  // A lease-expired job can be re-queued by the consumer-specific claim RPC.
+  // Give it a bounded retry window, but report the actual condition instead
+  // of the misleading never-claimed error.
+  const requeued = await supabase.from("facebook_scan_jobs").update({
     status: "failed",
     finished_at: now,
-    error_message: "COLLECTOR_NOT_AVAILABLE: Facebook Collector did not claim the queued job within 90 seconds",
-  }).in("id", sourceScanIds).eq("status", "pending");
+    error_code: "COLLECTOR_LEASE_EXPIRED",
+    error_message: "Facebook Collector lease expired after the job was previously claimed",
+  }).eq("scan_run_id", runId).eq("status", "queued").gt("attempts", 0).lt("available_at", cutoff).select("source_scan_id");
+  if (requeued.error) throw new Error(`FACEBOOK_REQUEUED_WATCHDOG_FAILED: ${requeued.error.message}`);
+  await finalizeWatchdogSourceScans(supabase, requeued.data, "COLLECTOR_LEASE_EXPIRED: Facebook Collector lease expired after the job was previously claimed");
+}
+
+async function finalizeWatchdogSourceScans(
+  supabase: ReturnType<typeof createFacebookWatcherAdminClient>,
+  data: unknown,
+  errorMessage: string,
+): Promise<void> {
+  const sourceScanIds = rows(data).map((item) => string(item.source_scan_id)).filter((value): value is string => Boolean(value));
+  if (sourceScanIds.length === 0) return;
+  const scans = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: errorMessage }).in("id", sourceScanIds).in("status", ["pending", "running"]);
   if (scans.error) throw new Error(`FACEBOOK_PENDING_SOURCE_FINALIZE_FAILED: ${scans.error.message}`);
 }
 

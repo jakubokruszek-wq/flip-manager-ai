@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { claimFacebookJobState, facebookJobIdempotencyKey, heartbeatFacebookJobState, settleFacebookJobState, type FacebookJobState } from "./types.ts";
+import { claimFacebookJobState, facebookJobIdempotencyKey, heartbeatFacebookJobState, renewBrowserExtensionJobState, settleFacebookJobState, type FacebookJobState } from "./types.ts";
 
 const queued: FacebookJobState = { status: "queued", attempts: 0, maxAttempts: 3, leaseToken: null, leasedUntil: null, heartbeatAt: null };
 
 test("claims queued job and creates a lease", () => { const state = claimFacebookJobState(queued, 1_000); assert.equal(state.status, "running"); assert.equal(state.attempts, 1); assert.equal(state.leasedUntil, 181_000); });
 test("heartbeat extends the lease", () => { const state = heartbeatFacebookJobState(claimFacebookJobState(queued, 1_000), 31_000); assert.equal(state.heartbeatAt, 31_000); assert.equal(state.leasedUntil, 211_000); });
+test("browser-extension renewal requires the exact running owner and token", () => {
+  const running = { ...claimFacebookJobState(queued, 1_000), consumerType: "BROWSER_EXTENSION" as const, workerId: "extension-1" };
+  const renewed = renewBrowserExtensionJobState(running, 31_000, "extension-1", "lease-1");
+  assert.equal(renewed.leasedUntil, 211_000);
+  assert.throws(() => renewBrowserExtensionJobState(running, 31_000, "other-worker", "lease-1"), /FACEBOOK_JOB_LEASE_LOST/);
+  assert.throws(() => renewBrowserExtensionJobState({ ...running, consumerType: "LEGACY_WORKER" }, 31_000, "extension-1", "lease-1"), /FACEBOOK_JOB_LEASE_LOST/);
+  assert.throws(() => renewBrowserExtensionJobState({ ...running, status: "completed" }, 31_000, "extension-1", "lease-1"), /FACEBOOK_JOB_LEASE_LOST/);
+});
 test("expired lease can be claimed again", () => { const first = claimFacebookJobState(queued, 1_000, 100); const second = claimFacebookJobState(first, 1_101, 100); assert.equal(second.attempts, 2); });
 test("complete and fail settle running jobs", () => { const running = claimFacebookJobState(queued, 1_000); assert.equal(settleFacebookJobState(running, "completed").status, "completed"); assert.equal(settleFacebookJobState(running, "failed").status, "failed"); });
 test("idempotency key is stable and group-specific", () => { assert.equal(facebookJobIdempotencyKey("filter", "run", "group-a"), "filter:facebook:run:group-a"); assert.notEqual(facebookJobIdempotencyKey("filter", "run", "group-a"), facebookJobIdempotencyKey("filter", "run", "group-b")); });
@@ -16,5 +24,15 @@ test("atomic claim routes each consumer type inside SQL", () => {
   assert.match(migration, /consumer_type = p_consumer_type/);
   assert.match(migration, /BROWSER_EXTENSION/);
   assert.match(migration, /LEGACY_WORKER/);
+  assert.match(migration, /for update skip locked/i);
+});
+
+test("lease lifecycle scopes recovery and renewal to browser-extension ownership", () => {
+  const migration = readFileSync("supabase/migrations/20260903210000_harden_facebook_extension_leases.sql", "utf8");
+  assert.match(migration, /consumer_type = p_consumer_type/);
+  assert.match(migration, /renew_facebook_scan_job/);
+  assert.match(migration, /consumer_type = 'BROWSER_EXTENSION'/);
+  assert.match(migration, /lease_token = p_lease_token/);
+  assert.match(migration, /worker_id = p_worker_id/);
   assert.match(migration, /for update skip locked/i);
 });

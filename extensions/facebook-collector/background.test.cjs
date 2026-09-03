@@ -23,6 +23,7 @@ const failRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/
 const collectorClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/jobs/claim/route.ts"), "utf8");
 const legacyClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/facebook-worker/claim/route.ts"), "utf8");
 const workerJobs = fs.readFileSync(path.join(__dirname, "../../features/facebook-worker/jobs.ts"), "utf8");
+const leaseHeartbeatRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/jobs/heartbeat/route.ts"), "utf8");
 
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
@@ -364,6 +365,15 @@ test("queue poller performs an immediate startup pass and records alarm/claim di
   assert.match(background, /claimHttpStatus/);
   assert.match(background, /claimResponseKind/);
   assert.match(background, /updateCollectorPollDiagnostics/);
+});
+
+test("browser-extension jobs renew their lease during long collection", () => {
+  assert.match(background, /JOB_LEASE_RENEW_INTERVAL_MS = 60_000/);
+  assert.match(background, /startBrowserExtensionLeaseRenewal\(claimed\.job\)/);
+  assert.match(background, /api\/collector\/jobs\/heartbeat/);
+  assert.match(background, /leaseRenewal\.stop\(\)/);
+  assert.match(leaseHeartbeatRoute, /renewFacebookExtensionJobLease/);
+  assert.match(leaseHeartbeatRoute, /INVALID_PAYLOAD/);
 });
 
 test("claimed GROUP snapshots without a type field resolve their source type from the canonical URL", () => {

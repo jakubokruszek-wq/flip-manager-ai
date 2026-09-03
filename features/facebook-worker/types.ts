@@ -371,6 +371,8 @@ export type FacebookJobState = {
   leaseToken: string | null;
   leasedUntil: number | null;
   heartbeatAt: number | null;
+  consumerType?: "BROWSER_EXTENSION" | "LEGACY_WORKER";
+  workerId?: string | null;
 };
 
 export function facebookJobIdempotencyKey(filterId: string, scanRunId: string, groupId: string): string {
@@ -386,6 +388,11 @@ export function claimFacebookJobState(state: FacebookJobState, now: number, leas
 
 export function heartbeatFacebookJobState(state: FacebookJobState, now: number, leaseMs = 180_000): FacebookJobState {
   if (state.status !== "running" || !state.leaseToken) throw new Error("FACEBOOK_JOB_LEASE_LOST");
+  return { ...state, heartbeatAt: now, leasedUntil: now + leaseMs };
+}
+
+export function renewBrowserExtensionJobState(state: FacebookJobState, now: number, workerId: string, leaseToken: string, leaseMs = 180_000): FacebookJobState {
+  if (state.consumerType !== "BROWSER_EXTENSION" || state.status !== "running" || state.workerId !== workerId || state.leaseToken !== leaseToken || state.leasedUntil === null || state.leasedUntil < now) throw new Error("FACEBOOK_JOB_LEASE_LOST");
   return { ...state, heartbeatAt: now, leasedUntil: now + leaseMs };
 }
 

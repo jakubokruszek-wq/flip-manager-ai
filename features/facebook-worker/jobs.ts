@@ -96,6 +96,26 @@ export async function heartbeatFacebookJob(input: { jobId: string; leaseToken: s
   return leasedUntil;
 }
 
+/**
+ * Renew a browser-extension lease only for the exact running job owner.
+ * The database predicate is the security boundary: callers cannot extend
+ * another device's job, a legacy-worker job, or a terminal job.
+ */
+export async function renewFacebookExtensionJobLease(input: { jobId: string; leaseToken: string; workerId: string }): Promise<string> {
+  const supabase = createFacebookWatcherAdminClient();
+  const result = await supabase.rpc("renew_facebook_scan_job", {
+    p_job_id: input.jobId,
+    p_worker_id: input.workerId,
+    p_lease_token: input.leaseToken,
+    p_lease_seconds: LEASE_SECONDS,
+  });
+  if (result.error) throw new Error(`FACEBOOK_JOB_LEASE_RENEW_FAILED: ${result.error.message}`);
+  const row = Array.isArray(result.data) ? asRow(result.data[0]) : asRow(result.data);
+  if (!row || typeof row.leased_until !== "string" || !row.leased_until) throw new Error("FACEBOOK_JOB_LEASE_LOST");
+  const leasedUntil = row.leased_until;
+  return leasedUntil;
+}
+
 export async function getFacebookWorkerCache(input: { jobId: string; leaseToken: string; workerId: string; postIds: string[] }): Promise<{ hits: Record<string, FacebookPostCacheHit & { publishedAt: string }>; ageHits: Record<string, FacebookAgeCacheHit> }> {
   const supabase = createFacebookWatcherAdminClient();
   const current = await supabase.from("facebook_scan_jobs").select("id,scan_run_id,search_filter_id,started_at").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();

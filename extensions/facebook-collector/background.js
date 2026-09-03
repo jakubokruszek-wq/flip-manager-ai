@@ -24,6 +24,7 @@ const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000;
 const COLLECT_SOURCE_RESPONSE_GRACE_MS = 20_000;
 const SOURCE_COLLECTION_DEADLINE_MS = 360_000;
 const FAIL_REPORT_TIMEOUT_MS = 10_000;
+const JOB_LEASE_RENEW_INTERVAL_MS = 60_000;
 
 const DEFAULT_SOURCES = [
   "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
@@ -230,10 +231,36 @@ async function pollCollectorJobs() {
     await updateCollectorPollDiagnostics({ status: "JOB_CLAIMED", claimHttpStatus: 200, claimResponseKind: "JOB_CLAIMED", elapsedMs: Date.now() - pollStartedAt });
     const requestId = crypto.randomUUID();
     await setCollectorState({ status: "collecting", phase: "CLAIMED", progress: "Collector odebrał zlecenie", scanId: claimed.job.runId, jobId: claimed.job.id });
-    const result = await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group);
+    const leaseRenewal = startBrowserExtensionLeaseRenewal(claimed.job);
+    let result;
+    try {
+      result = await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group);
+    } finally {
+      leaseRenewal.stop();
+    }
     const completedBody = JSON.stringify({ jobId: claimed.job.id, leaseToken: claimed.job.leaseToken, status: result.status === "FAILED" ? "failed" : "completed", errorCode: result.error || null });
     await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/complete`, completedBody, 8_000);
   } finally { collectorJobPollInFlight = false; }
+}
+
+function startBrowserExtensionLeaseRenewal(job) {
+  let stopped = false;
+  let inFlight = null;
+  const renew = async () => {
+    if (stopped || inFlight) return;
+    inFlight = (async () => {
+      const value = await pairingStorageValue();
+      const apiUrl = String(value.apiUrl || "").replace(/\/+$/, "");
+      if (!apiUrl || !value.deviceId || !value.deviceToken) throw new Error("PAIRING_MISSING");
+      const response = await signedPost(`${apiUrl}/api/collector/jobs/heartbeat`, JSON.stringify({ jobId: job.id, leaseToken: job.leaseToken }), 8_000);
+      await updateCollectorPollDiagnostics({ leaseRenewalAt: new Date().toISOString(), leaseRenewalStatus: response?.ok === true ? "PASS" : "FAILED", leaseRenewalError: null });
+    })().catch(async (error) => {
+      await updateCollectorPollDiagnostics({ leaseRenewalAt: new Date().toISOString(), leaseRenewalStatus: "FAILED", leaseRenewalError: collectorErrorCode(error) });
+    }).finally(() => { inFlight = null; });
+    return inFlight;
+  };
+  const timer = setInterval(() => { void renew(); }, JOB_LEASE_RENEW_INTERVAL_MS);
+  return { stop() { stopped = true; clearInterval(timer); } };
 }
 
 async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown", collectionContext = null, sourceDescriptor = null) {
