@@ -8,6 +8,8 @@ import {
   collectorProgressGroupFromJobAndSourceScan,
   collectorProgressGroupFromSourceScan,
   type CollectorScanFunnel,
+  type CollectorMainFeedDiagnostic,
+  type CollectorSearchQueryTelemetry,
   type FacebookGroupProgress,
   type ScanProgressResponse,
   type ScanWorkUnit,
@@ -203,6 +205,7 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[]): CollectorScanFunnel
   const collected = sum(facebookScans, "scanned_count") || posts.length;
   const matched = sum(facebookScans, "matched_count");
   const search = searchSummary(payloads);
+  const mainFeedDiagnostics = mainFeedSummary(payloads);
   const buildingTypeUnverified = countWarningMatches(warnings, /BUILDING(?:_TYPE)?_(?:UNVERIFIED|UNKNOWN)/i);
   const outsideLodz = countWarningMatches(warnings, /(?:OUTSIDE|LOCATION).*LODZ/i);
   const tenement = countWarningMatches(warnings, /(?:TENEMENT|KAMIENICA)/i);
@@ -232,12 +235,14 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[]): CollectorScanFunnel
       queriesExecuted: search.queriesExecuted,
       queriesPlanned: search.queriesPlanned,
       globalTimeBudgetExhausted: search.globalTimeBudgetExhausted,
+      queries: search.queries,
     },
+    mainFeedDiagnostics,
   };
 }
 
-function searchSummary(payloads: Row[]): { queriesExecuted: number; queriesPlanned: number; tilesUnverified: number; globalTimeBudgetExhausted: boolean } {
-  return payloads.reduce<{ queriesExecuted: number; queriesPlanned: number; tilesUnverified: number; globalTimeBudgetExhausted: boolean }>((summary, payload) => {
+function searchSummary(payloads: Row[]): { queriesExecuted: number; queriesPlanned: number; tilesUnverified: number; globalTimeBudgetExhausted: boolean; queries: CollectorSearchQueryTelemetry[] } {
+  return payloads.reduce<{ queriesExecuted: number; queriesPlanned: number; tilesUnverified: number; globalTimeBudgetExhausted: boolean; queries: CollectorSearchQueryTelemetry[] }>((summary, payload) => {
     const telemetry = row(payload.searchTelemetry);
     if (!telemetry) return summary;
     const queries = Array.isArray(telemetry.queries) ? telemetry.queries.filter((query): query is Row => row(query) !== null) : [];
@@ -246,8 +251,63 @@ function searchSummary(payloads: Row[]): { queriesExecuted: number; queriesPlann
       queriesPlanned: summary.queriesPlanned + number(telemetry.queriesPlanned),
       tilesUnverified: summary.tilesUnverified + queries.reduce((total, query) => total + number(query.tilesUnverified), 0),
       globalTimeBudgetExhausted: summary.globalTimeBudgetExhausted || telemetry.budgetExhausted === true,
+      queries: [...summary.queries, ...queries.map(toSearchQueryTelemetry).slice(0, 100 - summary.queries.length)].slice(0, 100),
     };
-  }, { queriesExecuted: 0, queriesPlanned: 0, tilesUnverified: 0, globalTimeBudgetExhausted: false });
+  }, { queriesExecuted: 0, queriesPlanned: 0, tilesUnverified: 0, globalTimeBudgetExhausted: false, queries: [] });
+}
+
+function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
+  const status = string(value.status);
+  return {
+    query: string(value.query) ?? "unknown",
+    executed: value.executed === true,
+    status: status === "FAILED" ? "FAILED" : status === "DEGRADED" ? "DEGRADED" : "HEALTHY",
+    scrolls: number(value.scrolls),
+    visibleCards: number(value.visibleCards),
+    captured: number(value.captured),
+    unique: number(value.unique),
+    duplicatesVsMainFeed: number(value.duplicatesVsMainFeed),
+    uniqueContribution: number(value.uniqueContribution),
+    sellContribution: number(value.sellContribution),
+    tilesSeen: number(value.tilesSeen),
+    tilesOpened: number(value.tilesOpened),
+    tilesResolved: number(value.tilesResolved),
+    tilesUnverified: number(value.tilesUnverified),
+    uniqueParentPosts: number(value.uniqueParentPosts),
+    verifiedParentPosts: number(value.verifiedParentPosts),
+    duplicatesByMedia: number(value.duplicatesByMedia),
+    durationMs: number(value.durationMs),
+    stopReason: string(value.stopReason) ?? "UNKNOWN",
+  };
+}
+
+function mainFeedSummary(payloads: Row[]): CollectorMainFeedDiagnostic[] {
+  return payloads.flatMap((payload) => Array.isArray(payload.mainFeedTelemetry)
+    ? payload.mainFeedTelemetry.filter((item): item is Row => row(item) !== null).map(toMainFeedDiagnostic)
+    : []).slice(0, 100);
+}
+
+function toMainFeedDiagnostic(value: Row): CollectorMainFeedDiagnostic {
+  const sourceLayer = value.sourceLayer === "DOM" || value.sourceLayer === "BOTH" ? value.sourceLayer : "NETWORK";
+  return {
+    postId: safeNumericId(value.postId) ?? "unknown",
+    sourceLayer,
+    structuredAuthorPresent: value.structuredAuthorPresent === true,
+    structuredTextPresent: value.structuredTextPresent === true,
+    structuredTextPath: string(value.structuredTextPath),
+    rootCardFound: value.rootCardFound === true,
+    rootCardPostIdBound: value.rootCardPostIdBound === true,
+    rootCardPermalink: safeFacebookPermalink(value.rootCardPermalink),
+    rootAuthorFound: value.rootAuthorFound === true,
+    rootTextFound: value.rootTextFound === true,
+    seeMorePresent: value.seeMorePresent === true,
+    seeMoreClicked: value.seeMoreClicked === true,
+    rootTextAfterExpand: value.rootTextAfterExpand === true,
+    authorMatch: value.authorMatch === true,
+    postIdMatch: value.postIdMatch === true,
+    finalIdentity: value.finalIdentity === "EXACT" ? "EXACT" : "UNVERIFIED",
+    failSubstep: string(value.failSubstep),
+  };
 }
 
 function collectorPartialReason(scanRows: Row[], collector: CollectorScanFunnel | null): string | null {
@@ -257,6 +317,22 @@ function collectorPartialReason(scanRows: Row[], collector: CollectorScanFunnel 
   const warnings = scanRows.flatMap((scan) => Array.isArray(scan.warnings) ? scan.warnings.filter((warning): warning is string => typeof warning === "string") : []);
   if (warnings.includes("COLLECTOR_SEARCH_GLOBAL_TIME_BUDGET")) return "Collector zakończył pracę, ale część SEARCH została pominięta/ograniczona z powodu globalnego limitu czasu.";
   return null;
+}
+
+function safeNumericId(value: unknown): string | null {
+  const candidate = string(value);
+  return candidate && /^\d{5,30}$/.test(candidate) ? candidate : null;
+}
+
+function safeFacebookPermalink(value: unknown): string | null {
+  const candidate = string(value);
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "https:" && parsed.hostname === "www.facebook.com" && /\/groups\//i.test(parsed.pathname) ? candidate.slice(0, 2_000) : null;
+  } catch {
+    return null;
+  }
 }
 
 function countWarnings(warnings: string[], pattern: RegExp): number { return warnings.reduce((total, warning) => total + (warning.match(pattern)?.[1] ? Number(warning.match(pattern)![1]) || 0 : 0), 0); }

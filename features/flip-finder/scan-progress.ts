@@ -4,6 +4,48 @@ export type ScanProgressStatus = "queued" | "running" | "completed" | "partial" 
 export type WorkerJobStatus = "queued" | "running" | "completed" | "failed";
 export type VisionCostDataQuality = "EXACT" | "PARTIAL" | "UNAVAILABLE";
 
+export type CollectorSearchQueryTelemetry = {
+  query: string;
+  executed: boolean;
+  status: "HEALTHY" | "DEGRADED" | "FAILED";
+  scrolls: number;
+  visibleCards: number;
+  captured: number;
+  unique: number;
+  duplicatesVsMainFeed: number;
+  uniqueContribution: number;
+  sellContribution: number;
+  tilesSeen: number;
+  tilesOpened: number;
+  tilesResolved: number;
+  tilesUnverified: number;
+  uniqueParentPosts: number;
+  verifiedParentPosts: number;
+  duplicatesByMedia: number;
+  durationMs: number;
+  stopReason: string;
+};
+
+export type CollectorMainFeedDiagnostic = {
+  postId: string;
+  sourceLayer: "NETWORK" | "DOM" | "BOTH";
+  structuredAuthorPresent: boolean;
+  structuredTextPresent: boolean;
+  structuredTextPath: string | null;
+  rootCardFound: boolean;
+  rootCardPostIdBound: boolean;
+  rootCardPermalink: string | null;
+  rootAuthorFound: boolean;
+  rootTextFound: boolean;
+  seeMorePresent: boolean;
+  seeMoreClicked: boolean;
+  rootTextAfterExpand: boolean;
+  authorMatch: boolean;
+  postIdMatch: boolean;
+  finalIdentity: "EXACT" | "UNVERIFIED";
+  failSubstep: string | null;
+};
+
 export type ScanWorkUnit = {
   id: string;
   source: ListingSource;
@@ -49,7 +91,9 @@ export type CollectorScanFunnel = {
     queriesExecuted: number;
     queriesPlanned: number;
     globalTimeBudgetExhausted: boolean;
+    queries: CollectorSearchQueryTelemetry[];
   };
+  mainFeedDiagnostics: CollectorMainFeedDiagnostic[];
 };
 
 export type OpenAICostWindow = {
