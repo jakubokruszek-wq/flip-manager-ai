@@ -626,10 +626,11 @@ function productionSource(value) {
   try {
     if (value && typeof value === "object") {
       const explicitSourceId = typeof value.sourceId === "string" ? value.sourceId : null;
-      const sourceType = value.type === "PROFILE" || value.sourceType === "PROFILE" ? "PROFILE" : value.type === "GROUP" || value.sourceType === "GROUP" ? "GROUP" : null;
       const sourceUrl = typeof value.url === "string" ? value.url : typeof value.sourceUrl === "string" ? value.sourceUrl : null;
-      if (!sourceType || !sourceUrl) return null;
-      const normalized = normalizeProductionSourceUrl(sourceUrl, sourceType);
+      if (!sourceUrl) return null;
+      const normalized = normalizeProductionSourceUrl(sourceUrl);
+      const sourceType = value.type === "PROFILE" || value.sourceType === "PROFILE" ? "PROFILE" : value.type === "GROUP" || value.sourceType === "GROUP" ? "GROUP" : normalized?.sourceType || null;
+      if (!sourceType || (normalized && normalized.sourceType !== sourceType)) return null;
       const sourceId = explicitSourceId || normalized?.sourceId;
       return normalized && sourceId === normalized.sourceId ? PRODUCTION_SOURCES.find((source) => source.sourceId === sourceId && source.sourceType === sourceType && source.sourceUrl === normalized.sourceUrl) || null : null;
     }

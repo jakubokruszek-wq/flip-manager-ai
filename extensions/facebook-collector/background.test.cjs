@@ -87,7 +87,7 @@ test("production scan start uses only the backend Facebook queue", () => {
   assert.match(scanHandler, /POST_SCAN_SENT/);
   assert.match(scanHandler, /oczekiwanie na odebranie zlecenia przez Collector/);
   assert.doesNotMatch(scanHandler, /requestCollectorBridgePing|requestCollectorReady|requestCollectorHealthRefresh|requestCollectorScan|SCAN_COMMAND_SENT/);
-  assert.match(manualScan, /enqueueFacebookJobs\(filter, runId\)/);
+  assert.match(manualScan, /enqueueFacebookJobs\(filter, runId(?:, facebookSourceId)?\)/);
   assert.doesNotMatch(manualScan, /enqueueFacebookCollectorScan/);
   assert.match(scanProgressServer, /FACEBOOK_PENDING_TIMEOUT_MS = 90_000/);
   assert.match(scanProgressServer, /COLLECTOR_NOT_AVAILABLE/);
@@ -353,4 +353,10 @@ test("backend collector queue polling is bounded and independent of page messagi
   assert.match(collectorClaimRoute, /BROWSER_EXTENSION/);
   assert.match(legacyClaimRoute, /LEGACY_WORKER/);
   assert.match(workerJobs, /p_consumer_type/);
+});
+
+test("claimed GROUP snapshots without a type field resolve their source type from the canonical URL", () => {
+  assert.match(background, /const normalized = normalizeProductionSourceUrl\(sourceUrl\);/);
+  assert.match(background, /normalized\?\.sourceType \|\| null/);
+  assert.match(background, /normalized\.sourceType !== sourceType/);
 });
