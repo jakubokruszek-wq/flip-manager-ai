@@ -30,6 +30,8 @@ import type { SearchFilterScan } from "@/features/flip-finder/search-filter-cont
 type ResultsResponse = {
   filter: SearchFilter;
   results: FilterResult[];
+  reviewResults?: FilterResult[];
+  archivedResults?: FilterResult[];
   total: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
@@ -78,6 +80,8 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     () => sortResults(filteredResults, sort),
     [filteredResults, sort],
   );
+  const reviewResults = data?.reviewResults ?? [];
+  const archivedResults = data?.archivedResults ?? [];
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
   const activeSources = data?.filter.sources ?? [];
   const historicalSources = (["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
@@ -120,11 +124,26 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
           {query ? <p className="mt-1 text-sm text-muted-foreground">Zmień tekst wyszukiwania, aby zobaczyć pozostałe oferty.</p> : null}
         </div>
       ) : null}
+      {data && reviewResults.length > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewResults.length}</p></div><div className="grid gap-3 lg:grid-cols-2">{reviewResults.map((result) => <ReviewListingCard key={result.id} result={result} onChanged={() => void load()} />)}</div></section> : null}
+      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ODRZUCONE / ARCHIWUM</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length}</p></section> : null}
       <div className="grid gap-4 lg:grid-cols-2">
         {renderedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} result={result} />)}
       </div>
     </section>
   );
+}
+
+function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const decide = async (decision: "ACCEPTED" | "REJECTED") => {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/review`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision }) });
+      if (!response.ok) throw new Error("Nie udało się zapisać decyzji.");
+      onChanged();
+    } finally { setBusy(false); }
+  };
+  return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{result.title ?? "Oferta do oceny"}</h3><p className="mt-1 text-sm text-muted-foreground">{result.locationText ?? "Lokalizacja nieznana"}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">DO OCENY</span></div><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ: {result.buildingType ?? "brak"}</span></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{result.missingFields?.length ? ` · Brak: ${result.missingFields.join(", ")}` : ""}</p><div className="mt-3 flex gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">Facebook <ExternalLink className="size-3" /></a> : null}</div></article>;
 }
 
 export function ExpandableListingCard({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {

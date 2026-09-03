@@ -21,6 +21,8 @@ type Row = Record<string, unknown>;
 type FilterResultsPayload = {
   filter: SearchFilter;
   results: FilterResult[];
+  reviewResults: FilterResult[];
+  archivedResults: FilterResult[];
   total: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
@@ -57,6 +59,9 @@ type ListingRow = Pick<
   | "status"
   | "firstSeenAt"
   | "lastSeenAt"
+  | "lifecycleStatus"
+  | "reviewReason"
+  | "missingFields"
 >;
 
 type SnapshotRow = {
@@ -77,8 +82,7 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
     supabase
       .from("listing_filter_matches")
       .select("listing_id,search_filter_id,first_matched_at,last_matched_at,match_origin,match_reasons")
-      .eq("search_filter_id", filterId)
-      .eq("is_current_match", true),
+      .eq("search_filter_id", filterId),
     supabase
       .from("source_scans")
       .select(
@@ -118,6 +122,8 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
     return {
       filter,
       results: [],
+      reviewResults: [],
+      archivedResults: [],
       total: 0,
       newMatches: 0,
       lastScan,
@@ -130,10 +136,11 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
     supabase
       .from("listings")
       .select(
-        "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at",
+        "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at",
       )
       .in("id", listingIds)
-      .eq("status", "active"),
+      .eq("status", "active")
+      .in("lifecycle_status", ["ACTIVE", "REVIEW", "STALE", "ARCHIVED"]),
     supabase
       .from("listing_snapshots")
       .select("listing_id,price,captured_at,raw_data")
@@ -165,7 +172,7 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
     snapshotsByListingId.set(snapshot.listingId, snapshots);
   }
 
-  const results = matches.flatMap((match): FilterResult[] => {
+  const allResults = matches.flatMap((match): FilterResult[] => {
     const listing = listingsById.get(match.listingId);
     if (!listing) {
       return [];
@@ -222,14 +229,22 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
         unknownFields: match.matchReasons
           .filter((reason) => reason.startsWith("unknown_"))
           .map((reason) => reason.slice("unknown_".length)),
+        decisionBucket: listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review") ? "REVIEW" : "MATCHED",
+        lifecycleStatus: listing.lifecycleStatus,
+        reviewReason: listing.reviewReason,
+        missingFields: listing.missingFields,
       },
     ];
   });
-  const sortedResults = sortResults(results, "newest");
+  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket !== "REVIEW" && result.lifecycleStatus !== "ARCHIVED"), "newest");
+  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW"), "newest");
+  const archivedResults = sortResults(allResults.filter((result) => result.lifecycleStatus === "ARCHIVED"), "newest");
 
   return {
     filter,
     results: sortedResults,
+    reviewResults,
+    archivedResults,
     total: sortedResults.length,
     newMatches: sortedResults.filter((result) => result.isNew).length,
     lastScan,
@@ -293,7 +308,14 @@ function toListingRow(row: Row): ListingRow | null {
     status,
     firstSeenAt,
     lastSeenAt,
+    lifecycleStatus: nullableLifecycle(row.lifecycle_status),
+    reviewReason: nullableString(row.review_reason),
+    missingFields: stringArray(row.missing_fields),
   };
+}
+
+function nullableLifecycle(value: unknown): PropertyListing["lifecycleStatus"] {
+  return value === "ACTIVE" || value === "REVIEW" || value === "STALE" || value === "ARCHIVED" || value === "REJECTED" ? value : "ACTIVE";
 }
 
 function toSnapshotRow(row: Row): SnapshotRow | null {

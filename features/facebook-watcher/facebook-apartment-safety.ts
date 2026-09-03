@@ -4,6 +4,7 @@ import type { FacebookBuildingEvidence } from "./facebook-building-evidence";
 
 export type FacebookApartmentSafetyDecision = {
   passes: boolean;
+  hardReject: boolean;
   reasons: string[];
   buildingType: string | null;
   locationVerified: boolean;
@@ -21,27 +22,28 @@ export function evaluateFacebookApartmentSafety(input: {
 }): FacebookApartmentSafetyDecision {
   const text = normalize(input.authoritativeText ?? "");
   const reasons: string[] = [];
+  const hardReasons = new Set<string>();
   const buildingEvidence = input.buildingEvidence ?? unverifiedBuildingEvidence();
   const buildingType = buildingEvidence.buildingType ?? inferBuildingType(text);
 
-  if (/\bkamienic\w*\b/u.test(text)) reasons.push("FACEBOOK_BUILDING_KAMIENICA");
-  if (/\b(blizniak\w*|dom(?:u|em|y|ow)?\s+(?:wolnostojac\w*|jednorodzinn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dom\b)\b/u.test(text)) reasons.push("FACEBOOK_PROPERTY_HOUSE");
-  if (/\b(dzialk\w*\s+(?:budowlan\w*|rekreacyjn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dzialk\w*)\b/u.test(text)) reasons.push("FACEBOOK_PROPERTY_PLOT");
+  if (/\bkamienic\w*\b/u.test(text)) { reasons.push("FACEBOOK_BUILDING_KAMIENICA"); hardReasons.add("FACEBOOK_BUILDING_KAMIENICA"); }
+  if (/\b(blizniak\w*|dom(?:u|em|y|ow)?\s+(?:wolnostojac\w*|jednorodzinn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dom\b)\b/u.test(text)) { reasons.push("FACEBOOK_PROPERTY_HOUSE"); hardReasons.add("FACEBOOK_PROPERTY_HOUSE"); }
+  if (/\b(dzialk\w*\s+(?:budowlan\w*|rekreacyjn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dzialk\w*)\b/u.test(text)) { reasons.push("FACEBOOK_PROPERTY_PLOT"); hardReasons.add("FACEBOOK_PROPERTY_PLOT"); }
 
-  if (buildingEvidence.status === "TENEMENT_CONFIRMED") reasons.push("FACEBOOK_BUILDING_KAMIENICA");
+  if (buildingEvidence.status === "TENEMENT_CONFIRMED") { reasons.push("FACEBOOK_BUILDING_KAMIENICA"); hardReasons.add("FACEBOOK_BUILDING_KAMIENICA"); }
   else if (buildingEvidence.status === "UNVERIFIED" && buildingType === null) reasons.push("FACEBOOK_BUILDING_TYPE_UNVERIFIED");
   else if (input.filter.buildingTypes.length > 0 && !input.filter.buildingTypes.some((value) => normalize(value) === buildingType)) {
-    reasons.push("FACEBOOK_BUILDING_TYPE_EXCLUDED");
+    reasons.push("FACEBOOK_BUILDING_TYPE_EXCLUDED"); hardReasons.add("FACEBOOK_BUILDING_TYPE_EXCLUDED");
   }
 
   const expectedCity = normalize(input.filter.city ?? "lodz");
   const extractedCity = normalize(input.property.city ?? "");
   const explicitOutside = OUTSIDE_LODZ.test(text) || Boolean(extractedCity && expectedCity && extractedCity !== expectedCity);
   const locationVerified = !explicitOutside && (LODZ_CONTEXT.test(text) || Boolean(extractedCity && extractedCity === expectedCity));
-  if (explicitOutside) reasons.push("FACEBOOK_LOCATION_OUTSIDE_LODZ");
+  if (explicitOutside) { reasons.push("FACEBOOK_LOCATION_OUTSIDE_LODZ"); hardReasons.add("FACEBOOK_LOCATION_OUTSIDE_LODZ"); }
   else if (!locationVerified) reasons.push("FACEBOOK_LOCATION_UNVERIFIED");
 
-  return { passes: reasons.length === 0, reasons: [...new Set(reasons)], buildingType, locationVerified, buildingEvidence };
+  return { passes: reasons.length === 0, hardReject: hardReasons.size > 0, reasons: [...new Set(reasons)], buildingType, locationVerified, buildingEvidence };
 }
 
 function unverifiedBuildingEvidence(): FacebookBuildingEvidence {

@@ -3,6 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-evaluation";
+import { decisionBucket } from "@/features/flip-finder/decision-model";
 import { calculateContentHash } from "@/features/flip-finder/otodom-search";
 import { deactivateListingFilterMatch, persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
@@ -94,7 +95,7 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   }
   const buildingEvidence = resolveFacebookBuildingEvidence(normalized.postText, extracted);
   const apartmentSafety = context ? evaluateFacebookApartmentSafety({ authoritativeText: normalized.postText, property: extracted, filter: context.filter, buildingEvidence }) : null;
-  if (context && apartmentSafety && !apartmentSafety.passes) {
+  if (context && apartmentSafety && apartmentSafety.hardReject) {
     return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: apartmentSafety.reasons, notProperty: { realEstateLanguage: true, structuredFieldCount: classification.structuredFieldCount, detectedFields: classification.detectedFields, classification: "non_sale_intent", reasonCode: "FACEBOOK_PROPERTY_FILTER_REJECTED" } };
   }
   const hash = createHash("sha256").update([normalized.postText, extracted.price, extracted.area, extracted.neighborhood].join("|")).digest("hex");
@@ -200,7 +201,10 @@ async function importAutomatedFacebook(input: {
   const pricePerSqm = effective.price && effective.area ? effective.price / effective.area : null;
   const score = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
   const locationText = [effective.street, effective.neighborhood, effective.district, effective.city].filter(Boolean).join(", ") || null;
-  const decision = evaluateListingAgainstFilter({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
+  const baseDecision = evaluateListingAgainstFilter({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
+  const safetyUnknown = apartmentUnknownFields(context.filter, buildingEvidence, effective.city);
+  const decisionUnknownFields = [...new Set([...baseDecision.unknownFields, ...safetyUnknown])];
+  const decision = { ...baseDecision, unknownFields: decisionUnknownFields, missingFields: decisionUnknownFields, bucket: decisionBucket({ reasons: baseDecision.reasons, unknownFields: decisionUnknownFields }), matches: baseDecision.reasons.length === 0 && decisionUnknownFields.length === 0 };
   let listingId: string;
   let listingCreated = false;
   let listingUpdated = false;
@@ -211,13 +215,18 @@ async function importAutomatedFacebook(input: {
     listingId = existing.id;
     const imagesUpdate = await supabase.from("listings").update({ images: imageMirror.images }).eq("id", listingId);
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
-    matchCreated = decision.matches ? await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now) : false;
-    if (!decision.matches) await deactivateListingFilterMatch(supabase, listingId, context.filter.id);
+    const lifecycleUpdate = await supabase.from("listings").update({ lifecycle_status: decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket, review_reason: decision.bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: decision.bucket === "REVIEW" ? decision.unknownFields : [], last_seen_at: now, status: "active", archived_at: null }).eq("id", listingId);
+    if (lifecycleUpdate.error) throw new Error(`FACEBOOK_LIFECYCLE_PERSIST_FAILED: ${lifecycleUpdate.error.message}`);
+    if (decision.matches) matchCreated = await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now);
+    else if (decision.bucket === "REVIEW") {
+      const review = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: context.filter.id, last_matched_at: now, is_current_match: false, match_reasons: ["review", ...decision.unknownFields.map((field) => `unknown_${field}`)], match_origin: "scan", source_scan_id: context.sourceScanId }, { onConflict: "listing_id,search_filter_id" });
+      if (review.error) throw new Error(`FACEBOOK_REVIEW_PERSIST_FAILED: ${review.error.message}`);
+    } else await deactivateListingFilterMatch(supabase, listingId, context.filter.id);
   } else {
     const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt), authoritativeTextSource: normalized.postText ? "AUTHOR_TEXT" : null, mediaBinding: facebookMediaBindingSummary(normalized, externalId), buildingEvidence, flags: effective.flags, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, locationProvenance: locationResolution.provenance, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED" };
     const contentHash = calculateContentHash({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor, locationText, images: imageMirror.images });
     const listing: SourceListing = { source: "facebook", externalListingId: externalId, originalUrl: sourceUrl, normalizedUrl: sourceUrl, title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), pricePerSqm, city: effective.city, district: effective.district, locationText, images: imageMirror.images, thumbnailUrl: imageMirror.images[0] ?? null, buildingType, description: effective.description, rawPayload, contentHash };
-    const saved = await persistListing(supabase, context.filter.id, listing, decision.matches, decision.unknownFields, context.sourceScanId, now, AbortSignal.timeout(75_000));
+    const saved = await persistListing(supabase, context.filter.id, listing, decision.matches, decision.unknownFields, context.sourceScanId, now, AbortSignal.timeout(75_000), decision);
     listingId = saved.listingId;
     listingCreated = saved.listingCreated;
     listingUpdated = saved.updated > 0;
@@ -269,6 +278,13 @@ async function upsertAutomatedMatch(supabase: ReturnType<typeof createFacebookWa
   const updated = await supabase.from("listing_filter_matches").update(values).eq("listing_id", listingId).eq("search_filter_id", context.filter.id);
   if (updated.error) throw new Error(`FACEBOOK_MATCH_UPDATE_FAILED: ${updated.error.message}`);
   return false;
+}
+
+function apartmentUnknownFields(filter: SearchFilter, evidence: FacebookBuildingEvidence, city: string | null): string[] {
+  const fields: string[] = [];
+  if (evidence.status === "UNVERIFIED") fields.push("buildingType");
+  if (filter.city && !city) fields.push("city");
+  return fields;
 }
 
 function facebookPostUrl(groupUrl: string, postId: string | null): string {

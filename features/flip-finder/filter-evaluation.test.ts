@@ -26,6 +26,7 @@ test("city comparison is case and diacritic safe", () => {
 
 test("unknown city remains explicit metadata instead of becoming a false mismatch", () => {
   const result = evaluateListingAgainstFilter({ ...candidate, city: null }, filter);
-  assert.equal(result.matches, true);
+  assert.equal(result.matches, false);
+  assert.equal(result.bucket, "REVIEW");
   assert.deepEqual(result.unknownFields, ["city"]);
 });

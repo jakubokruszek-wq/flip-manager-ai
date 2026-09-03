@@ -141,6 +141,10 @@ export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "ar
   priceDropAmount: number | null;
   matchReasons: string[];
   unknownFields: string[];
+  decisionBucket?: "MATCHED" | "REVIEW" | "REJECTED";
+  lifecycleStatus?: "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED";
+  reviewReason?: string | null;
+  missingFields?: string[];
 };
 
 /** Persisted Flip Finder listing. */
@@ -155,6 +159,12 @@ export type PropertyListing = Pick<PropertyFields, "externalListingId" | "normal
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
+  reviewReason?: string | null;
+  missingFields?: string[];
+  manualDecision?: "ACCEPTED" | "REJECTED" | null;
+  manualDecisionReason?: string | null;
+  lifecycleStatus?: "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED";
+  archivedAt?: string | null;
 };
 
 export type PropertyCalculator = Pick<PropertyFields, "purchasePrice" | "purchaseTax" | "notaryCost" | "purchaseCommission" | "renovationCost" | "furnishingCost" | "reserveCost" | "expectedSalePrice" | "saleCommission" | "taxCost" | "totalCost" | "revenue" | "profit" | "roi" | "margin">;

@@ -1,5 +1,6 @@
 import type { SearchFilter } from "@/features/flip-finder";
 import type { PropertyFields } from "@/features/properties/types/property";
+import { decisionBucket, type DecisionBucket } from "./decision-model.ts";
 
 export type FilterCandidate = Pick<
   PropertyFields,
@@ -21,8 +22,10 @@ export type FilterCandidate = Pick<
 
 export type FilterDecision = {
   matches: boolean;
+  bucket: DecisionBucket;
   reasons: string[];
   unknownFields: string[];
+  missingFields: string[];
 };
 
 export function evaluateListingAgainstFilter(
@@ -45,7 +48,7 @@ export function evaluateListingAgainstFilter(
 
   if (filter.priceMin !== null || filter.priceMax !== null || filter.maxPricePerSqm !== null) {
     if (candidate.price === null) {
-      reject(true, "price_missing");
+      markUnknown("price");
     } else if (!hasValidPrice) {
       reject(true, "price_invalid");
     }
@@ -53,7 +56,7 @@ export function evaluateListingAgainstFilter(
 
   if (filter.areaMin !== null || filter.areaMax !== null || filter.maxPricePerSqm !== null) {
     if (candidate.area === null) {
-      reject(true, "area_missing");
+      markUnknown("area");
     } else if (!hasValidArea) {
       reject(true, "area_invalid");
     }
@@ -75,7 +78,8 @@ export function evaluateListingAgainstFilter(
 
   if (filter.rooms.length > 0) {
     if (!isPositiveFinite(candidate.rooms)) {
-      reject(true, candidate.rooms === null ? "rooms_missing" : "rooms_invalid");
+      if (candidate.rooms === null) markUnknown("rooms");
+      else reject(true, "rooms_invalid");
     } else {
       reject(!filter.rooms.includes(candidate.rooms), "rooms");
     }
@@ -160,11 +164,10 @@ export function evaluateListingAgainstFilter(
     "excluded_keywords",
   );
 
-  return {
-    matches: reasons.size === 0,
-    reasons: [...reasons],
-    unknownFields: [...unknownFields],
-  };
+  const reasonList = [...reasons];
+  const unknownList = [...unknownFields];
+  const bucket = decisionBucket({ reasons: reasonList, unknownFields: unknownList });
+  return { matches: bucket === "MATCHED", bucket, reasons: reasonList, unknownFields: unknownList, missingFields: unknownList };
 }
 
 export const evaluateFilter = evaluateListingAgainstFilter;

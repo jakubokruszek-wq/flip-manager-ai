@@ -3,6 +3,7 @@ import test from "node:test";
 import { evaluateListingAgainstFilter } from "../flip-finder/filter-evaluation.ts";
 import type { SearchFilter } from "../flip-finder/types/index.ts";
 import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence } from "./facebook-data-quality.ts";
+import { evaluateFacebookApartmentSafety } from "./facebook-apartment-safety.ts";
 import type { FacebookProperty } from "./types.ts";
 
 function property(overrides: Partial<FacebookProperty> = {}): FacebookProperty {
@@ -69,4 +70,18 @@ test("NO MATCH reason codes are exposed without changing matcher output", () => 
     "FACEBOOK_NO_MATCH:area_missing,rooms_missing",
   ]);
   assert.deepEqual(facebookNoMatchWarnings(true, []), []);
+});
+
+test("missing building evidence remains reviewable but never passes safety as accepted", () => {
+  const filter = { ...({ city: "Łódź", buildingTypes: [] } as unknown as SearchFilter) };
+  const decision = evaluateFacebookApartmentSafety({ authoritativeText: "Na sprzedaż mieszkanie w Łodzi", property: { city: "Łódź" }, filter });
+  assert.equal(decision.hardReject, false);
+  assert.equal(decision.passes, false);
+  assert.ok(decision.reasons.includes("FACEBOOK_BUILDING_TYPE_UNVERIFIED"));
+});
+
+test("explicit house remains hard rejected", () => {
+  const filter = { ...({ city: "Łódź", buildingTypes: [] } as unknown as SearchFilter) };
+  const decision = evaluateFacebookApartmentSafety({ authoritativeText: "Sprzedam dom w Łodzi", property: { city: "Łódź" }, filter });
+  assert.equal(decision.hardReject, true);
 });

@@ -44,6 +44,7 @@ export function createMatchDiagnostic(
   decision: FilterDecision,
 ): MatchDiagnostic {
   const rejected = new Set(decision.reasons);
+  const unknown = new Set(decision.unknownFields);
   const calculatedPricePerSqm = positive(listing.price) && positive(listing.area)
     ? listing.price / listing.area
     : null;
@@ -60,7 +61,7 @@ export function createMatchDiagnostic(
     matches: decision.matches,
     reasons: {
       price: condition(
-        !hasAny(rejected, ["price_missing", "price_invalid", "price_min", "price_max"]),
+        !unknown.has("price") && !hasAny(rejected, ["price_missing", "price_invalid", "price_min", "price_max"]),
         range(filter.priceMin, filter.priceMax),
         listing.price,
       ),
@@ -70,17 +71,17 @@ export function createMatchDiagnostic(
         calculatedPricePerSqm,
       ),
       area: condition(
-        !hasAny(rejected, ["area_missing", "area_invalid", "area_min", "area_max"]),
+        !unknown.has("area") && !hasAny(rejected, ["area_missing", "area_invalid", "area_min", "area_max"]),
         range(filter.areaMin, filter.areaMax),
         listing.area,
       ),
       rooms: condition(
-        !hasAny(rejected, ["rooms", "rooms_missing", "rooms_invalid"]),
+        !unknown.has("rooms") && !hasAny(rejected, ["rooms", "rooms_missing", "rooms_invalid"]),
         filter.rooms.length ? JSON.stringify(filter.rooms) : "any",
         listing.rooms,
       ),
       district: condition(
-        !rejected.has("district"),
+        !unknown.has("district") && !rejected.has("district"),
         filter.districts.length ? JSON.stringify(filter.districts) : "any",
         listing.district,
       ),
