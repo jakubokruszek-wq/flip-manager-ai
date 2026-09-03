@@ -38,12 +38,17 @@ const PHASE_DONE = "Zakonczono";
 const FINDER_ORIGIN = "https://flip-manager-ai.vercel.app";
 const RUNTIME_GENERATION = crypto.randomUUID();
 let collectorJobPollInFlight = false;
+const COLLECTOR_JOB_POLL_ALARM = "collector-job-poll";
+const COLLECTOR_JOB_POLL_PERIOD_MINUTES = 0.5;
 
 void recoverFinderBootstraps().catch(() => {});
-chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
-chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); });
-chrome.alarms.create("collector-job-poll", { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === "collector-job-poll") void pollCollectorJobs().catch(() => {}); });
+void ensureCollectorJobPollAlarm();
+chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm(); });
+chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm(); });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== COLLECTOR_JOB_POLL_ALARM) return;
+  void pollCollectorJobs().catch(() => {}).finally(() => { void ensureCollectorJobPollAlarm(); });
+});
 
 chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
   if (message?.type !== "FLIP_COLLECTOR_EXTERNAL_PING" || !isAllowedExternalSender(sender) || safeRequestId(message.requestId) === "unknown") {
@@ -60,6 +65,10 @@ async function recoverFinderBootstraps() {
     if (!tab.id || !isFinderUrl(tab.url)) continue;
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["bootstrap.js"] }).catch(() => {});
   }
+}
+
+async function ensureCollectorJobPollAlarm() {
+  await chrome.alarms.create(COLLECTOR_JOB_POLL_ALARM, { periodInMinutes: COLLECTOR_JOB_POLL_PERIOD_MINUTES });
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
@@ -176,11 +185,20 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
 async function pollCollectorJobs() {
   if (collectorJobPollInFlight) return;
   collectorJobPollInFlight = true;
+  const pollStartedAt = Date.now();
+  await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: "STARTED" } }).catch(() => {});
   try {
     const value = await pairingStorageValue();
-    if (!value.apiUrl || !value.deviceId || !value.deviceToken) return;
+    if (!value.apiUrl || !value.deviceId || !value.deviceToken) {
+      await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: "PAIRING_MISSING", elapsedMs: Date.now() - pollStartedAt } }).catch(() => {});
+      return;
+    }
     const claimed = await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/claim`, "{}", 8_000);
-    if (!claimed?.job?.id || !claimed.job.leaseToken || !claimed.job.runId) return;
+    if (!claimed?.job?.id || !claimed.job.leaseToken || !claimed.job.runId) {
+      await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: claimed?.code === "NO_PENDING_JOB" ? "NO_PENDING_JOB" : "INVALID_CLAIM_RESPONSE", elapsedMs: Date.now() - pollStartedAt } }).catch(() => {});
+      return;
+    }
+    await chrome.storage.local.set({ collectorPollDiagnostics: { lastAlarmAt: new Date(pollStartedAt).toISOString(), status: "JOB_CLAIMED", elapsedMs: Date.now() - pollStartedAt } }).catch(() => {});
     const requestId = crypto.randomUUID();
     await setCollectorState({ status: "collecting", phase: "CLAIMED", progress: "Collector odebrał zlecenie", scanId: claimed.job.runId, jobId: claimed.job.id });
     const result = await collectConfiguredSources(claimed.job.runId, requestId);

@@ -346,6 +346,8 @@ test("backend collector queue polling is bounded and independent of page messagi
   assert.match(background, /api\/collector\/jobs\/claim/);
   assert.match(background, /COLLECTOR_SELF_TEST/);
   assert.match(background, /pollCollectorJobs/);
+  assert.match(background, /ensureCollectorJobPollAlarm/);
+  assert.match(background, /collectorPollDiagnostics/);
   assert.match(collectorClaimRoute, /FACEBOOK_COLLECTOR_QUEUE_ENABLED/);
   assert.match(collectorClaimRoute, /NO_PENDING_JOB/);
   assert.match(collectorClaimRoute, /BROWSER_EXTENSION/);
