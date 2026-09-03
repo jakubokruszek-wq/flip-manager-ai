@@ -625,12 +625,13 @@ function hex(buffer) { return [...new Uint8Array(buffer)].map((byte) => byte.toS
 function productionSource(value) {
   try {
     if (value && typeof value === "object") {
-      const sourceId = typeof value.sourceId === "string" ? value.sourceId : null;
+      const explicitSourceId = typeof value.sourceId === "string" ? value.sourceId : null;
       const sourceType = value.type === "PROFILE" || value.sourceType === "PROFILE" ? "PROFILE" : value.type === "GROUP" || value.sourceType === "GROUP" ? "GROUP" : null;
       const sourceUrl = typeof value.url === "string" ? value.url : typeof value.sourceUrl === "string" ? value.sourceUrl : null;
-      if (!sourceId || !sourceType || !sourceUrl) return null;
+      if (!sourceType || !sourceUrl) return null;
       const normalized = normalizeProductionSourceUrl(sourceUrl, sourceType);
-      return normalized && normalized.sourceId === sourceId ? PRODUCTION_SOURCES.find((source) => source.sourceId === sourceId && source.sourceType === sourceType && source.sourceUrl === normalized.sourceUrl) || null : null;
+      const sourceId = explicitSourceId || normalized?.sourceId;
+      return normalized && sourceId === normalized.sourceId ? PRODUCTION_SOURCES.find((source) => source.sourceId === sourceId && source.sourceType === sourceType && source.sourceUrl === normalized.sourceUrl) || null : null;
     }
     const normalized = normalizeProductionSourceUrl(String(value || ""));
     return normalized ? PRODUCTION_SOURCES.find((source) => source.sourceId === normalized.sourceId && source.sourceType === normalized.sourceType && source.sourceUrl === normalized.sourceUrl) || null : null;
