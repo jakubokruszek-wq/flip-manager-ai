@@ -51,12 +51,12 @@ const COLLECTOR_JOB_POLL_ALARM = "collector-job-poll";
 const COLLECTOR_JOB_POLL_PERIOD_MINUTES = 0.5;
 
 void recoverFinderBootstraps().catch(() => {});
-void ensureCollectorJobPollAlarm().then(() => pollCollectorJobs()).catch(() => {});
-chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().then(() => pollCollectorJobs()).catch(() => {}); });
-chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().then(() => pollCollectorJobs()).catch(() => {}); });
+void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); });
+chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); }); });
+chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); }); });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== COLLECTOR_JOB_POLL_ALARM) return;
-  void pollCollectorJobs().catch(() => {}).finally(() => { void ensureCollectorJobPollAlarm().catch(() => {}); });
+  void pollCollectorJobs().catch(() => {}).finally(() => { void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)); });
 });
 
 chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
@@ -82,7 +82,7 @@ async function ensureCollectorJobPollAlarm() {
     await chrome.storage.local.set({ collectorPollDiagnostics: { ...(await chrome.storage.local.get("collectorPollDiagnostics")).collectorPollDiagnostics, alarmPresent: true, alarmNextFire: existing.scheduledTime, alarmPeriodMinutes: existing.periodInMinutes } }).catch(() => {});
     return existing;
   }
-  await chrome.alarms.create(COLLECTOR_JOB_POLL_ALARM, { delayInMinutes: 0.01, periodInMinutes: COLLECTOR_JOB_POLL_PERIOD_MINUTES });
+  await chrome.alarms.create(COLLECTOR_JOB_POLL_ALARM, { delayInMinutes: COLLECTOR_JOB_POLL_PERIOD_MINUTES, periodInMinutes: COLLECTOR_JOB_POLL_PERIOD_MINUTES });
   const created = await chrome.alarms.get(COLLECTOR_JOB_POLL_ALARM).catch(() => null);
   await chrome.storage.local.set({ collectorPollDiagnostics: { ...(await chrome.storage.local.get("collectorPollDiagnostics")).collectorPollDiagnostics, alarmPresent: Boolean(created), alarmNextFire: created?.scheduledTime ?? null, alarmPeriodMinutes: created?.periodInMinutes ?? COLLECTOR_JOB_POLL_PERIOD_MINUTES } }).catch(() => {});
   return created;
@@ -571,6 +571,9 @@ async function setCollectorState(state) { await chrome.storage.local.set({ colle
 async function updateCollectorPollDiagnostics(patch) {
   const stored = await chrome.storage.local.get("collectorPollDiagnostics").catch(() => ({}));
   await chrome.storage.local.set({ collectorPollDiagnostics: { ...(stored.collectorPollDiagnostics || {}), ...patch } }).catch(() => {});
+}
+function recordCollectorPollAlarmError(error) {
+  return updateCollectorPollDiagnostics({ alarmPresent: false, alarmCreateError: safeError(error) });
 }
 async function configValue() { return chrome.storage.local.get(["apiUrl", "deviceId", "deviceToken", "sources"]); }
 async function pairingStorageValue() { return chrome.storage.local.get(["apiUrl", "deviceId", "deviceToken", "collectorPairingState", "collectorLastResult"]); }

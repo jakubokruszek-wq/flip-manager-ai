@@ -356,8 +356,9 @@ test("backend collector queue polling is bounded and independent of page messagi
 });
 
 test("queue poller performs an immediate startup pass and records alarm/claim diagnostics", () => {
-  assert.match(background, /ensureCollectorJobPollAlarm\(\)\.then\(\(\) => pollCollectorJobs\(\)\)/);
-  assert.match(background, /delayInMinutes: 0\.01/);
+  assert.match(background, /ensureCollectorJobPollAlarm\(\)\.catch\([\s\S]*?pollCollectorJobs\(\)/);
+  assert.match(background, /delayInMinutes: COLLECTOR_JOB_POLL_PERIOD_MINUTES/);
+  assert.match(background, /recordCollectorPollAlarmError/);
   assert.match(background, /alarmFiredAt/);
   assert.match(background, /claimAttemptAt/);
   assert.match(background, /claimHttpStatus/);
