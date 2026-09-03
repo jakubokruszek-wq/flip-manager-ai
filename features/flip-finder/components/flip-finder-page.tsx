@@ -395,6 +395,12 @@ export function FlipFinderPage() {
   }
 
   const activeFilter = data.filters.find((filter) => filter.id === requestedFilterId) ?? data.filters.find((filter) => filter.isActive) ?? data.filters[0] ?? null;
+  const latestProgressResponse = activeFilter && scanProgress && scanProgress.runId === activeFilter.lastScan?.scanRunId
+    ? scanResponseFromProgress(scanProgress)
+    : null;
+  const displayedScanResult = latestProgressResponse && activeFilter
+    ? { filter: activeFilter, response: latestProgressResponse }
+    : lastScanDiagnostics;
   void collectorValidation;
   void externalPingResult;
 
@@ -501,14 +507,14 @@ export function FlipFinderPage() {
         </div>
       ) : null}
 
-      {lastScanDiagnostics ? (
-        <ScanResultPanel filter={lastScanDiagnostics.filter} response={lastScanDiagnostics.response} />
+      {displayedScanResult ? (
+        <ScanResultPanel filter={displayedScanResult.filter} response={displayedScanResult.response} />
       ) : null}
 
       <section aria-label="Statystyki Flip Findera" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-6">
         <StatisticCard label="Aktywne filtry" value={data.summary.activeFilters ?? 0} />
         <StatisticCard label="Wstrzymane filtry" value={data.summary.pausedFilters ?? 0} />
-        <StatisticCard label="Aktywne oferty" value={data.summary.activeListings ?? 0} />
+        <StatisticCard label="Baza ofert — aktywne" value={data.summary.activeListings ?? 0} />
         <StatisticCard label="Usunięte / nieaktywne" value={data.summary.removedListings ?? 0} />
         <StatisticCard label="Łączna historia" value={data.summary.listingsCount ?? 0} />
         <StatisticCard label="Nowe w ostatnim skanie" value={data.summary.newMatches ?? 0} />
@@ -664,14 +670,32 @@ function ScanResultPanel({ filter, response }: { filter: SearchFilterListItem; r
   const status = response.status === "partial" ? "PARTIAL" : response.status === "failed" ? "FAILED" : response.status === "queued" ? "QUEUED" : response.status === "running" ? "RUNNING" : "COMPLETED";
   const partialReason = response.partialReason || response.warnings?.[0] || response.sourceResults?.find((source) => source.status === "failed")?.errorMessage;
   const noOffers = funnel.matched === 0 && funnel.collected > 0;
-  return <Card aria-label="Wynik skanu" className="overflow-hidden border-gold/20 bg-gradient-to-br from-gold/[0.07] via-card to-card p-5 sm:p-6">
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-gold">WYNIK SKANU</p><h2 className="mt-1 text-xl font-semibold tracking-tight">{filter.name}</h2></div><span className={`ui-badge ${status === "PARTIAL" ? "border-warning/30 bg-warning/10 text-warning" : status === "FAILED" ? "border-danger/20 bg-danger/10 text-danger" : status === "RUNNING" || status === "QUEUED" ? "border-gold/30 bg-gold/10 text-gold" : "border-success/20 bg-success/10 text-success"}`}>{status}</span></div>
+  return <Card aria-label="Wynik ostatniego skanu" className="overflow-hidden border-gold/20 bg-gradient-to-br from-gold/[0.07] via-card to-card p-5 sm:p-6">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-gold">WYNIK OSTATNIEGO SKANU</p><h2 className="mt-1 text-xl font-semibold tracking-tight">{filter.name}</h2></div><span className={`ui-badge ${status === "PARTIAL" ? "border-warning/30 bg-warning/10 text-warning" : status === "FAILED" ? "border-danger/20 bg-danger/10 text-danger" : status === "RUNNING" || status === "QUEUED" ? "border-gold/30 bg-gold/10 text-gold" : "border-success/20 bg-success/10 text-success"}`}>{status}</span></div>
     {status === "PARTIAL" || status === "FAILED" ? <div className="mt-4 rounded-xl border border-warning/25 bg-warning/10 p-4 text-sm"><p className="font-semibold text-warning">{status === "PARTIAL" ? "Częściowo zakończony" : "Skan zakończony błędem"}</p><p className="mt-1 text-muted-foreground">{partialReason || "Nie wszystkie źródła zakończyły pracę."}</p></div> : null}
-    <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"><DiagnosticMetric label="Zebrane posty" value={funnel.collected} /><DiagnosticMetric label="Zweryfikowane EXACT" value={funnel.exact} /><DiagnosticMetric label="SELL_PROPERTY" value={funnel.sell} tone="gold" /><DiagnosticMetric label="Odrzucone" value={funnel.rejected} /><DiagnosticMetric label="Dopasowane" value={funnel.matched} tone="gold" /><DiagnosticMetric label="Zapisane" value={funnel.saved} /></div>
-    {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground">Nie zapisano ofert. Najwięcej rekordów odpadło na: <strong className="text-foreground">{funnel.topRejection}</strong>.</p> : null}
+    <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4"><DiagnosticMetric label="Zebrane posty" value={funnel.collected} /><DiagnosticMetric label="Zweryfikowane EXACT" value={funnel.exact} /><DiagnosticMetric label="SELL_PROPERTY" value={funnel.sell} tone="gold" /><DiagnosticMetric label="Odrzucone" value={funnel.rejected} /><DiagnosticMetric label="Dopasowane" value={funnel.matched} tone="gold" /><DiagnosticMetric label="Nowe zapisane oferty" value={response.newCount} /><DiagnosticMetric label="Zaktualizowane" value={response.updatedCount} /></div>
+    {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground"><strong className="text-foreground">Ten skan nie dodał nowych ofert.</strong> Najwięcej rekordów odpadło na: <strong className="text-foreground">{funnel.topRejection}</strong>.</p> : null}
     <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">ODRZUCONE</h3><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
     <details className="mt-6 border-t border-border/60 pt-4 text-sm"><summary className="cursor-pointer font-semibold">Szczegóły diagnostyczne</summary><div className="mt-4 space-y-4"><p className="text-xs text-muted-foreground">Statusy źródeł i techniczne kody są dostępne tutaj; nie wpływają na decyzję filtra.</p><div className="grid gap-3 lg:grid-cols-3">{(response.sourceResults ?? []).map((source) => <SourceDiagnosticCard key={source.source} source={source} />)}</div>{response.matchDiagnostics ? <div className="space-y-3">{technicalDiagnosticBars(response.matchDiagnostics, funnel.collected).map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div> : null}</div></details>
   </Card>;
+}
+
+function scanResponseFromProgress(progress: ScanProgressResponse): ScanResponse {
+  const collector = progress.collector;
+  return {
+    runId: progress.runId,
+    status: progress.status,
+    scannedCount: collector?.collected ?? progress.totals.scanned,
+    matchedCount: progress.totals.matched,
+    newCount: collector?.listingsCreated ?? progress.totals.created,
+    updatedCount: collector?.listingsUpdated ?? progress.totals.updated,
+    priceDropCount: progress.totals.priceDrops,
+    exactCount: collector?.exact,
+    sellPropertyCount: collector?.sellProperty,
+    persistedCount: (collector?.listingsCreated ?? progress.totals.created) + (collector?.listingsUpdated ?? progress.totals.updated),
+    rejectionBreakdown: collector?.rejections,
+    partialReason: progress.partialReason,
+  };
 }
 
 type ScanFunnel = { collected: number; exact: number; sell: number; rejected: number; matched: number; saved: number; topRejection: string; rejections: Array<{ key: string; label: string; count: number }> };

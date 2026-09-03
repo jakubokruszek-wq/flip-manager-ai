@@ -1,10 +1,13 @@
 import "server-only";
 
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
+import { resolveFacebookListingIntent } from "@/features/facebook-watcher/facebook-intent";
 import { buildOpenAICostDashboard } from "@/features/flip-finder/scan-cost";
 import {
   buildOverallProgress,
+  collectorProgressGroupFromJobAndSourceScan,
   collectorProgressGroupFromSourceScan,
+  type CollectorScanFunnel,
   type FacebookGroupProgress,
   type ScanProgressResponse,
   type ScanWorkUnit,
@@ -21,26 +24,28 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
   await expireUnclaimedFacebookJobs(supabase, runId);
   const monthStart = zonedPeriodStart("month");
   const todayStart = zonedPeriodStart("day");
-  const [scansResult, facebookResult, olxResult, monthJobsResult] = await Promise.all([
-    supabase.from("source_scans").select("id,source,status,started_at,finished_at,scanned_count,matched_count,listings_found,listings_updated,price_drop_count,error_message,warnings").eq("scan_run_id", runId).order("started_at", { ascending: true }),
+  const [scansResult, facebookResult, olxResult, monthJobsResult, collectorBatchesResult] = await Promise.all([
+    supabase.from("source_scans").select("id,source,status,started_at,finished_at,scanned_count,matched_count,listings_found,listings_created,new_count,listings_updated,price_drop_count,error_message,warnings").eq("scan_run_id", runId).order("started_at", { ascending: true }),
     supabase.from("facebook_scan_jobs").select("id,source_scan_id,status,group_snapshot,result_summary,error_code,error_message,created_at,started_at,finished_at,heartbeat_at").eq("scan_run_id", runId).order("created_at", { ascending: true }),
     supabase.from("olx_scan_jobs").select("id,source_scan_id,status,result_summary,error_code,error_message,created_at,started_at,finished_at,heartbeat_at").eq("scan_run_id", runId).maybeSingle(),
     supabase.from("facebook_scan_jobs").select("scan_run_id,result_summary,finished_at").eq("status", "completed").gte("finished_at", monthStart),
+    supabase.from("collector_scan_batches").select("payload,result,received_at").eq("scan_id", runId).order("received_at", { ascending: true }),
   ]);
 
-  const databaseError = scansResult.error ?? facebookResult.error ?? olxResult.error ?? monthJobsResult.error;
+  const databaseError = scansResult.error ?? facebookResult.error ?? olxResult.error ?? monthJobsResult.error ?? collectorBatchesResult.error;
   if (databaseError) throw new Error(`SCAN_PROGRESS_READ_FAILED: ${databaseError.message}`);
 
   const scanRows = rows(scansResult.data);
   if (scanRows.length === 0) throw new Error("SCAN_RUN_NOT_FOUND");
   const facebookRows = rows(facebookResult.data);
+  const sourceScansById = new Map(scanRows.map((item) => [string(item.id), item]).filter((entry): entry is [string, Row] => Boolean(entry[0])));
   const jobSourceScanIds = new Set(facebookRows.map((item) => string(item.source_scan_id)).filter((value): value is string => Boolean(value)));
   const collectorSourceScans = scanRows
     .filter((item) => item.source === "facebook" && typeof item.id === "string" && !jobSourceScanIds.has(String(item.id)))
     .map(toCollectorGroup);
   const olxRow = row(olxResult.data);
   const units = scanRows.map(toWorkUnit).filter((value): value is ScanWorkUnit => value !== null);
-  const facebookGroups = [...facebookRows.map(toFacebookGroup), ...collectorSourceScans];
+  const facebookGroups = [...facebookRows.map((item) => toFacebookGroup(item, sourceScansById.get(string(item.source_scan_id) ?? "") ?? null)), ...collectorSourceScans];
   const jobStatuses = [...facebookGroups.map((group) => group.status), ...(olxRow ? [jobStatus(olxRow.status)] : [])].filter((status): status is WorkerJobStatus => status !== null);
   const overall = buildOverallProgress(units, jobStatuses);
   const startedAt = units.map((unit) => unit.startedAt).sort()[0];
@@ -66,6 +71,8 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
     ...facebookRows.flatMap((item) => string(item.error_message) ? [String(item.error_message)] : []),
     ...(string(olxRow?.error_message) ? [String(olxRow?.error_message)] : []),
   ]);
+  const collector = collectorFunnel(rows(collectorBatchesResult.data), scanRows);
+  const partialReason = collectorPartialReason(scanRows, collector);
   const currentFacebook = facebookGroups.find((group) => group.status === "running");
   const queuedFacebook = facebookGroups.find((group) => group.status === "queued");
   const currentUnit = units.find((unit) => unit.status === "running");
@@ -111,9 +118,12 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
     totals: {
       scanned: sum(scanRows, "scanned_count"),
       matched: sum(scanRows, "matched_count"),
+      created: sum(scanRows, "listings_created"),
       updated: sum(scanRows, "listings_updated"),
       priceDrops: sum(scanRows, "price_drop_count"),
     },
+    collector,
+    partialReason,
     errors,
     openai: {
       lastRun: cost.lastRun,
@@ -161,21 +171,98 @@ function toWorkUnit(value: Row): ScanWorkUnit | null {
   };
 }
 
-function toFacebookGroup(value: Row): FacebookGroupProgress {
+function toFacebookGroup(value: Row, sourceScan: Row | null): FacebookGroupProgress {
   const snapshot = Array.isArray(value.group_snapshot) ? row(value.group_snapshot[0]) : null;
   const summary = row(value.result_summary);
-  return {
-    groupId: string(snapshot?.id), groupName: string(snapshot?.name) ?? "Grupa Facebook",
-    jobId: string(value.id) ?? "", sourceScanId: string(value.source_scan_id) ?? "",
-    status: jobStatus(value.status) ?? "queued",
-    discovered: number(row(summary?.performance)?.postsDiscovered ?? summary?.postsReceived),
-    processed: number(summary?.postsProcessed), errorMessage: string(value.error_message),
-  };
+  return collectorProgressGroupFromJobAndSourceScan({
+    job: {
+      id: string(value.id) ?? "", sourceScanId: string(value.source_scan_id), status: string(value.status) ?? "queued",
+      groupId: string(snapshot?.id), groupName: string(snapshot?.name),
+      discovered: number(row(summary?.performance)?.postsDiscovered ?? summary?.postsReceived), processed: number(summary?.postsProcessed), errorMessage: string(value.error_message),
+    },
+    sourceScan: sourceScan ? { scannedCount: number(sourceScan.scanned_count), status: string(sourceScan.status) ?? "pending", errorMessage: string(sourceScan.error_message) } : null,
+  });
 }
 
 function toCollectorGroup(value: Row): FacebookGroupProgress {
   return collectorProgressGroupFromSourceScan({ id: String(value.id), status: String(value.status), scannedCount: number(value.scanned_count), errorMessage: string(value.error_message) });
 }
+
+function collectorFunnel(batchRows: Row[], scanRows: Row[]): CollectorScanFunnel | null {
+  const facebookScans = scanRows.filter((item) => item.source === "facebook");
+  if (facebookScans.length === 0) return null;
+  const payloads = batchRows.map((item) => row(item.payload)).filter((item): item is Row => item !== null);
+  const posts = payloads.flatMap((payload) => Array.isArray(payload.posts) ? payload.posts.filter((item): item is Row => row(item) !== null) : []);
+  const warnings = facebookScans.flatMap((scan) => Array.isArray(scan.warnings) ? scan.warnings.filter((warning): warning is string => typeof warning === "string") : []);
+  const exactFromPayload = posts.filter((post) => post.identityConfidence === "EXACT");
+  const identityFromWarnings = countWarnings(warnings, /^FACEBOOK_IDENTITY_UNVERIFIED:(\d+)$/);
+  const identityUnverified = Math.max(identityFromWarnings, Math.max(0, posts.length - exactFromPayload.length));
+  const intents = exactFromPayload.map((post) => resolveFacebookListingIntent(string(post.text), null, null).intent);
+  const sellProperty = intents.filter((intent) => intent === "SELL_PROPERTY").length;
+  const rent = intents.filter((intent) => intent === "RENT_OFFER" || intent === "RENT_WANTED").length;
+  const collected = sum(facebookScans, "scanned_count") || posts.length;
+  const matched = sum(facebookScans, "matched_count");
+  const search = searchSummary(payloads);
+  const buildingTypeUnverified = countWarningMatches(warnings, /BUILDING(?:_TYPE)?_(?:UNVERIFIED|UNKNOWN)/i);
+  const outsideLodz = countWarningMatches(warnings, /(?:OUTSIDE|LOCATION).*LODZ/i);
+  const tenement = countWarningMatches(warnings, /(?:TENEMENT|KAMIENICA)/i);
+  const duplicate = countWarningMatches(warnings, /DUPLICATE/i);
+  const ageCutoff = posts.filter((post) => isOlderThanCollectorCutoff(string(post.publishedAt), stringFromPayloads(payloads, "collectedAt"))).length;
+  const rejected = Math.max(0, collected - matched);
+  const known = identityUnverified + rent + buildingTypeUnverified + outsideLodz + tenement + duplicate + ageCutoff;
+  return {
+    collected,
+    exact: exactFromPayload.length,
+    sellProperty,
+    rejected,
+    listingsCreated: sum(facebookScans, "listings_created"),
+    listingsUpdated: sum(facebookScans, "listings_updated"),
+    rejections: {
+      identityUnverified,
+      searchParentUnverified: search.tilesUnverified,
+      buildingTypeUnverified,
+      rent,
+      ageCutoff,
+      outsideLodz,
+      tenement,
+      duplicate,
+      other: Math.max(0, rejected - known),
+    },
+    search: {
+      queriesExecuted: search.queriesExecuted,
+      queriesPlanned: search.queriesPlanned,
+      globalTimeBudgetExhausted: search.globalTimeBudgetExhausted,
+    },
+  };
+}
+
+function searchSummary(payloads: Row[]): { queriesExecuted: number; queriesPlanned: number; tilesUnverified: number; globalTimeBudgetExhausted: boolean } {
+  return payloads.reduce<{ queriesExecuted: number; queriesPlanned: number; tilesUnverified: number; globalTimeBudgetExhausted: boolean }>((summary, payload) => {
+    const telemetry = row(payload.searchTelemetry);
+    if (!telemetry) return summary;
+    const queries = Array.isArray(telemetry.queries) ? telemetry.queries.filter((query): query is Row => row(query) !== null) : [];
+    return {
+      queriesExecuted: summary.queriesExecuted + number(telemetry.queriesExecuted),
+      queriesPlanned: summary.queriesPlanned + number(telemetry.queriesPlanned),
+      tilesUnverified: summary.tilesUnverified + queries.reduce((total, query) => total + number(query.tilesUnverified), 0),
+      globalTimeBudgetExhausted: summary.globalTimeBudgetExhausted || telemetry.budgetExhausted === true,
+    };
+  }, { queriesExecuted: 0, queriesPlanned: 0, tilesUnverified: 0, globalTimeBudgetExhausted: false });
+}
+
+function collectorPartialReason(scanRows: Row[], collector: CollectorScanFunnel | null): string | null {
+  if (collector?.search.globalTimeBudgetExhausted) {
+    return `Collector zakończył pracę, ale część SEARCH została pominięta/ograniczona. Wykonano ${collector.search.queriesExecuted}/${collector.search.queriesPlanned} zapytań; wykorzystano globalny limit czasu.`;
+  }
+  const warnings = scanRows.flatMap((scan) => Array.isArray(scan.warnings) ? scan.warnings.filter((warning): warning is string => typeof warning === "string") : []);
+  if (warnings.includes("COLLECTOR_SEARCH_GLOBAL_TIME_BUDGET")) return "Collector zakończył pracę, ale część SEARCH została pominięta/ograniczona z powodu globalnego limitu czasu.";
+  return null;
+}
+
+function countWarnings(warnings: string[], pattern: RegExp): number { return warnings.reduce((total, warning) => total + (warning.match(pattern)?.[1] ? Number(warning.match(pattern)![1]) || 0 : 0), 0); }
+function countWarningMatches(warnings: string[], pattern: RegExp): number { return warnings.filter((warning) => pattern.test(warning)).length; }
+function stringFromPayloads(payloads: Row[], key: string): string | null { for (const payload of payloads) { const value = string(payload[key]); if (value) return value; } return null; }
+function isOlderThanCollectorCutoff(publishedAt: string | null, collectedAt: string | null): boolean { const publishedMs = publishedAt ? Date.parse(publishedAt) : Number.NaN; const collectedMs = collectedAt ? Date.parse(collectedAt) : Number.NaN; return Number.isFinite(publishedMs) && Number.isFinite(collectedMs) && collectedMs - publishedMs > 72 * 60 * 60 * 1_000; }
 
 function configuredBudget(): number | null {
   const parsed = Number(process.env.OPENAI_MONTHLY_BUDGET_USD);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanWorkUnit } from "./scan-progress.ts";
+import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanWorkUnit } from "./scan-progress.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -67,6 +67,16 @@ test("collector source scan is rendered as one active Facebook group", () => {
   assert.equal(group.groupId, "lodzsprzedazzakupwynajem");
   assert.equal(group.status, "queued");
   assert.equal(group.sourceScanId, "scan-1");
+});
+
+test("completed collector source scan is the authoritative post count when a job summary is empty", () => {
+  const group = collectorProgressGroupFromJobAndSourceScan({
+    job: { id: "job-1", sourceScanId: "scan-1", status: "completed", groupId: "lodzsprzedazzakupwynajem", groupName: "Łódź sprzedaż zakup wynajem", discovered: 0, processed: 0, errorMessage: null },
+    sourceScan: { scannedCount: 31, status: "partial", errorMessage: null },
+  });
+  assert.equal(group.discovered, 31);
+  assert.equal(group.processed, 31);
+  assert.equal(group.status, "completed");
 });
 
 function unit(index: number, status: ScanWorkUnit["status"], source: ScanWorkUnit["source"] = "facebook"): ScanWorkUnit {

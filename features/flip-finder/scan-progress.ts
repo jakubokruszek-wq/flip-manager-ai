@@ -27,6 +27,31 @@ export type FacebookGroupProgress = {
   errorMessage: string | null;
 };
 
+export type CollectorScanFunnel = {
+  collected: number;
+  exact: number;
+  sellProperty: number;
+  rejected: number;
+  listingsCreated: number;
+  listingsUpdated: number;
+  rejections: {
+    identityUnverified: number;
+    searchParentUnverified: number;
+    buildingTypeUnverified: number;
+    rent: number;
+    ageCutoff: number;
+    outsideLodz: number;
+    tenement: number;
+    duplicate: number;
+    other: number;
+  };
+  search: {
+    queriesExecuted: number;
+    queriesPlanned: number;
+    globalTimeBudgetExhausted: boolean;
+  };
+};
+
 export type OpenAICostWindow = {
   calls: number;
   inputTokens: number;
@@ -72,9 +97,12 @@ export type ScanProgressResponse = {
   totals: {
     scanned: number;
     matched: number;
+    created: number;
     updated: number;
     priceDrops: number;
   };
+  collector: CollectorScanFunnel | null;
+  partialReason: string | null;
   errors: string[];
   openai: {
     lastRun: OpenAICostWindow;
@@ -139,6 +167,25 @@ export function collectorProgressGroupFromSourceScan(input: { id: string; status
     discovered: input.scannedCount,
     processed: input.scannedCount,
     errorMessage: input.errorMessage,
+  };
+}
+
+export function collectorProgressGroupFromJobAndSourceScan(input: {
+  job: { id: string; sourceScanId: string | null; status: string; groupId: string | null; groupName: string | null; discovered: number; processed: number; errorMessage: string | null };
+  sourceScan: { scannedCount: number; status: string; errorMessage: string | null } | null;
+}): FacebookGroupProgress {
+  const sourceCount = input.sourceScan?.scannedCount ?? 0;
+  const sourceStatus = input.sourceScan?.status;
+  const jobStatus = input.job.status === "running" ? "running" : input.job.status === "completed" || input.job.status === "partial" ? "completed" : input.job.status === "failed" ? "failed" : "queued";
+  return {
+    groupId: input.job.groupId,
+    groupName: input.job.groupName ?? "Grupa Facebook",
+    jobId: input.job.id,
+    sourceScanId: input.job.sourceScanId ?? "",
+    status: sourceStatus === "failed" ? "failed" : sourceStatus === "completed" || sourceStatus === "partial" ? "completed" : jobStatus,
+    discovered: Math.max(input.job.discovered, sourceCount),
+    processed: Math.max(input.job.processed, sourceCount),
+    errorMessage: input.sourceScan?.errorMessage ?? input.job.errorMessage,
   };
 }
 

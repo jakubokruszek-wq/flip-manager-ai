@@ -10,6 +10,11 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
       : sourceLabel(progress.current.source)
     : null;
   const tone = budgetTone(progress.openai.budgetUsedPercent);
+  const terminalStage = progress.status === "partial"
+    ? "Częściowo zakończony"
+    : progress.status === "failed"
+      ? "Zakończony błędem"
+      : "Wszystkie etapy zakończone";
 
   return (
     <section aria-label="Postęp skanowania" className="rounded-2xl border border-border/70 bg-muted/20 p-4">
@@ -20,11 +25,12 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
         </div>
         <div aria-label={`Postęp ${progress.overall.percent}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progress.overall.percent} className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-muted" role="progressbar"><div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progress.overall.percent}%` }} /></div>
         <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-          <ProgressDetail label="Bieżący etap" value={currentLabel ?? (active ? "Oczekiwanie na worker" : "Wszystkie etapy zakończone")} />
+          <ProgressDetail label="Bieżący etap" value={currentLabel ?? (active ? "Oczekiwanie na Collector" : terminalStage)} />
           <ProgressDetail label="Pozostało" value={`${progress.overall.remainingUnits} etapów`} />
           {progress.facebook.totalGroups > 0 ? <ProgressDetail label="Facebook" value={`${progress.facebook.completedGroups}/${progress.facebook.totalGroups} grup · ${progress.facebook.processed}/${progress.facebook.discovered} postów`} /> : null}
           {progress.olx.status ? <ProgressDetail label="OLX" value={`${jobStatusLabel(progress.olx.status)} · raw ${progress.olx.raw} · normalized ${progress.olx.normalized}`} /> : null}
         </div>
+        {progress.status === "partial" ? <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-800 dark:text-amber-300">Częściowo zakończony</p><p className="mt-1 text-muted-foreground">{progress.partialReason ?? "Collector zakończył pracę, ale część SEARCH została pominięta lub ograniczona."}</p></div> : null}
         {progress.facebook.groups.length > 0 ? (
           <div className="mt-4 space-y-2" aria-label="Facebook group statuses">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Facebook — grupy</p>
