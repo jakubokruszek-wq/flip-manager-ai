@@ -36,6 +36,10 @@ update public.listings
 set lifecycle_status = 'REJECTED'
 where manual_decision = 'REJECTED' and lifecycle_status <> 'REJECTED';
 
+update public.listings
+set archived_at = coalesce(archived_at, now())
+where lifecycle_status = 'ARCHIVED' and archived_at is null;
+
 do $$
 begin
   if not exists (select 1 from pg_constraint where conrelid = 'public.listings'::regclass and conname = 'listings_lifecycle_status_check') then
