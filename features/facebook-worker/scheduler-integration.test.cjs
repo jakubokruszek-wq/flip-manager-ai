@@ -58,3 +58,10 @@ test("parallel ticks are serialized before active-job and cycle decisions", () =
   assert.ok(lockIndex >= 0 && activeIndex > lockIndex && historyIndex > activeIndex);
   assert.match(scheduler, /code === "23505"/);
 });
+
+test("scheduler reads public filter configuration without widening backend grants", () => {
+  assert.match(scheduler, /createSchedulerReadClient/);
+  assert.match(scheduler, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
+  assert.match(scheduler, /readClient\.from\("search_filters"\)/);
+  assert.match(scheduler, /lockStore: "ATOMIC_INSERT_DELETE"/);
+});
