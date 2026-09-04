@@ -170,11 +170,11 @@
         result.currMediaId = mediaId;
         const story = node.container_story;
         if (!isObject(story)) { result.failSubstep = "SEARCH_CONTAINER_STORY_MISSING"; return; }
-        const postId = exactStoryRootPostId(story);
+        const postId = exactMediaBoundStoryPostId(story, mediaId);
         if (!postId) { result.failSubstep = "SEARCH_PARENT_POST_ID_MISSING"; return; }
         result.containerStoryPostId = postId;
         const rootStory = findExactRootStoryNode(story, postId) || story;
-        const link = findPermalink(story, postId, source);
+        const link = findPermalink(story, postId, source) || (hasExactMediaTracking(story, postId, mediaId) ? canonicalParentLink(postId, source) : null);
         if (link) { result.parentPostId = postId; result.parentPermalink = link.permalink; }
         result.rootAuthorFound = Boolean(findAuthor(rootStory));
         result.rootTextFound = Boolean(findRootMessage(rootStory));
@@ -182,13 +182,13 @@
         result.identityResult = result.parentPermalink && result.rootAuthorFound && result.rootTextFound && result.mediaAttachmentCrosscheck ? "EXACT" : "UNVERIFIED";
         result.failSubstep = result.identityResult === "EXACT" ? null : !result.parentPermalink ? "SEARCH_PARENT_PERMALINK_MISSING" : !result.rootAuthorFound || !result.rootTextFound ? "SEARCH_ROOT_TEXT_MISSING" : "SEARCH_MEDIA_CROSSCHECK_FAILED";
       }
-      if (result.currMediaId || !isObject(node)) return;
+      if (!isObject(node)) return;
       const postId = exactStoryRootPostId(node);
       if (postId && hasExactMediaTracking(node, postId, mediaId)) {
         result.topLevelPostId = postId;
         result.mediaAttachmentCrosscheck = true;
         result.parentPostId = postId;
-        const link = findPermalink(node, postId, source);
+        const link = findPermalink(node, postId, source) || canonicalParentLink(postId, source);
         result.parentPermalink = link?.permalink || null;
         result.rootAuthorFound = Boolean(findAuthor(node));
         result.rootTextFound = Boolean(findRootMessage(node));
@@ -197,22 +197,67 @@
       }
     }, 16);
     if (!result.structuredPayloadFound) result.failSubstep = "SEARCH_PAYLOAD_NOT_FOUND";
-    else if (!result.currMediaId && !result.topLevelPostId) result.failSubstep = "SEARCH_MEDIA_ID_NOT_FOUND";
+    else if (result.currMediaId || result.topLevelPostId) {
+      // A matching media node is stronger evidence than an earlier unrelated
+      // payload in the same document. Preserve the first real failed hop for
+      // this tile instead of reporting MEDIA_ID_NOT_FOUND.
+      if (!result.parentPostId) result.failSubstep = !result.containerStoryPostId && !result.topLevelPostId
+        ? "SEARCH_PARENT_POST_ID_MISSING"
+        : !result.parentPermalink ? "SEARCH_PARENT_PERMALINK_MISSING"
+          : !result.rootAuthorFound || !result.rootTextFound ? "SEARCH_ROOT_TEXT_MISSING"
+            : "SEARCH_MEDIA_CROSSCHECK_FAILED";
+    } else result.failSubstep = "SEARCH_MEDIA_ID_NOT_FOUND";
     return result;
   }
 
   function hasExactMediaTracking(story, postId, mediaId) {
     let exact = false;
-    walk(story, (node) => {
-      if (exact || !isObject(node) || typeof node.tracking !== "string" || !node.tracking.includes(mediaId)) return;
-      try {
-        const tracking = JSON.parse(node.tracking);
-        exact = scalarId(tracking.top_level_post_id) === postId
-          && Array.isArray(tracking.photo_attachments_list)
-          && tracking.photo_attachments_list.some((id) => scalarId(id) === mediaId);
-      } catch { /* fail closed on non-JSON tracking */ }
+    walkPath(story, (node, path) => {
+      if (exact || !isObject(node)) return;
+      if (path.length && /(?:comment|feedback|media|caption|attachment)/i.test(path.join("."))) return false;
+      const tracking = parseMediaTracking(node.tracking, mediaId);
+      exact = scalarId(tracking?.top_level_post_id) === postId
+        && Array.isArray(tracking.photo_attachments_list)
+        && tracking.photo_attachments_list.some((id) => scalarId(id) === mediaId);
     }, 7);
     return exact;
+  }
+
+  // Some Comet photo payloads omit container_story.post_id and expose the
+  // canonical id only in the story tracking object. Treat that id as usable
+  // only when the same tracking object lists the requested media id. If both
+  // direct and tracking ids exist, they must agree.
+  function exactMediaBoundStoryPostId(story, mediaId) {
+    const direct = exactStoryRootPostId(story);
+    let tracked = null;
+    let conflict = false;
+    walkPath(story, (node, path) => {
+      if (!isObject(node)) return;
+      if (path.length && /(?:comment|feedback|media|caption|attachment)/i.test(path.join("."))) return false;
+      const tracking = parseMediaTracking(node.tracking, mediaId);
+      if (!tracking || !Array.isArray(tracking.photo_attachments_list) || !tracking.photo_attachments_list.some((id) => scalarId(id) === mediaId)) return;
+      const candidate = scalarId(tracking.top_level_post_id);
+      if (!candidate) return;
+      if (tracked && tracked !== candidate) conflict = true;
+      tracked ||= candidate;
+    }, 7);
+    if (conflict || (direct && tracked && direct !== tracked)) return null;
+    return direct || tracked;
+  }
+
+  function parseMediaTracking(value, expectedMediaId) {
+    if (isObject(value)) return value;
+    if (typeof value !== "string" || !value.includes(expectedMediaId)) return null;
+    try {
+      const parsed = JSON.parse(value);
+      return isObject(parsed) ? parsed : null;
+    } catch { return null; }
+  }
+
+  function canonicalParentLink(postId, source) {
+    if (!source?.sourceUrl || !/^\d{5,30}$/.test(postId)) return null;
+    const base = source.sourceUrl.endsWith("/") ? source.sourceUrl : `${source.sourceUrl}/`;
+    return parsePostLink(`${base}permalink/${postId}/`, source);
   }
 
   function resolveSearchMediaParentFromText(text, layer, source, expectedMediaId, iteration = 0) {
@@ -224,9 +269,9 @@
       if (!isObject(node) || scalarId(node.id) !== mediaId || String(node.__typename || node.typename || "").toLowerCase() !== "photo") return;
       const story = node.container_story;
       if (!isObject(story)) return;
-      const postId = exactStoryRootPostId(story);
+      const postId = exactMediaBoundStoryPostId(story, mediaId);
       if (!postId) return;
-      const link = findPermalink(story, postId, source);
+      const link = findPermalink(story, postId, source) || (hasExactMediaTracking(story, postId, mediaId) ? canonicalParentLink(postId, source) : null);
       if (!link || link.postId !== postId) return;
       const rootStory = findExactRootStoryNode(story, postId) || story;
       const author = findAuthor(rootStory);
@@ -252,7 +297,7 @@
     for (const root of roots) walk(root, (story) => {
       const postId = exactStoryRootPostId(story);
       if (!postId || !hasExactMediaTracking(story, postId, mediaId)) return;
-      const link = findPermalink(story, postId, source);
+      const link = findPermalink(story, postId, source) || (hasExactMediaTracking(story, postId, mediaId) ? canonicalParentLink(postId, source) : null);
       if (!link || link.postId !== postId) return;
       const author = findAuthor(story);
       const message = findRootMessage(story);

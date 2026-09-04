@@ -228,3 +228,86 @@ test("search media resolver resolves author and text from an exact nested contai
   assert.equal(record.identityConfidence, "EXACT");
   assert.equal(record.media[0].exactPostId, postId);
 });
+
+test("search media resolver recovers parent id from container story tracking when direct id is omitted", () => {
+  const mediaId = "28074641558832168";
+  const postId = "1583208690163941";
+  const body = JSON.stringify({
+    data: { currMedia: {
+      __typename: "Photo",
+      id: mediaId,
+      image: { uri: `https://scontent.xx.fbcdn.net/${mediaId}.jpg` },
+      container_story: {
+        __typename: "Story",
+        permalink_url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/${postId}/`,
+        actors: [{ name: "Tracked Root Author" }],
+        message: { text: "Na sprzedaĹĽ mieszkanie" },
+        tracking: JSON.stringify({ top_level_post_id: postId, photo_attachments_list: [mediaId] }),
+      },
+    } },
+  });
+  const [record] = core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId);
+  assert.equal(record.postId, postId);
+  assert.equal(record.identityConfidence, "EXACT");
+  assert.equal(record.media[0].exactAssociation, true);
+  const inspected = core.inspectSearchMediaParentFromText(body, source, mediaId);
+  assert.equal(inspected.containerStoryPostId, postId);
+  assert.equal(inspected.parentPostId, postId);
+  assert.equal(inspected.identityResult, "EXACT");
+});
+
+test("search media resolver rejects tracking parent without requested media binding", () => {
+  const mediaId = "28074641558832168";
+  const postId = "1583208690163941";
+  const body = JSON.stringify({
+    __typename: "Photo",
+    id: mediaId,
+    image: { uri: `https://scontent.xx.fbcdn.net/${mediaId}.jpg` },
+    container_story: {
+      __typename: "Story",
+      permalink_url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/${postId}/`,
+      actors: [{ name: "Tracked Root Author" }],
+      message: { text: "Na sprzedaĹĽ mieszkanie" },
+      tracking: JSON.stringify({ top_level_post_id: postId, photo_attachments_list: ["28074642035498787"] }),
+    },
+  });
+  assert.deepEqual(core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId), []);
+});
+
+test("search media resolver rejects conflicting direct and tracking parent ids", () => {
+  const mediaId = "28074641558832168";
+  const body = JSON.stringify({
+    __typename: "Photo",
+    id: mediaId,
+    image: { uri: `https://scontent.xx.fbcdn.net/${mediaId}.jpg` },
+    container_story: {
+      __typename: "Story",
+      post_id: "1583208690163941",
+      permalink_url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/permalink/1583208690163941/",
+      actors: [{ name: "Tracked Root Author" }],
+      message: { text: "Na sprzedaĹĽ mieszkanie" },
+      tracking: JSON.stringify({ top_level_post_id: "1583208690163999", photo_attachments_list: [mediaId] }),
+    },
+  });
+  assert.deepEqual(core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId), []);
+});
+
+test("search media resolver derives a canonical source permalink only from verified tracking", () => {
+  const mediaId = "28074641558832168";
+  const postId = "1583208690163941";
+  const body = JSON.stringify({
+    __typename: "Photo",
+    id: mediaId,
+    image: { uri: `https://scontent.xx.fbcdn.net/${mediaId}.jpg` },
+    container_story: {
+      __typename: "Story",
+      actors: [{ name: "Tracked Root Author" }],
+      message: { text: "Na sprzedaĹĽ mieszkanie" },
+      tracking: { top_level_post_id: postId, photo_attachments_list: [mediaId] },
+    },
+  });
+  const [record] = core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId);
+  assert.equal(record.postId, postId);
+  assert.equal(record.permalink, `https://www.facebook.com/groups/${source.sourceId}/posts/${postId}/`);
+  assert.equal(record.identityConfidence, "EXACT");
+});
