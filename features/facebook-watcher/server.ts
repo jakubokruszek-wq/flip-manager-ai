@@ -210,16 +210,17 @@ async function importAutomatedFacebook(input: {
   let listingUpdated = false;
   let matchCreated = false;
   let priceDrops = 0;
+  const manualRejected = existingState.manualDecision === "REJECTED";
 
   if (crossSourceMatch && existing) {
     listingId = existing.id;
     const imagesUpdate = await supabase.from("listings").update({ images: imageMirror.images }).eq("id", listingId);
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
-    let lifecycleUpdate = await supabase.from("listings").update({ lifecycle_status: decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket, review_reason: decision.bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: decision.bucket === "REVIEW" ? decision.unknownFields : [], last_seen_at: now, status: "active", archived_at: null }).eq("id", listingId);
+    let lifecycleUpdate = await supabase.from("listings").update({ lifecycle_status: manualRejected ? "REJECTED" : decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket, review_reason: !manualRejected && decision.bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: !manualRejected && decision.bucket === "REVIEW" ? decision.unknownFields : [], last_seen_at: now, status: "active", archived_at: manualRejected ? existingState.archivedAt ?? now : null }).eq("id", listingId);
     if (lifecycleUpdate.error?.code === "42703") lifecycleUpdate = await supabase.from("listings").update({ last_seen_at: now, status: "active" }).eq("id", listingId);
     if (lifecycleUpdate.error) throw new Error(`FACEBOOK_LIFECYCLE_PERSIST_FAILED: ${lifecycleUpdate.error.message}`);
-    if (decision.matches) matchCreated = await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now);
-    else if (decision.bucket === "REVIEW") {
+    if (decision.matches && !manualRejected) matchCreated = await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now);
+    else if (decision.bucket === "REVIEW" && !manualRejected) {
       const review = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: context.filter.id, last_matched_at: now, is_current_match: false, match_reasons: ["review", ...decision.unknownFields.map((field) => `unknown_${field}`)], match_origin: "scan", source_scan_id: context.sourceScanId }, { onConflict: "listing_id,search_filter_id" });
       if (review.error) throw new Error(`FACEBOOK_REVIEW_PERSIST_FAILED: ${review.error.message}`);
     } else await deactivateListingFilterMatch(supabase, listingId, context.filter.id);
@@ -311,21 +312,28 @@ type FacebookListingState = {
   images: string[]; firstSeenAt: string | null; title: string | null; price: number | null;
   area: number | null; rooms: number | null; floor: number | null; address: string | null;
   district: string | null; city: string | null; description: string | null;
+  manualDecision: "ACCEPTED" | "REJECTED" | null; lifecycleStatus: string | null; archivedAt: string | null;
 };
 
 async function readListingState(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string): Promise<FacebookListingState> {
-  const { data, error } = await supabase.from("listings").select("images,first_seen_at,title,price,area,rooms,floor,address,district,city,description").eq("id", listingId).maybeSingle();
+  let result = await supabase.from("listings").select("images,first_seen_at,title,price,area,rooms,floor,address,district,city,description,manual_decision,lifecycle_status,archived_at").eq("id", listingId).maybeSingle();
+  if (result.error?.code === "42703" || result.error?.code === "PGRST204") {
+    result = await supabase.from("listings").select("images,first_seen_at,title,price,area,rooms,floor,address,district,city,description").eq("id", listingId).maybeSingle();
+  }
+  const { data, error } = result;
   if (error) throw new Error(`Nie udało się odczytać istniejących zdjęć oferty: ${error.message}`);
   return {
     images: Array.isArray(data?.images) ? data.images.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [],
     firstSeenAt: str(data?.first_seen_at), title: str(data?.title), price: num(data?.price), area: num(data?.area),
     rooms: num(data?.rooms), floor: num(data?.floor), address: str(data?.address), district: str(data?.district),
     city: str(data?.city), description: str(data?.description),
+    manualDecision: data?.manual_decision === "ACCEPTED" || data?.manual_decision === "REJECTED" ? data.manual_decision : null,
+    lifecycleStatus: str(data?.lifecycle_status), archivedAt: str(data?.archived_at),
   };
 }
 
 function emptyListingState(): FacebookListingState {
-  return { images: [], firstSeenAt: null, title: null, price: null, area: null, rooms: null, floor: null, address: null, district: null, city: null, description: null };
+  return { images: [], firstSeenAt: null, title: null, price: null, area: null, rooms: null, floor: null, address: null, district: null, city: null, description: null, manualDecision: null, lifecycleStatus: null, archivedAt: null };
 }
 
 function listingStateValues(state: FacebookListingState, metadata: Row) {

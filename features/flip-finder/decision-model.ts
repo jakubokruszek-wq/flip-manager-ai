@@ -18,6 +18,24 @@ export function lifecycleForLastSeen(lastSeenAt: string | null | undefined, now 
   return "ACTIVE";
 }
 
+/**
+ * Applies the visibility lifecycle without changing the business decision.
+ * A fresh REVIEW stays REVIEW, while manually rejected records are immutable
+ * for automatic cleanup and re-discovery.
+ */
+export function lifecycleForListing(input: {
+  current: LifecycleStatus | null | undefined;
+  manualDecision?: "ACCEPTED" | "REJECTED" | null;
+  lastSeenAt: string | null | undefined;
+}, now = Date.now()): LifecycleStatus {
+  if (input.manualDecision === "REJECTED" || input.current === "REJECTED") {
+    return "REJECTED";
+  }
+
+  const ageStatus = lifecycleForLastSeen(input.lastSeenAt, now);
+  return ageStatus === "ACTIVE" && input.current === "REVIEW" ? "REVIEW" : ageStatus;
+}
+
 export function reviewReason(unknownFields: string[]): string {
   return unknownFields.length ? `Brak danych: ${unknownFields.join(", ")}` : "Wymaga ręcznej oceny";
 }

@@ -62,6 +62,9 @@ type ListingRow = Pick<
   | "lifecycleStatus"
   | "reviewReason"
   | "missingFields"
+  | "manualDecision"
+  | "manualDecisionReason"
+  | "archivedAt"
 >;
 
 type SnapshotRow = {
@@ -140,7 +143,7 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
       )
       .in("id", listingIds)
       .eq("status", "active")
-      .in("lifecycle_status", ["ACTIVE", "REVIEW", "STALE", "ARCHIVED"]),
+        .in("lifecycle_status", ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]),
     supabase
       .from("listing_snapshots")
       .select("listing_id,price,captured_at,raw_data")
@@ -234,16 +237,20 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
         unknownFields: match.matchReasons
           .filter((reason) => reason.startsWith("unknown_"))
           .map((reason) => reason.slice("unknown_".length)),
-        decisionBucket: listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review") ? "REVIEW" : "MATCHED",
+        decisionBucket: listing.lifecycleStatus === "REJECTED" ? "REJECTED" : listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review") ? "REVIEW" : "MATCHED",
         lifecycleStatus: listing.lifecycleStatus,
         reviewReason: listing.reviewReason,
         missingFields: listing.missingFields,
+        manualDecision: listing.manualDecision,
+        manualDecisionReason: listing.manualDecisionReason,
+        archivedAt: listing.archivedAt,
       },
     ];
   });
-  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket !== "REVIEW" && result.lifecycleStatus !== "ARCHIVED"), "newest");
-  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW"), "newest");
-  const archivedResults = sortResults(allResults.filter((result) => result.lifecycleStatus === "ARCHIVED"), "newest");
+  const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
+  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED" && !archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest");
+  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW" && !archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest");
+  const archivedResults = sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest");
 
   return {
     filter,
@@ -316,6 +323,9 @@ function toListingRow(row: Row): ListingRow | null {
     lifecycleStatus: nullableLifecycle(row.lifecycle_status),
     reviewReason: nullableString(row.review_reason),
     missingFields: stringArray(row.missing_fields),
+    manualDecision: row.manual_decision === "ACCEPTED" || row.manual_decision === "REJECTED" ? row.manual_decision : null,
+    manualDecisionReason: nullableString(row.manual_decision_reason),
+    archivedAt: nullableString(row.archived_at),
   };
 }
 

@@ -16,6 +16,14 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
   const { data, error } = await supabase.from("listings").update(values).eq("id", listingId).select("id").maybeSingle();
   if (error) return Response.json({ message: "Nie udało się zapisać decyzji." }, { status: 500 });
   if (!data) return Response.json({ message: "Nie znaleziono oferty." }, { status: 404 });
-  if (decision === "REJECTED") await supabase.from("listing_filter_matches").update({ is_current_match: false }).eq("listing_id", listingId);
+  if (decision === "REJECTED") {
+    await supabase.from("listing_filter_matches").update({ is_current_match: false }).eq("listing_id", listingId);
+  } else {
+    const { data: matches } = await supabase.from("listing_filter_matches").select("search_filter_id,match_reasons").eq("listing_id", listingId);
+    for (const match of matches ?? []) {
+      const reasons = Array.isArray(match.match_reasons) ? match.match_reasons.filter((value): value is string => typeof value === "string" && value !== "review" && !value.startsWith("unknown_")) : [];
+      await supabase.from("listing_filter_matches").update({ is_current_match: true, last_matched_at: new Date().toISOString(), match_reasons: [...new Set(["manual_accept", ...reasons])] }).eq("listing_id", listingId).eq("search_filter_id", match.search_filter_id);
+    }
+  }
   return Response.json({ ok: true, listingId, decision });
 }

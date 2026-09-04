@@ -8,7 +8,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { staleListingFilterMatchKey, staleListingFilterMatchValues } from "./match-state";
 import type { DecisionBucket } from "../decision-model";
 
-type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images">;
+type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
+  manualDecision?: "ACCEPTED" | "REJECTED" | null;
+  lifecycleStatus?: "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED" | null;
+  archivedAt?: string | null;
+};
 
 export async function deactivateListingFilterMatch(supabase: SupabaseClient, listingId: string, filterId: string, signal?: AbortSignal): Promise<void> {
   const key = staleListingFilterMatchKey(listingId, filterId);
@@ -25,13 +29,26 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   // `manual_decision` was added with the review-lifecycle migration. Keep the
   // lookup compatible while that migration is being rolled out: the value is
   // not needed to decide whether this scan should update/create the listing.
-  const { data: existing, error: existingError } = await supabase.from("listings").select("id,price,content_hash,images").eq("source", item.source).eq("external_listing_id", item.externalListingId).abortSignal(signal).maybeSingle();
+  let existingResult = await supabase.from("listings").select("id,price,content_hash,images,manual_decision,lifecycle_status,archived_at").eq("source", item.source).eq("external_listing_id", item.externalListingId).abortSignal(signal).maybeSingle();
+  if (isMissingReviewLifecycleColumn(existingResult.error)) {
+    existingResult = await supabase.from("listings").select("id,price,content_hash,images").eq("source", item.source).eq("external_listing_id", item.externalListingId).abortSignal(signal).maybeSingle();
+  }
+  const existingError = existingResult.error;
+  const existing = existingResult.data;
   if (existingError) throw new Error("Nie udało się sprawdzić istniejącej oferty.");
   const current = existing && typeof existing === "object" && "id" in existing && typeof existing.id === "string" ? { id: existing.id, price: typeof existing.price === "number" ? existing.price : null, contentHash: typeof existing.content_hash === "string" ? existing.content_hash : null, images: Array.isArray(existing.images) ? existing.images.filter((image: unknown): image is string => typeof image === "string") : [] } satisfies ExistingListing : null;
+  const manualRejected = existing && typeof existing === "object" && existing.manual_decision === "REJECTED";
+  const archivedAt = existing && typeof existing === "object" && typeof existing.archived_at === "string" ? existing.archived_at : null;
   const changed = needsSnapshot(current ? { price: current.price, contentHash: current.contentHash } : null, { price: item.price, contentHash: item.contentHash });
   const priceDrop = isPriceDrop(current?.price ?? null, item.price) ? 1 : 0;
   const images = resolveListingImages(current?.images ?? [], item.thumbnailUrl, item.images);
   const listingValues = { source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", removed_at: null, last_seen_at: matchedAt, lifecycle_status: bucket === "MATCHED" ? "ACTIVE" : bucket, review_reason: bucket === "REVIEW" ? (reviewReasons.length ? reviewReasons.join(", ") : "Wymaga ręcznej oceny") : null, missing_fields: bucket === "REVIEW" ? reviewFields : [], archived_at: null, content_hash: item.contentHash };
+  if (manualRejected) {
+    listingValues.lifecycle_status = "REJECTED";
+    listingValues.review_reason = null;
+    listingValues.missing_fields = [];
+    (listingValues as { archived_at: string | null }).archived_at = archivedAt ?? matchedAt;
+  }
   let { data: saved, error } = await supabase.from("listings").upsert(listingValues, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single();
   if (isMissingReviewLifecycleColumn(error)) {
     const legacyValues = { source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", removed_at: null, last_seen_at: matchedAt, content_hash: item.contentHash };
@@ -40,13 +57,17 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   if (error || !saved || typeof saved.id !== "string") throw new Error("Nie udało się zapisać oferty.");
   if (changed) { const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: item.rawPayload }).abortSignal(signal); if (snapshotError) throw new Error("Nie udało się zapisać historii oferty."); }
   if (!createMatch) {
-    if (bucket === "REVIEW") {
+    if (bucket === "REVIEW" && !manualRejected) {
       const { error: reviewMatchError } = await supabase.from("listing_filter_matches").upsert({ listing_id: saved.id, search_filter_id: filterId, last_matched_at: matchedAt, is_current_match: false, match_reasons: ["review", ...reviewReasons, ...reviewFields.map((field) => `unknown_${field}`)], match_score: null, match_origin: "scan", source_scan_id: sourceScanId }, { onConflict: "listing_id,search_filter_id" }).abortSignal(signal);
       if (reviewMatchError) throw new Error("Nie udało się zapisać oferty do oceny.");
     } else {
       await deactivateListingFilterMatch(supabase, saved.id, filterId, signal);
     }
     return { listingId: saved.id, listingCreated: current === null, matchCreated: false, updated: current && changed ? 1 : 0, priceDrop };
+  }
+  if (manualRejected) {
+    await deactivateListingFilterMatch(supabase, saved.id, filterId, signal);
+    return { listingId: saved.id, listingCreated: false, matchCreated: false, updated: changed ? 1 : 0, priceDrop };
   }
   const matchReasons = [...new Set([`${item.source}_search`, ...unknownFields.map((field) => `unknown_${field}`)])];
   const { error: insertMatchError } = await supabase.from("listing_filter_matches").insert({ listing_id: saved.id, search_filter_id: filterId, last_matched_at: matchedAt, is_current_match: true, match_reasons: matchReasons, match_score: null, match_origin: "scan", source_scan_id: sourceScanId }).abortSignal(signal);
@@ -59,5 +80,5 @@ function isMissingReviewLifecycleColumn(error: { code?: unknown; message?: unkno
   if (!error) return false;
   const code = typeof error.code === "string" ? error.code : "";
   const message = typeof error.message === "string" ? error.message : "";
-  return (code === "42703" || code === "PGRST204") && /lifecycle_status|review_reason|missing_fields|archived_at/.test(message);
+  return (code === "42703" || code === "PGRST204") && /lifecycle_status|review_reason|missing_fields|archived_at|manual_decision/.test(message);
 }

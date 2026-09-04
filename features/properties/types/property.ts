@@ -145,6 +145,9 @@ export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "ar
   lifecycleStatus?: "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED";
   reviewReason?: string | null;
   missingFields?: string[];
+  manualDecision?: "ACCEPTED" | "REJECTED" | null;
+  manualDecisionReason?: string | null;
+  archivedAt?: string | null;
 };
 
 /** Persisted Flip Finder listing. */

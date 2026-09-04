@@ -124,8 +124,9 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
           {query ? <p className="mt-1 text-sm text-muted-foreground">Zmień tekst wyszukiwania, aby zobaczyć pozostałe oferty.</p> : null}
         </div>
       ) : null}
+      {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / MATCHED <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
       {data && reviewResults.length > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewResults.length}</p></div><div className="grid gap-3 lg:grid-cols-2">{reviewResults.map((result) => <ReviewListingCard key={result.id} result={result} onChanged={() => void load()} />)}</div></section> : null}
-      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ODRZUCONE / ARCHIWUM</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length}</p></section> : null}
+      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} key={result.id} marketType={data.filter.marketType ?? null} result={result} />)}</div></section> : null}
       <div className="grid gap-4 lg:grid-cols-2">
         {renderedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} result={result} />)}
       </div>
@@ -339,7 +340,8 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
           </div>
         </div>
         <div className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-4 sm:px-5 sm:py-3">
-          <div className="absolute right-3 top-4 sm:right-5 sm:top-3">
+          <div className="absolute right-3 top-4 flex items-center gap-2 sm:right-5 sm:top-3">
+            <LifecycleBadge status={result.lifecycleStatus} />
             <SourceBadge source={result.source} />
           </div>
           <div className="min-w-0 pr-24"><h2 className="line-clamp-2 text-base font-semibold leading-snug tracking-tight sm:text-lg">{title}</h2></div>
@@ -453,6 +455,7 @@ function DetailList({ label, values, empty }: { label: string; values: string[];
 function SourceBadge({ source }: { source: FilterResult["source"] }) { return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{source === "otodom" ? "Otodom" : source === "olx" ? "OLX" : source === "morizon" ? "Morizon" : "Facebook"}</span>; }
 function StatusBadge({ status }: { status: FilterResult["listingStatus"] }) { return <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-500/90 px-2.5 py-1 text-xs font-semibold text-white shadow-sm backdrop-blur"><span className="size-1.5 rounded-full bg-white/90" />{status === "active" ? "Aktywna" : status === "removed" ? "Usunięta" : status === "sold" ? "Sprzedana" : "Obserwowana"}</span>; }
 function Badge({ label }: { label: string }) { return <span className="rounded-full bg-background/90 px-2.5 py-1 text-xs font-semibold text-foreground shadow-sm backdrop-blur">{label}</span>; }
+function LifecycleBadge({ status }: { status: FilterResult["lifecycleStatus"] }) { const label = status === "REVIEW" ? "DO OCENY" : status === "STALE" ? "NIEAKTUALNA" : status === "ARCHIVED" ? "ARCHIWALNA" : status === "REJECTED" ? "ODRZUCONA" : "AKTYWNA"; return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{label}</span>; }
 function calculatorCurrency(value: number): string { return new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 }).format(value); }
 function signedCurrency(value: number): string { return `${value > 0 ? "+" : ""}${calculatorCurrency(value)}`; }
 function percentage(value: number): string { return `${new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 }).format(value)}%`; }
