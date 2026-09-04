@@ -531,7 +531,7 @@ async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, qu
 }
 
 function searchTileErrorCode(error) {
-  if (error && typeof error.code === "string" && error.code === "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT") return error.code;
+  if (error && typeof error.code === "string" && ["SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT", "CONTENT_SCRIPT_NOT_READY", "CONTENT_SCRIPT_MESSAGE_FAILED", "PHOTO_NAVIGATION_TIMEOUT", "INJECTION_FAILED", "RECEIVING_END_MISSING", "PAYLOAD_WAIT_TIMEOUT"].includes(error.code)) return error.code;
   const message = safeError(error);
   if (/timeout/i.test(message)) return "SEARCH_TIMEOUT";
   if (/content.?script|receiving end|message channel/i.test(message)) return "SEARCH_CONTENT_SCRIPT_UNAVAILABLE";
