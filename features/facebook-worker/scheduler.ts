@@ -67,14 +67,21 @@ export async function getFacebookSchedulerDiagnostics() {
   const jobs = records(jobsResult.data); const scans = records(scansResult.data); const batches = records(batchesResult.data);
   const cycle = latestCycle(scans.filter((scan) => markerFromScan(scan)));
   const active = jobs.find((job) => job.status === "queued" || job.status === "running") ?? null;
+  const automaticScans = scans.filter((scan) => markerFromScan(scan));
+  const recentBrowserJobs = jobs.slice(0, 10).map((job) => ({
+    id: text(job.id), status: text(job.status), scanRunId: text(job.scan_run_id), sourceScanId: text(job.source_scan_id),
+    sourceId: snapshotSourceId(job.group_snapshot), createdAt: text(job.created_at), startedAt: text(job.started_at),
+    finishedAt: text(job.finished_at), heartbeatAt: text(job.heartbeat_at), errorCode: text(job.error_code),
+  }));
   const device = record(devicesResult.data?.[0]);
   const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
   for (const job of jobs) if (typeof job.status === "string" && job.status in counts) counts[job.status as keyof typeof counts] += 1;
   return {
-    scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle ? new Date(Date.parse(cycle.startedAt) + cycle.cooldownMinutes * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE" },
+    scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle ? new Date(Date.parse(cycle.startedAt) + cycle.cooldownMinutes * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null },
     queue: counts,
     sources: records(sourcesResult.data).map((source) => sourceDiagnostics(source, scans, batches, jobs)),
     extension: { deviceName: text(device?.device_name), lastHeartbeat: text(device?.last_heartbeat_at), lastPoll: text(device?.last_heartbeat_at), lastClaim: latestTimestamp(jobs.map((job) => text(job.started_at))), currentJob: active && active.status === "running" ? text(active.id) : null, health: text(device?.health_status) },
+    recentBrowserJobs,
   };
 }
 
