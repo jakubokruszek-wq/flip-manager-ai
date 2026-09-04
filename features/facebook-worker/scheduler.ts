@@ -97,7 +97,39 @@ async function enqueueAutomaticSource(filter: SearchFilter, cycleId: string, sta
   const scheduledFilter = { ...filter, _facebookScheduler: marker } as SearchFilter;
   const queued = await enqueueFacebookJobs(scheduledFilter, cycleId, source.sourceId);
   const job = queued.jobs[0];
-  return job ? output(status, cycleId, source.sourceId, job.jobId, null) : output("ERROR", cycleId, source.sourceId, null, queued.failedGroups[0]?.error ?? queued.reasonCode ?? "FACEBOOK_QUEUE_JOB_NOT_CREATED");
+  if (!job) return output("ERROR", cycleId, source.sourceId, null, queued.failedGroups[0]?.error ?? queued.reasonCode ?? "FACEBOOK_QUEUE_JOB_NOT_CREATED");
+  const supabase = createFacebookWatcherAdminClient();
+  try {
+    await stampAndVerifyAutomaticSource(supabase, job.jobId, job.sourceScanId, marker);
+    return output(status, cycleId, source.sourceId, job.jobId, null);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "SCHEDULER_MARKER_PERSIST_FAILED";
+    const now = new Date().toISOString();
+    await supabase.from("facebook_scan_jobs").update({ status: "failed", finished_at: now, error_code: "SCHEDULER_MARKER_PERSIST_FAILED", error_message: message }).eq("id", job.jobId).eq("status", "queued").eq("attempts", 0);
+    await supabase.from("source_scans").update({ status: "failed", finished_at: now, error_message: `SCHEDULER_MARKER_PERSIST_FAILED: ${message}`.slice(0, 1_000) }).eq("id", job.sourceScanId).eq("status", "pending");
+    return output("ERROR", cycleId, source.sourceId, job.jobId, message);
+  }
+}
+
+async function stampAndVerifyAutomaticSource(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, jobId: string, sourceScanId: string, marker: SchedulerMarker): Promise<void> {
+  const [jobResult, scanResult] = await Promise.all([
+    supabase.from("facebook_scan_jobs").select("group_snapshot").eq("id", jobId).eq("status", "queued").maybeSingle(),
+    supabase.from("source_scans").select("filter_snapshot,warnings").eq("id", sourceScanId).eq("status", "pending").maybeSingle(),
+  ]);
+  if (jobResult.error || scanResult.error || !jobResult.data || !scanResult.data) throw new Error("SCHEDULER_MARKER_TARGET_NOT_FOUND");
+  const first = Array.isArray(jobResult.data.group_snapshot) ? record(jobResult.data.group_snapshot[0]) : null;
+  const snapshot = jsonRecord(scanResult.data.filter_snapshot);
+  if (!first || !snapshot) throw new Error("SCHEDULER_MARKER_TARGET_INVALID");
+  const warning = `FACEBOOK_SCHEDULER_MARKER:${JSON.stringify(marker).slice(0, 2_000)}`;
+  const warnings = unique([warning, ...strings(scanResult.data.warnings)]).slice(0, 100);
+  const [jobUpdate, scanUpdate] = await Promise.all([
+    supabase.from("facebook_scan_jobs").update({ group_snapshot: [{ ...first, _facebookScheduler: marker }] }).eq("id", jobId).eq("status", "queued").select("source_scan_id,group_snapshot").maybeSingle(),
+    supabase.from("source_scans").update({ filter_snapshot: { ...snapshot, _facebookScheduler: marker }, warnings }).eq("id", sourceScanId).eq("status", "pending").select("id,filter_snapshot,warnings").maybeSingle(),
+  ]);
+  if (jobUpdate.error || scanUpdate.error || !jobUpdate.data || !scanUpdate.data) throw new Error("SCHEDULER_MARKER_WRITE_FAILED");
+  const verifiedJob = { source_scan_id: jobUpdate.data.source_scan_id, group_snapshot: jobUpdate.data.group_snapshot } as Row;
+  const verifiedScan = { id: scanUpdate.data.id, filter_snapshot: scanUpdate.data.filter_snapshot, warnings: scanUpdate.data.warnings } as Row;
+  if (markerFromJob(verifiedJob)?.cycleId !== marker.cycleId || markerFromScan(verifiedScan)?.cycleId !== marker.cycleId) throw new Error("SCHEDULER_MARKER_VERIFY_FAILED");
 }
 
 async function schedulerContext(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, now: Date): Promise<{ filter: SearchFilter; sources: SchedulerSource[] } | null> {

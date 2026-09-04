@@ -44,6 +44,8 @@ test("cycle marker survives source finalization through immutable job snapshot",
   assert.match(jobs, /_facebookScheduler: schedulerMarker/);
   assert.match(scheduler, /attachJobMarkers/);
   assert.match(scheduler, /markerFromJob/);
+  assert.match(scheduler, /stampAndVerifyAutomaticSource/);
+  assert.match(scheduler, /SCHEDULER_MARKER_VERIFY_FAILED/);
 });
 
 test("parallel ticks are serialized before active-job and cycle decisions", () => {
