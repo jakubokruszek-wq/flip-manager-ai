@@ -24,6 +24,27 @@ export type CollectorSearchQueryTelemetry = {
   duplicatesByMedia: number;
   durationMs: number;
   stopReason: string;
+  tileDiagnostics: CollectorSearchTileDiagnostic[];
+};
+
+/** Safe, read-only projection of a collector tile diagnostic. */
+export type CollectorSearchTileDiagnostic = {
+  query: string;
+  tileIndex: number;
+  mediaUrl: string | null;
+  mediaId: string | null;
+  photoPageOpened: boolean;
+  payloadObserved: boolean;
+  currMediaFound: boolean;
+  containerStoryFound: boolean;
+  parentPostIdFound: boolean;
+  parentPermalinkFound: boolean;
+  parentStoryFound: boolean;
+  authorFound: boolean;
+  rootTextFound: boolean;
+  exactBinding: boolean;
+  timeSpentMs: number;
+  firstFailedHop: string | null;
 };
 
 export type CollectorMainFeedDiagnostic = {
@@ -160,6 +181,32 @@ export type ScanProgressResponse = {
   };
 };
 
+export function projectSearchTileDiagnostics(value: unknown, query: string, limit = 50): CollectorSearchTileDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  const boundedLimit = Math.max(0, Math.min(50, Math.floor(limit)));
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)).slice(0, boundedLimit).map((item, tileIndex) => {
+    const id = numericId(item.mediaId);
+    const parentPostId = numericId(item.parentPostId);
+    const containerStoryPostId = numericId(item.containerStoryPostId);
+    const parentPermalink = facebookPermalink(item.parentPermalink);
+    return {
+      query, tileIndex, mediaUrl: null, mediaId: id,
+      photoPageOpened: item.photoOpened === true,
+      payloadObserved: item.structuredPayloadFound === true,
+      currMediaFound: Boolean(numericId(item.currMediaId)),
+      containerStoryFound: Boolean(containerStoryPostId),
+      parentPostIdFound: Boolean(parentPostId),
+      parentPermalinkFound: Boolean(parentPermalink),
+      parentStoryFound: Boolean(containerStoryPostId && (parentPostId === containerStoryPostId || parentPostId)),
+      authorFound: item.rootAuthorFound === true,
+      rootTextFound: item.rootTextFound === true,
+      exactBinding: item.identityResult === "EXACT",
+      timeSpentMs: nonnegativeInteger(item.elapsedMs),
+      firstFailedHop: typeof item.failSubstep === "string" ? item.failSubstep : null,
+    };
+  });
+}
+
 export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJobStatus[]): ScanProgressResponse["overall"] & { status: ScanProgressStatus } {
   const terminalUnits = units.filter((unit) => isTerminalUnitStatus(unit.status)).length;
   // A queue job can fail after its source scan has already been finalized by a
@@ -188,6 +235,10 @@ export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJ
     remainingUnits: Math.max(0, totalUnits - terminalUnits),
   };
 }
+
+function numericId(value: unknown): string | null { return typeof value === "string" && /^\d{5,30}$/.test(value) ? value : typeof value === "number" && Number.isSafeInteger(value) && value >= 10_000 ? String(value) : null; }
+function facebookPermalink(value: unknown): string | null { if (typeof value !== "string") return null; try { const parsed = new URL(value); return parsed.protocol === "https:" && parsed.hostname === "www.facebook.com" && /\/groups\//i.test(parsed.pathname) ? value.slice(0, 2_000) : null; } catch { return null; } }
+function nonnegativeInteger(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
 
 export function isTerminalScanStatus(status: ScanProgressStatus): boolean {
   return status === "completed" || status === "partial" || status === "failed";

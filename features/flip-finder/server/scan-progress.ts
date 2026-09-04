@@ -10,6 +10,7 @@ import {
   type CollectorScanFunnel,
   type CollectorMainFeedDiagnostic,
   type CollectorSearchQueryTelemetry,
+  projectSearchTileDiagnostics,
   type FacebookGroupProgress,
   type ScanProgressResponse,
   type ScanWorkUnit,
@@ -265,18 +266,22 @@ function searchSummary(payloads: Row[]): { queriesExecuted: number; queriesPlann
     const telemetry = row(payload.searchTelemetry);
     if (!telemetry) return summary;
     const queries = Array.isArray(telemetry.queries) ? telemetry.queries.filter((query): query is Row => row(query) !== null) : [];
+    const mappedQueries = queries.map(toSearchQueryTelemetry);
+    const remainingTiles = Math.max(0, 50 - summary.queries.reduce((total, query) => total + query.tileDiagnostics.length, 0));
+    const limitedQueries = mappedQueries.map((query) => ({ ...query, tileDiagnostics: query.tileDiagnostics.slice(0, remainingTiles) }));
     return {
       queriesExecuted: summary.queriesExecuted + number(telemetry.queriesExecuted),
       queriesPlanned: summary.queriesPlanned + number(telemetry.queriesPlanned),
       tilesUnverified: summary.tilesUnverified + queries.reduce((total, query) => total + number(query.tilesUnverified), 0),
       globalTimeBudgetExhausted: summary.globalTimeBudgetExhausted || telemetry.budgetExhausted === true,
-      queries: [...summary.queries, ...queries.map(toSearchQueryTelemetry).slice(0, 100 - summary.queries.length)].slice(0, 100),
+      queries: [...summary.queries, ...limitedQueries.slice(0, 100 - summary.queries.length)].slice(0, 100),
     };
   }, { queriesExecuted: 0, queriesPlanned: 0, tilesUnverified: 0, globalTimeBudgetExhausted: false, queries: [] });
 }
 
 function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
   const status = string(value.status);
+  const tileDiagnostics = projectSearchTileDiagnostics(value.tileDiagnostics, string(value.query) ?? "unknown");
   return {
     query: string(value.query) ?? "unknown",
     executed: value.executed === true,
@@ -297,6 +302,7 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     duplicatesByMedia: number(value.duplicatesByMedia),
     durationMs: number(value.durationMs),
     stopReason: string(value.stopReason) ?? "UNKNOWN",
+    tileDiagnostics,
   };
 }
 

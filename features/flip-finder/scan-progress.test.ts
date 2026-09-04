@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanWorkUnit } from "./scan-progress.ts";
+import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -101,6 +101,29 @@ test("failed queue job makes the overall run non-healthy even when its source sc
   const progress = buildOverallProgress([unit(0, "partial")], ["failed"]);
   assert.equal(progress.status, "failed");
   assert.equal(progress.failedUnits, 1);
+});
+
+test("search tile diagnostics are projected as safe read-only fields", () => {
+  const [diagnostic] = projectSearchTileDiagnostics([{
+    mediaId: "28074641558832168", photoOpened: true, structuredPayloadFound: true, currMediaId: "28074641558832168",
+    containerStoryPostId: "1576413074176836", parentPostId: "1576413074176836", parentPermalink: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1576413074176836/",
+    rootAuthorFound: true, rootTextFound: true, identityResult: "EXACT", elapsedMs: 42, failSubstep: null,
+    leaseToken: "must-not-survive", workerSecret: "must-not-survive",
+  }], "sprzedam");
+  assert.deepEqual(diagnostic, {
+    query: "sprzedam", tileIndex: 0, mediaUrl: null, mediaId: "28074641558832168", photoPageOpened: true,
+    payloadObserved: true, currMediaFound: true, containerStoryFound: true, parentPostIdFound: true,
+    parentPermalinkFound: true, parentStoryFound: true, authorFound: true, rootTextFound: true,
+    exactBinding: true, timeSpentMs: 42, firstFailedHop: null,
+  });
+});
+
+test("missing tile diagnostics return an empty list and projection is capped at fifty", () => {
+  assert.deepEqual(projectSearchTileDiagnostics(undefined, "mieszkanie"), []);
+  const values = Array.from({ length: 75 }, (_, index) => ({ mediaId: String(28074641558832000 + index), elapsedMs: index }));
+  const projected = projectSearchTileDiagnostics(values, "mieszkanie");
+  assert.equal(projected.length, 50);
+  assert.equal(projected[49].tileIndex, 49);
 });
 
 function unit(index: number, status: ScanWorkUnit["status"], source: ScanWorkUnit["source"] = "facebook"): ScanWorkUnit {
