@@ -65,7 +65,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
 
   try {
     const existingScan = await supabase.from("source_scans")
-      .select("id,search_filter_id,filter_snapshot,status")
+      .select("id,search_filter_id,filter_snapshot,status,warnings")
       .eq("scan_run_id", batch.scanId)
       .eq("source", "facebook")
       .in("status", ["pending", "running"])
@@ -74,9 +74,9 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       .maybeSingle();
     if (existingScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_LOOKUP_FAILED: ${existingScan.error.message}`);
     const existingScanRow = record(existingScan.data);
-    const targets: Array<{ filter: SearchFilter; sourceScanId: string | null }> = existingScanRow
-      ? [{ filter: filterFromSnapshot(existingScanRow.filter_snapshot, String(existingScanRow.search_filter_id)), sourceScanId: String(existingScanRow.id) }]
-      : (await getActiveSearchFiltersForSource("facebook")).map((filter) => ({ filter, sourceScanId: null }));
+    const targets: Array<{ filter: SearchFilter; sourceScanId: string | null; existingWarnings: string[] }> = existingScanRow
+      ? [{ filter: filterFromSnapshot(existingScanRow.filter_snapshot, String(existingScanRow.search_filter_id)), sourceScanId: String(existingScanRow.id), existingWarnings: stringArray(existingScanRow.warnings) }]
+      : (await getActiveSearchFiltersForSource("facebook")).map((filter) => ({ filter, sourceScanId: null, existingWarnings: [] }));
     if (targets.length === 0) return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), "COLLECTOR_NO_ACTIVE_FACEBOOK_FILTER");
     const history = await supabase.from("collector_scan_batches").select("payload").eq("source_id", batch.sourceId).neq("id", batchRowId).order("received_at", { ascending: false }).limit(50);
     if (history.error) throw new Error(`COLLECTOR_IDENTITY_HISTORY_QUERY_FAILED: ${history.error.message}`);
@@ -106,7 +106,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       errors += summary.errors;
       const sourceStatus = batch.health.status === "DEGRADED" || summary.errors > 0 || unverifiedIdentityCount > 0 ? "partial" : "completed";
       const identityWarnings = unverifiedIdentityCount > 0 ? [`FACEBOOK_IDENTITY_UNVERIFIED:${unverifiedIdentityCount}`, ...[...historicalIdentityConflicts].slice(0, 20).map((postId) => `FACEBOOK_IDENTITY_HISTORY_CONFLICT:${postId}`)] : [];
-      const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100), error_message: null }).eq("id", sourceScanId);
+      const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...target.existingWarnings, ...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100), error_message: null }).eq("id", sourceScanId);
       if (sourceUpdate.error) throw new Error(`COLLECTOR_SOURCE_SCAN_FINISH_FAILED: ${sourceUpdate.error.message}`);
     }
     const status = batch.health.status === "DEGRADED" || errors > 0 || unverifiedIdentityCount > 0 ? "degraded" : "completed";
@@ -137,3 +137,4 @@ function filterFromSnapshot(value: unknown, expectedId: string): SearchFilter {
   return value as SearchFilter;
 }
 function safeMessage(value: unknown): string { return value instanceof Error ? value.message.slice(0, 500) : "COLLECTOR_BATCH_FAILED"; }
+function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }

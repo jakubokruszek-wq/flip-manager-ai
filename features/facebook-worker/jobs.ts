@@ -76,9 +76,12 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, r
       continue;
     }
     const sourceScanId = String(scan.data.id);
+    const groupSnapshot = schedulerMarker
+      ? [{ ...plan.groupSnapshot[0], _facebookScheduler: schedulerMarker }]
+      : plan.groupSnapshot;
     const job = await supabase.from("facebook_scan_jobs").insert({
       scan_run_id: runId, source_scan_id: sourceScanId, search_filter_id: filter.id,
-      group_snapshot: plan.groupSnapshot, idempotency_key: plan.idempotencyKey,
+      group_snapshot: groupSnapshot, idempotency_key: plan.idempotencyKey,
       consumer_type: "BROWSER_EXTENSION",
     }).select("id").single();
     if (job.error || !job.data?.id) {
