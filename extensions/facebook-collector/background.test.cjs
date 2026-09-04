@@ -70,6 +70,9 @@ test("photo tile resolution waits for the content script and retries payload obs
   for (const field of ["photoOpenedAt", "contentScriptReadyAt", "sendMessageAttemptCount", "sendMessageFirstAt", "sendMessageSuccessAt", "payloadObservedAt", "responseAt"]) assert.match(background, new RegExp(`\\b${field}\\b`));
   for (const code of ["CONTENT_SCRIPT_NOT_READY", "CONTENT_SCRIPT_MESSAGE_FAILED", "PAYLOAD_WAIT_TIMEOUT", "PHOTO_NAVIGATION_TIMEOUT"]) assert.match(background, new RegExp(code));
   assert.match(background, /SEARCH_TILE_MESSAGE_RETRY_INTERVAL_MS/);
+  for (const field of ["initialUrl", "finalUrl", "tabStatus", "injectAttempted", "injectSuccess", "injectError", "sendMessageError"]) assert.match(background, new RegExp(`\\b${field}\\b`));
+  assert.match(background, /PHOTO_NAVIGATION_TIMEOUT/);
+  assert.match(background, /RECEIVING_END_MISSING/);
 });
 
 test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {

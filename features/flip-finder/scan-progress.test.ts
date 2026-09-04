@@ -112,6 +112,7 @@ test("search tile diagnostics are projected as safe read-only fields", () => {
   }], "sprzedam");
   assert.deepEqual(diagnostic, {
     query: "sprzedam", tileIndex: 0, mediaUrl: null, mediaId: "28074641558832168", photoPageOpened: true,
+    initialUrl: null, finalUrl: null, tabStatus: null, injectAttempted: false, injectSuccess: false, injectError: null, sendMessageError: null,
     photoOpenedAt: null, contentScriptReadyAt: null, sendMessageAttemptCount: 0, sendMessageFirstAt: null,
     sendMessageSuccessAt: null, payloadObservedAt: null, responseAt: null,
     payloadObserved: true, currMediaFound: true, containerStoryFound: true, parentPostIdFound: true,

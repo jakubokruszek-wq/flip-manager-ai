@@ -81,6 +81,13 @@ export type CollectorSearchTileDiagnostic = {
   tileIndex?: number;
   mediaUrl?: string | null;
   mediaId: string;
+  initialUrl?: string | null;
+  finalUrl?: string | null;
+  tabStatus?: string | null;
+  injectAttempted?: boolean;
+  injectSuccess?: boolean;
+  injectError?: string | null;
+  sendMessageError?: string | null;
   photoOpenedAt?: string | null;
   contentScriptReadyAt?: string | null;
   sendMessageAttemptCount?: number;
@@ -296,6 +303,13 @@ function normalizeSearchTileDiagnostic(value: unknown): CollectorSearchTileDiagn
     ...(Number.isInteger(value.tileIndex) && Number(value.tileIndex) >= 0 ? { tileIndex: Math.min(100, Number(value.tileIndex)) } : {}),
     ...(safeHttpsUrl(value.mediaUrl) ? { mediaUrl: safeHttpsUrl(value.mediaUrl) } : {}),
     mediaId: id && /^\d{5,30}$/.test(id) ? id : "0",
+    ...(safeHttpsUrl(value.initialUrl) ? { initialUrl: safeHttpsUrl(value.initialUrl) } : {}),
+    ...(safeHttpsUrl(value.finalUrl) ? { finalUrl: safeHttpsUrl(value.finalUrl) } : {}),
+    ...(typeof value.tabStatus === "string" ? { tabStatus: value.tabStatus.slice(0, 30) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "injectAttempted") ? { injectAttempted: value.injectAttempted === true } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "injectSuccess") ? { injectSuccess: value.injectSuccess === true } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "injectError") ? { injectError: nullableString(value.injectError, 240) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageError") ? { sendMessageError: nullableString(value.sendMessageError, 240) } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "photoOpenedAt") ? { photoOpenedAt: nullableIsoTimestamp(value.photoOpenedAt) } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "contentScriptReadyAt") ? { contentScriptReadyAt: nullableIsoTimestamp(value.contentScriptReadyAt) } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "sendMessageAttemptCount") ? { sendMessageAttemptCount: boundedInteger(value.sendMessageAttemptCount, 0, 10) } : {}),

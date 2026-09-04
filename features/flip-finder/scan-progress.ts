@@ -33,6 +33,13 @@ export type CollectorSearchTileDiagnostic = {
   tileIndex: number;
   mediaUrl: string | null;
   mediaId: string | null;
+  initialUrl: string | null;
+  finalUrl: string | null;
+  tabStatus: string | null;
+  injectAttempted: boolean;
+  injectSuccess: boolean;
+  injectError: string | null;
+  sendMessageError: string | null;
   photoOpenedAt: string | null;
   contentScriptReadyAt: string | null;
   sendMessageAttemptCount: number;
@@ -198,6 +205,10 @@ export function projectSearchTileDiagnostics(value: unknown, query: string, limi
     const parentPermalink = facebookPermalink(item.parentPermalink);
     return {
       query, tileIndex, mediaUrl: facebookPhotoUrl(item.mediaUrl), mediaId: id,
+      initialUrl: facebookPhotoUrl(item.initialUrl), finalUrl: facebookPhotoUrl(item.finalUrl),
+      tabStatus: typeof item.tabStatus === "string" ? item.tabStatus.slice(0, 30) : null,
+      injectAttempted: item.injectAttempted === true, injectSuccess: item.injectSuccess === true,
+      injectError: safeDiagnosticError(item.injectError), sendMessageError: safeDiagnosticError(item.sendMessageError),
       photoOpenedAt: isoTimestamp(item.photoOpenedAt),
       contentScriptReadyAt: isoTimestamp(item.contentScriptReadyAt),
       sendMessageAttemptCount: nonnegativeInteger(item.sendMessageAttemptCount),
@@ -253,6 +264,7 @@ export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJ
 function numericId(value: unknown): string | null { return typeof value === "string" && /^\d{5,30}$/.test(value) ? value : typeof value === "number" && Number.isSafeInteger(value) && value >= 10_000 ? String(value) : null; }
 function isoTimestamp(value: unknown): string | null { if (typeof value !== "string") return null; const timestamp = Date.parse(value); return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null; }
 function facebookPhotoUrl(value: unknown): string | null { if (typeof value !== "string") return null; try { const parsed = new URL(value); return parsed.protocol === "https:" && parsed.hostname === "www.facebook.com" && /^\/photo(?:\.php)?\/?$/i.test(parsed.pathname) ? value.slice(0, 2_000) : null; } catch { return null; } }
+function safeDiagnosticError(value: unknown): string | null { return typeof value === "string" ? value.replace(/token|secret|cookie|hmac|authorization/gi, "redacted").slice(0, 240) : null; }
 function facebookPermalink(value: unknown): string | null { if (typeof value !== "string") return null; try { const parsed = new URL(value); return parsed.protocol === "https:" && parsed.hostname === "www.facebook.com" && /\/groups\//i.test(parsed.pathname) ? value.slice(0, 2_000) : null; } catch { return null; } }
 function nonnegativeInteger(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
 

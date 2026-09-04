@@ -30,6 +30,7 @@ const SOURCE_COLLECTION_DEADLINE_MS = 360_000;
 const FAIL_REPORT_TIMEOUT_MS = 10_000;
 const JOB_LEASE_RENEW_INTERVAL_MS = 60_000;
 const SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS = 3_000;
+const SEARCH_TILE_NAVIGATION_TIMEOUT_MS = Math.max(SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS, 5_000);
 const SEARCH_TILE_MESSAGE_TIMEOUT_MS = 2_000;
 const SEARCH_TILE_MESSAGE_RETRY_INTERVAL_MS = 250;
 const SEARCH_TILE_MAX_MESSAGE_ATTEMPTS = 3;
@@ -418,6 +419,13 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
         tileIndex,
         mediaUrl: typeof tile.photoUrl === "string" ? tile.photoUrl.slice(0, 2_000) : null,
         mediaId: String(tile.mediaId),
+        initialUrl: typeof tile.photoUrl === "string" ? tile.photoUrl.slice(0, 2_000) : null,
+        finalUrl: null,
+        tabStatus: null,
+        injectAttempted: false,
+        injectSuccess: false,
+        injectError: null,
+        sendMessageError: null,
         photoOpened: false,
         photoOpenedAt: null,
         contentScriptReadyAt: null,
@@ -446,11 +454,10 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
         tileDiagnostic.photoOpened = true;
         tileDiagnostic.photoOpenedAt = new Date().toISOString();
         try {
-          await waitForContentScript(resolverTabId, Math.min(SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS, Math.max(1, deadlineMs - Date.now())), { injectImmediately: true });
+          await waitForContentScript(resolverTabId, Math.min(SEARCH_TILE_NAVIGATION_TIMEOUT_MS, Math.max(1, deadlineMs - Date.now())), { injectImmediately: true, diagnostics: tileDiagnostic });
         } catch (error) {
-          const readinessError = new Error("CONTENT_SCRIPT_NOT_READY");
-          const tabState = await chrome.tabs.get(resolverTabId).catch(() => null);
-          readinessError.code = tabState && tabState.status !== "complete" ? "PHOTO_NAVIGATION_TIMEOUT" : "CONTENT_SCRIPT_NOT_READY";
+          const readinessError = new Error(tileDiagnostic.tabStatus && tileDiagnostic.tabStatus !== "complete" ? "PHOTO_NAVIGATION_TIMEOUT" : "CONTENT_SCRIPT_NOT_READY");
+          readinessError.code = tileDiagnostic.tabStatus && tileDiagnostic.tabStatus !== "complete" ? "PHOTO_NAVIGATION_TIMEOUT" : tileDiagnostic.injectError ? "INJECTION_FAILED" : tileDiagnostic.sendMessageError ? "RECEIVING_END_MISSING" : "CONTENT_SCRIPT_NOT_READY";
           readinessError.cause = error;
           throw readinessError;
         }
@@ -740,21 +747,31 @@ async function waitForTab(tabId, timeoutMs) {
   }
   throw new Error("FACEBOOK_TAB_LOAD_TIMEOUT");
 }
-async function waitForContentScript(tabId, timeoutMs = 10_000, { injectImmediately = false } = {}) {
+async function waitForContentScript(tabId, timeoutMs = 10_000, { injectImmediately = false, diagnostics = null } = {}) {
   let injected = false;
   let lastError = null;
   const attempts = Math.max(1, Math.ceil(timeoutMs / 250));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try { const response = await chrome.tabs.sendMessage(tabId, { type: "COLLECTOR_PING" }); if (response) return; } catch (error) { lastError = `${lastError || ""}|${safeError(error)}`.slice(-800); }
-    if (!injected && (injectImmediately || attempt === Math.min(10, Math.max(1, Math.floor(attempts / 2))))) {
-      try {
-        await chrome.scripting.executeScript({ target: { tabId }, files: ["collector-core.js", "content.js"] });
-        injected = true;
-      } catch (error) { lastError = safeError(error); }
+    const tab = await chrome.tabs.get(tabId).catch((error) => { lastError = safeError(error); return null; });
+    if (tab) {
+      if (diagnostics) { diagnostics.finalUrl = typeof tab.url === "string" ? tab.url.slice(0, 2_000) : diagnostics.finalUrl; diagnostics.tabStatus = typeof tab.status === "string" ? tab.status : diagnostics.tabStatus; }
+      try { const response = await chrome.tabs.sendMessage(tabId, { type: "COLLECTOR_PING" }); if (response) return; } catch (error) { lastError = safeError(error); if (diagnostics) diagnostics.sendMessageError = lastError.slice(-800); }
+      const fallbackInjectAttempt = attempt === Math.min(10, Math.max(1, Math.floor(attempts / 2)));
+      const readyToInject = tab.status === "complete" || (injectImmediately && (attempt >= Math.min(2, Math.max(0, Math.floor(attempts / 3))) || fallbackInjectAttempt));
+      if (!injected && readyToInject) {
+        if (diagnostics) diagnostics.injectAttempted = true;
+        try {
+          await chrome.scripting.executeScript({ target: { tabId }, files: ["collector-core.js", "content.js"] });
+          injected = true;
+          if (diagnostics) diagnostics.injectSuccess = true;
+        } catch (error) { lastError = safeError(error); if (diagnostics) diagnostics.injectError = lastError.slice(-800); }
+      }
     }
     await wait(250);
   }
-  throw new Error(`COLLECTOR_CONTENT_SCRIPT_UNAVAILABLE:${lastError || "UNKNOWN"}`);
+  const error = new Error(`COLLECTOR_CONTENT_SCRIPT_UNAVAILABLE:${lastError || "UNKNOWN"}`);
+  error.code = diagnostics?.injectError ? "INJECTION_FAILED" : diagnostics?.sendMessageError ? "RECEIVING_END_MISSING" : "CONTENT_SCRIPT_NOT_READY";
+  throw error;
 }
 async function sha256Hex(value) { return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))); }
 function hex(buffer) { return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
