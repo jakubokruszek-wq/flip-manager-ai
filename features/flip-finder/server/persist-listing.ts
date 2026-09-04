@@ -22,7 +22,10 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   const bucket = decision?.bucket ?? (createMatch ? "MATCHED" : unknownFields.length ? "REVIEW" : "REJECTED");
   const reviewFields = decision?.unknownFields ?? unknownFields;
   const reviewReasons = decision?.reasons ?? [];
-  const { data: existing, error: existingError } = await supabase.from("listings").select("id,price,content_hash,images,manual_decision").eq("source", item.source).eq("external_listing_id", item.externalListingId).abortSignal(signal).maybeSingle();
+  // `manual_decision` was added with the review-lifecycle migration. Keep the
+  // lookup compatible while that migration is being rolled out: the value is
+  // not needed to decide whether this scan should update/create the listing.
+  const { data: existing, error: existingError } = await supabase.from("listings").select("id,price,content_hash,images").eq("source", item.source).eq("external_listing_id", item.externalListingId).abortSignal(signal).maybeSingle();
   if (existingError) throw new Error("Nie udało się sprawdzić istniejącej oferty.");
   const current = existing && typeof existing === "object" && "id" in existing && typeof existing.id === "string" ? { id: existing.id, price: typeof existing.price === "number" ? existing.price : null, contentHash: typeof existing.content_hash === "string" ? existing.content_hash : null, images: Array.isArray(existing.images) ? existing.images.filter((image: unknown): image is string => typeof image === "string") : [] } satisfies ExistingListing : null;
   const changed = needsSnapshot(current ? { price: current.price, contentHash: current.contentHash } : null, { price: item.price, contentHash: item.contentHash });

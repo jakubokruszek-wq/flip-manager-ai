@@ -80,6 +80,33 @@ test("missing building evidence remains reviewable but never passes safety as ac
   assert.ok(decision.reasons.includes("FACEBOOK_BUILDING_TYPE_UNVERIFIED"));
 });
 
+test("Alicja-style exact sell with missing price remains a persisted review candidate", () => {
+  const filter: SearchFilter = {
+    id: "flip", name: "Flip", sources: ["facebook"], city: "ĹĂłdĹş", districts: [], priceMin: null,
+    priceMax: null, areaMin: null, areaMax: null, rooms: [1, 2, 3, 4], floorMin: null, floorMax: null,
+    excludeGroundFloor: false, excludeTopFloor: true, buildingTypes: ["blok", "apartamentowiec"],
+    ownershipTypes: ["peĹ‚na wĹ‚asnoĹ›Ä‡", "spĂłĹ‚dzielcze"], marketType: null, privateOnly: false,
+    maxPricePerSqm: 12_000, requiredKeywords: [], excludedKeywords: [], minFlipScore: null,
+    minEstimatedProfit: null, maxEstimatedRenovationCost: null, scanIntervalMinutes: 60, isActive: true,
+    lastScannedAt: null, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const safety = evaluateFacebookApartmentSafety({
+    authoritativeText: "ĹĂ“DĹš, Karolew, na sprzedaĹĽ 2 pok., 48 mÂ˛, ul. WileĹ„ska",
+    property: { city: "ĹĂłdĹş" },
+    filter,
+  });
+  assert.equal(safety.hardReject, false);
+  const decision = evaluateListingAgainstFilter({
+    price: null, area: 48, pricePerSqm: null, rooms: 2, floor: null, city: "ĹĂłdĹş", district: "Karolew",
+    title: "Na sprzedaĹĽ mieszkanie", locationText: "Karolew, ĹĂłdĹş", buildingType: null,
+    sellerType: null, marketType: null, ownership: null,
+  }, filter);
+  assert.equal(decision.matches, false);
+  assert.equal(decision.bucket, "REVIEW");
+  assert.ok(decision.unknownFields.includes("price"));
+  assert.ok(decision.unknownFields.includes("buildingType"));
+});
+
 test("explicit house remains hard rejected", () => {
   const filter = { ...({ city: "Łódź", buildingTypes: [] } as unknown as SearchFilter) };
   const decision = evaluateFacebookApartmentSafety({ authoritativeText: "Sprzedam dom w Łodzi", property: { city: "Łódź" }, filter });
