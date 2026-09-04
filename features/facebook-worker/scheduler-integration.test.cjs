@@ -21,7 +21,8 @@ test("automatic scheduler keeps exactly one active source in singleton state", (
 test("cron and empty queue advance automatic cycles without page messaging", () => {
   assert.match(watchJob, /runFacebookSchedulerTick\(\)/);
   assert.doesNotMatch(watchJob, /safeFacebookGroupAdapter/);
-  assert.match(claimRoute, /if \(!job\) \{\s*await runFacebookSchedulerTick\(\);\s*job = await claimFacebookJob/s);
+  assert.match(claimRoute, /if \(!job\) \{\s*scheduler = await runFacebookSchedulerTick\(\);\s*job = await claimFacebookJob/s);
+  assert.match(claimRoute, /scheduler: scheduler \? \{/);
   assert.match(claimRoute, /"BROWSER_EXTENSION"/);
   assert.doesNotMatch(claimRoute, /BOOTSTRAP|postMessage|READY_REQUEST/);
 });

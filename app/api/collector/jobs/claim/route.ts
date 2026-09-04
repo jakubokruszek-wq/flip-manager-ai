@@ -11,11 +11,23 @@ export async function POST(request: Request) {
     const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, markHealthy: true });
     if (process.env.FACEBOOK_COLLECTOR_QUEUE_ENABLED !== "true") return cors(Response.json({ ok: true, job: null, code: "NO_PENDING_JOB" }), request);
     let job = await claimFacebookJob(device.id, "BROWSER_EXTENSION");
+    let scheduler = null;
     if (!job) {
-      await runFacebookSchedulerTick();
+      scheduler = await runFacebookSchedulerTick();
       job = await claimFacebookJob(device.id, "BROWSER_EXTENSION");
     }
-    return cors(Response.json({ ok: true, job, code: job ? "JOB_CLAIMED" : "NO_PENDING_JOB" }), request);
+    return cors(Response.json({
+      ok: true,
+      job,
+      code: job ? "JOB_CLAIMED" : "NO_PENDING_JOB",
+      scheduler: scheduler ? {
+        status: scheduler.status,
+        cycleId: scheduler.cycleId,
+        activeSourceId: scheduler.activeSourceId,
+        activeJobId: scheduler.activeJobId,
+        message: scheduler.message,
+      } : null,
+    }), request);
   } catch (error) {
     const status = error instanceof SignedCollectorAuthError ? error.status : 503;
     return cors(Response.json({ ok: false, code: error instanceof SignedCollectorAuthError ? error.code : "COLLECTOR_JOB_CLAIM_FAILED" }, { status }), request);
