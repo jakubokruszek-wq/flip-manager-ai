@@ -97,7 +97,9 @@ test("current rooms win over possible rearrangement", async () => {
     ["Sprzedam mieszkanie, 2 pokoje + garderoba", 2],
   ] as const;
   for (const [postText, expectedRooms] of cases) {
-    assert.equal((await extractFacebookProperty({ postText })).rooms, expectedRooms, postText);
+    const value = await extractFacebookProperty({ postText });
+    assert.equal(value.rooms, expectedRooms, postText);
+    if (expectedRooms !== null) assert.equal(value.fieldConfidence?.rooms, 0.95, postText);
   }
   assert.equal((await extractFacebookProperty({ postText: "Możliwość 3 pokoi, obecnie 2 pokoje" })).rooms, 2);
 });

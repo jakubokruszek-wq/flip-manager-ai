@@ -131,6 +131,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   property.fieldConfidence = Object.fromEntries([
     "title", "description", "city", "district", "neighborhood", "street", "price", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",
   ].map((field) => [field, property[field as keyof FacebookProperty] === null ? 0 : confidence]));
+  if (explicitRoomCount !== null) property.fieldConfidence.rooms = 0.95;
   return property;
 }
 
