@@ -38,6 +38,8 @@ test("scheduler lock and diagnostics do not expose collector secrets", () => {
   assert.doesNotMatch(scheduler, /deviceToken|token_hash|lease_token/);
   assert.match(scheduler, /lastHeartbeat/);
   assert.match(scheduler, /currentJob/);
+  assert.match(scheduler, /preflight:\s*\{/);
+  assert.match(scheduler, /activeFilterQuery:/);
 });
 
 test("cycle marker survives source finalization through immutable job snapshot", () => {

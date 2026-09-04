@@ -62,12 +62,14 @@ async function runLockedSchedulerTick(supabase: ReturnType<typeof createFacebook
 
 export async function getFacebookSchedulerDiagnostics() {
   const supabase = createFacebookWatcherAdminClient();
-  const [jobsResult, sourcesResult, devicesResult, scansResult, batchesResult] = await Promise.all([
+  const [jobsResult, sourcesResult, devicesResult, scansResult, batchesResult, filtersResult, lockResult] = await Promise.all([
     supabase.from("facebook_scan_jobs").select("id,status,scan_run_id,source_scan_id,group_snapshot,result_summary,error_code,error_message,worker_id,created_at,started_at,finished_at,heartbeat_at,consumer_type").eq("consumer_type", "BROWSER_EXTENSION").order("created_at", { ascending: false }).limit(500),
     supabase.from("watched_facebook_groups").select("id,name,url,enabled,last_checked_at,last_error,access_status").order("priority").order("name"),
     supabase.from("collector_devices").select("id,device_name,last_heartbeat_at,last_source_scan_at,last_captured_count,health_status,revoked_at").is("revoked_at", null).order("last_heartbeat_at", { ascending: false, nullsFirst: false }).limit(1),
     supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot,warnings").eq("source", "facebook").order("started_at", { ascending: false }).limit(500),
     supabase.from("collector_scan_batches").select("scan_id,source_id,payload,result,received_at,status,error_message").order("received_at", { ascending: false }).limit(500),
+    supabase.from("search_filters").select("id,sources,is_active,scan_interval_minutes").eq("is_active", true).limit(20),
+    supabase.from("facebook_worker_nonces").select("nonce,created_at,expires_at").eq("nonce", LOCK_NONCE).maybeSingle(),
   ]);
   const error = jobsResult.error ?? sourcesResult.error ?? devicesResult.error ?? scansResult.error ?? batchesResult.error;
   if (error) throw new Error(`SCHEDULER_DIAGNOSTICS_FAILED: ${error.message}`);
@@ -84,7 +86,15 @@ export async function getFacebookSchedulerDiagnostics() {
   const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
   for (const job of jobs) if (typeof job.status === "string" && job.status in counts) counts[job.status as keyof typeof counts] += 1;
   return {
-    scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle ? new Date(Date.parse(cycle.startedAt) + cycle.cooldownMinutes * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null },
+    scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle ? new Date(Date.parse(cycle.startedAt) + cycle.cooldownMinutes * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null,
+      preflight: {
+        lockStore: lockResult.error ? `ERROR:${lockResult.error.code ?? "QUERY_FAILED"}` : "PASS",
+        lockPresent: Boolean(lockResult.data),
+        lockExpiresAt: text(lockResult.data?.expires_at),
+        activeFilterQuery: filtersResult.error ? `ERROR:${filtersResult.error.code ?? "QUERY_FAILED"}` : "PASS",
+        activeFacebookFilterCount: filtersResult.error ? null : records(filtersResult.data).filter((filter) => strings(filter.sources).includes("facebook")).length,
+      },
+    },
     queue: counts,
     sources: records(sourcesResult.data).map((source) => sourceDiagnostics(source, scans, batches, jobs)),
     extension: { deviceName: text(device?.device_name), lastHeartbeat: text(device?.last_heartbeat_at), lastPoll: text(device?.last_heartbeat_at), lastClaim: latestTimestamp(jobs.map((job) => text(job.started_at))), currentJob: active && active.status === "running" ? text(active.id) : null, health: text(device?.health_status) },
