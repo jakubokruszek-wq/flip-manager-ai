@@ -182,10 +182,18 @@ function latestCycle(scans: Row[]): { cycleId: string; startedAt: string; cooldo
 }
 
 function markerFromScan(scan: Row): SchedulerMarker | null {
-  const marker = record(record(scan.filter_snapshot)?._facebookScheduler);
+  const snapshot = jsonRecord(scan.filter_snapshot);
+  const marker = record(snapshot?._facebookScheduler);
   if (marker?.automatic !== true || !text(marker.cycleId) || !text(marker.cycleStartedAt) || !text(marker.sourceId)) return null;
   const plannedSourceIds = strings(marker.plannedSourceIds);
   return plannedSourceIds.length ? { automatic: true, cycleId: String(marker.cycleId), cycleStartedAt: String(marker.cycleStartedAt), cooldownMinutes: schedulerCooldownMinutes(marker.cooldownMinutes), sourceId: String(marker.sourceId), plannedSourceIds } : null;
+}
+
+function jsonRecord(value: unknown): Row | null {
+  if (typeof value === "string") {
+    try { return record(JSON.parse(value)); } catch { return null; }
+  }
+  return record(value);
 }
 
 function sourceDiagnostics(source: Row, scans: Row[], batches: Row[], jobs: Row[]) {
