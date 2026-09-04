@@ -58,7 +58,7 @@ export async function getFacebookSchedulerDiagnostics() {
   const [jobsResult, sourcesResult, devicesResult, scansResult, batchesResult] = await Promise.all([
     supabase.from("facebook_scan_jobs").select("id,status,scan_run_id,source_scan_id,group_snapshot,result_summary,error_code,error_message,worker_id,created_at,started_at,finished_at,heartbeat_at,consumer_type").eq("consumer_type", "BROWSER_EXTENSION").order("created_at", { ascending: false }).limit(500),
     supabase.from("watched_facebook_groups").select("id,name,url,enabled,last_checked_at,last_error,access_status").order("priority").order("name"),
-    supabase.from("collector_devices").select("id,device_name,last_heartbeat_at,last_source_scan_at,last_captured_count,health_status,revoked_at").is("revoked_at", null).order("last_heartbeat_at", { ascending: false }).limit(1),
+    supabase.from("collector_devices").select("id,device_name,last_heartbeat_at,last_source_scan_at,last_captured_count,health_status,revoked_at").is("revoked_at", null).order("last_heartbeat_at", { ascending: false, nullsFirst: false }).limit(1),
     supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot").eq("source", "facebook").order("started_at", { ascending: false }).limit(500),
     supabase.from("collector_scan_batches").select("scan_id,source_id,payload,result,received_at,status,error_message").order("received_at", { ascending: false }).limit(500),
   ]);
