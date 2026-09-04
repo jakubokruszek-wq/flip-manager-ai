@@ -33,7 +33,8 @@ test("terminal jobs advance the next source and source health is persisted", () 
 });
 
 test("scheduler lock and diagnostics do not expose collector secrets", () => {
-  assert.match(scheduler, /facebook_worker_nonces/);
+  assert.match(scheduler, /collector_request_nonces/);
+  assert.match(scheduler, /\.eq\("device_id", deviceId\)/);
   assert.match(scheduler, /\.eq\("created_at", createdAt\)/);
   assert.doesNotMatch(scheduler, /deviceToken|token_hash|lease_token/);
   assert.match(scheduler, /lastHeartbeat/);
@@ -63,5 +64,5 @@ test("scheduler reads public filter configuration without widening backend grant
   assert.match(scheduler, /createSchedulerReadClient/);
   assert.match(scheduler, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
   assert.match(scheduler, /readClient\.from\("search_filters"\)/);
-  assert.match(scheduler, /lockStore: "ATOMIC_INSERT_DELETE"/);
+  assert.match(scheduler, /lockStore: lockResult\.error/);
 });

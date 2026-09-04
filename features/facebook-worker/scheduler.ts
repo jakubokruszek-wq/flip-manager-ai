@@ -64,13 +64,14 @@ async function runLockedSchedulerTick(supabase: ReturnType<typeof createFacebook
 export async function getFacebookSchedulerDiagnostics() {
   const supabase = createFacebookWatcherAdminClient();
   const readClient = createSchedulerReadClient();
-  const [jobsResult, sourcesResult, devicesResult, scansResult, batchesResult, filtersResult] = await Promise.all([
+  const [jobsResult, sourcesResult, devicesResult, scansResult, batchesResult, filtersResult, lockResult] = await Promise.all([
     supabase.from("facebook_scan_jobs").select("id,status,scan_run_id,source_scan_id,group_snapshot,result_summary,error_code,error_message,worker_id,created_at,started_at,finished_at,heartbeat_at,consumer_type").eq("consumer_type", "BROWSER_EXTENSION").order("created_at", { ascending: false }).limit(500),
     supabase.from("watched_facebook_groups").select("id,name,url,enabled,last_checked_at,last_error,access_status").order("priority").order("name"),
     supabase.from("collector_devices").select("id,device_name,last_heartbeat_at,last_source_scan_at,last_captured_count,health_status,revoked_at").is("revoked_at", null).order("last_heartbeat_at", { ascending: false, nullsFirst: false }).limit(1),
     supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot,warnings").eq("source", "facebook").order("started_at", { ascending: false }).limit(500),
     supabase.from("collector_scan_batches").select("scan_id,source_id,payload,result,received_at,status,error_message").order("received_at", { ascending: false }).limit(500),
     readClient.from("search_filters").select("id,sources,is_active,scan_interval_minutes").eq("is_active", true).limit(20),
+    supabase.from("collector_request_nonces").select("device_id,created_at,expires_at").eq("nonce", LOCK_NONCE).maybeSingle(),
   ]);
   const error = jobsResult.error ?? sourcesResult.error ?? devicesResult.error ?? scansResult.error ?? batchesResult.error;
   if (error) throw new Error(`SCHEDULER_DIAGNOSTICS_FAILED: ${error.message}`);
@@ -89,7 +90,9 @@ export async function getFacebookSchedulerDiagnostics() {
   return {
     scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle ? new Date(Date.parse(cycle.startedAt) + cycle.cooldownMinutes * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null,
       preflight: {
-        lockStore: "ATOMIC_INSERT_DELETE",
+        lockStore: lockResult.error ? `ERROR:${lockResult.error.code ?? "QUERY_FAILED"}` : "PASS",
+        lockPresent: Boolean(lockResult.data),
+        lockExpiresAt: text(lockResult.data?.expires_at),
         activeFilterQuery: filtersResult.error ? `ERROR:${filtersResult.error.code ?? "QUERY_FAILED"}` : "PASS",
         activeFacebookFilterCount: filtersResult.error ? null : records(filtersResult.data).filter((filter) => strings(filter.sources).includes("facebook")).length,
       },
@@ -171,16 +174,25 @@ function createSchedulerReadClient() {
 }
 
 async function acquireSchedulerLock(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, now: Date): Promise<string | null> {
+  const deviceResult = await supabase.from("collector_devices").select("id").is("revoked_at", null).order("created_at", { ascending: true }).limit(1).maybeSingle();
+  if (deviceResult.error) throw new Error(`SCHEDULER_LOCK_DEVICE_QUERY_FAILED: ${deviceResult.error.message}`);
+  const deviceId = text(deviceResult.data?.id);
+  if (!deviceId) return null;
   const createdAt = now.toISOString();
-  await supabase.from("facebook_worker_nonces").delete().eq("nonce", LOCK_NONCE).lt("expires_at", now.toISOString());
-  const inserted = await supabase.from("facebook_worker_nonces").insert({ nonce: LOCK_NONCE, created_at: createdAt, expires_at: new Date(now.getTime() + 5 * 60_000).toISOString() });
-  if (!inserted.error) return createdAt;
+  const stale = await supabase.from("collector_request_nonces").delete().eq("device_id", deviceId).eq("nonce", LOCK_NONCE).lt("expires_at", createdAt);
+  if (stale.error) throw new Error(`SCHEDULER_LOCK_CLEANUP_FAILED: ${stale.error.message}`);
+  const inserted = await supabase.from("collector_request_nonces").insert({ device_id: deviceId, nonce: LOCK_NONCE, created_at: createdAt, expires_at: new Date(now.getTime() + 5 * 60_000).toISOString() });
+  if (!inserted.error) return `${deviceId}|${createdAt}`;
   if (inserted.error.code === "23505") return null;
   throw new Error(`SCHEDULER_LOCK_FAILED: ${inserted.error.message}`);
 }
 
-async function releaseSchedulerLock(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, createdAt: string): Promise<void> {
-  await supabase.from("facebook_worker_nonces").delete().eq("nonce", LOCK_NONCE).eq("created_at", createdAt);
+async function releaseSchedulerLock(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, owner: string): Promise<void> {
+  const separator = owner.indexOf("|");
+  const deviceId = separator > 0 ? owner.slice(0, separator) : "";
+  const createdAt = separator > 0 ? owner.slice(separator + 1) : "";
+  if (!deviceId || !createdAt) return;
+  await supabase.from("collector_request_nonces").delete().eq("device_id", deviceId).eq("nonce", LOCK_NONCE).eq("created_at", createdAt);
 }
 
 async function activeBrowserJob(supabase: ReturnType<typeof createFacebookWatcherAdminClient>): Promise<Row | null> {
