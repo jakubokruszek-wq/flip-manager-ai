@@ -11,6 +11,28 @@ const FLAG_PHRASES = ["bezpośrednio", "bez pośredników", "do remontu", "gener
 const number = (value?: string) => value ? Number(value.replace(",", ".").replace(/\s/g, "")) : null;
 const boundedFloor = (value: number | null) => value !== null && value >= 0 && value <= 30 ? value : null;
 
+const ROOM_MENTION = /\b(\d{1,2})\s*(?:[-–]\s*)?pok(?:oj(?:e|owy|owe|owych)?|oi|\.?)\b/giu;
+const ROOM_POSSIBILITY = /(?:z\s+mozliwosc\w*|mozna\s+zrobic|wydziel\w*|przerob\w*|po\s+zmianie\s+uklad\w*|aran\w*)/giu;
+const ROOM_CURRENT = /(?:obecnie|aktualnie|teraz|stan\s+obecn\w*)/iu;
+
+/** Returns the explicitly stated current layout, never a potential rearrangement. */
+export function resolveActualRoomCount(text: string): number | null {
+  const normalized = text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL");
+  const mentions = [...normalized.matchAll(ROOM_MENTION)];
+  let previousMentionEnd = 0;
+  let firstNonPotential: number | null = null;
+  for (const mention of mentions) {
+    const start = mention.index ?? 0;
+    const between = normalized.slice(previousMentionEnd, start);
+    const isPotential = ROOM_POSSIBILITY.test(between);
+    ROOM_POSSIBILITY.lastIndex = 0;
+    previousMentionEnd = start + mention[0].length;
+    if (!isPotential && firstNonPotential === null) firstNonPotential = Number(mention[1]);
+    if (!isPotential && ROOM_CURRENT.test(between)) return Number(mention[1]);
+  }
+  return firstNonPotential;
+}
+
 export type FacebookPriceResolution = {
   price: number | null;
   pricePerM2: number | null;
@@ -67,13 +89,13 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     .filter((match) => !/[#\d]\s*$/u.test(normalizedText.slice(Math.max(0, (match.index ?? 0) - 4), match.index)))
     .map((match) => Number(match[1]));
   const mRooms = new Set(mRoomValues).size === 1 ? mRoomValues[0] : null;
-  const explicitRooms = normalizedText.match(/\b(\d{1,2})\s*[-–]?\s*pokoj(?:e|owy|owe|owych)?\b/u);
+  const explicitRoomCount = resolveActualRoomCount(text);
   const floor = boundedFloor(number(normalizedText.match(/\b(\d{1,2})\.?\s*(?:pietro|pietrze|p\.)\b/u)?.[1]));
   const fraction = normalizedText.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:pietro|p\.)\b/u);
   const streetMatch = text.match(/\bul\.?\s+([\p{L}][\p{L}\s.-]{1,40}?)(?:\s+(\d+[\p{L}]?))?(?=,|\.|\n|$)/iu);
   const street = streetMatch ? [streetMatch[1]?.trim(), streetMatch[2]].filter(Boolean).join(" ") : null;
   const flags = FLAG_PHRASES.filter((phrase) => lower.includes(phrase));
-  const known = [price.price !== null, effectiveArea, explicitRooms || mRooms, place || districtFound, floor].filter(Boolean).length;
+  const known = [price.price !== null, effectiveArea, explicitRoomCount ?? mRooms, place || districtFound, floor].filter(Boolean).length;
   const explicitNeighborhood = place?.[1] ?? null;
   const explicitDistrict = place?.[2] ?? districtFound;
   const location = await resolveLocation({ address: street, street, district: explicitDistrict, city: explicitNeighborhood || explicitDistrict || /łódź/i.test(text) ? "Łódź" : null, locationText: text, title: text.split(/[.!?\n]/)[0] ?? null, description: text || null });
@@ -89,7 +111,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     price: describesConcreteProperty ? price.price : null,
     priceProvenance: describesConcreteProperty ? (input.priceProvenance ?? (price.price !== null ? "AUTHORITATIVE_TEXT" : undefined)) : undefined,
     area: describesConcreteProperty ? effectiveArea : null,
-    rooms: describesConcreteProperty ? number(explicitRooms?.[1]) ?? (mRooms ? Math.max(1, mRooms - 1) : null) : null,
+    rooms: describesConcreteProperty ? explicitRoomCount ?? (mRooms ? Math.max(1, mRooms - 1) : null) : null,
     floor: describesConcreteProperty ? fraction ? boundedFloor(Number(fraction[1])) : floor : null,
     totalFloors: describesConcreteProperty && fraction ? Number(fraction[2]) : null,
     marketType: describesConcreteProperty ? /rynek pierwotny|deweloper/i.test(text) ? "primary" : /sprzedam|po babci|do remontu/i.test(text) ? "secondary" : null : null,

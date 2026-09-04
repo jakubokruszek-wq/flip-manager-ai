@@ -86,3 +86,23 @@ test("hashtags and conflicting M-layout labels never invent rooms", async () => 
   const value = await extractFacebookProperty({ postText: "Mieszkanie 80,53 m2 #M5 #M4 #apartament" });
   assert.equal(value.rooms, null);
 });
+
+test("current rooms win over possible rearrangement", async () => {
+  const cases = [
+    ["Sprzedam mieszkanie, 2 pokoje z możliwością 3", 2],
+    ["Sprzedam mieszkanie, 2 pokoje, możliwość wydzielenia trzeciego", 2],
+    ["Sprzedam mieszkanie, obecnie 2 pokoje, po zmianie układu 3", 2],
+    ["Sprzedam mieszkanie, 3 pokoje", 3],
+    ["Sprzedam mieszkanie 3-pokojowe", 3],
+    ["Sprzedam mieszkanie, 2 pokoje + garderoba", 2],
+  ] as const;
+  for (const [postText, expectedRooms] of cases) {
+    assert.equal((await extractFacebookProperty({ postText })).rooms, expectedRooms, postText);
+  }
+  assert.equal((await extractFacebookProperty({ postText: "Możliwość 3 pokoi, obecnie 2 pokoje" })).rooms, 2);
+});
+
+test("salon plus bedrooms does not invent a room count", async () => {
+  // The existing parser does not model this phrasing; keep it fail-safe.
+  assert.equal((await extractFacebookProperty({ postText: "Sprzedam mieszkanie: salon + 2 sypialnie" })).rooms, null);
+});

@@ -20,3 +20,8 @@ test("deterministic non-SELL never becomes a complete SELL", () => {
   assert.equal(resolveDeterministicFacebookSellFacts("Kupi\u0119 M3, 64 m2, bud\u017cet 588 800 z\u0142").complete, false);
   assert.equal(resolveDeterministicFacebookSellFacts("Wynajm\u0119 2 pokoje, 45 m2, 2500 z\u0142").complete, false);
 });
+
+test("deterministic rooms use the current layout, not potential rooms", () => {
+  const facts = resolveDeterministicFacebookSellFacts("Sprzedam mieszkanie, 2 pokoje z możliwością 3, 48 m2, 249000 zł");
+  assert.equal(facts.rooms, 2);
+});

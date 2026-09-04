@@ -1,4 +1,4 @@
-import { resolveFacebookPrice } from "./extract-facebook-property.ts";
+import { resolveActualRoomCount, resolveFacebookPrice } from "./extract-facebook-property.ts";
 import { resolveFacebookListingIntent } from "./facebook-intent.ts";
 
 export type DeterministicFacebookSellFacts = {
@@ -21,7 +21,7 @@ export function resolveDeterministicFacebookSellFacts(text: string | null | unde
   const authoritativeText = text?.trim() ?? "";
   const intent = resolveFacebookListingIntent(authoritativeText, null, null);
   const area = number(authoritativeText.match(/(\d{1,3}(?:[.,]\d+)?)\s*m(?:2|\u00b2)(?![\p{L}\d])/iu)?.[1]);
-  const explicitRooms = number(authoritativeText.match(/(\d+)\s*(?:pok(?:oje|oi|\u00f3j|\.)?)(?![\p{L}\d])/iu)?.[1]);
+  const explicitRooms = resolveActualRoomCount(authoritativeText);
   const mRooms = number(authoritativeText.match(/\bM(\d)\b/iu)?.[1]);
   const rooms = explicitRooms ?? (mRooms === null ? null : Math.max(1, mRooms - 1));
   const price = resolveFacebookPrice(authoritativeText, area);
