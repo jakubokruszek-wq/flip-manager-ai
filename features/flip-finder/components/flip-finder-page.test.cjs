@@ -27,3 +27,9 @@ test("saved listings database is labeled independently from the latest scan", ()
   assert.match(inlineResults, /Aktywne zapisane oferty:/);
   assert.doesNotMatch(inlineResults, /Znalezione oferty:/);
 });
+
+test("archive is opt-in and fetched separately from the main finder", () => {
+  assert.match(inlineResults, /Pokaż archiwum/);
+  assert.match(inlineResults, /view=archive/);
+  assert.match(inlineResults, /archiveOpen \? \(data\?\.archivedResults/);
+});

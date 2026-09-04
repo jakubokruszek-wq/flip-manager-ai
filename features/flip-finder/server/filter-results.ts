@@ -74,7 +74,7 @@ type SnapshotRow = {
   rawData: Row;
 };
 
-export async function getFilterResults(filterId: string): Promise<FilterResultsPayload | null> {
+export async function getFilterResults(filterId: string, includeArchived = false): Promise<FilterResultsPayload | null> {
   const filter = await getSearchFilter(filterId);
   if (isFilterMissing(filter)) {
     return null;
@@ -135,15 +135,16 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
   }
 
   const listingIds = matches.map((match) => match.listingId);
+  const listingQuery = supabase
+    .from("listings")
+    .select(
+      "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at",
+    )
+    .in("id", listingIds)
+    .eq("status", "active")
+    .in("lifecycle_status", includeArchived ? ["STALE", "ARCHIVED", "REJECTED"] : ["ACTIVE", "REVIEW"]);
   const [listingsResultRaw, snapshotsResult] = await Promise.all([
-    supabase
-      .from("listings")
-      .select(
-        "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at",
-      )
-      .in("id", listingIds)
-      .eq("status", "active")
-        .in("lifecycle_status", ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]),
+    listingQuery,
     supabase
       .from("listing_snapshots")
       .select("listing_id,price,captured_at,raw_data")
@@ -248,9 +249,9 @@ export async function getFilterResults(filterId: string): Promise<FilterResultsP
     ];
   });
   const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
-  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED" && !archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest");
-  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW" && !archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest");
-  const archivedResults = sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest");
+  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED"), "newest");
+  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW"), "newest");
+  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest") : [];
 
   return {
     filter,

@@ -4,9 +4,10 @@ type Context = {
   params: Promise<{ id: string }>;
 };
 
-export async function GET(_request: Request, { params }: Context) {
+export async function GET(request: Request, { params }: Context) {
   try {
-    const results = await getFilterResults((await params).id);
+    const includeArchived = new URL(request.url).searchParams.get("view") === "archive";
+    const results = await getFilterResults((await params).id, includeArchived);
 
     if (!results) {
       return Response.json({ message: "Nie znaleziono filtra." }, { status: 404 });

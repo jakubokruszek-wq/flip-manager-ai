@@ -50,11 +50,12 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
   const [sort, setSort] = useState<ResultSort>("newest");
   const [source, setSource] = useState<FilterResult["source"] | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch(`/api/flip-finder/search-filters/${filterId}/results`);
+      const response = await fetch(`/api/flip-finder/search-filters/${filterId}/results${archiveOpen ? "?view=archive" : ""}`);
       const payload: unknown = await readJson(response);
       if (!response.ok || !isResultsResponse(payload)) {
         throw new Error(readMessage(payload, "Nie udało się pobrać ofert."));
@@ -64,7 +65,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Nie udało się pobrać ofert.");
     }
-  }, [filterId]);
+  }, [archiveOpen, filterId]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => void load(), 0);
@@ -81,7 +82,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     [filteredResults, sort],
   );
   const reviewResults = data?.reviewResults ?? [];
-  const archivedResults = data?.archivedResults ?? [];
+  const archivedResults = archiveOpen ? (data?.archivedResults ?? []) : [];
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
   const activeSources = data?.filter.sources ?? [];
   const historicalSources = (["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
@@ -126,6 +127,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
       ) : null}
       {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / MATCHED <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
       {data && reviewResults.length > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewResults.length}</p></div><div className="grid gap-3 lg:grid-cols-2">{reviewResults.map((result) => <ReviewListingCard key={result.id} result={result} onChanged={() => void load()} />)}</div></section> : null}
+      {data ? <div className="flex items-center justify-between border-t border-border/60 pt-4"><div><h2 className="font-semibold">ARCHIWUM</h2><p className="mt-1 text-sm text-muted-foreground">Stare i odrzucone rekordy są ukryte w głównym Finderze.</p></div><Button onClick={() => setArchiveOpen((current) => !current)} type="button" variant="outline">{archiveOpen ? "Ukryj archiwum" : "Pokaż archiwum"}</Button></div> : null}
       {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} key={result.id} marketType={data.filter.marketType ?? null} result={result} />)}</div></section> : null}
       <div className="grid gap-4 lg:grid-cols-2">
         {renderedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} result={result} />)}
