@@ -15,8 +15,10 @@ test("SEARCH timing gives each query a 30-second active budget within a 240-seco
   assert.match(background, /hardTimeBudgetMs: 240_000/);
   assert.match(background, /ACTIVE_SEARCH_QUERIES = \["sprzedam", "na sprzeda\\u017c", "mieszkanie", "do remontu", "\\u0141\\u00f3d\\u017a", "2 pokoje", "3 pokoje"\]/);
   assert.ok(7 * 30_000 <= 240_000);
-  assert.match(background, /queryDeadlineMs/);
+  assert.match(background, /discoveryDeadlineMs/);
   assert.match(background, /queryBudgetMs = Math\.min\(/);
+  assert.match(background, /searchCollectionBudgetMs = Math\.max\(5_000, queryBudgetMs\)/);
+  assert.match(background, /resolutionDeadlineMs/);
   assert.match(content, /collectSearchMediaTiles\(\)/);
   assert.match(background, /resolveSearchMediaTiles/);
   assert.match(content, /core\.shouldStopDiscovery/);

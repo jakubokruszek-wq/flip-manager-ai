@@ -71,6 +71,10 @@ export type CollectorSearchQueryTelemetry = {
   uniqueParentPosts: number;
   verifiedParentPosts: number;
   duplicatesByMedia: number;
+  discoveryDurationMs?: number | null;
+  resolutionDurationMs?: number | null;
+  discoveryStopReason?: string | null;
+  resolutionStopReason?: string | null;
   durationMs: number;
   stopReason: string;
   tileDiagnostics?: CollectorSearchTileDiagnostic[];
@@ -260,8 +264,8 @@ function normalizeSearchTelemetry(value: unknown): CollectorSearchTelemetry | nu
   if (!isRecord(value)) throw new Error("COLLECTOR_SEARCH_TELEMETRY_INVALID");
   const queries = Array.isArray(value.queries) ? value.queries.slice(0, 20).map(normalizeSearchQueryTelemetry) : [];
   return {
-    hardTimeBudgetMs: boundedInteger(value.hardTimeBudgetMs, 1_000, 90_000),
-    durationMs: boundedInteger(value.durationMs, 0, 120_000),
+    hardTimeBudgetMs: boundedInteger(value.hardTimeBudgetMs, 1_000, 300_000),
+    durationMs: boundedInteger(value.durationMs, 0, 360_000),
     queriesPlanned: boundedInteger(value.queriesPlanned, 0, 20),
     queriesExecuted: boundedInteger(value.queriesExecuted, 0, queries.length),
     budgetExhausted: value.budgetExhausted === true,
@@ -289,6 +293,10 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     uniqueParentPosts: boundedInteger(value.uniqueParentPosts, 0, 10),
     verifiedParentPosts: boundedInteger(value.verifiedParentPosts, 0, 10),
     duplicatesByMedia: boundedInteger(value.duplicatesByMedia, 0, 10),
+    ...(Number.isFinite(value.discoveryDurationMs) ? { discoveryDurationMs: boundedInteger(value.discoveryDurationMs, 0, 300_000) } : {}),
+    ...(Number.isFinite(value.resolutionDurationMs) ? { resolutionDurationMs: boundedInteger(value.resolutionDurationMs, 0, 120_000) } : {}),
+    ...(typeof value.discoveryStopReason === "string" ? { discoveryStopReason: value.discoveryStopReason.slice(0, 120) } : {}),
+    ...(typeof value.resolutionStopReason === "string" ? { resolutionStopReason: value.resolutionStopReason.slice(0, 120) } : {}),
     durationMs: boundedInteger(value.durationMs, 0, 120_000),
     stopReason: requiredString(value.stopReason, "COLLECTOR_SEARCH_QUERY_STOP_REASON_REQUIRED").slice(0, 120),
     ...(Array.isArray(value.tileDiagnostics) ? { tileDiagnostics: value.tileDiagnostics.slice(0, 10).map(normalizeSearchTileDiagnostic) } : {}),

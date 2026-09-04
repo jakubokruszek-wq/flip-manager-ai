@@ -22,6 +22,10 @@ export type CollectorSearchQueryTelemetry = {
   uniqueParentPosts: number;
   verifiedParentPosts: number;
   duplicatesByMedia: number;
+  discoveryDurationMs?: number | null;
+  resolutionDurationMs?: number | null;
+  discoveryStopReason?: string | null;
+  resolutionStopReason?: string | null;
   durationMs: number;
   stopReason: string;
   tileDiagnostics: CollectorSearchTileDiagnostic[];
