@@ -20,6 +20,10 @@ const SEARCH_BUDGET_RESERVE_MS = 40_000;
 const SEARCH_LIMITS = { minScrolls: 3, maxScrolls: 10, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 240_000 };
 const SEARCH_BUDGET_SAFETY_MS = 2_000;
 const SEARCH_QUERY_CLEANUP_RESERVE_MS = 1_500;
+// Keep a bounded slice of each query budget for opening media tiles and
+// waiting for late photo-page hydration. Without this reserve, collectFromTab
+// can consume the entire query deadline before parent resolution begins.
+const SEARCH_TILE_RESOLUTION_RESERVE_MS = 12_000;
 const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000;
 const COLLECT_SOURCE_RESPONSE_GRACE_MS = 20_000;
 const SOURCE_COLLECTION_DEADLINE_MS = 360_000;
@@ -303,7 +307,8 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
         if (remainingAfterLoad < 5_000 + SEARCH_BUDGET_SAFETY_MS) throw new Error("SEARCH_GLOBAL_TIME_BUDGET");
         const queryBudgetMs = Math.min(SEARCH_LIMITS.discoveryBudgetMs, remainingAfterLoad - SEARCH_BUDGET_SAFETY_MS, queryDeadlineMs - Date.now() - SEARCH_BUDGET_SAFETY_MS);
         if (queryBudgetMs < 5_000) throw new Error("SEARCH_QUERY_TIME_BUDGET");
-        const search = await collectFromTab(tabId, { minScrolls: SEARCH_LIMITS.minScrolls, maxScrolls: SEARCH_LIMITS.maxScrolls, maxPosts: SEARCH_LIMITS.maxUniquePerQuery, maxMediaTiles: SEARCH_LIMITS.maxTilesToOpen, budgetMs: queryBudgetMs, searchMode: true, discoverySource: "SEARCH", searchQuery: query }, { requestId, source: primary.source.sourceId, collectionContext });
+        const searchCollectionBudgetMs = Math.max(5_000, queryBudgetMs - SEARCH_TILE_RESOLUTION_RESERVE_MS);
+        const search = await collectFromTab(tabId, { minScrolls: SEARCH_LIMITS.minScrolls, maxScrolls: SEARCH_LIMITS.maxScrolls, maxPosts: SEARCH_LIMITS.maxUniquePerQuery, maxMediaTiles: SEARCH_LIMITS.maxTilesToOpen, budgetMs: searchCollectionBudgetMs, searchMode: true, discoverySource: "SEARCH", searchQuery: query }, { requestId, source: primary.source.sourceId, collectionContext });
         const tileResolution = await resolveSearchMediaTiles({ tiles: search.mediaTiles, source: primary.source, query, deadlineMs: queryDeadlineMs });
         const queryPosts = globalThis.FlipFacebookCollectorCore.mergeRecords([...search.posts, ...tileResolution.posts], SEARCH_LIMITS.maxUniquePerQuery);
         const beforeIds = new Set(posts.map((post) => post.postId));
@@ -415,7 +420,11 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
         if (contentRemainingMs < 250) { deadlineReached = true; return; }
         await waitForContentScript(resolverTabId, Math.min(4_000, contentRemainingMs));
         if (deadlineMs - Date.now() < 100) { deadlineReached = true; return; }
-        const response = await chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query } });
+        const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
+          () => chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query, resolutionWaitMs: 4_000 } }),
+          { timeoutMs: Math.min(8_000, Math.max(1, deadlineMs - Date.now())), timeoutCode: "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT", diagnostics: { query, tabId: resolverTabId, source: source.sourceId } },
+        );
+        const response = responseResult.response;
         Object.assign(tileDiagnostic, response?.result?.diagnostics || {});
         const records = response?.ok && response.result?.status === "VERIFIED" && Array.isArray(response.result.records) ? response.result.records : [];
         if (records.length === 1 && records[0].identityConfidence === "EXACT" && records[0].resolvedFromMediaTile === true) { resolvedRecords.push({ ...records[0], media: [] }); tileDiagnostic.identityResult = "EXACT"; tileDiagnostic.parentPostId = records[0].postId; tileDiagnostic.parentPermalink = records[0].permalink; tileDiagnostic.rootAuthorFound = true; tileDiagnostic.rootTextFound = true; tileDiagnostic.failSubstep = null; }
@@ -440,6 +449,7 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
 }
 
 function searchTileErrorCode(error) {
+  if (error && typeof error.code === "string" && error.code === "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT") return error.code;
   const message = safeError(error);
   if (/timeout/i.test(message)) return "SEARCH_TIMEOUT";
   if (/content.?script|receiving end|message channel/i.test(message)) return "SEARCH_CONTENT_SCRIPT_UNAVAILABLE";

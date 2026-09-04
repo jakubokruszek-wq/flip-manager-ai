@@ -188,3 +188,43 @@ test("merge retains main-feed and search discovery evidence", () => {
   assert.deepEqual(record.searchQueries, ["mieszkanie"]);
   assert.equal(record.firstSeenPhase, "MAIN_FEED");
 });
+test("resolves a nested exact root story message without borrowing attached or comment text", () => {
+  const postId = "1583208690163941";
+  const body = JSON.stringify({
+    __typename: "Story",
+    post_id: postId,
+    permalink_url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`,
+    actor: { name: "Root Author" },
+    comet_sections: { content: { story: { __typename: "Story", post_id: postId, message: { text: "Na sprzedaż mieszkanie 2 pokoje" } } } },
+    feedback: { comments: [{ message: { text: "Komentarz nie jest rootem" } }] },
+    attachments: [{ __typename: "Story", post_id: "999999999999999", message: { text: "Obcy załącznik" } }],
+  });
+  const [record] = core.extractStructuredRecordsFromText(body, "NETWORK", source, 0);
+  assert.equal(record.postId, postId);
+  assert.equal(record.author, "Root Author");
+  assert.equal(record.text, "Na sprzedaż mieszkanie 2 pokoje");
+  assert.equal(record.identityConfidence, "EXACT");
+});
+
+test("search media resolver resolves author and text from an exact nested container story", () => {
+  const mediaId = "28074641558832168";
+  const postId = "1583208690163941";
+  const body = JSON.stringify({
+    __typename: "Photo",
+    id: mediaId,
+    image: { uri: "https://scontent.xx.fbcdn.net/exact.jpg" },
+    container_story: {
+      __typename: "Story",
+      post_id: postId,
+      permalink_url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`,
+      comet_sections: { content: { story: { __typename: "Story", post_id: postId, actor: { name: "Nested Root Author" }, message: { text: "Na sprzedaż mieszkanie 2 pokoje" } } } },
+      feedback: { comments: [{ actor: { name: "Comment Author" }, message: { text: "Nie jest root" } }] },
+    },
+  });
+  const [record] = core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId);
+  assert.equal(record.postId, postId);
+  assert.equal(record.author, "Nested Root Author");
+  assert.equal(record.text, "Na sprzedaż mieszkanie 2 pokoje");
+  assert.equal(record.identityConfidence, "EXACT");
+  assert.equal(record.media[0].exactPostId, postId);
+});

@@ -55,6 +55,10 @@ test("search fallback has bounded media-tile resolution budgets", () => {
   assert.match(background, /RESOLVE_SEARCH_MEDIA_TILE/);
   assert.match(background, /Math\.min\(SEARCH_LIMITS\.tileConcurrency, selected\.length\)/);
   assert.doesNotMatch(background, /Promise\.all\(selected\.map/);
+  assert.match(background, /SEARCH_TILE_RESOLUTION_RESERVE_MS = 12_000/);
+  assert.match(background, /searchCollectionBudgetMs = Math\.max\(5_000, queryBudgetMs - SEARCH_TILE_RESOLUTION_RESERVE_MS\)/);
+  assert.match(background, /SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT/);
+  assert.match(background, /sendMessageWithTimeout/);
 });
 
 test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {
@@ -68,6 +72,9 @@ test("media tile resolver is exact, fail-closed and never forwards tile media as
   assert.match(content, /current\.searchParams\.get\("fbid"\) !== mediaId/);
   assert.match(content, /verifySearchMediaParent/);
   assert.doesNotMatch(content, /postId:\s*mediaId/);
+  assert.match(content, /async function resolveSearchMediaTile/);
+  assert.match(content, /resolutionWaitMs/);
+  assert.match(content, /return true;/);
 });
 
 test("Flip Finder bootstrap starts the production collector after readiness verification", () => {

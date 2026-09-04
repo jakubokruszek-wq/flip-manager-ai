@@ -121,8 +121,9 @@
       if (!postId) return;
       const link = findPermalink(node, postId, source);
       if (!link || link.postId !== postId) return;
-      const author = findAuthor(node);
-      const message = findRootMessage(node);
+      const rootStory = findExactRootStoryNode(node, postId) || node;
+      const author = findAuthor(rootStory) || (rootStory === node ? null : findAuthor(node));
+      const message = findRootMessage(rootStory);
       records.push({
         postId,
         permalink: link.permalink,
@@ -172,10 +173,11 @@
         const postId = exactStoryRootPostId(story);
         if (!postId) { result.failSubstep = "SEARCH_PARENT_POST_ID_MISSING"; return; }
         result.containerStoryPostId = postId;
+        const rootStory = findExactRootStoryNode(story, postId) || story;
         const link = findPermalink(story, postId, source);
         if (link) { result.parentPostId = postId; result.parentPermalink = link.permalink; }
-        result.rootAuthorFound = Boolean(findAuthor(story));
-        result.rootTextFound = Boolean(findRootMessage(story));
+        result.rootAuthorFound = Boolean(findAuthor(rootStory));
+        result.rootTextFound = Boolean(findRootMessage(rootStory));
         result.mediaAttachmentCrosscheck = Boolean(mediaUrl(node));
         result.identityResult = result.parentPermalink && result.rootAuthorFound && result.rootTextFound && result.mediaAttachmentCrosscheck ? "EXACT" : "UNVERIFIED";
         result.failSubstep = result.identityResult === "EXACT" ? null : !result.parentPermalink ? "SEARCH_PARENT_PERMALINK_MISSING" : !result.rootAuthorFound || !result.rootTextFound ? "SEARCH_ROOT_TEXT_MISSING" : "SEARCH_MEDIA_CROSSCHECK_FAILED";
@@ -226,8 +228,9 @@
       if (!postId) return;
       const link = findPermalink(story, postId, source);
       if (!link || link.postId !== postId) return;
-      const author = findAuthor(story);
-      const message = findRootMessage(story);
+      const rootStory = findExactRootStoryNode(story, postId) || story;
+      const author = findAuthor(rootStory);
+      const message = findRootMessage(rootStory);
       const url = mediaUrl(node);
       const exactIdentity = Boolean(author && message && url);
       records.push({
@@ -357,7 +360,37 @@
       const cleaned = clean(text);
       if (cleaned && cleaned.length <= 20_000) return cleaned;
     }
-    return null;
+    let found = null;
+    walkPath(node, (child, path) => {
+      if (found || !isObject(child)) return false;
+      const location = path.join(".");
+      if (/(?:comment|feedback|attachment|media|caption)/i.test(location)) return false;
+      for (const key of ["message", "text", "body"]) {
+        const value = child[key];
+        const text = typeof value === "string" ? value : isObject(value) && typeof value.text === "string" ? value.text : null;
+        const cleaned = clean(text);
+        if (cleaned && cleaned.length <= 20_000) { found = cleaned; return false; }
+      }
+      return true;
+    }, 6);
+    return found;
+  }
+
+  // Resolve a nested root Story only when its canonical id exactly matches
+  // the outer candidate. Unsafe comment/media/attachment branches are pruned.
+  function findExactRootStoryNode(node, postId) {
+    let found = null;
+    walkPath(node, (child, path) => {
+      if (found || !isObject(child)) return false;
+      const location = path.join(".");
+      if (path.length && /(?:comment|feedback|media|caption|attachment)/i.test(location)) return false;
+      if (exactStoryRootPostId(child) === postId && findRootMessage(child)) {
+        found = child;
+        return false;
+      }
+      return true;
+    }, 8);
+    return found;
   }
 
   function findRootMessagePath(node) {
@@ -383,7 +416,19 @@
 
   function findAuthor(node) {
     const actor = node.actors?.[0] || node.actor || node.author || node.owner;
-    return clean(actor?.name || actor?.short_name || null)?.slice(0, 200) || null;
+    const direct = clean(actor?.name || actor?.short_name || null)?.slice(0, 200) || null;
+    if (direct) return direct;
+    let found = null;
+    walkPath(node, (child, path) => {
+      if (found || !isObject(child)) return false;
+      const location = path.join(".");
+      if (/(?:comment|feedback|attachment|media|caption)/i.test(location)) return false;
+      const nested = child.actors?.[0] || child.actor || child.author || child.owner;
+      const name = clean(nested?.name || nested?.short_name || null)?.slice(0, 200) || null;
+      if (name) { found = name; return false; }
+      return true;
+    }, 6);
+    return found;
   }
 
   function findTimestamp(node) {

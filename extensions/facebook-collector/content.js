@@ -16,41 +16,51 @@
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (message?.type === "COLLECTOR_PING") { respond({ ready: true }); return false; }
     if (message?.type === "COLLECTOR_SELF_TEST") { respond({ ok: true, requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 80) : null, href: location.href, documentReadyState: document.readyState, collectorVersion: "0.1.0" }); return false; }
-    if (message?.type === "RESOLVE_SEARCH_MEDIA_TILE") { respond({ ok: true, result: resolveSearchMediaTile(message.options || {}) }); return false; }
+    if (message?.type === "RESOLVE_SEARCH_MEDIA_TILE") {
+      void resolveSearchMediaTile(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+      return true;
+    }
     if (message?.type !== "COLLECT_SOURCE") return false;
     void collectSource(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
   });
 
-  function resolveSearchMediaTile(options) {
+  async function resolveSearchMediaTile(options) {
     const mediaId = String(options.mediaId || "");
     const source = core.canonicalSource(options.sourceUrl);
     const current = new URL(location.href);
     const invalid = (reason) => ({ status: "UNVERIFIED", records: [], reasons: [reason], diagnostics: { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId, photoOpened: false, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: reason } });
     if (!source || source.sourceType !== "GROUP" || !/^\d{5,30}$/.test(mediaId)) return invalid("SEARCH_MEDIA_RESOLVE_INPUT_INVALID");
     if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("fbid") !== mediaId) return invalid("SEARCH_MEDIA_TILE_CONTEXT_MISMATCH");
-    const candidates = [];
     const diagnostics = { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId, photoOpened: true, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_PAYLOAD_NOT_FOUND" };
-    let bytes = 0;
-    for (const script of [...document.scripts].slice(0, 250)) {
-      const body = script.textContent || "";
-      if (!body || bytes + body.length > 4_000_000) continue;
-      bytes += body.length;
-      const inspected = core.inspectSearchMediaParentFromText(body, source, mediaId);
-      diagnostics.structuredPayloadFound ||= inspected.structuredPayloadFound;
-      diagnostics.currMediaId ||= inspected.currMediaId;
-      diagnostics.containerStoryPostId ||= inspected.containerStoryPostId;
-      diagnostics.topLevelPostId ||= inspected.topLevelPostId;
-      diagnostics.mediaAttachmentCrosscheck ||= inspected.mediaAttachmentCrosscheck;
-      diagnostics.parentPostId ||= inspected.parentPostId;
-      diagnostics.parentPermalink ||= inspected.parentPermalink;
-      diagnostics.rootAuthorFound ||= inspected.rootAuthorFound;
-      diagnostics.rootTextFound ||= inspected.rootTextFound;
-      if (inspected.identityResult === "EXACT") diagnostics.identityResult = "EXACT";
-      if (inspected.failSubstep && diagnostics.failSubstep === "SEARCH_PAYLOAD_NOT_FOUND") diagnostics.failSubstep = inspected.failSubstep;
-      candidates.push(...core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId, 0));
-    }
-    const verified = core.verifySearchMediaParent(candidates, mediaId);
+    const candidates = [];
+    const retryMs = Math.min(4_000, Math.max(0, Number(options.resolutionWaitMs) || 4_000));
+    const retryDeadline = Date.now() + retryMs;
+    let verified = { status: "UNVERIFIED", records: [], reasons: ["SEARCH_MEDIA_EXACT_PARENT_NOT_PROVEN"] };
+    do {
+      let bytes = 0;
+      for (const script of [...document.scripts].slice(0, 250)) {
+        const body = script.textContent || "";
+        if (!body || bytes + body.length > 4_000_000) continue;
+        bytes += body.length;
+        const inspected = core.inspectSearchMediaParentFromText(body, source, mediaId);
+        diagnostics.structuredPayloadFound ||= inspected.structuredPayloadFound;
+        diagnostics.currMediaId ||= inspected.currMediaId;
+        diagnostics.containerStoryPostId ||= inspected.containerStoryPostId;
+        diagnostics.topLevelPostId ||= inspected.topLevelPostId;
+        diagnostics.mediaAttachmentCrosscheck ||= inspected.mediaAttachmentCrosscheck;
+        diagnostics.parentPostId ||= inspected.parentPostId;
+        diagnostics.parentPermalink ||= inspected.parentPermalink;
+        diagnostics.rootAuthorFound ||= inspected.rootAuthorFound;
+        diagnostics.rootTextFound ||= inspected.rootTextFound;
+        if (inspected.identityResult === "EXACT") diagnostics.identityResult = "EXACT";
+        if (inspected.failSubstep && diagnostics.failSubstep === "SEARCH_PAYLOAD_NOT_FOUND") diagnostics.failSubstep = inspected.failSubstep;
+        candidates.push(...core.resolveSearchMediaParentFromText(body, "SEARCH_MEDIA_RESOLVE", source, mediaId, 0));
+      }
+      verified = core.verifySearchMediaParent(candidates, mediaId);
+      if (verified.status === "VERIFIED" || Date.now() >= retryDeadline) break;
+      await wait(Math.min(250, Math.max(1, retryDeadline - Date.now())));
+    } while (Date.now() < retryDeadline);
     if (verified.status !== "VERIFIED") return { ...verified, diagnostics: { ...diagnostics, identityResult: "UNVERIFIED", failSubstep: diagnostics.failSubstep || verified.reasons?.[0] || "SEARCH_PARENT_UNVERIFIED" } };
     const records = verified.records.map((record) => ({ ...record, discoverySource: "SEARCH", foundInMainFeed: false, firstSeenPhase: "SEARCH", searchQuery: String(options.searchQuery || "").slice(0, 120) || null, searchQueries: options.searchQuery ? [String(options.searchQuery).slice(0, 120)] : [] }));
     return { ...verified, records, diagnostics: { ...diagnostics, identityResult: "EXACT", failSubstep: null, parentPostId: records[0]?.postId || diagnostics.parentPostId, parentPermalink: records[0]?.permalink || diagnostics.parentPermalink, rootAuthorFound: true, rootTextFound: true } };
