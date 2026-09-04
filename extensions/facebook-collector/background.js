@@ -29,6 +29,11 @@ const COLLECT_SOURCE_RESPONSE_GRACE_MS = 20_000;
 const SOURCE_COLLECTION_DEADLINE_MS = 360_000;
 const FAIL_REPORT_TIMEOUT_MS = 10_000;
 const JOB_LEASE_RENEW_INTERVAL_MS = 60_000;
+const SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS = 3_000;
+const SEARCH_TILE_MESSAGE_TIMEOUT_MS = 2_000;
+const SEARCH_TILE_MESSAGE_RETRY_INTERVAL_MS = 250;
+const SEARCH_TILE_MAX_MESSAGE_ATTEMPTS = 3;
+const SEARCH_TILE_PAYLOAD_WAIT_MS = 1_750;
 
 const DEFAULT_SOURCES = [
   "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
@@ -403,29 +408,57 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
   async function resolveWorker() {
     while (nextTileIndex < selected.length) {
       if (deadlineMs - Date.now() < 1_000) { deadlineReached = true; return; }
+      const tileIndex = nextTileIndex;
       const tile = selected[nextTileIndex];
       nextTileIndex += 1;
       let resolverTabId = null;
       const tileStartedAt = Date.now();
-      const tileDiagnostic = { query, mediaId: String(tile.mediaId), photoOpened: false, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_TILE_NOT_OPENED", elapsedMs: 0 };
+      const tileDiagnostic = {
+        query,
+        tileIndex,
+        mediaUrl: typeof tile.photoUrl === "string" ? tile.photoUrl.slice(0, 2_000) : null,
+        mediaId: String(tile.mediaId),
+        photoOpened: false,
+        photoOpenedAt: null,
+        contentScriptReadyAt: null,
+        sendMessageAttemptCount: 0,
+        sendMessageFirstAt: null,
+        sendMessageSuccessAt: null,
+        payloadObservedAt: null,
+        responseAt: null,
+        structuredPayloadFound: false,
+        currMediaId: null,
+        containerStoryPostId: null,
+        topLevelPostId: null,
+        mediaAttachmentCrosscheck: false,
+        parentPostId: null,
+        parentPermalink: null,
+        rootAuthorFound: false,
+        rootTextFound: false,
+        identityResult: "UNVERIFIED",
+        failSubstep: "SEARCH_TILE_NOT_OPENED",
+        elapsedMs: 0,
+      };
       try {
         resolverTabId = (await chrome.tabs.create({ url: tile.photoUrl, active: false })).id;
         if (!resolverTabId) throw new Error("SEARCH_MEDIA_RESOLVER_TAB_MISSING");
         tilesOpened += 1;
         tileDiagnostic.photoOpened = true;
-        const remainingMs = deadlineMs - Date.now();
-        if (remainingMs < 500) { deadlineReached = true; return; }
-        await waitForTab(resolverTabId, Math.min(4_000, remainingMs));
-        const contentRemainingMs = deadlineMs - Date.now();
-        if (contentRemainingMs < 250) { deadlineReached = true; return; }
-        await waitForContentScript(resolverTabId, Math.min(4_000, contentRemainingMs));
-        if (deadlineMs - Date.now() < 100) { deadlineReached = true; return; }
-        const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-          () => chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query, resolutionWaitMs: 4_000 } }),
-          { timeoutMs: Math.min(8_000, Math.max(1, deadlineMs - Date.now())), timeoutCode: "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT", diagnostics: { query, tabId: resolverTabId, source: source.sourceId } },
-        );
+        tileDiagnostic.photoOpenedAt = new Date().toISOString();
+        try {
+          await waitForContentScript(resolverTabId, Math.min(SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS, Math.max(1, deadlineMs - Date.now())), { injectImmediately: true });
+        } catch (error) {
+          const readinessError = new Error("CONTENT_SCRIPT_NOT_READY");
+          const tabState = await chrome.tabs.get(resolverTabId).catch(() => null);
+          readinessError.code = tabState && tabState.status !== "complete" ? "PHOTO_NAVIGATION_TIMEOUT" : "CONTENT_SCRIPT_NOT_READY";
+          readinessError.cause = error;
+          throw readinessError;
+        }
+        tileDiagnostic.contentScriptReadyAt = new Date().toISOString();
+        const responseResult = await resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, tileDiagnostic });
         const response = responseResult.response;
         Object.assign(tileDiagnostic, response?.result?.diagnostics || {});
+        if (tileDiagnostic.structuredPayloadFound && !tileDiagnostic.payloadObservedAt) tileDiagnostic.payloadObservedAt = tileDiagnostic.responseAt || new Date().toISOString();
         const records = response?.ok && response.result?.status === "VERIFIED" && Array.isArray(response.result.records) ? response.result.records : [];
         if (records.length === 1 && records[0].identityConfidence === "EXACT" && records[0].resolvedFromMediaTile === true) { resolvedRecords.push({ ...records[0], media: [] }); tileDiagnostic.identityResult = "EXACT"; tileDiagnostic.parentPostId = records[0].postId; tileDiagnostic.parentPermalink = records[0].permalink; tileDiagnostic.rootAuthorFound = true; tileDiagnostic.rootTextFound = true; tileDiagnostic.failSubstep = null; }
         else if (!tileDiagnostic.failSubstep || tileDiagnostic.failSubstep === "SEARCH_TILE_NOT_OPENED") tileDiagnostic.failSubstep = response?.result?.reasons?.[0] || "SEARCH_PARENT_UNVERIFIED";
@@ -446,6 +479,42 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
   const tilesUnverified = Math.max(0, tilesOpened - tilesResolved);
   const expectedOpens = Math.min(tilesSeen, SEARCH_LIMITS.maxTilesToOpen);
   return { posts, tilesSeen, tilesOpened, tilesResolved, tilesUnverified, uniqueParentPosts: posts.length, verifiedParentPosts: posts.length, duplicatesByMedia, tileDiagnostics, budgetExhausted: deadlineReached || ((tilesOpened < expectedOpens || tilesUnverified > 0) && Date.now() >= deadlineMs) };
+}
+
+async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, tileDiagnostic }) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= SEARCH_TILE_MAX_MESSAGE_ATTEMPTS; attempt += 1) {
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs < 300) break;
+    tileDiagnostic.sendMessageAttemptCount = attempt;
+    tileDiagnostic.sendMessageFirstAt ||= new Date().toISOString();
+    try {
+      const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
+        () => chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query, resolutionWaitMs: Math.min(SEARCH_TILE_PAYLOAD_WAIT_MS, Math.max(250, remainingMs - 250)) } }),
+        { timeoutMs: Math.min(SEARCH_TILE_MESSAGE_TIMEOUT_MS, Math.max(1, remainingMs - 250)), timeoutCode: "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT", diagnostics: { query, tabId: resolverTabId, source: source.sourceId } },
+      );
+      tileDiagnostic.sendMessageSuccessAt ||= new Date().toISOString();
+      tileDiagnostic.responseAt = new Date().toISOString();
+      if (responseResult.response?.result?.diagnostics?.structuredPayloadFound) tileDiagnostic.payloadObservedAt ||= tileDiagnostic.responseAt;
+      const result = responseResult.response?.result;
+      if (responseResult.response?.ok && result?.diagnostics?.structuredPayloadFound) return responseResult;
+      lastError = new Error("PAYLOAD_WAIT_TIMEOUT");
+      lastError.code = "PAYLOAD_WAIT_TIMEOUT";
+      tileDiagnostic.failSubstep = "PAYLOAD_WAIT_TIMEOUT";
+    } catch (error) {
+      lastError = error;
+      const code = searchTileErrorCode(error);
+      tileDiagnostic.failSubstep = code === "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT" || code === "SEARCH_CONTENT_SCRIPT_UNAVAILABLE" ? "CONTENT_SCRIPT_MESSAGE_FAILED" : code;
+    }
+    if (attempt < SEARCH_TILE_MAX_MESSAGE_ATTEMPTS && deadlineMs - Date.now() >= 300) await wait(Math.min(SEARCH_TILE_MESSAGE_RETRY_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())));
+  }
+  if (lastError && (searchTileErrorCode(lastError) === "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT" || searchTileErrorCode(lastError) === "SEARCH_CONTENT_SCRIPT_UNAVAILABLE")) {
+    const messageError = new Error("CONTENT_SCRIPT_MESSAGE_FAILED");
+    messageError.code = "CONTENT_SCRIPT_MESSAGE_FAILED";
+    messageError.cause = lastError;
+    throw messageError;
+  }
+  throw lastError || Object.assign(new Error("PAYLOAD_WAIT_TIMEOUT"), { code: "PAYLOAD_WAIT_TIMEOUT" });
 }
 
 function searchTileErrorCode(error) {
@@ -665,13 +734,13 @@ async function waitForTab(tabId, timeoutMs) {
   }
   throw new Error("FACEBOOK_TAB_LOAD_TIMEOUT");
 }
-async function waitForContentScript(tabId, timeoutMs = 10_000) {
+async function waitForContentScript(tabId, timeoutMs = 10_000, { injectImmediately = false } = {}) {
   let injected = false;
   let lastError = null;
   const attempts = Math.max(1, Math.ceil(timeoutMs / 250));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try { const response = await chrome.tabs.sendMessage(tabId, { type: "COLLECTOR_PING" }); if (response) return; } catch (error) { lastError = `${lastError || ""}|${safeError(error)}`.slice(-800); }
-    if (!injected && attempt === Math.min(10, Math.max(1, Math.floor(attempts / 2)))) {
+    if (!injected && (injectImmediately || attempt === Math.min(10, Math.max(1, Math.floor(attempts / 2))))) {
       try {
         await chrome.scripting.executeScript({ target: { tabId }, files: ["collector-core.js", "content.js"] });
         injected = true;

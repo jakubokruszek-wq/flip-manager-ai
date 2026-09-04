@@ -78,7 +78,16 @@ export type CollectorSearchQueryTelemetry = {
 
 export type CollectorSearchTileDiagnostic = {
   query: string;
+  tileIndex?: number;
+  mediaUrl?: string | null;
   mediaId: string;
+  photoOpenedAt?: string | null;
+  contentScriptReadyAt?: string | null;
+  sendMessageAttemptCount?: number;
+  sendMessageFirstAt?: string | null;
+  sendMessageSuccessAt?: string | null;
+  payloadObservedAt?: string | null;
+  responseAt?: string | null;
   photoOpened: boolean;
   structuredPayloadFound: boolean;
   currMediaId: string | null;
@@ -284,7 +293,16 @@ function normalizeSearchTileDiagnostic(value: unknown): CollectorSearchTileDiagn
   const id = nullableString(value.mediaId, 30);
   return {
     query: requiredString(value.query, "COLLECTOR_SEARCH_TILE_QUERY_REQUIRED").slice(0, 120),
+    ...(Number.isInteger(value.tileIndex) && Number(value.tileIndex) >= 0 ? { tileIndex: Math.min(100, Number(value.tileIndex)) } : {}),
+    ...(safeHttpsUrl(value.mediaUrl) ? { mediaUrl: safeHttpsUrl(value.mediaUrl) } : {}),
     mediaId: id && /^\d{5,30}$/.test(id) ? id : "0",
+    ...(Object.prototype.hasOwnProperty.call(value, "photoOpenedAt") ? { photoOpenedAt: nullableIsoTimestamp(value.photoOpenedAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "contentScriptReadyAt") ? { contentScriptReadyAt: nullableIsoTimestamp(value.contentScriptReadyAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageAttemptCount") ? { sendMessageAttemptCount: boundedInteger(value.sendMessageAttemptCount, 0, 10) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageFirstAt") ? { sendMessageFirstAt: nullableIsoTimestamp(value.sendMessageFirstAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageSuccessAt") ? { sendMessageSuccessAt: nullableIsoTimestamp(value.sendMessageSuccessAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "payloadObservedAt") ? { payloadObservedAt: nullableIsoTimestamp(value.payloadObservedAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "responseAt") ? { responseAt: nullableIsoTimestamp(value.responseAt) } : {}),
     photoOpened: value.photoOpened === true,
     structuredPayloadFound: value.structuredPayloadFound === true,
     currMediaId: nullableString(value.currMediaId, 30),
@@ -299,6 +317,12 @@ function normalizeSearchTileDiagnostic(value: unknown): CollectorSearchTileDiagn
     failSubstep: nullableString(value.failSubstep, 120),
     elapsedMs: boundedInteger(value.elapsedMs, 0, 120_000),
   };
+}
+
+function nullableIsoTimestamp(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 function normalizeMainFeedTelemetry(value: unknown): CollectorMainFeedDiagnostic[] {

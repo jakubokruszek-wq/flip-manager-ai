@@ -61,6 +61,17 @@ test("search fallback has bounded media-tile resolution budgets", () => {
   assert.match(background, /sendMessageWithTimeout/);
 });
 
+test("photo tile resolution waits for the content script and retries payload observation with bounded telemetry", () => {
+  assert.match(background, /SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS = 3_000/);
+  assert.match(background, /SEARCH_TILE_MESSAGE_TIMEOUT_MS = 2_000/);
+  assert.match(background, /SEARCH_TILE_MAX_MESSAGE_ATTEMPTS = 3/);
+  assert.match(background, /injectImmediately: true/);
+  assert.match(background, /resolveSearchMediaTileWithRetry/);
+  for (const field of ["photoOpenedAt", "contentScriptReadyAt", "sendMessageAttemptCount", "sendMessageFirstAt", "sendMessageSuccessAt", "payloadObservedAt", "responseAt"]) assert.match(background, new RegExp(`\\b${field}\\b`));
+  for (const code of ["CONTENT_SCRIPT_NOT_READY", "CONTENT_SCRIPT_MESSAGE_FAILED", "PAYLOAD_WAIT_TIMEOUT", "PHOTO_NAVIGATION_TIMEOUT"]) assert.match(background, new RegExp(code));
+  assert.match(background, /SEARCH_TILE_MESSAGE_RETRY_INTERVAL_MS/);
+});
+
 test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {
   for (const field of ["query", "scrolls", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "durationMs", "stopReason"]) {
     assert.match(background, new RegExp(`\\b${field}\\b`));
