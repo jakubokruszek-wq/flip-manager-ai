@@ -33,7 +33,7 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   const images = resolveListingImages(current?.images ?? [], item.thumbnailUrl, item.images);
   const listingValues = { source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", removed_at: null, last_seen_at: matchedAt, lifecycle_status: bucket === "MATCHED" ? "ACTIVE" : bucket, review_reason: bucket === "REVIEW" ? (reviewReasons.length ? reviewReasons.join(", ") : "Wymaga ręcznej oceny") : null, missing_fields: bucket === "REVIEW" ? reviewFields : [], archived_at: null, content_hash: item.contentHash };
   let { data: saved, error } = await supabase.from("listings").upsert(listingValues, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single();
-  if (error?.code === "42703") {
+  if (isMissingReviewLifecycleColumn(error)) {
     const legacyValues = { source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", removed_at: null, last_seen_at: matchedAt, content_hash: item.contentHash };
     ({ data: saved, error } = await supabase.from("listings").upsert(legacyValues, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single());
   }
@@ -53,4 +53,11 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   let matchCreated = !insertMatchError;
   if (insertMatchError) { if (insertMatchError.code !== "23505") throw new Error("Nie udało się zapisać dopasowania."); const { error: updateMatchError } = await supabase.from("listing_filter_matches").update({ last_matched_at: matchedAt, is_current_match: true, match_reasons: matchReasons, match_score: null, match_origin: "scan", source_scan_id: sourceScanId }).eq("listing_id", saved.id).eq("search_filter_id", filterId).abortSignal(signal); if (updateMatchError) throw new Error("Nie udało się odświeżyć dopasowania."); matchCreated = false; }
   return { listingId: saved.id, listingCreated: current === null, matchCreated, updated: current && changed ? 1 : 0, priceDrop };
+}
+
+function isMissingReviewLifecycleColumn(error: { code?: unknown; message?: unknown } | null): boolean {
+  if (!error) return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (code === "42703" || code === "PGRST204") && /lifecycle_status|review_reason|missing_fields|archived_at/.test(message);
 }
