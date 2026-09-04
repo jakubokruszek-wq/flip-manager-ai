@@ -1,5 +1,6 @@
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { authenticateSignedCollectorRequest, SignedCollectorAuthError } from "@/features/collector/signed-device-auth";
+import { runFacebookSchedulerTick } from "@/features/facebook-worker/scheduler";
 
 const PATHNAME = "/api/collector/jobs/complete";
 export const runtime = "nodejs";
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
     const update = await supabase.from("facebook_scan_jobs").update({ status: input.status, finished_at: now, leased_until: null, heartbeat_at: now, error_code: input.status === "failed" ? String(input.errorCode || "COLLECTOR_FAILED").slice(0, 100) : null, error_message: input.status === "failed" ? String(input.errorCode || "Collector failed").slice(0, 1_000) : null }).eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", device.id).eq("status", "running").select("id").maybeSingle();
     if (update.error || !update.data) return Response.json({ ok: false, code: "COLLECTOR_JOB_LEASE_LOST" }, { status: 409 });
+    await runFacebookSchedulerTick();
     return cors(Response.json({ ok: true, status: input.status }), request);
   } catch (error) {
     const status = error instanceof SignedCollectorAuthError ? error.status : 503;
