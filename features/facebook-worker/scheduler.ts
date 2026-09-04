@@ -59,7 +59,7 @@ export async function getFacebookSchedulerDiagnostics() {
     supabase.from("facebook_scan_jobs").select("id,status,scan_run_id,source_scan_id,group_snapshot,result_summary,error_code,error_message,worker_id,created_at,started_at,finished_at,heartbeat_at,consumer_type").eq("consumer_type", "BROWSER_EXTENSION").order("created_at", { ascending: false }).limit(500),
     supabase.from("watched_facebook_groups").select("id,name,url,enabled,last_checked_at,last_error,access_status").order("priority").order("name"),
     supabase.from("collector_devices").select("id,device_name,last_heartbeat_at,last_source_scan_at,last_captured_count,health_status,revoked_at").is("revoked_at", null).order("last_heartbeat_at", { ascending: false, nullsFirst: false }).limit(1),
-    supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot").eq("source", "facebook").order("started_at", { ascending: false }).limit(500),
+    supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot,warnings").eq("source", "facebook").order("started_at", { ascending: false }).limit(500),
     supabase.from("collector_scan_batches").select("scan_id,source_id,payload,result,received_at,status,error_message").order("received_at", { ascending: false }).limit(500),
   ]);
   const error = jobsResult.error ?? sourcesResult.error ?? devicesResult.error ?? scansResult.error ?? batchesResult.error;
@@ -137,7 +137,7 @@ async function failStuckJob(supabase: ReturnType<typeof createFacebookWatcherAdm
 }
 
 async function automaticScanHistory(supabase: ReturnType<typeof createFacebookWatcherAdminClient>): Promise<Row[]> {
-  const response = await supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot").eq("source", "facebook").order("started_at", { ascending: false }).limit(500);
+  const response = await supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot,warnings").eq("source", "facebook").order("started_at", { ascending: false }).limit(500);
   if (response.error) throw new Error(`SCHEDULER_HISTORY_QUERY_FAILED: ${response.error.message}`);
   return records(response.data).filter((scan) => markerFromScan(scan));
 }
@@ -183,10 +183,17 @@ function latestCycle(scans: Row[]): { cycleId: string; startedAt: string; cooldo
 
 function markerFromScan(scan: Row): SchedulerMarker | null {
   const snapshot = jsonRecord(scan.filter_snapshot);
-  const marker = record(snapshot?._facebookScheduler);
+  const marker = record(snapshot?._facebookScheduler) ?? schedulerMarkerFromWarnings(scan.warnings);
   if (marker?.automatic !== true || !text(marker.cycleId) || !text(marker.cycleStartedAt) || !text(marker.sourceId)) return null;
   const plannedSourceIds = strings(marker.plannedSourceIds);
   return plannedSourceIds.length ? { automatic: true, cycleId: String(marker.cycleId), cycleStartedAt: String(marker.cycleStartedAt), cooldownMinutes: schedulerCooldownMinutes(marker.cooldownMinutes), sourceId: String(marker.sourceId), plannedSourceIds } : null;
+}
+
+function schedulerMarkerFromWarnings(value: unknown): SchedulerMarker | null {
+  if (!Array.isArray(value)) return null;
+  const warning = value.find((item): item is string => typeof item === "string" && item.startsWith("FACEBOOK_SCHEDULER_MARKER:"));
+  if (!warning) return null;
+  try { return record(JSON.parse(warning.slice("FACEBOOK_SCHEDULER_MARKER:".length))) as SchedulerMarker | null; } catch { return null; }
 }
 
 function jsonRecord(value: unknown): Row | null {

@@ -69,7 +69,8 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, r
   }
   const result: FacebookEnqueueResult = { jobs: [], failedGroups: [], reasonCode: null };
   for (const plan of plans) {
-    const scan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "pending", scan_run_id: runId, filter_snapshot: filter }).select("id").single();
+    const schedulerMarker = schedulerMarkerFromFilter(filter);
+    const scan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "pending", scan_run_id: runId, filter_snapshot: filter, ...(schedulerMarker ? { warnings: [schedulerWarning(schedulerMarker)] } : {}) }).select("id").single();
     if (scan.error || !scan.data?.id) {
       result.failedGroups.push({ groupId: plan.group.id, error: `FACEBOOK_SOURCE_SCAN_CREATE_FAILED: ${scan.error?.message ?? "missing id"}` });
       continue;
@@ -89,6 +90,15 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, r
     result.jobs.push({ jobId: String(job.data.id), sourceScanId, groupId: plan.group.id, status: "queued" });
   }
   return result;
+}
+
+function schedulerMarkerFromFilter(filter: SearchFilter): Record<string, unknown> | null {
+  const value = (filter as SearchFilter & { _facebookScheduler?: unknown })._facebookScheduler;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function schedulerWarning(marker: Record<string, unknown>): string {
+  return `FACEBOOK_SCHEDULER_MARKER:${JSON.stringify(marker).slice(0, 2_000)}`;
 }
 
 export async function claimFacebookJob(workerId: string, consumerType: FacebookJobConsumerType = "LEGACY_WORKER"): Promise<FacebookWorkerJob | null> {
@@ -204,7 +214,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   const now = new Date().toISOString();
   const sourceScanId = String(existing.data.source_scan_id);
   const searchFilterId = String(existing.data.search_filter_id);
-  const sourceScan = await supabase.from("source_scans").select("filter_snapshot").eq("id", sourceScanId).maybeSingle();
+  const sourceScan = await supabase.from("source_scans").select("filter_snapshot,warnings").eq("id", sourceScanId).maybeSingle();
   if (sourceScan.error || !sourceScan.data) throw new Error(`FACEBOOK_SOURCE_SCAN_READ_FAILED: ${sourceScan.error?.message ?? "missing source scan"}`);
   const filter = parseStoredFilter(sourceScan.data.filter_snapshot, searchFilterId);
   const summary = await processFacebookPostBatch(input.posts, async (post) => {
@@ -246,7 +256,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   const scan = await supabase.from("source_scans").update({
     status: "completed", finished_at: now, scanned_count: summary.postsProcessed, listings_found: normalized,
     matched_count: summary.matched, listings_created: summary.listingsCreated, new_count: summary.newMatches, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops,
-    warnings: [...input.warnings, ...summary.warnings].slice(0, 100), error_message: null,
+    warnings: [...(Array.isArray(sourceScan.data.warnings) ? sourceScan.data.warnings.filter((value): value is string => typeof value === "string") : []), ...input.warnings, ...summary.warnings].slice(0, 100), error_message: null,
   }).eq("id", sourceScanId).in("status", ["pending", "running"]);
   if (scan.error) throw new Error(`FACEBOOK_SOURCE_SCAN_FINALIZE_FAILED: ${scan.error.message}`);
   const job = await supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: result, error_code: null, error_message: null })
