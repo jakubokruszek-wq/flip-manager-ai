@@ -42,7 +42,11 @@ export function nextSchedulerSource(
 }
 
 export function schedulerCooldownMinutes(value: unknown): number {
-  return typeof value === "number" && Number.isInteger(value) ? Math.max(60, Math.min(value, 24 * 60)) : 24 * 60;
+  // Keep a bounded floor while allowing the explicitly configured short
+  // cadence used by the single-source test mode. Production filters retain
+  // their configured value (normally 60+ minutes) and therefore are
+  // unaffected.
+  return typeof value === "number" && Number.isInteger(value) ? Math.max(5, Math.min(value, 24 * 60)) : 24 * 60;
 }
 
 export function isStaleAt(value: unknown, timeoutMs: number, nowMs = Date.now()): boolean {

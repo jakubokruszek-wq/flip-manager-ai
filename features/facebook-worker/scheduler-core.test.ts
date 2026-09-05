@@ -53,7 +53,7 @@ test("completed cycle waits for cooldown and starts exactly when scheduled", () 
 });
 
 test("scheduler enforces a bounded production cooldown", () => {
-  assert.equal(schedulerCooldownMinutes(5), 60);
+  assert.equal(schedulerCooldownMinutes(5), 5);
   assert.equal(schedulerCooldownMinutes(120), 120);
   assert.equal(schedulerCooldownMinutes(9_999), 1_440);
   assert.equal(schedulerCooldownMinutes(null), 1_440);

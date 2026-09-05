@@ -52,7 +52,12 @@ async function runLockedSchedulerTick(supabase: ReturnType<typeof createFacebook
       await repairOrphanedCycleScans(supabase, cycle.scans, now);
       await refreshWatchedSourceHealth(supabase, cycle.scans, context.sources);
       const terminalSourceIds = unique(cycle.scans.filter((scan) => isTerminalSourceStatus(text(scan.status))).map((scan) => markerFromScan(scan)?.sourceId).filter((value): value is string => Boolean(value)));
-      const decision = schedulerCycleDecision({ plan: cycle.plan, terminalSourceIds, cycleStartedAt: cycle.startedAt, cooldownMinutes: cycle.cooldownMinutes, nowMs: now.getTime() });
+      // A cadence change is applied only between cycles. This keeps an active
+      // cycle deterministic while allowing the temporary test-mode filter
+      // value to take effect once the previous cycle is fully terminal.
+      const cycleComplete = cycle.plan.length > 0 && terminalSourceIds.length >= cycle.plan.length;
+      const cooldownMinutes = cycleComplete ? schedulerCooldownMinutes(context.filter.scanIntervalMinutes) : cycle.cooldownMinutes;
+      const decision = schedulerCycleDecision({ plan: cycle.plan, terminalSourceIds, cycleStartedAt: cycle.startedAt, cooldownMinutes, nowMs: now.getTime() });
       if (decision.type === "ADVANCE") return enqueueAutomaticSource(context.filter, cycle.cycleId, cycle.startedAt, cycle.cooldownMinutes, cycle.plan, decision.source, terminalSourceIds.length > 0 ? "ADVANCED" : "STARTED");
       if (decision.type === "WAIT_COOLDOWN") return output("COMPLETED", cycle.cycleId, null, null, null);
     }
@@ -77,6 +82,10 @@ export async function getFacebookSchedulerDiagnostics() {
   if (error) throw new Error(`SCHEDULER_DIAGNOSTICS_FAILED: ${error.message}`);
   const jobs = records(jobsResult.data); const scans = attachJobMarkers(records(scansResult.data), jobs); const batches = records(batchesResult.data);
   const cycle = latestCycle(scans.filter((scan) => markerFromScan(scan)));
+  const activeFilterRow = records(filtersResult.data).find((filter) => filter.is_active === true && strings(filter.sources).includes("facebook"));
+  const cycleTerminalSourceIds = cycle ? unique(cycle.scans.filter((scan) => isTerminalSourceStatus(text(scan.status))).map((scan) => markerFromScan(scan)?.sourceId).filter((value): value is string => Boolean(value))) : [];
+  const cycleComplete = Boolean(cycle && cycle.plan.length > 0 && cycleTerminalSourceIds.length >= cycle.plan.length);
+  const diagnosticCooldown = cycle && cycleComplete && activeFilterRow ? schedulerCooldownMinutes(activeFilterRow.scan_interval_minutes) : cycle?.cooldownMinutes;
   const active = jobs.find((job) => job.status === "queued" || job.status === "running") ?? null;
   const automaticScans = scans.filter((scan) => markerFromScan(scan));
   const recentBrowserJobs = jobs.slice(0, 10).map((job) => ({
@@ -88,7 +97,7 @@ export async function getFacebookSchedulerDiagnostics() {
   const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
   for (const job of jobs) if (typeof job.status === "string" && job.status in counts) counts[job.status as keyof typeof counts] += 1;
   return {
-    scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle ? new Date(Date.parse(cycle.startedAt) + cycle.cooldownMinutes * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null,
+    scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle && diagnosticCooldown !== undefined ? new Date(Date.parse(cycle.startedAt) + diagnosticCooldown * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null,
       preflight: {
         lockStore: lockResult.error ? `ERROR:${lockResult.error.code ?? "QUERY_FAILED"}` : "PASS",
         lockPresent: Boolean(lockResult.data),
