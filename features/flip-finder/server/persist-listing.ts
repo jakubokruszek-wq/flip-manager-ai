@@ -7,6 +7,7 @@ import type { PropertyListing } from "@/features/properties/types/property";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { staleListingFilterMatchKey, staleListingFilterMatchValues } from "./match-state";
 import type { DecisionBucket } from "../decision-model";
+import { syncResaleCompFromListing } from "@/features/market-intelligence/resale-comps-store";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -55,6 +56,13 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
     ({ data: saved, error } = await supabase.from("listings").upsert(legacyValues, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single());
   }
   if (error || !saved || typeof saved.id !== "string") throw new Error("Nie udało się zapisać oferty.");
+  void syncResaleCompFromListing(supabase, item, saved.id, matchedAt).catch((reason) => {
+    console.warn("RESALE_COMP_SYNC_DEFERRED", {
+      source: item.source,
+      externalListingId: item.externalListingId,
+      error: reason instanceof Error ? reason.message : "unknown",
+    });
+  });
   if (changed) { const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: item.rawPayload }).abortSignal(signal); if (snapshotError) throw new Error("Nie udało się zapisać historii oferty."); }
   if (!createMatch) {
     if (bucket === "REVIEW" && !manualRejected) {

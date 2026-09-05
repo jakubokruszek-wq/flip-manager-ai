@@ -9,6 +9,8 @@ import { estimateAfterRenovationValue } from "./valuation";
 import { createClient } from "@/lib/supabase/server";
 import { resolveLocation } from "@/features/location-intelligence/resolve-location";
 import type { LocationResolution } from "@/features/location-intelligence/types";
+import { calculateResaleArv, selectResaleComps, type ArvSubject } from "./resale-arv";
+import { classifyRenovation, resaleCompFingerprint, type ResaleCompRecord } from "./resale-comps";
 
 type Row = Record<string, unknown>;
 type BatchResult = { data: unknown; error: { message: string } | null };
@@ -113,6 +115,10 @@ export async function analyzeMarket(listingId: string): Promise<MarketIntelligen
   const currentPricePerSqm = subject.pricePerSqm;
   const priceDifference = currentPricePerSqm !== null && statistics.average !== null ? currentPricePerSqm - statistics.average : null;
   const ranking = currentPricePerSqm !== null && comparablePricesPerSqm.length ? comparablePricesPerSqm.filter((value) => value < currentPricePerSqm).length + 1 : null;
+  const resaleCandidates = await loadResaleCompCandidates(supabase, subject, candidates);
+  const arvSubject: ArvSubject = { id: subject.id, area: subject.area, rooms: subject.rooms, city: subject.city, district: subject.district, address: subject.address, buildingType: subject.buildingType, floor: subject.floor };
+  const resaleComps = selectResaleComps(arvSubject, resaleCandidates);
+  const resaleArv = calculateResaleArv(arvSubject, resaleComps);
 
   return {
     listingId: subject.id,
@@ -134,8 +140,97 @@ export async function analyzeMarket(listingId: string): Promise<MarketIntelligen
     percentile: percentileRank(comparablePricesPerSqm, currentPricePerSqm),
     comparableCount: comparables.length,
     comparables,
+    resaleCompCount: resaleArv.compCount,
+    resaleCompMedianPricePerSqm: resaleArv.medianPricePerSqm,
+    resaleCompWeightedPricePerSqm: resaleArv.weightedPricePerSqm,
+    resaleCompLowPrice: resaleArv.conservativePrice,
+    resaleCompExpectedPrice: resaleArv.expectedPrice,
+    resaleCompHighPrice: resaleArv.optimisticPrice,
+    recommendedListingPrice: resaleArv.recommendedListingPrice,
+    estimatedSalePrice: resaleArv.estimatedSalePrice,
+    resaleComps: resaleArv.comparables,
   };
 }
+
+async function loadResaleCompCandidates(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  subject: MarketListing,
+  fallback: MarketListing[],
+): Promise<ResaleCompRecord[]> {
+  const fallbackRecords = fallback.map((listing) => resaleRecordFromMarketListing(listing));
+  const result = await supabase
+    .from("resale_comps")
+    .select("id,source,external_listing_id,canonical_url,title,description,city,district,street,address,latitude,longitude,price,area_m2,price_per_m2,rooms,floor,floors,building_type,construction_year,ownership,balcony,elevator,parking,renovation_status,renovation_confidence,finish_level,listing_created_at,first_seen_at,last_seen_at,active,seller_type,fingerprint,outlier_reason,evidence")
+    .eq("active", true)
+    .limit(MAX_CANDIDATES);
+  if (result.error) {
+    if (isMissingResaleCompsTable(result.error)) return fallbackRecords;
+    console.warn("MARKET INTELLIGENCE RESALE COMPS ERROR:", result.error.message);
+    return fallbackRecords;
+  }
+  const sidecar = asRows(result.data).map(resaleRecordFromRow).filter((record): record is ResaleCompRecord => record !== null);
+  return uniqueCompRecords([...sidecar, ...fallbackRecords]);
+}
+
+function resaleRecordFromMarketListing(listing: MarketListing): ResaleCompRecord {
+  const sourceListing = {
+    source: listing.source === "facebook" || listing.source === "otodom" || listing.source === "olx" || listing.source === "morizon" ? listing.source : "facebook",
+    externalListingId: listing.id,
+    originalUrl: listing.originalUrl ?? "",
+    normalizedUrl: listing.normalizedUrl ?? "",
+    title: listing.title,
+    description: listing.description,
+    price: listing.price,
+    area: listing.area,
+    pricePerSqm: listing.pricePerSqm,
+    rooms: listing.rooms,
+    floor: listing.floor ?? null,
+    city: listing.city,
+    district: listing.district,
+    locationText: listing.address,
+    thumbnailUrl: null,
+    buildingType: null,
+    images: [],
+    rawPayload: {},
+    contentHash: "",
+  } as const;
+  const classification = classifyRenovation({ title: listing.title, description: listing.description, price: listing.price, areaM2: listing.area, pricePerM2: listing.pricePerSqm });
+  return {
+    ...sourceListing,
+    canonicalUrl: listing.originalUrl,
+    areaM2: listing.area,
+    pricePerM2: listing.pricePerSqm,
+    address: listing.address,
+    street: listing.address,
+    listingCreatedAt: null,
+    firstSeenAt: listing.lastSeenAt,
+    lastSeenAt: listing.lastSeenAt,
+    active: listing.status === "active",
+    fingerprint: resaleCompFingerprint({ address: listing.address, areaM2: listing.area, price: listing.price, rooms: listing.rooms }),
+    classification,
+  };
+}
+
+function resaleRecordFromRow(row: Row): ResaleCompRecord | null {
+  const source = stringValue(row.source);
+  const externalListingId = stringValue(row.external_listing_id);
+  const lastSeenAt = stringValue(row.last_seen_at);
+  if (!source || !externalListingId || !lastSeenAt || !["facebook", "otodom", "olx", "morizon"].includes(source)) return null;
+  const renovationConfidence = row.renovation_confidence === "HIGH" || row.renovation_confidence === "MEDIUM" || row.renovation_confidence === "LOW" ? row.renovation_confidence : "LOW";
+  const renovationStatus = row.renovation_status === "RENOVATED" || row.renovation_status === "MOVE_IN_READY" || row.renovation_status === "REFRESHED" || row.renovation_status === "UNKNOWN" ? row.renovation_status : "UNKNOWN";
+  const input = {
+    id: stringValue(row.id) ?? undefined,
+    source: source as ResaleCompRecord["source"], externalListingId, canonicalUrl: stringValue(row.canonical_url), title: stringValue(row.title), description: stringValue(row.description), city: stringValue(row.city), district: stringValue(row.district), street: stringValue(row.street), address: stringValue(row.address), latitude: numberValue(row.latitude), longitude: numberValue(row.longitude), price: numberValue(row.price), areaM2: numberValue(row.area_m2), pricePerM2: numberValue(row.price_per_m2), rooms: numberValue(row.rooms), floor: stringValue(row.floor), floors: stringValue(row.floors), buildingType: stringValue(row.building_type), constructionYear: numberValue(row.construction_year), ownership: stringValue(row.ownership), balcony: booleanValue(row.balcony), elevator: booleanValue(row.elevator), parking: booleanValue(row.parking), listingCreatedAt: stringValue(row.listing_created_at), firstSeenAt: stringValue(row.first_seen_at) ?? lastSeenAt, lastSeenAt, active: row.active !== false, sellerType: stringValue(row.seller_type), fingerprint: stringValue(row.fingerprint), classification: { isCandidate: true, renovationStatus: renovationStatus as "RENOVATED" | "MOVE_IN_READY" | "REFRESHED" | "UNKNOWN", renovationConfidence: renovationConfidence as "HIGH" | "MEDIUM" | "LOW", finishLevel: stringValue(row.finish_level), evidence: [], outlierReason: stringValue(row.outlier_reason), exclusionReason: null },
+  };
+  return input;
+}
+
+function uniqueCompRecords(records: ResaleCompRecord[]): ResaleCompRecord[] {
+  const seen = new Set<string>();
+  return records.filter((record) => { const key = `${record.source}:${record.externalListingId}`; if (seen.has(key)) return false; seen.add(key); return true; });
+}
+function isMissingResaleCompsTable(error: { code?: unknown; message?: unknown } | null): boolean { return Boolean(error && (error.code === "42P01" || error.code === "PGRST205" || /resale_comps/i.test(String(error.message)))); }
+function booleanValue(value: unknown): boolean | null { return typeof value === "boolean" ? value : null; }
 
 async function resolveListingLocations(listings: MarketListing[]): Promise<Map<string, LocationResolution>> {
   const entries = await Promise.all(listings.map(async (listing) => {
@@ -234,7 +329,7 @@ function toMarketListing(row: Row, snapshotPrices: Map<string, number>, marketTy
   const storedPricePerSqm = numberValue(row.price_per_sqm);
   const normalizedUrl = stringValue(row.normalized_url);
   const originalUrl = preferredListingUrl(stringValue(row.original_url), normalizedUrl, source, id);
-  return { id, title: stringValue(row.title), description: stringValue(row.description), originalUrl, normalizedUrl, price, area, pricePerSqm: storedPricePerSqm ?? (isPositiveFinite(price) && isPositiveFinite(area) ? price / area : null), rooms: numberValue(row.rooms), address: stringValue(row.address), district: stringValue(row.district), city: stringValue(row.city), source, status, lastSeenAt, marketTypes: marketTypesByListing.get(id) ?? [] };
+  return { id, title: stringValue(row.title), description: stringValue(row.description), originalUrl, normalizedUrl, price, area, pricePerSqm: storedPricePerSqm ?? (isPositiveFinite(price) && isPositiveFinite(area) ? price / area : null), rooms: numberValue(row.rooms), floor: stringValue(row.floor), buildingType: stringValue(row.building_type), address: stringValue(row.address), district: stringValue(row.district), city: stringValue(row.city), source, status, lastSeenAt, marketTypes: marketTypesByListing.get(id) ?? [] };
 }
 
 

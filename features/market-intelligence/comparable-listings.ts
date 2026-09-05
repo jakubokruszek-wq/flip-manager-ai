@@ -112,6 +112,7 @@ function toComparable(subject: MarketListing, listing: MarketListing, tier: stri
     area: listing.area,
     pricePerSqm: listing.pricePerSqm,
     rooms: listing.rooms,
+    buildingType: listing.buildingType ?? null,
     address: listing.address,
     district: listing.district,
     city: listing.city,

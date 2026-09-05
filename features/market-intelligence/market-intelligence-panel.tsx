@@ -68,6 +68,8 @@ export function MarketIntelligencePanel({ data, loading, error, calculatorCosts,
         <Metric label="Potencjalny wzrost" value={signedCurrency(data.estimatedValueIncrease)} tone={tone(data.estimatedValueIncrease)} />
       </div>
 
+      <ResaleCompsSection data={data} />
+
       <div className="grid gap-3 lg:grid-cols-3">
         <Metric label="Różnica do średniej" value={signedCurrency(data.priceDifference)} description={signedPercent(data.percentageDifference)} tone={tone(-1 * (data.priceDifference ?? 0))} />
         <Metric label="Ranking ceny / m²" value={data.ranking === null ? "—" : `${data.ranking}. z ${data.comparableCount + 1}`} />
@@ -105,6 +107,18 @@ export function MarketIntelligencePanel({ data, loading, error, calculatorCosts,
       </section>
     </div>
   );
+}
+
+function ResaleCompsSection({ data }: { data: MarketIntelligence }) {
+  const comps = data.resaleComps ?? [];
+  const hasArv = data.resaleCompCount !== undefined;
+  if (!hasArv) return null;
+  return <section className="space-y-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4 sm:p-5">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-base font-bold">Porównania po remoncie</h3><p className="mt-1 text-sm text-muted-foreground">Oddzielna baza ofert wykończonych, używana wyłącznie do wyceny odsprzedaży.</p></div><span className="rounded-full border border-emerald-500/30 px-3 py-1 text-sm font-semibold text-emerald-700 dark:text-emerald-300">{data.resaleCompCount} porównań</span></div>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Mediana / m²" value={perSqm(data.resaleCompMedianPricePerSqm ?? null)} /><Metric label="Średnia ważona / m²" value={perSqm(data.resaleCompWeightedPricePerSqm ?? null)} /><Metric label="Conservative" value={currency(data.resaleCompLowPrice ?? null)} /><Metric label="Expected" value={currency(data.resaleCompExpectedPrice ?? null)} /><Metric label="Optimistic" value={currency(data.resaleCompHighPrice ?? null)} /></div>
+    <div className="grid gap-3 sm:grid-cols-2"><Metric label="Recommended listing price" value={currency(data.recommendedListingPrice ?? null)} /><Metric label="Estimated sale price" value={currency(data.estimatedSalePrice ?? null)} description="z uwzględnieniem negocjacji" /></div>
+    {comps.length ? <div className="overflow-x-auto rounded-xl border border-border/70 bg-card"><table className="w-full min-w-[620px] text-left text-sm"><thead className="border-b border-border/70 text-xs text-muted-foreground"><tr><th className="px-3 py-2 font-medium">Oferta</th><th className="px-3 py-2 font-medium">Lokalizacja</th><th className="px-3 py-2 font-medium">zł/m²</th><th className="px-3 py-2 font-medium">Świeżość</th><th className="px-3 py-2 text-right font-medium">Podobieństwo</th></tr></thead><tbody className="divide-y divide-border/60">{comps.slice(0, 10).map((comp) => <tr key={comp.id}><td className="max-w-56 px-3 py-2 font-medium">{comp.originalUrl ? <a className="truncate text-gold hover:underline" href={comp.originalUrl} rel="noopener noreferrer" target="_blank">{comp.title ?? "Oferta"}</a> : comp.title ?? "Oferta"}<div className="mt-0.5 text-xs text-muted-foreground">Remont: {comp.renovationConfidence ?? "—"}</div></td><td className="px-3 py-2 text-muted-foreground">{[comp.address, comp.district, comp.city].filter(Boolean).join(", ") || "—"}</td><td className="px-3 py-2">{perSqm(comp.pricePerSqm)}</td><td className="px-3 py-2 text-muted-foreground">{comp.freshnessDays === null || comp.freshnessDays === undefined ? "—" : `${formatNumber(comp.freshnessDays)} dni`}</td><td className="px-3 py-2 text-right"><span className="rounded-full bg-foreground px-2 py-1 text-xs font-semibold text-background">{comp.similarityScore}%</span></td></tr>)}</tbody></table></div> : <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">Brak zweryfikowanych porównań po remoncie dla tej oferty.</p>}
+  </section>;
 }
 
 function PurchaseRecommendationSection({ recommendation, currentListingPrice, targetProfit, targetRoi, onTargetProfitChange, onTargetRoiChange }: { recommendation: ReturnType<typeof getPurchaseRecommendation>; currentListingPrice: number | null; targetProfit: number; targetRoi: number; onTargetProfitChange: (value: number) => void; onTargetRoiChange: (value: number) => void }) {

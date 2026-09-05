@@ -10,6 +10,8 @@ export type MarketListing = {
   area: number | null;
   pricePerSqm: number | null;
   rooms: number | null;
+  floor?: string | null;
+  buildingType?: string | null;
   address: string | null;
   district: string | null;
   city: string | null;
@@ -21,10 +23,15 @@ export type MarketListing = {
 
 export type ComparableListing = Pick<
   MarketListing,
-  "id" | "title" | "originalUrl" | "normalizedUrl" | "price" | "area" | "pricePerSqm" | "rooms" | "address" | "district" | "city" | "source" | "lastSeenAt"
+  "id" | "title" | "originalUrl" | "normalizedUrl" | "price" | "area" | "pricePerSqm" | "rooms" | "buildingType" | "address" | "district" | "city" | "source" | "lastSeenAt"
 > & {
   similarityScore: number;
   matchReasons: string[];
+  renovationConfidence?: "HIGH" | "MEDIUM" | "LOW";
+  renovationStatus?: "RENOVATED" | "MOVE_IN_READY" | "REFRESHED" | "UNKNOWN";
+  freshnessDays?: number | null;
+  distanceMeters?: number | null;
+  outlierReason?: string | null;
 };
 
 export type PriceStatistics = {
@@ -59,4 +66,13 @@ export type MarketIntelligence = {
   percentile: number | null;
   comparableCount: number;
   comparables: ComparableListing[];
+  resaleCompCount?: number;
+  resaleCompMedianPricePerSqm?: number | null;
+  resaleCompWeightedPricePerSqm?: number | null;
+  resaleCompLowPrice?: number | null;
+  resaleCompExpectedPrice?: number | null;
+  resaleCompHighPrice?: number | null;
+  recommendedListingPrice?: number | null;
+  estimatedSalePrice?: number | null;
+  resaleComps?: ComparableListing[];
 };

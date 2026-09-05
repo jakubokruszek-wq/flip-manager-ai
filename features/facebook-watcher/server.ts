@@ -23,6 +23,7 @@ import { reconcileFacebookLocation } from "./facebook-location-quality";
 import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookImageProvenanceDiagnostics, facebookMediaBindingSummary, hasApprovedFacebookImageProvenance, preserveFacebookPublishedAt } from "./facebook-media-binding";
 import { evaluateFacebookApartmentSafety } from "./facebook-apartment-safety";
 import { resolveFacebookBuildingEvidence, type FacebookBuildingEvidence } from "./facebook-building-evidence";
+import { syncResaleCompFromListing } from "@/features/market-intelligence/resale-comps-store";
 
 type Row = Record<string, unknown>;
 
@@ -236,6 +237,33 @@ async function importAutomatedFacebook(input: {
     priceDrops = saved.priceDrop;
     const scoreUpdate = await supabase.from("listings").update({ flip_score: score }).eq("id", listingId);
     if (scoreUpdate.error) throw new Error(`FACEBOOK_SCORE_PERSIST_FAILED: ${scoreUpdate.error.message}`);
+  }
+
+  if (crossSourceMatch) {
+    const sidecarListing: SourceListing = {
+      source: "facebook",
+      externalListingId: externalId,
+      originalUrl: sourceUrl,
+      normalizedUrl: sourceUrl,
+      title: effective.title,
+      price: effective.price,
+      area: effective.area,
+      rooms: effective.rooms,
+      floor: effective.floor === null ? null : String(effective.floor),
+      pricePerSqm,
+      city: effective.city,
+      district: effective.district,
+      locationText,
+      images: imageMirror.images,
+      thumbnailUrl: imageMirror.images[0] ?? null,
+      buildingType,
+      description: effective.description,
+      rawPayload: {},
+      contentHash: calculateContentHash({ title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, locationText }),
+    };
+    void syncResaleCompFromListing(supabase, sidecarListing, listingId, now).catch((reason) => {
+      console.warn("RESALE_COMP_SYNC_DEFERRED", { source: "facebook", externalListingId: externalId, error: reason instanceof Error ? reason.message : "unknown" });
+    });
   }
 
   const persistedPublishedAt = preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt);
