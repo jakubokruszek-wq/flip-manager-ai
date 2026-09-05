@@ -9,16 +9,23 @@ const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8"
 const content = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
 const runtimeSource = fs.readFileSync(path.join(__dirname, "collector-runtime.js"), "utf8");
 
-test("SEARCH timing gives each query a 30-second active budget within a 240-second phase", () => {
+test("SEARCH timing gives each query a 30-second active budget within a bounded phase", () => {
   assert.match(background, /hardTimeBudgetPerQueryMs: 30_000/);
   assert.match(background, /discoveryBudgetMs: 30_000/);
-  assert.match(background, /hardTimeBudgetMs: 240_000/);
+  assert.match(background, /hardTimeBudgetMs: 280_000/);
   assert.match(background, /ACTIVE_SEARCH_QUERIES = \["sprzedam", "na sprzeda\\u017c", "mieszkanie", "do remontu", "\\u0141\\u00f3d\\u017a", "2 pokoje", "3 pokoje"\]/);
   assert.ok(7 * 30_000 <= 240_000);
   assert.match(background, /discoveryDeadlineMs/);
   assert.match(background, /queryBudgetMs = Math\.min\(/);
+  assert.match(background, /queryBudgetMs < SEARCH_LIMITS\.discoveryBudgetMs/);
   assert.match(background, /searchCollectionBudgetMs = Math\.max\(5_000, queryBudgetMs\)/);
   assert.match(background, /resolutionDeadlineMs/);
+  assert.match(background, /MAX_DISCOVERY_MEDIA_TILES = 100/);
+  assert.match(background, /maxDiscoveryMediaTiles: SEARCH_LIMITS\.maxDiscoveryMediaTiles/);
+  assert.match(content, /candidateCapReached/);
+  assert.match(content, /searchMediaTiles\.size < maxDiscoveryMediaTiles/);
+  assert.match(content, /END_OF_RESULTS_CONFIRMED/);
+  assert.doesNotMatch(content, /MAX_SEARCH_MEDIA_TILES/);
   assert.match(content, /collectSearchMediaTiles\(\)/);
   assert.match(background, /resolveSearchMediaTiles/);
   assert.match(content, /core\.shouldStopDiscovery/);

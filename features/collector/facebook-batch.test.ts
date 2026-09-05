@@ -36,6 +36,33 @@ test("normalizes bounded per-query search telemetry without affecting post ident
   assert.deepEqual(batch.searchTelemetry?.queries[0], { query: "sprzedam", executed: true, status: "HEALTHY", scrolls: 3, visibleCards: 12, captured: 1, unique: 1, duplicatesVsMainFeed: 0, uniqueContribution: 1, sellContribution: 1, tilesSeen: 5, tilesOpened: 5, tilesResolved: 5, tilesUnverified: 0, uniqueParentPosts: 1, verifiedParentPosts: 1, duplicatesByMedia: 4, durationMs: 14_500, stopReason: "MAX_SCROLLS" });
 });
 
+test("keeps discovery coverage separate from the bounded resolution cap", () => {
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111",
+    batchId: "22222222-2222-4222-8222-222222222222",
+    sourceId,
+    sourceType: "GROUP",
+    sourceUrl: `https://www.facebook.com/groups/${sourceId}/`,
+    collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "DEGRADED", visibleCardCount: 10, capturedPostCount: 0, scrolls: 30, durationMs: 30_000, stopReason: "QUERY_TIME_BUDGET", reasons: [] },
+    searchTelemetry: {
+      hardTimeBudgetMs: 280_000,
+      durationMs: 34_000,
+      queriesPlanned: 7,
+      queriesExecuted: 1,
+      budgetExhausted: false,
+      queries: [{ query: "sprzedam", executed: true, status: "DEGRADED", scrolls: 30, visibleCards: 10, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 100, rawTilesSeen: 220, uniqueTilesFound: 100, candidateBufferSize: 100, candidateCapReached: true, resolutionCandidates: 10, tilesOpened: 10, tilesResolved: 0, tilesUnverified: 10, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, discoveryDurationMs: 30_000, resolutionDurationMs: 4_000, discoveryStopReason: "QUERY_TIME_BUDGET", resolutionStopReason: "RESOLUTION_TIME_BUDGET", durationMs: 34_000, stopReason: "RESOLUTION_TIME_BUDGET" }],
+    },
+    posts: [],
+  });
+  const query = batch.searchTelemetry?.queries[0];
+  assert.equal(query?.rawTilesSeen, 220);
+  assert.equal(query?.uniqueTilesFound, 100);
+  assert.equal(query?.candidateCapReached, true);
+  assert.equal(query?.resolutionCandidates, 10);
+  assert.equal(query?.discoveryDurationMs, 30_000);
+});
+
 test("preserves verified media-tile discovery provenance without gallery media", () => {
   const postId = "1576413074176836";
   const batch = normalizeFacebookCollectorBatch({

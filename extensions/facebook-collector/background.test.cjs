@@ -43,11 +43,14 @@ test("production active-source flow is allowlisted, deep, single-click and bound
 });
 
 test("search fallback has bounded media-tile resolution budgets", () => {
-  assert.match(background, /SEARCH_LIMITS = \{ minScrolls: 3, maxScrolls: 10, maxUniquePerQuery: 10, maxTilesToOpen: 10, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 240_000 \}/);
+  assert.match(background, /MAX_DISCOVERY_MEDIA_TILES = 100/);
+  assert.match(background, /MAX_RESOLUTION_MEDIA_TILES = 10/);
+  assert.match(background, /SEARCH_LIMITS = \{ minScrolls: 3, maxScrolls: 30, maxUniquePerQuery: 10, maxDiscoveryMediaTiles: MAX_DISCOVERY_MEDIA_TILES, maxTilesToOpen: MAX_RESOLUTION_MEDIA_TILES, tileConcurrency: 1, hardTimeBudgetPerQueryMs: 30_000, discoveryBudgetMs: 30_000, hardTimeBudgetMs: 280_000 \}/);
   assert.match(background, /minScrolls: SEARCH_LIMITS\.minScrolls/);
   assert.match(background, /maxScrolls: SEARCH_LIMITS\.maxScrolls/);
   assert.match(background, /maxPosts: SEARCH_LIMITS\.maxUniquePerQuery/);
-  assert.match(background, /maxMediaTiles: SEARCH_LIMITS\.maxTilesToOpen/);
+  assert.match(background, /maxDiscoveryMediaTiles: SEARCH_LIMITS\.maxDiscoveryMediaTiles/);
+  assert.match(background, /maxMediaTiles: SEARCH_LIMITS\.maxDiscoveryMediaTiles/);
   assert.match(background, /COLLECTOR_SEARCH_GLOBAL_TIME_BUDGET/);
   assert.match(background, /COLLECTOR_SEARCH_QUERY_DEGRADED/);
   assert.match(background, /appendUnexecutedSearchRuns/);
@@ -55,8 +58,10 @@ test("search fallback has bounded media-tile resolution budgets", () => {
   assert.match(background, /RESOLVE_SEARCH_MEDIA_TILE/);
   assert.match(background, /Math\.min\(SEARCH_LIMITS\.tileConcurrency, selected\.length\)/);
   assert.doesNotMatch(background, /Promise\.all\(selected\.map/);
-  assert.match(background, /SEARCH_TILE_RESOLUTION_RESERVE_MS = 12_000/);
-  assert.match(background, /searchCollectionBudgetMs = Math\.max\(5_000, queryBudgetMs - SEARCH_TILE_RESOLUTION_RESERVE_MS\)/);
+  assert.match(background, /SEARCH_TILE_RESOLUTION_RESERVE_MS = 4_000/);
+  assert.match(background, /searchCollectionBudgetMs = Math\.max\(5_000, queryBudgetMs\)/);
+  assert.match(background, /resolutionCandidates/);
+  assert.match(background, /candidateCapReached/);
   assert.match(background, /SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT/);
   assert.match(background, /sendMessageWithTimeout/);
 });
@@ -76,7 +81,7 @@ test("photo tile resolution waits for the content script and retries payload obs
 });
 
 test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {
-  for (const field of ["query", "scrolls", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "durationMs", "stopReason"]) {
+  for (const field of ["query", "scrolls", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "rawTilesSeen", "uniqueTilesFound", "candidateBufferSize", "candidateCapReached", "resolutionCandidates", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "discoveryDurationMs", "resolutionDurationMs", "discoveryStopReason", "resolutionStopReason", "durationMs", "stopReason"]) {
     assert.match(background, new RegExp(`\\b${field}\\b`));
   }
   assert.match(background, /searchTelemetry: searchTelemetrySummary/);

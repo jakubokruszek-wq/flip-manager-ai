@@ -72,7 +72,8 @@
     const maxScrolls = clamp(options.maxScrolls, 0, 30, 30);
     const minScrolls = clamp(options.minScrolls, 0, maxScrolls, 3);
     const maxPosts = clamp(options.maxPosts, 1, 50, 50);
-    const maxMediaTiles = clamp(options.maxMediaTiles, 1, 100, 10);
+    const maxDiscoveryPosts = clamp(options.maxDiscoveryPosts, Math.max(50, maxPosts), 100, Math.max(50, maxPosts));
+    const maxDiscoveryMediaTiles = clamp(options.maxDiscoveryMediaTiles ?? options.maxMediaTiles, 1, 100, 100);
     const budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
     const searchMode = options.searchMode === true;
     const layerPrefix = searchMode ? "SEARCH_" : "";
@@ -81,6 +82,7 @@
     let records = [];
     const mainFeedDiagnostics = new Map();
     const searchMediaTiles = new Map();
+    let rawSearchMediaTilesSeen = 0;
     let scrolls = 0;
     let consecutiveNoNew = 0;
     let consecutiveNoVisibleGrowth = 0;
@@ -92,7 +94,13 @@
     let stopReason = "MAX_SCROLLS";
 
     for (let iteration = 0; ; iteration += 1) {
-      if (searchMode) for (const tile of collectSearchMediaTiles()) searchMediaTiles.set(tile.mediaId, tile);
+      if (searchMode) {
+        const visibleTiles = collectSearchMediaTiles();
+        rawSearchMediaTilesSeen += visibleTiles.length;
+        for (const tile of visibleTiles) {
+          if (searchMediaTiles.has(tile.mediaId) || searchMediaTiles.size < maxDiscoveryMediaTiles) searchMediaTiles.set(tile.mediaId, tile);
+        }
+      }
       const dom = collectDom(source, iteration, `${layerPrefix}DOM`);
       const hydration = collectHydration(source, iteration, `${layerPrefix}HYDRATION`);
       const network = [...networkRecords.values()].map((record) => ({ ...record, firstSeenIteration: record.firstSeenIteration ?? iteration, discoveryLayers: [`${layerPrefix}NETWORK`] }));
@@ -103,7 +111,7 @@
       }
       const beforeIds = new Set(records.map((record) => record.postId));
       const before = records.length;
-      records = core.mergeRecords([...records, ...dom, ...hydration, ...network], maxPosts);
+      records = core.mergeRecords([...records, ...dom, ...hydration, ...network], searchMode ? maxDiscoveryPosts : maxPosts);
       const added = records.length - before;
       const addedRecords = records.filter((record) => !beforeIds.has(record.postId));
       consecutiveOldNewPosts = core.updateAgeCutoffStreak(consecutiveOldNewPosts, addedRecords);
@@ -119,7 +127,13 @@
       const scrollHeight = container.scrollHeight;
       iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: cards.length, newVisibleCardsThisIteration: newVisibleCards, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, consecutiveOldNewPosts, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses });
       previousNetworkResponses = networkResponses;
-      const decision = searchMode && scrolls >= minScrolls && searchMediaTiles.size >= maxMediaTiles ? "MAX_SEARCH_MEDIA_TILES" : core.shouldStopDiscovery({ durationMs: performance.now() - start, budgetMs, uniqueCount: records.length, maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, consecutiveOldNewPosts });
+      const elapsedMs = performance.now() - start;
+      const atEndOfResults = searchMode && scrolls >= minScrolls && consecutiveNoNew >= 3 && consecutiveNoVisibleGrowth >= 3 && isAtEndOfResults(container);
+      const decision = searchMode
+        ? elapsedMs >= budgetMs ? "QUERY_TIME_BUDGET"
+          : atEndOfResults ? "END_OF_RESULTS_CONFIRMED"
+            : null
+        : core.shouldStopDiscovery({ durationMs: elapsedMs, budgetMs, uniqueCount: records.length, maxPosts: searchMode ? maxDiscoveryPosts : maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, consecutiveOldNewPosts });
       if (decision) { stopReason = decision; break; }
       const moved = scrollContainer(container);
       scrolls += 1;
@@ -148,7 +162,7 @@
         }
       }
     }
-    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, 100), health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
+    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchMediaTiles.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {
@@ -271,6 +285,11 @@
     else container.scrollBy({ top: Math.max(container.clientHeight * 0.85, 700), behavior: "instant" });
     const after = container === document.scrollingElement ? window.scrollY : container.scrollTop;
     return after >= before;
+  }
+  function isAtEndOfResults(container) {
+    const position = container === document.scrollingElement ? window.scrollY : container.scrollTop;
+    const viewport = container === document.scrollingElement ? innerHeight : container.clientHeight;
+    return position + viewport >= container.scrollHeight - 32;
   }
   function mediaIdFromUrl(value) { return value.match(/(?:fbid=|\/)(\d{8,30})(?:[/?&_.-]|$)/)?.[1] || null; }
   function ids(records) { return [...new Set(records.map((record) => record.postId))].slice(0, 20); }

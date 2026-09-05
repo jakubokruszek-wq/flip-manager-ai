@@ -65,6 +65,11 @@ export type CollectorSearchQueryTelemetry = {
   uniqueContribution: number;
   sellContribution: number;
   tilesSeen: number;
+  rawTilesSeen?: number;
+  uniqueTilesFound?: number;
+  candidateBufferSize?: number;
+  candidateCapReached?: boolean;
+  resolutionCandidates?: number;
   tilesOpened: number;
   tilesResolved: number;
   tilesUnverified: number;
@@ -287,6 +292,11 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     uniqueContribution: boundedInteger(value.uniqueContribution, 0, 100),
     sellContribution: boundedInteger(value.sellContribution, 0, 100),
     tilesSeen: boundedInteger(value.tilesSeen, 0, 10_000),
+    ...(Number.isFinite(value.rawTilesSeen) ? { rawTilesSeen: boundedInteger(value.rawTilesSeen, 0, 50_000) } : {}),
+    ...(Number.isFinite(value.uniqueTilesFound) ? { uniqueTilesFound: boundedInteger(value.uniqueTilesFound, 0, 100) } : {}),
+    ...(Number.isFinite(value.candidateBufferSize) ? { candidateBufferSize: boundedInteger(value.candidateBufferSize, 0, 100) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "candidateCapReached") ? { candidateCapReached: value.candidateCapReached === true } : {}),
+    ...(Number.isFinite(value.resolutionCandidates) ? { resolutionCandidates: boundedInteger(value.resolutionCandidates, 0, 10) } : {}),
     tilesOpened: boundedInteger(value.tilesOpened, 0, 10),
     tilesResolved: boundedInteger(value.tilesResolved, 0, 10),
     tilesUnverified: boundedInteger(value.tilesUnverified, 0, 10_000),
