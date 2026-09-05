@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
-import { processFacebookPostBatch } from "@/features/facebook-worker/post-flow";
+import { processFacebookPostBatch, type FacebookPersistenceDiagnostics } from "@/features/facebook-worker/post-flow";
 import { importFacebookWatcher } from "@/features/facebook-watcher/server";
 import type { SearchFilter } from "@/features/flip-finder";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
@@ -25,6 +25,8 @@ export type CollectorBatchResult = {
   errors: number;
   sourceScanIds: string[];
   health: FacebookCollectorBatch["health"];
+  /** Optional per-post image trace; safe projection is applied by progress API. */
+  persistenceDiagnostics?: FacebookPersistenceDiagnostics[];
 };
 
 export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
@@ -83,6 +85,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     const historicalIdentityConflicts = findHistoricalCollectorIdentityConflicts(batch, (history.data ?? []).map((row) => row.payload));
     const sourceScanIds: string[] = [];
     let processed = 0; let listingsCreated = 0; let listingsUpdated = 0; let skipped = 0; let errors = 0;
+    const persistenceDiagnostics: FacebookPersistenceDiagnostics[] = [];
     const posts = collectorPostsForProcessing(batch, Date.now(), historicalIdentityConflicts);
     const unverifiedIdentityCount = batch.posts.filter((post) => post.identityConfidence !== "EXACT" || historicalIdentityConflicts.has(post.postId)).length;
     const authors = new Map(batch.posts.map((post) => [post.postId, post.author]));
@@ -104,13 +107,14 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       listingsUpdated += summary.listingsUpdated;
       skipped += summary.listingsSkipped;
       errors += summary.errors;
+      persistenceDiagnostics.push(...summary.persistenceDiagnostics);
       const sourceStatus = batch.health.status === "DEGRADED" || summary.errors > 0 || unverifiedIdentityCount > 0 ? "partial" : "completed";
       const identityWarnings = unverifiedIdentityCount > 0 ? [`FACEBOOK_IDENTITY_UNVERIFIED:${unverifiedIdentityCount}`, ...[...historicalIdentityConflicts].slice(0, 20).map((postId) => `FACEBOOK_IDENTITY_HISTORY_CONFLICT:${postId}`)] : [];
       const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...target.existingWarnings, ...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100), error_message: null }).eq("id", sourceScanId);
       if (sourceUpdate.error) throw new Error(`COLLECTOR_SOURCE_SCAN_FINISH_FAILED: ${sourceUpdate.error.message}`);
     }
     const status = batch.health.status === "DEGRADED" || errors > 0 || unverifiedIdentityCount > 0 ? "degraded" : "completed";
-    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health });
+    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics });
   } catch (error) {
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));
   }
