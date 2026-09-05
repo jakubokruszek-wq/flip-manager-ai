@@ -42,6 +42,16 @@ test("media without exact root binding never reaches the image importer", () => 
   assert.deepEqual(exactCollectorMediaCandidates(current.posts[0]).map((candidate) => candidate.url), ["https://scontent.xx.fbcdn.net/ambiguous.jpg"]);
 });
 
+test("structured exact media remains eligible when optional rootPostId is omitted", () => {
+  const current = batch();
+  current.posts[0].media = [{ url: "https://scontent.xx.fbcdn.net/structured.jpg", mediaId: "9003", exactPostId: current.posts[0].postId, exactAssociation: true, discoveryLayers: ["HYDRATION"] }];
+  current.posts[0].rootPostId = null;
+  const candidates = exactCollectorMediaCandidates(current.posts[0]);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.storyRootPostId, current.posts[0].postId);
+  assert.equal(candidates[0]?.boundPostId, current.posts[0].postId);
+});
+
 test("unverified identity and a historical author/text conflict cannot reach processing", () => {
   const current = batch();
   current.posts[0].identityConfidence = "UNVERIFIED";

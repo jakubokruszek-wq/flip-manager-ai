@@ -35,7 +35,12 @@ export function collectorPostsForProcessing(batch: FacebookCollectorBatch, now =
  * URLs, media ids, captions or neighbouring cards are never promoted here.
  */
 export function exactCollectorMediaCandidates(post: CollectorPostRecord): FacebookMediaCandidate[] {
-  if (post.identityConfidence !== "EXACT" || post.rootPostId !== post.postId || !post.author?.trim() || !post.text?.trim()) return [];
+  // Structured collector records may not carry the optional rootPostId field:
+  // their canonical postId is already the exact root selected by the
+  // structured story/link binding.  Keep that proof rather than dropping
+  // media solely because the optional field was omitted in the batch.
+  const rootPostId = post.rootPostId ?? post.postId;
+  if (post.identityConfidence !== "EXACT" || rootPostId !== post.postId || !post.author?.trim() || !post.text?.trim()) return [];
   const candidates = post.media.filter((media) => media.exactAssociation === true && media.exactPostId === post.postId && isSafeFacebookMediaUrl(media.url));
   const seen = new Set<string>();
   return candidates.flatMap((media) => {
@@ -46,7 +51,7 @@ export function exactCollectorMediaCandidates(post: CollectorPostRecord): Facebo
       url: media.url,
       mediaId: media.mediaId,
       expectedPostId: post.postId,
-      storyRootPostId: post.rootPostId,
+      storyRootPostId: rootPostId,
       boundPostId: post.postId,
       bindingConfidence: 1,
       bindingProvenance: "EXACT_ROOT_STORY",
