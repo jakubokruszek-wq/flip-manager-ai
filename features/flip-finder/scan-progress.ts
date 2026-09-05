@@ -50,6 +50,7 @@ export type CollectorSearchQueryTelemetry = {
   candidateBufferSize?: number | null;
   candidateCapReached?: boolean | null;
   resolutionCandidates?: number | null;
+  payloadObserved?: number | null;
   discoveryStopReason?: string | null;
   resolutionStopReason?: string | null;
   discoveryEvidence?: CollectorSearchDiscoveryEvidence | null;

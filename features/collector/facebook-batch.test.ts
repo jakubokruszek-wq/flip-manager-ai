@@ -51,7 +51,7 @@ test("keeps discovery coverage separate from the bounded resolution cap", () => 
       queriesPlanned: 7,
       queriesExecuted: 1,
       budgetExhausted: false,
-      queries: [{ query: "sprzedam", executed: true, status: "DEGRADED", scrolls: 30, scrollCount: 30, visibleCards: 10, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 100, rawTilesSeen: 220, uniqueTilesFound: 120, candidateBufferSize: 100, candidateCapReached: true, resolutionCandidates: 10, tilesOpened: 10, tilesResolved: 0, tilesUnverified: 10, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, discoveryDurationMs: 30_000, discoveryDuration: 30_000, resolutionDurationMs: 4_000, resolutionDuration: 4_000, discoveryStopReason: "QUERY_TIME_BUDGET", resolutionStopReason: "RESOLUTION_TIME_BUDGET", discoveryEvidence: { scrollAttempts: 30, reachedBottom: false, consecutiveBottomChecks: 0, stableScrollPosition: false, urlStable: true, pageErrorFree: true, consecutiveNoGrowthChecks: 2, consecutiveNoVisibleGrowthChecks: 2, networkQuietChecks: 1, noPendingContent: false, finalScrollTop: 1000, finalScrollHeight: 5000, viewportHeight: 900, uniqueTileProgression: [100, 110, 120] }, durationMs: 34_000, stopReason: "RESOLUTION_TIME_BUDGET" }],
+      queries: [{ query: "sprzedam", executed: true, status: "DEGRADED", scrolls: 30, scrollCount: 30, visibleCards: 10, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 100, rawTilesSeen: 220, uniqueTilesFound: 120, candidateBufferSize: 100, candidateCapReached: true, resolutionCandidates: 10, payloadObserved: 3, tilesOpened: 10, tilesResolved: 0, tilesUnverified: 10, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, discoveryDurationMs: 30_000, discoveryDuration: 30_000, resolutionDurationMs: 4_000, resolutionDuration: 4_000, discoveryStopReason: "QUERY_TIME_BUDGET", resolutionStopReason: "RESOLUTION_TIME_BUDGET", discoveryEvidence: { scrollAttempts: 30, reachedBottom: false, consecutiveBottomChecks: 0, stableScrollPosition: false, urlStable: true, pageErrorFree: true, consecutiveNoGrowthChecks: 2, consecutiveNoVisibleGrowthChecks: 2, networkQuietChecks: 1, noPendingContent: false, finalScrollTop: 1000, finalScrollHeight: 5000, viewportHeight: 900, uniqueTileProgression: [100, 110, 120] }, durationMs: 34_000, stopReason: "RESOLUTION_TIME_BUDGET" }],
     },
     posts: [],
   });
@@ -60,6 +60,7 @@ test("keeps discovery coverage separate from the bounded resolution cap", () => 
   assert.equal(query?.uniqueTilesFound, 120);
   assert.equal(query?.candidateCapReached, true);
   assert.equal(query?.resolutionCandidates, 10);
+  assert.equal(query?.payloadObserved, 3);
   assert.equal(query?.discoveryDurationMs, 30_000);
   assert.equal(query?.scrollCount, 30);
   assert.equal(query?.discoveryEvidence?.reachedBottom, false);

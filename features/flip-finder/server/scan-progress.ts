@@ -301,6 +301,7 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     candidateBufferSize: optionalNumber(value.candidateBufferSize),
     candidateCapReached: typeof value.candidateCapReached === "boolean" ? value.candidateCapReached : null,
     resolutionCandidates: optionalNumber(value.resolutionCandidates),
+    payloadObserved: optionalNumber(value.payloadObserved),
     tilesOpened: number(value.tilesOpened),
     tilesResolved: number(value.tilesResolved),
     tilesUnverified: number(value.tilesUnverified),

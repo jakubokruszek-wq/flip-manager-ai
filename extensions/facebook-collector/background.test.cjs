@@ -81,7 +81,7 @@ test("photo tile resolution waits for the content script and retries payload obs
 });
 
 test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {
-  for (const field of ["query", "scrolls", "scrollCount", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "rawTilesSeen", "uniqueTilesFound", "candidateBufferSize", "candidateCapReached", "resolutionCandidates", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "discoveryDurationMs", "discoveryDuration", "resolutionDurationMs", "resolutionDuration", "discoveryStopReason", "resolutionStopReason", "discoveryEvidence", "tabLoadAttempts", "tabLoadRecovery", "durationMs", "stopReason"]) {
+  for (const field of ["query", "scrolls", "scrollCount", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "rawTilesSeen", "uniqueTilesFound", "candidateBufferSize", "candidateCapReached", "resolutionCandidates", "payloadObserved", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "discoveryDurationMs", "discoveryDuration", "resolutionDurationMs", "resolutionDuration", "discoveryStopReason", "resolutionStopReason", "discoveryEvidence", "tabLoadAttempts", "tabLoadRecovery", "durationMs", "stopReason"]) {
     assert.match(background, new RegExp(`\\b${field}\\b`));
   }
   assert.match(background, /searchTelemetry: searchTelemetrySummary/);

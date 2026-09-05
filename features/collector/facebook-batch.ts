@@ -71,6 +71,7 @@ export type CollectorSearchQueryTelemetry = {
   candidateBufferSize?: number | null;
   candidateCapReached?: boolean | null;
   resolutionCandidates?: number | null;
+  payloadObserved?: number | null;
   tilesOpened: number;
   tilesResolved: number;
   tilesUnverified: number;
@@ -321,6 +322,7 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     ...(Number.isFinite(value.candidateBufferSize) ? { candidateBufferSize: boundedInteger(value.candidateBufferSize, 0, 100) } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "candidateCapReached") ? { candidateCapReached: value.candidateCapReached === true } : {}),
     ...(Number.isFinite(value.resolutionCandidates) ? { resolutionCandidates: boundedInteger(value.resolutionCandidates, 0, 10) } : {}),
+    ...(Number.isFinite(value.payloadObserved) ? { payloadObserved: boundedInteger(value.payloadObserved, 0, 10) } : {}),
     tilesOpened: boundedInteger(value.tilesOpened, 0, 10),
     tilesResolved: boundedInteger(value.tilesResolved, 0, 10),
     tilesUnverified: boundedInteger(value.tilesUnverified, 0, 10_000),
