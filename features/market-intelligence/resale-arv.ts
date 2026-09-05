@@ -1,6 +1,6 @@
 import type { ComparableListing } from "./types";
 import type { ResaleCompRecord } from "./resale-comps";
-import { ANALYSIS_RULES } from "@/features/ai-analysis/rules";
+import { ANALYSIS_RULES } from "../ai-analysis/rules.ts";
 
 export type ArvSubject = {
   id: string;
