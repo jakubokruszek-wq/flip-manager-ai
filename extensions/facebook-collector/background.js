@@ -25,9 +25,9 @@ const SEARCH_QUERY_CLEANUP_RESERVE_MS = 1_500;
 // Keep a bounded slice of each query budget for opening media tiles and
 // waiting for late photo-page hydration. Without this reserve, collectFromTab
 // can consume the entire query deadline before parent resolution begins.
-// Keep resolution bounded but leave enough of the 240s global phase for all
-// seven queries to receive their independent 30s discovery window.
-const SEARCH_TILE_RESOLUTION_RESERVE_MS = 4_000;
+// The 280s global phase budgets 210s for seven discovery windows, 56s for
+// bounded resolution, and 14s for navigation/telemetry overhead.
+const SEARCH_TILE_RESOLUTION_RESERVE_MS = 8_000;
 const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000;
 const COLLECT_SOURCE_RESPONSE_GRACE_MS = 20_000;
 const SOURCE_COLLECTION_DEADLINE_MS = 360_000;

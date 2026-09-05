@@ -58,7 +58,7 @@ test("search fallback has bounded media-tile resolution budgets", () => {
   assert.match(background, /RESOLVE_SEARCH_MEDIA_TILE/);
   assert.match(background, /Math\.min\(SEARCH_LIMITS\.tileConcurrency, selected\.length\)/);
   assert.doesNotMatch(background, /Promise\.all\(selected\.map/);
-  assert.match(background, /SEARCH_TILE_RESOLUTION_RESERVE_MS = 4_000/);
+  assert.match(background, /SEARCH_TILE_RESOLUTION_RESERVE_MS = 8_000/);
   assert.match(background, /searchCollectionBudgetMs = Math\.max\(5_000, queryBudgetMs\)/);
   assert.match(background, /resolutionCandidates/);
   assert.match(background, /candidateCapReached/);
