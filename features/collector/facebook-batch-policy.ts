@@ -1,11 +1,14 @@
 import type { FacebookPostSnapshot } from "@/features/facebook-worker/types";
+import type { FacebookMediaCandidate } from "@/features/facebook-worker/types";
 
-import type { FacebookCollectorBatch } from "./facebook-batch";
+import type { CollectorPostRecord, FacebookCollectorBatch } from "./facebook-batch";
 
 export const COLLECTOR_MAX_POST_AGE_MS = 72 * 60 * 60 * 1_000;
 
 export function collectorPostsForProcessing(batch: FacebookCollectorBatch, now = Date.now(), identityConflictPostIds: ReadonlySet<string> = new Set()): FacebookPostSnapshot[] {
-  return batch.posts.filter((post) => post.identityConfidence === "EXACT" && !identityConflictPostIds.has(post.postId) && isCollectorPostFresh(post.publishedAt, now)).map((post) => ({
+  return batch.posts.filter((post) => post.identityConfidence === "EXACT" && !identityConflictPostIds.has(post.postId) && isCollectorPostFresh(post.publishedAt, now)).map((post) => {
+    const mediaCandidates = exactCollectorMediaCandidates(post);
+    return {
     postId: post.postId,
     groupId: post.sourceId,
     permalink: post.permalink,
@@ -13,8 +16,8 @@ export function collectorPostsForProcessing(batch: FacebookCollectorBatch, now =
     authoritativePostTextSource: "POST_REGION_DOM",
     authoritativePostTextProvenance: "ROOT_AUTHOR_MESSAGE",
     text: post.text ?? "",
-    imageUrls: [],
-    mediaCandidates: [],
+    imageUrls: mediaCandidates.map((candidate) => candidate.url),
+    mediaCandidates,
     publishedAt: post.publishedAt,
     vision: null,
     discoverySource: post.discoverySource,
@@ -22,7 +25,47 @@ export function collectorPostsForProcessing(batch: FacebookCollectorBatch, now =
     searchQueries: post.searchQueries,
     foundInMainFeed: post.foundInMainFeed,
     firstSeenPhase: post.firstSeenPhase,
-  }));
+  };
+  });
+}
+
+/**
+ * Converts only media found in the exact root story into the watcher candidate
+ * format. The collector's exactAssociation flag is intentionally required;
+ * URLs, media ids, captions or neighbouring cards are never promoted here.
+ */
+export function exactCollectorMediaCandidates(post: CollectorPostRecord): FacebookMediaCandidate[] {
+  if (post.identityConfidence !== "EXACT" || post.rootPostId !== post.postId || !post.author?.trim() || !post.text?.trim()) return [];
+  const candidates = post.media.filter((media) => media.exactAssociation === true && media.exactPostId === post.postId && isSafeFacebookMediaUrl(media.url));
+  const seen = new Set<string>();
+  return candidates.flatMap((media) => {
+    const key = media.mediaId || media.url;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{
+      url: media.url,
+      mediaId: media.mediaId,
+      expectedPostId: post.postId,
+      storyRootPostId: post.rootPostId,
+      boundPostId: post.postId,
+      bindingConfidence: 1,
+      bindingProvenance: "EXACT_ROOT_STORY",
+      rootStoryUnique: true,
+      foreignPostIdsDetected: [],
+      classification: "PROPERTY_IMAGE",
+      classificationConfidence: 0.9,
+      structuredPostMediaProvenance: false,
+    } satisfies FacebookMediaCandidate];
+  });
+}
+
+function isSafeFacebookMediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase().startsWith("scontent") && url.hostname.toLowerCase().endsWith(".fbcdn.net");
+  } catch {
+    return false;
+  }
 }
 
 export function findHistoricalCollectorIdentityConflicts(batch: FacebookCollectorBatch, historicalPayloads: unknown[]): Set<string> {

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { formatListingDescription } from "@/lib/listing-description";
+import { cleanDisplayText, dedupeLocationText, friendlyMissingFields } from "@/features/flip-finder/display-format";
 import { analyzeProperty } from "@/features/ai-analysis/analyze-property";
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { MarketIntelligencePanel } from "@/features/market-intelligence/market-intelligence-panel";
@@ -146,7 +147,10 @@ function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChan
       onChanged();
     } finally { setBusy(false); }
   };
-  return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{result.title ?? "Oferta do oceny"}</h3><p className="mt-1 text-sm text-muted-foreground">{result.locationText ?? "Lokalizacja nieznana"}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">DO OCENY</span></div><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ: {result.buildingType ?? "brak"}</span></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{result.missingFields?.length ? ` · Brak: ${result.missingFields.join(", ")}` : ""}</p><div className="mt-3 flex gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">Facebook <ExternalLink className="size-3" /></a> : null}</div></article>;
+  const title = cleanDisplayText(result.title) || "Oferta do oceny";
+  const location = dedupeLocationText(result.locationText) ?? "Lokalizacja nieznana";
+  const missing = friendlyMissingFields((result.missingFields ?? []).filter((field) => !(field === "buildingType" && result.buildingType)));
+  return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">DO OCENY</span></div><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}</p><div className="mt-3 flex gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">Facebook <ExternalLink className="size-3" /></a> : null}</div></article>;
 }
 
 export function ExpandableListingCard({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
@@ -163,8 +167,8 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
   const [calculator, setCalculator] = useState({ purchasePrice: result.price ?? 0, notary: 0, purchaseCommission: 0, renovation: 0, furnishing: 0, reserve: 0, salePrice: 0, saleCommission: 0, tax: 0 });
   const [targetProfit, setTargetProfit] = useState(50_000);
   const [targetRoi, setTargetRoi] = useState(15);
-  const location = result.locationText ?? resultLocation(result.address, result.district, result.city) ?? "—";
-  const title = result.title ?? "Oferta bez tytułu";
+  const location = dedupeLocationText(result.locationText ?? resultLocation(result.address, result.district, result.city)) ?? "—";
+  const title = cleanDisplayText(result.title) || "Oferta bez tytułu";
   const toggle = () => setExpanded((current) => { if (!current) onOpen?.(); return !current; });
   const purchaseTax = calculator.purchasePrice * 0.02;
   const purchaseCost = calculator.purchasePrice + purchaseTax + calculator.notary + calculator.purchaseCommission;
@@ -333,7 +337,7 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
       <div className="flex min-h-[270px] flex-col p-2 sm:flex-row sm:p-3">
         <div className="relative aspect-[16/11] w-full shrink-0 overflow-hidden rounded-xl bg-muted sm:w-[44%] sm:max-w-[300px]">
           {result.thumbnailUrl ? (
-            <Image fill unoptimized alt={`Zdjęcie: ${title}`} className="object-cover transition-transform duration-500 group-hover:scale-[1.035]" sizes="(max-width: 640px) 100vw, 300px" src={result.thumbnailUrl} />
+            <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover transition-transform duration-500 group-hover:scale-[1.035]" fill sizes="(max-width: 640px) 100vw, 300px" src={result.thumbnailUrl} />
           ) : <Placeholder />}
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
           <div className="absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
@@ -383,17 +387,17 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
         </div>
         {activeTab === "details" ? <div className="space-y-7 px-5 py-6 sm:px-8 sm:py-8">
           <div className="grid gap-3 sm:grid-cols-2">
-            {result.images.length > 0 ? result.images.map((image, index) => <div className={`relative aspect-[4/3] overflow-hidden rounded-xl bg-muted ${index === 0 ? "sm:col-span-2" : ""}`} key={image}><Image fill unoptimized alt={`${title} — zdjęcie ${index + 1}`} className="object-cover" sizes="(max-width: 640px) 100vw, 50vw" src={image} /></div>) : <div className="flex aspect-[16/9] items-center justify-center rounded-xl bg-muted text-sm text-muted-foreground sm:col-span-2">Brak zdjęć</div>}
+            {result.images.length > 0 ? result.images.map((image, index) => <div className={`relative aspect-[4/3] overflow-hidden rounded-xl bg-muted ${index === 0 ? "sm:col-span-2" : ""}`} key={image}><SafeImage alt={`${title} — zdjęcie ${index + 1}`} fill sizes="(max-width: 640px) 100vw, 50vw" src={image} /></div>) : <div className="flex aspect-[16/9] items-center justify-center rounded-xl bg-muted px-4 text-center text-sm text-muted-foreground sm:col-span-2">Brak zweryfikowanego zdjęcia</div>}
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="col-span-2 rounded-xl bg-foreground px-4 py-4 text-background"><p className="text-xs font-medium text-background/65">Cena</p><p className="mt-1 text-2xl font-bold leading-none tracking-tight">{currency(result.price)}</p><p className="mt-2 text-sm font-medium text-background/70">{currencyPerSqm(result.pricePerSqm)}</p></div>
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4"><p className="text-xs text-muted-foreground">Powierzchnia</p><p className="mt-1 font-semibold tracking-tight">{measure(result.area, "m²")}</p></div>
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4"><p className="text-xs text-muted-foreground">Pokoje</p><p className="mt-1 font-semibold tracking-tight">{measure(result.rooms, "pok.")}</p></div>
           </div>
-          <div className="rounded-xl border border-border/70 bg-muted/20 p-4 sm:p-5"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Opis ogłoszenia</p><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/80">{formatListingDescription(result.description) || "Brak opisu ogłoszenia."}</p></div>
+          <div className="rounded-xl border border-border/70 bg-muted/20 p-4 sm:p-5"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Opis ogłoszenia</p><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/80">{cleanDisplayText(formatListingDescription(result.description)) || "Brak opisu ogłoszenia."}</p></div>
           <div className="grid gap-3 rounded-xl bg-muted/40 p-4 text-sm sm:grid-cols-2"><Metric label="Piętro" value={result.floor ?? "—"} /><Metric label="Liczba pięter" value={result.totalFloors ?? "—"} /><Metric label="Typ budynku" value={result.buildingType ?? "—"} /><Metric label="Własność" value={result.ownership ?? "—"} /></div>
           <DetailList label="Powody dopasowania" values={result.matchReasons} empty="Brak dodatkowych danych." />
-          <DetailList label="Do weryfikacji" values={result.unknownFields} empty="Brak." />
+          <DetailList label="Do weryfikacji" values={friendlyMissingFields(result.unknownFields.filter((field) => !(field === "buildingType" && result.buildingType)))} empty="Brak." />
           <DetailList label="Atuty Flip Score" values={flipScore.reasons} empty="Brak punktów dodatnich." />
           <DetailList label="Ryzyka Flip Score" values={flipScore.risks} empty="Nie wykryto ryzyk." />
           <div className="grid gap-3 border-t border-border/70 pt-6 sm:grid-cols-3">
@@ -420,7 +424,12 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
   );
 }
 
-function Placeholder() { return <div className="flex size-full items-center justify-center text-sm text-muted-foreground">Brak zdjęcia</div>; }
+function Placeholder() { return <div className="flex size-full items-center justify-center px-4 text-center text-sm text-muted-foreground">Brak zweryfikowanego zdjęcia</div>; }
+function SafeImage({ alt, className, fill, sizes, src }: { alt: string; className?: string; fill?: boolean; sizes: string; src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <Placeholder />;
+  return <Image fill={fill} unoptimized alt={alt} className={className} onError={() => setFailed(true)} sizes={sizes} src={src} />;
+}
 function PriceHistoryPanel({ history, loading, error }: { history: PriceHistoryResponse | null; loading: boolean; error: string | null }) {
   if (loading) return <div className="px-5 py-8 text-sm text-muted-foreground sm:px-8">Ładowanie historii ceny…</div>;
   if (error) return <div className="px-5 py-8 sm:px-8"><p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</p></div>;

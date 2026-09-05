@@ -1,3 +1,6 @@
+import type { PropertyListingResult } from "@/features/properties/types/property";
+import { dedupeLocationText } from "./display-format.ts";
+
 export type ResultSort =
   | "newest"
   | "price_asc"
@@ -150,7 +153,7 @@ export function resultLocation(
     (value): value is string => typeof value === "string" && value.trim().length > 0,
   );
 
-  return values.length > 0 ? values.join(", ") : null;
+  return dedupeLocationText(values.join(", "));
 }
 
 export function displayMetric(value: number | null, unit: string): string | null {
@@ -211,4 +214,3 @@ function timestamp(value: string): number {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
 }
-import type { PropertyListingResult } from "@/features/properties/types/property";

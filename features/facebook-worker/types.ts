@@ -41,6 +41,8 @@ export const FACEBOOK_MEDIA_BINDING_PROVENANCE = ["EXACT_ROOT_STORY", "EXACT_POS
 export type FacebookMediaBindingProvenance = (typeof FACEBOOK_MEDIA_BINDING_PROVENANCE)[number];
 export type FacebookMediaCandidate = {
   url: string;
+  /** Source media id, when the collector exposed one alongside the URL. */
+  mediaId?: string | null;
   expectedPostId: string;
   /** Canonical post id of the one exact DOM story root that contained this media. */
   storyRootPostId?: string | null;
