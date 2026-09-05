@@ -82,10 +82,14 @@
     let records = [];
     const mainFeedDiagnostics = new Map();
     const searchMediaTiles = new Map();
+    const searchObservedMediaIds = new Set();
+    const discoveryStartUrl = location.href;
     let rawSearchMediaTilesSeen = 0;
     let scrolls = 0;
     let consecutiveNoNew = 0;
+    let consecutiveNoTileGrowth = 0;
     let consecutiveNoVisibleGrowth = 0;
+    let consecutiveBottomChecks = 0;
     let consecutiveOldNewPosts = 0;
     let previousVisibleFingerprints = new Set();
     let consecutiveVisibleAdvanceWithoutCapture = 0;
@@ -95,11 +99,14 @@
 
     for (let iteration = 0; ; iteration += 1) {
       if (searchMode) {
+        const tilesBeforeCollection = searchObservedMediaIds.size;
         const visibleTiles = collectSearchMediaTiles();
         rawSearchMediaTilesSeen += visibleTiles.length;
         for (const tile of visibleTiles) {
+          if (searchObservedMediaIds.size < 5_000) searchObservedMediaIds.add(tile.mediaId);
           if (searchMediaTiles.has(tile.mediaId) || searchMediaTiles.size < maxDiscoveryMediaTiles) searchMediaTiles.set(tile.mediaId, tile);
         }
+        consecutiveNoTileGrowth = searchObservedMediaIds.size > tilesBeforeCollection ? 0 : consecutiveNoTileGrowth + 1;
       }
       const dom = collectDom(source, iteration, `${layerPrefix}DOM`);
       const hydration = collectHydration(source, iteration, `${layerPrefix}HYDRATION`);
@@ -125,10 +132,19 @@
       const container = findScrollContainer();
       const scrollTop = container === document.scrollingElement ? window.scrollY : container.scrollTop;
       const scrollHeight = container.scrollHeight;
-      iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: cards.length, newVisibleCardsThisIteration: newVisibleCards, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, consecutiveOldNewPosts, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses });
+      const atBottomNow = isAtEndOfResults(container);
+      consecutiveBottomChecks = atBottomNow ? consecutiveBottomChecks + 1 : 0;
+      const pendingContentCount = searchMode ? pendingSearchContentCount() : 0;
+      iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: cards.length, newVisibleCardsThisIteration: newVisibleCards, uniqueTileCount: searchMode ? searchObservedMediaIds.size : 0, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, consecutiveOldNewPosts, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses, pendingContentCount, atBottom: atBottomNow });
       previousNetworkResponses = networkResponses;
       const elapsedMs = performance.now() - start;
-      const atEndOfResults = searchMode && scrolls >= minScrolls && consecutiveNoNew >= 3 && consecutiveNoVisibleGrowth >= 3 && isAtEndOfResults(container);
+      const recentIterations = iterations.slice(-3);
+      const networkQuietChecks = recentIterations.filter((item) => item.networkResponsesSinceLastScroll === 0).length;
+      const noPendingContent = pendingContentCount === 0;
+      const pageErrorFree = document.readyState === "complete" && !document.querySelector('[data-pagelet="ErrorPage"], [data-testid="page_error"]');
+      const urlStable = location.href === discoveryStartUrl;
+      const stableScrollPosition = recentIterations.length >= 3 && new Set(recentIterations.map((item) => item.scrollTop)).size === 1;
+      const atEndOfResults = searchMode && scrolls >= minScrolls && consecutiveNoNew >= 3 && consecutiveNoTileGrowth >= 3 && consecutiveNoVisibleGrowth >= 3 && consecutiveBottomChecks >= 3 && networkQuietChecks >= 3 && noPendingContent && pageErrorFree && urlStable && stableScrollPosition;
       const decision = searchMode
         ? elapsedMs >= budgetMs ? "QUERY_TIME_BUDGET"
           : atEndOfResults ? "END_OF_RESULTS_CONFIRMED"
@@ -141,6 +157,30 @@
     }
 
     const durationMs = Math.round(performance.now() - start);
+    const finalContainer = findScrollContainer();
+    const finalScrollTop = finalContainer === document.scrollingElement ? window.scrollY : finalContainer.scrollTop;
+    const finalViewportHeight = finalContainer === document.scrollingElement ? innerHeight : finalContainer.clientHeight;
+    const finalReachedBottom = searchMode && isAtEndOfResults(finalContainer);
+    const finalPendingContent = searchMode ? pendingSearchContentCount() : 0;
+    const finalPageErrorFree = document.readyState === "complete" && !document.querySelector('[data-pagelet="ErrorPage"], [data-testid="page_error"]');
+    const finalUrlStable = location.href === discoveryStartUrl;
+    const recentIterations = iterations.slice(-3);
+    const discoveryEvidence = searchMode ? {
+      scrollAttempts: scrolls,
+      reachedBottom: finalReachedBottom,
+      consecutiveBottomChecks,
+      stableScrollPosition: recentIterations.length >= 3 && new Set(recentIterations.map((item) => item.scrollTop)).size === 1,
+      urlStable: finalUrlStable,
+      pageErrorFree: finalPageErrorFree,
+      consecutiveNoGrowthChecks: consecutiveNoNew,
+      consecutiveNoVisibleGrowthChecks: consecutiveNoVisibleGrowth,
+      networkQuietChecks: recentIterations.filter((item) => item.networkResponsesSinceLastScroll === 0).length,
+      noPendingContent: finalPendingContent === 0,
+      finalScrollTop: Math.floor(finalScrollTop),
+      finalScrollHeight: finalContainer.scrollHeight,
+      viewportHeight: Math.floor(finalViewportHeight),
+      uniqueTileProgression: iterations.map((item) => item.uniqueTileCount || 0).slice(-10),
+    } : undefined;
     const maxVisibleCardCount = Math.max(0, ...iterations.map((item) => item.visibleCardCount));
     const capturedAdvanced = iterations.slice(1).some((item) => item.newIdsThisIteration > 0);
     const visibleFeedAdvancedWithoutCapture = consecutiveVisibleAdvanceWithoutCapture > 0;
@@ -162,7 +202,7 @@
         }
       }
     }
-    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchMediaTiles.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
+    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {
@@ -290,6 +330,9 @@
     const position = container === document.scrollingElement ? window.scrollY : container.scrollTop;
     const viewport = container === document.scrollingElement ? innerHeight : container.clientHeight;
     return position + viewport >= container.scrollHeight - 32;
+  }
+  function pendingSearchContentCount() {
+    return document.querySelectorAll('[aria-busy="true"], [data-visualcompletion="loading-state"]').length;
   }
   function mediaIdFromUrl(value) { return value.match(/(?:fbid=|\/)(\d{8,30})(?:[/?&_.-]|$)/)?.[1] || null; }
   function ids(records) { return [...new Set(records.map((record) => record.postId))].slice(0, 20); }

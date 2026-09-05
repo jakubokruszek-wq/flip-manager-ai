@@ -81,10 +81,20 @@ test("photo tile resolution waits for the content script and retries payload obs
 });
 
 test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {
-  for (const field of ["query", "scrolls", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "rawTilesSeen", "uniqueTilesFound", "candidateBufferSize", "candidateCapReached", "resolutionCandidates", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "discoveryDurationMs", "resolutionDurationMs", "discoveryStopReason", "resolutionStopReason", "durationMs", "stopReason"]) {
+  for (const field of ["query", "scrolls", "scrollCount", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "rawTilesSeen", "uniqueTilesFound", "candidateBufferSize", "candidateCapReached", "resolutionCandidates", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "discoveryDurationMs", "discoveryDuration", "resolutionDurationMs", "resolutionDuration", "discoveryStopReason", "resolutionStopReason", "discoveryEvidence", "tabLoadAttempts", "tabLoadRecovery", "durationMs", "stopReason"]) {
     assert.match(background, new RegExp(`\\b${field}\\b`));
   }
   assert.match(background, /searchTelemetry: searchTelemetrySummary/);
+});
+
+test("search tab load has bounded recovery and reports exhausted retries", () => {
+  assert.match(background, /SEARCH_TAB_LOAD_MAX_ATTEMPTS = 2/);
+  assert.match(background, /SEARCH_TAB_LOAD_ATTEMPT_TIMEOUT_MS = 6_000/);
+  assert.match(background, /SEARCH_TAB_LOAD_RETRY_DELAY_MS = 300/);
+  assert.match(background, /waitForSearchTab/);
+  assert.match(background, /RETRY_SUCCEEDED/);
+  assert.match(background, /RETRY_EXHAUSTED/);
+  assert.match(background, /tabLoadAttempts/);
 });
 
 test("media tile resolver is exact, fail-closed and never forwards tile media as gallery provenance", () => {

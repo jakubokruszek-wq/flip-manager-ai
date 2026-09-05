@@ -4,11 +4,30 @@ export type ScanProgressStatus = "queued" | "running" | "completed" | "partial" 
 export type WorkerJobStatus = "queued" | "running" | "completed" | "failed";
 export type VisionCostDataQuality = "EXACT" | "PARTIAL" | "UNAVAILABLE";
 
+/** Safe proof fields for an END_OF_RESULTS_CONFIRMED discovery stop. */
+export type CollectorSearchDiscoveryEvidence = {
+  scrollAttempts: number;
+  reachedBottom: boolean;
+  consecutiveBottomChecks: number;
+  stableScrollPosition: boolean;
+  urlStable: boolean;
+  pageErrorFree: boolean;
+  consecutiveNoGrowthChecks: number;
+  consecutiveNoVisibleGrowthChecks: number;
+  networkQuietChecks: number;
+  noPendingContent: boolean;
+  finalScrollTop: number;
+  finalScrollHeight: number;
+  viewportHeight: number;
+  uniqueTileProgression: number[];
+};
+
 export type CollectorSearchQueryTelemetry = {
   query: string;
   executed: boolean;
   status: "HEALTHY" | "DEGRADED" | "FAILED";
   scrolls: number;
+  scrollCount?: number | null;
   visibleCards: number;
   captured: number;
   unique: number;
@@ -24,8 +43,18 @@ export type CollectorSearchQueryTelemetry = {
   duplicatesByMedia: number;
   discoveryDurationMs?: number | null;
   resolutionDurationMs?: number | null;
+  discoveryDuration?: number | null;
+  resolutionDuration?: number | null;
+  rawTilesSeen?: number | null;
+  uniqueTilesFound?: number | null;
+  candidateBufferSize?: number | null;
+  candidateCapReached?: boolean | null;
+  resolutionCandidates?: number | null;
   discoveryStopReason?: string | null;
   resolutionStopReason?: string | null;
+  discoveryEvidence?: CollectorSearchDiscoveryEvidence | null;
+  tabLoadAttempts?: number | null;
+  tabLoadRecovery?: string | null;
   durationMs: number;
   stopReason: string;
   tileDiagnostics: CollectorSearchTileDiagnostic[];

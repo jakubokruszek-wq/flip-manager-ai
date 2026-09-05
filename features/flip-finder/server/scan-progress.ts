@@ -9,6 +9,7 @@ import {
   collectorProgressGroupFromSourceScan,
   type CollectorScanFunnel,
   type CollectorMainFeedDiagnostic,
+  type CollectorSearchDiscoveryEvidence,
   type CollectorSearchQueryTelemetry,
   projectSearchTileDiagnostics,
   type FacebookGroupProgress,
@@ -287,6 +288,7 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     executed: value.executed === true,
     status: status === "FAILED" ? "FAILED" : status === "DEGRADED" ? "DEGRADED" : "HEALTHY",
     scrolls: number(value.scrolls),
+    scrollCount: optionalNumber(value.scrollCount),
     visibleCards: number(value.visibleCards),
     captured: number(value.captured),
     unique: number(value.unique),
@@ -294,6 +296,11 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     uniqueContribution: number(value.uniqueContribution),
     sellContribution: number(value.sellContribution),
     tilesSeen: number(value.tilesSeen),
+    rawTilesSeen: optionalNumber(value.rawTilesSeen),
+    uniqueTilesFound: optionalNumber(value.uniqueTilesFound),
+    candidateBufferSize: optionalNumber(value.candidateBufferSize),
+    candidateCapReached: typeof value.candidateCapReached === "boolean" ? value.candidateCapReached : null,
+    resolutionCandidates: optionalNumber(value.resolutionCandidates),
     tilesOpened: number(value.tilesOpened),
     tilesResolved: number(value.tilesResolved),
     tilesUnverified: number(value.tilesUnverified),
@@ -302,11 +309,40 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     duplicatesByMedia: number(value.duplicatesByMedia),
     discoveryDurationMs: number(value.discoveryDurationMs),
     resolutionDurationMs: number(value.resolutionDurationMs),
+    discoveryDuration: optionalNumber(value.discoveryDuration),
+    resolutionDuration: optionalNumber(value.resolutionDuration),
     discoveryStopReason: string(value.discoveryStopReason),
     resolutionStopReason: string(value.resolutionStopReason),
+    discoveryEvidence: projectDiscoveryEvidence(value.discoveryEvidence),
+    tabLoadAttempts: optionalNumber(value.tabLoadAttempts),
+    tabLoadRecovery: string(value.tabLoadRecovery),
     durationMs: number(value.durationMs),
     stopReason: string(value.stopReason) ?? "UNKNOWN",
     tileDiagnostics,
+  };
+}
+
+function projectDiscoveryEvidence(value: unknown): CollectorSearchDiscoveryEvidence | null {
+  const evidence = row(value);
+  if (!evidence) return null;
+  const progression = Array.isArray(evidence.uniqueTileProgression)
+    ? evidence.uniqueTileProgression.filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item >= 0).slice(-10).map((item) => Math.floor(item))
+    : [];
+  return {
+    scrollAttempts: boundedTelemetryNumber(evidence.scrollAttempts, 30),
+    reachedBottom: evidence.reachedBottom === true,
+    consecutiveBottomChecks: boundedTelemetryNumber(evidence.consecutiveBottomChecks, 30),
+    stableScrollPosition: evidence.stableScrollPosition === true,
+    urlStable: evidence.urlStable === true,
+    pageErrorFree: evidence.pageErrorFree === true,
+    consecutiveNoGrowthChecks: boundedTelemetryNumber(evidence.consecutiveNoGrowthChecks, 30),
+    consecutiveNoVisibleGrowthChecks: boundedTelemetryNumber(evidence.consecutiveNoVisibleGrowthChecks, 30),
+    networkQuietChecks: boundedTelemetryNumber(evidence.networkQuietChecks, 30),
+    noPendingContent: evidence.noPendingContent === true,
+    finalScrollTop: boundedTelemetryNumber(evidence.finalScrollTop, 10_000_000),
+    finalScrollHeight: boundedTelemetryNumber(evidence.finalScrollHeight, 10_000_000),
+    viewportHeight: boundedTelemetryNumber(evidence.viewportHeight, 10_000),
+    uniqueTileProgression: progression.slice(-10).map((item) => Math.min(50_000, Math.max(0, Math.floor(item)))),
   };
 }
 
@@ -388,6 +424,8 @@ function rows(value: unknown): Row[] { return Array.isArray(value) ? value.filte
 function row(value: unknown): Row | null { return value && typeof value === "object" && !Array.isArray(value) ? value as Row : null; }
 function string(value: unknown): string | null { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function number(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0; }
+function optionalNumber(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null; }
+function boundedTelemetryNumber(value: unknown, max: number): number { return Math.min(max, optionalNumber(value) ?? 0); }
 function sum(values: Row[], key: string): number { return values.reduce((total, value) => total + number(value[key]), 0); }
 function unique(values: string[]): string[] { return [...new Set(values)]; }
 function listingSource(value: unknown): ListingSource | null { return value === "facebook" || value === "olx" || value === "otodom" || value === "morizon" ? value : null; }

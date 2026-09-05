@@ -25,6 +25,14 @@ test("SEARCH timing gives each query a 30-second active budget within a bounded 
   assert.match(content, /candidateCapReached/);
   assert.match(content, /searchMediaTiles\.size < maxDiscoveryMediaTiles/);
   assert.match(content, /END_OF_RESULTS_CONFIRMED/);
+  assert.match(content, /consecutiveNoTileGrowth >= 3/);
+  assert.match(content, /consecutiveBottomChecks >= 3/);
+  assert.match(content, /networkQuietChecks >= 3/);
+  assert.match(content, /pendingSearchContentCount/);
+  assert.match(content, /discoveryEvidence/);
+  assert.match(content, /uniqueTileProgression/);
+  assert.match(content, /urlStable/);
+  assert.match(content, /pageErrorFree/);
   assert.doesNotMatch(content, /MAX_SEARCH_MEDIA_TILES/);
   assert.match(content, /collectSearchMediaTiles\(\)/);
   assert.match(background, /resolveSearchMediaTiles/);

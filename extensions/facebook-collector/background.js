@@ -39,6 +39,9 @@ const SEARCH_TILE_MESSAGE_TIMEOUT_MS = 2_000;
 const SEARCH_TILE_MESSAGE_RETRY_INTERVAL_MS = 250;
 const SEARCH_TILE_MAX_MESSAGE_ATTEMPTS = 3;
 const SEARCH_TILE_PAYLOAD_WAIT_MS = 1_750;
+const SEARCH_TAB_LOAD_MAX_ATTEMPTS = 2;
+const SEARCH_TAB_LOAD_ATTEMPT_TIMEOUT_MS = 6_000;
+const SEARCH_TAB_LOAD_RETRY_DELAY_MS = 300;
 
 const DEFAULT_SOURCES = [
   "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
@@ -308,9 +311,10 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
       await setCollectorState({ status: "collecting", phase: "SEARCH", query, progress: `Przeszukiwanie: ${query}…`, sourceUrl, scanId, startedAt: new Date(startedAtMs).toISOString() });
       updateCollectionContext(collectionContext, "SEARCH", query);
       const searchUrl = `https://www.facebook.com/groups/${primary.source.sourceId}/search/?q=${encodeURIComponent(query)}`;
-      await chrome.tabs.update(tabId, { url: searchUrl });
+      const tabLoadDiagnostics = { attempts: 0, recovery: "NOT_NEEDED" };
       try {
-        await waitForTab(tabId, Math.min(10_000, searchRemaining));
+        await chrome.tabs.update(tabId, { url: searchUrl });
+        await waitForSearchTab(tabId, searchUrl, Math.min(10_000, searchRemaining), tabLoadDiagnostics);
         collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
         const remainingAfterLoad = SEARCH_LIMITS.hardTimeBudgetMs - (Date.now() - searchStartedAtMs);
         if (remainingAfterLoad < SEARCH_LIMITS.discoveryBudgetMs + SEARCH_TILE_RESOLUTION_RESERVE_MS + SEARCH_BUDGET_SAFETY_MS) throw new Error("SEARCH_GLOBAL_TIME_BUDGET");
@@ -329,11 +333,11 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
         const beforeIds = new Set(posts.map((post) => post.postId));
         const mergedSearch = mergePosts([...posts, ...queryPosts]);
         const newUnique = mergedSearch.filter((post) => !beforeIds.has(post.postId));
-        searchRuns.push(searchTelemetry({ query, search: { ...search, posts: queryPosts }, tileResolution, mainFeedIds, newUnique, discoveryDurationMs: search.discoveryDurationMs ?? discoveryEndedAtMs - discoveryStartedAtMs, resolutionDurationMs: Date.now() - discoveryEndedAtMs, durationMs: Date.now() - queryStartedAtMs }));
+        searchRuns.push(searchTelemetry({ query, search: { ...search, posts: queryPosts }, tileResolution, mainFeedIds, newUnique, tabLoadDiagnostics, discoveryDurationMs: search.discoveryDurationMs ?? discoveryEndedAtMs - discoveryStartedAtMs, resolutionDurationMs: Date.now() - discoveryEndedAtMs, durationMs: Date.now() - queryStartedAtMs }));
         posts = mergedSearch.slice(0, PRODUCTION_LIMITS.maxPosts);
       } catch (error) {
         const reason = safeError(error);
-        searchRuns.push(failedSearchTelemetry(query, Date.now() - queryStartedAtMs, reason));
+        searchRuns.push(failedSearchTelemetry(query, Date.now() - queryStartedAtMs, reason, tabLoadDiagnostics));
         if (reason === "COLLECT_SOURCE_RESPONSE_TIMEOUT" || reason === "SOURCE_COLLECTION_DEADLINE_EXCEEDED") throw error;
         if (reason === "SEARCH_GLOBAL_TIME_BUDGET" || Date.now() - searchStartedAtMs >= SEARCH_LIMITS.hardTimeBudgetMs) {
           searchBudgetExhausted = true;
@@ -684,13 +688,13 @@ function healthAfterSearch(primary, captured, searchTelemetrySummary, durationMs
   return { ...primary, status: reasons.length ? "DEGRADED" : "HEALTHY", capturedPostCount: captured, captureRatio: primary.visibleCardCount ? Math.min(1, captured / primary.visibleCardCount) : captured ? 1 : 0, durationMs, stopReason, reasons: [...new Set(reasons)] };
 }
 
-function searchTelemetry({ query, search, tileResolution, mainFeedIds, newUnique, discoveryDurationMs = null, resolutionDurationMs = null, durationMs }) {
+function searchTelemetry({ query, search, tileResolution, mainFeedIds, newUnique, tabLoadDiagnostics, discoveryDurationMs = null, resolutionDurationMs = null, durationMs }) {
   const incompleteTiles = tileResolution.tilesOpened < Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen) || tileResolution.tilesUnverified > 0;
   const status = search.health.status === "FAILED" ? "FAILED" : incompleteTiles || tileResolution.budgetExhausted ? "DEGRADED" : search.posts.length || tileResolution.tilesSeen === 0 ? "HEALTHY" : "DEGRADED";
-  return { query, executed: true, status, scrolls: search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: tileResolution.tilesSeen, rawTilesSeen: search.rawTilesSeen ?? tileResolution.rawTilesSeen ?? tileResolution.tilesSeen, uniqueTilesFound: search.uniqueTilesFound ?? tileResolution.tilesSeen, candidateBufferSize: search.candidateBufferSize ?? tileResolution.tilesSeen, candidateCapReached: search.candidateCapReached ?? false, resolutionCandidates: tileResolution.resolutionCandidates ?? Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen), tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, tileDiagnostics: tileResolution.tileDiagnostics, discoveryDurationMs, resolutionDurationMs, durationMs, discoveryStopReason: search.discoveryStopReason ?? search.health.stopReason, resolutionStopReason: tileResolution.resolutionStopReason ?? (tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED"), stopReason: tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : search.discoveryStopReason ?? search.health.stopReason };
+  return { query, executed: true, status, scrolls: search.health.scrolls, scrollCount: search.scrollCount ?? search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: tileResolution.tilesSeen, rawTilesSeen: search.rawTilesSeen ?? tileResolution.rawTilesSeen ?? tileResolution.tilesSeen, uniqueTilesFound: search.uniqueTilesFound ?? tileResolution.tilesSeen, candidateBufferSize: search.candidateBufferSize ?? tileResolution.tilesSeen, candidateCapReached: search.candidateCapReached ?? false, resolutionCandidates: tileResolution.resolutionCandidates ?? Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen), tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, tileDiagnostics: tileResolution.tileDiagnostics, discoveryDurationMs, discoveryDuration: discoveryDurationMs, resolutionDurationMs, resolutionDuration: resolutionDurationMs, discoveryEvidence: search.discoveryEvidence ?? null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", durationMs, discoveryStopReason: search.discoveryStopReason ?? search.health.stopReason, resolutionStopReason: tileResolution.resolutionStopReason ?? (tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED"), stopReason: tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : search.discoveryStopReason ?? search.health.stopReason };
 }
-function failedSearchTelemetry(query, durationMs, stopReason) { return { query, executed: true, status: "FAILED", scrolls: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs, discoveryDurationMs: 0, resolutionDurationMs: 0, discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }; }
-function appendUnexecutedSearchRuns(searchRuns, fromIndex, stopReason) { for (const query of ACTIVE_SEARCH_QUERIES.slice(fromIndex)) searchRuns.push({ query, executed: false, status: "DEGRADED", scrolls: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs: 0, discoveryDurationMs: 0, resolutionDurationMs: 0, discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }); }
+function failedSearchTelemetry(query, durationMs, stopReason, tabLoadDiagnostics = null) { return { query, executed: true, status: "FAILED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }; }
+function appendUnexecutedSearchRuns(searchRuns, fromIndex, stopReason) { for (const query of ACTIVE_SEARCH_QUERIES.slice(fromIndex)) searchRuns.push({ query, executed: false, status: "DEGRADED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs: 0, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: 0, tabLoadRecovery: "NOT_STARTED", discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }); }
 
 function mergePosts(posts) {
   return globalThis.FlipFacebookCollectorCore.mergeRecords(posts, PRODUCTION_LIMITS.maxPosts);
@@ -756,6 +760,32 @@ async function waitForTab(tabId, timeoutMs) {
     await wait(250);
   }
   throw new Error("FACEBOOK_TAB_LOAD_TIMEOUT");
+}
+async function waitForSearchTab(tabId, url, timeoutMs, diagnostics) {
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+  let lastError = null;
+  for (let attempt = 0; attempt < SEARCH_TAB_LOAD_MAX_ATTEMPTS; attempt += 1) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    diagnostics.attempts = attempt + 1;
+    try {
+      await waitForTab(tabId, Math.min(SEARCH_TAB_LOAD_ATTEMPT_TIMEOUT_MS, remainingMs));
+      diagnostics.recovery = attempt === 0 ? "NOT_NEEDED" : "RETRY_SUCCEEDED";
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= SEARCH_TAB_LOAD_MAX_ATTEMPTS - 1) break;
+      diagnostics.recovery = "RETRYING";
+      try {
+        await chrome.tabs.update(tabId, { url });
+      } catch (updateError) {
+        lastError = updateError;
+      }
+      await wait(Math.min(SEARCH_TAB_LOAD_RETRY_DELAY_MS, Math.max(1, deadline - Date.now())));
+    }
+  }
+  diagnostics.recovery = "RETRY_EXHAUSTED";
+  throw lastError || new Error("FACEBOOK_TAB_LOAD_TIMEOUT");
 }
 async function waitForContentScript(tabId, timeoutMs = 10_000, { injectImmediately = false, diagnostics = null } = {}) {
   let injected = false;

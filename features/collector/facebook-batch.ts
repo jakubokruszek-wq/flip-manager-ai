@@ -58,6 +58,7 @@ export type CollectorSearchQueryTelemetry = {
   executed: boolean;
   status: CollectorDiscoveryHealth;
   scrolls: number;
+  scrollCount?: number | null;
   visibleCards: number;
   captured: number;
   unique: number;
@@ -65,11 +66,11 @@ export type CollectorSearchQueryTelemetry = {
   uniqueContribution: number;
   sellContribution: number;
   tilesSeen: number;
-  rawTilesSeen?: number;
-  uniqueTilesFound?: number;
-  candidateBufferSize?: number;
-  candidateCapReached?: boolean;
-  resolutionCandidates?: number;
+  rawTilesSeen?: number | null;
+  uniqueTilesFound?: number | null;
+  candidateBufferSize?: number | null;
+  candidateCapReached?: boolean | null;
+  resolutionCandidates?: number | null;
   tilesOpened: number;
   tilesResolved: number;
   tilesUnverified: number;
@@ -78,11 +79,33 @@ export type CollectorSearchQueryTelemetry = {
   duplicatesByMedia: number;
   discoveryDurationMs?: number | null;
   resolutionDurationMs?: number | null;
+  discoveryDuration?: number | null;
+  resolutionDuration?: number | null;
   discoveryStopReason?: string | null;
   resolutionStopReason?: string | null;
+  discoveryEvidence?: CollectorSearchDiscoveryEvidence | null;
+  tabLoadAttempts?: number | null;
+  tabLoadRecovery?: string | null;
   durationMs: number;
   stopReason: string;
   tileDiagnostics?: CollectorSearchTileDiagnostic[];
+};
+
+export type CollectorSearchDiscoveryEvidence = {
+  scrollAttempts: number;
+  reachedBottom: boolean;
+  consecutiveBottomChecks: number;
+  stableScrollPosition: boolean;
+  urlStable: boolean;
+  pageErrorFree: boolean;
+  consecutiveNoGrowthChecks: number;
+  consecutiveNoVisibleGrowthChecks: number;
+  networkQuietChecks: number;
+  noPendingContent: boolean;
+  finalScrollTop: number;
+  finalScrollHeight: number;
+  viewportHeight: number;
+  uniqueTileProgression: number[];
 };
 
 export type CollectorSearchTileDiagnostic = {
@@ -285,6 +308,7 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     executed: value.executed === true,
     status: enumValue(value.status, ["HEALTHY", "DEGRADED", "FAILED"] as const, "COLLECTOR_SEARCH_QUERY_STATUS_INVALID"),
     scrolls: boundedInteger(value.scrolls, 0, 30),
+    ...(Number.isFinite(value.scrollCount) ? { scrollCount: boundedInteger(value.scrollCount, 0, 30) } : {}),
     visibleCards: boundedInteger(value.visibleCards, 0, 10_000),
     captured: boundedInteger(value.captured, 0, 100),
     unique: boundedInteger(value.unique, 0, 100),
@@ -293,7 +317,7 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     sellContribution: boundedInteger(value.sellContribution, 0, 100),
     tilesSeen: boundedInteger(value.tilesSeen, 0, 10_000),
     ...(Number.isFinite(value.rawTilesSeen) ? { rawTilesSeen: boundedInteger(value.rawTilesSeen, 0, 50_000) } : {}),
-    ...(Number.isFinite(value.uniqueTilesFound) ? { uniqueTilesFound: boundedInteger(value.uniqueTilesFound, 0, 100) } : {}),
+    ...(Number.isFinite(value.uniqueTilesFound) ? { uniqueTilesFound: boundedInteger(value.uniqueTilesFound, 0, 50_000) } : {}),
     ...(Number.isFinite(value.candidateBufferSize) ? { candidateBufferSize: boundedInteger(value.candidateBufferSize, 0, 100) } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "candidateCapReached") ? { candidateCapReached: value.candidateCapReached === true } : {}),
     ...(Number.isFinite(value.resolutionCandidates) ? { resolutionCandidates: boundedInteger(value.resolutionCandidates, 0, 10) } : {}),
@@ -305,11 +329,39 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     duplicatesByMedia: boundedInteger(value.duplicatesByMedia, 0, 10),
     ...(Number.isFinite(value.discoveryDurationMs) ? { discoveryDurationMs: boundedInteger(value.discoveryDurationMs, 0, 300_000) } : {}),
     ...(Number.isFinite(value.resolutionDurationMs) ? { resolutionDurationMs: boundedInteger(value.resolutionDurationMs, 0, 120_000) } : {}),
+    ...(Number.isFinite(value.discoveryDuration) ? { discoveryDuration: boundedInteger(value.discoveryDuration, 0, 300_000) } : {}),
+    ...(Number.isFinite(value.resolutionDuration) ? { resolutionDuration: boundedInteger(value.resolutionDuration, 0, 120_000) } : {}),
     ...(typeof value.discoveryStopReason === "string" ? { discoveryStopReason: value.discoveryStopReason.slice(0, 120) } : {}),
     ...(typeof value.resolutionStopReason === "string" ? { resolutionStopReason: value.resolutionStopReason.slice(0, 120) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "discoveryEvidence") ? { discoveryEvidence: normalizeDiscoveryEvidence(value.discoveryEvidence) } : {}),
+    ...(Number.isFinite(value.tabLoadAttempts) ? { tabLoadAttempts: boundedInteger(value.tabLoadAttempts, 0, 3) } : {}),
+    ...(typeof value.tabLoadRecovery === "string" ? { tabLoadRecovery: value.tabLoadRecovery.slice(0, 40) } : {}),
     durationMs: boundedInteger(value.durationMs, 0, 120_000),
     stopReason: requiredString(value.stopReason, "COLLECTOR_SEARCH_QUERY_STOP_REASON_REQUIRED").slice(0, 120),
     ...(Array.isArray(value.tileDiagnostics) ? { tileDiagnostics: value.tileDiagnostics.slice(0, 10).map(normalizeSearchTileDiagnostic) } : {}),
+  };
+}
+
+function normalizeDiscoveryEvidence(value: unknown): CollectorSearchDiscoveryEvidence | null {
+  if (!isRecord(value)) return null;
+  const progression = Array.isArray(value.uniqueTileProgression)
+    ? value.uniqueTileProgression.filter((item): item is number => Number.isFinite(item)).slice(-10).map((item) => boundedInteger(item, 0, 50_000))
+    : [];
+  return {
+    scrollAttempts: boundedInteger(value.scrollAttempts, 0, 30),
+    reachedBottom: value.reachedBottom === true,
+    consecutiveBottomChecks: boundedInteger(value.consecutiveBottomChecks, 0, 30),
+    stableScrollPosition: value.stableScrollPosition === true,
+    urlStable: value.urlStable === true,
+    pageErrorFree: value.pageErrorFree === true,
+    consecutiveNoGrowthChecks: boundedInteger(value.consecutiveNoGrowthChecks, 0, 30),
+    consecutiveNoVisibleGrowthChecks: boundedInteger(value.consecutiveNoVisibleGrowthChecks, 0, 30),
+    networkQuietChecks: boundedInteger(value.networkQuietChecks, 0, 30),
+    noPendingContent: value.noPendingContent === true,
+    finalScrollTop: boundedInteger(value.finalScrollTop, 0, 10_000_000),
+    finalScrollHeight: boundedInteger(value.finalScrollHeight, 0, 10_000_000),
+    viewportHeight: boundedInteger(value.viewportHeight, 0, 10_000),
+    uniqueTileProgression: progression,
   };
 }
 
