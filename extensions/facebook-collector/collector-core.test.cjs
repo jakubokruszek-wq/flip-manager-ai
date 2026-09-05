@@ -118,7 +118,9 @@ test("verified media parent gate rejects ambiguity and wrong association", () =>
   const verified = core.verifySearchMediaParent([record("1576413074176836", expectedMediaId)], expectedMediaId);
   assert.equal(verified.status, "VERIFIED");
   assert.equal(verified.records[0].resolvedFromMediaTile, true);
-  assert.deepEqual(verified.records[0].media, []);
+  assert.equal(verified.records[0].media.length, 1);
+  assert.equal(verified.records[0].media[0].mediaId, expectedMediaId);
+  assert.equal(verified.records[0].media[0].exactAssociation, true);
 });
 
 test("five resolved media tiles collapse to one parent with complete discovery provenance", () => {

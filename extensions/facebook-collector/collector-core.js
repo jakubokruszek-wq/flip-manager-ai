@@ -327,7 +327,10 @@
     const exact = mergeRecords(records).filter((record) => record.identityConfidence === "EXACT" && (record.media || []).some((media) => media.mediaId === mediaId && media.exactAssociation === true && media.exactPostId === record.postId));
     if (exact.length !== 1) return { status: "UNVERIFIED", records: [], reasons: [exact.length ? "SEARCH_MEDIA_MULTIPLE_PARENT_POSTS" : "SEARCH_MEDIA_EXACT_PARENT_NOT_PROVEN"] };
     const record = exact[0];
-    return { status: "VERIFIED", records: [{ ...record, media: [], resolvedFromMediaTile: true, mediaIds: [mediaId], parentResolutionEvidence: record.identityReasons || [] }], reasons: ["SEARCH_MEDIA_EXACT_PARENT_PROVEN"] };
+    // Retain only the media candidate that participated in the exact proof;
+    // sibling, comment, caption and unbound media remain excluded.
+    const exactMedia = (record.media || []).filter((media) => media.mediaId === mediaId && media.exactAssociation === true && media.exactPostId === record.postId);
+    return { status: "VERIFIED", records: [{ ...record, media: exactMedia, resolvedFromMediaTile: true, mediaIds: [mediaId], parentResolutionEvidence: record.identityReasons || [] }], reasons: ["SEARCH_MEDIA_EXACT_PARENT_PROVEN"] };
   }
 
   function evaluateHealth(input) {
