@@ -21,6 +21,7 @@ import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebo
 import { resolveFacebookListingIntent } from "./facebook-intent";
 import { reconcileFacebookLocation } from "./facebook-location-quality";
 import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookImageProvenanceDiagnostics, facebookMediaBindingSummary, hasApprovedFacebookImageProvenance, preserveFacebookPublishedAt } from "./facebook-media-binding";
+import type { FacebookPersistenceDiagnostics } from "../facebook-worker/post-flow";
 import { evaluateFacebookApartmentSafety } from "./facebook-apartment-safety";
 import { resolveFacebookBuildingEvidence, type FacebookBuildingEvidence } from "./facebook-building-evidence";
 import { syncResaleCompFromListing } from "@/features/market-intelligence/resale-comps-store";
@@ -50,25 +51,7 @@ export type FacebookImportResult = {
   imagesMirrored: number;
   priceDrops: number;
   warnings: string[];
-  persistenceDiagnostics?: {
-    postId: string | null;
-    creationTime: string | null;
-    timestampSource: "POST_PAGE_METADATA" | "POST_PAGE" | "UNKNOWN";
-    publishedAtCandidate: string | null;
-    publishedAtPersistAttempted: boolean;
-    publishedAtPersisted: boolean;
-    exactBoundCandidates: number;
-    relevanceAccepted: number;
-    relevanceRejected: number;
-    mirrorAttempted: number;
-    mirroredCount: number;
-    persistedNewImageCount: number;
-    finalListingImageCount: number;
-    persistedImageCount: number;
-    imageReasonCode: string;
-    reasonCodes: string[];
-    imageProvenance: import("../facebook-worker/post-flow").FacebookImageProvenanceDiagnostic[];
-  };
+  persistenceDiagnostics?: FacebookPersistenceDiagnostics;
   notProperty?: {
     realEstateLanguage: boolean;
     structuredFieldCount: number;
@@ -283,6 +266,16 @@ async function importAutomatedFacebook(input: {
   await recordFacebookGroupImport(context.groupName, listingCreated, score >= 85 || effective.sellerType === "private" && effective.condition === "renovation");
   const relevanceAccepted = normalized.imageAssessments?.filter((assessment) => assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8).length ?? effective.images.length;
   const persistenceDiagnostics = facebookImagePersistenceDiagnostics({
+    listingId,
+    decision: manualRejected ? "REJECTED" : decision.bucket,
+    lifecycleStatus: manualRejected ? "REJECTED" : decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket,
+    existingListingFound: Boolean(existing),
+    existingListingLifecycle: existingState.lifecycleStatus,
+    imagePersistenceAttempted: true,
+    storageUploadAttempted: imageMirror.stats.inputCount,
+    storageUploadSuccess: imageMirror.stats.uploadedCount,
+    storageUploadFailed: imageMirror.stats.failedCount,
+    storageFailureReason: imageMirror.stats.failedCount > 0 ? "FACEBOOK_IMAGE_MIRROR_FAILED" : null,
     postId: externalId,
     creationTime: normalized.publishedAt ?? null,
     timestampSource: normalized.publishedAt ? "POST_PAGE_METADATA" as const : "UNKNOWN" as const,

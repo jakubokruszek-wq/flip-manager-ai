@@ -11,6 +11,7 @@ import {
   type CollectorMainFeedDiagnostic,
   type CollectorSearchDiscoveryEvidence,
   type CollectorSearchQueryTelemetry,
+  projectImagePersistenceDiagnostics,
   projectSearchTileDiagnostics,
   type FacebookGroupProgress,
   type ScanProgressResponse,
@@ -75,7 +76,7 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
     ...facebookRows.flatMap((item) => string(item.error_message) ? [String(item.error_message)] : []),
     ...(string(olxRow?.error_message) ? [String(olxRow?.error_message)] : []),
   ]);
-  const collector = collectorFunnel(rows(collectorBatchesResult.data), scanRows);
+  const collector = collectorFunnel(rows(collectorBatchesResult.data), scanRows, facebookRows);
   const partialReason = collectorPartialReason(scanRows, collector);
   const currentFacebook = facebookGroups.find((group) => group.status === "running");
   const queuedFacebook = facebookGroups.find((group) => group.status === "queued");
@@ -211,7 +212,7 @@ function toCollectorGroup(value: Row): FacebookGroupProgress {
   return collectorProgressGroupFromSourceScan({ id: String(value.id), status: String(value.status), scannedCount: number(value.scanned_count), errorMessage: string(value.error_message) });
 }
 
-function collectorFunnel(batchRows: Row[], scanRows: Row[]): CollectorScanFunnel | null {
+function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = []): CollectorScanFunnel | null {
   const facebookScans = scanRows.filter((item) => item.source === "facebook");
   if (facebookScans.length === 0) return null;
   const payloads = batchRows.map((item) => row(item.payload)).filter((item): item is Row => item !== null);
@@ -227,6 +228,19 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[]): CollectorScanFunnel
   const matched = sum(facebookScans, "matched_count");
   const search = searchSummary(payloads);
   const mainFeedDiagnostics = mainFeedSummary(payloads);
+  // Per-post persistence diagnostics live in the immutable queue job result;
+  // collector_scan_batches intentionally keeps only the aggregate batch result.
+  // Read both locations for compatibility with older/manual batch writers.
+  const imageDiagnostics = projectImagePersistenceDiagnostics([
+    ...batchRows.flatMap((batch) => {
+      const result = row(batch.result);
+      return Array.isArray(result?.persistenceDiagnostics) ? result.persistenceDiagnostics : [];
+    }),
+    ...jobRows.flatMap((job) => {
+      const result = row(job.result_summary);
+      return Array.isArray(result?.persistenceDiagnostics) ? result.persistenceDiagnostics : [];
+    }),
+  ]);
   const buildingTypeUnverified = countWarningMatches(warnings, /BUILDING(?:_TYPE)?_(?:UNVERIFIED|UNKNOWN)/i);
   const outsideLodz = countWarningMatches(warnings, /(?:OUTSIDE|LOCATION).*LODZ/i);
   const tenement = countWarningMatches(warnings, /(?:TENEMENT|KAMIENICA)/i);
@@ -259,6 +273,7 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[]): CollectorScanFunnel
       queries: search.queries,
     },
     mainFeedDiagnostics,
+    imageDiagnostics,
   };
 }
 

@@ -312,6 +312,22 @@ async function associateCachedFacebookListing(
   if (saved.error) throw new Error(`FACEBOOK_CACHE_METADATA_PERSIST_FAILED: ${saved.error.message}`);
   const matched = await readFacebookCachedMatch((columns) => supabase.from("listing_filter_matches").select(columns).eq("listing_id", input.listingId).eq("search_filter_id", input.filterId).eq("is_current_match", true).maybeSingle());
   return { status: "reused" as const, listingId: input.listingId, listingCreated: false, listingUpdated: false, matched, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], persistenceDiagnostics: {
+    listingId: input.listingId,
+    decision: matched ? "MATCHED" as const : null,
+    lifecycleStatus: matched ? "ACTIVE" : null,
+    existingListingFound: true,
+    existingListingLifecycle: null,
+    existingListingImageCount: 0,
+    incomingImageCount: 0,
+    imagePersistenceAttempted: false,
+    storageUploadAttempted: 0,
+    storageUploadSuccess: 0,
+    storageUploadFailed: 0,
+    storageFailureReason: null,
+    imagesBeforeUpdate: 0,
+    imagesAfterUpdate: 0,
+    thumbnailBeforePresent: false,
+    thumbnailAfterPresent: false,
     postId: input.postId, creationTime: input.publishedAt, timestampSource: input.publishedAt ? "POST_PAGE" as const : "UNKNOWN" as const,
     publishedAtCandidate: input.publishedAt, publishedAtPersistAttempted: false, publishedAtPersisted: false,
     exactBoundCandidates: 0, relevanceAccepted: 0, relevanceRejected: 0, mirrorAttempted: 0, mirroredCount: 0,

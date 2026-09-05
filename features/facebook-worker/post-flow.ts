@@ -1,6 +1,23 @@
 import type { FacebookIntentSource, FacebookListingIntent, FacebookPostPerformanceTiming, FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
 
 export type FacebookPersistenceDiagnostics = {
+  /** Safe per-post image/persistence trace. Optional for backwards-compatible batches. */
+  listingId?: string | null;
+  decision?: "MATCHED" | "REVIEW" | "REJECTED" | null;
+  lifecycleStatus?: string | null;
+  existingListingFound?: boolean;
+  existingListingLifecycle?: string | null;
+  existingListingImageCount?: number;
+  incomingImageCount?: number;
+  imagePersistenceAttempted?: boolean;
+  storageUploadAttempted?: number;
+  storageUploadSuccess?: number;
+  storageUploadFailed?: number;
+  storageFailureReason?: string | null;
+  imagesBeforeUpdate?: number;
+  imagesAfterUpdate?: number;
+  thumbnailBeforePresent?: boolean;
+  thumbnailAfterPresent?: boolean;
   postId: string | null;
   creationTime: string | null;
   timestampSource: "POST_PAGE_METADATA" | "POST_PAGE" | "UNKNOWN";

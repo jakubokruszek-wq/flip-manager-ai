@@ -40,6 +40,16 @@ export function facebookMediaBindingSummary(input: FacebookListingInput, expecte
 }
 
 export function facebookImagePersistenceDiagnostics(input: {
+  listingId?: string | null;
+  decision?: "MATCHED" | "REVIEW" | "REJECTED" | null;
+  lifecycleStatus?: string | null;
+  existingListingFound?: boolean;
+  existingListingLifecycle?: string | null;
+  imagePersistenceAttempted?: boolean;
+  storageUploadAttempted?: number;
+  storageUploadSuccess?: number;
+  storageUploadFailed?: number;
+  storageFailureReason?: string | null;
   postId: string | null;
   creationTime: string | null;
   timestampSource: "POST_PAGE_METADATA" | "POST_PAGE" | "UNKNOWN";
@@ -58,7 +68,35 @@ export function facebookImagePersistenceDiagnostics(input: {
   const persistedNewImageCount = input.finalListingImages.filter((image) => !existing.has(image)).length;
   const relevanceRejected = Math.max(0, input.exactBoundCandidates - input.relevanceAccepted);
   const imageReasonCode = persistedNewImageCount === input.mirroredCount ? "NONE" : "FACEBOOK_IMAGE_PERSIST_COUNT_MISMATCH";
+  const hasExtendedDiagnostics = input.listingId !== undefined
+    || input.decision !== undefined
+    || input.lifecycleStatus !== undefined
+    || input.existingListingFound !== undefined
+    || input.existingListingLifecycle !== undefined
+    || input.imagePersistenceAttempted !== undefined
+    || input.storageUploadAttempted !== undefined
+    || input.storageUploadSuccess !== undefined
+    || input.storageUploadFailed !== undefined
+    || input.storageFailureReason !== undefined;
   return {
+    ...(hasExtendedDiagnostics ? {
+      listingId: input.listingId ?? null,
+      decision: input.decision ?? null,
+      lifecycleStatus: input.lifecycleStatus ?? null,
+      existingListingFound: input.existingListingFound ?? false,
+      existingListingLifecycle: input.existingListingLifecycle ?? null,
+      existingListingImageCount: input.existingImages.length,
+      incomingImageCount: input.mirrorAttempted,
+      imagePersistenceAttempted: input.imagePersistenceAttempted ?? input.publishedAtPersistAttempted,
+      storageUploadAttempted: input.storageUploadAttempted ?? input.mirrorAttempted,
+      storageUploadSuccess: input.storageUploadSuccess ?? input.mirroredCount,
+      storageUploadFailed: input.storageUploadFailed ?? 0,
+      storageFailureReason: input.storageFailureReason ?? null,
+      imagesBeforeUpdate: input.existingImages.length,
+      imagesAfterUpdate: input.finalListingImages.length,
+      thumbnailBeforePresent: input.existingImages.length > 0,
+      thumbnailAfterPresent: input.finalListingImages.length > 0,
+    } : {}),
     postId: input.postId,
     creationTime: input.creationTime,
     timestampSource: input.timestampSource,

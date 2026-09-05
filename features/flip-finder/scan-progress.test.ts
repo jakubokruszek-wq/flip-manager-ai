@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
+import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, projectImagePersistenceDiagnostics, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -127,6 +127,39 @@ test("missing tile diagnostics return an empty list and projection is capped at 
   const projected = projectSearchTileDiagnostics(values, "mieszkanie");
   assert.equal(projected.length, 50);
   assert.equal(projected[49].tileIndex, 49);
+});
+
+test("projects bounded image persistence diagnostics without secrets or image URLs", () => {
+  const [diagnostic] = projectImagePersistenceDiagnostics([{
+    postId: "1582049850279825", listingId: "d35b4c57-5d0a-49af-8900-3a091a7f52ca",
+    decision: "REVIEW", lifecycleStatus: "REVIEW", existingListingFound: true,
+    existingListingLifecycle: "REVIEW", existingListingImageCount: 0, incomingImageCount: 2,
+    exactBoundCandidates: 2, relevanceAccepted: 2, relevanceRejected: 0,
+    imagePersistenceAttempted: true, storageUploadAttempted: 2, storageUploadSuccess: 2,
+    storageUploadFailed: 0, storageFailureReason: null, imagesBeforeUpdate: 0, imagesAfterUpdate: 2,
+    thumbnailBeforePresent: false, thumbnailAfterPresent: true, imageReasonCode: "NONE", reasonCodes: [],
+    leaseToken: "must-not-survive", workerSecret: "must-not-survive", normalizedMediaUrl: "https://scontent.xx.fbcdn.net/private",
+  }]);
+  assert.deepEqual(diagnostic, {
+    postId: "1582049850279825", listingId: "d35b4c57-5d0a-49af-8900-3a091a7f52ca", decision: "REVIEW", lifecycleStatus: "REVIEW",
+    existingListingFound: true, existingListingLifecycle: "REVIEW", existingListingImageCount: 0, incomingImageCount: 2,
+    exactBoundCandidates: 2, relevanceAccepted: 2, relevanceRejected: 0, imagePersistenceAttempted: true,
+    storageUploadAttempted: 2, storageUploadSuccess: 2, storageUploadFailed: 0, storageFailureReason: null,
+    imagesBeforeUpdate: 0, imagesAfterUpdate: 2, thumbnailBeforePresent: false, thumbnailAfterPresent: true,
+    imageReasonCode: "NONE", reasonCodes: [],
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /leaseToken|workerSecret|normalizedMediaUrl|scontent/);
+});
+
+test("image persistence diagnostics are empty when batch result has no diagnostics", () => {
+  assert.deepEqual(projectImagePersistenceDiagnostics(undefined), []);
+});
+
+test("image persistence diagnostics are capped at fifty records", () => {
+  const values = Array.from({ length: 75 }, (_, index) => ({ postId: String(1582049850279825 + index), finalListingImageCount: index }));
+  const projected = projectImagePersistenceDiagnostics(values);
+  assert.equal(projected.length, 50);
+  assert.equal(projected[49].imagesAfterUpdate, 49);
 });
 
 function unit(index: number, status: ScanWorkUnit["status"], source: ScanWorkUnit["source"] = "facebook"): ScanWorkUnit {

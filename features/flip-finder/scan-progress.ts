@@ -115,6 +115,32 @@ export type CollectorMainFeedDiagnostic = {
   failSubstep: string | null;
 };
 
+/** Safe, bounded image/persistence trace projected from a completed batch. */
+export type CollectorImagePersistenceDiagnostic = {
+  postId: string | null;
+  listingId: string | null;
+  decision: "MATCHED" | "REVIEW" | "REJECTED" | null;
+  lifecycleStatus: string | null;
+  existingListingFound: boolean;
+  existingListingLifecycle: string | null;
+  existingListingImageCount: number;
+  incomingImageCount: number;
+  exactBoundCandidates: number;
+  relevanceAccepted: number;
+  relevanceRejected: number;
+  imagePersistenceAttempted: boolean;
+  storageUploadAttempted: number;
+  storageUploadSuccess: number;
+  storageUploadFailed: number;
+  storageFailureReason: string | null;
+  imagesBeforeUpdate: number;
+  imagesAfterUpdate: number;
+  thumbnailBeforePresent: boolean;
+  thumbnailAfterPresent: boolean;
+  imageReasonCode: string;
+  reasonCodes: string[];
+};
+
 export type ScanWorkUnit = {
   id: string;
   source: ListingSource;
@@ -163,6 +189,7 @@ export type CollectorScanFunnel = {
     queries: CollectorSearchQueryTelemetry[];
   };
   mainFeedDiagnostics: CollectorMainFeedDiagnostic[];
+  imageDiagnostics: CollectorImagePersistenceDiagnostic[];
 };
 
 export type OpenAICostWindow = {
@@ -266,6 +293,49 @@ export function projectSearchTileDiagnostics(value: unknown, query: string, limi
   });
 }
 
+export function projectImagePersistenceDiagnostics(value: unknown, limit = 50): CollectorImagePersistenceDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  const boundedLimit = Math.max(0, Math.min(50, Math.floor(limit)));
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .slice(0, boundedLimit)
+    .map((item) => {
+      const existingCount = nonnegativeInteger(item.existingListingImageCount ?? item.imagesBeforeUpdate);
+      const incomingCount = nonnegativeInteger(item.incomingImageCount ?? item.mirrorAttempted);
+      const afterCount = nonnegativeInteger(item.imagesAfterUpdate ?? item.finalListingImageCount);
+      const decision = item.decision === "MATCHED" || item.decision === "REVIEW" || item.decision === "REJECTED" ? item.decision : null;
+      const lifecycle = item.lifecycleStatus === "ACTIVE" || item.lifecycleStatus === "REVIEW" || item.lifecycleStatus === "STALE" || item.lifecycleStatus === "ARCHIVED" || item.lifecycleStatus === "REJECTED"
+        ? item.lifecycleStatus : null;
+      const reasonCodes = Array.isArray(item.reasonCodes)
+        ? item.reasonCodes.filter((reason): reason is string => typeof reason === "string" && /^[A-Z0-9_:-]{1,120}$/.test(reason)).slice(0, 20)
+        : [];
+      return {
+        postId: numericId(item.postId),
+        listingId: safeUuid(item.listingId),
+        decision,
+        lifecycleStatus: lifecycle,
+        existingListingFound: item.existingListingFound === true,
+        existingListingLifecycle: typeof item.existingListingLifecycle === "string" ? item.existingListingLifecycle.slice(0, 40) : null,
+        existingListingImageCount: existingCount,
+        incomingImageCount: incomingCount,
+        exactBoundCandidates: nonnegativeInteger(item.exactBoundCandidates),
+        relevanceAccepted: nonnegativeInteger(item.relevanceAccepted),
+        relevanceRejected: nonnegativeInteger(item.relevanceRejected),
+        imagePersistenceAttempted: item.imagePersistenceAttempted === true,
+        storageUploadAttempted: nonnegativeInteger(item.storageUploadAttempted ?? item.mirrorAttempted),
+        storageUploadSuccess: nonnegativeInteger(item.storageUploadSuccess ?? item.mirroredCount),
+        storageUploadFailed: nonnegativeInteger(item.storageUploadFailed),
+        storageFailureReason: safeDiagnosticError(item.storageFailureReason),
+        imagesBeforeUpdate: existingCount,
+        imagesAfterUpdate: afterCount,
+        thumbnailBeforePresent: typeof item.thumbnailBeforePresent === "boolean" ? item.thumbnailBeforePresent : existingCount > 0,
+        thumbnailAfterPresent: typeof item.thumbnailAfterPresent === "boolean" ? item.thumbnailAfterPresent : afterCount > 0,
+        imageReasonCode: typeof item.imageReasonCode === "string" ? item.imageReasonCode.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "NONE",
+        reasonCodes,
+      };
+    });
+}
+
 export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJobStatus[]): ScanProgressResponse["overall"] & { status: ScanProgressStatus } {
   const terminalUnits = units.filter((unit) => isTerminalUnitStatus(unit.status)).length;
   // A queue job can fail after its source scan has already been finalized by a
@@ -296,6 +366,7 @@ export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJ
 }
 
 function numericId(value: unknown): string | null { return typeof value === "string" && /^\d{5,30}$/.test(value) ? value : typeof value === "number" && Number.isSafeInteger(value) && value >= 10_000 ? String(value) : null; }
+function safeUuid(value: unknown): string | null { return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ? value : null; }
 function isoTimestamp(value: unknown): string | null { if (typeof value !== "string") return null; const timestamp = Date.parse(value); return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null; }
 function facebookPhotoUrl(value: unknown): string | null { if (typeof value !== "string") return null; try { const parsed = new URL(value); return parsed.protocol === "https:" && parsed.hostname === "www.facebook.com" && /^\/photo(?:\.php)?\/?$/i.test(parsed.pathname) ? value.slice(0, 2_000) : null; } catch { return null; } }
 function safeDiagnosticError(value: unknown): string | null { return typeof value === "string" ? value.replace(/token|secret|cookie|hmac|authorization/gi, "redacted").slice(0, 240) : null; }
