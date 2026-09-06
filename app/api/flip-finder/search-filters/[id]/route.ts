@@ -13,7 +13,7 @@ export async function PATCH(request: Request, { params }: Context) {
   let input: SearchFilterInput;
   try { input = parseSearchFilterInput(await request.json()); }
   catch (error) { return Response.json({ message: error instanceof Error ? error.message : "Nieprawidłowe dane filtra." }, { status: 400 }); }
-  try { const filterId = (await params).id; const filter = await updateSearchFilter(filterId, input); if (!filter) return Response.json({ message: "Nie znaleziono filtra." }, { status: 404 }); try { const recalculation = await recalculateFilterMatches(filterId); return Response.json({ filter, recalculation }); } catch (error) { console.error("FLIP FINDER EDIT RECALCULATE ERROR:", error); return Response.json({ filter, recalculation: null, recalculationWarning: "Filtr zapisano, ale nie udało się odświeżyć wyników." }); } }
+  try { const filterId = (await params).id; const filter = await updateSearchFilter(filterId, input); if (!filter) return Response.json({ message: "Nie znaleziono filtra." }, { status: 404 }); try { const recalculation = await recalculateFilterMatches(filterId, { allowWithoutScan: true }); return Response.json({ filter, recalculation }); } catch (error) { console.error("FLIP FINDER EDIT RECALCULATE ERROR:", error); return Response.json({ filter, recalculation: null, recalculationWarning: "Filtr zapisano, ale nie udało się odświeżyć wyników." }); } }
   catch { return Response.json({ message: "Nie udało się zapisać filtra." }, { status: 500 }); }
 }
 

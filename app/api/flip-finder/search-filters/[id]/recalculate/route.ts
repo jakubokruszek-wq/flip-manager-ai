@@ -10,7 +10,7 @@ export async function POST(request: Request, { params }: Context) {
   }
 
   try {
-    const result = await recalculateFilterMatches((await params).id);
+    const result = await recalculateFilterMatches((await params).id, { allowWithoutScan: true });
 
     return result
       ? Response.json(result)

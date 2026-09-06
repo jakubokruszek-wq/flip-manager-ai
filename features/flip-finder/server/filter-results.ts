@@ -19,6 +19,7 @@ import { safeFacebookDisplayLocation } from "@/features/facebook-watcher/faceboo
 import { createClient } from "@/lib/supabase/server";
 import { calculateOpportunityAssessment } from "@/features/flip-finder/opportunity-score";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
+import { visibleMembership } from "@/features/flip-finder/membership-reconciliation";
 
 type Row = Record<string, unknown>;
 
@@ -45,6 +46,7 @@ type MatchRow = {
   lastMatchedAt: string;
   matchOrigin: "scan" | "filter_recalculation" | "collector_import";
   matchReasons: string[];
+  isCurrentMatch: boolean;
 };
 
 type ListingRow = Pick<
@@ -97,7 +99,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const [matchesResult, scansResult] = await Promise.all([
     supabase
       .from("listing_filter_matches")
-      .select("listing_id,search_filter_id,first_matched_at,last_matched_at,match_origin,match_reasons")
+      .select("listing_id,search_filter_id,first_matched_at,last_matched_at,is_current_match,match_origin,match_reasons")
       .eq("search_filter_id", filterId),
     supabase
       .from("source_scans")
@@ -112,12 +114,16 @@ export async function getFilterResults(filterId: string, includeArchived = false
     throw new Error("Nie udało się pobrać wyników filtra.");
   }
 
-  const matches = filterMatchesForFilter(
+  const allMatches = filterMatchesForFilter(
     asRows(matchesResult.data)
       .map(toMatchRow)
       .filter((match): match is MatchRow => match !== null),
     filterId,
   );
+  // Current MATCHED memberships and explicit REVIEW memberships are visible in
+  // the Finder. Reconciled-out rows remain in the database for audit/history,
+  // but must not reappear as active results.
+  const matches = includeArchived ? allMatches : allMatches.filter(visibleMembership);
   const scans = asRows(scansResult.data)
     .map(toSearchFilterScan)
     .filter((scan): scan is SearchFilterScan => scan !== null);
@@ -330,9 +336,10 @@ function toMatchRow(row: Row): MatchRow | null {
   const lastMatchedAt = nullableString(row.last_matched_at);
   const matchOrigin = nullableString(row.match_origin) ?? "scan";
   const matchReasons = stringArray(row.match_reasons);
+  const isCurrentMatch = row.is_current_match !== false;
 
   return listingId && searchFilterId && firstMatchedAt && lastMatchedAt && isMatchOrigin(matchOrigin)
-    ? { listingId, searchFilterId, firstMatchedAt, lastMatchedAt, matchOrigin, matchReasons }
+    ? { listingId, searchFilterId, firstMatchedAt, lastMatchedAt, matchOrigin, matchReasons, isCurrentMatch }
     : null;
 }
 

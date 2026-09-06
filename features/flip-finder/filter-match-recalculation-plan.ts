@@ -5,9 +5,15 @@ export type RecalculationListing = FilterCandidate & {
   id: string;
   source: ListingSource;
   originalUrl: string;
+  manualDecision?: "ACCEPTED" | "REJECTED" | null;
+  lifecycleStatus?: "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED" | null;
 };
 
-export type RecalculationMatch = { listingId: string };
+export type RecalculationMatch = {
+  listingId: string;
+  isCurrentMatch?: boolean;
+  matchReasons?: string[];
+};
 
 export type FilterRecalculationPlan = {
   evaluated: number;
@@ -28,7 +34,11 @@ export function planFilterMatchRecalculation(
   matches: RecalculationMatch[],
 ): FilterRecalculationPlan {
   const listingsById = new Map(listings.map((listing) => [listing.id, listing]));
-  const existingIds = new Set(matches.map((match) => match.listingId));
+  const existingIds = new Set(
+    matches
+      .filter((match) => match.isCurrentMatch !== false || (match.matchReasons ?? []).some((reason) => reason === "review" || reason.startsWith("unknown_")))
+      .map((match) => match.listingId),
+  );
   const addedListingIds: string[] = [];
   const removedIds = new Set<string>();
   const unchangedListingIds: string[] = [];
@@ -46,6 +56,11 @@ export function planFilterMatchRecalculation(
     }
 
     evaluated += 1;
+    const permanentlyExcluded = listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "REJECTED" || listing.lifecycleStatus === "ARCHIVED";
+    if (permanentlyExcluded) {
+      if (existingIds.has(listing.id)) removedIds.add(listing.id);
+      continue;
+    }
     const decision = evaluateListingAgainstFilter(listing, filter);
     const categoryPage = isMorizonCategoryPage(listing);
     const matchesCurrentFilter = decision.matches && !categoryPage;
@@ -79,11 +94,11 @@ export function planFilterMatchRecalculation(
 
   return {
     evaluated,
-    matchesBefore: matches.length,
+    matchesBefore: existingIds.size,
     addedListingIds,
     removedListingIds: [...removedIds],
     unchangedListingIds,
-    matchesAfter: matches.length - removedIds.size + addedListingIds.length,
+    matchesAfter: existingIds.size - removedIds.size + addedListingIds.length,
     rejectedByPricePerSqm,
     rejectedByOtherCriteria,
     maxPricePerSqmBefore: maximumPricePerSqm(
