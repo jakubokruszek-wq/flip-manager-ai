@@ -151,6 +151,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
 type GalleryState = NonNullable<FilterResult["galleryStatus"]>;
 
 type GalleryTraceStage =
+  | "GALLERY_BUTTON_RENDERED"
   | "GALLERY_UI_CLICK"
   | "GALLERY_HANDLER_ENTER"
   | "GALLERY_GUARD_PASS"
@@ -178,9 +179,14 @@ type GalleryTraceEntry = {
   currentTargetTag?: string | null;
   disabled?: boolean;
   pointerEvents?: string | null;
+  source?: FilterResult["source"];
+  clientBuild?: string;
+  component?: string;
+  buttonRendered?: boolean;
 };
 
 const GALLERY_TRACE_STORAGE_KEY = "flipFinderGalleryRequestTraces";
+const CLIENT_BUILD_ID = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_COMMIT_SHA ?? "gallery-render-probe-v1";
 
 function createGalleryTraceId(): string {
   try {
@@ -206,7 +212,7 @@ function recordGalleryTrace(
   result: FilterResult,
   status: GalleryState,
   traceId: string,
-  extra: Pick<GalleryTraceEntry, "httpStatus" | "responseOk" | "errorCode" | "guard" | "targetTag" | "currentTargetTag" | "disabled" | "pointerEvents"> = {},
+  extra: Pick<GalleryTraceEntry, "httpStatus" | "responseOk" | "errorCode" | "guard" | "targetTag" | "currentTargetTag" | "disabled" | "pointerEvents" | "clientBuild" | "component" | "buttonRendered"> = {},
 ): void {
   const entry: GalleryTraceEntry = {
     stage,
@@ -215,6 +221,7 @@ function recordGalleryTrace(
     postId: galleryPostId(result),
     galleryStatus: status,
     timestamp: new Date().toISOString(),
+    source: result.source,
     ...extra,
   };
   try {
@@ -263,8 +270,15 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
   const [total, setTotalValue] = useState(result.galleryTotal ?? 0);
   const [busy, setBusy] = useState(false);
   const inFlightRef = useRef(false);
+  const renderProbeSentRef = useRef(false);
   const [localTraceId] = useState(createGalleryTraceId);
   const traceId = providedTraceId ?? localTraceId;
+  useEffect(() => {
+    if (renderProbeSentRef.current) return;
+    if (result.source !== "facebook" || result.lifecycleStatus === "REJECTED" || result.lifecycleStatus === "ARCHIVED" || result.lifecycleStatus === "STALE" || result.manualDecision === "REJECTED") return;
+    renderProbeSentRef.current = true;
+    recordGalleryTrace("GALLERY_BUTTON_RENDERED", result, status, traceId, { clientBuild: CLIENT_BUILD_ID, component: "GalleryRequestButton", buttonRendered: true });
+  }, [result, status, traceId]);
   useEffect(() => {
     if (status !== "PENDING" && status !== "RUNNING") return;
     let cancelled = false;

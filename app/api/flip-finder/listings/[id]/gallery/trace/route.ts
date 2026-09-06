@@ -19,7 +19,7 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
     const trace = projectGalleryTrace(value, listingId);
     if (!trace) return Response.json({ ok: false, code: "INVALID_GALLERY_TRACE" }, { status: 400 });
     await writeGalleryTrace(trace);
-    console.info("FLIP_GALLERY_SERVER_TRACE", JSON.stringify({ traceId: trace.traceId, event: trace.event, listingId, postId: trace.postId, galleryStatus: trace.galleryStatus, serverTimestamp: new Date().toISOString() }));
+    console.info("FLIP_GALLERY_SERVER_TRACE", JSON.stringify({ traceId: trace.traceId, event: trace.event, listingId, postId: trace.postId, source: trace.source, component: trace.component, buttonRendered: trace.buttonRendered, clientBuild: trace.clientBuild, galleryStatus: trace.galleryStatus, serverTimestamp: new Date().toISOString() }));
     return Response.json({ ok: true, traceId: trace.traceId });
   } catch {
     return Response.json({ ok: false, code: "GALLERY_TRACE_STORE_FAILED" }, { status: 503 });

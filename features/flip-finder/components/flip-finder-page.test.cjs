@@ -10,6 +10,7 @@ const galleryRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip
 const galleryTraceRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/listings/[id]/gallery/trace/route.ts"), "utf8");
 const galleryTraceStore = fs.readFileSync(path.join(__dirname, "../server/gallery-request-trace.ts"), "utf8");
 const galleryTraceMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906133000_create_gallery_request_traces.sql"), "utf8");
+const galleryTraceProbeMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906143000_extend_gallery_request_traces_render_probe.sql"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
 const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
 
@@ -55,6 +56,8 @@ test("review cards expose safe image and persisted source provenance", () => {
 });
 
 test("Facebook cards expose an explicit, non-blocking on-demand gallery request", () => {
+  assert.equal((inlineResults.match(/function GalleryRequestButton\(/g) || []).length, 1);
+  assert.match(page, /<InlineFilterResults[^>]+filterId=\{activeFilter\.id\}/);
   assert.match(inlineResults, /POBIERZ ZDJĘCIA|POBIERZ ZDJ/);
   assert.match(inlineResults, /listings\/\$\{result\.id\}\/gallery/);
   assert.match(inlineResults, /GALLERY_UI_CLICK/);
@@ -67,6 +70,11 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /GALLERY_CARD_POINTER_CAPTURE/);
   assert.match(inlineResults, /GALLERY_BUTTON_CLICK_CAPTURE/);
   assert.match(inlineResults, /GALLERY_CARD_CLICK_CAPTURE/);
+  assert.match(inlineResults, /GALLERY_BUTTON_RENDERED/);
+  assert.match(inlineResults, /GalleryRequestButton/);
+  assert.match(inlineResults, /buttonRendered: true/);
+  assert.match(inlineResults, /CLIENT_BUILD_ID/);
+  assert.match(inlineResults, /result\.source/);
   assert.match(inlineResults, /onPointerDownCapture/);
   assert.match(inlineResults, /onClickCapture/);
   assert.match(inlineResults, /targetTag/);
@@ -99,6 +107,21 @@ test("gallery mutation is protected by same-origin request authorization", () =>
   assert.match(galleryTraceRoute, /readGalleryTraces/);
   assert.match(galleryTraceRoute, /writeGalleryTrace/);
   assert.match(galleryTraceRoute, /authorizeGalleryTraceRead/);
+});
+
+test("render-time gallery probe is durable, bounded, and non-business-mutating", () => {
+  assert.match(galleryTraceProbeMigration, /add column if not exists source text/);
+  assert.match(galleryTraceProbeMigration, /add column if not exists client_build text/);
+  assert.match(galleryTraceProbeMigration, /add column if not exists component text/);
+  assert.match(galleryTraceProbeMigration, /add column if not exists button_rendered boolean/);
+  assert.match(galleryTraceProbeMigration, /GALLERY_BUTTON_RENDERED/);
+  assert.match(galleryTraceProbeMigration, /enable row level security/);
+  assert.match(galleryTraceProbeMigration, /revoke all on table public\.gallery_request_traces from anon, authenticated/);
+  assert.match(galleryTraceProbeMigration, /grant select, insert on table public\.gallery_request_traces to service_role/);
+  assert.match(galleryTraceStore, /client_build/);
+  assert.match(galleryTraceStore, /button_rendered/);
+  assert.match(galleryTraceStore, /isRenderProbeSchemaMissing/);
+  assert.match(galleryTraceStore, /legacyQuery/);
 });
 
 test("gallery trace storage is backend-only and does not mutate business state", () => {
