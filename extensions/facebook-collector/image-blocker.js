@@ -8,7 +8,6 @@
   const GALLERY_HYDRATION_MEDIA_ALLOWED = "GALLERY_HYDRATION_MEDIA_ALLOWED";
   const RULE_ID_BASE = 1_700_000_000;
   const RULE_ID_MAX = RULE_ID_BASE + 2_000_000;
-  const CDN_MEDIA_REGEX = "^https?://[^/]*(?:fbcdn\\.net|facebook\\.com)/.*(?:\\.(?:jpe?g|png|gif|webp|avif)(?:[?#].*)?$|/p[0-9]+x[0-9]+(?:[/?#]|$))";
   const tabs = new Map();
   const sessions = new Map();
 
@@ -167,8 +166,7 @@
       await installRules(normalizedTabId, {
         removeRuleIds: ids,
         addRules: [
-          { id: ids[0], priority: 1000, action: { type: "block" }, condition: { urlFilter: "|http", resourceTypes: ["image"], tabIds: [normalizedTabId] } },
-          { id: ids[1], priority: 1000, action: { type: "block" }, condition: { regexFilter: CDN_MEDIA_REGEX, resourceTypes: ["media", "xmlhttprequest"], tabIds: [normalizedTabId] } },
+          { id: ids[0], priority: 1000, action: { type: "block" }, condition: { resourceTypes: ["image"], tabIds: [normalizedTabId] } },
         ],
       });
     }

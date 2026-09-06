@@ -10,6 +10,7 @@ test("collector failure payload preserves only safe timeout diagnostics", () => 
     tabId: 77,
     elapsedMs: 25_003,
     source: "lodzsprzedazzakupwynajem",
+    imageRule: null,
     deviceToken: "must-not-survive",
   }));
   assert.deepEqual(parsed, {
@@ -19,6 +20,7 @@ test("collector failure payload preserves only safe timeout diagnostics", () => 
     tabId: 77,
     elapsedMs: 25_003,
     source: "lodzsprzedazzakupwynajem",
+    imageRule: null,
   });
 });
 
@@ -37,4 +39,27 @@ test("failure parser rejects arbitrary error strings and credentials", () => {
   const parsed = parseCollectorScanFailure(JSON.stringify({ error: "token=secret", token: "secret", hmac: "secret" }));
   assert.equal(parsed.errorCode, "COLLECTOR_SCAN_FAILED");
   assert.equal("token" in parsed, false);
+});
+
+test("failure parser preserves only safe DNR diagnostics", () => {
+  const parsed = parseCollectorScanFailure(JSON.stringify({
+    error: "SOURCE_SCAN_IMAGE_RULE_INSTALL_FAILED",
+    stage: "COLLECTOR_START_FAILED",
+    tabId: 22,
+    imageRule: {
+      tabId: 22,
+      ruleIds: [1700000044, "bad"],
+      chromeErrorName: "TypeError",
+      chromeErrorMessage: "Invalid value for resourceTypes",
+      options: {
+        removeRuleIds: [1700000044],
+        addRules: [{ id: 1700000044, priority: 1000, actionType: "block", condition: { tabIds: [22], resourceTypes: ["image"] } }],
+      },
+      deviceToken: "must-not-survive",
+    },
+  }));
+  assert.equal(parsed.imageRule?.chromeErrorName, "TypeError");
+  assert.equal(parsed.imageRule?.options?.addRules.length, 1);
+  assert.equal("deviceToken" in (parsed.imageRule as object), false);
+  assert.doesNotMatch(JSON.stringify(parsed), /must-not-survive|deviceToken|secret|hmac/i);
 });

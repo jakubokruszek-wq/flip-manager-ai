@@ -27,7 +27,7 @@ function validateRuleShape(rule) {
   assert.equal(Array.isArray(rule.condition.resourceTypes), true);
   assert.equal(rule.condition.resourceTypes.length > 0, true);
   assert.equal(rule.condition.resourceTypes.every((type) => VALID_RESOURCE_TYPES.has(type)), true);
-  assert.equal(["urlFilter", "regexFilter"].filter((key) => typeof rule.condition[key] === "string").length, 1);
+  assert.equal(["urlFilter", "regexFilter"].filter((key) => typeof rule.condition[key] === "string").length <= 1, true);
   for (const key of conditionKeys) assert.ok(["tabIds", "resourceTypes", "urlFilter", "regexFilter", "requestDomains", "initiatorDomains"].includes(key), `unknown condition key: ${key}`);
 }
 
@@ -76,11 +76,9 @@ test("SOURCE_SCAN_DATA_ONLY blocks image requests only on the attached collector
   await policy.attachTab(11, { sessionId: "scan-1", mode: policy.SOURCE_SCAN_DATA_ONLY });
 
   const addRules = updates.at(-1).addRules;
-  assert.equal(addRules.length, 2);
+  assert.equal(addRules.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[0].condition.tabIds)), [11]);
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[0].condition.resourceTypes)), ["image"]);
-  assert.deepEqual(JSON.parse(JSON.stringify(addRules[1].condition.tabIds)), [11]);
-  assert.deepEqual(JSON.parse(JSON.stringify(addRules[1].condition.resourceTypes)), ["media", "xmlhttprequest"]);
 
   listeners.before({ tabId: 11, type: "image", url: "https://scontent.xx.fbcdn.net/v/t1.0/a.jpg" });
   listeners.before({ tabId: 11, type: "fetch", url: "https://www.facebook.com/api/graphql/" });
@@ -93,7 +91,6 @@ test("SOURCE_SCAN_DATA_ONLY blocks image requests only on the attached collector
   assert.equal(diagnostics.listingImageBytesReceived, 0);
   assert.equal(diagnostics.fullGalleriesDownloaded, 0);
   assert.equal(diagnostics.photoViewerNavigationsWithImageBytes, 0);
-  assert.equal(addRules[1].condition.regexFilter.includes("fbcdn\\.net"), true);
 });
 
 test("GALLERY_HYDRATION_MEDIA_ALLOWED does not install blocking rules and records responses", async () => {
@@ -168,7 +165,7 @@ test("DNR installation failures preserve the Chrome error and sanitized rule opt
       && error.diagnostics.tabId === 22
       && error.diagnostics.chromeErrorName === "TypeError"
       && error.diagnostics.chromeErrorMessage.includes("resourceTypes")
-      && error.diagnostics.options.addRules.length === 2
+      && error.diagnostics.options.addRules.length === 1
       && !JSON.stringify(error.diagnostics).match(/token|secret|cookie|hmac/i),
   );
 });
