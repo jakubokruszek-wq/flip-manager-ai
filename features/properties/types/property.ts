@@ -148,6 +148,11 @@ export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "ar
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
   manualDecisionReason?: string | null;
   archivedAt?: string | null;
+  galleryStatus?: "NOT_REQUESTED" | "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "FAILED";
+  galleryJobId?: string | null;
+  galleryTotal?: number;
+  galleryPersistedCount?: number;
+  galleryError?: string | null;
 };
 
 /** Persisted Flip Finder listing. */
@@ -168,6 +173,13 @@ export type PropertyListing = Pick<PropertyFields, "externalListingId" | "normal
   manualDecisionReason?: string | null;
   lifecycleStatus?: "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED";
   archivedAt?: string | null;
+  galleryStatus?: "NOT_REQUESTED" | "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "FAILED";
+  galleryJobId?: string | null;
+  galleryRequestedAt?: string | null;
+  galleryCompletedAt?: string | null;
+  galleryError?: string | null;
+  galleryTotal?: number;
+  galleryPersistedCount?: number;
 };
 
 export type PropertyCalculator = Pick<PropertyFields, "purchasePrice" | "purchaseTax" | "notaryCost" | "purchaseCommission" | "renovationCost" | "furnishingCost" | "reserveCost" | "expectedSalePrice" | "saleCommission" | "taxCost" | "totalCost" | "revenue" | "profit" | "roi" | "margin">;

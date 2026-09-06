@@ -15,6 +15,7 @@ import { manualFacebookAdapter } from "./facebook-source-adapter";
 import { createFacebookWatcherAdminClient } from "./supabase-admin";
 import { isLikelySameFacebookProperty } from "./deduplicate-facebook-listing";
 import { mirrorFacebookImages } from "./server/mirror-facebook-images";
+import { dataFirstFacebookImageResult, type FacebookImageMode } from "./facebook-image-mode";
 import { FACEBOOK_WORKFLOW_STATUSES, type FacebookListingInput, type FacebookWatcherListing, type FacebookWorkflowStatus } from "./types";
 import { recordFacebookGroupImport } from "@/features/facebook-groups/server";
 import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebookFieldConfidence } from "./facebook-data-quality";
@@ -37,6 +38,7 @@ export type FacebookAutomatedImportContext = {
   postId: string | null;
   checkedAt: string;
   preserveExistingImagesOnEmptyInput?: boolean;
+  imageMode?: FacebookImageMode;
 };
 
 export type FacebookImportResult = {
@@ -180,7 +182,10 @@ async function importAutomatedFacebook(input: {
   // A verified extraction is authoritative for the current Facebook post. Never
   // carry forward unproven images from an older extraction/cache entry.
   const preserveExistingImages = context.preserveExistingImagesOnEmptyInput === true && boundImages.length === 0;
-  const imageMirror = await mirrorFacebookImages({ listingId: externalId, imageUrls: boundImages, existingImages: existingState.images, preserveExistingImages });
+  const dataFirstSearch = context.imageMode === "SEARCH_DATA_FIRST";
+  const imageMirror = dataFirstSearch
+    ? dataFirstFacebookImageResult(existingState.images, boundImages.length)
+    : await mirrorFacebookImages({ listingId: externalId, imageUrls: boundImages, existingImages: existingState.images, preserveExistingImages });
   effective.images = imageMirror.images;
   const pricePerSqm = effective.price && effective.area ? effective.price / effective.area : null;
   const score = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
@@ -254,12 +259,13 @@ async function importAutomatedFacebook(input: {
   const mediaProvenance = (normalized.mediaCandidates ?? []).map((candidate) => ({
     sourcePostId: candidate.expectedPostId,
     storyRootPostId: candidate.storyRootPostId ?? null,
+    normalizedMediaUrl: candidate.url,
     bindingMethod: candidate.bindingProvenance,
     bindingConfidence: candidate.bindingConfidence,
     classification: candidate.classification,
     classificationConfidence: candidate.classificationConfidence,
   }));
-  const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: persistedPublishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, locationProvenance: locationResolution.provenance, buildingEvidence, confidence: effective.confidence, fieldConfidence: effective.fieldConfidence, fieldProvenance: facebookFieldProvenance(normalized, effective), sourceFacts: effective.sourceFacts, authoritativeSourceText: normalized.postText ?? null, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED", mediaBinding: bindingSummary, mediaProvenance, imageExtractionVersion: 2, imageMirror: imageMirror.stats, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
+  const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: persistedPublishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, locationProvenance: locationResolution.provenance, buildingEvidence, confidence: effective.confidence, fieldConfidence: effective.fieldConfidence, fieldProvenance: facebookFieldProvenance(normalized, effective), sourceFacts: effective.sourceFacts, authoritativeSourceText: normalized.postText ?? null, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED", mediaBinding: bindingSummary, mediaProvenance, imageExtractionVersion: 2, imageMirror: { ...imageMirror.stats, mode: dataFirstSearch ? "SEARCH_DATA_FIRST" : "FULL" }, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
   if (metadata.error) throw new Error(`FACEBOOK_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
   console.info("FACEBOOK_MEDIA_BINDING_SUMMARY", { postId: externalId, ...bindingSummary, mirrored: imageMirror.images.length });
   console.info("FACEBOOK_PUBLICATION_DATE", { postId: externalId, source: normalized.publishedAt ? "FACEBOOK_CREATION_TIME" : previousSource.publishedAt ? "EXISTING_DATA" : "UNKNOWN", exact: Boolean(normalized.publishedAt), persisted: persistedPublishedAt });
@@ -271,11 +277,11 @@ async function importAutomatedFacebook(input: {
     lifecycleStatus: manualRejected ? "REJECTED" : decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket,
     existingListingFound: Boolean(existing),
     existingListingLifecycle: existingState.lifecycleStatus,
-    imagePersistenceAttempted: true,
-    storageUploadAttempted: imageMirror.stats.inputCount,
-    storageUploadSuccess: imageMirror.stats.uploadedCount,
-    storageUploadFailed: imageMirror.stats.failedCount,
-    storageFailureReason: imageMirror.stats.failedCount > 0 ? "FACEBOOK_IMAGE_MIRROR_FAILED" : null,
+    imagePersistenceAttempted: !dataFirstSearch,
+    storageUploadAttempted: dataFirstSearch ? 0 : imageMirror.stats.inputCount,
+    storageUploadSuccess: dataFirstSearch ? 0 : imageMirror.stats.uploadedCount,
+    storageUploadFailed: dataFirstSearch ? 0 : imageMirror.stats.failedCount,
+    storageFailureReason: !dataFirstSearch && imageMirror.stats.failedCount > 0 ? "FACEBOOK_IMAGE_MIRROR_FAILED" : null,
     postId: externalId,
     creationTime: normalized.publishedAt ?? null,
     timestampSource: normalized.publishedAt ? "POST_PAGE_METADATA" as const : "UNKNOWN" as const,
@@ -284,8 +290,8 @@ async function importAutomatedFacebook(input: {
     publishedAtPersisted: !metadata.error,
     exactBoundCandidates: bindingSummary.exactBound,
     relevanceAccepted,
-    mirrorAttempted: boundImages.length,
-    mirroredCount: imageMirror.stats.uploadedCount,
+    mirrorAttempted: dataFirstSearch ? 0 : boundImages.length,
+    mirroredCount: dataFirstSearch ? 0 : imageMirror.stats.uploadedCount,
     existingImages: existingState.images,
     finalListingImages: imageMirror.images,
     imageProvenance: facebookImageProvenanceDiagnostics(normalized.mediaCandidates ?? [], externalId, new Set(boundImages)),

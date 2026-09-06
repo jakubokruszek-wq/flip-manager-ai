@@ -70,7 +70,7 @@ export async function getFacebookSchedulerDiagnostics() {
   const supabase = createFacebookWatcherAdminClient();
   const readClient = createSchedulerReadClient();
   const [jobsResult, sourcesResult, devicesResult, scansResult, batchesResult, filtersResult, lockResult] = await Promise.all([
-    supabase.from("facebook_scan_jobs").select("id,status,scan_run_id,source_scan_id,group_snapshot,result_summary,error_code,error_message,worker_id,created_at,started_at,finished_at,heartbeat_at,consumer_type").eq("consumer_type", "BROWSER_EXTENSION").order("created_at", { ascending: false }).limit(500),
+    supabase.from("facebook_scan_jobs").select("id,status,scan_run_id,source_scan_id,group_snapshot,result_summary,error_code,error_message,worker_id,created_at,started_at,finished_at,heartbeat_at,consumer_type,job_type").eq("consumer_type", "BROWSER_EXTENSION").eq("job_type", "SOURCE_SCAN").order("created_at", { ascending: false }).limit(500),
     supabase.from("watched_facebook_groups").select("id,name,url,enabled,last_checked_at,last_error,access_status").order("priority").order("name"),
     supabase.from("collector_devices").select("id,device_name,last_heartbeat_at,last_source_scan_at,last_captured_count,health_status,revoked_at").is("revoked_at", null).order("last_heartbeat_at", { ascending: false, nullsFirst: false }).limit(1),
     supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot,warnings").eq("source", "facebook").order("started_at", { ascending: false }).limit(500),
@@ -205,7 +205,7 @@ async function releaseSchedulerLock(supabase: ReturnType<typeof createFacebookWa
 }
 
 async function activeBrowserJob(supabase: ReturnType<typeof createFacebookWatcherAdminClient>): Promise<Row | null> {
-  const response = await supabase.from("facebook_scan_jobs").select("id,status,attempts,created_at,heartbeat_at,scan_run_id,source_scan_id,group_snapshot").eq("consumer_type", "BROWSER_EXTENSION").in("status", ["queued", "running"]).order("created_at", { ascending: true }).limit(1).maybeSingle();
+  const response = await supabase.from("facebook_scan_jobs").select("id,status,attempts,created_at,heartbeat_at,scan_run_id,source_scan_id,group_snapshot").eq("consumer_type", "BROWSER_EXTENSION").eq("job_type", "SOURCE_SCAN").in("status", ["queued", "running"]).order("created_at", { ascending: true }).limit(1).maybeSingle();
   if (response.error) throw new Error(`SCHEDULER_ACTIVE_JOB_QUERY_FAILED: ${response.error.message}`);
   return record(response.data);
 }
@@ -221,7 +221,7 @@ async function failStuckJob(supabase: ReturnType<typeof createFacebookWatcherAdm
 async function automaticScanHistory(supabase: ReturnType<typeof createFacebookWatcherAdminClient>): Promise<Row[]> {
   const [scansResult, jobsResult] = await Promise.all([
     supabase.from("source_scans").select("id,scan_run_id,status,started_at,finished_at,scanned_count,matched_count,listings_created,listings_updated,error_message,filter_snapshot,warnings").eq("source", "facebook").order("started_at", { ascending: false }).limit(500),
-    supabase.from("facebook_scan_jobs").select("source_scan_id,group_snapshot").eq("consumer_type", "BROWSER_EXTENSION").order("created_at", { ascending: false }).limit(500),
+    supabase.from("facebook_scan_jobs").select("source_scan_id,group_snapshot").eq("consumer_type", "BROWSER_EXTENSION").eq("job_type", "SOURCE_SCAN").order("created_at", { ascending: false }).limit(500),
   ]);
   const error = scansResult.error ?? jobsResult.error;
   if (error) throw new Error(`SCHEDULER_HISTORY_QUERY_FAILED: ${error.message}`);

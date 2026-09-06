@@ -42,6 +42,7 @@ const SEARCH_TILE_PAYLOAD_WAIT_MS = 1_750;
 const SEARCH_TAB_LOAD_MAX_ATTEMPTS = 2;
 const SEARCH_TAB_LOAD_ATTEMPT_TIMEOUT_MS = 6_000;
 const SEARCH_TAB_LOAD_RETRY_DELAY_MS = 300;
+const GALLERY_JOB_TIMEOUT_MS = 120_000;
 
 const DEFAULT_SOURCES = [
   "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
@@ -251,11 +252,19 @@ async function pollCollectorJobs() {
     const leaseRenewal = startBrowserExtensionLeaseRenewal(claimed.job);
     let result;
     try {
-      result = await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group);
+      result = claimed.job.jobType === "GALLERY_HYDRATION"
+        ? await collectGalleryHydration(claimed.job, requestId)
+        : await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group);
     } finally {
       leaseRenewal.stop();
     }
-    const completedBody = JSON.stringify({ jobId: claimed.job.id, leaseToken: claimed.job.leaseToken, status: result.status === "FAILED" ? "failed" : "completed", errorCode: result.error || null });
+    const completedBody = JSON.stringify({
+      jobId: claimed.job.id,
+      leaseToken: claimed.job.leaseToken,
+      status: result.status === "FAILED" ? "failed" : "completed",
+      errorCode: result.error || null,
+      gallery: claimed.job.jobType === "GALLERY_HYDRATION" ? result.gallery : undefined,
+    });
     await signedPost(`${String(value.apiUrl).replace(/\/+$/, "")}/api/collector/jobs/complete`, completedBody, 8_000);
   } finally { collectorJobPollInFlight = false; }
 }
@@ -328,7 +337,8 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
         const search = await collectFromTab(tabId, { minScrolls: SEARCH_LIMITS.minScrolls, maxScrolls: SEARCH_LIMITS.maxScrolls, maxPosts: SEARCH_LIMITS.maxUniquePerQuery, maxDiscoveryMediaTiles: SEARCH_LIMITS.maxDiscoveryMediaTiles, maxMediaTiles: SEARCH_LIMITS.maxDiscoveryMediaTiles, budgetMs: searchCollectionBudgetMs, searchMode: true, discoverySource: "SEARCH", searchQuery: query }, { requestId, source: primary.source.sourceId, collectionContext });
         const discoveryEndedAtMs = Date.now();
         const resolutionDeadlineMs = Math.min(discoveryEndedAtMs + SEARCH_TILE_RESOLUTION_RESERVE_MS, searchStartedAtMs + SEARCH_LIMITS.hardTimeBudgetMs - SEARCH_QUERY_CLEANUP_RESERVE_MS);
-        const tileResolution = await resolveSearchMediaTiles({ tiles: search.mediaTiles, source: primary.source, query, deadlineMs: resolutionDeadlineMs });
+        const tilesForResolution = searchTilesNeedingParentResolution(search.posts, search.mediaTiles);
+        const tileResolution = await resolveSearchMediaTiles({ tiles: tilesForResolution, source: primary.source, query, deadlineMs: resolutionDeadlineMs });
         const queryPosts = globalThis.FlipFacebookCollectorCore.mergeRecords([...search.posts, ...tileResolution.posts], SEARCH_LIMITS.maxUniquePerQuery);
         const beforeIds = new Set(posts.map((post) => post.postId));
         const mergedSearch = mergePosts([...posts, ...queryPosts]);
@@ -365,14 +375,17 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   const health = healthAfterSearch(primary.health, posts.length, searchTelemetrySummary, durationMs);
   const duplicateCount = primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0) - posts.length;
   const identity = { verified: posts.filter((post) => post.identityConfidence === "EXACT").length, unverified: posts.filter((post) => post.identityConfidence !== "EXACT").length, conflictsBlocked: posts.filter((post) => (post.identityReasons || []).includes("POST_IDENTITY_CONFLICT")).length };
-  const images = { rawCandidates: posts.reduce((sum, post) => sum + (post.media || []).length, 0), verifiedProvenance: posts.reduce((sum, post) => sum + (post.media || []).filter((media) => media.exactAssociation === true && media.exactPostId === post.postId).length, 0), imported: 0 };
+  const images = { rawCandidates: posts.reduce((sum, post) => sum + (post.media || []).length, 0), verifiedProvenance: posts.reduce((sum, post) => sum + (post.media || []).filter((media) => media.exactAssociation === true && media.exactPostId === post.postId).length, 0), imported: 0, downloadedDuringSearch: 0 };
   const targets = ["1577700267381450", "1578068947344582", "1577710350713775"];
   collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
   const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], posts };
   await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
   const upload = await uploadBatch(batch);
-  images.imported = upload?.listingsCreated ? images.verifiedProvenance : 0;
-  const result = { scanId, sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, health, captured: posts.length, searchFallbackUsed: searchRuns.some((run) => run.executed), upload, mainFeed: { captured: primary.posts.length, unique: primary.posts.length, scrolls: primary.health.scrolls, durationMs: primary.health.durationMs, stopReason: primary.health.stopReason }, search: searchRuns, searchTelemetry: searchTelemetrySummary, merged: { totalCaptured: primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0), totalUnique: posts.length, duplicatesRemoved: Math.max(0, duplicateCount) }, identity, images, targetsFound: targets.filter((target) => posts.some((post) => post.postId === target)), iterations: primary.iterations, finishedAt: new Date().toISOString() };
+  // SEARCH_DATA_FIRST deliberately does not download or mirror media. Keep
+  // this counter honest: verified candidates are provenance evidence, not
+  // downloaded images. Gallery hydration is an explicit later operation.
+  images.imported = 0;
+  const result = { scanId, sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, imageMode: "SEARCH_DATA_FIRST", imagesDownloadedDuringSearch: 0, health, captured: posts.length, searchFallbackUsed: searchRuns.some((run) => run.executed), upload, mainFeed: { captured: primary.posts.length, unique: primary.posts.length, scrolls: primary.health.scrolls, durationMs: primary.health.durationMs, stopReason: primary.health.stopReason }, search: searchRuns, searchTelemetry: searchTelemetrySummary, merged: { totalCaptured: primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0), totalUnique: posts.length, duplicatesRemoved: Math.max(0, duplicateCount) }, identity, images, targetsFound: targets.filter((target) => posts.some((post) => post.postId === target)), iterations: primary.iterations, finishedAt: new Date().toISOString() };
   await chrome.storage.local.set({ collectorLastResult: result, collectorState: { status: "idle", phase: "DONE", progress: PHASE_DONE, scanId, finishedAt: result.finishedAt } });
   return result;
 }
@@ -500,6 +513,50 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
   const expectedOpens = Math.min(tilesSeen, SEARCH_LIMITS.maxTilesToOpen);
   const budgetExhausted = deadlineReached || ((tilesOpened < expectedOpens || tilesUnverified > 0) && Date.now() >= deadlineMs);
   return { posts, tilesSeen, rawTilesSeen: tilesSeen, uniqueTilesFound: tilesSeen, candidateBufferSize: tilesSeen, candidateCapReached: false, resolutionCandidates: selected.length, tilesOpened, tilesResolved, tilesUnverified, uniqueParentPosts: posts.length, verifiedParentPosts: posts.length, duplicatesByMedia, tileDiagnostics, budgetExhausted, resolutionStopReason: budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED" };
+}
+
+async function collectGalleryHydration(job, requestId) {
+  const postId = String(job.galleryPostId || "");
+  const sourceUrl = String(job.gallerySourceUrl || "");
+  if (!/^\d{5,30}$/.test(postId) || !/^https:\/\/(?:www\.)?facebook\.com\//i.test(sourceUrl)) return { status: "FAILED", error: "FACEBOOK_GALLERY_TARGET_INVALID" };
+  let tab = null;
+  const deadline = Date.now() + GALLERY_JOB_TIMEOUT_MS;
+  try {
+    tab = await chrome.tabs.create({ url: sourceUrl, active: false });
+    await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline - Date.now())));
+    await waitForContentScript(tab.id, Math.min(10_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
+    const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
+      () => chrome.tabs.sendMessage(tab.id, { type: "HYDRATE_FACEBOOK_GALLERY", options: { expectedPostId: postId, expectedUrl: sourceUrl } }),
+      { timeoutMs: Math.min(30_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId } },
+    );
+    if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_FAILED") };
+    return { status: responseResult.response.result?.status === "FAILED" ? "FAILED" : "COMPLETE", gallery: responseResult.response.result };
+  } catch (error) {
+    return { status: "FAILED", error: collectorErrorCode(error) };
+  } finally {
+    if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+// A search result that is already an exact, author/text-bound parent does not
+// need a photo tab just to rediscover the same parent. Keep unresolved media
+// candidates in the resolver so identity remains fail-closed for all other
+// tiles.
+function searchTilesNeedingParentResolution(posts, tiles) {
+  const exactMediaIds = new Set();
+  for (const post of Array.isArray(posts) ? posts : []) {
+    if (post?.identityConfidence !== "EXACT" || !String(post?.postId || "") || !String(post?.author || "").trim() || !String(post?.text || "").trim()) continue;
+    for (const mediaId of Array.isArray(post.mediaIds) ? post.mediaIds : []) {
+      if (/^\d{5,30}$/.test(String(mediaId))) exactMediaIds.add(String(mediaId));
+    }
+    for (const media of Array.isArray(post.media) ? post.media : []) {
+      // The parent is already exact-bound; this set is only a resolver skip
+      // list, never image provenance. Unverified media therefore cannot be
+      // promoted by this optimisation.
+      if (/^\d{5,30}$/.test(String(media?.mediaId || ""))) exactMediaIds.add(String(media.mediaId));
+    }
+  }
+  return (Array.isArray(tiles) ? tiles : []).filter((tile) => !exactMediaIds.has(String(tile?.mediaId || "")));
 }
 
 async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, tileDiagnostic }) {
@@ -691,7 +748,7 @@ function healthAfterSearch(primary, captured, searchTelemetrySummary, durationMs
 function searchTelemetry({ query, search, tileResolution, mainFeedIds, newUnique, tabLoadDiagnostics, discoveryDurationMs = null, resolutionDurationMs = null, durationMs }) {
   const incompleteTiles = tileResolution.tilesOpened < Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen) || tileResolution.tilesUnverified > 0;
   const status = search.health.status === "FAILED" ? "FAILED" : incompleteTiles || tileResolution.budgetExhausted ? "DEGRADED" : search.posts.length || tileResolution.tilesSeen === 0 ? "HEALTHY" : "DEGRADED";
-  return { query, executed: true, status, scrolls: search.health.scrolls, scrollCount: search.scrollCount ?? search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: tileResolution.tilesSeen, rawTilesSeen: search.rawTilesSeen ?? tileResolution.rawTilesSeen ?? tileResolution.tilesSeen, uniqueTilesFound: search.uniqueTilesFound ?? tileResolution.tilesSeen, candidateBufferSize: search.candidateBufferSize ?? tileResolution.tilesSeen, candidateCapReached: search.candidateCapReached ?? false, resolutionCandidates: tileResolution.resolutionCandidates ?? Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen), payloadObserved: (tileResolution.tileDiagnostics || []).filter((diagnostic) => diagnostic.structuredPayloadFound === true).length, tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, tileDiagnostics: tileResolution.tileDiagnostics, discoveryDurationMs, discoveryDuration: discoveryDurationMs, resolutionDurationMs, resolutionDuration: resolutionDurationMs, discoveryEvidence: search.discoveryEvidence ?? null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", durationMs, discoveryStopReason: search.discoveryStopReason ?? search.health.stopReason, resolutionStopReason: tileResolution.resolutionStopReason ?? (tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED"), stopReason: tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : search.discoveryStopReason ?? search.health.stopReason };
+  return { query, executed: true, status, scrolls: search.health.scrolls, scrollCount: search.scrollCount ?? search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: search.uniqueTilesFound ?? tileResolution.tilesSeen, rawTilesSeen: search.rawTilesSeen ?? tileResolution.rawTilesSeen ?? tileResolution.tilesSeen, uniqueTilesFound: search.uniqueTilesFound ?? tileResolution.tilesSeen, candidateBufferSize: search.candidateBufferSize ?? tileResolution.tilesSeen, candidateCapReached: search.candidateCapReached ?? false, resolutionCandidates: tileResolution.resolutionCandidates ?? Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen), payloadObserved: (tileResolution.tileDiagnostics || []).filter((diagnostic) => diagnostic.structuredPayloadFound === true).length, tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, tileDiagnostics: tileResolution.tileDiagnostics, discoveryDurationMs, discoveryDuration: discoveryDurationMs, resolutionDurationMs, resolutionDuration: resolutionDurationMs, discoveryEvidence: search.discoveryEvidence ?? null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", durationMs, discoveryStopReason: search.discoveryStopReason ?? search.health.stopReason, resolutionStopReason: tileResolution.resolutionStopReason ?? (tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED"), stopReason: tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : search.discoveryStopReason ?? search.health.stopReason };
 }
 function failedSearchTelemetry(query, durationMs, stopReason, tabLoadDiagnostics = null) { return { query, executed: true, status: "FAILED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, payloadObserved: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }; }
 function appendUnexecutedSearchRuns(searchRuns, fromIndex, stopReason) { for (const query of ACTIVE_SEARCH_QUERIES.slice(fromIndex)) searchRuns.push({ query, executed: false, status: "DEGRADED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, payloadObserved: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs: 0, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: 0, tabLoadRecovery: "NOT_STARTED", discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }); }

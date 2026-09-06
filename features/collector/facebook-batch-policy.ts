@@ -101,4 +101,13 @@ export function isCollectorPostFresh(publishedAt: string | null, now = Date.now(
   return publishedAt === null || now - Date.parse(publishedAt) <= COLLECTOR_MAX_POST_AGE_MS;
 }
 
-export const COLLECTOR_IMAGE_IMPORT_OPTIONS = { preserveExistingImagesOnEmptyInput: true } as const;
+/**
+ * Collector batches are data-first: SEARCH must not turn every exact media
+ * candidate into a Storage/gallery download. Images remain available through
+ * the explicit on-demand enrichment path, while existing stable images are
+ * preserved by the import layer.
+ */
+export const COLLECTOR_IMAGE_IMPORT_OPTIONS = {
+  preserveExistingImagesOnEmptyInput: true,
+  imageMode: "SEARCH_DATA_FIRST",
+} as const;

@@ -1,6 +1,7 @@
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { authenticateSignedCollectorRequest, SignedCollectorAuthError } from "@/features/collector/signed-device-auth";
 import { runFacebookSchedulerTick } from "@/features/facebook-worker/scheduler";
+import { completeFacebookGalleryJob } from "@/features/facebook-worker/gallery-jobs";
 
 const PATHNAME = "/api/collector/jobs/complete";
 export const runtime = "nodejs";
@@ -9,9 +10,14 @@ export async function POST(request: Request) {
   const body = await request.text();
   try {
     const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, markHealthy: true });
-    const input = JSON.parse(body) as { jobId?: string; leaseToken?: string; status?: string; errorCode?: string | null };
+    const input = JSON.parse(body) as { jobId?: string; leaseToken?: string; status?: string; errorCode?: string | null; gallery?: { status?: string; expectedPostId?: string; sourceMediaCount?: number; candidates?: unknown[] } };
     if (!input.jobId || !input.leaseToken || !["completed", "failed"].includes(String(input.status))) return Response.json({ ok: false, code: "INVALID_PAYLOAD" }, { status: 400 });
     const supabase = createFacebookWatcherAdminClient();
+    const jobType = await supabase.from("facebook_scan_jobs").select("job_type").eq("id", input.jobId).maybeSingle();
+    if (!jobType.error && jobType.data?.job_type === "GALLERY_HYDRATION") {
+      const result = await completeFacebookGalleryJob({ jobId: input.jobId, leaseToken: input.leaseToken, workerId: device.id, status: input.status as "completed" | "failed", errorCode: input.errorCode, gallery: input.gallery });
+      return cors(Response.json({ ok: true, status: input.status, gallery: result }), request);
+    }
     const now = new Date().toISOString();
     const update = await supabase.from("facebook_scan_jobs").update({ status: input.status, finished_at: now, leased_until: null, heartbeat_at: now, error_code: input.status === "failed" ? String(input.errorCode || "COLLECTOR_FAILED").slice(0, 100) : null, error_message: input.status === "failed" ? String(input.errorCode || "Collector failed").slice(0, 1_000) : null }).eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", device.id).eq("status", "running").select("id").maybeSingle();
     if (update.error || !update.data) return Response.json({ ok: false, code: "COLLECTOR_JOB_LEASE_LOST" }, { status: 409 });

@@ -148,7 +148,55 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
   );
 }
 
-function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChanged: () => void }) {
+type GalleryState = NonNullable<FilterResult["galleryStatus"]>;
+
+function GalleryRequestButton({ result }: { result: FilterResult }) {
+  const [status, setStatus] = useState<GalleryState>(result.galleryStatus ?? "NOT_REQUESTED");
+  const [persisted, setPersistedValue] = useState(result.galleryPersistedCount ?? 0);
+  const [total, setTotalValue] = useState(result.galleryTotal ?? 0);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (status !== "PENDING" && status !== "RUNNING") return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`);
+        const payload: unknown = await readJson(response);
+        if (cancelled || !response.ok || !payload || typeof payload !== "object") return;
+        if ("status" in payload && isGalleryState(payload.status)) setStatus(payload.status);
+        if ("persistedCount" in payload && typeof payload.persistedCount === "number") setPersistedValue(payload.persistedCount);
+        if ("total" in payload && typeof payload.total === "number") setTotalValue(payload.total);
+      } catch { /* bounded UI refresh; the durable job remains authoritative */ }
+    };
+    const interval = window.setInterval(() => void poll(), 2_000);
+    void poll();
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [result.id, status]);
+  if (result.source !== "facebook" || result.lifecycleStatus === "REJECTED" || result.lifecycleStatus === "ARCHIVED" || result.lifecycleStatus === "STALE" || result.manualDecision === "REJECTED") return null;
+  const request = async () => {
+    if (busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE") return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { method: "POST" });
+      const payload: unknown = await readJson(response);
+      if (!response.ok || !payload || typeof payload !== "object") throw new Error("Nie udało się zlecić pobrania galerii.");
+      const next = "status" in payload && isGalleryState(payload.status) ? payload.status : "PENDING";
+      setStatus(next);
+    } catch {
+      setStatus("FAILED");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const label = status === "PENDING" ? "Oczekuje na pobranie galerii" : status === "RUNNING" ? "Pobieranie galerii…" : status === "PARTIAL" ? `Pobrano ${persisted}/${Math.max(total, persisted)} zdjęć` : status === "COMPLETE" ? `Galeria: ${persisted} zdjęć` : status === "FAILED" ? "Ponów pobieranie zdjęć" : "POBIERZ ZDJĘCIA";
+  return <Button className="min-h-10" disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={() => void request()} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
+}
+
+function isGalleryState(value: unknown): value is GalleryState {
+  return value === "NOT_REQUESTED" || value === "PENDING" || value === "RUNNING" || value === "PARTIAL" || value === "COMPLETE" || value === "FAILED";
+}
+
+function ReviewListingCardContent({ result, onChanged }: { result: FilterResult; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const decide = async (decision: "ACCEPTED" | "REJECTED") => {
     setBusy(true);
@@ -165,7 +213,11 @@ function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChan
   return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-lg bg-muted">{result.thumbnailUrl ? <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover" fill sizes="(max-width: 640px) 100vw, 420px" src={result.thumbnailUrl} /> : <Placeholder />}</div><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">{result.opportunityPriority ?? "DO OCENY"}</span></div><OpportunitySummary result={result} /><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}{result.sourceConflict ? " · Źródło wymaga weryfikacji" : ""}</p><div className="mt-3 flex gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">{sourceLabelForResult(result.source)} <ExternalLink className="size-3" /></a> : null}</div></article>;
 }
 
-export function ExpandableListingCard({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
+function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChanged: () => void }) {
+  return <><ReviewListingCardContent onChanged={onChanged} result={result} /><GalleryRequestButton result={result} /></>;
+}
+
+function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [crmImporting, setCrmImporting] = useState(false);
   const [crmToast, setCrmToast] = useState<string | null>(null);
@@ -436,6 +488,10 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
       </DialogContent>
     </Dialog>
   );
+}
+
+export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
+  return <><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton result={props.result} /></div></>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {

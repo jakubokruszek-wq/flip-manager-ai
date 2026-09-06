@@ -28,6 +28,7 @@ test("collector processes fresh authoritative text with exact root media", () =>
 
 test("collector preserves exact root media while keeping import options safe", () => {
   assert.equal(COLLECTOR_IMAGE_IMPORT_OPTIONS.preserveExistingImagesOnEmptyInput, true);
+  assert.equal(COLLECTOR_IMAGE_IMPORT_OPTIONS.imageMode, "SEARCH_DATA_FIRST");
 });
 
 test("media without exact root binding never reaches the image importer", () => {

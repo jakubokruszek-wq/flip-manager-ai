@@ -80,6 +80,13 @@ type ListingRow = Pick<
   | "estimatedProfit"
   | "estimatedRoi"
   | "flipScore"
+  | "galleryStatus"
+  | "galleryJobId"
+  | "galleryRequestedAt"
+  | "galleryCompletedAt"
+  | "galleryError"
+  | "galleryTotal"
+  | "galleryPersistedCount"
 >;
 
 type SnapshotRow = {
@@ -161,7 +168,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const listingQuery = supabase
     .from("listings")
     .select(
-      "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score",
+      "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
     )
     .in("id", listingIds)
     .eq("status", "active")
@@ -303,6 +310,11 @@ export async function getFilterResults(filterId: string, includeArchived = false
         manualDecision: listing.manualDecision,
         manualDecisionReason: listing.manualDecisionReason,
         archivedAt: listing.archivedAt,
+        galleryStatus: listing.galleryStatus,
+        galleryJobId: listing.galleryJobId,
+        galleryTotal: listing.galleryTotal,
+        galleryPersistedCount: listing.galleryPersistedCount,
+        galleryError: listing.galleryError,
         ...opportunityFields(listing, filter, decisionBucket, resaleComps),
       },
     ];
@@ -392,6 +404,13 @@ function toListingRow(row: Row): ListingRow | null {
     manualDecision: row.manual_decision === "ACCEPTED" || row.manual_decision === "REJECTED" ? row.manual_decision : null,
     manualDecisionReason: nullableString(row.manual_decision_reason),
     archivedAt: nullableString(row.archived_at),
+    galleryStatus: nullableGalleryStatus(row.gallery_status),
+    galleryJobId: nullableString(row.gallery_job_id),
+    galleryRequestedAt: nullableString(row.gallery_requested_at),
+    galleryCompletedAt: nullableString(row.gallery_completed_at),
+    galleryError: nullableString(row.gallery_error),
+    galleryTotal: nonnegativeNumber(row.gallery_total),
+    galleryPersistedCount: nonnegativeNumber(row.gallery_persisted_count),
     estimatedSalePrice: nullableNumber(row.estimated_sale_price),
     estimatedProfit: nullableNumber(row.estimated_profit),
     estimatedRoi: nullableNumber(row.estimated_roi),
@@ -526,6 +545,10 @@ function isRenovationConfidence(value: unknown): value is ResaleCompRecord["clas
 
 function nullableLifecycle(value: unknown): PropertyListing["lifecycleStatus"] {
   return value === "ACTIVE" || value === "REVIEW" || value === "STALE" || value === "ARCHIVED" || value === "REJECTED" ? value : "ACTIVE";
+}
+
+function nullableGalleryStatus(value: unknown): NonNullable<PropertyListing["galleryStatus"]> {
+  return value === "PENDING" || value === "RUNNING" || value === "PARTIAL" || value === "COMPLETE" || value === "FAILED" ? value : "NOT_REQUESTED";
 }
 
 function toSnapshotRow(row: Row): SnapshotRow | null {

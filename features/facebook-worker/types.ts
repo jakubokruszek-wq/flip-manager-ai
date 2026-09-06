@@ -277,12 +277,17 @@ export type FacebookFieldConfidence = Partial<Record<FacebookConfidenceField, nu
 export type FacebookWorkerJob = {
   id: string;
   runId: string;
-  sourceScanId: string;
+  sourceScanId: string | null;
   filterId: string;
   group: FacebookGroupSnapshot;
   leaseToken: string;
   leasedUntil: string;
   attempts: number;
+  jobType?: "SOURCE_SCAN" | "GALLERY_HYDRATION";
+  priority?: number;
+  galleryListingId?: string | null;
+  galleryPostId?: string | null;
+  gallerySourceUrl?: string | null;
 };
 
 export type FacebookCompletion = {

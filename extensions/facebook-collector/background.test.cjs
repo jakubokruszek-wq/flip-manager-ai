@@ -66,6 +66,15 @@ test("search fallback has bounded media-tile resolution budgets", () => {
   assert.match(background, /sendMessageWithTimeout/);
 });
 
+test("SEARCH_DATA_FIRST avoids resolver tabs for parents already exact-bound in discovery", () => {
+  assert.match(background, /searchTilesNeedingParentResolution/);
+  assert.match(background, /post\?\.identityConfidence !== "EXACT"/);
+  assert.match(background, /post\?\.author/);
+  assert.match(background, /post\?\.text/);
+  assert.match(background, /exactMediaIds\.add/);
+  assert.match(background, /images\.imported = 0/);
+});
+
 test("photo tile resolution waits for the content script and retries payload observation with bounded telemetry", () => {
   assert.match(background, /SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS = 3_000/);
   assert.match(background, /SEARCH_TILE_MESSAGE_TIMEOUT_MS = 2_000/);
@@ -410,6 +419,17 @@ test("browser-extension jobs renew their lease during long collection", () => {
   assert.match(background, /leaseRenewal\.stop\(\)/);
   assert.match(leaseHeartbeatRoute, /renewFacebookExtensionJobLease/);
   assert.match(leaseHeartbeatRoute, /INVALID_PAYLOAD/);
+});
+
+test("on-demand gallery uses the existing exact-root queue path and never broadens source scope", () => {
+  assert.match(background, /jobType === "GALLERY_HYDRATION"/);
+  assert.match(background, /HYDRATE_FACEBOOK_GALLERY/);
+  assert.match(background, /GALLERY_JOB_TIMEOUT_MS/);
+  assert.match(content, /HYDRATE_FACEBOOK_GALLERY/);
+  assert.match(content, /expectedGroup/);
+  assert.match(content, /EXACT_ROOT_STORY/);
+  assert.match(content, /foreignPostIdsDetected: \[\]/);
+  assert.doesNotMatch(content, /comment.*media|media.*comment/i);
 });
 
 test("claimed GROUP snapshots without a type field resolve their source type from the canonical URL", () => {

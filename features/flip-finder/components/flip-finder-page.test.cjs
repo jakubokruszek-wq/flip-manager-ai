@@ -6,6 +6,8 @@ const test = require("node:test");
 
 const page = fs.readFileSync(path.join(__dirname, "flip-finder-page.tsx"), "utf8");
 const inlineResults = fs.readFileSync(path.join(__dirname, "inline-filter-results.tsx"), "utf8");
+const galleryRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/listings/[id]/gallery/route.ts"), "utf8");
+const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
 
 test("normal Flip Finder UI uses the queue scan result funnel", () => {
   assert.match(page, /WYNIK OSTATNIEGO SKANU/);
@@ -46,4 +48,15 @@ test("review cards expose safe image and persisted source provenance", () => {
   assert.match(inlineResults, /result\.thumbnailUrl \? <SafeImage/);
   assert.match(inlineResults, /sourceLabelForResult\(result\.source\)/);
   assert.doesNotMatch(inlineResults, /target="_blank">Facebook <ExternalLink/);
+});
+
+test("Facebook cards expose an explicit, non-blocking on-demand gallery request", () => {
+  assert.match(inlineResults, /POBIERZ ZDJĘCIA|POBIERZ ZDJ/);
+  assert.match(inlineResults, /listings\/\$\{result\.id\}\/gallery/);
+  assert.match(galleryRoute, /enqueueFacebookGalleryJob/);
+  assert.match(galleryRoute, /getFacebookGalleryStatus/);
+  assert.match(inlineResults, /setInterval\(\(\) => void poll\(\), 2_000\)/);
+  assert.match(galleryJobs, /job_type: "GALLERY_HYDRATION"/);
+  assert.match(galleryJobs, /priority: 100/);
+  assert.match(galleryJobs, /EXACT_ROOT_STORY/);
 });

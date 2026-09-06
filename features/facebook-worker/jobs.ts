@@ -112,9 +112,15 @@ export async function claimFacebookJob(workerId: string, consumerType: FacebookJ
   if (result.error) throw new Error(`FACEBOOK_JOB_CLAIM_FAILED: ${result.error.message}`);
   const row = Array.isArray(result.data) ? asRow(result.data[0]) : asRow(result.data);
   if (!row) return null;
+  const jobType = row.job_type === "GALLERY_HYDRATION" ? "GALLERY_HYDRATION" : "SOURCE_SCAN";
   return {
-    id: requiredString(row.id), runId: requiredString(row.scan_run_id), sourceScanId: requiredString(row.source_scan_id), filterId: requiredString(row.search_filter_id),
-    group: parseFacebookGroupSnapshot(row.group_snapshot), leaseToken: requiredString(row.lease_token), leasedUntil: requiredString(row.leased_until), attempts: nonnegativeInteger(row.attempts),
+    id: requiredString(row.id), runId: requiredString(row.scan_run_id), sourceScanId: nullableString(row.source_scan_id), filterId: requiredString(row.search_filter_id),
+    group: jobType === "SOURCE_SCAN" ? parseFacebookGroupSnapshot(row.group_snapshot) : { id: "gallery", name: "Gallery hydration", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/", type: "GROUP" }, leaseToken: requiredString(row.lease_token), leasedUntil: requiredString(row.leased_until), attempts: nonnegativeInteger(row.attempts),
+    jobType,
+    priority: nonnegativeInteger(row.priority ?? 0),
+    galleryListingId: nullableString(row.gallery_listing_id),
+    galleryPostId: nullableString(row.gallery_post_id),
+    gallerySourceUrl: nullableString(row.gallery_source_url),
   };
 }
 
@@ -357,4 +363,5 @@ function parseStoredFilter(value: unknown, expectedId: string): SearchFilter { c
 function asRow(value: unknown): Row | null { return value && typeof value === "object" && !Array.isArray(value) ? value as Row : null; }
 function requireRow(value: unknown): Row { const row = asRow(value); if (!row) throw new Error("INVALID_PAYLOAD"); return row; }
 function requiredString(value: unknown): string { if (typeof value !== "string" || !value.trim()) throw new Error("INVALID_PAYLOAD"); return value.trim(); }
+function nullableString(value: unknown): string | null { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function nonnegativeInteger(value: unknown): number { if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error("INVALID_PAYLOAD"); return value; }

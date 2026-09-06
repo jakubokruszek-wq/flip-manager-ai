@@ -16,6 +16,10 @@
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (message?.type === "COLLECTOR_PING") { respond({ ready: true }); return false; }
     if (message?.type === "COLLECTOR_SELF_TEST") { respond({ ok: true, requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 80) : null, href: location.href, documentReadyState: document.readyState, collectorVersion: "0.1.0" }); return false; }
+    if (message?.type === "HYDRATE_FACEBOOK_GALLERY") {
+      void hydrateFacebookGallery(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+      return true;
+    }
     if (message?.type === "RESOLVE_SEARCH_MEDIA_TILE") {
       void resolveSearchMediaTile(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
       return true;
@@ -24,6 +28,41 @@
     void collectSource(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
   });
+
+  function hydrateFacebookGallery(options) {
+    const expectedPostId = String(options.expectedPostId || "");
+    const expectedUrl = String(options.expectedUrl || "");
+    if (!/^\d{5,30}$/.test(expectedPostId)) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_POST_ID_INVALID", expectedPostId: null, candidates: [], sourceMediaCount: 0 });
+    let expectedGroup = null;
+    try { expectedGroup = new URL(expectedUrl).pathname.match(/^\/groups\/([^/]+)(?:\/|$)/i)?.[1] || null; } catch { /* invalid source is rejected below */ }
+    if (!expectedGroup) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_SOURCE_URL_INVALID", expectedPostId, candidates: [], sourceMediaCount: 0 });
+    const permalinkLinks = [...document.querySelectorAll("a[href]")].filter((anchor) => {
+      try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && new RegExp(`^/groups/${escapeRegExp(expectedGroup)}/permalink/${expectedPostId}(?:/|$)`, "i").test(url.pathname); } catch { return false; }
+    });
+    const roots = [...new Set(permalinkLinks.map((anchor) => anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]")))] .filter(Boolean);
+    if (roots.length !== 1) return Promise.resolve({ status: "FAILED", error: roots.length === 0 ? "FACEBOOK_GALLERY_ROOT_NOT_FOUND" : "FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, candidates: [], sourceMediaCount: 0 });
+    const root = roots[0];
+    const rootIsArticle = root.matches?.('[role="article"]') === true;
+    const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
+    const author = [...root.querySelectorAll("h2 a, h3 a, strong a")].filter(sameRoot).map(visibleText).find(Boolean) || null;
+    const messageNodes = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]')].filter((node) => sameRoot(node) && !isCommentDescendant(node));
+    const rootText = messageNodes.map(visibleText).find(Boolean) || null;
+    if (!author || !rootText) return Promise.resolve({ status: "FAILED", error: !author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, candidates: [], sourceMediaCount: 0 });
+    const candidates = [];
+    const seen = new Set();
+    for (const anchor of root.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')) {
+      if (!sameRoot(anchor) || isCommentDescendant(anchor)) continue;
+      let url;
+      try { url = new URL(anchor.href); } catch { continue; }
+      const mediaId = url.searchParams.get("fbid") || mediaIdFromUrl(url.toString());
+      const image = anchor.querySelector("img") || anchor.closest("div")?.querySelector("img");
+      const mediaUrl = image?.currentSrc || image?.src || null;
+      if (!mediaUrl || !/^https:\/\//i.test(mediaUrl) || !/^\d{5,30}$/.test(String(mediaId || "")) || seen.has(mediaId)) continue;
+      seen.add(mediaId);
+      candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
+    }
+    return Promise.resolve({ status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true });
+  }
 
   async function resolveSearchMediaTile(options) {
     const mediaId = String(options.mediaId || "");
@@ -339,4 +378,5 @@
   function clamp(value, min, max, fallback) { return Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback; }
   function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
   function safeError(error) { return error instanceof Error ? error.message.slice(0, 300) : "COLLECTOR_FAILED"; }
+  function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 })();
