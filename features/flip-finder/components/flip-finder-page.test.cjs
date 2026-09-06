@@ -54,6 +54,16 @@ test("review cards expose safe image and persisted source provenance", () => {
 test("Facebook cards expose an explicit, non-blocking on-demand gallery request", () => {
   assert.match(inlineResults, /POBIERZ ZDJĘCIA|POBIERZ ZDJ/);
   assert.match(inlineResults, /listings\/\$\{result\.id\}\/gallery/);
+  assert.match(inlineResults, /GALLERY_UI_CLICK/);
+  assert.match(inlineResults, /GALLERY_HANDLER_ENTER/);
+  assert.match(inlineResults, /GALLERY_GUARD_PASS/);
+  assert.match(inlineResults, /GALLERY_FETCH_START/);
+  assert.match(inlineResults, /GALLERY_FETCH_RESPONSE/);
+  assert.match(inlineResults, /GALLERY_FETCH_ERROR/);
+  assert.match(inlineResults, /credentials: "same-origin"/);
+  assert.match(inlineResults, /event\.stopPropagation\(\)/);
+  assert.match(inlineResults, /data-gallery-action="request"/);
+  assert.match(inlineResults, /inFlightRef/);
   assert.match(galleryRoute, /enqueueFacebookGalleryJob/);
   assert.match(galleryRoute, /getFacebookGalleryStatus/);
   assert.match(inlineResults, /setInterval\(\(\) => void poll\(\), 2_000\)/);

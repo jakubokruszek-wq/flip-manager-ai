@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { BedDouble, BrainCircuit, Clock3, ExternalLink, MapPin, Plus, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -150,11 +150,85 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
 
 type GalleryState = NonNullable<FilterResult["galleryStatus"]>;
 
+type GalleryTraceStage =
+  | "GALLERY_UI_CLICK"
+  | "GALLERY_HANDLER_ENTER"
+  | "GALLERY_GUARD_PASS"
+  | "GALLERY_GUARD_BLOCKED"
+  | "GALLERY_FETCH_START"
+  | "GALLERY_FETCH_RESPONSE"
+  | "GALLERY_FETCH_ERROR";
+
+type GalleryTraceEntry = {
+  traceId: string;
+  stage: GalleryTraceStage;
+  listingId: string;
+  postId: string | null;
+  galleryStatus: GalleryState;
+  timestamp: string;
+  httpStatus?: number;
+  responseOk?: boolean;
+  errorCode?: string;
+  guard?: string;
+};
+
+const GALLERY_TRACE_STORAGE_KEY = "flipFinderGalleryRequestTraces";
+
+function createGalleryTraceId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  } catch {
+    // Fall through to a bounded, non-secret identifier for older browsers.
+  }
+  return `gallery-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function galleryPostId(result: FilterResult): string | null {
+  const match = result.originalUrl.match(/\/(?:posts|permalink)\/(\d+)(?:[/?#]|$)/i);
+  return match?.[1] ?? null;
+}
+
+function safeGalleryError(value: unknown): string {
+  const message = value instanceof Error ? value.message : String(value || "GALLERY_REQUEST_FAILED");
+  return message.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120).replace(/[^A-Za-z0-9_.:-]/g, "_");
+}
+
+function recordGalleryTrace(
+  stage: GalleryTraceStage,
+  result: FilterResult,
+  status: GalleryState,
+  traceId: string,
+  extra: Pick<GalleryTraceEntry, "httpStatus" | "responseOk" | "errorCode" | "guard"> = {},
+): void {
+  const entry: GalleryTraceEntry = {
+    stage,
+    traceId,
+    listingId: result.id,
+    postId: galleryPostId(result),
+    galleryStatus: status,
+    timestamp: new Date().toISOString(),
+    ...extra,
+  };
+  try {
+    const current = JSON.parse(window.sessionStorage.getItem(GALLERY_TRACE_STORAGE_KEY) || "[]");
+    const traces = Array.isArray(current) ? current.filter((item) => item && typeof item === "object") : [];
+    window.sessionStorage.setItem(GALLERY_TRACE_STORAGE_KEY, JSON.stringify([...traces, entry].slice(-80)));
+  } catch {
+    // Diagnostics must never block the user action.
+  }
+  try {
+    console.info("FLIP_GALLERY_TRACE", entry);
+  } catch {
+    // Console availability is not guaranteed in embedded browsers.
+  }
+}
+
 function GalleryRequestButton({ result }: { result: FilterResult }) {
   const [status, setStatus] = useState<GalleryState>(result.galleryStatus ?? "NOT_REQUESTED");
   const [persisted, setPersistedValue] = useState(result.galleryPersistedCount ?? 0);
   const [total, setTotalValue] = useState(result.galleryTotal ?? 0);
   const [busy, setBusy] = useState(false);
+  const inFlightRef = useRef(false);
   useEffect(() => {
     if (status !== "PENDING" && status !== "RUNNING") return;
     let cancelled = false;
@@ -173,23 +247,40 @@ function GalleryRequestButton({ result }: { result: FilterResult }) {
     return () => { cancelled = true; window.clearInterval(interval); };
   }, [result.id, status]);
   if (result.source !== "facebook" || result.lifecycleStatus === "REJECTED" || result.lifecycleStatus === "ARCHIVED" || result.lifecycleStatus === "STALE" || result.manualDecision === "REJECTED") return null;
-  const request = async () => {
-    if (busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE") return;
+  const request = async (traceId: string) => {
+    recordGalleryTrace("GALLERY_HANDLER_ENTER", result, status, traceId);
+    if (inFlightRef.current || busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE") {
+      recordGalleryTrace("GALLERY_GUARD_BLOCKED", result, status, traceId, { guard: inFlightRef.current ? "IN_FLIGHT" : status });
+      return;
+    }
+    recordGalleryTrace("GALLERY_GUARD_PASS", result, status, traceId);
+    inFlightRef.current = true;
     setBusy(true);
+    recordGalleryTrace("GALLERY_FETCH_START", result, status, traceId);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { method: "POST", headers: { "x-flip-finder-action": "gallery" } });
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { credentials: "same-origin", method: "POST", headers: { "x-flip-finder-action": "gallery" } });
       const payload: unknown = await readJson(response);
+      recordGalleryTrace("GALLERY_FETCH_RESPONSE", result, status, traceId, { httpStatus: response.status, responseOk: response.ok });
       if (!response.ok || !payload || typeof payload !== "object") throw new Error("Nie udało się zlecić pobrania galerii.");
       const next = "status" in payload && isGalleryState(payload.status) ? payload.status : "PENDING";
       setStatus(next);
-    } catch {
+    } catch (reason) {
+      recordGalleryTrace("GALLERY_FETCH_ERROR", result, status, traceId, { errorCode: safeGalleryError(reason) });
       setStatus("FAILED");
     } finally {
+      inFlightRef.current = false;
       setBusy(false);
     }
   };
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const traceId = createGalleryTraceId();
+    recordGalleryTrace("GALLERY_UI_CLICK", result, status, traceId);
+    void request(traceId);
+  };
   const label = status === "PENDING" ? "Oczekuje na pobranie galerii" : status === "RUNNING" ? "Pobieranie galerii…" : status === "PARTIAL" ? `Pobrano ${persisted}/${Math.max(total, persisted)} zdjęć` : status === "COMPLETE" ? `Galeria: ${persisted} zdjęć` : status === "FAILED" ? "Ponów pobieranie zdjęć" : "POBIERZ ZDJĘCIA";
-  return <Button className="min-h-10" disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={() => void request()} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
+  return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-gallery-action="request" data-listing-id={result.id} disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={handleClick} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
 }
 
 function isGalleryState(value: unknown): value is GalleryState {
