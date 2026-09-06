@@ -7,6 +7,7 @@ const test = require("node:test");
 const page = fs.readFileSync(path.join(__dirname, "flip-finder-page.tsx"), "utf8");
 const inlineResults = fs.readFileSync(path.join(__dirname, "inline-filter-results.tsx"), "utf8");
 const galleryRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/listings/[id]/gallery/route.ts"), "utf8");
+const galleryTraceRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/listings/[id]/gallery/trace/route.ts"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
 const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
 
@@ -60,6 +61,7 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /GALLERY_FETCH_START/);
   assert.match(inlineResults, /GALLERY_FETCH_RESPONSE/);
   assert.match(inlineResults, /GALLERY_FETCH_ERROR/);
+  assert.match(inlineResults, /listings\/\$\{result\.id\}\/gallery\/trace/);
   assert.match(inlineResults, /credentials: "same-origin"/);
   assert.match(inlineResults, /event\.stopPropagation\(\)/);
   assert.match(inlineResults, /data-gallery-action="request"/);
@@ -77,4 +79,7 @@ test("gallery mutation is protected by same-origin request authorization", () =>
   assert.match(inlineResults, /x-flip-finder-action.*gallery/);
   assert.match(galleryAuth, /GALLERY_REQUEST_FORBIDDEN/);
   assert.match(galleryAuth, /https:\/\/flip-manager-ai\.vercel\.app/);
+  assert.match(galleryTraceRoute, /authorizeGalleryTrace/);
+  assert.match(galleryTraceRoute, /FLIP_GALLERY_SERVER_TRACE/);
+  assert.match(galleryTraceRoute, /GALLERY_TRACE_TOO_LARGE/);
 });

@@ -9,13 +9,21 @@ const ALLOWED_ORIGINS = new Set([
  * from reaching the service-role enqueue path.
  */
 export function authorizeGalleryMutation(request: Request): Response | null {
+  return authorizeGalleryRequest(request, "gallery");
+}
+
+export function authorizeGalleryTrace(request: Request): Response | null {
+  return authorizeGalleryRequest(request, "gallery-trace");
+}
+
+function authorizeGalleryRequest(request: Request, expectedAction: "gallery" | "gallery-trace"): Response | null {
   const origin = normalizeOrigin(request.headers.get("origin"));
   const fetchSite = request.headers.get("sec-fetch-site");
   const action = request.headers.get("x-flip-finder-action");
 
   if (!origin || !ALLOWED_ORIGINS.has(origin)) return forbidden();
   if (fetchSite && fetchSite !== "same-origin") return forbidden();
-  if (action !== "gallery") return forbidden();
+  if (action !== expectedAction) return forbidden();
   return null;
 }
 

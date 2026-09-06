@@ -221,6 +221,15 @@ function recordGalleryTrace(
   } catch {
     // Console availability is not guaranteed in embedded browsers.
   }
+  void fetch(`/api/flip-finder/listings/${result.id}/gallery/trace`, {
+    body: JSON.stringify(entry),
+    credentials: "same-origin",
+    headers: { "content-type": "application/json", "x-flip-finder-action": "gallery-trace" },
+    keepalive: true,
+    method: "POST",
+  }).catch(() => {
+    // Server trace is best effort and must never block gallery hydration.
+  });
 }
 
 function GalleryRequestButton({ result }: { result: FilterResult }) {
