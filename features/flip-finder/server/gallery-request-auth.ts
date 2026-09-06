@@ -16,7 +16,11 @@ export function authorizeGalleryTrace(request: Request): Response | null {
   return authorizeGalleryRequest(request, "gallery-trace");
 }
 
-function authorizeGalleryRequest(request: Request, expectedAction: "gallery" | "gallery-trace"): Response | null {
+export function authorizeGalleryTraceRead(request: Request): Response | null {
+  return authorizeGalleryRequest(request, "gallery-trace-read");
+}
+
+function authorizeGalleryRequest(request: Request, expectedAction: "gallery" | "gallery-trace" | "gallery-trace-read"): Response | null {
   const origin = normalizeOrigin(request.headers.get("origin"));
   const fetchSite = request.headers.get("sec-fetch-site");
   const action = request.headers.get("x-flip-finder-action");

@@ -1,20 +1,7 @@
-import { authorizeGalleryTrace } from "@/features/flip-finder/server/gallery-request-auth";
+import { authorizeGalleryTrace, authorizeGalleryTraceRead } from "@/features/flip-finder/server/gallery-request-auth";
+import { projectGalleryTrace, readGalleryTraces, writeGalleryTrace } from "@/features/flip-finder/server/gallery-request-trace";
 
 type Context = { params: Promise<{ id: string }> };
-
-const STAGES = new Set([
-  "GALLERY_UI_CLICK",
-  "GALLERY_HANDLER_ENTER",
-  "GALLERY_GUARD_PASS",
-  "GALLERY_GUARD_BLOCKED",
-  "GALLERY_BUTTON_POINTER_CAPTURE",
-  "GALLERY_BUTTON_CLICK_CAPTURE",
-  "GALLERY_CARD_CLICK_CAPTURE",
-  "GALLERY_FETCH_START",
-  "GALLERY_FETCH_RESPONSE",
-  "GALLERY_FETCH_ERROR",
-]);
-const STATUSES = new Set(["NOT_REQUESTED", "PENDING", "RUNNING", "PARTIAL", "COMPLETE", "FAILED"]);
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {
   const authorizationError = authorizeGalleryTrace(request);
@@ -29,21 +16,26 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
     const value: unknown = JSON.parse(body);
     const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
     if (!row) return Response.json({ ok: false, code: "INVALID_GALLERY_TRACE" }, { status: 400 });
-    const traceId = typeof row?.traceId === "string" && /^[a-z0-9-]{8,80}$/i.test(row.traceId) ? row.traceId : null;
-    const stage = typeof row?.stage === "string" && STAGES.has(row.stage) ? row.stage : null;
-    const status = typeof row?.galleryStatus === "string" && STATUSES.has(row.galleryStatus) ? row.galleryStatus : null;
-    if (!traceId || !stage || !status) return Response.json({ ok: false, code: "INVALID_GALLERY_TRACE" }, { status: 400 });
-    const postId = typeof row?.postId === "string" && /^\d{5,30}$/.test(row.postId) ? row.postId : null;
-    const errorCode = typeof row?.errorCode === "string" ? row.errorCode.slice(0, 120) : null;
-    const guard = typeof row?.guard === "string" ? row.guard.slice(0, 60) : null;
-    const httpStatus = Number.isInteger(row?.httpStatus) && Number(row.httpStatus) >= 100 && Number(row.httpStatus) <= 599 ? Number(row.httpStatus) : null;
-    const targetTag = typeof row?.targetTag === "string" ? row.targetTag.slice(0, 30) : null;
-    const currentTargetTag = typeof row?.currentTargetTag === "string" ? row.currentTargetTag.slice(0, 30) : null;
-    const disabled = typeof row?.disabled === "boolean" ? row.disabled : null;
-    const pointerEvents = typeof row?.pointerEvents === "string" ? row.pointerEvents.slice(0, 30) : null;
-    console.info("FLIP_GALLERY_SERVER_TRACE", JSON.stringify({ traceId, stage, listingId, postId, galleryStatus: status, httpStatus, errorCode, guard, targetTag, currentTargetTag, disabled, pointerEvents, serverTimestamp: new Date().toISOString() }));
-    return Response.json({ ok: true });
+    const trace = projectGalleryTrace(value, listingId);
+    if (!trace) return Response.json({ ok: false, code: "INVALID_GALLERY_TRACE" }, { status: 400 });
+    await writeGalleryTrace(trace);
+    console.info("FLIP_GALLERY_SERVER_TRACE", JSON.stringify({ traceId: trace.traceId, event: trace.event, listingId, postId: trace.postId, galleryStatus: trace.galleryStatus, serverTimestamp: new Date().toISOString() }));
+    return Response.json({ ok: true, traceId: trace.traceId });
   } catch {
-    return Response.json({ ok: false, code: "INVALID_GALLERY_TRACE" }, { status: 400 });
+    return Response.json({ ok: false, code: "GALLERY_TRACE_STORE_FAILED" }, { status: 503 });
+  }
+}
+
+export async function GET(request: Request, { params }: Context): Promise<Response> {
+  const authorizationError = authorizeGalleryTraceRead(request);
+  if (authorizationError) return authorizationError;
+  const listingId = (await params).id;
+  if (!/^[0-9a-f-]{20,}$/i.test(listingId)) return Response.json({ ok: false, code: "INVALID_LISTING_ID" }, { status: 400 });
+  const traceId = new URL(request.url).searchParams.get("traceId") || undefined;
+  if (traceId && !/^[A-Za-z0-9-]{8,80}$/.test(traceId)) return Response.json({ ok: false, code: "INVALID_TRACE_ID" }, { status: 400 });
+  try {
+    return Response.json({ ok: true, events: await readGalleryTraces(listingId, traceId) });
+  } catch {
+    return Response.json({ ok: false, code: "GALLERY_TRACE_READ_FAILED" }, { status: 503 });
   }
 }

@@ -155,6 +155,7 @@ type GalleryTraceStage =
   | "GALLERY_HANDLER_ENTER"
   | "GALLERY_GUARD_PASS"
   | "GALLERY_GUARD_BLOCKED"
+  | "GALLERY_CARD_POINTER_CAPTURE"
   | "GALLERY_BUTTON_POINTER_CAPTURE"
   | "GALLERY_BUTTON_CLICK_CAPTURE"
   | "GALLERY_CARD_CLICK_CAPTURE"
@@ -346,10 +347,13 @@ function ReviewListingCardContent({ result, onChanged }: { result: FilterResult;
 
 function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChanged: () => void }) {
   const [traceId] = useState(createGalleryTraceId);
+  const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
+    captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, result, result.galleryStatus ?? "NOT_REQUESTED", traceId);
+  };
   const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, result, result.galleryStatus ?? "NOT_REQUESTED", traceId);
   };
-  return <div className="contents" onClickCapture={handleCardClickCapture}><ReviewListingCardContent onChanged={onChanged} result={result} /><GalleryRequestButton result={result} traceId={traceId} /></div>;
+  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ReviewListingCardContent onChanged={onChanged} result={result} /><GalleryRequestButton result={result} traceId={traceId} /></div>;
 }
 
 function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
@@ -627,10 +631,13 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
 
 export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
   const [traceId] = useState(createGalleryTraceId);
+  const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
+    captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
+  };
   const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
   };
-  return <div className="contents" onClickCapture={handleCardClickCapture}><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton result={props.result} traceId={traceId} /></div></div>;
+  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton result={props.result} traceId={traceId} /></div></div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {

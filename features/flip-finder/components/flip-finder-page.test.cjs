@@ -8,6 +8,8 @@ const page = fs.readFileSync(path.join(__dirname, "flip-finder-page.tsx"), "utf8
 const inlineResults = fs.readFileSync(path.join(__dirname, "inline-filter-results.tsx"), "utf8");
 const galleryRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/listings/[id]/gallery/route.ts"), "utf8");
 const galleryTraceRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/listings/[id]/gallery/trace/route.ts"), "utf8");
+const galleryTraceStore = fs.readFileSync(path.join(__dirname, "../server/gallery-request-trace.ts"), "utf8");
+const galleryTraceMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906133000_create_gallery_request_traces.sql"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
 const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
 
@@ -62,6 +64,7 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /GALLERY_FETCH_RESPONSE/);
   assert.match(inlineResults, /GALLERY_FETCH_ERROR/);
   assert.match(inlineResults, /GALLERY_BUTTON_POINTER_CAPTURE/);
+  assert.match(inlineResults, /GALLERY_CARD_POINTER_CAPTURE/);
   assert.match(inlineResults, /GALLERY_BUTTON_CLICK_CAPTURE/);
   assert.match(inlineResults, /GALLERY_CARD_CLICK_CAPTURE/);
   assert.match(inlineResults, /onPointerDownCapture/);
@@ -89,7 +92,21 @@ test("gallery mutation is protected by same-origin request authorization", () =>
   assert.match(galleryTraceRoute, /authorizeGalleryTrace/);
   assert.match(galleryTraceRoute, /FLIP_GALLERY_SERVER_TRACE/);
   assert.match(galleryTraceRoute, /GALLERY_TRACE_TOO_LARGE/);
-  assert.match(galleryTraceRoute, /GALLERY_BUTTON_POINTER_CAPTURE/);
-  assert.match(galleryTraceRoute, /GALLERY_BUTTON_CLICK_CAPTURE/);
-  assert.match(galleryTraceRoute, /GALLERY_CARD_CLICK_CAPTURE/);
+  assert.match(galleryTraceStore, /GALLERY_BUTTON_POINTER_CAPTURE/);
+  assert.match(galleryTraceStore, /GALLERY_CARD_POINTER_CAPTURE/);
+  assert.match(galleryTraceStore, /GALLERY_BUTTON_CLICK_CAPTURE/);
+  assert.match(galleryTraceStore, /GALLERY_CARD_CLICK_CAPTURE/);
+  assert.match(galleryTraceRoute, /readGalleryTraces/);
+  assert.match(galleryTraceRoute, /writeGalleryTrace/);
+  assert.match(galleryTraceRoute, /authorizeGalleryTraceRead/);
+});
+
+test("gallery trace storage is backend-only and does not mutate business state", () => {
+  assert.match(galleryTraceMigration, /create table if not exists public\.gallery_request_traces/);
+  assert.match(galleryTraceMigration, /alter table public\.gallery_request_traces enable row level security/);
+  assert.match(galleryTraceMigration, /revoke all on table public\.gallery_request_traces from anon, authenticated/);
+  assert.match(galleryTraceMigration, /grant select, insert on table public\.gallery_request_traces to service_role/);
+  assert.doesNotMatch(galleryTraceMigration, /grant .* to anon|grant .* to authenticated/);
+  assert.match(galleryTraceStore, /MAX_TRACE_ROWS = 80/);
+  assert.match(galleryTraceRoute, /export async function GET/);
 });
