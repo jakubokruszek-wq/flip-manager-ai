@@ -156,6 +156,9 @@ export type CollectorImageNetworkDiagnostics = {
   fullGalleriesDownloaded: number;
   photoViewerNavigations: number;
   photoViewerNavigationsWithImageBytes: number;
+  imageRequestTypeCounts: Record<string, number>;
+  imageResponseTypeCounts: Record<string, number>;
+  imageResponseSamples: Array<{ type: string; host: string | null; path: string | null; tabId: number | null; bytes: number }>;
 };
 
 export type ScanWorkUnit = {

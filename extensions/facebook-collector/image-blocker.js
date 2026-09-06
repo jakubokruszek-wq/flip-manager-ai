@@ -9,6 +9,7 @@
   const DNR_POLICY_VERSION = "SOURCE_SCAN_IMAGE_ONLY_V2";
   const RULE_ID_BASE = 1_700_000_000;
   const RULE_ID_MAX = RULE_ID_BASE + 2_000_000;
+  const CDN_IMAGE_REGEX = "^https?://[^/]*(?:fbcdn\\.net|facebook\\.com)/.*(?:\\.(?:jpe?g|png|gif|webp|avif)(?:[?#].*)?$|/p[0-9]+x[0-9]+(?:[/?#]|$))";
   let nextRuleId = RULE_ID_BASE;
   const tabs = new Map();
   const sessions = new Map();
@@ -28,6 +29,9 @@
       fullGalleriesDownloaded: 0,
       photoViewerNavigations: 0,
       photoViewerNavigationsWithImageBytes: 0,
+      imageRequestTypeCounts: {},
+      imageResponseTypeCounts: {},
+      imageResponseSamples: [],
     };
   }
 
@@ -45,10 +49,30 @@
     if (!["media", "xmlhttprequest", "fetch"].includes(type)) return false;
     try {
       const url = new URL(String(details?.url || ""));
-      return /(?:^|\.)fbcdn\.net$/i.test(url.hostname) || /(?:^|\.)facebook\.com$/i.test(url.hostname) && /(?:jpe?g|png|gif|webp|avif|\/p\d+x\d+)/i.test(`${url.pathname}${url.search}`);
+      return /(?:^|\.)fbcdn\.net$/i.test(url.hostname) && /(?:jpe?g|png|gif|webp|avif|\/p\d+x\d+)/i.test(`${url.pathname}${url.search}`)
+        || /(?:^|\.)facebook\.com$/i.test(url.hostname) && /(?:jpe?g|png|gif|webp|avif|\/p\d+x\d+)/i.test(`${url.pathname}${url.search}`);
     } catch {
       return false;
     }
+  }
+
+  function requestType(details) { return String(details?.type || "unknown").toLowerCase().slice(0, 40); }
+  function requestSample(details, bytes = 0) {
+    try {
+      const url = new URL(String(details?.url || ""));
+      return { type: requestType(details), host: url.hostname.slice(0, 120), path: url.pathname.slice(0, 300), tabId: Number(details?.tabId), bytes };
+    } catch {
+      return { type: requestType(details), host: null, path: null, tabId: Number(details?.tabId), bytes };
+    }
+  }
+  function bumpType(session, key, details) {
+    const type = requestType(details);
+    const counts = session.telemetry[key];
+    counts[type] = Math.max(0, Number(counts[type] || 0) + 1);
+  }
+  function addResponseSample(session, details, bytes) {
+    if (!Array.isArray(session.telemetry.imageResponseSamples) || session.telemetry.imageResponseSamples.length >= 20) return;
+    session.telemetry.imageResponseSamples.push(requestSample(details, bytes));
   }
 
   function contentLength(headers) {
@@ -66,6 +90,7 @@
   function beforeRequest(details) {
     const session = sessionForTab(details?.tabId);
     if (!session || !isImageLike(details)) return;
+    bumpType(session, "imageRequestTypeCounts", details);
     if (session.mode === SOURCE_SCAN_DATA_ONLY) {
       bump(session, "imageRequestsBlocked");
       return;
@@ -78,6 +103,8 @@
     const session = sessionForTab(details?.tabId);
     if (!session || !isImageLike(details)) return;
     const bytes = contentLength(details?.responseHeaders);
+    bumpType(session, "imageResponseTypeCounts", details);
+    addResponseSample(session, details, bytes);
     bump(session, "imageResponsesReceived");
     bump(session, "imageBytesReceived", bytes);
     if (session.mode !== GALLERY_HYDRATION_MEDIA_ALLOWED) {
@@ -281,11 +308,12 @@
     await clearRules(normalizedTabId);
     if (mode === SOURCE_SCAN_DATA_ONLY) {
       if (!scope.chrome?.declarativeNetRequest?.updateSessionRules) throw new Error("SOURCE_SCAN_IMAGE_BLOCKER_UNAVAILABLE");
-      const ids = [await allocateRuleId()];
+      const ids = [await allocateRuleId(), await allocateRuleId()];
       const installDiagnostics = await installRules(normalizedTabId, {
         removeRuleIds: ids,
         addRules: [
           { id: ids[0], priority: 1, action: { type: "block" }, condition: { resourceTypes: ["image"], tabIds: [normalizedTabId] } },
+          { id: ids[1], priority: 1, action: { type: "block" }, condition: { regexFilter: CDN_IMAGE_REGEX, resourceTypes: ["media", "xmlhttprequest"], tabIds: [normalizedTabId] } },
         ],
       });
       tabs.set(normalizedTabId, { mode, sessionId: String(sessionId), telemetry: session.telemetry, photoViewer, ruleIds: ids });

@@ -113,12 +113,15 @@ test("SOURCE_SCAN_DATA_ONLY blocks image requests only on the attached collector
   await policy.attachTab(11, { sessionId: "scan-1", mode: policy.SOURCE_SCAN_DATA_ONLY });
 
   const addRules = updates.at(-1).addRules;
-  assert.equal(addRules.length, 1);
+  assert.equal(addRules.length, 2);
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[0].condition.tabIds)), [11]);
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[0].condition.resourceTypes)), ["image"]);
   assert.equal(addRules[0].priority, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[0].action)), { type: "block" });
   assert.deepEqual(Object.keys(addRules[0].condition).sort(), ["resourceTypes", "tabIds"]);
+  assert.equal(addRules[1].condition.regexFilter.includes("fbcdn\\.net"), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(addRules[1].condition.resourceTypes)), ["media", "xmlhttprequest"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(addRules[1].condition.tabIds)), [11]);
 
   listeners.before({ tabId: 11, type: "image", url: "https://scontent.xx.fbcdn.net/v/t1.0/a.jpg" });
   listeners.before({ tabId: 11, type: "fetch", url: "https://www.facebook.com/api/graphql/" });
@@ -159,7 +162,7 @@ test("tab rules and telemetry are cleaned up after a source session", async () =
   await policy.attachTab(17, { sessionId: "scan-2", mode: policy.SOURCE_SCAN_DATA_ONLY });
   const result = await policy.finishSession("scan-2");
   assert.equal(result.imageMode, policy.SOURCE_SCAN_DATA_ONLY);
-  assert.deepEqual(JSON.parse(JSON.stringify(policy.snapshot("scan-2"))), { imageMode: policy.SOURCE_SCAN_DATA_ONLY, imageRequestsBlocked: 0, imageRequestsAllowed: 0, imageResponsesReceived: 0, imageBytesReceived: 0, listingImageRequestsStarted: 0, listingImageResponsesReceived: 0, listingImageBytesReceived: 0, thumbnailsDownloaded: 0, fullImagesDownloaded: 0, fullGalleriesDownloaded: 0, photoViewerNavigations: 0, photoViewerNavigationsWithImageBytes: 0 });
+  assert.deepEqual(JSON.parse(JSON.stringify(policy.snapshot("scan-2"))), { imageMode: policy.SOURCE_SCAN_DATA_ONLY, imageRequestsBlocked: 0, imageRequestsAllowed: 0, imageResponsesReceived: 0, imageBytesReceived: 0, listingImageRequestsStarted: 0, listingImageResponsesReceived: 0, listingImageBytesReceived: 0, thumbnailsDownloaded: 0, fullImagesDownloaded: 0, fullGalleriesDownloaded: 0, photoViewerNavigations: 0, photoViewerNavigationsWithImageBytes: 0, imageRequestTypeCounts: {}, imageResponseTypeCounts: {}, imageResponseSamples: [] });
   assert.ok(updates.some((update) => Array.isArray(update.removeRuleIds) && update.removeRuleIds.length === 2));
 });
 
@@ -172,6 +175,24 @@ test("image diagnostics contain no credentials or raw payloads", async () => {
   assert.doesNotMatch(serialized, /secret|token|cookie|hmac|payload/i);
 });
 
+test("image telemetry identifies narrowly matched CDN media without treating GraphQL as an image", async () => {
+  const { policy, listeners } = createPolicyContext();
+  policy.startSession("request-proof", policy.SOURCE_SCAN_DATA_ONLY);
+  await policy.attachTab(20, { sessionId: "request-proof", mode: policy.SOURCE_SCAN_DATA_ONLY, photoViewer: true });
+  listeners.before({ tabId: 20, type: "xmlhttprequest", url: "https://scontent.xx.fbcdn.net/v/t39.30808-6/12345.jpg?opaque=1" });
+  listeners.before({ tabId: 20, type: "xmlhttprequest", url: "https://www.facebook.com/api/graphql/" });
+  listeners.completed({ tabId: 20, type: "xmlhttprequest", url: "https://scontent.xx.fbcdn.net/v/t39.30808-6/12345.jpg?opaque=1", responseHeaders: [{ name: "Content-Length", value: "42" }] });
+  const diagnostics = policy.snapshot("request-proof");
+  assert.equal(diagnostics.imageRequestsBlocked, 1);
+  assert.equal(diagnostics.imageResponsesReceived, 1);
+  assert.equal(diagnostics.imageBytesReceived, 42);
+  assert.deepEqual(JSON.parse(JSON.stringify(diagnostics.imageRequestTypeCounts)), { xmlhttprequest: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(diagnostics.imageResponseTypeCounts)), { xmlhttprequest: 1 });
+  assert.equal(diagnostics.imageResponseSamples[0].path.includes(".jpg"), true);
+  assert.equal(JSON.stringify(diagnostics).includes("opaque"), false);
+  assert.equal(diagnostics.photoViewerNavigationsWithImageBytes, 1);
+});
+
 test("production DNR rules use only the MV3 schema and supported resource types", async () => {
   const { policy, updates } = createPolicyContext();
   policy.startSession("schema-1", policy.SOURCE_SCAN_DATA_ONLY);
@@ -179,9 +200,12 @@ test("production DNR rules use only the MV3 schema and supported resource types"
   const install = updates.at(-1);
   assert.deepEqual(Object.keys(install).sort(), ["addRules", "removeRuleIds"]);
   install.addRules.forEach(validateRuleShape);
-  assert.equal(install.addRules.some((rule) => rule.condition.resourceTypes.includes("fetch")), false);
-  assert.equal(install.addRules.length, 1);
+  assert.equal(install.addRules.some((rule) => rule.condition.resourceTypes.includes("xmlhttprequest") && typeof rule.condition.regexFilter === "string"), true);
+  assert.equal(install.addRules.length, 2);
   assert.deepEqual(JSON.parse(JSON.stringify(install.addRules[0].condition)), { resourceTypes: ["image"], tabIds: [21] });
+  assert.deepEqual(JSON.parse(JSON.stringify(install.addRules[1].condition.resourceTypes)), ["media", "xmlhttprequest"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(install.addRules[1].condition.tabIds)), [21]);
+  assert.equal(typeof install.addRules[1].condition.regexFilter, "string");
 
   assert.throws(() => validateRuleShape({ id: "21", priority: 1000, action: "block", condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http" } }));
   assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block", telemetry: true }, condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http" } }));
@@ -212,7 +236,7 @@ test("DNR installation failures preserve the Chrome error, session state and san
       && error.diagnostics.tabId === 22
       && error.diagnostics.chromeErrorName === "TypeError"
       && error.diagnostics.chromeErrorMessage.includes("resourceTypes")
-      && error.diagnostics.options.addRules.length === 1
+      && error.diagnostics.options.addRules.length === 2
       && error.diagnostics.runtime.policyVersion === "SOURCE_SCAN_IMAGE_ONLY_V2"
       && error.diagnostics.runtime.dnrPermissionPresent === true
       && error.diagnostics.runtimeValues.tabIdType === "number"
@@ -236,7 +260,7 @@ test("successful image-only install records the exact runtime rule and atomic se
   assert.equal(result.installDiagnostics.installResult, "PASS");
   assert.equal(result.installDiagnostics.targetRulePresentBefore, false);
   assert.equal(result.installDiagnostics.targetRulePresentAfter, true);
-  assert.equal(sessionRules().length, 1);
+  assert.equal(sessionRules().length, 2);
   assert.equal(storage.collectorDnrDiagnostics.runtime.updateSessionRulesAvailable, true);
   assert.deepEqual(storage.collectorDnrDiagnostics.options.addRules[0].condition, { resourceTypes: ["image"], tabIds: [23] });
 });
@@ -259,7 +283,7 @@ test("parallel attached tabs receive unique session rule ids", async () => {
   const first = await policy.attachTab(369_530_379, { sessionId: "two-tabs", mode: policy.SOURCE_SCAN_DATA_ONLY });
   const second = await policy.attachTab(369_530_380, { sessionId: "two-tabs", mode: policy.SOURCE_SCAN_DATA_ONLY });
   assert.notEqual(first.ruleIds[0], second.ruleIds[0]);
-  assert.equal(new Set(sessionRules().map((rule) => rule.id)).size, 2);
+  assert.equal(new Set(sessionRules().map((rule) => rule.id)).size, 4);
 });
 
 test("callback runtime.lastError is retained separately from the wrapped install code", async () => {

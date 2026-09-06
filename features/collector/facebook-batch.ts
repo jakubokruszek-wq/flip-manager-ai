@@ -21,6 +21,9 @@ export type CollectorImageNetworkDiagnostics = {
   fullGalleriesDownloaded: number;
   photoViewerNavigations: number;
   photoViewerNavigationsWithImageBytes: number;
+  imageRequestTypeCounts: Record<string, number>;
+  imageResponseTypeCounts: Record<string, number>;
+  imageResponseSamples: Array<{ type: string; host: string | null; path: string | null; tabId: number | null; bytes: number }>;
 };
 
 export type CollectorMediaRecord = {
@@ -317,6 +320,16 @@ function imageMode(value: unknown): CollectorImageMode {
 function normalizeImageNetworkDiagnostics(value: unknown, mode: unknown): CollectorImageNetworkDiagnostics | null {
   if (!isRecord(value)) return null;
   const bounded = (candidate: unknown, max = 100_000_000): number => boundedInteger(candidate, 0, max);
+  const typeCounts = (candidate: unknown): Record<string, number> => {
+    if (!isRecord(candidate)) return {};
+    return Object.fromEntries(Object.entries(candidate).slice(0, 20).flatMap(([key, item]) => typeof item === "number" && Number.isFinite(item) ? [[key.slice(0, 40), bounded(item)]] : []));
+  };
+  const samples = Array.isArray(value.imageResponseSamples) ? value.imageResponseSamples.slice(0, 20).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const type = nullableString(item.type, 40);
+    if (!type) return [];
+    return [{ type, host: nullableString(item.host, 120), path: nullableString(item.path, 300), tabId: Number.isSafeInteger(item.tabId) ? Number(item.tabId) : null, bytes: bounded(item.bytes, 10_000_000_000) }];
+  }) : [];
   return {
     imageMode: imageMode(value.imageMode ?? mode),
     imageRequestsBlocked: bounded(value.imageRequestsBlocked),
@@ -331,6 +344,9 @@ function normalizeImageNetworkDiagnostics(value: unknown, mode: unknown): Collec
     fullGalleriesDownloaded: bounded(value.fullGalleriesDownloaded),
     photoViewerNavigations: bounded(value.photoViewerNavigations),
     photoViewerNavigationsWithImageBytes: bounded(value.photoViewerNavigationsWithImageBytes),
+    imageRequestTypeCounts: typeCounts(value.imageRequestTypeCounts),
+    imageResponseTypeCounts: typeCounts(value.imageResponseTypeCounts),
+    imageResponseSamples: samples,
   };
 }
 

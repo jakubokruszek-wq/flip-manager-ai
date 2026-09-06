@@ -284,6 +284,22 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
 function aggregateImageNetworkDiagnostics(payloads: Row[]): CollectorImageNetworkDiagnostics {
   const diagnostics = payloads.map((payload) => row(payload.imageNetworkDiagnostics)).filter((value): value is Row => value !== null);
   const numberValue = (key: keyof Omit<CollectorImageNetworkDiagnostics, "imageMode">) => diagnostics.reduce((total, item) => total + boundedTelemetryNumber(item[key], 10_000_000_000), 0);
+  const typeCounts = (key: "imageRequestTypeCounts" | "imageResponseTypeCounts") => diagnostics.reduce<Record<string, number>>((result, item) => {
+    const counts = row(item[key]);
+    if (!counts) return result;
+    for (const [type, value] of Object.entries(counts)) {
+      const bounded = boundedTelemetryNumber(value, 10_000_000);
+      result[type.slice(0, 40)] = Math.min(10_000_000, (result[type.slice(0, 40)] || 0) + bounded);
+    }
+    return result;
+  }, {});
+  const samples = diagnostics.flatMap((item) => Array.isArray(item.imageResponseSamples) ? item.imageResponseSamples : []).filter((sample): sample is Row => row(sample) !== null).slice(0, 20).map((sample) => ({
+    type: (string(sample.type) ?? "unknown").slice(0, 40),
+    host: (string(sample.host) ?? "").slice(0, 120) || null,
+    path: (string(sample.path) ?? "").slice(0, 300) || null,
+    tabId: Number.isSafeInteger(sample.tabId) ? Number(sample.tabId) : null,
+    bytes: boundedTelemetryNumber(sample.bytes, 10_000_000_000),
+  }));
   const mode = diagnostics.some((item) => item.imageMode === "GALLERY_HYDRATION_MEDIA_ALLOWED") ? "GALLERY_HYDRATION_MEDIA_ALLOWED" : "SOURCE_SCAN_DATA_ONLY";
   return {
     imageMode: mode,
@@ -299,6 +315,9 @@ function aggregateImageNetworkDiagnostics(payloads: Row[]): CollectorImageNetwor
     fullGalleriesDownloaded: numberValue("fullGalleriesDownloaded"),
     photoViewerNavigations: numberValue("photoViewerNavigations"),
     photoViewerNavigationsWithImageBytes: numberValue("photoViewerNavigationsWithImageBytes"),
+    imageRequestTypeCounts: typeCounts("imageRequestTypeCounts"),
+    imageResponseTypeCounts: typeCounts("imageResponseTypeCounts"),
+    imageResponseSamples: samples,
   };
 }
 
