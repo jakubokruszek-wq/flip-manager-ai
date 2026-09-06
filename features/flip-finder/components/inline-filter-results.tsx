@@ -177,7 +177,7 @@ function GalleryRequestButton({ result }: { result: FilterResult }) {
     if (busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE") return;
     setBusy(true);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { method: "POST" });
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { method: "POST", headers: { "x-flip-finder-action": "gallery" } });
       const payload: unknown = await readJson(response);
       if (!response.ok || !payload || typeof payload !== "object") throw new Error("Nie udało się zlecić pobrania galerii.");
       const next = "status" in payload && isGalleryState(payload.status) ? payload.status : "PENDING";

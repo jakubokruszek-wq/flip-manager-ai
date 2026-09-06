@@ -8,6 +8,7 @@ const page = fs.readFileSync(path.join(__dirname, "flip-finder-page.tsx"), "utf8
 const inlineResults = fs.readFileSync(path.join(__dirname, "inline-filter-results.tsx"), "utf8");
 const galleryRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/listings/[id]/gallery/route.ts"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
+const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
 
 test("normal Flip Finder UI uses the queue scan result funnel", () => {
   assert.match(page, /WYNIK OSTATNIEGO SKANU/);
@@ -59,4 +60,11 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(galleryJobs, /job_type: "GALLERY_HYDRATION"/);
   assert.match(galleryJobs, /priority: 100/);
   assert.match(galleryJobs, /EXACT_ROOT_STORY/);
+});
+
+test("gallery mutation is protected by same-origin request authorization", () => {
+  assert.match(galleryRoute, /authorizeGalleryMutation/);
+  assert.match(inlineResults, /x-flip-finder-action.*gallery/);
+  assert.match(galleryAuth, /GALLERY_REQUEST_FORBIDDEN/);
+  assert.match(galleryAuth, /https:\/\/flip-manager-ai\.vercel\.app/);
 });

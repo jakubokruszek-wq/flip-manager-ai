@@ -1,4 +1,5 @@
 import { enqueueFacebookGalleryJob, getFacebookGalleryStatus } from "@/features/facebook-worker/gallery-jobs";
+import { authorizeGalleryMutation } from "@/features/flip-finder/server/gallery-request-auth";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -14,6 +15,8 @@ export async function GET(_request: Request, { params }: Context): Promise<Respo
 }
 
 export async function POST(_request: Request, { params }: Context): Promise<Response> {
+  const authorizationError = authorizeGalleryMutation(_request);
+  if (authorizationError) return authorizationError;
   const listingId = (await params).id;
   if (!/^[0-9a-f-]{20,}$/i.test(listingId)) return Response.json({ ok: false, code: "INVALID_LISTING_ID" }, { status: 400 });
   try {
