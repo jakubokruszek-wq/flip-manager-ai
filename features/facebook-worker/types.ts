@@ -284,6 +284,7 @@ export type FacebookWorkerJob = {
   leasedUntil: string;
   attempts: number;
   jobType?: "SOURCE_SCAN" | "GALLERY_HYDRATION";
+  imageMode?: "SOURCE_SCAN_DATA_ONLY" | "GALLERY_HYDRATION_MEDIA_ALLOWED";
   priority?: number;
   galleryListingId?: string | null;
   galleryPostId?: string | null;

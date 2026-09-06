@@ -4,6 +4,7 @@ importScripts("collector-core.js");
 importScripts("collector-runtime.js");
 importScripts("pairing-status.js");
 importScripts("collector-preflight.js");
+importScripts("image-blocker.js");
 
 const PRODUCTION_SOURCE_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
 const PRODUCTION_SOURCES = [
@@ -68,15 +69,18 @@ const PHASE_FINALIZE = "Scalanie wynikow i analiza ofert\u2026";
 const PHASE_DONE = "Zakonczono";
 
 const FINDER_ORIGIN = "https://flip-manager-ai.vercel.app";
+const SOURCE_SCAN_IMAGE_MODE = globalThis.FlipCollectorImagePolicy?.SOURCE_SCAN_DATA_ONLY || "SOURCE_SCAN_DATA_ONLY";
+const GALLERY_HYDRATION_MEDIA_MODE = globalThis.FlipCollectorImagePolicy?.GALLERY_HYDRATION_MEDIA_ALLOWED || "GALLERY_HYDRATION_MEDIA_ALLOWED";
 const RUNTIME_GENERATION = crypto.randomUUID();
 let collectorJobPollInFlight = false;
 const COLLECTOR_JOB_POLL_ALARM = "collector-job-poll";
 const COLLECTOR_JOB_POLL_PERIOD_MINUTES = 0.5;
 
 void recoverFinderBootstraps().catch(() => {});
+void Promise.resolve(globalThis.FlipCollectorImagePolicy?.cleanupStaleRules?.()).catch(() => {});
 void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); });
-chrome.runtime.onInstalled.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); }); });
-chrome.runtime.onStartup.addListener(() => { void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); }); });
+chrome.runtime.onInstalled.addListener(() => { void Promise.resolve(globalThis.FlipCollectorImagePolicy?.cleanupStaleRules?.()).catch(() => {}); void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); }); });
+chrome.runtime.onStartup.addListener(() => { void Promise.resolve(globalThis.FlipCollectorImagePolicy?.cleanupStaleRules?.()).catch(() => {}); void recoverFinderBootstraps().catch(() => {}); void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)).finally(() => { void pollCollectorJobs().catch(() => {}); }); });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== COLLECTOR_JOB_POLL_ALARM) return;
   void pollCollectorJobs().catch(() => {}).finally(() => { void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)); });
@@ -161,7 +165,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     const scanId = typeof message.scanId === "string" && isUuid(message.scanId) ? message.scanId : null;
     if (!scanId) { respond({ ok: false, error: "COLLECTOR_SCAN_ID_INVALID" }); return false; }
     const requestId = safeRequestId(message.requestId);
-    void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_SCAN_COMMAND", status: "PASS" }).then(() => collectConfiguredSources(scanId, requestId)).catch(() => {});
+    void recordStartTrace({ requestId, stage: "EXTENSION_RECEIVED_SCAN_COMMAND", status: "PASS" }).then(() => collectConfiguredSources(scanId, requestId, null, SOURCE_SCAN_IMAGE_MODE)).catch(() => {});
     respond({ ok: true, accepted: true, scanId });
     return false;
   }
@@ -193,20 +197,26 @@ async function collectActiveSource() {
   return collectTabSource(tab.id, source.sourceUrl, scanId, "unknown", null, source);
 }
 
-async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId = "unknown", sourceInput = null) {
+async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId = "unknown", sourceInput = null, imageMode = SOURCE_SCAN_IMAGE_MODE) {
   const selectedSource = productionSource(sourceInput) || (sourceInput ? null : productionSource(PRODUCTION_SOURCE_URL));
   if (!selectedSource) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
+  if (imageMode !== SOURCE_SCAN_IMAGE_MODE && imageMode !== GALLERY_HYDRATION_MEDIA_MODE) throw new Error("COLLECTOR_IMAGE_MODE_INVALID");
   let tab;
   const runtime = globalThis.FlipCollectorRuntime;
   const deadline = runtime.createDeadline(SOURCE_COLLECTION_DEADLINE_MS);
   const context = { deadline, lastStage: "FACEBOOK_TAB_CREATE", query: null, source: selectedSource.sourceId };
+  const imagePolicy = globalThis.FlipCollectorImagePolicy;
+  imagePolicy?.startSession?.(scanId, imageMode);
   const collection = (async () => {
-    tab = await chrome.tabs.create({ url: selectedSource.sourceUrl, active: false });
+    tab = await chrome.tabs.create({ url: "about:blank", active: false });
+    if (!imagePolicy?.attachTab) throw new Error("SOURCE_SCAN_IMAGE_BLOCKER_UNAVAILABLE");
+    await imagePolicy.attachTab(tab.id, { sessionId: scanId, mode: imageMode });
+    await chrome.tabs.update(tab.id, { url: selectedSource.sourceUrl });
     context.lastStage = "FACEBOOK_TAB_LOAD";
     deadline.assertActive(failureDiagnostics(context, tab?.id));
     await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline.remainingMs())));
     deadline.assertActive(failureDiagnostics(context, tab.id));
-    return collectTabSource(tab.id, selectedSource.sourceUrl, scanId, requestId, context, selectedSource);
+    return collectTabSource(tab.id, selectedSource.sourceUrl, scanId, requestId, context, selectedSource, imageMode);
   })();
   try {
     return await Promise.race([collection, deadline.timeout]);
@@ -218,9 +228,10 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
     if (tab?.id) { await chrome.tabs.remove(tab.id).catch(() => {}); tab = null; }
     await failCollectorScan(scanId, error, diagnostics);
     await setCollectorState({ status: "failed", phase: "FAILED", progress: errorCode, errorCode, lastStage: diagnostics.stage, query: diagnostics.query, sourceUrl: selectedSource.sourceUrl, scanId, finishedAt: new Date().toISOString() });
-    return { sourceUrl: selectedSource.sourceUrl, status: "FAILED", error: errorCode, diagnostics, scanId };
+    return { sourceUrl: selectedSource.sourceUrl, status: "FAILED", error: errorCode, diagnostics: { ...diagnostics, imageNetwork: imagePolicy?.snapshot?.(scanId) || null }, scanId };
   } finally {
     deadline.cancel();
+    await Promise.resolve(imagePolicy?.finishSession?.(scanId)).catch(() => {});
     if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
   }
 }
@@ -258,7 +269,7 @@ async function pollCollectorJobs() {
     try {
       result = claimed.job.jobType === "GALLERY_HYDRATION"
         ? await collectGalleryHydration(claimed.job, requestId)
-        : await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group);
+        : await collectConfiguredSources(claimed.job.runId, requestId, claimed.job.group, claimed.job.imageMode || SOURCE_SCAN_IMAGE_MODE);
     } finally {
       leaseRenewal.stop();
     }
@@ -293,7 +304,7 @@ function startBrowserExtensionLeaseRenewal(job) {
   return { stop() { stopped = true; clearInterval(timer); } };
 }
 
-async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown", collectionContext = null, sourceDescriptor = null) {
+async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown", collectionContext = null, sourceDescriptor = null, imageMode = SOURCE_SCAN_IMAGE_MODE) {
   const source = sourceDescriptor || productionSource(sourceUrl);
   if (!source) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
   await recordStartTrace({ requestId, stage: "COLLECTOR_STARTED", status: "PASS" });
@@ -301,7 +312,7 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, scanId, startedAt: new Date().toISOString() });
   const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
   updateCollectionContext(collectionContext, "MAIN_FEED", null);
-  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED" }, { requestId, source: source.sourceId, collectionContext });
+  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED", imageMode }, { requestId, source: source.sourceId, collectionContext });
   let posts = primary.posts;
   const searchRuns = [];
   const mainFeedIds = new Set(primary.posts.map((post) => post.postId));
@@ -338,11 +349,11 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
         // Discovery owns the complete per-query budget. Tile resolution starts
         // only after discovery has returned, with its own bounded slice.
         const searchCollectionBudgetMs = Math.max(5_000, queryBudgetMs);
-        const search = await collectFromTab(tabId, { minScrolls: SEARCH_LIMITS.minScrolls, maxScrolls: SEARCH_LIMITS.maxScrolls, maxPosts: SEARCH_LIMITS.maxUniquePerQuery, maxDiscoveryMediaTiles: SEARCH_LIMITS.maxDiscoveryMediaTiles, maxMediaTiles: SEARCH_LIMITS.maxDiscoveryMediaTiles, budgetMs: searchCollectionBudgetMs, searchMode: true, discoverySource: "SEARCH", searchQuery: query }, { requestId, source: primary.source.sourceId, collectionContext });
+        const search = await collectFromTab(tabId, { minScrolls: SEARCH_LIMITS.minScrolls, maxScrolls: SEARCH_LIMITS.maxScrolls, maxPosts: SEARCH_LIMITS.maxUniquePerQuery, maxDiscoveryMediaTiles: SEARCH_LIMITS.maxDiscoveryMediaTiles, maxMediaTiles: SEARCH_LIMITS.maxDiscoveryMediaTiles, budgetMs: searchCollectionBudgetMs, searchMode: true, discoverySource: "SEARCH", searchQuery: query, imageMode }, { requestId, source: primary.source.sourceId, collectionContext });
         const discoveryEndedAtMs = Date.now();
         const resolutionDeadlineMs = Math.min(discoveryEndedAtMs + SEARCH_TILE_RESOLUTION_RESERVE_MS, searchStartedAtMs + SEARCH_LIMITS.hardTimeBudgetMs - SEARCH_QUERY_CLEANUP_RESERVE_MS);
         const tilesForResolution = searchTilesNeedingParentResolution(search.posts, search.mediaTiles);
-        const tileResolution = await resolveSearchMediaTiles({ tiles: tilesForResolution, source: primary.source, query, deadlineMs: resolutionDeadlineMs });
+        const tileResolution = await resolveSearchMediaTiles({ tiles: tilesForResolution, source: primary.source, query, deadlineMs: resolutionDeadlineMs, scanId, imageMode });
         const queryPosts = globalThis.FlipFacebookCollectorCore.mergeRecords([...search.posts, ...tileResolution.posts], SEARCH_LIMITS.maxUniquePerQuery);
         const beforeIds = new Set(posts.map((post) => post.postId));
         const mergedSearch = mergePosts([...posts, ...queryPosts]);
@@ -382,14 +393,15 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   const images = { rawCandidates: posts.reduce((sum, post) => sum + (post.media || []).length, 0), verifiedProvenance: posts.reduce((sum, post) => sum + (post.media || []).filter((media) => media.exactAssociation === true && media.exactPostId === post.postId).length, 0), imported: 0, downloadedDuringSearch: 0 };
   const targets = ["1577700267381450", "1578068947344582", "1577710350713775"];
   collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
-  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], posts };
+  const imageNetworkDiagnostics = globalThis.FlipCollectorImagePolicy?.snapshot?.(scanId) || null;
+  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], imageMode, imageNetworkDiagnostics, posts };
   await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
   const upload = await uploadBatch(batch);
   // SEARCH_DATA_FIRST deliberately does not download or mirror media. Keep
   // this counter honest: verified candidates are provenance evidence, not
   // downloaded images. Gallery hydration is an explicit later operation.
   images.imported = 0;
-  const result = { scanId, sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, imageMode: "SEARCH_DATA_FIRST", imagesDownloadedDuringSearch: 0, health, captured: posts.length, searchFallbackUsed: searchRuns.some((run) => run.executed), upload, mainFeed: { captured: primary.posts.length, unique: primary.posts.length, scrolls: primary.health.scrolls, durationMs: primary.health.durationMs, stopReason: primary.health.stopReason }, search: searchRuns, searchTelemetry: searchTelemetrySummary, merged: { totalCaptured: primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0), totalUnique: posts.length, duplicatesRemoved: Math.max(0, duplicateCount) }, identity, images, targetsFound: targets.filter((target) => posts.some((post) => post.postId === target)), iterations: primary.iterations, finishedAt: new Date().toISOString() };
+  const result = { scanId, sourceUrl: primary.source.sourceUrl, sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, imageMode, imagesDownloadedDuringSearch: 0, imageNetworkDiagnostics, health, captured: posts.length, searchFallbackUsed: searchRuns.some((run) => run.executed), upload, mainFeed: { captured: primary.posts.length, unique: primary.posts.length, scrolls: primary.health.scrolls, durationMs: primary.health.durationMs, stopReason: primary.health.stopReason }, search: searchRuns, searchTelemetry: searchTelemetrySummary, merged: { totalCaptured: primary.posts.length + searchRuns.reduce((sum, run) => sum + run.captured, 0), totalUnique: posts.length, duplicatesRemoved: Math.max(0, duplicateCount) }, identity, images, targetsFound: targets.filter((target) => posts.some((post) => post.postId === target)), iterations: primary.iterations, finishedAt: new Date().toISOString() };
   await chrome.storage.local.set({ collectorLastResult: result, collectorState: { status: "idle", phase: "DONE", progress: PHASE_DONE, scanId, finishedAt: result.finishedAt } });
   return result;
 }
@@ -412,7 +424,7 @@ async function collectFromTab(tabId, options, traceContext = {}) {
   let responseResult;
   try {
     responseResult = await runtime.sendMessageWithTimeout(
-      () => chrome.tabs.sendMessage(tabId, { type: "COLLECT_SOURCE", options }),
+      () => chrome.tabs.sendMessage(tabId, { type: "COLLECT_SOURCE", options: { ...options, imageMode: options.imageMode || SOURCE_SCAN_IMAGE_MODE } }),
       { timeoutMs, timeoutCode, diagnostics },
     );
   } catch (error) {
@@ -426,7 +438,7 @@ async function collectFromTab(tabId, options, traceContext = {}) {
   return response.result;
 }
 
-async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
+async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs, scanId, imageMode = SOURCE_SCAN_IMAGE_MODE }) {
   const uniqueTiles = [...new Map((Array.isArray(tiles) ? tiles : []).filter((tile) => /^\d{5,30}$/.test(String(tile?.mediaId || "")) && typeof tile?.photoUrl === "string").map((tile) => [String(tile.mediaId), tile])).values()];
   const selected = uniqueTiles.slice(0, SEARCH_LIMITS.maxTilesToOpen);
   const parentPosts = new Map();
@@ -478,8 +490,10 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
         elapsedMs: 0,
       };
       try {
-        resolverTabId = (await chrome.tabs.create({ url: tile.photoUrl, active: false })).id;
+        resolverTabId = (await chrome.tabs.create({ url: "about:blank", active: false })).id;
         if (!resolverTabId) throw new Error("SEARCH_MEDIA_RESOLVER_TAB_MISSING");
+        await globalThis.FlipCollectorImagePolicy.attachTab(resolverTabId, { sessionId: scanId, mode: imageMode, photoViewer: true });
+        await chrome.tabs.update(resolverTabId, { url: tile.photoUrl });
         tilesOpened += 1;
         tileDiagnostic.photoOpened = true;
         tileDiagnostic.photoOpenedAt = new Date().toISOString();
@@ -492,7 +506,7 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
           throw readinessError;
         }
         tileDiagnostic.contentScriptReadyAt = new Date().toISOString();
-        const responseResult = await resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, tileDiagnostic });
+        const responseResult = await resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, imageMode, tileDiagnostic });
         const response = responseResult.response;
         Object.assign(tileDiagnostic, response?.result?.diagnostics || {});
         if (tileDiagnostic.structuredPayloadFound && !tileDiagnostic.payloadObservedAt) tileDiagnostic.payloadObservedAt = tileDiagnostic.responseAt || new Date().toISOString();
@@ -500,7 +514,7 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs }) {
         if (records.length === 1 && records[0].identityConfidence === "EXACT" && records[0].resolvedFromMediaTile === true) { resolvedRecords.push(records[0]); tileDiagnostic.identityResult = "EXACT"; tileDiagnostic.parentPostId = records[0].postId; tileDiagnostic.parentPermalink = records[0].permalink; tileDiagnostic.rootAuthorFound = true; tileDiagnostic.rootTextFound = true; tileDiagnostic.failSubstep = null; }
         else if (!tileDiagnostic.failSubstep || tileDiagnostic.failSubstep === "SEARCH_TILE_NOT_OPENED") tileDiagnostic.failSubstep = response?.result?.reasons?.[0] || "SEARCH_PARENT_UNVERIFIED";
       } catch (error) { tileDiagnostic.failSubstep = searchTileErrorCode(error); }
-      finally { tileDiagnostic.elapsedMs = Date.now() - tileStartedAt; tileDiagnostics.push(tileDiagnostic); if (resolverTabId !== null) await chrome.tabs.remove(resolverTabId).catch(() => {}); }
+      finally { tileDiagnostic.elapsedMs = Date.now() - tileStartedAt; tileDiagnostics.push(tileDiagnostic); if (resolverTabId !== null) { await globalThis.FlipCollectorImagePolicy.detachTab(resolverTabId).catch(() => {}); await chrome.tabs.remove(resolverTabId).catch(() => {}); } }
     }
   }
   await Promise.all(Array.from({ length: Math.min(SEARCH_LIMITS.tileConcurrency, selected.length) }, () => resolveWorker()));
@@ -525,19 +539,25 @@ async function collectGalleryHydration(job, requestId) {
   if (!/^\d{5,30}$/.test(postId) || !/^https:\/\/(?:www\.)?facebook\.com\//i.test(sourceUrl)) return { status: "FAILED", error: "FACEBOOK_GALLERY_TARGET_INVALID" };
   let tab = null;
   const deadline = Date.now() + GALLERY_JOB_TIMEOUT_MS;
+  const sessionId = `gallery:${String(job.id || requestId)}`;
+  const imagePolicy = globalThis.FlipCollectorImagePolicy;
+  imagePolicy?.startSession?.(sessionId, GALLERY_HYDRATION_MEDIA_MODE);
   try {
-    tab = await chrome.tabs.create({ url: sourceUrl, active: false });
+    tab = await chrome.tabs.create({ url: "about:blank", active: false });
+    await imagePolicy.attachTab(tab.id, { sessionId, mode: GALLERY_HYDRATION_MEDIA_MODE });
+    await chrome.tabs.update(tab.id, { url: sourceUrl });
     await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline - Date.now())));
     await waitForContentScript(tab.id, Math.min(10_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
     const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-      () => chrome.tabs.sendMessage(tab.id, { type: "HYDRATE_FACEBOOK_GALLERY", options: { expectedPostId: postId, expectedUrl: sourceUrl } }),
+      () => chrome.tabs.sendMessage(tab.id, { type: "HYDRATE_FACEBOOK_GALLERY", options: { expectedPostId: postId, expectedUrl: sourceUrl, imageMode: GALLERY_HYDRATION_MEDIA_MODE } }),
       { timeoutMs: Math.min(30_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId } },
     );
     if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_FAILED") };
-    return { status: responseResult.response.result?.status === "FAILED" ? "FAILED" : "COMPLETE", gallery: responseResult.response.result };
+    return { status: responseResult.response.result?.status === "FAILED" ? "FAILED" : "COMPLETE", gallery: { ...responseResult.response.result, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
   } catch (error) {
     return { status: "FAILED", error: collectorErrorCode(error) };
   } finally {
+    await Promise.resolve(imagePolicy?.finishSession?.(sessionId)).catch(() => {});
     if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
   }
 }
@@ -563,7 +583,7 @@ function searchTilesNeedingParentResolution(posts, tiles) {
   return (Array.isArray(tiles) ? tiles : []).filter((tile) => !exactMediaIds.has(String(tile?.mediaId || "")));
 }
 
-async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, tileDiagnostic }) {
+async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, imageMode = SOURCE_SCAN_IMAGE_MODE, tileDiagnostic }) {
   let lastError = null;
   for (let attempt = 1; attempt <= SEARCH_TILE_MAX_MESSAGE_ATTEMPTS; attempt += 1) {
     const remainingMs = deadlineMs - Date.now();
@@ -572,7 +592,7 @@ async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, qu
     tileDiagnostic.sendMessageFirstAt ||= new Date().toISOString();
     try {
       const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-        () => chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query, resolutionWaitMs: Math.min(SEARCH_TILE_PAYLOAD_WAIT_MS, Math.max(250, remainingMs - 250)) } }),
+        () => chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query, imageMode: imageMode || SOURCE_SCAN_IMAGE_MODE, resolutionWaitMs: Math.min(SEARCH_TILE_PAYLOAD_WAIT_MS, Math.max(250, remainingMs - 250)) } }),
         { timeoutMs: Math.min(SEARCH_TILE_MESSAGE_TIMEOUT_MS, Math.max(1, remainingMs - 250)), timeoutCode: "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT", diagnostics: { query, tabId: resolverTabId, source: source.sourceId } },
       );
       tileDiagnostic.sendMessageSuccessAt ||= new Date().toISOString();

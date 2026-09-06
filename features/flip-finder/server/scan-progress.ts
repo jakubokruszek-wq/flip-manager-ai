@@ -11,6 +11,7 @@ import {
   type CollectorMainFeedDiagnostic,
   type CollectorSearchDiscoveryEvidence,
   type CollectorSearchQueryTelemetry,
+  type CollectorImageNetworkDiagnostics,
   projectImagePersistenceDiagnostics,
   projectSearchTileDiagnostics,
   type FacebookGroupProgress,
@@ -241,6 +242,7 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
       return Array.isArray(result?.persistenceDiagnostics) ? result.persistenceDiagnostics : [];
     }),
   ]);
+  const imageNetworkDiagnostics = aggregateImageNetworkDiagnostics(payloads);
   const buildingTypeUnverified = countWarningMatches(warnings, /BUILDING(?:_TYPE)?_(?:UNVERIFIED|UNKNOWN)/i);
   const outsideLodz = countWarningMatches(warnings, /(?:OUTSIDE|LOCATION).*LODZ/i);
   const tenement = countWarningMatches(warnings, /(?:TENEMENT|KAMIENICA)/i);
@@ -274,6 +276,29 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
     },
     mainFeedDiagnostics,
     imageDiagnostics,
+    imageMode: imageNetworkDiagnostics.imageMode,
+    imageNetworkDiagnostics,
+  };
+}
+
+function aggregateImageNetworkDiagnostics(payloads: Row[]): CollectorImageNetworkDiagnostics {
+  const diagnostics = payloads.map((payload) => row(payload.imageNetworkDiagnostics)).filter((value): value is Row => value !== null);
+  const numberValue = (key: keyof Omit<CollectorImageNetworkDiagnostics, "imageMode">) => diagnostics.reduce((total, item) => total + boundedTelemetryNumber(item[key], 10_000_000_000), 0);
+  const mode = diagnostics.some((item) => item.imageMode === "GALLERY_HYDRATION_MEDIA_ALLOWED") ? "GALLERY_HYDRATION_MEDIA_ALLOWED" : "SOURCE_SCAN_DATA_ONLY";
+  return {
+    imageMode: mode,
+    imageRequestsBlocked: numberValue("imageRequestsBlocked"),
+    imageRequestsAllowed: numberValue("imageRequestsAllowed"),
+    imageResponsesReceived: numberValue("imageResponsesReceived"),
+    imageBytesReceived: numberValue("imageBytesReceived"),
+    listingImageRequestsStarted: numberValue("listingImageRequestsStarted"),
+    listingImageResponsesReceived: numberValue("listingImageResponsesReceived"),
+    listingImageBytesReceived: numberValue("listingImageBytesReceived"),
+    thumbnailsDownloaded: numberValue("thumbnailsDownloaded"),
+    fullImagesDownloaded: numberValue("fullImagesDownloaded"),
+    fullGalleriesDownloaded: numberValue("fullGalleriesDownloaded"),
+    photoViewerNavigations: numberValue("photoViewerNavigations"),
+    photoViewerNavigationsWithImageBytes: numberValue("photoViewerNavigationsWithImageBytes"),
   };
 }
 

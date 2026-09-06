@@ -94,6 +94,20 @@ test("normalizes bounded diagnostic telemetry without accepting raw DOM or secre
   assert.equal((batch.searchTelemetry?.queries[0]?.tileDiagnostics?.[0] as Record<string, unknown>).secret, undefined);
 });
 
+test("keeps source image policy telemetry bounded and exposes no raw request data", () => {
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "HEALTHY", visibleCardCount: 0, capturedPostCount: 0, scrolls: 3, durationMs: 5000, stopReason: "MAX_POSTS", reasons: [] },
+    imageMode: "SOURCE_SCAN_DATA_ONLY",
+    imageNetworkDiagnostics: { imageMode: "SOURCE_SCAN_DATA_ONLY", imageRequestsBlocked: 4, imageRequestsAllowed: 0, imageResponsesReceived: 0, imageBytesReceived: 0, listingImageRequestsStarted: 0, listingImageResponsesReceived: 0, listingImageBytesReceived: 0, thumbnailsDownloaded: 0, fullImagesDownloaded: 0, fullGalleriesDownloaded: 0, photoViewerNavigations: 2, photoViewerNavigationsWithImageBytes: 0, deviceToken: "must-not-survive" },
+    posts: [],
+  });
+  assert.equal(batch.imageMode, "SOURCE_SCAN_DATA_ONLY");
+  assert.equal(batch.imageNetworkDiagnostics?.imageRequestsBlocked, 4);
+  assert.equal(batch.imageNetworkDiagnostics?.imageBytesReceived, 0);
+  assert.equal((batch.imageNetworkDiagnostics as Record<string, unknown>)?.deviceToken, undefined);
+});
+
 test("fails closed on source mismatch and forged media association", () => {
   const raw = { scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z", health: { status: "HEALTHY", visibleCardCount: 1, capturedPostCount: 1, scrolls: 3, durationMs: 5000, stopReason: "MAX_POSTS", reasons: [] }, posts: [{ postId: "1577700267381450", permalink: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, sourceId, sourceType: "GROUP", media: [{ url: "https://scontent.example/image.jpg", exactPostId: "foreign", exactAssociation: true }], discoveryLayers: ["DOM"], firstSeenIteration: 0 }] };
   const batch = normalizeFacebookCollectorBatch(raw);

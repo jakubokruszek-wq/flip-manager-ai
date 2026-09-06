@@ -142,6 +142,22 @@ export type CollectorImagePersistenceDiagnostic = {
   reasonCodes: string[];
 };
 
+export type CollectorImageNetworkDiagnostics = {
+  imageMode: "SOURCE_SCAN_DATA_ONLY" | "GALLERY_HYDRATION_MEDIA_ALLOWED";
+  imageRequestsBlocked: number;
+  imageRequestsAllowed: number;
+  imageResponsesReceived: number;
+  imageBytesReceived: number;
+  listingImageRequestsStarted: number;
+  listingImageResponsesReceived: number;
+  listingImageBytesReceived: number;
+  thumbnailsDownloaded: number;
+  fullImagesDownloaded: number;
+  fullGalleriesDownloaded: number;
+  photoViewerNavigations: number;
+  photoViewerNavigationsWithImageBytes: number;
+};
+
 export type ScanWorkUnit = {
   id: string;
   source: ListingSource;
@@ -191,6 +207,8 @@ export type CollectorScanFunnel = {
   };
   mainFeedDiagnostics: CollectorMainFeedDiagnostic[];
   imageDiagnostics: CollectorImagePersistenceDiagnostic[];
+  imageMode: "SOURCE_SCAN_DATA_ONLY" | "GALLERY_HYDRATION_MEDIA_ALLOWED";
+  imageNetworkDiagnostics: CollectorImageNetworkDiagnostics;
 };
 
 export type OpenAICostWindow = {

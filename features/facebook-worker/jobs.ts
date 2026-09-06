@@ -117,6 +117,7 @@ export async function claimFacebookJob(workerId: string, consumerType: FacebookJ
     id: requiredString(row.id), runId: requiredString(row.scan_run_id), sourceScanId: nullableString(row.source_scan_id), filterId: requiredString(row.search_filter_id),
     group: jobType === "SOURCE_SCAN" ? parseFacebookGroupSnapshot(row.group_snapshot) : { id: "gallery", name: "Gallery hydration", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/", type: "GROUP" }, leaseToken: requiredString(row.lease_token), leasedUntil: requiredString(row.leased_until), attempts: nonnegativeInteger(row.attempts),
     jobType,
+    imageMode: jobType === "GALLERY_HYDRATION" ? "GALLERY_HYDRATION_MEDIA_ALLOWED" : "SOURCE_SCAN_DATA_ONLY",
     priority: nonnegativeInteger(row.priority ?? 0),
     galleryListingId: nullableString(row.gallery_listing_id),
     galleryPostId: nullableString(row.gallery_post_id),

@@ -16,6 +16,7 @@ const options = fs.readFileSync(path.join(__dirname, "options.js"), "utf8");
 const optionsHtml = fs.readFileSync(path.join(__dirname, "options.html"), "utf8");
 const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf8");
 const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
+const imageBlocker = fs.readFileSync(path.join(__dirname, "image-blocker.js"), "utf8");
 const finderPage = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/components/flip-finder-page.tsx"), "utf8");
 const manualScan = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/server/manual-scan.ts"), "utf8");
 const scanProgressServer = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/server/scan-progress.ts"), "utf8");
@@ -433,6 +434,26 @@ test("on-demand gallery uses the existing exact-root queue path and never broade
   assert.match(content, /EXACT_ROOT_STORY/);
   assert.match(content, /foreignPostIdsDetected: \[\]/);
   assert.doesNotMatch(content, /comment.*media|media.*comment/i);
+});
+
+test("source scans use a tab-scoped data-only image policy and gallery is the only media-enabled mode", () => {
+  assert.ok(manifest.permissions.includes("declarativeNetRequest"));
+  assert.ok(manifest.permissions.includes("webRequest"));
+  assert.ok(manifest.host_permissions.includes("https://*.fbcdn.net/*"));
+  assert.match(background, /SOURCE_SCAN_IMAGE_MODE/);
+  assert.match(background, /imagePolicy\.attachTab/);
+  assert.match(background, /imageNetworkDiagnostics/);
+  assert.match(background, /imagesDownloadedDuringSearch: 0/);
+  for (const field of ["imageRequestsBlocked", "imageRequestsAllowed", "imageResponsesReceived", "imageBytesReceived", "listingImageRequestsStarted", "listingImageResponsesReceived", "listingImageBytesReceived", "thumbnailsDownloaded", "fullImagesDownloaded", "fullGalleriesDownloaded", "photoViewerNavigations", "photoViewerNavigationsWithImageBytes"]) {
+    assert.match(scanProgressServer, new RegExp(`\\b${field}\\b`));
+  }
+  assert.match(background, /GALLERY_HYDRATION_MEDIA_MODE/);
+  assert.match(content, /options\.imageMode !== GALLERY_HYDRATION_MEDIA_ALLOWED/);
+  assert.match(content, /options\.imageMode !== SOURCE_SCAN_DATA_ONLY/);
+  assert.match(imageBlocker, /tabIds: \[normalizedTabId\]/);
+  assert.match(imageBlocker, /resourceTypes: \["image"\]/);
+  assert.match(imageBlocker, /GALLERY_HYDRATION_MEDIA_ALLOWED/);
+  assert.doesNotMatch(imageBlocker, /tabIds: \[\]/);
 });
 
 test("claimed GROUP snapshots without a type field resolve their source type from the canonical URL", () => {

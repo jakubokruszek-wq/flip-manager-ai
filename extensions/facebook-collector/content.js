@@ -3,6 +3,8 @@
   const core = globalThis.FlipFacebookCollectorCore;
   if (!core || globalThis.__flipCollectorContent) return;
   globalThis.__flipCollectorContent = true;
+  const SOURCE_SCAN_DATA_ONLY = "SOURCE_SCAN_DATA_ONLY";
+  const GALLERY_HYDRATION_MEDIA_ALLOWED = "GALLERY_HYDRATION_MEDIA_ALLOWED";
   const networkRecords = new Map();
   let networkResponses = 0;
 
@@ -30,6 +32,7 @@
   });
 
   function hydrateFacebookGallery(options) {
+    if (options.imageMode !== GALLERY_HYDRATION_MEDIA_ALLOWED) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_IMAGE_MODE_INVALID", candidates: [], sourceMediaCount: 0 });
     const expectedPostId = String(options.expectedPostId || "");
     const expectedUrl = String(options.expectedUrl || "");
     if (!/^\d{5,30}$/.test(expectedPostId)) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_POST_ID_INVALID", expectedPostId: null, candidates: [], sourceMediaCount: 0 });
@@ -65,6 +68,7 @@
   }
 
   async function resolveSearchMediaTile(options) {
+    if (options.imageMode !== SOURCE_SCAN_DATA_ONLY) return { status: "UNVERIFIED", records: [], reasons: ["SEARCH_IMAGE_MODE_INVALID"], diagnostics: { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId: String(options.mediaId || ""), photoOpened: false, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_IMAGE_MODE_INVALID" } };
     const mediaId = String(options.mediaId || "");
     const source = core.canonicalSource(options.sourceUrl);
     const current = new URL(location.href);
@@ -106,6 +110,7 @@
   }
 
   async function collectSource(options) {
+    const imageMode = options.imageMode === GALLERY_HYDRATION_MEDIA_ALLOWED ? GALLERY_HYDRATION_MEDIA_ALLOWED : SOURCE_SCAN_DATA_ONLY;
     const source = core.canonicalSource(location.href);
     if (!source) throw new Error("FACEBOOK_SOURCE_URL_REQUIRED");
     const maxScrolls = clamp(options.maxScrolls, 0, 30, 30);
@@ -241,7 +246,7 @@
         }
       }
     }
-    return { source, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
+    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {

@@ -5,6 +5,23 @@ export type CollectorDiscoveryHealth = "HEALTHY" | "DEGRADED" | "FAILED";
 export type CollectorIdentityConfidence = "EXACT" | "UNVERIFIED";
 export type CollectorDiscoverySource = "MAIN_FEED" | "SEARCH";
 export type CollectorFirstSeenPhase = "MAIN_FEED" | "SEARCH";
+export type CollectorImageMode = "SOURCE_SCAN_DATA_ONLY" | "GALLERY_HYDRATION_MEDIA_ALLOWED";
+
+export type CollectorImageNetworkDiagnostics = {
+  imageMode: CollectorImageMode;
+  imageRequestsBlocked: number;
+  imageRequestsAllowed: number;
+  imageResponsesReceived: number;
+  imageBytesReceived: number;
+  listingImageRequestsStarted: number;
+  listingImageResponsesReceived: number;
+  listingImageBytesReceived: number;
+  thumbnailsDownloaded: number;
+  fullImagesDownloaded: number;
+  fullGalleriesDownloaded: number;
+  photoViewerNavigations: number;
+  photoViewerNavigationsWithImageBytes: number;
+};
 
 export type CollectorMediaRecord = {
   url: string;
@@ -182,6 +199,8 @@ export type FacebookCollectorBatch = {
   collectedAt: string;
   health: CollectorSourceHealth;
   searchTelemetry: CollectorSearchTelemetry | null;
+  imageMode: CollectorImageMode;
+  imageNetworkDiagnostics: CollectorImageNetworkDiagnostics | null;
   mainFeedTelemetry?: CollectorMainFeedDiagnostic[];
   posts: CollectorPostRecord[];
 };
@@ -204,6 +223,8 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
     collectedAt: isoDate(value.collectedAt, "COLLECTOR_COLLECTED_AT_INVALID"),
     health,
     searchTelemetry: normalizeSearchTelemetry(value.searchTelemetry),
+    imageMode: imageMode(value.imageMode),
+    imageNetworkDiagnostics: normalizeImageNetworkDiagnostics(value.imageNetworkDiagnostics, value.imageMode),
     mainFeedTelemetry: normalizeMainFeedTelemetry(value.mainFeedTelemetry),
     posts: deduped,
   };
@@ -287,6 +308,30 @@ function normalizeHealth(value: unknown, captured: number): CollectorSourceHealt
   const count = nonnegativeInteger(value.capturedPostCount);
   if (count !== captured) throw new Error("COLLECTOR_CAPTURE_COUNT_MISMATCH");
   return { status, visibleCardCount: visible, capturedPostCount: count, captureRatio: visible === 0 ? (count > 0 ? 1 : 0) : Math.min(1, count / visible), scrolls: nonnegativeInteger(value.scrolls), durationMs: nonnegativeInteger(value.durationMs), stopReason: requiredString(value.stopReason, "COLLECTOR_STOP_REASON_REQUIRED").slice(0, 120), reasons: Array.isArray(value.reasons) ? value.reasons.filter((item): item is string => typeof item === "string").slice(0, 20) : [] };
+}
+
+function imageMode(value: unknown): CollectorImageMode {
+  return value === "GALLERY_HYDRATION_MEDIA_ALLOWED" ? "GALLERY_HYDRATION_MEDIA_ALLOWED" : "SOURCE_SCAN_DATA_ONLY";
+}
+
+function normalizeImageNetworkDiagnostics(value: unknown, mode: unknown): CollectorImageNetworkDiagnostics | null {
+  if (!isRecord(value)) return null;
+  const bounded = (candidate: unknown, max = 100_000_000): number => boundedInteger(candidate, 0, max);
+  return {
+    imageMode: imageMode(value.imageMode ?? mode),
+    imageRequestsBlocked: bounded(value.imageRequestsBlocked),
+    imageRequestsAllowed: bounded(value.imageRequestsAllowed),
+    imageResponsesReceived: bounded(value.imageResponsesReceived),
+    imageBytesReceived: bounded(value.imageBytesReceived, 10_000_000_000),
+    listingImageRequestsStarted: bounded(value.listingImageRequestsStarted),
+    listingImageResponsesReceived: bounded(value.listingImageResponsesReceived),
+    listingImageBytesReceived: bounded(value.listingImageBytesReceived, 10_000_000_000),
+    thumbnailsDownloaded: bounded(value.thumbnailsDownloaded),
+    fullImagesDownloaded: bounded(value.fullImagesDownloaded),
+    fullGalleriesDownloaded: bounded(value.fullGalleriesDownloaded),
+    photoViewerNavigations: bounded(value.photoViewerNavigations),
+    photoViewerNavigationsWithImageBytes: bounded(value.photoViewerNavigationsWithImageBytes),
+  };
 }
 
 function normalizeSearchTelemetry(value: unknown): CollectorSearchTelemetry | null {
