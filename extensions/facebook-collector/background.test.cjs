@@ -97,13 +97,16 @@ test("search telemetry records coverage, main duplicates, contribution and stop 
 });
 
 test("search tab load has bounded recovery and reports exhausted retries", () => {
-  assert.match(background, /SEARCH_TAB_LOAD_MAX_ATTEMPTS = 2/);
+  assert.match(background, /SEARCH_TAB_LOAD_MAX_ATTEMPTS = 3/);
   assert.match(background, /SEARCH_TAB_LOAD_ATTEMPT_TIMEOUT_MS = 6_000/);
+  assert.match(background, /SEARCH_TAB_LOAD_TIMEOUT_MS = 20_000/);
   assert.match(background, /SEARCH_TAB_LOAD_RETRY_DELAY_MS = 300/);
+  assert.match(background, /Math\.min\(SEARCH_TAB_LOAD_TIMEOUT_MS, searchRemaining\)/);
   assert.match(background, /waitForSearchTab/);
   assert.match(background, /RETRY_SUCCEEDED/);
   assert.match(background, /RETRY_EXHAUSTED/);
   assert.match(background, /tabLoadAttempts/);
+  assert.match(background, /tabLoadError/);
 });
 
 test("media tile resolver is exact, fail-closed and never forwards tile media as gallery provenance", () => {

@@ -332,6 +332,7 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     discoveryEvidence: projectDiscoveryEvidence(value.discoveryEvidence),
     tabLoadAttempts: optionalNumber(value.tabLoadAttempts),
     tabLoadRecovery: string(value.tabLoadRecovery),
+    tabLoadError: string(value.tabLoadError),
     durationMs: number(value.durationMs),
     stopReason: string(value.stopReason) ?? "UNKNOWN",
     tileDiagnostics,

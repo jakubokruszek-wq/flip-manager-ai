@@ -56,6 +56,7 @@ export type CollectorSearchQueryTelemetry = {
   discoveryEvidence?: CollectorSearchDiscoveryEvidence | null;
   tabLoadAttempts?: number | null;
   tabLoadRecovery?: string | null;
+  tabLoadError?: string | null;
   durationMs: number;
   stopReason: string;
   tileDiagnostics: CollectorSearchTileDiagnostic[];

@@ -87,6 +87,7 @@ export type CollectorSearchQueryTelemetry = {
   discoveryEvidence?: CollectorSearchDiscoveryEvidence | null;
   tabLoadAttempts?: number | null;
   tabLoadRecovery?: string | null;
+  tabLoadError?: string | null;
   durationMs: number;
   stopReason: string;
   tileDiagnostics?: CollectorSearchTileDiagnostic[];
@@ -338,6 +339,7 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     ...(Object.prototype.hasOwnProperty.call(value, "discoveryEvidence") ? { discoveryEvidence: normalizeDiscoveryEvidence(value.discoveryEvidence) } : {}),
     ...(Number.isFinite(value.tabLoadAttempts) ? { tabLoadAttempts: boundedInteger(value.tabLoadAttempts, 0, 3) } : {}),
     ...(typeof value.tabLoadRecovery === "string" ? { tabLoadRecovery: value.tabLoadRecovery.slice(0, 40) } : {}),
+    ...(typeof value.tabLoadError === "string" ? { tabLoadError: value.tabLoadError.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 160) } : {}),
     durationMs: boundedInteger(value.durationMs, 0, 120_000),
     stopReason: requiredString(value.stopReason, "COLLECTOR_SEARCH_QUERY_STOP_REASON_REQUIRED").slice(0, 120),
     ...(Array.isArray(value.tileDiagnostics) ? { tileDiagnostics: value.tileDiagnostics.slice(0, 10).map(normalizeSearchTileDiagnostic) } : {}),
