@@ -8,6 +8,18 @@ export const OPPORTUNITY_PRIORITIES = ["TOP", "HIGH", "MEDIUM", "LOW"] as const;
 export type OpportunityPriority = (typeof OPPORTUNITY_PRIORITIES)[number];
 export type OpportunityConfidence = "HIGH" | "MEDIUM" | "LOW";
 
+/**
+ * Explicit, configurable business guardrails for priority buckets.  The
+ * opportunity score remains relative; these values prevent a weak absolute
+ * deal from being presented as a high-priority opportunity merely because it
+ * is the best item in a small sample.
+ */
+export const OPPORTUNITY_QUALITY_GUARDS = {
+  minimumHighRoiPct: 10,
+  minimumHighProfit: 0,
+  minimumHighMarketDiscountPct: 0,
+} as const;
+
 export type OpportunityListingInput = {
   id: string;
   source: string;
@@ -32,6 +44,7 @@ export type OpportunityListingInput = {
 export type OpportunityAssessment = {
   score: number;
   priority: OpportunityPriority;
+  economicsConfidence: OpportunityConfidence;
   arvConfidence: OpportunityConfidence;
   dataConfidence: OpportunityConfidence;
   compCount: number;
@@ -84,6 +97,12 @@ export function calculateOpportunityAssessment(
   const estimatedRoi = estimateRoi(price, renovationCost, estimatedProfit);
   const arvConfidence = confidenceForArv(comparables, arv);
   const dataConfidence = confidenceForData(input, pricePerSqm);
+  const economicsConfidence = confidenceForEconomics({
+    estimatedProfit,
+    estimatedRoi,
+    marketDiscountPct,
+    arvConfidence,
+  });
   const score = scoreOpportunity({
     input,
     filter,
@@ -99,7 +118,13 @@ export function calculateOpportunityAssessment(
 
   return {
     score,
-    priority: priorityFor(score),
+    priority: priorityForBusiness(score, {
+      estimatedProfit,
+      estimatedRoi,
+      marketDiscountPct,
+      arvConfidence,
+    }),
+    economicsConfidence,
     arvConfidence,
     dataConfidence,
     compCount: comparables.length,
@@ -121,6 +146,41 @@ export function priorityFor(score: number): OpportunityPriority {
   if (score >= 65) return "HIGH";
   if (score >= 45) return "MEDIUM";
   return "LOW";
+}
+
+type EconomicsSnapshot = {
+  estimatedProfit: number | null;
+  estimatedRoi: number | null;
+  marketDiscountPct: number | null;
+  arvConfidence: OpportunityConfidence;
+};
+
+/**
+ * Applies absolute economics after calculating the relative score.  Missing
+ * values do not become an automatic hard reject, but they cannot claim a TOP
+ * or HIGH bucket without enough evidence.
+ */
+export function priorityForBusiness(score: number, economics: EconomicsSnapshot): OpportunityPriority {
+  const relative = priorityFor(score);
+
+  if (
+    economics.estimatedProfit !== null &&
+    economics.estimatedProfit <= OPPORTUNITY_QUALITY_GUARDS.minimumHighProfit
+  ) {
+    return "LOW";
+  }
+
+  if (
+    economics.estimatedRoi === null ||
+    economics.estimatedRoi < OPPORTUNITY_QUALITY_GUARDS.minimumHighRoiPct ||
+    economics.arvConfidence === "LOW" ||
+    economics.marketDiscountPct === null ||
+    economics.marketDiscountPct <= OPPORTUNITY_QUALITY_GUARDS.minimumHighMarketDiscountPct
+  ) {
+    return relative === "TOP" || relative === "HIGH" ? "MEDIUM" : relative;
+  }
+
+  return relative;
 }
 
 export function priorityLabel(priority: OpportunityPriority): string {
@@ -207,6 +267,27 @@ function confidenceForArv(comparables: Array<{ similarityScore: number; freshnes
 function confidenceForData(input: OpportunityListingInput, pricePerSqm: number | null): OpportunityConfidence {
   const keyFields = [input.price, input.area, input.rooms, input.city, pricePerSqm].filter((value) => value !== null).length;
   return keyFields >= 5 ? "HIGH" : keyFields >= 3 ? "MEDIUM" : "LOW";
+}
+
+function confidenceForEconomics(input: EconomicsSnapshot): OpportunityConfidence {
+  if (
+    input.estimatedProfit === null ||
+    input.estimatedRoi === null ||
+    input.estimatedProfit <= 0 ||
+    input.estimatedRoi < 0
+  ) {
+    return "LOW";
+  }
+
+  if (
+    input.arvConfidence === "HIGH" &&
+    input.estimatedRoi >= OPPORTUNITY_QUALITY_GUARDS.minimumHighRoiPct &&
+    (input.marketDiscountPct ?? 0) > OPPORTUNITY_QUALITY_GUARDS.minimumHighMarketDiscountPct
+  ) {
+    return "HIGH";
+  }
+
+  return input.arvConfidence === "LOW" ? "LOW" : "MEDIUM";
 }
 
 function renovationEstimate(area: number, title: string | null, description: string | null): number {

@@ -26,6 +26,7 @@ export type ResultStatusInput = {
 export type FilterResult = PropertyListingResult & {
   opportunityScore?: number | null;
   opportunityPriority?: OpportunityPriority | null;
+  economicsConfidence?: OpportunityConfidence | null;
   arvConfidence?: OpportunityConfidence | null;
   dataConfidence?: OpportunityConfidence | null;
   compCount?: number;
@@ -38,7 +39,33 @@ export type FilterResult = PropertyListingResult & {
   estimatedRoi?: number | null;
   marketDiscountPct?: number | null;
   opportunityMissingFields?: string[];
+  sourceConflict?: boolean;
 };
+
+/** Returns the canonical host family expected for a persisted source. */
+export function sourceDomainMatchesSource(
+  source: FilterResult["source"],
+  originalUrl: string | null | undefined,
+): boolean {
+  if (!originalUrl) return false;
+
+  try {
+    const hostname = new URL(originalUrl).hostname.toLocaleLowerCase("en-US");
+    const domains: Record<FilterResult["source"], string[]> = {
+      facebook: ["facebook.com", "fb.com"],
+      olx: ["olx.pl"],
+      otodom: ["otodom.pl"],
+      morizon: ["morizon.pl"],
+    };
+    return domains[source].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
+
+export function sourceLabelForResult(source: FilterResult["source"]): string {
+  return source === "otodom" ? "Otodom" : source === "olx" ? "OLX" : source === "morizon" ? "Morizon" : "Facebook";
+}
 
 export function filterResultsByText(results: FilterResult[], query: string): FilterResult[] {
   const normalizedQuery = normalizeSearchText(query);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterResultsByText, publicationLabel, resultLocation, sortResults } from "./results.ts";
+import { filterResultsByText, publicationLabel, resultLocation, sortResults, sourceDomainMatchesSource, sourceLabelForResult } from "./results.ts";
 
 const results = [
   result({ id: "olx-baluty", title: "Mieszkanie do remontu przy Wielkopolskiej", district: "Bałuty", city: "Łódź", source: "olx" }),
@@ -72,6 +72,18 @@ test("opportunity sort prefers score, then profit and confidence", () => {
     result({ id: "high-profit", title: "High profit", district: null, city: "Łódź", source: "facebook", opportunityScore: 55, estimatedProfit: 60_000, dataConfidence: "LOW" }),
   ];
   assert.deepEqual(ids(sortResults(values, "opportunity")), ["top", "high-profit", "medium"]);
+});
+
+test("source provenance accepts matching canonical domains and rejects conflicts", () => {
+  assert.equal(sourceDomainMatchesSource("facebook", "https://www.facebook.com/groups/example/posts/1"), true);
+  assert.equal(sourceDomainMatchesSource("olx", "https://www.olx.pl/d/oferta/example"), true);
+  assert.equal(sourceDomainMatchesSource("facebook", "https://www.olx.pl/d/oferta/example"), false);
+  assert.equal(sourceDomainMatchesSource("olx", "not-a-url"), false);
+});
+
+test("source label follows the persisted source", () => {
+  assert.equal(sourceLabelForResult("facebook"), "Facebook");
+  assert.equal(sourceLabelForResult("olx"), "OLX");
 });
 
 function result(overrides) {

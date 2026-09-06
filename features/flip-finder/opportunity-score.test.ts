@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { calculateOpportunityAssessment } from "./opportunity-score.ts";
+import { calculateOpportunityAssessment, priorityForBusiness } from "./opportunity-score.ts";
 import type { SearchFilter } from "./index.ts";
 import type { ResaleCompRecord } from "../market-intelligence/resale-comps.ts";
 
@@ -133,6 +133,33 @@ test("known hard filter violations cannot be promoted by a strong ARV", () => {
     lastSeenAt: "2026-09-05T00:00:00.000Z",
   }, filter, [comp(18_000), comp(19_000)]);
   assert.equal(assessment, null);
+});
+
+test("weak positive economics cannot receive a high priority from relative score alone", () => {
+  assert.equal(priorityForBusiness(73, {
+    estimatedProfit: 13_856,
+    estimatedRoi: 2.9,
+    marketDiscountPct: 21.2,
+    arvConfidence: "MEDIUM",
+  }), "MEDIUM");
+});
+
+test("negative economics are low priority without becoming a hard reject", () => {
+  assert.equal(priorityForBusiness(81, {
+    estimatedProfit: -38_524,
+    estimatedRoi: -7.3,
+    marketDiscountPct: 21.8,
+    arvConfidence: "HIGH",
+  }), "LOW");
+});
+
+test("strong economics can remain high priority when secondary ownership data is missing", () => {
+  assert.equal(priorityForBusiness(73, {
+    estimatedProfit: 65_000,
+    estimatedRoi: 18,
+    marketDiscountPct: 24,
+    arvConfidence: "HIGH",
+  }), "HIGH");
 });
 
 function comp(pricePerM2: number): ResaleCompRecord {

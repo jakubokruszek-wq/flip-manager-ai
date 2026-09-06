@@ -6,6 +6,7 @@ import {
   isFilterMissing,
   resultLocation,
   resultStatus,
+  sourceDomainMatchesSource,
   sortResults,
   type CompletedScanWindow,
   type FilterResult,
@@ -25,6 +26,11 @@ type FilterResultsPayload = {
   results: FilterResult[];
   reviewResults: FilterResult[];
   archivedResults: FilterResult[];
+  counts: {
+    active: number;
+    review: number;
+    archived: number;
+  };
   total: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
@@ -133,6 +139,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       results: [],
       reviewResults: [],
       archivedResults: [],
+      counts: { active: 0, review: 0, archived: 0 },
       total: 0,
       newMatches: 0,
       lastScan,
@@ -237,6 +244,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         thumbnailUrl: listing.images[0] ?? null,
         originalUrl: listing.originalUrl,
         source: listing.source,
+        sourceConflict: !sourceDomainMatchesSource(listing.source, listing.originalUrl),
         listingStatus: listing.status,
         isActive: listing.status === "active",
         publishedAt,
@@ -252,7 +260,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
         unknownFields: match.matchReasons
           .filter((reason) => reason.startsWith("unknown_"))
           .map((reason) => reason.slice("unknown_".length)),
-        decisionBucket: listing.lifecycleStatus === "REJECTED" ? "REJECTED" : listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review") ? "REVIEW" : "MATCHED",
+        decisionBucket: !sourceDomainMatchesSource(listing.source, listing.originalUrl)
+          ? "REJECTED"
+          : listing.lifecycleStatus === "REJECTED" ? "REJECTED" : listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review") ? "REVIEW" : "MATCHED",
         lifecycleStatus: listing.lifecycleStatus,
         reviewReason: listing.reviewReason,
         missingFields: listing.missingFields,
@@ -266,13 +276,18 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
   const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED"), "newest");
   const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW"), "newest");
-  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "")), "newest") : [];
+  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "") || result.sourceConflict === true), "newest") : [];
 
   return {
     filter,
     results: sortedResults,
     reviewResults,
     archivedResults,
+    counts: {
+      active: sortedResults.length,
+      review: reviewResults.length,
+      archived: archivedResults.length,
+    },
     total: sortedResults.length,
     newMatches: sortedResults.filter((result) => result.isNew).length,
     lastScan,
@@ -354,7 +369,7 @@ function opportunityFields(
   filter: SearchFilter,
   decisionBucket: "MATCHED" | "REVIEW" | "REJECTED",
   comps: ResaleCompRecord[],
-): Pick<FilterResult, "opportunityScore" | "opportunityPriority" | "arvConfidence" | "dataConfidence" | "compCount" | "conservativeArv" | "expectedArv" | "optimisticArv" | "grossSpread" | "estimatedRenovationCost" | "estimatedProfit" | "estimatedRoi" | "marketDiscountPct" | "opportunityMissingFields"> {
+): Pick<FilterResult, "opportunityScore" | "opportunityPriority" | "economicsConfidence" | "arvConfidence" | "dataConfidence" | "compCount" | "conservativeArv" | "expectedArv" | "optimisticArv" | "grossSpread" | "estimatedRenovationCost" | "estimatedProfit" | "estimatedRoi" | "marketDiscountPct" | "opportunityMissingFields"> {
   const assessment = calculateOpportunityAssessment({
     id: listing.id,
     source: listing.source,
@@ -378,6 +393,7 @@ function opportunityFields(
   return assessment ? {
     opportunityScore: assessment.score,
     opportunityPriority: assessment.priority,
+    economicsConfidence: assessment.economicsConfidence,
     arvConfidence: assessment.arvConfidence,
     dataConfidence: assessment.dataConfidence,
     compCount: assessment.compCount,
@@ -393,6 +409,7 @@ function opportunityFields(
   } : {
     opportunityScore: null,
     opportunityPriority: null,
+    economicsConfidence: null,
     arvConfidence: null,
     dataConfidence: null,
     compCount: 0,
