@@ -147,6 +147,8 @@ test("production DNR rules use only the MV3 schema and supported resource types"
   assert.throws(() => validateRuleShape({ id: "21", priority: 1000, action: "block", condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http" } }));
   assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block", telemetry: true }, condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http" } }));
   assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block" }, condition: { tabIds: ["21"], resourceTypes: ["image"], urlFilter: "|http" } }));
+  assert.throws(() => validateRuleShape({ id: undefined, priority: 1000, action: { type: "block" }, condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http" } }));
+  assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block" }, condition: { tabIds: [undefined], resourceTypes: ["image"], urlFilter: "|http" } }));
   assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block" }, condition: { tabIds: [21], resourceTypes: ["fetch"], urlFilter: "|http" } }));
   assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block" }, condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http", telemetry: "bad" } }));
 });
