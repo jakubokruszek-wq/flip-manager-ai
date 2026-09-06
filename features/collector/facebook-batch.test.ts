@@ -94,6 +94,21 @@ test("normalizes bounded diagnostic telemetry without accepting raw DOM or secre
   assert.equal((batch.searchTelemetry?.queries[0]?.tileDiagnostics?.[0] as Record<string, unknown>).secret, undefined);
 });
 
+test("source scan telemetry preserves bounded tab topology without accepting raw payloads", () => {
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111",
+    batchId: "22222222-2222-4222-8222-222222222222",
+    sourceId,
+    sourceType: "GROUP",
+    sourceUrl: `https://www.facebook.com/groups/${sourceId}/`,
+    collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "DEGRADED", visibleCardCount: 0, capturedPostCount: 0, scrolls: 3, durationMs: 5000, stopReason: "MAX_POSTS", reasons: [] },
+    sourceTabDiagnostics: { primaryTabId: 42, childTabsCreated: 7, postNavigations: 1, mediaNavigations: 1, photoViewerNavigations: 1, inPageParentResolved: 2, structuredParentResolved: 1, unverifiedWithoutNavigation: 3 },
+    posts: [],
+  });
+  assert.deepEqual(batch.sourceTabDiagnostics, { primaryTabId: 42, childTabsCreated: 7, postNavigations: 1, mediaNavigations: 1, photoViewerNavigations: 1, inPageParentResolved: 2, structuredParentResolved: 1, unverifiedWithoutNavigation: 3 });
+});
+
 test("keeps source image policy telemetry bounded and exposes no raw request data", () => {
   const batch = normalizeFacebookCollectorBatch({
     scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z",

@@ -204,11 +204,27 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
   let tab;
   const runtime = globalThis.FlipCollectorRuntime;
   const deadline = runtime.createDeadline(SOURCE_COLLECTION_DEADLINE_MS);
-  const context = { deadline, lastStage: "FACEBOOK_TAB_CREATE", query: null, source: selectedSource.sourceId };
+  const context = {
+    deadline,
+    lastStage: "FACEBOOK_TAB_CREATE",
+    query: null,
+    source: selectedSource.sourceId,
+    sourceTabDiagnostics: {
+      primaryTabId: null,
+      childTabsCreated: 0,
+      postNavigations: 0,
+      mediaNavigations: 0,
+      photoViewerNavigations: 0,
+      inPageParentResolved: 0,
+      structuredParentResolved: 0,
+      unverifiedWithoutNavigation: 0,
+    },
+  };
   const imagePolicy = globalThis.FlipCollectorImagePolicy;
   imagePolicy?.startSession?.(scanId, imageMode);
   const collection = (async () => {
     tab = await chrome.tabs.create({ url: "about:blank", active: false });
+    context.sourceTabDiagnostics.primaryTabId = Number.isInteger(tab?.id) ? tab.id : null;
     if (!imagePolicy?.attachTab) throw new Error("SOURCE_SCAN_IMAGE_BLOCKER_UNAVAILABLE");
     await imagePolicy.attachTab(tab.id, { sessionId: scanId, mode: imageMode });
     await chrome.tabs.update(tab.id, { url: selectedSource.sourceUrl });
@@ -354,7 +370,7 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
         const discoveryEndedAtMs = Date.now();
         const resolutionDeadlineMs = Math.min(discoveryEndedAtMs + SEARCH_TILE_RESOLUTION_RESERVE_MS, searchStartedAtMs + SEARCH_LIMITS.hardTimeBudgetMs - SEARCH_QUERY_CLEANUP_RESERVE_MS);
         const tilesForResolution = searchTilesNeedingParentResolution(search.posts, search.mediaTiles);
-        const tileResolution = await resolveSearchMediaTiles({ tiles: tilesForResolution, source: primary.source, query, deadlineMs: resolutionDeadlineMs, scanId, imageMode });
+        const tileResolution = await resolveSearchMediaTiles({ tabId, tiles: tilesForResolution, source: primary.source, query, deadlineMs: resolutionDeadlineMs, scanId, imageMode, sourceTabDiagnostics: collectionContext?.sourceTabDiagnostics });
         const queryPosts = globalThis.FlipFacebookCollectorCore.mergeRecords([...search.posts, ...tileResolution.posts], SEARCH_LIMITS.maxUniquePerQuery);
         const beforeIds = new Set(posts.map((post) => post.postId));
         const mergedSearch = mergePosts([...posts, ...queryPosts]);
@@ -395,7 +411,8 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   const targets = ["1577700267381450", "1578068947344582", "1577710350713775"];
   collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
   const imageNetworkDiagnostics = globalThis.FlipCollectorImagePolicy?.snapshot?.(scanId) || null;
-  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], imageMode, imageNetworkDiagnostics, posts };
+  const sourceTabDiagnostics = collectionContext?.sourceTabDiagnostics || { primaryTabId: tabId, childTabsCreated: 0, postNavigations: 0, mediaNavigations: 0, photoViewerNavigations: 0, inPageParentResolved: 0, structuredParentResolved: 0, unverifiedWithoutNavigation: 0 };
+  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], sourceTabDiagnostics, imageMode, imageNetworkDiagnostics, posts };
   await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
   const upload = await uploadBatch(batch);
   // SEARCH_DATA_FIRST deliberately does not download or mirror media. Keep
@@ -439,13 +456,17 @@ async function collectFromTab(tabId, options, traceContext = {}) {
   return response.result;
 }
 
-async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs, scanId, imageMode = SOURCE_SCAN_IMAGE_MODE }) {
+async function resolveSearchMediaTiles({ tabId, tiles, source, query, deadlineMs, scanId, imageMode = SOURCE_SCAN_IMAGE_MODE, sourceTabDiagnostics = null }) {
   const uniqueTiles = [...new Map((Array.isArray(tiles) ? tiles : []).filter((tile) => /^\d{5,30}$/.test(String(tile?.mediaId || "")) && typeof tile?.photoUrl === "string").map((tile) => [String(tile.mediaId), tile])).values()];
   const selected = uniqueTiles.slice(0, SEARCH_LIMITS.maxTilesToOpen);
   const parentPosts = new Map();
   const resolvedRecords = [];
   const tileDiagnostics = [];
   let tilesOpened = 0;
+  let inPageTilesInspected = 0;
+  let inPageParentResolved = 0;
+  let structuredParentResolved = 0;
+  let unverifiedWithoutNavigation = 0;
   let duplicatesByMedia = 0;
   let nextTileIndex = 0;
   let deadlineReached = false;
@@ -455,7 +476,6 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs, scanI
       const tileIndex = nextTileIndex;
       const tile = selected[nextTileIndex];
       nextTileIndex += 1;
-      let resolverTabId = null;
       const tileStartedAt = Date.now();
       const tileDiagnostic = {
         query,
@@ -470,6 +490,7 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs, scanI
         injectError: null,
         sendMessageError: null,
         photoOpened: false,
+        inPageResolution: true,
         photoOpenedAt: null,
         contentScriptReadyAt: null,
         sendMessageAttemptCount: 0,
@@ -491,31 +512,29 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs, scanI
         elapsedMs: 0,
       };
       try {
-        resolverTabId = (await chrome.tabs.create({ url: "about:blank", active: false })).id;
-        if (!resolverTabId) throw new Error("SEARCH_MEDIA_RESOLVER_TAB_MISSING");
-        await globalThis.FlipCollectorImagePolicy.attachTab(resolverTabId, { sessionId: scanId, mode: imageMode, photoViewer: true });
-        await chrome.tabs.update(resolverTabId, { url: tile.photoUrl });
-        tilesOpened += 1;
-        tileDiagnostic.photoOpened = true;
-        tileDiagnostic.photoOpenedAt = new Date().toISOString();
-        try {
-          await waitForContentScript(resolverTabId, Math.min(SEARCH_TILE_NAVIGATION_TIMEOUT_MS, Math.max(1, deadlineMs - Date.now())), { injectImmediately: true, diagnostics: tileDiagnostic });
-        } catch (error) {
-          const readinessError = new Error(tileDiagnostic.tabStatus && tileDiagnostic.tabStatus !== "complete" ? "PHOTO_NAVIGATION_TIMEOUT" : "CONTENT_SCRIPT_NOT_READY");
-          readinessError.code = tileDiagnostic.tabStatus && tileDiagnostic.tabStatus !== "complete" ? "PHOTO_NAVIGATION_TIMEOUT" : tileDiagnostic.injectError ? "INJECTION_FAILED" : tileDiagnostic.sendMessageError ? "RECEIVING_END_MISSING" : "CONTENT_SCRIPT_NOT_READY";
-          readinessError.cause = error;
-          throw readinessError;
-        }
-        tileDiagnostic.contentScriptReadyAt = new Date().toISOString();
-        const responseResult = await resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, imageMode, tileDiagnostic });
+        if (!Number.isInteger(tabId) || tabId < 0) throw Object.assign(new Error("SOURCE_SCAN_PRIMARY_TAB_MISSING"), { code: "SOURCE_SCAN_PRIMARY_TAB_MISSING" });
+        inPageTilesInspected += 1;
+        const responseResult = await resolveSearchMediaTileWithRetry({ resolverTabId: tabId, tile, source, query, deadlineMs, imageMode, tileDiagnostic, inPage: true });
         const response = responseResult.response;
         Object.assign(tileDiagnostic, response?.result?.diagnostics || {});
         if (tileDiagnostic.structuredPayloadFound && !tileDiagnostic.payloadObservedAt) tileDiagnostic.payloadObservedAt = tileDiagnostic.responseAt || new Date().toISOString();
         const records = response?.ok && response.result?.status === "VERIFIED" && Array.isArray(response.result.records) ? response.result.records : [];
-        if (records.length === 1 && records[0].identityConfidence === "EXACT" && records[0].resolvedFromMediaTile === true) { resolvedRecords.push(records[0]); tileDiagnostic.identityResult = "EXACT"; tileDiagnostic.parentPostId = records[0].postId; tileDiagnostic.parentPermalink = records[0].permalink; tileDiagnostic.rootAuthorFound = true; tileDiagnostic.rootTextFound = true; tileDiagnostic.failSubstep = null; }
-        else if (!tileDiagnostic.failSubstep || tileDiagnostic.failSubstep === "SEARCH_TILE_NOT_OPENED") tileDiagnostic.failSubstep = response?.result?.reasons?.[0] || "SEARCH_PARENT_UNVERIFIED";
-      } catch (error) { tileDiagnostic.failSubstep = searchTileErrorCode(error); }
-      finally { tileDiagnostic.elapsedMs = Date.now() - tileStartedAt; tileDiagnostics.push(tileDiagnostic); if (resolverTabId !== null) { await globalThis.FlipCollectorImagePolicy.detachTab(resolverTabId).catch(() => {}); await chrome.tabs.remove(resolverTabId).catch(() => {}); } }
+        if (records.length === 1 && records[0].identityConfidence === "EXACT" && records[0].resolvedFromMediaTile === true) {
+          resolvedRecords.push(records[0]);
+          inPageParentResolved += 1;
+          if (tileDiagnostic.structuredPayloadFound) structuredParentResolved += 1;
+          tileDiagnostic.identityResult = "EXACT";
+          tileDiagnostic.parentPostId = records[0].postId;
+          tileDiagnostic.parentPermalink = records[0].permalink;
+          tileDiagnostic.rootAuthorFound = true;
+          tileDiagnostic.rootTextFound = true;
+          tileDiagnostic.failSubstep = null;
+        } else {
+          unverifiedWithoutNavigation += 1;
+          tileDiagnostic.failSubstep = response?.result?.reasons?.[0] || tileDiagnostic.failSubstep || "SEARCH_PARENT_UNVERIFIED";
+        }
+      } catch (error) { unverifiedWithoutNavigation += 1; tileDiagnostic.failSubstep = searchTileErrorCode(error); }
+      finally { tileDiagnostic.elapsedMs = Date.now() - tileStartedAt; tileDiagnostics.push(tileDiagnostic); }
     }
   }
   await Promise.all(Array.from({ length: Math.min(SEARCH_LIMITS.tileConcurrency, selected.length) }, () => resolveWorker()));
@@ -527,11 +546,16 @@ async function resolveSearchMediaTiles({ tiles, source, query, deadlineMs, scanI
   }
   const posts = [...parentPosts.values()];
   const tilesSeen = uniqueTiles.length;
-  const tilesResolved = posts.reduce((sum, post) => sum + Math.max(1, post.mediaIds?.length || 0), 0);
-  const tilesUnverified = Math.max(0, tilesOpened - tilesResolved);
-  const expectedOpens = Math.min(tilesSeen, SEARCH_LIMITS.maxTilesToOpen);
-  const budgetExhausted = deadlineReached || ((tilesOpened < expectedOpens || tilesUnverified > 0) && Date.now() >= deadlineMs);
-  return { posts, tilesSeen, rawTilesSeen: tilesSeen, uniqueTilesFound: tilesSeen, candidateBufferSize: tilesSeen, candidateCapReached: false, resolutionCandidates: selected.length, tilesOpened, tilesResolved, tilesUnverified, uniqueParentPosts: posts.length, verifiedParentPosts: posts.length, duplicatesByMedia, tileDiagnostics, budgetExhausted, resolutionStopReason: budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED" };
+  const tilesResolved = inPageParentResolved;
+  const tilesUnverified = Math.max(0, selected.length - tilesResolved);
+  const expectedOpens = selected.length;
+  const budgetExhausted = deadlineReached || ((inPageTilesInspected < expectedOpens || tilesUnverified > 0) && Date.now() >= deadlineMs);
+  if (sourceTabDiagnostics) {
+    sourceTabDiagnostics.inPageParentResolved += inPageParentResolved;
+    sourceTabDiagnostics.structuredParentResolved += structuredParentResolved;
+    sourceTabDiagnostics.unverifiedWithoutNavigation += unverifiedWithoutNavigation;
+  }
+  return { posts, tilesSeen, rawTilesSeen: tilesSeen, uniqueTilesFound: tilesSeen, candidateBufferSize: tilesSeen, candidateCapReached: false, resolutionCandidates: selected.length, inPageTilesInspected, tilesOpened, tilesResolved, tilesUnverified, uniqueParentPosts: posts.length, verifiedParentPosts: posts.length, duplicatesByMedia, inPageParentResolved, structuredParentResolved, unverifiedWithoutNavigation, tileDiagnostics, budgetExhausted, resolutionStopReason: budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED" };
 }
 
 async function collectGalleryHydration(job, requestId) {
@@ -584,7 +608,7 @@ function searchTilesNeedingParentResolution(posts, tiles) {
   return (Array.isArray(tiles) ? tiles : []).filter((tile) => !exactMediaIds.has(String(tile?.mediaId || "")));
 }
 
-async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, imageMode = SOURCE_SCAN_IMAGE_MODE, tileDiagnostic }) {
+async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, query, deadlineMs, imageMode = SOURCE_SCAN_IMAGE_MODE, tileDiagnostic, inPage = false }) {
   let lastError = null;
   for (let attempt = 1; attempt <= SEARCH_TILE_MAX_MESSAGE_ATTEMPTS; attempt += 1) {
     const remainingMs = deadlineMs - Date.now();
@@ -593,7 +617,7 @@ async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, qu
     tileDiagnostic.sendMessageFirstAt ||= new Date().toISOString();
     try {
       const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-        () => chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query, imageMode: imageMode || SOURCE_SCAN_IMAGE_MODE, resolutionWaitMs: Math.min(SEARCH_TILE_PAYLOAD_WAIT_MS, Math.max(250, remainingMs - 250)) } }),
+        () => chrome.tabs.sendMessage(resolverTabId, { type: "RESOLVE_SEARCH_MEDIA_TILE", options: { mediaId: tile.mediaId, sourceUrl: source.sourceUrl, searchQuery: query, imageMode: imageMode || SOURCE_SCAN_IMAGE_MODE, inPage, resolutionWaitMs: Math.min(SEARCH_TILE_PAYLOAD_WAIT_MS, Math.max(250, remainingMs - 250)) } }),
         { timeoutMs: Math.min(SEARCH_TILE_MESSAGE_TIMEOUT_MS, Math.max(1, remainingMs - 250)), timeoutCode: "SEARCH_CONTENT_SCRIPT_RESPONSE_TIMEOUT", diagnostics: { query, tabId: resolverTabId, source: source.sourceId } },
       );
       tileDiagnostic.sendMessageSuccessAt ||= new Date().toISOString();
@@ -606,7 +630,10 @@ async function resolveSearchMediaTileWithRetry({ resolverTabId, tile, source, qu
         continue;
       }
       const result = responseResult.response?.result;
-      if (responseResult.response?.ok && result?.diagnostics?.structuredPayloadFound) return responseResult;
+      // Source scans resolve media in the already-open primary tab.  A
+      // verified in-page root-card binding is a terminal success even when
+      // no new structured payload was observed (the DOM is the evidence).
+      if (responseResult.response?.ok && (result?.status === "VERIFIED" || result?.diagnostics?.structuredPayloadFound)) return responseResult;
       lastError = new Error("PAYLOAD_WAIT_TIMEOUT");
       lastError.code = "PAYLOAD_WAIT_TIMEOUT";
       tileDiagnostic.failSubstep = "PAYLOAD_WAIT_TIMEOUT";
@@ -772,12 +799,14 @@ function healthAfterSearch(primary, captured, searchTelemetrySummary, durationMs
 }
 
 function searchTelemetry({ query, search, tileResolution, mainFeedIds, newUnique, tabLoadDiagnostics, discoveryDurationMs = null, resolutionDurationMs = null, durationMs }) {
-  const incompleteTiles = tileResolution.tilesOpened < Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen) || tileResolution.tilesUnverified > 0;
+  const expectedResolution = tileResolution.resolutionCandidates ?? Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen);
+  const inspectedTiles = tileResolution.inPageTilesInspected ?? tileResolution.tilesOpened;
+  const incompleteTiles = inspectedTiles < expectedResolution || tileResolution.tilesUnverified > 0;
   const status = search.health.status === "FAILED" ? "FAILED" : incompleteTiles || tileResolution.budgetExhausted ? "DEGRADED" : search.posts.length || tileResolution.tilesSeen === 0 ? "HEALTHY" : "DEGRADED";
-  return { query, executed: true, status, scrolls: search.health.scrolls, scrollCount: search.scrollCount ?? search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: search.uniqueTilesFound ?? tileResolution.tilesSeen, rawTilesSeen: search.rawTilesSeen ?? tileResolution.rawTilesSeen ?? tileResolution.tilesSeen, uniqueTilesFound: search.uniqueTilesFound ?? tileResolution.tilesSeen, candidateBufferSize: search.candidateBufferSize ?? tileResolution.tilesSeen, candidateCapReached: search.candidateCapReached ?? false, resolutionCandidates: tileResolution.resolutionCandidates ?? Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen), payloadObserved: (tileResolution.tileDiagnostics || []).filter((diagnostic) => diagnostic.structuredPayloadFound === true).length, tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, tileDiagnostics: tileResolution.tileDiagnostics, discoveryDurationMs, discoveryDuration: discoveryDurationMs, resolutionDurationMs, resolutionDuration: resolutionDurationMs, discoveryEvidence: search.discoveryEvidence ?? null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", tabLoadError: tabLoadDiagnostics?.lastError ?? null, durationMs, discoveryStopReason: search.discoveryStopReason ?? search.health.stopReason, resolutionStopReason: tileResolution.resolutionStopReason ?? (tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED"), stopReason: tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : search.discoveryStopReason ?? search.health.stopReason };
+  return { query, executed: true, status, scrolls: search.health.scrolls, scrollCount: search.scrollCount ?? search.health.scrolls, visibleCards: search.health.visibleCardCount, captured: search.posts.length, unique: search.posts.length, duplicatesVsMainFeed: search.posts.filter((post) => mainFeedIds.has(post.postId)).length, uniqueContribution: newUnique.length, sellContribution: newUnique.filter(isLikelySellText).length, tilesSeen: search.uniqueTilesFound ?? tileResolution.tilesSeen, rawTilesSeen: search.rawTilesSeen ?? tileResolution.rawTilesSeen ?? tileResolution.tilesSeen, uniqueTilesFound: search.uniqueTilesFound ?? tileResolution.tilesSeen, candidateBufferSize: search.candidateBufferSize ?? tileResolution.tilesSeen, candidateCapReached: search.candidateCapReached ?? false, resolutionCandidates: tileResolution.resolutionCandidates ?? Math.min(tileResolution.tilesSeen, SEARCH_LIMITS.maxTilesToOpen), inPageTilesInspected: tileResolution.inPageTilesInspected ?? 0, inPageParentResolved: tileResolution.inPageParentResolved ?? 0, structuredParentResolved: tileResolution.structuredParentResolved ?? 0, unverifiedWithoutNavigation: tileResolution.unverifiedWithoutNavigation ?? 0, payloadObserved: (tileResolution.tileDiagnostics || []).filter((diagnostic) => diagnostic.structuredPayloadFound === true).length, tilesOpened: tileResolution.tilesOpened, tilesResolved: tileResolution.tilesResolved, tilesUnverified: tileResolution.tilesUnverified, uniqueParentPosts: tileResolution.uniqueParentPosts, verifiedParentPosts: tileResolution.verifiedParentPosts, duplicatesByMedia: tileResolution.duplicatesByMedia, tileDiagnostics: tileResolution.tileDiagnostics, discoveryDurationMs, discoveryDuration: discoveryDurationMs, resolutionDurationMs, resolutionDuration: resolutionDurationMs, discoveryEvidence: search.discoveryEvidence ?? null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", tabLoadError: tabLoadDiagnostics?.lastError ?? null, durationMs, discoveryStopReason: search.discoveryStopReason ?? search.health.stopReason, resolutionStopReason: tileResolution.resolutionStopReason ?? (tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : "COMPLETED"), stopReason: tileResolution.budgetExhausted ? "RESOLUTION_TIME_BUDGET" : search.discoveryStopReason ?? search.health.stopReason };
 }
-function failedSearchTelemetry(query, durationMs, stopReason, tabLoadDiagnostics = null) { return { query, executed: true, status: "FAILED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, payloadObserved: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", tabLoadError: tabLoadDiagnostics?.lastError ?? null, discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }; }
-function appendUnexecutedSearchRuns(searchRuns, fromIndex, stopReason) { for (const query of ACTIVE_SEARCH_QUERIES.slice(fromIndex)) searchRuns.push({ query, executed: false, status: "DEGRADED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, payloadObserved: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs: 0, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: 0, tabLoadRecovery: "NOT_STARTED", discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }); }
+function failedSearchTelemetry(query, durationMs, stopReason, tabLoadDiagnostics = null) { return { query, executed: true, status: "FAILED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, inPageTilesInspected: 0, inPageParentResolved: 0, structuredParentResolved: 0, unverifiedWithoutNavigation: 0, payloadObserved: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: tabLoadDiagnostics?.attempts ?? 0, tabLoadRecovery: tabLoadDiagnostics?.recovery ?? "NOT_NEEDED", tabLoadError: tabLoadDiagnostics?.lastError ?? null, discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }; }
+function appendUnexecutedSearchRuns(searchRuns, fromIndex, stopReason) { for (const query of ACTIVE_SEARCH_QUERIES.slice(fromIndex)) searchRuns.push({ query, executed: false, status: "DEGRADED", scrolls: 0, scrollCount: 0, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, tilesSeen: 0, rawTilesSeen: 0, uniqueTilesFound: 0, candidateBufferSize: 0, candidateCapReached: false, resolutionCandidates: 0, inPageTilesInspected: 0, inPageParentResolved: 0, structuredParentResolved: 0, unverifiedWithoutNavigation: 0, payloadObserved: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, tileDiagnostics: [], durationMs: 0, discoveryDurationMs: 0, discoveryDuration: 0, resolutionDurationMs: 0, resolutionDuration: 0, discoveryEvidence: null, tabLoadAttempts: 0, tabLoadRecovery: "NOT_STARTED", discoveryStopReason: stopReason, resolutionStopReason: "NOT_STARTED", stopReason }); }
 
 function mergePosts(posts) {
   return globalThis.FlipFacebookCollectorCore.mergeRecords(posts, PRODUCTION_LIMITS.maxPosts);

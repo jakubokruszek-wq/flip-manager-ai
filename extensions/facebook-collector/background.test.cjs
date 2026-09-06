@@ -76,6 +76,30 @@ test("SEARCH_DATA_FIRST avoids resolver tabs for parents already exact-bound in 
   assert.match(background, /images\.imported = 0/);
 });
 
+test("SOURCE_SCAN resolves media in the primary tab and never creates child tabs", () => {
+  const resolver = background.slice(background.indexOf("async function resolveSearchMediaTiles"), background.indexOf("async function collectGalleryHydration"));
+  assert.match(resolver, /inPage: true/);
+  assert.match(resolver, /SOURCE_SCAN_PRIMARY_TAB_MISSING/);
+  assert.doesNotMatch(resolver, /chrome\.tabs\.create/);
+  assert.doesNotMatch(resolver, /chrome\.tabs\.update/);
+  assert.doesNotMatch(resolver, /chrome\.tabs\.remove/);
+  assert.match(background, /sourceTabDiagnostics/);
+  assert.match(background, /childTabsCreated: 0/);
+  assert.match(background, /inPageParentResolved/);
+  assert.match(background, /unverifiedWithoutNavigation/);
+});
+
+test("in-page verified roots are terminal retry successes without structured payload", () => {
+  assert.match(background, /result\?\.status === "VERIFIED" \|\| result\?\.diagnostics\?\.structuredPayloadFound/);
+});
+
+test("GALLERY_HYDRATION remains the only flow allowed to open a dedicated tab", () => {
+  const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
+  assert.match(gallery, /chrome\.tabs\.create/);
+  assert.match(gallery, /GALLERY_HYDRATION_MEDIA_MODE/);
+  assert.match(gallery, /HYDRATE_FACEBOOK_GALLERY/);
+});
+
 test("photo tile resolution waits for the content script and retries payload observation with bounded telemetry", () => {
   assert.match(background, /SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS = 3_000/);
   assert.match(background, /SEARCH_TILE_MESSAGE_TIMEOUT_MS = 2_000/);
@@ -117,6 +141,15 @@ test("media tile resolver is exact, fail-closed and never forwards tile media as
   assert.match(content, /async function resolveSearchMediaTile/);
   assert.match(content, /resolutionWaitMs/);
   assert.match(content, /return true;/);
+});
+
+test("in-page media resolver requires one exact root card and never borrows neighboring text", () => {
+  assert.match(content, /resolveSearchMediaTileFromDom/);
+  assert.match(content, /closest\('\[role="article"\]'\)/);
+  assert.match(content, /uniqueLinks\.length !== 1/);
+  assert.match(content, /isCommentDescendant/);
+  assert.match(content, /IN_PAGE_ROOT_CARD_MEDIA_BINDING/);
+  assert.match(content, /inPageResolution/);
 });
 
 test("Flip Finder bootstrap starts the production collector after readiness verification", () => {

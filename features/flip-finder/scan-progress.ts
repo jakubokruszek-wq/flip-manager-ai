@@ -50,6 +50,10 @@ export type CollectorSearchQueryTelemetry = {
   candidateBufferSize?: number | null;
   candidateCapReached?: boolean | null;
   resolutionCandidates?: number | null;
+  inPageTilesInspected?: number | null;
+  inPageParentResolved?: number | null;
+  structuredParentResolved?: number | null;
+  unverifiedWithoutNavigation?: number | null;
   payloadObserved?: number | null;
   discoveryStopReason?: string | null;
   resolutionStopReason?: string | null;
@@ -161,6 +165,17 @@ export type CollectorImageNetworkDiagnostics = {
   imageResponseSamples: Array<{ type: string; host: string | null; path: string | null; tabId: number | null; bytes: number }>;
 };
 
+export type CollectorSourceTabDiagnostics = {
+  primaryTabId: number | null;
+  childTabsCreated: number;
+  postNavigations: number;
+  mediaNavigations: number;
+  photoViewerNavigations: number;
+  inPageParentResolved: number;
+  structuredParentResolved: number;
+  unverifiedWithoutNavigation: number;
+};
+
 export type ScanWorkUnit = {
   id: string;
   source: ListingSource;
@@ -212,6 +227,7 @@ export type CollectorScanFunnel = {
   imageDiagnostics: CollectorImagePersistenceDiagnostic[];
   imageMode: "SOURCE_SCAN_DATA_ONLY" | "GALLERY_HYDRATION_MEDIA_ALLOWED";
   imageNetworkDiagnostics: CollectorImageNetworkDiagnostics;
+  sourceTabDiagnostics: CollectorSourceTabDiagnostics;
 };
 
 export type OpenAICostWindow = {

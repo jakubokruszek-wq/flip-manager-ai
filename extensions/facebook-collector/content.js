@@ -70,12 +70,17 @@
   async function resolveSearchMediaTile(options) {
     if (options.imageMode !== SOURCE_SCAN_DATA_ONLY) return { status: "UNVERIFIED", records: [], reasons: ["SEARCH_IMAGE_MODE_INVALID"], diagnostics: { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId: String(options.mediaId || ""), photoOpened: false, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_IMAGE_MODE_INVALID" } };
     const mediaId = String(options.mediaId || "");
+    const inPage = options.inPage === true;
     const source = core.canonicalSource(options.sourceUrl);
     const current = new URL(location.href);
     const invalid = (reason) => ({ status: "UNVERIFIED", records: [], reasons: [reason], diagnostics: { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId, photoOpened: false, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: reason } });
     if (!source || source.sourceType !== "GROUP" || !/^\d{5,30}$/.test(mediaId)) return invalid("SEARCH_MEDIA_RESOLVE_INPUT_INVALID");
-    if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("fbid") !== mediaId) return invalid("SEARCH_MEDIA_TILE_CONTEXT_MISMATCH");
-    const diagnostics = { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId, photoOpened: true, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_PAYLOAD_NOT_FOUND" };
+    if (!inPage && (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("fbid") !== mediaId)) return invalid("SEARCH_MEDIA_TILE_CONTEXT_MISMATCH");
+    const diagnostics = { query: String(options.searchQuery || "").slice(0, 120) || null, mediaId, photoOpened: !inPage, inPageResolution: inPage, structuredPayloadFound: false, currMediaId: null, containerStoryPostId: null, topLevelPostId: null, mediaAttachmentCrosscheck: false, parentPostId: null, parentPermalink: null, rootAuthorFound: false, rootTextFound: false, identityResult: "UNVERIFIED", failSubstep: "SEARCH_PAYLOAD_NOT_FOUND" };
+    if (inPage) {
+      const inPageResult = resolveSearchMediaTileFromDom(mediaId, source, options.searchQuery, diagnostics);
+      if (inPageResult) return inPageResult;
+    }
     const candidates = [];
     const retryMs = Math.min(4_000, Math.max(0, Number(options.resolutionWaitMs) || 4_000));
     const retryDeadline = Date.now() + retryMs;
@@ -107,6 +112,77 @@
     if (verified.status !== "VERIFIED") return { ...verified, diagnostics: { ...diagnostics, identityResult: "UNVERIFIED", failSubstep: diagnostics.failSubstep || verified.reasons?.[0] || "SEARCH_PARENT_UNVERIFIED" } };
     const records = verified.records.map((record) => ({ ...record, discoverySource: "SEARCH", foundInMainFeed: false, firstSeenPhase: "SEARCH", searchQuery: String(options.searchQuery || "").slice(0, 120) || null, searchQueries: options.searchQuery ? [String(options.searchQuery).slice(0, 120)] : [] }));
     return { ...verified, records, diagnostics: { ...diagnostics, identityResult: "EXACT", failSubstep: null, parentPostId: records[0]?.postId || diagnostics.parentPostId, parentPermalink: records[0]?.permalink || diagnostics.parentPermalink, rootAuthorFound: true, rootTextFound: true } };
+  }
+
+  function resolveSearchMediaTileFromDom(mediaId, source, query, diagnostics) {
+    const anchors = [...document.querySelectorAll('a[href*="/photo/"][href*="fbid="], a[href*="/photo.php"][href*="fbid="]')].filter((anchor) => {
+      if (isCommentDescendant(anchor)) return false;
+      try { const url = new URL(anchor.href); return url.hostname === "www.facebook.com" && url.searchParams.get("fbid") === mediaId; } catch { return false; }
+    });
+    const records = [];
+    const seenRoots = new Set();
+    for (const anchor of anchors) {
+      const root = anchor.closest('[role="article"]') || anchor.closest('[data-pagelet*="Feed"], [data-pagelet*="Group"]');
+      if (!root || seenRoots.has(root)) continue;
+      seenRoots.add(root);
+      if (!root.matches?.('[role="article"]') && root.querySelectorAll('[role="article"]').length > 1) continue;
+      const links = [...root.querySelectorAll('a[href]')].map((item) => {
+        try { return core.parsePostLink(item.href, source); } catch { return null; }
+      }).filter(Boolean);
+      const uniqueLinks = [...new Map(links.map((link) => [link.postId, link])).values()];
+      if (uniqueLinks.length !== 1) continue;
+      const link = uniqueLinks[0];
+      const scoped = (selector) => [...root.querySelectorAll(selector)].filter((node) => !isCommentDescendant(node) && (!root.matches?.('[role="article"]') || node.closest('[role="article"]') === root));
+      const authorCandidates = scoped('h2 a, h3 a, strong a').map(visibleText).filter(Boolean);
+      const messageCandidates = scoped('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]').map(visibleText).filter(Boolean);
+      const author = authorCandidates.length === 1 ? authorCandidates[0] : null;
+      const text = messageCandidates.length === 1 ? messageCandidates[0] : null;
+      const image = anchor.querySelector("img") || anchor.closest("div")?.querySelector("img");
+      const mediaUrl = image?.currentSrc || image?.src || null;
+      const identity = core.resolveRootStoryIdentity({ rootPostId: link.postId, author, text, rootAuthorSource: author ? "ROOT_CARD_AUTHOR" : null, rootTextSource: text ? "ROOT_CARD_MESSAGE" : null, rootTextVerified: Boolean(author && text) }, link.postId);
+      diagnostics.parentPostId ||= link.postId;
+      diagnostics.parentPermalink ||= link.permalink;
+      diagnostics.rootAuthorFound ||= Boolean(author);
+      diagnostics.rootTextFound ||= Boolean(text);
+      diagnostics.mediaAttachmentCrosscheck ||= Boolean(mediaUrl);
+      if (identity.identityConfidence !== "EXACT" || !mediaUrl || !/^https:\/\/(?:[^/]+\.)?(?:fbcdn\.net|facebook\.com)\//i.test(mediaUrl)) continue;
+      records.push({
+        ...link,
+        author: identity.author,
+        text: identity.text,
+        publishedAt: null,
+        timestampText: null,
+        media: [{ url: mediaUrl.slice(0, 2_000), mediaId, exactPostId: link.postId, exactAssociation: true, discoveryLayers: ["SEARCH_DOM"] }],
+        discoveryLayers: ["SEARCH_DOM"],
+        firstSeenIteration: 0,
+        identityConfidence: "EXACT",
+        identityReasons: ["IN_PAGE_ROOT_CARD_MEDIA_BINDING", "ROOT_TEXT_VERIFIED"],
+        discoverySource: "SEARCH",
+        searchQuery: String(query || "").slice(0, 120) || null,
+        searchQueries: query ? [String(query).slice(0, 120)] : [],
+        foundInMainFeed: false,
+        firstSeenPhase: "SEARCH",
+        resolvedFromMediaTile: true,
+        mediaIds: [mediaId],
+        parentResolutionEvidence: ["IN_PAGE_ROOT_CARD_MEDIA_BINDING"],
+        rootPostId: link.postId,
+        rootAuthorSource: "ROOT_CARD_AUTHOR",
+        rootTextSource: "ROOT_CARD_MESSAGE",
+        rootTextVerified: true,
+      });
+    }
+    const verified = core.verifySearchMediaParent(records, mediaId);
+    if (verified.status !== "VERIFIED") {
+      diagnostics.failSubstep = !diagnostics.parentPostId ? "SEARCH_PARENT_POST_ID_MISSING" : !diagnostics.rootAuthorFound || !diagnostics.rootTextFound ? "SEARCH_ROOT_TEXT_MISSING" : !diagnostics.mediaAttachmentCrosscheck ? "SEARCH_MEDIA_CROSSCHECK_FAILED" : "SEARCH_PARENT_UNVERIFIED";
+      return null;
+    }
+    diagnostics.identityResult = "EXACT";
+    diagnostics.failSubstep = null;
+    diagnostics.parentPostId = verified.records[0].postId;
+    diagnostics.parentPermalink = verified.records[0].permalink;
+    diagnostics.rootAuthorFound = true;
+    diagnostics.rootTextFound = true;
+    return { ...verified, diagnostics };
   }
 
   async function collectSource(options) {

@@ -26,6 +26,19 @@ export type CollectorImageNetworkDiagnostics = {
   imageResponseSamples: Array<{ type: string; host: string | null; path: string | null; tabId: number | null; bytes: number }>;
 };
 
+/** Safe source-scan tab topology. Source scans are intentionally one-tab and
+ * never open a photo/detail resolver tab; gallery hydration is separate. */
+export type CollectorSourceTabDiagnostics = {
+  primaryTabId: number | null;
+  childTabsCreated: number;
+  postNavigations: number;
+  mediaNavigations: number;
+  photoViewerNavigations: number;
+  inPageParentResolved: number;
+  structuredParentResolved: number;
+  unverifiedWithoutNavigation: number;
+};
+
 export type CollectorMediaRecord = {
   url: string;
   mediaId: string | null;
@@ -91,6 +104,10 @@ export type CollectorSearchQueryTelemetry = {
   candidateBufferSize?: number | null;
   candidateCapReached?: boolean | null;
   resolutionCandidates?: number | null;
+  inPageTilesInspected?: number | null;
+  inPageParentResolved?: number | null;
+  structuredParentResolved?: number | null;
+  unverifiedWithoutNavigation?: number | null;
   payloadObserved?: number | null;
   tilesOpened: number;
   tilesResolved: number;
@@ -204,6 +221,7 @@ export type FacebookCollectorBatch = {
   searchTelemetry: CollectorSearchTelemetry | null;
   imageMode: CollectorImageMode;
   imageNetworkDiagnostics: CollectorImageNetworkDiagnostics | null;
+  sourceTabDiagnostics?: CollectorSourceTabDiagnostics;
   mainFeedTelemetry?: CollectorMainFeedDiagnostic[];
   posts: CollectorPostRecord[];
 };
@@ -228,8 +246,23 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
     searchTelemetry: normalizeSearchTelemetry(value.searchTelemetry),
     imageMode: imageMode(value.imageMode),
     imageNetworkDiagnostics: normalizeImageNetworkDiagnostics(value.imageNetworkDiagnostics, value.imageMode),
+    sourceTabDiagnostics: normalizeSourceTabDiagnostics(value.sourceTabDiagnostics),
     mainFeedTelemetry: normalizeMainFeedTelemetry(value.mainFeedTelemetry),
     posts: deduped,
+  };
+}
+
+function normalizeSourceTabDiagnostics(value: unknown): CollectorSourceTabDiagnostics {
+  const row = isRecord(value) ? value : {};
+  return {
+    primaryTabId: Number.isSafeInteger(row.primaryTabId) && Number(row.primaryTabId) >= 0 ? Number(row.primaryTabId) : null,
+    childTabsCreated: boundedInteger(row.childTabsCreated, 0, 100),
+    postNavigations: boundedInteger(row.postNavigations, 0, 100),
+    mediaNavigations: boundedInteger(row.mediaNavigations, 0, 100),
+    photoViewerNavigations: boundedInteger(row.photoViewerNavigations, 0, 100),
+    inPageParentResolved: boundedInteger(row.inPageParentResolved, 0, 100),
+    structuredParentResolved: boundedInteger(row.structuredParentResolved, 0, 100),
+    unverifiedWithoutNavigation: boundedInteger(row.unverifiedWithoutNavigation, 0, 100),
   };
 }
 
@@ -384,6 +417,10 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     ...(Number.isFinite(value.candidateBufferSize) ? { candidateBufferSize: boundedInteger(value.candidateBufferSize, 0, 100) } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "candidateCapReached") ? { candidateCapReached: value.candidateCapReached === true } : {}),
     ...(Number.isFinite(value.resolutionCandidates) ? { resolutionCandidates: boundedInteger(value.resolutionCandidates, 0, 10) } : {}),
+    ...(Number.isFinite(value.inPageTilesInspected) ? { inPageTilesInspected: boundedInteger(value.inPageTilesInspected, 0, 100) } : {}),
+    ...(Number.isFinite(value.inPageParentResolved) ? { inPageParentResolved: boundedInteger(value.inPageParentResolved, 0, 100) } : {}),
+    ...(Number.isFinite(value.structuredParentResolved) ? { structuredParentResolved: boundedInteger(value.structuredParentResolved, 0, 100) } : {}),
+    ...(Number.isFinite(value.unverifiedWithoutNavigation) ? { unverifiedWithoutNavigation: boundedInteger(value.unverifiedWithoutNavigation, 0, 100) } : {}),
     ...(Number.isFinite(value.payloadObserved) ? { payloadObserved: boundedInteger(value.payloadObserved, 0, 10) } : {}),
     tilesOpened: boundedInteger(value.tilesOpened, 0, 10),
     tilesResolved: boundedInteger(value.tilesResolved, 0, 10),

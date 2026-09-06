@@ -12,6 +12,7 @@ import {
   type CollectorSearchDiscoveryEvidence,
   type CollectorSearchQueryTelemetry,
   type CollectorImageNetworkDiagnostics,
+  type CollectorSourceTabDiagnostics,
   projectImagePersistenceDiagnostics,
   projectSearchTileDiagnostics,
   type FacebookGroupProgress,
@@ -243,6 +244,7 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
     }),
   ]);
   const imageNetworkDiagnostics = aggregateImageNetworkDiagnostics(payloads);
+  const sourceTabDiagnostics = aggregateSourceTabDiagnostics(payloads);
   const buildingTypeUnverified = countWarningMatches(warnings, /BUILDING(?:_TYPE)?_(?:UNVERIFIED|UNKNOWN)/i);
   const outsideLodz = countWarningMatches(warnings, /(?:OUTSIDE|LOCATION).*LODZ/i);
   const tenement = countWarningMatches(warnings, /(?:TENEMENT|KAMIENICA)/i);
@@ -278,6 +280,23 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
     imageDiagnostics,
     imageMode: imageNetworkDiagnostics.imageMode,
     imageNetworkDiagnostics,
+    sourceTabDiagnostics,
+  };
+}
+
+function aggregateSourceTabDiagnostics(payloads: Row[]): CollectorSourceTabDiagnostics {
+  const diagnostics = payloads.map((payload) => row(payload.sourceTabDiagnostics)).filter((value): value is Row => value !== null);
+  const numberValue = (key: keyof Omit<CollectorSourceTabDiagnostics, "primaryTabId">) => diagnostics.reduce((total, item) => total + boundedTelemetryNumber(item[key], 100), 0);
+  const primary = diagnostics.find((item) => Number.isSafeInteger(item.primaryTabId) && Number(item.primaryTabId) >= 0);
+  return {
+    primaryTabId: primary ? Number(primary.primaryTabId) : null,
+    childTabsCreated: numberValue("childTabsCreated"),
+    postNavigations: numberValue("postNavigations"),
+    mediaNavigations: numberValue("mediaNavigations"),
+    photoViewerNavigations: numberValue("photoViewerNavigations"),
+    inPageParentResolved: numberValue("inPageParentResolved"),
+    structuredParentResolved: numberValue("structuredParentResolved"),
+    unverifiedWithoutNavigation: numberValue("unverifiedWithoutNavigation"),
   };
 }
 
@@ -360,6 +379,10 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     candidateBufferSize: optionalNumber(value.candidateBufferSize),
     candidateCapReached: typeof value.candidateCapReached === "boolean" ? value.candidateCapReached : null,
     resolutionCandidates: optionalNumber(value.resolutionCandidates),
+    inPageTilesInspected: optionalNumber(value.inPageTilesInspected),
+    inPageParentResolved: optionalNumber(value.inPageParentResolved),
+    structuredParentResolved: optionalNumber(value.structuredParentResolved),
+    unverifiedWithoutNavigation: optionalNumber(value.unverifiedWithoutNavigation),
     payloadObserved: optionalNumber(value.payloadObserved),
     tilesOpened: number(value.tilesOpened),
     tilesResolved: number(value.tilesResolved),
