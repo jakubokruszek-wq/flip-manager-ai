@@ -193,6 +193,14 @@ test("image telemetry identifies narrowly matched CDN media without treating Gra
   assert.equal(diagnostics.photoViewerNavigationsWithImageBytes, 1);
 });
 
+test("image telemetry blocks Facebook CDN kf media fetched as XHR", async () => {
+  const { policy, listeners } = createPolicyContext();
+  policy.startSession("kf-proof", policy.SOURCE_SCAN_DATA_ONLY);
+  await policy.attachTab(22, { sessionId: "kf-proof", mode: policy.SOURCE_SCAN_DATA_ONLY });
+  listeners.before({ tabId: 22, type: "xmlhttprequest", url: "https://scontent-waw2-1.xx.fbcdn.net/m1/v/t6/example.kf" });
+  assert.equal(policy.snapshot("kf-proof").imageRequestsBlocked, 1);
+});
+
 test("production DNR rules use only the MV3 schema and supported resource types", async () => {
   const { policy, updates } = createPolicyContext();
   policy.startSession("schema-1", policy.SOURCE_SCAN_DATA_ONLY);

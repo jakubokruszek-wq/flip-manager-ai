@@ -9,7 +9,7 @@
   const DNR_POLICY_VERSION = "SOURCE_SCAN_IMAGE_ONLY_V2";
   const RULE_ID_BASE = 1_700_000_000;
   const RULE_ID_MAX = RULE_ID_BASE + 2_000_000;
-  const CDN_IMAGE_REGEX = "^https?://[^/]*(?:fbcdn\\.net|facebook\\.com)/.*(?:\\.(?:jpe?g|png|gif|webp|avif)(?:[?#].*)?$|/p[0-9]+x[0-9]+(?:[/?#]|$))";
+  const CDN_IMAGE_REGEX = "^https?://[^/]*(?:fbcdn\\.net|facebook\\.com)/.*(?:\\.(?:jpe?g|png|gif|webp|avif|kf)(?:[?#].*)?$|/p[0-9]+x[0-9]+(?:[/?#]|$))";
   let nextRuleId = RULE_ID_BASE;
   const tabs = new Map();
   const sessions = new Map();
@@ -49,8 +49,8 @@
     if (!["media", "xmlhttprequest", "fetch"].includes(type)) return false;
     try {
       const url = new URL(String(details?.url || ""));
-      return /(?:^|\.)fbcdn\.net$/i.test(url.hostname) && /(?:jpe?g|png|gif|webp|avif|\/p\d+x\d+)/i.test(`${url.pathname}${url.search}`)
-        || /(?:^|\.)facebook\.com$/i.test(url.hostname) && /(?:jpe?g|png|gif|webp|avif|\/p\d+x\d+)/i.test(`${url.pathname}${url.search}`);
+      return /(?:^|\.)fbcdn\.net$/i.test(url.hostname) && /(?:jpe?g|png|gif|webp|avif|kf|\/p\d+x\d+)/i.test(`${url.pathname}${url.search}`)
+        || /(?:^|\.)facebook\.com$/i.test(url.hostname) && /(?:jpe?g|png|gif|webp|avif|kf|\/p\d+x\d+)/i.test(`${url.pathname}${url.search}`);
     } catch {
       return false;
     }
