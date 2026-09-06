@@ -57,6 +57,8 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => installGalleryNativeCapture(), []);
+
   const load = useCallback(async () => {
     try {
       const response = await fetch(`/api/flip-finder/search-filters/${filterId}/results${archiveOpen ? "?view=archive" : ""}`);
@@ -152,6 +154,11 @@ type GalleryState = NonNullable<FilterResult["galleryStatus"]>;
 
 type GalleryTraceStage =
   | "GALLERY_BUTTON_RENDERED"
+  | "GALLERY_BUTTON_MOUNT"
+  | "GALLERY_BUTTON_UNMOUNT"
+  | "GALLERY_NATIVE_POINTER_CAPTURE"
+  | "GALLERY_NATIVE_CLICK_CAPTURE"
+  | "GALLERY_CLIENT_EXCEPTION"
   | "GALLERY_UI_CLICK"
   | "GALLERY_HANDLER_ENTER"
   | "GALLERY_GUARD_PASS"
@@ -183,6 +190,11 @@ type GalleryTraceEntry = {
   clientBuild?: string;
   component?: string;
   buttonRendered?: boolean;
+  instanceId?: string;
+  actionStage?: string;
+  errorName?: string;
+  errorMessage?: string;
+  closestButtonFound?: boolean;
 };
 
 const GALLERY_TRACE_STORAGE_KEY = "flipFinderGalleryRequestTraces";
@@ -207,44 +219,154 @@ function safeGalleryError(value: unknown): string {
   return message.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120).replace(/[^A-Za-z0-9_.:-]/g, "_");
 }
 
+function safeGalleryErrorMessage(value: unknown): string {
+  const message = value instanceof Error ? value.message : String(value || "GALLERY_CLIENT_EXCEPTION");
+  return message.replace(/token|secret|cookie|hmac|authorization|jwt/gi, "redacted").slice(0, 160);
+}
+
+function dispatchGalleryTrace(entry: GalleryTraceEntry): void {
+  try {
+    try {
+      const current = JSON.parse(window.sessionStorage.getItem(GALLERY_TRACE_STORAGE_KEY) || "[]");
+      const traces = Array.isArray(current) ? current.filter((item) => item && typeof item === "object") : [];
+      window.sessionStorage.setItem(GALLERY_TRACE_STORAGE_KEY, JSON.stringify([...traces, entry].slice(-80)));
+    } catch {
+      // Diagnostics must never block the user action.
+    }
+    try {
+      console.info("FLIP_GALLERY_TRACE", entry);
+    } catch {
+      // Console availability is not guaranteed in embedded browsers.
+    }
+    try {
+      const request = fetch(`/api/flip-finder/listings/${entry.listingId}/gallery/trace`, {
+        body: JSON.stringify(entry),
+        credentials: "same-origin",
+        headers: { "content-type": "application/json", "x-flip-finder-action": "gallery-trace" },
+        keepalive: true,
+        method: "POST",
+      });
+      void Promise.resolve(request).catch(() => {
+        // Server trace is best effort and must never block gallery hydration.
+      });
+    } catch {
+      // A synchronous fetch/serialization failure must not escape into the business handler.
+    }
+  } catch {
+    // The complete diagnostics path is failure-isolated from gallery hydration.
+  }
+}
+
 function recordGalleryTrace(
   stage: GalleryTraceStage,
   result: FilterResult,
   status: GalleryState,
   traceId: string,
-  extra: Pick<GalleryTraceEntry, "httpStatus" | "responseOk" | "errorCode" | "guard" | "targetTag" | "currentTargetTag" | "disabled" | "pointerEvents" | "clientBuild" | "component" | "buttonRendered"> = {},
+  extra: Pick<GalleryTraceEntry, "httpStatus" | "responseOk" | "errorCode" | "guard" | "targetTag" | "currentTargetTag" | "disabled" | "pointerEvents" | "clientBuild" | "component" | "buttonRendered" | "instanceId" | "actionStage" | "errorName" | "errorMessage" | "closestButtonFound"> = {},
 ): void {
-  const entry: GalleryTraceEntry = {
-    stage,
-    traceId,
-    listingId: result.id,
-    postId: galleryPostId(result),
-    galleryStatus: status,
-    timestamp: new Date().toISOString(),
-    source: result.source,
-    ...extra,
+  try {
+    dispatchGalleryTrace({
+      stage,
+      traceId,
+      listingId: result.id,
+      postId: galleryPostId(result),
+      galleryStatus: status,
+      timestamp: new Date().toISOString(),
+      source: result.source,
+      ...extra,
+    });
+  } catch {
+    // Trace construction must not affect the business handler.
+  }
+}
+
+function recordGalleryClientException(
+  result: FilterResult,
+  status: GalleryState,
+  traceId: string,
+  actionStage: string,
+  reason: unknown,
+  instanceId?: string,
+): void {
+  try {
+    recordGalleryTrace("GALLERY_CLIENT_EXCEPTION", result, status, traceId, {
+      actionStage: actionStage.slice(0, 60),
+      errorName: reason instanceof Error ? reason.name.slice(0, 60) : "Error",
+      errorMessage: safeGalleryErrorMessage(reason),
+      instanceId,
+    });
+  } catch {
+    // Exception diagnostics are best effort and cannot recurse into business flow.
+  }
+}
+
+function galleryStateFromDataset(value: string | undefined): GalleryState {
+  return isGalleryState(value) ? value : "NOT_REQUESTED";
+}
+
+function recordNativeGalleryCapture(stage: "GALLERY_NATIVE_POINTER_CAPTURE" | "GALLERY_NATIVE_CLICK_CAPTURE", event: Event): void {
+  let button: HTMLElement | null = null;
+  try {
+    const target = event.target instanceof Element ? event.target : null;
+    button = target?.closest<HTMLElement>('[data-gallery-request-button="true"]') ?? null;
+    if (!button) return;
+    const listingId = button.dataset.listingId;
+    const traceId = button.dataset.galleryTraceId;
+    if (!listingId || !traceId || !/^[A-Za-z0-9-]{8,80}$/.test(traceId)) return;
+    dispatchGalleryTrace({
+      stage,
+      traceId,
+      listingId,
+      postId: button.dataset.postId && /^\d{5,30}$/.test(button.dataset.postId) ? button.dataset.postId : null,
+      galleryStatus: galleryStateFromDataset(button.dataset.galleryStatus),
+      timestamp: new Date().toISOString(),
+      source: "facebook",
+      clientBuild: button.dataset.clientBuild?.slice(0, 120),
+      component: "GalleryRequestButton",
+      instanceId: button.dataset.galleryInstanceId?.slice(0, 80),
+      targetTag: target?.tagName.toLowerCase() ?? null,
+      currentTargetTag: "document",
+      disabled: button instanceof HTMLButtonElement ? button.disabled : undefined,
+      pointerEvents: window.getComputedStyle(button).pointerEvents,
+      closestButtonFound: true,
+    });
+  } catch (reason) {
+    if (!button) return;
+    try {
+      const listingId = button.dataset.listingId;
+      const traceId = button.dataset.galleryTraceId;
+      if (!listingId || !traceId) return;
+      dispatchGalleryTrace({
+        stage: "GALLERY_CLIENT_EXCEPTION",
+        traceId,
+        listingId,
+        postId: button.dataset.postId && /^\d{5,30}$/.test(button.dataset.postId) ? button.dataset.postId : null,
+        galleryStatus: galleryStateFromDataset(button.dataset.galleryStatus),
+        timestamp: new Date().toISOString(),
+        source: "facebook",
+        clientBuild: button.dataset.clientBuild?.slice(0, 120),
+        component: "GalleryRequestButton",
+        instanceId: button.dataset.galleryInstanceId?.slice(0, 80),
+        actionStage: stage,
+        errorName: reason instanceof Error ? reason.name.slice(0, 60) : "Error",
+        errorMessage: safeGalleryErrorMessage(reason),
+        closestButtonFound: true,
+      });
+    } catch {
+      // Native diagnostics stay isolated even when DOM inspection fails.
+    }
+  }
+}
+
+function installGalleryNativeCapture(): () => void {
+  const pointerListener = (event: Event) => recordNativeGalleryCapture("GALLERY_NATIVE_POINTER_CAPTURE", event);
+  const clickListener = (event: Event) => recordNativeGalleryCapture("GALLERY_NATIVE_CLICK_CAPTURE", event);
+  document.addEventListener("pointerdown", pointerListener, true);
+  document.addEventListener("click", clickListener, true);
+  return () => {
+    document.removeEventListener("pointerdown", pointerListener, true);
+    document.removeEventListener("click", clickListener, true);
   };
-  try {
-    const current = JSON.parse(window.sessionStorage.getItem(GALLERY_TRACE_STORAGE_KEY) || "[]");
-    const traces = Array.isArray(current) ? current.filter((item) => item && typeof item === "object") : [];
-    window.sessionStorage.setItem(GALLERY_TRACE_STORAGE_KEY, JSON.stringify([...traces, entry].slice(-80)));
-  } catch {
-    // Diagnostics must never block the user action.
-  }
-  try {
-    console.info("FLIP_GALLERY_TRACE", entry);
-  } catch {
-    // Console availability is not guaranteed in embedded browsers.
-  }
-  void fetch(`/api/flip-finder/listings/${result.id}/gallery/trace`, {
-    body: JSON.stringify(entry),
-    credentials: "same-origin",
-    headers: { "content-type": "application/json", "x-flip-finder-action": "gallery-trace" },
-    keepalive: true,
-    method: "POST",
-  }).catch(() => {
-    // Server trace is best effort and must never block gallery hydration.
-  });
 }
 
 function captureGalleryTrace(
@@ -254,14 +376,20 @@ function captureGalleryTrace(
   status: GalleryState,
   traceId: string,
 ): void {
-  const currentTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-  const target = event.target instanceof Element ? event.target : null;
-  recordGalleryTrace(stage, result, status, traceId, {
-    targetTag: target?.tagName.toLowerCase() ?? null,
-    currentTargetTag: currentTarget?.tagName.toLowerCase() ?? null,
-    disabled: currentTarget instanceof HTMLButtonElement ? currentTarget.disabled : undefined,
-    pointerEvents: currentTarget ? window.getComputedStyle(currentTarget).pointerEvents : null,
-  });
+  try {
+    // Snapshot every SyntheticEvent field synchronously before any async trace I/O.
+    const currentTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    const target = event.target instanceof Element ? event.target : null;
+    const snapshot = {
+      targetTag: target?.tagName.toLowerCase() ?? null,
+      currentTargetTag: currentTarget?.tagName.toLowerCase() ?? null,
+      disabled: currentTarget instanceof HTMLButtonElement ? currentTarget.disabled : undefined,
+      pointerEvents: currentTarget ? window.getComputedStyle(currentTarget).pointerEvents : null,
+    };
+    recordGalleryTrace(stage, result, status, traceId, snapshot);
+  } catch (reason) {
+    recordGalleryClientException(result, status, traceId, stage, reason);
+  }
 }
 
 function GalleryRequestButton({ result, traceId: providedTraceId }: { result: FilterResult; traceId?: string }) {
@@ -272,13 +400,22 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
   const inFlightRef = useRef(false);
   const renderProbeSentRef = useRef(false);
   const [localTraceId] = useState(createGalleryTraceId);
+  const [instanceId] = useState(createGalleryTraceId);
   const traceId = providedTraceId ?? localTraceId;
+  const galleryEligible = result.source === "facebook" && result.lifecycleStatus !== "REJECTED" && result.lifecycleStatus !== "ARCHIVED" && result.lifecycleStatus !== "STALE" && result.manualDecision !== "REJECTED";
+  const lifecycleSnapshotRef = useRef({ result, status, traceId, instanceId, galleryEligible });
+  useEffect(() => {
+    const snapshot = lifecycleSnapshotRef.current;
+    if (!snapshot.galleryEligible) return;
+    recordGalleryTrace("GALLERY_BUTTON_MOUNT", snapshot.result, snapshot.status, snapshot.traceId, { clientBuild: CLIENT_BUILD_ID, component: "GalleryRequestButton", instanceId: snapshot.instanceId });
+    return () => recordGalleryTrace("GALLERY_BUTTON_UNMOUNT", snapshot.result, snapshot.status, snapshot.traceId, { clientBuild: CLIENT_BUILD_ID, component: "GalleryRequestButton", instanceId: snapshot.instanceId });
+  }, []);
   useEffect(() => {
     if (renderProbeSentRef.current) return;
-    if (result.source !== "facebook" || result.lifecycleStatus === "REJECTED" || result.lifecycleStatus === "ARCHIVED" || result.lifecycleStatus === "STALE" || result.manualDecision === "REJECTED") return;
+    if (!galleryEligible) return;
     renderProbeSentRef.current = true;
     recordGalleryTrace("GALLERY_BUTTON_RENDERED", result, status, traceId, { clientBuild: CLIENT_BUILD_ID, component: "GalleryRequestButton", buttonRendered: true });
-  }, [result, status, traceId]);
+  }, [galleryEligible, result, status, traceId]);
   useEffect(() => {
     if (status !== "PENDING" && status !== "RUNNING") return;
     let cancelled = false;
@@ -296,7 +433,7 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
     void poll();
     return () => { cancelled = true; window.clearInterval(interval); };
   }, [result.id, status]);
-  if (result.source !== "facebook" || result.lifecycleStatus === "REJECTED" || result.lifecycleStatus === "ARCHIVED" || result.lifecycleStatus === "STALE" || result.manualDecision === "REJECTED") return null;
+  if (!galleryEligible) return null;
   const request = async (traceId: string) => {
     recordGalleryTrace("GALLERY_HANDLER_ENTER", result, status, traceId);
     if (inFlightRef.current || busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE") {
@@ -315,7 +452,8 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
       const next = "status" in payload && isGalleryState(payload.status) ? payload.status : "PENDING";
       setStatus(next);
     } catch (reason) {
-      recordGalleryTrace("GALLERY_FETCH_ERROR", result, status, traceId, { errorCode: safeGalleryError(reason) });
+      recordGalleryTrace("GALLERY_FETCH_ERROR", result, status, traceId, { errorCode: safeGalleryError(reason), instanceId });
+      recordGalleryClientException(result, status, traceId, "GALLERY_FETCH", reason, instanceId);
       setStatus("FAILED");
     } finally {
       inFlightRef.current = false;
@@ -323,10 +461,14 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
     }
   };
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    recordGalleryTrace("GALLERY_UI_CLICK", result, status, traceId);
-    void request(traceId);
+    try {
+      event.preventDefault();
+      event.stopPropagation();
+      recordGalleryTrace("GALLERY_UI_CLICK", result, status, traceId, { instanceId });
+      void request(traceId);
+    } catch (reason) {
+      recordGalleryClientException(result, status, traceId, "GALLERY_CLICK_HANDLER", reason, instanceId);
+    }
   };
   const handlePointerDownCapture = (event: PointerEvent<HTMLButtonElement>) => {
     captureGalleryTrace("GALLERY_BUTTON_POINTER_CAPTURE", event, result, status, traceId);
@@ -335,7 +477,7 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
     captureGalleryTrace("GALLERY_BUTTON_CLICK_CAPTURE", event, result, status, traceId);
   };
   const label = status === "PENDING" ? "Oczekuje na pobranie galerii" : status === "RUNNING" ? "Pobieranie galerii…" : status === "PARTIAL" ? `Pobrano ${persisted}/${Math.max(total, persisted)} zdjęć` : status === "COMPLETE" ? `Galeria: ${persisted} zdjęć` : status === "FAILED" ? "Ponów pobieranie zdjęć" : "POBIERZ ZDJĘCIA";
-  return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-gallery-action="request" data-listing-id={result.id} disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={handleClick} onClickCapture={handleClickCapture} onPointerDownCapture={handlePointerDownCapture} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
+  return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-client-build={CLIENT_BUILD_ID} data-gallery-action="request" data-gallery-instance-id={instanceId} data-gallery-request-button="true" data-gallery-status={status} data-gallery-trace-id={traceId} data-listing-id={result.id} data-post-id={galleryPostId(result) ?? ""} disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={handleClick} onClickCapture={handleClickCapture} onPointerDownCapture={handlePointerDownCapture} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
 }
 
 function isGalleryState(value: unknown): value is GalleryState {

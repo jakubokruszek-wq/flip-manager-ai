@@ -4,6 +4,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const GALLERY_TRACE_EVENTS = [
   "GALLERY_BUTTON_RENDERED",
+  "GALLERY_BUTTON_MOUNT",
+  "GALLERY_BUTTON_UNMOUNT",
+  "GALLERY_NATIVE_POINTER_CAPTURE",
+  "GALLERY_NATIVE_CLICK_CAPTURE",
+  "GALLERY_CLIENT_EXCEPTION",
   "GALLERY_CARD_POINTER_CAPTURE",
   "GALLERY_BUTTON_POINTER_CAPTURE",
   "GALLERY_CARD_CLICK_CAPTURE",
@@ -41,6 +46,11 @@ export type GalleryRequestTrace = {
   clientBuild: string | null;
   component: string | null;
   buttonRendered: boolean | null;
+  instanceId: string | null;
+  actionStage: string | null;
+  errorName: string | null;
+  errorMessage: string | null;
+  closestButtonFound: boolean | null;
   createdAt: string;
 };
 
@@ -63,10 +73,29 @@ type TraceRow = {
   client_build: string | null;
   component: string | null;
   button_rendered: boolean | null;
+  instance_id: string | null;
+  action_stage: string | null;
+  error_name: string | null;
+  error_message: string | null;
+  closest_button_found: boolean | null;
   created_at: string;
 };
 
 const MAX_TRACE_ROWS = 80;
+const PRE_NATIVE_TRACE_EVENTS = new Set<GalleryTraceEvent>([
+  "GALLERY_BUTTON_RENDERED",
+  "GALLERY_CARD_POINTER_CAPTURE",
+  "GALLERY_BUTTON_POINTER_CAPTURE",
+  "GALLERY_CARD_CLICK_CAPTURE",
+  "GALLERY_BUTTON_CLICK_CAPTURE",
+  "GALLERY_UI_CLICK",
+  "GALLERY_HANDLER_ENTER",
+  "GALLERY_GUARD_PASS",
+  "GALLERY_GUARD_BLOCKED",
+  "GALLERY_FETCH_START",
+  "GALLERY_FETCH_RESPONSE",
+  "GALLERY_FETCH_ERROR",
+]);
 
 function isRenderProbeSchemaMissing(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
@@ -105,6 +134,11 @@ export function projectGalleryTrace(value: unknown, listingId: string): Omit<Gal
     clientBuild: boundedString("clientBuild", 120),
     component,
     buttonRendered: typeof row.buttonRendered === "boolean" ? row.buttonRendered : null,
+    instanceId: boundedString("instanceId", 80),
+    actionStage: boundedString("actionStage", 60),
+    errorName: boundedString("errorName", 60),
+    errorMessage: boundedString("errorMessage", 160),
+    closestButtonFound: typeof row.closestButtonFound === "boolean" ? row.closestButtonFound : null,
   };
 }
 
@@ -128,6 +162,11 @@ function fromRow(row: TraceRow): GalleryRequestTrace {
     clientBuild: row.client_build,
     component: row.component,
     buttonRendered: row.button_rendered,
+    instanceId: row.instance_id,
+    actionStage: row.action_stage,
+    errorName: row.error_name,
+    errorMessage: row.error_message,
+    closestButtonFound: row.closest_button_found,
     createdAt: row.created_at,
   };
 }
@@ -156,8 +195,13 @@ export async function writeGalleryTrace(trace: Omit<GalleryRequestTrace, "create
     client_build: trace.clientBuild,
     component: trace.component,
     button_rendered: trace.buttonRendered,
+    instance_id: trace.instanceId,
+    action_stage: trace.actionStage,
+    error_name: trace.errorName,
+    error_message: trace.errorMessage,
+    closest_button_found: trace.closestButtonFound,
   });
-  if (error && isRenderProbeSchemaMissing(error) && trace.event !== "GALLERY_BUTTON_RENDERED") {
+  if (error && isRenderProbeSchemaMissing(error) && PRE_NATIVE_TRACE_EVENTS.has(trace.event)) {
     const { error: legacyError } = await admin.from("gallery_request_traces").insert(basePayload);
     if (legacyError) throw new Error("GALLERY_TRACE_STORE_FAILED");
     return;
@@ -167,7 +211,7 @@ export async function writeGalleryTrace(trace: Omit<GalleryRequestTrace, "create
 
 export async function readGalleryTraces(listingId: string, traceId?: string): Promise<GalleryRequestTrace[]> {
   const admin = createAdminClient();
-  const select = "trace_id,listing_id,post_id,event,gallery_status,client_timestamp,target_tag,current_target_tag,disabled,pointer_events,guard_reason,http_status,response_ok,error_code,source,client_build,component,button_rendered,created_at";
+  const select = "trace_id,listing_id,post_id,event,gallery_status,client_timestamp,target_tag,current_target_tag,disabled,pointer_events,guard_reason,http_status,response_ok,error_code,source,client_build,component,button_rendered,instance_id,action_stage,error_name,error_message,closest_button_found,created_at";
   let query = admin.from("gallery_request_traces").select(select).eq("listing_id", listingId).order("created_at", { ascending: true }).limit(MAX_TRACE_ROWS);
   if (traceId) query = query.eq("trace_id", traceId);
   const { data, error } = await query;
@@ -177,5 +221,5 @@ export async function readGalleryTraces(listingId: string, traceId?: string): Pr
   if (traceId) legacyQuery = legacyQuery.eq("trace_id", traceId);
   const { data: legacyData, error: legacyError } = await legacyQuery;
   if (legacyError) throw new Error("GALLERY_TRACE_READ_FAILED");
-  return (legacyData as TraceRow[] | null ?? []).map((row) => fromRow({ ...row, source: null, client_build: null, component: null, button_rendered: null }));
+  return (legacyData as TraceRow[] | null ?? []).map((row) => fromRow({ ...row, source: null, client_build: null, component: null, button_rendered: null, instance_id: null, action_stage: null, error_name: null, error_message: null, closest_button_found: null }));
 }

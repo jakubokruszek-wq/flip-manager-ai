@@ -11,6 +11,7 @@ const galleryTraceRoute = fs.readFileSync(path.join(__dirname, "../../../app/api
 const galleryTraceStore = fs.readFileSync(path.join(__dirname, "../server/gallery-request-trace.ts"), "utf8");
 const galleryTraceMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906133000_create_gallery_request_traces.sql"), "utf8");
 const galleryTraceProbeMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906143000_extend_gallery_request_traces_render_probe.sql"), "utf8");
+const galleryTraceNativeMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906150000_extend_gallery_request_traces_native_events.sql"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
 const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
 
@@ -71,6 +72,11 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /GALLERY_BUTTON_CLICK_CAPTURE/);
   assert.match(inlineResults, /GALLERY_CARD_CLICK_CAPTURE/);
   assert.match(inlineResults, /GALLERY_BUTTON_RENDERED/);
+  assert.match(inlineResults, /GALLERY_NATIVE_POINTER_CAPTURE/);
+  assert.match(inlineResults, /GALLERY_NATIVE_CLICK_CAPTURE/);
+  assert.match(inlineResults, /GALLERY_CLIENT_EXCEPTION/);
+  assert.match(inlineResults, /GALLERY_BUTTON_MOUNT/);
+  assert.match(inlineResults, /GALLERY_BUTTON_UNMOUNT/);
   assert.match(inlineResults, /GalleryRequestButton/);
   assert.match(inlineResults, /buttonRendered: true/);
   assert.match(inlineResults, /CLIENT_BUILD_ID/);
@@ -79,10 +85,15 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /onClickCapture/);
   assert.match(inlineResults, /targetTag/);
   assert.match(inlineResults, /currentTargetTag/);
-  assert.match(inlineResults, /listings\/\$\{result\.id\}\/gallery\/trace/);
+  assert.match(inlineResults, /listings\/\$\{entry\.listingId\}\/gallery\/trace/);
   assert.match(inlineResults, /credentials: "same-origin"/);
   assert.match(inlineResults, /event\.stopPropagation\(\)/);
   assert.match(inlineResults, /data-gallery-action="request"/);
+  assert.match(inlineResults, /data-gallery-request-button="true"/);
+  assert.match(inlineResults, /data-gallery-trace-id/);
+  assert.match(inlineResults, /data-gallery-instance-id/);
+  assert.match(inlineResults, /document\.addEventListener\("pointerdown", pointerListener, true\)/);
+  assert.match(inlineResults, /document\.addEventListener\("click", clickListener, true\)/);
   assert.match(inlineResults, /inFlightRef/);
   assert.match(galleryRoute, /enqueueFacebookGalleryJob/);
   assert.match(galleryRoute, /getFacebookGalleryStatus/);
@@ -132,4 +143,22 @@ test("gallery trace storage is backend-only and does not mutate business state",
   assert.doesNotMatch(galleryTraceMigration, /grant .* to anon|grant .* to authenticated/);
   assert.match(galleryTraceStore, /MAX_TRACE_ROWS = 80/);
   assert.match(galleryTraceRoute, /export async function GET/);
+});
+
+test("native gallery diagnostics are bounded, backend-only, and failure-isolated", () => {
+  assert.match(inlineResults, /function dispatchGalleryTrace/);
+  assert.match(inlineResults, /A synchronous fetch\/serialization failure must not escape/);
+  assert.match(inlineResults, /Snapshot every SyntheticEvent field synchronously/);
+  assert.match(inlineResults, /closest\<HTMLElement\>\('\[data-gallery-request-button="true"\]'/);
+  assert.match(galleryTraceStore, /instanceId: boundedString\("instanceId", 80\)/);
+  assert.match(galleryTraceStore, /errorMessage: boundedString\("errorMessage", 160\)/);
+  assert.match(galleryTraceNativeMigration, /GALLERY_NATIVE_POINTER_CAPTURE/);
+  assert.match(galleryTraceNativeMigration, /GALLERY_NATIVE_CLICK_CAPTURE/);
+  assert.match(galleryTraceNativeMigration, /GALLERY_CLIENT_EXCEPTION/);
+  assert.match(galleryTraceNativeMigration, /char_length\(error_message\) between 1 and 160/);
+  assert.match(galleryTraceNativeMigration, /enable row level security/);
+  assert.match(galleryTraceNativeMigration, /revoke all on table public\.gallery_request_traces from anon, authenticated/);
+  assert.match(galleryTraceNativeMigration, /revoke update, delete on table public\.gallery_request_traces from service_role/);
+  assert.match(galleryTraceNativeMigration, /grant select, insert on table public\.gallery_request_traces to service_role/);
+  assert.doesNotMatch(galleryTraceNativeMigration, /grant .* to anon|grant .* to authenticated/);
 });
