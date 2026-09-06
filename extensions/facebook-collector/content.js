@@ -201,6 +201,7 @@
     const iterations = [];
     let records = [];
     const mainFeedDiagnostics = new Map();
+    const searchResultDiagnostics = new Map();
     const searchMediaTiles = new Map();
     const searchObservedMediaIds = new Set();
     const discoveryStartUrl = location.href;
@@ -228,6 +229,12 @@
         }
         consecutiveNoTileGrowth = searchObservedMediaIds.size > tilesBeforeCollection ? 0 : consecutiveNoTileGrowth + 1;
       }
+      const searchCards = searchMode ? collectSearchResultCards(source, options.searchQuery, iteration) : { records: [], diagnostics: [] };
+      for (const diagnostic of searchCards.diagnostics) {
+        const key = `${diagnostic.postIdCandidate || "unknown"}|${diagnostic.permalinkCandidate || diagnostic.anchorHref || iteration}`;
+        const previous = searchResultDiagnostics.get(key);
+        searchResultDiagnostics.set(key, previous ? mergeSearchResultDiagnostic(previous, diagnostic) : diagnostic);
+      }
       const dom = collectDom(source, iteration, `${layerPrefix}DOM`);
       const hydration = collectHydration(source, iteration, `${layerPrefix}HYDRATION`);
       const network = [...networkRecords.values()].map((record) => ({ ...record, firstSeenIteration: record.firstSeenIteration ?? iteration, discoveryLayers: [`${layerPrefix}NETWORK`] }));
@@ -238,7 +245,7 @@
       }
       const beforeIds = new Set(records.map((record) => record.postId));
       const before = records.length;
-      records = core.mergeRecords([...records, ...dom, ...hydration, ...network], searchMode ? maxDiscoveryPosts : maxPosts);
+      records = core.mergeRecords([...records, ...searchCards.records, ...dom, ...hydration, ...network], searchMode ? maxDiscoveryPosts : maxPosts);
       const added = records.length - before;
       const addedRecords = records.filter((record) => !beforeIds.has(record.postId));
       consecutiveOldNewPosts = core.updateAgeCutoffStreak(consecutiveOldNewPosts, addedRecords);
@@ -322,7 +329,7 @@
         }
       }
     }
-    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, iterations: iterations.slice(0, 31), ...(searchMode ? {} : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
+    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, iterations: iterations.slice(0, 31), ...(searchMode ? { searchResultDiagnostics: [...searchResultDiagnostics.values()].slice(0, 200) } : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {
@@ -341,6 +348,205 @@
       tiles.push({ mediaId, photoUrl: photoUrl.toString() });
     }
     return tiles;
+  }
+
+  // Search pages often expose a canonical post link and its root story in the
+  // result card, while the media payload remains unrelated or redacted. Keep
+  // this resolver strictly card-bound: it never walks to neighbours and never
+  // promotes a photo id to a post id.
+  function collectSearchResultCards(source, query, iteration) {
+    const diagnostics = new Map();
+    const records = [];
+    const mediaSeen = new Set();
+    for (const anchor of document.querySelectorAll('a[href]')) {
+      const link = core.parsePostLink(anchor.href, source);
+      if (!link) continue;
+      const key = `${link.postId}|${link.permalink}`;
+      const container = findSearchResultContainer(anchor, source, link.postId);
+      const evidence = inspectSearchResultCard(container, anchor, link);
+      const prior = diagnostics.get(key);
+      diagnostics.set(key, prior ? mergeSearchResultDiagnostic(prior, evidence) : evidence);
+      if (!container || !evidence.hasCanonicalPostCandidate) continue;
+      const author = searchRootAuthor(container);
+      const text = searchRootText(container);
+      const timestamp = searchRootTimestamp(container);
+      const mediaIds = searchCardMediaIds(container);
+      const identity = core.resolveRootStoryIdentity({
+        rootPostId: link.postId,
+        author,
+        text,
+        rootAuthorSource: author ? "SEARCH_RESULT_CARD_AUTHOR" : null,
+        rootTextSource: text ? "SEARCH_RESULT_CARD_MESSAGE" : null,
+        rootTextVerified: Boolean(author && text),
+      }, link.postId);
+      if (identity.identityConfidence !== "EXACT") continue;
+      const current = records.find((record) => record.postId === link.postId);
+      if (current) {
+        current.mediaIds = [...new Set([...(current.mediaIds || []), ...mediaIds])].slice(0, 30);
+        continue;
+      }
+      records.push({
+        ...link,
+        author: identity.author,
+        text: identity.text,
+        publishedAt: timestamp?.dateTime || null,
+        timestampText: visibleText(timestamp),
+        media: [],
+        discoveryLayers: ["SEARCH_DOM"],
+        firstSeenIteration: iteration,
+        rootPostId: link.postId,
+        rootAuthorSource: "SEARCH_RESULT_CARD_AUTHOR",
+        rootTextSource: "SEARCH_RESULT_CARD_MESSAGE",
+        rootTextVerified: true,
+        identityConfidence: "EXACT",
+        identityReasons: ["SEARCH_RESULT_CARD_CANONICAL_LINK", "ROOT_TEXT_VERIFIED"],
+        discoverySource: "SEARCH",
+        searchQuery: String(query || "").slice(0, 120) || null,
+        searchQueries: query ? [String(query).slice(0, 120)] : [],
+        foundInMainFeed: false,
+        firstSeenPhase: "SEARCH",
+        resolvedFromMediaTile: false,
+        mediaIds,
+        parentResolutionEvidence: ["SEARCH_RESULT_CARD_CANONICAL_LINK", "SEARCH_RESULT_CARD_ROOT_BINDING"],
+      });
+      const updated = diagnostics.get(key);
+      if (updated) { updated.hasCanonicalPostCandidate = true; updated.firstFailedHop = null; updated.sellIntentCandidate = isLikelySellText(text); }
+    }
+    // Keep photo-only candidates visible in diagnostics without ever treating
+    // their media id as a post id. This is the common unresolved shape on
+    // Facebook search pages after media requests are blocked.
+    for (const anchor of document.querySelectorAll('a[href*="/photo/"][href*="fbid="], a[href*="/photo.php"][href*="fbid="]')) {
+      if (isCommentDescendant(anchor)) continue;
+      let mediaId = null;
+      try { mediaId = new URL(anchor.href).searchParams.get("fbid"); } catch { /* invalid links are ignored */ }
+      if (!/^\d{5,30}$/.test(mediaId || "") || mediaSeen.has(mediaId)) continue;
+      mediaSeen.add(mediaId);
+      const container = anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]");
+      const cardLinks = container ? [...container.querySelectorAll("a[href]")].map((item) => core.parsePostLink(item.href, source)).filter(Boolean) : [];
+      if (cardLinks.length > 0) continue;
+      const key = `media:${mediaId}`;
+      diagnostics.set(key, {
+        query: String(query || "").slice(0, 120) || null,
+        candidateIndex: 0,
+        hasResultContainer: Boolean(container),
+        hasAnchor: true,
+        anchorHref: safeFacebookHref(anchor.href),
+        hasPostIdInHref: false,
+        hasStoryFbid: /[?&]story_fbid=\d+/i.test(String(anchor.href || "")),
+        hasFtEntIdentifier: Boolean(container?.querySelector?.("[data-ft], [data-entidentifier]")),
+        hasTrackingData: Boolean(container?.querySelector?.("[data-tracking], [data-store]")),
+        hasAuthor: false,
+        hasRootText: false,
+        hasTimestamp: false,
+        hasStructuredPayload: false,
+        hasCanonicalPostCandidate: false,
+        postIdCandidate: null,
+        permalinkCandidate: null,
+        sellIntentCandidate: false,
+        firstFailedHop: "ONLY_PHOTO_ID_AVAILABLE",
+      });
+    }
+    return { records: core.mergeRecords(records), diagnostics: [...diagnostics.values()].slice(0, 200).map((diagnostic, candidateIndex) => ({ ...diagnostic, query: String(query || "").slice(0, 120) || null, candidateIndex })) };
+  }
+
+  function inspectSearchResultCard(container, anchor, link) {
+    const anchorHref = safeFacebookHref(anchor?.href);
+    const base = {
+      query: null,
+      candidateIndex: 0,
+      hasResultContainer: Boolean(container),
+      hasAnchor: Boolean(anchor),
+      anchorHref,
+      hasPostIdInHref: Boolean(link?.postId),
+      hasStoryFbid: Boolean(anchorHref && /[?&]story_fbid=\d+/i.test(anchorHref)),
+      hasFtEntIdentifier: Boolean(container?.querySelector?.("[data-ft], [data-entidentifier], [data-testid*='entidentifier' i]")),
+      hasTrackingData: Boolean(container?.querySelector?.("[data-tracking], [data-store], [data-visualcompletion]")),
+      hasAuthor: false,
+      hasRootText: false,
+      hasTimestamp: false,
+      hasStructuredPayload: Boolean(container?.querySelector?.("script[type='application/json'], script[type='application/ld+json']")),
+      hasCanonicalPostCandidate: false,
+      postIdCandidate: link?.postId || null,
+      permalinkCandidate: link?.permalink || null,
+      sellIntentCandidate: false,
+      firstFailedHop: null,
+    };
+    if (!container) { base.firstFailedHop = "NO_RESULT_CONTAINER"; return base; }
+    const links = [...container.querySelectorAll("a[href]")].map((item) => core.parsePostLink(item.href, { ...link, sourceId: link.sourceId, sourceType: link.sourceType })).filter(Boolean);
+    const postIds = [...new Set(links.map((item) => item.postId))];
+    base.hasCanonicalPostCandidate = postIds.length === 1 && postIds[0] === link.postId;
+    base.hasAuthor = Boolean(searchRootAuthor(container));
+    const rootText = searchRootText(container);
+    base.hasRootText = Boolean(rootText);
+    base.sellIntentCandidate = isLikelySellText(rootText);
+    base.hasTimestamp = Boolean(searchRootTimestamp(container));
+    base.firstFailedHop = !base.hasCanonicalPostCandidate ? "NO_PARENT_LINK_IN_CARD" : !base.hasAuthor ? "AUTHOR_BINDING_MISSING" : !base.hasRootText ? "ROOT_TEXT_BINDING_MISSING" : null;
+    return base;
+  }
+
+  function mergeSearchResultDiagnostic(previous, current) {
+    const merged = { ...previous };
+    for (const key of ["hasResultContainer", "hasAnchor", "hasPostIdInHref", "hasStoryFbid", "hasFtEntIdentifier", "hasTrackingData", "hasAuthor", "hasRootText", "hasTimestamp", "hasStructuredPayload", "hasCanonicalPostCandidate", "sellIntentCandidate"]) merged[key] = previous[key] === true || current[key] === true;
+    merged.anchorHref ||= current.anchorHref;
+    merged.postIdCandidate ||= current.postIdCandidate;
+    merged.permalinkCandidate ||= current.permalinkCandidate;
+    if (current.hasCanonicalPostCandidate) merged.firstFailedHop = null;
+    else if (!merged.firstFailedHop) merged.firstFailedHop = current.firstFailedHop;
+    return merged;
+  }
+
+  function findSearchResultContainer(anchor, source, postId) {
+    const article = anchor.closest('[role="article"]');
+    if (article && isBoundSearchCard(article, source, postId)) return article;
+    let node = anchor.parentElement;
+    for (let depth = 0; node && depth < 10; depth += 1, node = node.parentElement) {
+      if (!isBoundSearchCard(node, source, postId)) continue;
+      if (node.hasAttribute("data-pagelet") || node.hasAttribute("data-ft") || node.hasAttribute("data-entidentifier") || node.querySelector("[data-ad-preview='message'], [data-testid='post_message'], [data-ad-comet-preview='message']")) return node;
+    }
+    return null;
+  }
+
+  function isBoundSearchCard(container, source, postId) {
+    const links = [...container.querySelectorAll("a[href]")].map((item) => core.parsePostLink(item.href, source)).filter(Boolean);
+    const postIds = [...new Set(links.map((item) => item.postId))];
+    return postIds.length === 1 && postIds[0] === postId;
+  }
+
+  function searchRootAuthor(container) {
+    const nodes = [...container.querySelectorAll("h2 a, h3 a, strong a, [role='heading'] a")].filter((node) => !isCommentDescendant(node));
+    const names = [...new Set(nodes.map(visibleText).filter(Boolean))];
+    return names.length === 1 ? names[0] : null;
+  }
+
+  function searchRootText(container) {
+    const selectors = "[data-ad-preview='message'], [data-testid='post_message'], [data-ad-comet-preview='message']";
+    const nodes = [...container.querySelectorAll(selectors)].filter((node) => !isCommentDescendant(node));
+    const texts = [...new Set(nodes.map(visibleText).filter(Boolean))];
+    return texts.length === 1 ? texts[0] : null;
+  }
+
+  function searchRootTimestamp(container) {
+    return [...container.querySelectorAll("abbr, time, a[aria-label*='godz' i], a[aria-label*='min' i], a[aria-label*='dzie' i]")].find((node) => !isCommentDescendant(node)) || null;
+  }
+
+  function searchCardMediaIds(container) {
+    const ids = [];
+    for (const anchor of container.querySelectorAll('a[href*="/photo/"][href*="fbid="], a[href*="/photo.php"][href*="fbid="]')) {
+      if (isCommentDescendant(anchor)) continue;
+      try { const id = new URL(anchor.href).searchParams.get("fbid"); if (/^\d{5,30}$/.test(id || "")) ids.push(id); } catch { /* invalid links are ignored */ }
+    }
+    return [...new Set(ids)].slice(0, 30);
+  }
+
+  function isLikelySellText(value) { return /\b(?:sprzedam|na\s+sprzeda[zż]|do\s+sprzedania|off\s*market|mam\s+do\s+zaoferowania)\b/i.test(String(value || "")); }
+  function safeFacebookHref(value) {
+    try {
+      const url = new URL(String(value || ""));
+      if (!/^https:\/\/(?:www\.)?facebook\.com\//i.test(url.toString())) return null;
+      url.search = "";
+      url.hash = "";
+      return url.toString().slice(0, 2_000);
+    } catch { return null; }
   }
 
   function collectDom(source, iteration, layer) {

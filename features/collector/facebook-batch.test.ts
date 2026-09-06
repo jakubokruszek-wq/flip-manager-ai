@@ -36,6 +36,21 @@ test("normalizes bounded per-query search telemetry without affecting post ident
   assert.deepEqual(batch.searchTelemetry?.queries[0], { query: "sprzedam", executed: true, status: "HEALTHY", scrolls: 3, visibleCards: 12, captured: 1, unique: 1, duplicatesVsMainFeed: 0, uniqueContribution: 1, sellContribution: 1, tilesSeen: 5, tilesOpened: 5, tilesResolved: 5, tilesUnverified: 0, uniqueParentPosts: 1, verifiedParentPosts: 1, duplicatesByMedia: 4, durationMs: 14_500, stopReason: "MAX_SCROLLS" });
 });
 
+test("preserves safe card-bound search diagnostics and sell-intent split", () => {
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "DEGRADED", visibleCardCount: 0, capturedPostCount: 0, scrolls: 3, durationMs: 5000, stopReason: "SEARCH_RESULT_CARD", reasons: [] },
+    searchTelemetry: { hardTimeBudgetMs: 280_000, durationMs: 2_000, queriesPlanned: 1, queriesExecuted: 1, budgetExhausted: false, queries: [{ query: "sprzedam", executed: true, status: "DEGRADED", scrolls: 3, visibleCards: 0, captured: 0, unique: 0, duplicatesVsMainFeed: 0, uniqueContribution: 0, sellContribution: 0, sellIntentCandidates: 2, exactSell: 1, persistableSell: 1, resultCardsInspected: 2, unresolvedByReason: { ROOT_TEXT_BINDING_MISSING: 1, NO_RESULT_CONTAINER: 1 }, searchResultDiagnostics: [{ query: "sprzedam", candidateIndex: 0, hasResultContainer: true, hasAnchor: true, anchorHref: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, hasPostIdInHref: true, hasStoryFbid: false, hasFtEntIdentifier: false, hasTrackingData: false, hasAuthor: true, hasRootText: false, hasTimestamp: true, hasStructuredPayload: false, hasCanonicalPostCandidate: true, postIdCandidate: "1577700267381450", permalinkCandidate: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, sellIntentCandidate: true, firstFailedHop: "ROOT_TEXT_BINDING_MISSING" }, { query: "sprzedam", candidateIndex: 1, hasResultContainer: false, hasAnchor: true, anchorHref: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381451/`, hasPostIdInHref: true, hasStoryFbid: false, hasFtEntIdentifier: false, hasTrackingData: false, hasAuthor: false, hasRootText: false, hasTimestamp: false, hasStructuredPayload: false, hasCanonicalPostCandidate: false, postIdCandidate: "1577700267381451", permalinkCandidate: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381451/`, sellIntentCandidate: false, firstFailedHop: "NO_RESULT_CONTAINER" }], tilesSeen: 0, tilesOpened: 0, tilesResolved: 0, tilesUnverified: 0, uniqueParentPosts: 0, verifiedParentPosts: 0, duplicatesByMedia: 0, durationMs: 2_000, stopReason: "SEARCH_RESULT_CARD" }] }, posts: []
+  });
+  const query = batch.searchTelemetry?.queries[0];
+  assert.equal(query?.sellIntentCandidates, 2);
+  assert.equal(query?.resultCardsInspected, 2);
+  assert.equal(query?.searchResultDiagnostics?.length, 2);
+  assert.equal(query?.searchResultDiagnostics?.[0]?.postIdCandidate, "1577700267381450");
+  assert.equal(query?.searchResultDiagnostics?.[0]?.hasRootText, false);
+  assert.deepEqual(query?.unresolvedByReason, { ROOT_TEXT_BINDING_MISSING: 1, NO_RESULT_CONTAINER: 1 });
+});
+
 test("keeps discovery coverage separate from the bounded resolution cap", () => {
   const batch = normalizeFacebookCollectorBatch({
     scanId: "11111111-1111-4111-8111-111111111111",

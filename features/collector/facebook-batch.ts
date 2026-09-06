@@ -128,6 +128,12 @@ export type CollectorSearchQueryTelemetry = {
   durationMs: number;
   stopReason: string;
   tileDiagnostics?: CollectorSearchTileDiagnostic[];
+  sellIntentCandidates?: number;
+  exactSell?: number;
+  persistableSell?: number;
+  resultCardsInspected?: number;
+  unresolvedByReason?: Record<string, number>;
+  searchResultDiagnostics?: CollectorSearchResultDiagnostic[];
 };
 
 export type CollectorSearchDiscoveryEvidence = {
@@ -179,6 +185,30 @@ export type CollectorSearchTileDiagnostic = {
   identityResult: CollectorIdentityConfidence;
   failSubstep: string | null;
   elapsedMs: number;
+};
+
+/** Safe, card-bound search evidence. No post text or raw Facebook payload is
+ * persisted; only structural booleans, bounded canonical ids/URLs and the
+ * first failed identity hop are retained. */
+export type CollectorSearchResultDiagnostic = {
+  query: string | null;
+  candidateIndex: number;
+  hasResultContainer: boolean;
+  hasAnchor: boolean;
+  anchorHref: string | null;
+  hasPostIdInHref: boolean;
+  hasStoryFbid: boolean;
+  hasFtEntIdentifier: boolean;
+  hasTrackingData: boolean;
+  hasAuthor: boolean;
+  hasRootText: boolean;
+  hasTimestamp: boolean;
+  hasStructuredPayload: boolean;
+  hasCanonicalPostCandidate: boolean;
+  postIdCandidate: string | null;
+  permalinkCandidate: string | null;
+  sellIntentCandidate: boolean;
+  firstFailedHop: string | null;
 };
 
 export type CollectorMainFeedDiagnostic = {
@@ -441,7 +471,48 @@ function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTele
     durationMs: boundedInteger(value.durationMs, 0, 120_000),
     stopReason: requiredString(value.stopReason, "COLLECTOR_SEARCH_QUERY_STOP_REASON_REQUIRED").slice(0, 120),
     ...(Array.isArray(value.tileDiagnostics) ? { tileDiagnostics: value.tileDiagnostics.slice(0, 10).map(normalizeSearchTileDiagnostic) } : {}),
+    ...(Number.isFinite(value.sellIntentCandidates) ? { sellIntentCandidates: boundedInteger(value.sellIntentCandidates, 0, 200) } : {}),
+    ...(Number.isFinite(value.exactSell) ? { exactSell: boundedInteger(value.exactSell, 0, 100) } : {}),
+    ...(Number.isFinite(value.persistableSell) ? { persistableSell: boundedInteger(value.persistableSell, 0, 100) } : {}),
+    ...(Number.isFinite(value.resultCardsInspected) ? { resultCardsInspected: boundedInteger(value.resultCardsInspected, 0, 200) } : {}),
+    ...(isRecord(value.unresolvedByReason) ? { unresolvedByReason: normalizeSearchReasonCounts(value.unresolvedByReason) } : {}),
+    ...(Array.isArray(value.searchResultDiagnostics) ? { searchResultDiagnostics: value.searchResultDiagnostics.slice(0, 200).flatMap(normalizeSearchResultDiagnostic) } : {}),
   };
+}
+
+function normalizeSearchReasonCounts(value: Record<string, unknown>): Record<string, number> {
+  return Object.fromEntries(Object.entries(value).slice(0, 20).flatMap(([key, count]) => Number.isFinite(count) ? [[key.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 80), boundedInteger(count, 0, 200)]] : []));
+}
+
+function normalizeSearchResultDiagnostic(value: unknown): CollectorSearchResultDiagnostic[] {
+  if (!isRecord(value)) return [];
+  const postIdCandidate = nullableString(value.postIdCandidate, 30);
+  const permalinkCandidate = safeHttpsUrl(value.permalinkCandidate);
+  const anchorHref = safeHttpsUrl(value.anchorHref);
+  let anchorFacebookHref: string | null = null;
+  if (anchorHref) {
+    try { anchorFacebookHref = /(^|\.)facebook\.com$/i.test(new URL(anchorHref).hostname) ? anchorHref : null; } catch { anchorFacebookHref = null; }
+  }
+  return [{
+    query: nullableString(value.query, 120),
+    candidateIndex: boundedInteger(value.candidateIndex, 0, 200),
+    hasResultContainer: value.hasResultContainer === true,
+    hasAnchor: value.hasAnchor === true,
+    anchorHref: anchorFacebookHref,
+    hasPostIdInHref: value.hasPostIdInHref === true,
+    hasStoryFbid: value.hasStoryFbid === true,
+    hasFtEntIdentifier: value.hasFtEntIdentifier === true,
+    hasTrackingData: value.hasTrackingData === true,
+    hasAuthor: value.hasAuthor === true,
+    hasRootText: value.hasRootText === true,
+    hasTimestamp: value.hasTimestamp === true,
+    hasStructuredPayload: value.hasStructuredPayload === true,
+    hasCanonicalPostCandidate: value.hasCanonicalPostCandidate === true,
+    postIdCandidate: postIdCandidate && /^\d{5,30}$/.test(postIdCandidate) ? postIdCandidate : null,
+    permalinkCandidate,
+    sellIntentCandidate: value.sellIntentCandidate === true,
+    firstFailedHop: nullableString(value.firstFailedHop, 120),
+  }];
 }
 
 function normalizeDiscoveryEvidence(value: unknown): CollectorSearchDiscoveryEvidence | null {

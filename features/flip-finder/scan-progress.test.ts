@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, projectImagePersistenceDiagnostics, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
+import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, projectImagePersistenceDiagnostics, projectSearchResultDiagnostics, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -127,6 +127,23 @@ test("missing tile diagnostics return an empty list and projection is capped at 
   const projected = projectSearchTileDiagnostics(values, "mieszkanie");
   assert.equal(projected.length, 50);
   assert.equal(projected[49].tileIndex, 49);
+});
+
+test("search result diagnostics stay card-bound and secret-free", () => {
+  const [diagnostic] = projectSearchResultDiagnostics([{
+    query: "sprzedam", candidateIndex: 1, hasResultContainer: true, hasAnchor: true,
+    anchorHref: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1577700267381450/",
+    hasPostIdInHref: true, hasStoryFbid: false, hasFtEntIdentifier: true, hasTrackingData: true,
+    hasAuthor: true, hasRootText: false, hasTimestamp: true, hasStructuredPayload: false,
+    hasCanonicalPostCandidate: true, postIdCandidate: "1577700267381450",
+    permalinkCandidate: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1577700267381450/",
+    sellIntentCandidate: true, firstFailedHop: "ROOT_TEXT_BINDING_MISSING", leaseToken: "must-not-survive",
+  }], "sprzedam");
+  assert.equal(diagnostic?.postIdCandidate, "1577700267381450");
+  assert.equal(diagnostic?.hasRootText, false);
+  assert.equal(diagnostic?.sellIntentCandidate, true);
+  assert.equal((diagnostic as Record<string, unknown>)?.leaseToken, undefined);
+  assert.deepEqual(projectSearchResultDiagnostics(undefined, "sprzedam"), []);
 });
 
 test("projects bounded image persistence diagnostics without secrets or image URLs", () => {

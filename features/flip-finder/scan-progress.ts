@@ -64,6 +64,12 @@ export type CollectorSearchQueryTelemetry = {
   durationMs: number;
   stopReason: string;
   tileDiagnostics: CollectorSearchTileDiagnostic[];
+  sellIntentCandidates?: number;
+  exactSell?: number;
+  persistableSell?: number;
+  resultCardsInspected?: number;
+  unresolvedByReason?: Record<string, number>;
+  searchResultDiagnostics?: CollectorSearchResultDiagnostic[];
 };
 
 /** Safe, read-only projection of a collector tile diagnostic. */
@@ -97,6 +103,27 @@ export type CollectorSearchTileDiagnostic = {
   rootTextFound: boolean;
   exactBinding: boolean;
   timeSpentMs: number;
+  firstFailedHop: string | null;
+};
+
+export type CollectorSearchResultDiagnostic = {
+  query: string | null;
+  candidateIndex: number;
+  hasResultContainer: boolean;
+  hasAnchor: boolean;
+  anchorHref: string | null;
+  hasPostIdInHref: boolean;
+  hasStoryFbid: boolean;
+  hasFtEntIdentifier: boolean;
+  hasTrackingData: boolean;
+  hasAuthor: boolean;
+  hasRootText: boolean;
+  hasTimestamp: boolean;
+  hasStructuredPayload: boolean;
+  hasCanonicalPostCandidate: boolean;
+  postIdCandidate: string | null;
+  permalinkCandidate: string | null;
+  sellIntentCandidate: boolean;
   firstFailedHop: string | null;
 };
 
@@ -327,6 +354,35 @@ export function projectSearchTileDiagnostics(value: unknown, query: string, limi
       exactBinding: item.identityResult === "EXACT",
       timeSpentMs: nonnegativeInteger(item.elapsedMs),
       firstFailedHop: typeof item.failSubstep === "string" ? item.failSubstep : null,
+    };
+  });
+}
+
+export function projectSearchResultDiagnostics(value: unknown, query: string, limit = 200): CollectorSearchResultDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  const boundedLimit = Math.max(0, Math.min(200, Math.floor(limit)));
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)).slice(0, boundedLimit).map((item, candidateIndex) => {
+    const anchorHref = facebookPermalink(item.anchorHref);
+    const permalinkCandidate = facebookPermalink(item.permalinkCandidate);
+    return {
+      query: typeof item.query === "string" && item.query.trim() ? item.query.trim().slice(0, 120) : query,
+      candidateIndex: nonnegativeInteger(item.candidateIndex ?? candidateIndex),
+      hasResultContainer: item.hasResultContainer === true,
+      hasAnchor: item.hasAnchor === true,
+      anchorHref,
+      hasPostIdInHref: item.hasPostIdInHref === true,
+      hasStoryFbid: item.hasStoryFbid === true,
+      hasFtEntIdentifier: item.hasFtEntIdentifier === true,
+      hasTrackingData: item.hasTrackingData === true,
+      hasAuthor: item.hasAuthor === true,
+      hasRootText: item.hasRootText === true,
+      hasTimestamp: item.hasTimestamp === true,
+      hasStructuredPayload: item.hasStructuredPayload === true,
+      hasCanonicalPostCandidate: item.hasCanonicalPostCandidate === true,
+      postIdCandidate: numericId(item.postIdCandidate),
+      permalinkCandidate,
+      sellIntentCandidate: item.sellIntentCandidate === true,
+      firstFailedHop: typeof item.firstFailedHop === "string" ? item.firstFailedHop.slice(0, 120) : null,
     };
   });
 }

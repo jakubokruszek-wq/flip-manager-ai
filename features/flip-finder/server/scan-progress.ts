@@ -11,6 +11,7 @@ import {
   type CollectorMainFeedDiagnostic,
   type CollectorSearchDiscoveryEvidence,
   type CollectorSearchQueryTelemetry,
+  projectSearchResultDiagnostics,
   type CollectorImageNetworkDiagnostics,
   type CollectorSourceTabDiagnostics,
   projectImagePersistenceDiagnostics,
@@ -361,6 +362,7 @@ function searchSummary(payloads: Row[]): { queriesExecuted: number; queriesPlann
 function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
   const status = string(value.status);
   const tileDiagnostics = projectSearchTileDiagnostics(value.tileDiagnostics, string(value.query) ?? "unknown");
+  const searchResultDiagnostics = projectSearchResultDiagnostics(value.searchResultDiagnostics, string(value.query) ?? "unknown");
   return {
     query: string(value.query) ?? "unknown",
     executed: value.executed === true,
@@ -403,7 +405,19 @@ function toSearchQueryTelemetry(value: Row): CollectorSearchQueryTelemetry {
     durationMs: number(value.durationMs),
     stopReason: string(value.stopReason) ?? "UNKNOWN",
     tileDiagnostics,
+    sellIntentCandidates: optionalNumber(value.sellIntentCandidates) ?? undefined,
+    exactSell: optionalNumber(value.exactSell) ?? undefined,
+    persistableSell: optionalNumber(value.persistableSell) ?? undefined,
+    resultCardsInspected: optionalNumber(value.resultCardsInspected) ?? searchResultDiagnostics.length,
+    unresolvedByReason: projectSearchReasonCounts(value.unresolvedByReason),
+    searchResultDiagnostics,
   };
+}
+
+function projectSearchReasonCounts(value: unknown): Record<string, number> {
+  const source = row(value);
+  if (!source) return {};
+  return Object.fromEntries(Object.entries(source).slice(0, 20).flatMap(([key, count]) => typeof count === "number" && Number.isFinite(count) && count >= 0 ? [[key.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 80), Math.min(200, Math.floor(count))]] : []));
 }
 
 function projectDiscoveryEvidence(value: unknown): CollectorSearchDiscoveryEvidence | null {

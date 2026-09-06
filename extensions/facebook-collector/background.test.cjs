@@ -115,10 +115,20 @@ test("photo tile resolution waits for the content script and retries payload obs
 });
 
 test("search telemetry records coverage, main duplicates, contribution and stop reason", () => {
-  for (const field of ["query", "scrolls", "scrollCount", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "tilesSeen", "rawTilesSeen", "uniqueTilesFound", "candidateBufferSize", "candidateCapReached", "resolutionCandidates", "payloadObserved", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "discoveryDurationMs", "discoveryDuration", "resolutionDurationMs", "resolutionDuration", "discoveryStopReason", "resolutionStopReason", "discoveryEvidence", "tabLoadAttempts", "tabLoadRecovery", "durationMs", "stopReason"]) {
+  for (const field of ["query", "scrolls", "scrollCount", "visibleCards", "captured", "unique", "duplicatesVsMainFeed", "uniqueContribution", "sellContribution", "sellIntentCandidates", "exactSell", "persistableSell", "resultCardsInspected", "unresolvedByReason", "searchResultDiagnostics", "tilesSeen", "rawTilesSeen", "uniqueTilesFound", "candidateBufferSize", "candidateCapReached", "resolutionCandidates", "payloadObserved", "tilesOpened", "tilesResolved", "tilesUnverified", "uniqueParentPosts", "verifiedParentPosts", "duplicatesByMedia", "discoveryDurationMs", "discoveryDuration", "resolutionDurationMs", "resolutionDuration", "discoveryStopReason", "resolutionStopReason", "discoveryEvidence", "tabLoadAttempts", "tabLoadRecovery", "durationMs", "stopReason"]) {
     assert.match(background, new RegExp(`\\b${field}\\b`));
   }
   assert.match(background, /searchTelemetry: searchTelemetrySummary/);
+});
+
+test("search discovery inspects only card-bound canonical result evidence", () => {
+  assert.match(content, /collectSearchResultCards/);
+  assert.match(content, /NO_RESULT_CONTAINER/);
+  assert.match(content, /NO_PARENT_LINK_IN_CARD/);
+  assert.match(content, /SEARCH_RESULT_CARD_CANONICAL_LINK/);
+  assert.match(content, /SEARCH_RESULT_CARD_ROOT_BINDING/);
+  assert.match(content, /searchResultDiagnostics/);
+  assert.match(content, /never walks to neighbours/);
 });
 
 test("search tab load has bounded recovery and reports exhausted retries", () => {
