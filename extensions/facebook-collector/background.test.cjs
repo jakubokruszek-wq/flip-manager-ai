@@ -464,7 +464,11 @@ test("DNR install uses valid MV3 resource types and preserves safe Chrome errors
   assert.match(imageBlocker, /sanitizeRuleUpdate/);
   assert.match(background, /safeImageRuleDiagnostics/);
   assert.match(background, /imageRule/);
-  assert.match(imageBlocker, /options: sanitizeRuleUpdate/);
+  assert.match(imageBlocker, /const sanitizedOptions = sanitizeRuleUpdate\(options\)/);
+  assert.match(imageBlocker, /chromeRuntimeLastErrorMessage/);
+  assert.match(imageBlocker, /sessionRulesBefore/);
+  assert.match(imageBlocker, /sessionRulesAfter/);
+  assert.match(imageBlocker, /getManifest/);
   assert.doesNotMatch(background, /deviceToken.*imageRule|imageRule.*deviceToken/);
 });
 

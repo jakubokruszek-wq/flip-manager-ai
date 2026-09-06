@@ -837,12 +837,43 @@ function safeImageRuleDiagnostics(value) {
   if (!value || typeof value !== "object") return null;
   const policy = globalThis.FlipCollectorImagePolicy;
   const options = policy?.sanitizeRuleUpdate?.(value.options);
+  const safeRules = (rules) => policy?.sanitizeRuleUpdate?.({ addRules: Array.isArray(rules) ? rules : [] })?.addRules || [];
   const tabId = Number.isInteger(value.tabId) && value.tabId >= 0 ? value.tabId : null;
   const ruleIds = Array.isArray(value.ruleIds) ? value.ruleIds.filter((id) => Number.isInteger(id) && id > 0).slice(0, 10) : [];
   const chromeErrorName = typeof value.chromeErrorName === "string" ? value.chromeErrorName.slice(0, 120) : null;
-  const chromeErrorMessage = typeof value.chromeErrorMessage === "string" ? value.chromeErrorMessage.slice(0, 400) : null;
+  const chromeErrorMessage = typeof value.chromeErrorMessage === "string" ? value.chromeErrorMessage.slice(0, 1000) : null;
+  const chromeRuntimeLastErrorMessage = typeof value.chromeRuntimeLastErrorMessage === "string" ? value.chromeRuntimeLastErrorMessage.slice(0, 1000) : null;
   if (tabId === null && !ruleIds.length && !chromeErrorName && !chromeErrorMessage && !options) return null;
-  return { tabId, ruleIds, chromeErrorName, chromeErrorMessage, ...(options ? { options } : {}) };
+  const runtime = value.runtime && typeof value.runtime === "object" ? {
+    policyVersion: typeof value.runtime.policyVersion === "string" ? value.runtime.policyVersion.slice(0, 80) : null,
+    dnrAvailable: value.runtime.dnrAvailable === true,
+    updateSessionRulesAvailable: value.runtime.updateSessionRulesAvailable === true,
+    getSessionRulesAvailable: value.runtime.getSessionRulesAvailable === true,
+    manifestVersion: typeof value.runtime.manifestVersion === "string" ? value.runtime.manifestVersion.slice(0, 40) : null,
+    dnrPermissionPresent: value.runtime.dnrPermissionPresent === true,
+  } : null;
+  const runtimeValues = value.runtimeValues && typeof value.runtimeValues === "object" ? {
+    tabIdType: typeof value.runtimeValues.tabIdType === "string" ? value.runtimeValues.tabIdType.slice(0, 20) : null,
+    tabIdIsInteger: value.runtimeValues.tabIdIsInteger === true,
+    ruleId: Number.isInteger(value.runtimeValues.ruleId) ? value.runtimeValues.ruleId : null,
+    ruleIdType: typeof value.runtimeValues.ruleIdType === "string" ? value.runtimeValues.ruleIdType.slice(0, 20) : null,
+    priority: Number.isInteger(value.runtimeValues.priority) ? value.runtimeValues.priority : null,
+    priorityType: typeof value.runtimeValues.priorityType === "string" ? value.runtimeValues.priorityType.slice(0, 20) : null,
+  } : null;
+  return {
+    tabId, ruleIds, chromeErrorName, chromeErrorMessage, chromeRuntimeLastErrorMessage,
+    ...(options ? { options } : {}),
+    ...(runtime ? { runtime } : {}),
+    ...(runtimeValues ? { runtimeValues } : {}),
+    installResult: value.installResult === "PASS" ? "PASS" : value.installResult === "FAIL" ? "FAIL" : null,
+    sessionRulesBefore: safeRules(value.sessionRulesBefore).slice(0, 100),
+    sessionRulesAfter: safeRules(value.sessionRulesAfter).slice(0, 100),
+    sessionRulesBeforeError: typeof value.sessionRulesBeforeError === "string" ? value.sessionRulesBeforeError.slice(0, 400) : null,
+    sessionRulesAfterError: typeof value.sessionRulesAfterError === "string" ? value.sessionRulesAfterError.slice(0, 400) : null,
+    targetRulePresentBefore: value.targetRulePresentBefore === true,
+    targetRulePresentAfter: value.targetRulePresentAfter === true,
+    duplicateAddRuleIds: value.duplicateAddRuleIds === true,
+  };
 }
 function collectorErrorCode(error) { return typeof error?.code === "string" ? error.code.slice(0, 120) : safeError(error).split(":", 1)[0]; }
 function updateCollectionContext(context, stage, query) { if (!context) return; context.lastStage = stage; context.query = query; }

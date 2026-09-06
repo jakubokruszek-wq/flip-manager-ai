@@ -1,7 +1,7 @@
 type CollectorImageRule = {
   id: number | null;
   priority: number | null;
-  actionType: string | null;
+  action: { type: string | null };
   condition: {
     tabIds: number[];
     resourceTypes: string[];
@@ -22,7 +22,32 @@ type CollectorImageRuleDiagnostics = {
   ruleIds: number[];
   chromeErrorName: string | null;
   chromeErrorMessage: string | null;
+  chromeRuntimeLastErrorMessage: string | null;
   options: CollectorImageRuleOptions | null;
+  runtime: {
+    policyVersion: string | null;
+    dnrAvailable: boolean;
+    updateSessionRulesAvailable: boolean;
+    getSessionRulesAvailable: boolean;
+    manifestVersion: string | null;
+    dnrPermissionPresent: boolean;
+  } | null;
+  runtimeValues: {
+    tabIdType: string | null;
+    tabIdIsInteger: boolean;
+    ruleId: number | null;
+    ruleIdType: string | null;
+    priority: number | null;
+    priorityType: string | null;
+  } | null;
+  installResult: "PASS" | "FAIL" | null;
+  sessionRulesBefore: CollectorImageRule[];
+  sessionRulesAfter: CollectorImageRule[];
+  sessionRulesBeforeError: string | null;
+  sessionRulesAfterError: string | null;
+  targetRulePresentBefore: boolean;
+  targetRulePresentAfter: boolean;
+  duplicateAddRuleIds: boolean;
 };
 
 export type CollectorScanFailure = {
@@ -80,9 +105,26 @@ function safeImageRuleDiagnostics(value: unknown): CollectorImageRuleDiagnostics
   const tabId = safeInteger(source.tabId);
   const ruleIds = safeIntegerArray(source.ruleIds, 10);
   const chromeErrorName = safeText(source.chromeErrorName, 120);
-  const chromeErrorMessage = safeText(source.chromeErrorMessage, 400);
+  const chromeErrorMessage = safeText(source.chromeErrorMessage, 1000);
+  const chromeRuntimeLastErrorMessage = safeText(source.chromeRuntimeLastErrorMessage, 1000);
+  const runtime = safeRuleRuntime(source.runtime);
+  const runtimeValues = safeRuleRuntimeValues(source.runtimeValues);
+  const sessionRulesBefore = safeRuleArray(source.sessionRulesBefore, 100);
+  const sessionRulesAfter = safeRuleArray(source.sessionRulesAfter, 100);
+  const sessionRulesBeforeError = safeText(source.sessionRulesBeforeError, 400);
+  const sessionRulesAfterError = safeText(source.sessionRulesAfterError, 400);
   if (tabId === null && !ruleIds.length && !chromeErrorName && !chromeErrorMessage && !options) return null;
-  return { tabId, ruleIds, chromeErrorName, chromeErrorMessage, options };
+  return {
+    tabId, ruleIds, chromeErrorName, chromeErrorMessage, chromeRuntimeLastErrorMessage, options, runtime, runtimeValues,
+    installResult: source.installResult === "PASS" ? "PASS" : source.installResult === "FAIL" ? "FAIL" : null,
+    sessionRulesBefore,
+    sessionRulesAfter,
+    sessionRulesBeforeError,
+    sessionRulesAfterError,
+    targetRulePresentBefore: source.targetRulePresentBefore === true,
+    targetRulePresentAfter: source.targetRulePresentAfter === true,
+    duplicateAddRuleIds: source.duplicateAddRuleIds === true,
+  };
 }
 
 function safeRuleUpdate(value: unknown): CollectorImageRuleOptions | null {
@@ -115,9 +157,43 @@ function safeRule(value: unknown): CollectorImageRule | null {
   return {
     id: safeInteger(source.id),
     priority: safeInteger(source.priority),
-    actionType: source.actionType === null || typeof source.actionType === "string" ? (source.actionType as string | null) : null,
+    action: { type: safeText(rowValue(source.action)?.type, 40) ?? safeText(source.actionType, 40) },
     condition: safeCondition,
   };
+}
+
+function safeRuleArray(value: unknown, maxLength: number): CollectorImageRule[] {
+  return Array.isArray(value) ? value.map(safeRule).filter((rule): rule is CollectorImageRule => rule !== null).slice(0, maxLength) : [];
+}
+
+function safeRuleRuntime(value: unknown): CollectorImageRuleDiagnostics["runtime"] {
+  const source = rowValue(value);
+  if (!source) return null;
+  return {
+    policyVersion: safeText(source.policyVersion, 80),
+    dnrAvailable: source.dnrAvailable === true,
+    updateSessionRulesAvailable: source.updateSessionRulesAvailable === true,
+    getSessionRulesAvailable: source.getSessionRulesAvailable === true,
+    manifestVersion: safeText(source.manifestVersion, 40),
+    dnrPermissionPresent: source.dnrPermissionPresent === true,
+  };
+}
+
+function safeRuleRuntimeValues(value: unknown): CollectorImageRuleDiagnostics["runtimeValues"] {
+  const source = rowValue(value);
+  if (!source) return null;
+  return {
+    tabIdType: safeText(source.tabIdType, 20),
+    tabIdIsInteger: source.tabIdIsInteger === true,
+    ruleId: safeInteger(source.ruleId),
+    ruleIdType: safeText(source.ruleIdType, 20),
+    priority: safeInteger(source.priority),
+    priorityType: safeText(source.priorityType, 20),
+  };
+}
+
+function rowValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function safeIntegerArray(value: unknown, maxLength: number): number[] {

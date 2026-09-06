@@ -51,15 +51,28 @@ test("failure parser preserves only safe DNR diagnostics", () => {
       ruleIds: [1700000044, "bad"],
       chromeErrorName: "TypeError",
       chromeErrorMessage: "Invalid value for resourceTypes",
+      chromeRuntimeLastErrorMessage: "Invalid rule schema",
       options: {
         removeRuleIds: [1700000044],
-        addRules: [{ id: 1700000044, priority: 1000, actionType: "block", condition: { tabIds: [22], resourceTypes: ["image"] } }],
+        addRules: [{ id: 1700000044, priority: 1, action: { type: "block" }, condition: { tabIds: [22], resourceTypes: ["image"] } }],
       },
+      runtime: { policyVersion: "SOURCE_SCAN_IMAGE_ONLY_V2", dnrAvailable: true, updateSessionRulesAvailable: true, getSessionRulesAvailable: true, manifestVersion: "0.1.0", dnrPermissionPresent: true },
+      runtimeValues: { tabIdType: "number", tabIdIsInteger: true, ruleId: 1700000044, ruleIdType: "number", priority: 1, priorityType: "number" },
+      installResult: "FAIL",
+      sessionRulesBefore: [],
+      sessionRulesAfter: [],
+      targetRulePresentBefore: false,
+      targetRulePresentAfter: false,
+      duplicateAddRuleIds: false,
       deviceToken: "must-not-survive",
     },
   }));
   assert.equal(parsed.imageRule?.chromeErrorName, "TypeError");
   assert.equal(parsed.imageRule?.options?.addRules.length, 1);
+  assert.equal(parsed.imageRule?.options?.addRules[0].action.type, "block");
+  assert.equal(parsed.imageRule?.runtime?.dnrPermissionPresent, true);
+  assert.equal(parsed.imageRule?.runtimeValues?.tabIdIsInteger, true);
+  assert.equal(parsed.imageRule?.chromeRuntimeLastErrorMessage, "Invalid rule schema");
   assert.equal("deviceToken" in (parsed.imageRule as object), false);
   assert.doesNotMatch(JSON.stringify(parsed), /must-not-survive|deviceToken|secret|hmac/i);
 });
