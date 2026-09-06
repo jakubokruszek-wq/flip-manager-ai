@@ -222,12 +222,13 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
     return await Promise.race([collection, deadline.timeout]);
   } catch (error) {
     const errorCode = collectorErrorCode(error);
-    const diagnostics = { ...failureDiagnostics(context, tab?.id), ...runtime.safeDiagnostics(error?.diagnostics || {}), errorCode };
+    const imageRule = safeImageRuleDiagnostics(error?.diagnostics);
+    const diagnostics = { ...failureDiagnostics(context, tab?.id), ...runtime.safeDiagnostics(error?.diagnostics || {}), ...(imageRule ? { imageRule } : {}), errorCode };
     const traceStage = errorCode === "SOURCE_COLLECTION_DEADLINE_EXCEEDED" ? "SOURCE_COLLECTION_TIMEOUT" : "COLLECTOR_START_FAILED";
     await recordStartTrace({ requestId, stage: traceStage, status: "FAIL", errorCode, ...diagnostics });
     if (tab?.id) { await chrome.tabs.remove(tab.id).catch(() => {}); tab = null; }
     await failCollectorScan(scanId, error, diagnostics);
-    await setCollectorState({ status: "failed", phase: "FAILED", progress: errorCode, errorCode, lastStage: diagnostics.stage, query: diagnostics.query, sourceUrl: selectedSource.sourceUrl, scanId, finishedAt: new Date().toISOString() });
+    await setCollectorState({ status: "failed", phase: "FAILED", progress: errorCode, errorCode, lastStage: diagnostics.stage, query: diagnostics.query, sourceUrl: selectedSource.sourceUrl, scanId, ...(imageRule ? { diagnostics: { imageRule } } : {}), finishedAt: new Date().toISOString() });
     return { sourceUrl: selectedSource.sourceUrl, status: "FAILED", error: errorCode, diagnostics: { ...diagnostics, imageNetwork: imagePolicy?.snapshot?.(scanId) || null }, scanId };
   } finally {
     deadline.cancel();
@@ -737,7 +738,8 @@ async function failCollectorScan(scanId, error, diagnostics = {}) {
   const config = await configValue();
   if (!config.apiUrl || !config.deviceId || !config.deviceToken) return;
   try {
-    await signedPost(`${String(config.apiUrl).replace(/\/+$/, "")}/api/collector/facebook/scans/${scanId}/fail`, JSON.stringify({ error: collectorErrorCode(error), ...globalThis.FlipCollectorRuntime.safeDiagnostics(diagnostics) }), FAIL_REPORT_TIMEOUT_MS);
+    const imageRule = safeImageRuleDiagnostics(diagnostics.imageRule || error?.diagnostics);
+    await signedPost(`${String(config.apiUrl).replace(/\/+$/, "")}/api/collector/facebook/scans/${scanId}/fail`, JSON.stringify({ error: collectorErrorCode(error), ...globalThis.FlipCollectorRuntime.safeDiagnostics(diagnostics), ...(imageRule ? { imageRule } : {}) }), FAIL_REPORT_TIMEOUT_MS);
   } catch { /* preserve the original collector failure */ }
 }
 
@@ -823,13 +825,25 @@ async function recordStartTrace(message) {
   const traces = stored.collectorStartTraces && typeof stored.collectorStartTraces === "object" ? stored.collectorStartTraces : {};
   const trace = Array.isArray(traces[requestId]) ? traces[requestId] : [];
   const diagnostics = globalThis.FlipCollectorRuntime?.safeDiagnostics(message) || {};
-  trace.push({ requestId, stage: String(message.stage || "UNKNOWN").slice(0, 80), timestamp: new Date().toISOString(), status: ["PASS", "FAIL", "TIMEOUT"].includes(message.status) ? message.status : "PASS", ...(typeof message.errorCode === "string" ? { errorCode: message.errorCode.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120) } : {}), ...diagnostics });
+  const imageRule = safeImageRuleDiagnostics(message.imageRule);
+  trace.push({ requestId, stage: String(message.stage || "UNKNOWN").slice(0, 80), timestamp: new Date().toISOString(), status: ["PASS", "FAIL", "TIMEOUT"].includes(message.status) ? message.status : "PASS", ...(typeof message.errorCode === "string" ? { errorCode: message.errorCode.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 120) } : {}), ...diagnostics, ...(imageRule ? { imageRule } : {}) });
   traces[requestId] = trace.slice(-80);
   const keys = Object.keys(traces).slice(-50);
   await chrome.storage.local.set({ collectorStartTraces: Object.fromEntries(keys.map((key) => [key, traces[key]])) });
 }
 function safeRequestId(value) { return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? value : "unknown"; }
 function isUuid(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
+function safeImageRuleDiagnostics(value) {
+  if (!value || typeof value !== "object") return null;
+  const policy = globalThis.FlipCollectorImagePolicy;
+  const options = policy?.sanitizeRuleUpdate?.(value.options);
+  const tabId = Number.isInteger(value.tabId) && value.tabId >= 0 ? value.tabId : null;
+  const ruleIds = Array.isArray(value.ruleIds) ? value.ruleIds.filter((id) => Number.isInteger(id) && id > 0).slice(0, 10) : [];
+  const chromeErrorName = typeof value.chromeErrorName === "string" ? value.chromeErrorName.slice(0, 120) : null;
+  const chromeErrorMessage = typeof value.chromeErrorMessage === "string" ? value.chromeErrorMessage.slice(0, 400) : null;
+  if (tabId === null && !ruleIds.length && !chromeErrorName && !chromeErrorMessage && !options) return null;
+  return { tabId, ruleIds, chromeErrorName, chromeErrorMessage, ...(options ? { options } : {}) };
+}
 function collectorErrorCode(error) { return typeof error?.code === "string" ? error.code.slice(0, 120) : safeError(error).split(":", 1)[0]; }
 function updateCollectionContext(context, stage, query) { if (!context) return; context.lastStage = stage; context.query = query; }
 function failureDiagnostics(context, tabId) { return { stage: context?.lastStage || "SOURCE_COLLECTION", query: context?.query || undefined, tabId, source: context?.source || "facebook", elapsedMs: context?.deadline ? Date.now() - context.deadline.startedAt : undefined }; }

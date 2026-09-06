@@ -456,6 +456,18 @@ test("source scans use a tab-scoped data-only image policy and gallery is the on
   assert.doesNotMatch(imageBlocker, /tabIds: \[\]/);
 });
 
+test("DNR install uses valid MV3 resource types and preserves safe Chrome errors", () => {
+  assert.doesNotMatch(imageBlocker, /resourceTypes:\s*\[[^\]]*\"fetch\"/);
+  assert.match(imageBlocker, /SOURCE_SCAN_IMAGE_RULE_INSTALL_FAILED/);
+  assert.match(imageBlocker, /chromeErrorName/);
+  assert.match(imageBlocker, /chromeErrorMessage/);
+  assert.match(imageBlocker, /sanitizeRuleUpdate/);
+  assert.match(background, /safeImageRuleDiagnostics/);
+  assert.match(background, /imageRule/);
+  assert.match(imageBlocker, /options: sanitizeRuleUpdate/);
+  assert.doesNotMatch(background, /deviceToken.*imageRule|imageRule.*deviceToken/);
+});
+
 test("claimed GROUP snapshots without a type field resolve their source type from the canonical URL", () => {
   assert.match(background, /const normalized = normalizeProductionSourceUrl\(sourceUrl\);/);
   assert.match(background, /normalized\?\.sourceType \|\| null/);

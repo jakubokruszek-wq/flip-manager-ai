@@ -7,7 +7,31 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "image-blocker.js"), "utf8");
 
-function createPolicyContext() {
+const VALID_RESOURCE_TYPES = new Set([
+  "main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object", "xmlhttprequest",
+  "ping", "media", "websocket", "other", "csp_report", "webtransport", "webbundle",
+]);
+
+function validateRuleShape(rule) {
+  assert.deepEqual(Object.keys(rule).sort(), ["action", "condition", "id", "priority"]);
+  assert.equal(Number.isInteger(rule.id), true);
+  assert.equal(rule.id > 0 && rule.id <= 2_147_483_647, true);
+  assert.deepEqual(Object.keys(rule.action).sort(), ["type"]);
+  assert.equal(rule.action.type, "block");
+  assert.equal(typeof rule.condition, "object");
+  const conditionKeys = Object.keys(rule.condition);
+  assert.equal(conditionKeys.includes("tabIds"), true);
+  assert.equal(Array.isArray(rule.condition.tabIds), true);
+  assert.equal(rule.condition.tabIds.length > 0, true);
+  assert.equal(rule.condition.tabIds.every((id) => Number.isInteger(id) && id >= 0), true);
+  assert.equal(Array.isArray(rule.condition.resourceTypes), true);
+  assert.equal(rule.condition.resourceTypes.length > 0, true);
+  assert.equal(rule.condition.resourceTypes.every((type) => VALID_RESOURCE_TYPES.has(type)), true);
+  assert.equal(["urlFilter", "regexFilter"].filter((key) => typeof rule.condition[key] === "string").length, 1);
+  for (const key of conditionKeys) assert.ok(["tabIds", "resourceTypes", "urlFilter", "regexFilter", "requestDomains", "initiatorDomains"].includes(key), `unknown condition key: ${key}`);
+}
+
+function createPolicyContext({ rejectUpdates = null } = {}) {
   const listeners = { before: null, completed: null };
   const updates = [];
   const context = vm.createContext({
@@ -29,7 +53,14 @@ function createPolicyContext() {
         onCompleted: { addListener(listener) { listeners.completed = listener; } },
       },
       declarativeNetRequest: {
-        async updateSessionRules(update) { updates.push(update); },
+        async updateSessionRules(update) {
+          if (typeof rejectUpdates === "function") await rejectUpdates(update);
+          if (Array.isArray(update.removeRuleIds)) {
+            assert.equal(update.removeRuleIds.every((id) => Number.isInteger(id) && id > 0), true);
+          }
+          if (Array.isArray(update.addRules)) update.addRules.forEach(validateRuleShape);
+          updates.push(update);
+        },
         async getSessionRules() { return []; },
       },
     },
@@ -49,7 +80,7 @@ test("SOURCE_SCAN_DATA_ONLY blocks image requests only on the attached collector
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[0].condition.tabIds)), [11]);
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[0].condition.resourceTypes)), ["image"]);
   assert.deepEqual(JSON.parse(JSON.stringify(addRules[1].condition.tabIds)), [11]);
-  assert.deepEqual(JSON.parse(JSON.stringify(addRules[1].condition.resourceTypes)), ["media", "xmlhttprequest", "fetch"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(addRules[1].condition.resourceTypes)), ["media", "xmlhttprequest"]);
 
   listeners.before({ tabId: 11, type: "image", url: "https://scontent.xx.fbcdn.net/v/t1.0/a.jpg" });
   listeners.before({ tabId: 11, type: "fetch", url: "https://www.facebook.com/api/graphql/" });
@@ -102,4 +133,40 @@ test("image diagnostics contain no credentials or raw payloads", async () => {
   listeners.before({ tabId: 19, type: "image", url: "https://scontent.xx.fbcdn.net/private.jpg?token=secret" });
   const serialized = JSON.stringify(policy.snapshot("scan-3"));
   assert.doesNotMatch(serialized, /secret|token|cookie|hmac|payload/i);
+});
+
+test("production DNR rules use only the MV3 schema and supported resource types", async () => {
+  const { policy, updates } = createPolicyContext();
+  policy.startSession("schema-1", policy.SOURCE_SCAN_DATA_ONLY);
+  await policy.attachTab(21, { sessionId: "schema-1", mode: policy.SOURCE_SCAN_DATA_ONLY });
+  const install = updates.at(-1);
+  assert.deepEqual(Object.keys(install).sort(), ["addRules", "removeRuleIds"]);
+  install.addRules.forEach(validateRuleShape);
+  assert.equal(install.addRules.some((rule) => rule.condition.resourceTypes.includes("fetch")), false);
+
+  assert.throws(() => validateRuleShape({ id: "21", priority: 1000, action: "block", condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http" } }));
+  assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block", telemetry: true }, condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http" } }));
+  assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block" }, condition: { tabIds: ["21"], resourceTypes: ["image"], urlFilter: "|http" } }));
+  assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block" }, condition: { tabIds: [21], resourceTypes: ["fetch"], urlFilter: "|http" } }));
+  assert.throws(() => validateRuleShape({ id: 21, priority: 1000, action: { type: "block" }, condition: { tabIds: [21], resourceTypes: ["image"], urlFilter: "|http", telemetry: "bad" } }));
+});
+
+test("DNR installation failures preserve the Chrome error and sanitized rule options", async () => {
+  const { policy } = createPolicyContext({ rejectUpdates: async (update) => {
+    if (Array.isArray(update.addRules)) {
+      const error = new Error("Invalid value for resourceTypes: fetch");
+      error.name = "TypeError";
+      throw error;
+    }
+  } });
+  policy.startSession("schema-error", policy.SOURCE_SCAN_DATA_ONLY);
+  await assert.rejects(
+    policy.attachTab(22, { sessionId: "schema-error", mode: policy.SOURCE_SCAN_DATA_ONLY }),
+    (error) => error.code === "SOURCE_SCAN_IMAGE_RULE_INSTALL_FAILED"
+      && error.diagnostics.tabId === 22
+      && error.diagnostics.chromeErrorName === "TypeError"
+      && error.diagnostics.chromeErrorMessage.includes("resourceTypes")
+      && error.diagnostics.options.addRules.length === 2
+      && !JSON.stringify(error.diagnostics).match(/token|secret|cookie|hmac/i),
+  );
 });

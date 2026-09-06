@@ -103,6 +103,54 @@
     await scope.chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: ids }).catch(() => {});
   }
 
+  function sanitizeRule(rule) {
+    if (!rule || typeof rule !== "object") return null;
+    const condition = rule.condition && typeof rule.condition === "object" ? rule.condition : {};
+    const safe = {
+      id: Number.isInteger(rule.id) ? rule.id : null,
+      priority: Number.isInteger(rule.priority) ? rule.priority : null,
+      actionType: typeof rule.action?.type === "string" ? rule.action.type : null,
+      condition: {
+        tabIds: Array.isArray(condition.tabIds) ? condition.tabIds.filter((id) => Number.isInteger(id)) : [],
+        resourceTypes: Array.isArray(condition.resourceTypes) ? condition.resourceTypes.filter((type) => typeof type === "string") : [],
+      },
+    };
+    for (const key of ["urlFilter", "regexFilter", "requestDomains", "initiatorDomains"]) {
+      const value = condition[key];
+      if (typeof value === "string") safe.condition[key] = value.slice(0, 500);
+      else if (Array.isArray(value)) safe.condition[key] = value.filter((item) => typeof item === "string").map((item) => item.slice(0, 120)).slice(0, 20);
+    }
+    return safe;
+  }
+
+  function sanitizeRuleUpdate(options) {
+    if (!options || typeof options !== "object") return null;
+    return {
+      removeRuleIds: Array.isArray(options.removeRuleIds) ? options.removeRuleIds.filter((id) => Number.isInteger(id)) : [],
+      addRules: Array.isArray(options.addRules) ? options.addRules.map(sanitizeRule).filter(Boolean).slice(0, 10) : [],
+    };
+  }
+
+  async function installRules(tabId, options) {
+    try {
+      await scope.chrome.declarativeNetRequest.updateSessionRules(options);
+      const runtimeError = scope.chrome?.runtime?.lastError;
+      if (runtimeError?.message) throw Object.assign(new Error(String(runtimeError.message)), { name: "ChromeRuntimeError" });
+    } catch (error) {
+      const wrapped = new Error("SOURCE_SCAN_IMAGE_RULE_INSTALL_FAILED");
+      wrapped.code = "SOURCE_SCAN_IMAGE_RULE_INSTALL_FAILED";
+      wrapped.cause = error;
+      wrapped.diagnostics = {
+        tabId,
+        ruleIds: sanitizeRuleUpdate(options)?.addRules?.map((rule) => rule.id).filter((id) => Number.isInteger(id)) || [],
+        chromeErrorName: typeof error?.name === "string" ? error.name.slice(0, 120) : "Error",
+        chromeErrorMessage: typeof error?.message === "string" ? error.message.slice(0, 400) : "DNR_UPDATE_FAILED",
+        options: sanitizeRuleUpdate(options),
+      };
+      throw wrapped;
+    }
+  }
+
   async function attachTab(tabId, { sessionId, mode = SOURCE_SCAN_DATA_ONLY, photoViewer = false } = {}) {
     const normalizedTabId = Number(tabId);
     if (!Number.isInteger(normalizedTabId) || normalizedTabId < 0) throw new Error("SOURCE_SCAN_TAB_ID_INVALID");
@@ -116,11 +164,11 @@
     if (mode === SOURCE_SCAN_DATA_ONLY) {
       if (!scope.chrome?.declarativeNetRequest?.updateSessionRules) throw new Error("SOURCE_SCAN_IMAGE_BLOCKER_UNAVAILABLE");
       const ids = ruleIds(normalizedTabId);
-      await scope.chrome.declarativeNetRequest.updateSessionRules({
+      await installRules(normalizedTabId, {
         removeRuleIds: ids,
         addRules: [
           { id: ids[0], priority: 1000, action: { type: "block" }, condition: { urlFilter: "|http", resourceTypes: ["image"], tabIds: [normalizedTabId] } },
-          { id: ids[1], priority: 1000, action: { type: "block" }, condition: { regexFilter: CDN_MEDIA_REGEX, resourceTypes: ["media", "xmlhttprequest", "fetch"], tabIds: [normalizedTabId] } },
+          { id: ids[1], priority: 1000, action: { type: "block" }, condition: { regexFilter: CDN_MEDIA_REGEX, resourceTypes: ["media", "xmlhttprequest"], tabIds: [normalizedTabId] } },
         ],
       });
     }
@@ -189,5 +237,6 @@
     finishSession,
     markPhotoViewerNavigation,
     cleanupStaleRules,
+    sanitizeRuleUpdate,
   };
 })(globalThis);
