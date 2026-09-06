@@ -15,6 +15,8 @@ import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import type { PropertyListing } from "@/features/properties/types/property";
 import { safeFacebookDisplayLocation } from "@/features/facebook-watcher/facebook-location-quality";
 import { createClient } from "@/lib/supabase/server";
+import { calculateOpportunityAssessment } from "@/features/flip-finder/opportunity-score";
+import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
 
 type Row = Record<string, unknown>;
 
@@ -65,6 +67,10 @@ type ListingRow = Pick<
   | "manualDecision"
   | "manualDecisionReason"
   | "archivedAt"
+  | "estimatedSalePrice"
+  | "estimatedProfit"
+  | "estimatedRoi"
+  | "flipScore"
 >;
 
 type SnapshotRow = {
@@ -138,7 +144,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const listingQuery = supabase
     .from("listings")
     .select(
-      "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at",
+      "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score",
     )
     .in("id", listingIds)
     .eq("status", "active")
@@ -164,6 +170,14 @@ export async function getFilterResults(filterId: string, includeArchived = false
     );
     throw new Error("Nie udało się pobrać ofert dla filtra.");
   }
+
+  const compsResult = await supabase
+    .from("resale_comps")
+    .select("id,source,external_listing_id,canonical_url,title,description,city,district,street,address,latitude,longitude,price,area_m2,price_per_m2,rooms,floor,floors,building_type,construction_year,ownership,balcony,elevator,parking,renovation_status,renovation_confidence,finish_level,listing_created_at,first_seen_at,last_seen_at,active,seller_type,fingerprint,outlier_reason,evidence")
+    .eq("active", true)
+    .limit(500);
+
+  const resaleComps = compsResult.error ? [] : asRows(compsResult.data).map(toResaleCompRecord).filter((comp): comp is ResaleCompRecord => comp !== null);
 
   const listingsById = new Map(
     asRows(listingsResult.data)
@@ -245,6 +259,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         manualDecision: listing.manualDecision,
         manualDecisionReason: listing.manualDecisionReason,
         archivedAt: listing.archivedAt,
+        ...opportunityFields(listing, filter, match.matchReasons.includes("review") ? "REVIEW" : listing.lifecycleStatus === "REJECTED" ? "REJECTED" : "MATCHED", resaleComps),
       },
     ];
   });
@@ -327,7 +342,134 @@ function toListingRow(row: Row): ListingRow | null {
     manualDecision: row.manual_decision === "ACCEPTED" || row.manual_decision === "REJECTED" ? row.manual_decision : null,
     manualDecisionReason: nullableString(row.manual_decision_reason),
     archivedAt: nullableString(row.archived_at),
+    estimatedSalePrice: nullableNumber(row.estimated_sale_price),
+    estimatedProfit: nullableNumber(row.estimated_profit),
+    estimatedRoi: nullableNumber(row.estimated_roi),
+    flipScore: nullableNumber(row.flip_score),
   };
+}
+
+function opportunityFields(
+  listing: ListingRow,
+  filter: SearchFilter,
+  decisionBucket: "MATCHED" | "REVIEW" | "REJECTED",
+  comps: ResaleCompRecord[],
+): Pick<FilterResult, "opportunityScore" | "opportunityPriority" | "arvConfidence" | "dataConfidence" | "compCount" | "conservativeArv" | "expectedArv" | "optimisticArv" | "grossSpread" | "estimatedRenovationCost" | "estimatedProfit" | "estimatedRoi" | "marketDiscountPct" | "opportunityMissingFields"> {
+  const assessment = calculateOpportunityAssessment({
+    id: listing.id,
+    source: listing.source,
+    lifecycleStatus: listing.lifecycleStatus,
+    decisionBucket,
+    manualDecision: listing.manualDecision,
+    price: listing.price,
+    area: listing.area,
+    rooms: listing.rooms,
+    pricePerSqm: reliablePricePerSqm(listing.pricePerSqm, listing.price, listing.area),
+    city: listing.city,
+    district: listing.district,
+    address: listing.address,
+    buildingType: listing.buildingType,
+    floor: listing.floor,
+    title: listing.title,
+    description: listing.description,
+    missingFields: listing.missingFields ?? [],
+    lastSeenAt: listing.lastSeenAt,
+  }, filter, comps);
+  return assessment ? {
+    opportunityScore: assessment.score,
+    opportunityPriority: assessment.priority,
+    arvConfidence: assessment.arvConfidence,
+    dataConfidence: assessment.dataConfidence,
+    compCount: assessment.compCount,
+    conservativeArv: assessment.conservativeArv,
+    expectedArv: assessment.expectedArv,
+    optimisticArv: assessment.optimisticArv,
+    grossSpread: assessment.grossSpread,
+    estimatedRenovationCost: assessment.estimatedRenovationCost,
+    estimatedProfit: assessment.estimatedProfit,
+    estimatedRoi: assessment.estimatedRoi,
+    marketDiscountPct: assessment.marketDiscountPct,
+    opportunityMissingFields: assessment.missingFields,
+  } : {
+    opportunityScore: null,
+    opportunityPriority: null,
+    arvConfidence: null,
+    dataConfidence: null,
+    compCount: 0,
+    conservativeArv: null,
+    expectedArv: null,
+    optimisticArv: null,
+    grossSpread: null,
+    estimatedRenovationCost: null,
+    estimatedProfit: null,
+    estimatedRoi: null,
+    marketDiscountPct: null,
+    opportunityMissingFields: [],
+  };
+}
+
+function toResaleCompRecord(row: Row): ResaleCompRecord | null {
+  const id = nullableString(row.id);
+  const source = nullableString(row.source);
+  const externalListingId = nullableString(row.external_listing_id);
+  const lastSeenAt = nullableString(row.last_seen_at);
+  const renovationStatus = row.renovation_status;
+  const renovationConfidence = row.renovation_confidence;
+  if (!id || !externalListingId || !lastSeenAt || !isResaleCompSource(source) || !isRenovationStatus(renovationStatus) || !isRenovationConfidence(renovationConfidence)) return null;
+  const evidence = isRow(row.evidence) ? stringArray(row.evidence.signals) : [];
+  return {
+    id,
+    source,
+    externalListingId,
+    canonicalUrl: nullableString(row.canonical_url),
+    title: nullableString(row.title),
+    description: nullableString(row.description),
+    city: nullableString(row.city),
+    district: nullableString(row.district),
+    street: nullableString(row.street),
+    address: nullableString(row.address),
+    latitude: nullableNumber(row.latitude),
+    longitude: nullableNumber(row.longitude),
+    price: nullableNumber(row.price),
+    areaM2: nullableNumber(row.area_m2),
+    pricePerM2: nullableNumber(row.price_per_m2),
+    rooms: nullableNumber(row.rooms),
+    floor: nullableString(row.floor),
+    floors: nullableString(row.floors),
+    buildingType: nullableString(row.building_type),
+    constructionYear: nullableNumber(row.construction_year),
+    ownership: nullableString(row.ownership),
+    balcony: row.balcony === true ? true : row.balcony === false ? false : null,
+    elevator: row.elevator === true ? true : row.elevator === false ? false : null,
+    parking: row.parking === true ? true : row.parking === false ? false : null,
+    listingCreatedAt: nullableString(row.listing_created_at),
+    firstSeenAt: nullableString(row.first_seen_at) ?? lastSeenAt,
+    lastSeenAt,
+    active: row.active === true,
+    sellerType: nullableString(row.seller_type),
+    fingerprint: nullableString(row.fingerprint),
+    classification: {
+      isCandidate: true,
+      renovationStatus,
+      renovationConfidence,
+      finishLevel: nullableString(row.finish_level),
+      evidence,
+      outlierReason: nullableString(row.outlier_reason),
+      exclusionReason: null,
+    },
+  };
+}
+
+function isResaleCompSource(value: string | null): value is ResaleCompRecord["source"] {
+  return value === "facebook" || value === "otodom" || value === "olx" || value === "morizon";
+}
+
+function isRenovationStatus(value: unknown): value is ResaleCompRecord["classification"]["renovationStatus"] {
+  return value === "RENOVATED" || value === "MOVE_IN_READY" || value === "REFRESHED" || value === "UNKNOWN";
+}
+
+function isRenovationConfidence(value: unknown): value is ResaleCompRecord["classification"]["renovationConfidence"] {
+  return value === "HIGH" || value === "MEDIUM" || value === "LOW";
 }
 
 function nullableLifecycle(value: unknown): PropertyListing["lifecycleStatus"] {

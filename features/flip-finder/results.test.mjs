@@ -65,6 +65,15 @@ test("price per sqm sort is numeric, stable and puts non-positive or null values
   assert.deepEqual(ids(sortResults(values, "price_per_sqm_asc")), ["five-a", "five-b", "six", "null", "zero"]);
 });
 
+test("opportunity sort prefers score, then profit and confidence", () => {
+  const values = [
+    result({ id: "medium", title: "Medium", district: null, city: "Łódź", source: "facebook", opportunityScore: 55, estimatedProfit: 40_000, dataConfidence: "HIGH" }),
+    result({ id: "top", title: "Top", district: null, city: "Łódź", source: "facebook", opportunityScore: 88, estimatedProfit: 10_000, dataConfidence: "LOW" }),
+    result({ id: "high-profit", title: "High profit", district: null, city: "Łódź", source: "facebook", opportunityScore: 55, estimatedProfit: 60_000, dataConfidence: "LOW" }),
+  ];
+  assert.deepEqual(ids(sortResults(values, "opportunity")), ["top", "high-profit", "medium"]);
+});
+
 function result(overrides) {
   return {
     id: overrides.id, title: overrides.title, district: overrides.district, city: overrides.city,
@@ -77,6 +86,9 @@ function result(overrides) {
     firstMatchedAt: "2026-08-01T10:00:00.000Z", lastMatchedAt: "2026-08-01T10:00:00.000Z",
     previousPrice: null, currentPrice: null, isNew: false, hasPriceDrop: false,
     priceDropAmount: null, matchReasons: [], unknownFields: [],
+    opportunityScore: overrides.opportunityScore ?? null,
+    estimatedProfit: overrides.estimatedProfit ?? null,
+    dataConfidence: overrides.dataConfidence ?? null,
   };
 }
 

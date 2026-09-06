@@ -1,11 +1,16 @@
 import type { PropertyListingResult } from "@/features/properties/types/property";
 import { dedupeLocationText } from "./display-format.ts";
+import type { OpportunityPriority, OpportunityConfidence } from "./opportunity-score";
 
 export type ResultSort =
   | "newest"
   | "price_asc"
   | "price_per_sqm_asc"
-  | "biggest_price_drop";
+  | "biggest_price_drop"
+  | "opportunity"
+  | "profit"
+  | "roi"
+  | "discount";
 
 export type CompletedScanWindow = {
   startedAt: string;
@@ -18,7 +23,22 @@ export type ResultStatusInput = {
   currentPrice: number | null;
 };
 
-export type FilterResult = PropertyListingResult;
+export type FilterResult = PropertyListingResult & {
+  opportunityScore?: number | null;
+  opportunityPriority?: OpportunityPriority | null;
+  arvConfidence?: OpportunityConfidence | null;
+  dataConfidence?: OpportunityConfidence | null;
+  compCount?: number;
+  conservativeArv?: number | null;
+  expectedArv?: number | null;
+  optimisticArv?: number | null;
+  grossSpread?: number | null;
+  estimatedRenovationCost?: number | null;
+  estimatedProfit?: number | null;
+  estimatedRoi?: number | null;
+  marketDiscountPct?: number | null;
+  opportunityMissingFields?: string[];
+};
 
 export function filterResultsByText(results: FilterResult[], query: string): FilterResult[] {
   const normalizedQuery = normalizeSearchText(query);
@@ -62,6 +82,11 @@ type SortableResult = Pick<
   | "price"
   | "pricePerSqm"
   | "priceDropAmount"
+  | "opportunityScore"
+  | "estimatedProfit"
+  | "estimatedRoi"
+  | "marketDiscountPct"
+  | "dataConfidence"
 >;
 
 export function isNewMatch(
@@ -116,7 +141,11 @@ export function resultStatus(
 export function parseResultSort(value: string | null): ResultSort {
   return value === "price_asc" ||
     value === "price_per_sqm_asc" ||
-    value === "biggest_price_drop"
+    value === "biggest_price_drop" ||
+    value === "opportunity" ||
+    value === "profit" ||
+    value === "roi" ||
+    value === "discount"
     ? value
     : "newest";
 }
@@ -132,7 +161,23 @@ export function sortResults<T extends SortableResult>(items: T[], sort: ResultSo
       comparison = positiveNumericSort(left.pricePerSqm, right.pricePerSqm);
     } else if (sort === "biggest_price_drop") {
       comparison = descendingNumericSort(left.priceDropAmount, right.priceDropAmount);
+    } else if (sort === "opportunity") {
+      comparison = descendingNumericSort(left.opportunityScore ?? null, right.opportunityScore ?? null);
+    } else if (sort === "profit") {
+      comparison = descendingNumericSort(left.estimatedProfit ?? null, right.estimatedProfit ?? null);
+    } else if (sort === "roi") {
+      comparison = descendingNumericSort(left.estimatedRoi ?? null, right.estimatedRoi ?? null);
+    } else if (sort === "discount") {
+      comparison = descendingNumericSort(left.marketDiscountPct ?? null, right.marketDiscountPct ?? null);
     } else {
+      comparison = publicationSort(left, right);
+    }
+    if (comparison) return comparison;
+    if (sort === "opportunity") {
+      comparison = descendingNumericSort(left.estimatedProfit ?? null, right.estimatedProfit ?? null);
+      if (comparison) return comparison;
+      comparison = confidenceSort(left.dataConfidence ?? null, right.dataConfidence ?? null);
+      if (comparison) return comparison;
       comparison = publicationSort(left, right);
     }
     return comparison || leftEntry.index - rightEntry.index;
@@ -194,6 +239,11 @@ function descendingNumericSort(left: number | null, right: number | null): numbe
   }
 
   return right - left;
+}
+
+function confidenceSort(left: "HIGH" | "MEDIUM" | "LOW" | null, right: "HIGH" | "MEDIUM" | "LOW" | null): number {
+  const values = { HIGH: 3, MEDIUM: 2, LOW: 1 } as const;
+  return (values[right ?? "LOW"] ?? 0) - (values[left ?? "LOW"] ?? 0);
 }
 
 function isFiniteNumber(value: number | null): value is number {

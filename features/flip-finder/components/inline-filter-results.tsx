@@ -24,6 +24,7 @@ import {
   type FilterResult,
   type ResultSort,
 } from "@/features/flip-finder/results";
+import { priorityLabel } from "@/features/flip-finder/opportunity-score";
 import { activeSourcesSummary, latestActiveScansText, sourceLabel } from "@/features/flip-finder/source-summary";
 import type { SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
@@ -48,10 +49,11 @@ type PriceHistoryResponse = {
 export function InlineFilterResults({ filterId }: { filterId: string }) {
   const [data, setData] = useState<ResultsResponse | null>(null);
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<ResultSort>("newest");
+  const [sort, setSort] = useState<ResultSort>("opportunity");
   const [source, setSource] = useState<FilterResult["source"] | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [showAllReview, setShowAllReview] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -82,7 +84,12 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     () => sortResults(filteredResults, sort),
     [filteredResults, sort],
   );
-  const reviewResults = data?.reviewResults ?? [];
+  const reviewResults = useMemo(() => data?.reviewResults ?? [], [data?.reviewResults]);
+  const sortedReviewResults = useMemo(() => sortResults(reviewResults, "opportunity"), [reviewResults]);
+  const reviewBuckets = useMemo(() => reviewCounts(sortedReviewResults), [sortedReviewResults]);
+  const visibleReviewResults = showAllReview
+    ? sortedReviewResults
+    : sortedReviewResults.filter((result) => result.opportunityPriority === "TOP" || result.opportunityPriority === "HIGH");
   const archivedResults = archiveOpen ? (data?.archivedResults ?? []) : [];
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
   const activeSources = data?.filter.sources ?? [];
@@ -111,6 +118,10 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
             onChange={(event) => setSort(parseResultSort(event.target.value))}
             value={sort}
           >
+            <option value="opportunity">Najlepszy Flip Score</option>
+            <option value="profit">Największy potencjalny zysk</option>
+            <option value="roi">Najwyższe ROI</option>
+            <option value="discount">Największy rabat vs ARV</option>
             <option value="newest">Najnowsze ogłoszenia</option>
             <option value="price_asc">Najniższa cena</option>
             <option value="price_per_sqm_asc">Najniższa cena/m²</option>
@@ -127,7 +138,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
         </div>
       ) : null}
       {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / MATCHED <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
-      {data && reviewResults.length > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewResults.length}</p></div><div className="grid gap-3 lg:grid-cols-2">{reviewResults.map((result) => <ReviewListingCard key={result.id} result={result} onChanged={() => void load()} />)}</div></section> : null}
+      {data && reviewResults.length > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div>{visibleReviewResults.length !== sortedReviewResults.length ? <Button onClick={() => setShowAllReview(true)} type="button" variant="outline">Pokaż wszystkie do oceny ({sortedReviewResults.length})</Button> : showAllReview ? <Button onClick={() => setShowAllReview(false)} type="button" variant="outline">Pokaż tylko TOP + WYSOKI</Button> : null}</div>{visibleReviewResults.length === 0 ? <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Brak ofert TOP/WYSOKI. Rozwiń listę, aby zobaczyć wszystkie rekordy do oceny.</div> : <div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard key={result.id} result={result} onChanged={() => void load()} />)}</div>}</section> : null}
       {data ? <div className="flex items-center justify-between border-t border-border/60 pt-4"><div><h2 className="font-semibold">ARCHIWUM</h2><p className="mt-1 text-sm text-muted-foreground">Stare i odrzucone rekordy są ukryte w głównym Finderze.</p></div><Button onClick={() => setArchiveOpen((current) => !current)} type="button" variant="outline">{archiveOpen ? "Ukryj archiwum" : "Pokaż archiwum"}</Button></div> : null}
       {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} key={result.id} marketType={data.filter.marketType ?? null} result={result} />)}</div></section> : null}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -147,10 +158,11 @@ function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChan
       onChanged();
     } finally { setBusy(false); }
   };
-  const title = cleanDisplayText(result.title) || "Oferta do oceny";
+  const titleBase = cleanDisplayText(result.title) || "Oferta do oceny";
+  const title = result.opportunityScore == null ? titleBase : `${titleBase} · ${result.opportunityScore}/100${result.opportunityPriority ? ` ${priorityLabel(result.opportunityPriority)}` : ""}`;
   const location = dedupeLocationText(result.locationText) ?? "Lokalizacja nieznana";
-  const missing = friendlyMissingFields((result.missingFields ?? []).filter((field) => !(field === "buildingType" && result.buildingType)));
-  return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">DO OCENY</span></div><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}</p><div className="mt-3 flex gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">Facebook <ExternalLink className="size-3" /></a> : null}</div></article>;
+  const missing = friendlyMissingFields((result.opportunityMissingFields ?? result.missingFields ?? []).filter((field) => !(field === "buildingType" && result.buildingType)));
+  return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">{result.opportunityPriority ?? "DO OCENY"}</span></div><OpportunitySummary result={result} /><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}</p><div className="mt-3 flex gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">Facebook <ExternalLink className="size-3" /></a> : null}</div></article>;
 }
 
 export function ExpandableListingCard({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
@@ -168,7 +180,8 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
   const [targetProfit, setTargetProfit] = useState(50_000);
   const [targetRoi, setTargetRoi] = useState(15);
   const location = dedupeLocationText(result.locationText ?? resultLocation(result.address, result.district, result.city)) ?? "—";
-  const title = cleanDisplayText(result.title) || "Oferta bez tytułu";
+  const titleBase = cleanDisplayText(result.title) || "Oferta bez tytułu";
+  const title = result.opportunityScore == null ? titleBase : `${titleBase} · Score ${result.opportunityScore}/100${result.opportunityPriority ? ` · ${priorityLabel(result.opportunityPriority)}` : ""}`;
   const toggle = () => setExpanded((current) => { if (!current) onOpen?.(); return !current; });
   const purchaseTax = calculator.purchasePrice * 0.02;
   const purchaseCost = calculator.purchasePrice + purchaseTax + calculator.notary + calculator.purchaseCommission;
@@ -356,6 +369,7 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
             <p className="mt-1 text-sm font-medium text-muted-foreground">{currencyPerSqm(result.pricePerSqm)}</p>
             <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.09] px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300"><span className="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_0_3px] shadow-emerald-500/15" />Flip Score {flipScore.score} · {flipScore.label}</span>
           </div>
+          <OpportunitySummary result={result} />
           <div className="mt-4 space-y-2.5 text-sm text-muted-foreground">
             <p className="flex items-center gap-2 truncate"><MapPin aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span className="truncate">{location}</span></p>
             <p className="flex items-center gap-2"><BedDouble aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span>{measure(result.rooms, "pok.")} <span className="mx-1.5 text-border">•</span> {measure(result.area, "m²")}</span></p>
@@ -424,6 +438,10 @@ export function ExpandableListingCard({ result, averagePricePerSqm, marketType, 
   );
 }
 
+function OpportunitySummary({ result }: { result: FilterResult }) {
+  if (result.opportunityScore == null && result.expectedArv == null && result.estimatedProfit == null) return null;
+  return <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.05] p-3 text-xs"><Metric label="Opportunity score" value={result.opportunityScore == null ? "Brak" : `${result.opportunityScore}/100`} /><Metric label="Priorytet" value={result.opportunityPriority ?? "Brak"} /><Metric label="ARV" value={currency(result.expectedArv ?? null)} /><Metric label="Potencjalny zysk" value={currency(result.estimatedProfit ?? null)} /><Metric label="ROI" value={result.estimatedRoi == null ? "Brak" : `${result.estimatedRoi}%`} /><Metric label="Pewność danych" value={result.dataConfidence ?? "Brak"} /></div>;
+}
 function Placeholder() { return <div className="flex size-full items-center justify-center px-4 text-center text-sm text-muted-foreground">Brak zweryfikowanego zdjęcia</div>; }
 function SafeImage({ alt, className, fill, sizes, src }: { alt: string; className?: string; fill?: boolean; sizes: string; src: string }) {
   const [failed, setFailed] = useState(false);
@@ -467,6 +485,14 @@ function SourceBadge({ source }: { source: FilterResult["source"] }) { return <s
 function StatusBadge({ status }: { status: FilterResult["listingStatus"] }) { return <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-500/90 px-2.5 py-1 text-xs font-semibold text-white shadow-sm backdrop-blur"><span className="size-1.5 rounded-full bg-white/90" />{status === "active" ? "Aktywna" : status === "removed" ? "Usunięta" : status === "sold" ? "Sprzedana" : "Obserwowana"}</span>; }
 function Badge({ label }: { label: string }) { return <span className="rounded-full bg-background/90 px-2.5 py-1 text-xs font-semibold text-foreground shadow-sm backdrop-blur">{label}</span>; }
 function LifecycleBadge({ status }: { status: FilterResult["lifecycleStatus"] }) { const label = status === "REVIEW" ? "DO OCENY" : status === "STALE" ? "NIEAKTUALNA" : status === "ARCHIVED" ? "ARCHIWALNA" : status === "REJECTED" ? "ODRZUCONA" : "AKTYWNA"; return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{label}</span>; }
+function ReviewBucket({ label, count }: { label: string; count: number }) { return <span className="rounded-full border border-border/60 bg-muted/30 px-2 py-1">{label}: {count}</span>; }
+function reviewCounts(results: FilterResult[]): Record<"TOP" | "HIGH" | "MEDIUM" | "LOW", number> {
+  return results.reduce((counts, result) => {
+    const priority = result.opportunityPriority ?? "LOW";
+    counts[priority] += 1;
+    return counts;
+  }, { TOP: 0, HIGH: 0, MEDIUM: 0, LOW: 0 });
+}
 function calculatorCurrency(value: number): string { return new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 }).format(value); }
 function signedCurrency(value: number): string { return `${value > 0 ? "+" : ""}${calculatorCurrency(value)}`; }
 function percentage(value: number): string { return `${new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 }).format(value)}%`; }
