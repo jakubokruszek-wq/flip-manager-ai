@@ -5,6 +5,7 @@ import { mirrorFacebookImages } from "../facebook-watcher/server/mirror-facebook
 import { validateFacebookRevalidationCandidates } from "./image-revalidation";
 import type { FacebookMediaCandidate } from "./types";
 import { galleryMediaIds as collectGalleryMediaIds, selectMissingGalleryCandidates } from "./gallery-policy";
+import { safeFacebookPostUrl } from "./facebook-post-url";
 
 export type FacebookGalleryStatus = "NOT_REQUESTED" | "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "FAILED";
 
@@ -169,10 +170,6 @@ export function parseFacebookGalleryCandidates(value: unknown, expectedPostId: s
   });
 }
 
-function safeFacebookPostUrl(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  try { const url = new URL(value); return url.protocol === "https:" && /(^|\.)facebook\.com$/i.test(url.hostname) && /\/groups\/[^/]+\/permalink\/\d+/i.test(url.pathname) ? url.toString() : null; } catch { return null; }
-}
 function galleryStatus(value: unknown): FacebookGalleryStatus { return value === "PENDING" || value === "RUNNING" || value === "PARTIAL" || value === "COMPLETE" || value === "FAILED" ? value : "NOT_REQUESTED"; }
 function boundedCount(value: unknown, fallback: number): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(50, Math.floor(value)) : fallback; }
 function row(value: unknown): Row | null { return value && typeof value === "object" && !Array.isArray(value) ? value as Row : null; }
