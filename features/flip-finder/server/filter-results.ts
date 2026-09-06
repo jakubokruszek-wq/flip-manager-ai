@@ -11,6 +11,7 @@ import {
   type CompletedScanWindow,
   type FilterResult,
 } from "@/features/flip-finder/results";
+import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-evaluation";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import type { PropertyListing } from "@/features/properties/types/property";
@@ -221,6 +222,32 @@ export async function getFilterResults(filterId: string, includeArchived = false
       latestCompletedScan,
     );
     const safeLocation = safeFacebookDisplayLocation(listing);
+    const locationText = resultLocation(safeLocation.address, safeLocation.district, safeLocation.city);
+    const filterDecision = evaluateListingAgainstFilter(
+      {
+        price: listing.price,
+        area: listing.area,
+        pricePerSqm: reliablePricePerSqm(listing.pricePerSqm, listing.price, listing.area),
+        rooms: listing.rooms,
+        floor: listing.floor,
+        city: safeLocation.city,
+        district: safeLocation.district,
+        title: listing.title,
+        locationText,
+        buildingType: listing.buildingType,
+        ownership: listing.ownership,
+      },
+      filter,
+    );
+    const sourceConflict = !sourceDomainMatchesSource(listing.source, listing.originalUrl);
+    const hardFilterReject = filterDecision.bucket === "REJECTED";
+    const decisionBucket: FilterResult["decisionBucket"] = sourceConflict || hardFilterReject
+      ? "REJECTED"
+      : listing.lifecycleStatus === "REJECTED"
+        ? "REJECTED"
+        : listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review")
+          ? "REVIEW"
+          : "MATCHED";
     const publishedAt = publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? []);
 
     return [
@@ -237,14 +264,14 @@ export async function getFilterResults(filterId: string, includeArchived = false
         description: listing.description,
         images: listing.images,
         pricePerSqm: reliablePricePerSqm(listing.pricePerSqm, listing.price, listing.area),
-        locationText: resultLocation(safeLocation.address, safeLocation.district, safeLocation.city),
+        locationText,
         address: safeLocation.address,
         city: safeLocation.city,
         district: safeLocation.district,
         thumbnailUrl: listing.images[0] ?? null,
         originalUrl: listing.originalUrl,
         source: listing.source,
-        sourceConflict: !sourceDomainMatchesSource(listing.source, listing.originalUrl),
+        sourceConflict,
         listingStatus: listing.status,
         isActive: listing.status === "active",
         publishedAt,
@@ -260,23 +287,21 @@ export async function getFilterResults(filterId: string, includeArchived = false
         unknownFields: match.matchReasons
           .filter((reason) => reason.startsWith("unknown_"))
           .map((reason) => reason.slice("unknown_".length)),
-        decisionBucket: !sourceDomainMatchesSource(listing.source, listing.originalUrl)
-          ? "REJECTED"
-          : listing.lifecycleStatus === "REJECTED" ? "REJECTED" : listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review") ? "REVIEW" : "MATCHED",
+        decisionBucket,
         lifecycleStatus: listing.lifecycleStatus,
         reviewReason: listing.reviewReason,
         missingFields: listing.missingFields,
         manualDecision: listing.manualDecision,
         manualDecisionReason: listing.manualDecisionReason,
         archivedAt: listing.archivedAt,
-        ...opportunityFields(listing, filter, match.matchReasons.includes("review") ? "REVIEW" : listing.lifecycleStatus === "REJECTED" ? "REJECTED" : "MATCHED", resaleComps),
+        ...opportunityFields(listing, filter, decisionBucket, resaleComps),
       },
     ];
   });
   const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
   const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED"), "newest");
   const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW"), "newest");
-  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "") || result.sourceConflict === true), "newest") : [];
+  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "") || result.decisionBucket === "REJECTED" || result.sourceConflict === true), "newest") : [];
 
   return {
     filter,

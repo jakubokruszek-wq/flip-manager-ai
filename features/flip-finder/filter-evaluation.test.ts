@@ -30,3 +30,12 @@ test("unknown city remains explicit metadata instead of becoming a false mismatc
   assert.equal(result.bucket, "REVIEW");
   assert.deepEqual(result.unknownFields, ["city"]);
 });
+
+test("known price per square metre above the limit is a hard rejection", () => {
+  const result = evaluateListingAgainstFilter(
+    { ...candidate, price: 600_000, area: 40, pricePerSqm: 15_000 },
+    { ...filter, maxPricePerSqm: 12_000 },
+  );
+  assert.equal(result.bucket, "REJECTED");
+  assert.deepEqual(result.reasons, ["max_price_per_sqm"]);
+});
