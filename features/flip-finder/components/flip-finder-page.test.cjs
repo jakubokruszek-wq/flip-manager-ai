@@ -61,6 +61,13 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /GALLERY_FETCH_START/);
   assert.match(inlineResults, /GALLERY_FETCH_RESPONSE/);
   assert.match(inlineResults, /GALLERY_FETCH_ERROR/);
+  assert.match(inlineResults, /GALLERY_BUTTON_POINTER_CAPTURE/);
+  assert.match(inlineResults, /GALLERY_BUTTON_CLICK_CAPTURE/);
+  assert.match(inlineResults, /GALLERY_CARD_CLICK_CAPTURE/);
+  assert.match(inlineResults, /onPointerDownCapture/);
+  assert.match(inlineResults, /onClickCapture/);
+  assert.match(inlineResults, /targetTag/);
+  assert.match(inlineResults, /currentTargetTag/);
   assert.match(inlineResults, /listings\/\$\{result\.id\}\/gallery\/trace/);
   assert.match(inlineResults, /credentials: "same-origin"/);
   assert.match(inlineResults, /event\.stopPropagation\(\)/);
@@ -82,4 +89,7 @@ test("gallery mutation is protected by same-origin request authorization", () =>
   assert.match(galleryTraceRoute, /authorizeGalleryTrace/);
   assert.match(galleryTraceRoute, /FLIP_GALLERY_SERVER_TRACE/);
   assert.match(galleryTraceRoute, /GALLERY_TRACE_TOO_LARGE/);
+  assert.match(galleryTraceRoute, /GALLERY_BUTTON_POINTER_CAPTURE/);
+  assert.match(galleryTraceRoute, /GALLERY_BUTTON_CLICK_CAPTURE/);
+  assert.match(galleryTraceRoute, /GALLERY_CARD_CLICK_CAPTURE/);
 });

@@ -7,6 +7,9 @@ const STAGES = new Set([
   "GALLERY_HANDLER_ENTER",
   "GALLERY_GUARD_PASS",
   "GALLERY_GUARD_BLOCKED",
+  "GALLERY_BUTTON_POINTER_CAPTURE",
+  "GALLERY_BUTTON_CLICK_CAPTURE",
+  "GALLERY_CARD_CLICK_CAPTURE",
   "GALLERY_FETCH_START",
   "GALLERY_FETCH_RESPONSE",
   "GALLERY_FETCH_ERROR",
@@ -34,7 +37,11 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
     const errorCode = typeof row?.errorCode === "string" ? row.errorCode.slice(0, 120) : null;
     const guard = typeof row?.guard === "string" ? row.guard.slice(0, 60) : null;
     const httpStatus = Number.isInteger(row?.httpStatus) && Number(row.httpStatus) >= 100 && Number(row.httpStatus) <= 599 ? Number(row.httpStatus) : null;
-    console.info("FLIP_GALLERY_SERVER_TRACE", JSON.stringify({ traceId, stage, listingId, postId, galleryStatus: status, httpStatus, errorCode, guard, serverTimestamp: new Date().toISOString() }));
+    const targetTag = typeof row?.targetTag === "string" ? row.targetTag.slice(0, 30) : null;
+    const currentTargetTag = typeof row?.currentTargetTag === "string" ? row.currentTargetTag.slice(0, 30) : null;
+    const disabled = typeof row?.disabled === "boolean" ? row.disabled : null;
+    const pointerEvents = typeof row?.pointerEvents === "string" ? row.pointerEvents.slice(0, 30) : null;
+    console.info("FLIP_GALLERY_SERVER_TRACE", JSON.stringify({ traceId, stage, listingId, postId, galleryStatus: status, httpStatus, errorCode, guard, targetTag, currentTargetTag, disabled, pointerEvents, serverTimestamp: new Date().toISOString() }));
     return Response.json({ ok: true });
   } catch {
     return Response.json({ ok: false, code: "INVALID_GALLERY_TRACE" }, { status: 400 });

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { BedDouble, BrainCircuit, Clock3, ExternalLink, MapPin, Plus, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -155,6 +155,9 @@ type GalleryTraceStage =
   | "GALLERY_HANDLER_ENTER"
   | "GALLERY_GUARD_PASS"
   | "GALLERY_GUARD_BLOCKED"
+  | "GALLERY_BUTTON_POINTER_CAPTURE"
+  | "GALLERY_BUTTON_CLICK_CAPTURE"
+  | "GALLERY_CARD_CLICK_CAPTURE"
   | "GALLERY_FETCH_START"
   | "GALLERY_FETCH_RESPONSE"
   | "GALLERY_FETCH_ERROR";
@@ -170,6 +173,10 @@ type GalleryTraceEntry = {
   responseOk?: boolean;
   errorCode?: string;
   guard?: string;
+  targetTag?: string | null;
+  currentTargetTag?: string | null;
+  disabled?: boolean;
+  pointerEvents?: string | null;
 };
 
 const GALLERY_TRACE_STORAGE_KEY = "flipFinderGalleryRequestTraces";
@@ -198,7 +205,7 @@ function recordGalleryTrace(
   result: FilterResult,
   status: GalleryState,
   traceId: string,
-  extra: Pick<GalleryTraceEntry, "httpStatus" | "responseOk" | "errorCode" | "guard"> = {},
+  extra: Pick<GalleryTraceEntry, "httpStatus" | "responseOk" | "errorCode" | "guard" | "targetTag" | "currentTargetTag" | "disabled" | "pointerEvents"> = {},
 ): void {
   const entry: GalleryTraceEntry = {
     stage,
@@ -232,12 +239,31 @@ function recordGalleryTrace(
   });
 }
 
-function GalleryRequestButton({ result }: { result: FilterResult }) {
+function captureGalleryTrace(
+  stage: GalleryTraceStage,
+  event: { currentTarget: EventTarget | null; target: EventTarget | null },
+  result: FilterResult,
+  status: GalleryState,
+  traceId: string,
+): void {
+  const currentTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  const target = event.target instanceof Element ? event.target : null;
+  recordGalleryTrace(stage, result, status, traceId, {
+    targetTag: target?.tagName.toLowerCase() ?? null,
+    currentTargetTag: currentTarget?.tagName.toLowerCase() ?? null,
+    disabled: currentTarget instanceof HTMLButtonElement ? currentTarget.disabled : undefined,
+    pointerEvents: currentTarget ? window.getComputedStyle(currentTarget).pointerEvents : null,
+  });
+}
+
+function GalleryRequestButton({ result, traceId: providedTraceId }: { result: FilterResult; traceId?: string }) {
   const [status, setStatus] = useState<GalleryState>(result.galleryStatus ?? "NOT_REQUESTED");
   const [persisted, setPersistedValue] = useState(result.galleryPersistedCount ?? 0);
   const [total, setTotalValue] = useState(result.galleryTotal ?? 0);
   const [busy, setBusy] = useState(false);
   const inFlightRef = useRef(false);
+  const [localTraceId] = useState(createGalleryTraceId);
+  const traceId = providedTraceId ?? localTraceId;
   useEffect(() => {
     if (status !== "PENDING" && status !== "RUNNING") return;
     let cancelled = false;
@@ -284,12 +310,17 @@ function GalleryRequestButton({ result }: { result: FilterResult }) {
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    const traceId = createGalleryTraceId();
     recordGalleryTrace("GALLERY_UI_CLICK", result, status, traceId);
     void request(traceId);
   };
+  const handlePointerDownCapture = (event: PointerEvent<HTMLButtonElement>) => {
+    captureGalleryTrace("GALLERY_BUTTON_POINTER_CAPTURE", event, result, status, traceId);
+  };
+  const handleClickCapture = (event: MouseEvent<HTMLButtonElement>) => {
+    captureGalleryTrace("GALLERY_BUTTON_CLICK_CAPTURE", event, result, status, traceId);
+  };
   const label = status === "PENDING" ? "Oczekuje na pobranie galerii" : status === "RUNNING" ? "Pobieranie galerii…" : status === "PARTIAL" ? `Pobrano ${persisted}/${Math.max(total, persisted)} zdjęć` : status === "COMPLETE" ? `Galeria: ${persisted} zdjęć` : status === "FAILED" ? "Ponów pobieranie zdjęć" : "POBIERZ ZDJĘCIA";
-  return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-gallery-action="request" data-listing-id={result.id} disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={handleClick} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
+  return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-gallery-action="request" data-listing-id={result.id} disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={handleClick} onClickCapture={handleClickCapture} onPointerDownCapture={handlePointerDownCapture} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
 }
 
 function isGalleryState(value: unknown): value is GalleryState {
@@ -314,7 +345,11 @@ function ReviewListingCardContent({ result, onChanged }: { result: FilterResult;
 }
 
 function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChanged: () => void }) {
-  return <><ReviewListingCardContent onChanged={onChanged} result={result} /><GalleryRequestButton result={result} /></>;
+  const [traceId] = useState(createGalleryTraceId);
+  const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
+    captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, result, result.galleryStatus ?? "NOT_REQUESTED", traceId);
+  };
+  return <div className="contents" onClickCapture={handleCardClickCapture}><ReviewListingCardContent onChanged={onChanged} result={result} /><GalleryRequestButton result={result} traceId={traceId} /></div>;
 }
 
 function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
@@ -591,7 +626,11 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
 }
 
 export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
-  return <><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton result={props.result} /></div></>;
+  const [traceId] = useState(createGalleryTraceId);
+  const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
+    captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
+  };
+  return <div className="contents" onClickCapture={handleCardClickCapture}><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton result={props.result} traceId={traceId} /></div></div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {
