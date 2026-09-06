@@ -149,6 +149,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
   }
 
   const listingIds = matches.map((match) => match.listingId);
+  const lifecycleStatuses = includeArchived
+    ? ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]
+    : ["ACTIVE", "REVIEW"];
   const listingQuery = supabase
     .from("listings")
     .select(
@@ -156,7 +159,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     )
     .in("id", listingIds)
     .eq("status", "active")
-    .in("lifecycle_status", includeArchived ? ["STALE", "ARCHIVED", "REJECTED"] : ["ACTIVE", "REVIEW"]);
+    .in("lifecycle_status", lifecycleStatuses);
   const [listingsResultRaw, snapshotsResult] = await Promise.all([
     listingQuery,
     supabase
