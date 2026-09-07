@@ -481,7 +481,12 @@ test("on-demand gallery uses the existing exact-root queue path and never broade
 
 test("gallery exact-root matcher accepts posts and permalink routes for the exact group and post", () => {
   assert.match(content, /groups\/\$\{escapeRegExp\(expectedGroup\)\}\/\(\?:permalink\|posts\)\/\$\{expectedPostId\}/);
-  assert.match(content, /roots\.length !== 1/);
+  assert.match(content, /FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH/);
+  assert.match(content, /rootDeadline = Date\.now\(\) \+ 8_000/);
+  assert.match(content, /EXACT_SELF_LINK/);
+  assert.match(content, /EXACT_PAGE_SINGLE_ROOT/);
+  assert.match(content, /!article\.parentElement\?\.closest\('\[role="article"\]'\)/);
+  assert.match(content, /roots\.length > 1/);
   assert.match(content, /FACEBOOK_GALLERY_ROOT_NOT_FOUND/);
   assert.match(content, /FACEBOOK_GALLERY_ROOT_AMBIGUOUS/);
   assert.match(content, /FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING/);

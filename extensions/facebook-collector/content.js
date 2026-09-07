@@ -31,7 +31,7 @@
     return true;
   });
 
-  function hydrateFacebookGallery(options) {
+  async function hydrateFacebookGallery(options) {
     if (options.imageMode !== GALLERY_HYDRATION_MEDIA_ALLOWED) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_IMAGE_MODE_INVALID", candidates: [], sourceMediaCount: 0 });
     const expectedPostId = String(options.expectedPostId || "");
     const expectedUrl = String(options.expectedUrl || "");
@@ -39,18 +39,43 @@
     let expectedGroup = null;
     try { expectedGroup = new URL(expectedUrl).pathname.match(/^\/groups\/([^/]+)(?:\/|$)/i)?.[1] || null; } catch { /* invalid source is rejected below */ }
     if (!expectedGroup) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_SOURCE_URL_INVALID", expectedPostId, candidates: [], sourceMediaCount: 0 });
-    const permalinkLinks = [...document.querySelectorAll("a[href]")].filter((anchor) => {
-      try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && new RegExp(`^/groups/${escapeRegExp(expectedGroup)}/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i").test(url.pathname); } catch { return false; }
-    });
-    const roots = [...new Set(permalinkLinks.map((anchor) => anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]")))] .filter(Boolean);
-    if (roots.length !== 1) return Promise.resolve({ status: "FAILED", error: roots.length === 0 ? "FACEBOOK_GALLERY_ROOT_NOT_FOUND" : "FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, candidates: [], sourceMediaCount: 0 });
-    const root = roots[0];
+    const exactPath = new RegExp(`^/groups/${escapeRegExp(expectedGroup)}/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i");
+    let exactPageContext = false;
+    try { const current = new URL(location.href); exactPageContext = /(^|\.)facebook\.com$/i.test(current.hostname) && exactPath.test(current.pathname); } catch { /* invalid runtime location remains fail-closed */ }
+    if (!exactPageContext) return { status: "FAILED", error: "FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH", expectedPostId, candidates: [], sourceMediaCount: 0 };
+    const rootDeadline = Date.now() + 8_000;
+    let root = null;
+    let rootBindingSource = null;
+    let author = null;
+    let rootText = null;
+    let lastRootCount = 0;
+    do {
+      const permalinkLinks = [...document.querySelectorAll("a[href]")].filter((anchor) => {
+        try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && exactPath.test(url.pathname); } catch { return false; }
+      });
+      let roots = [...new Set(permalinkLinks.map((anchor) => anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]")))] .filter(Boolean);
+      rootBindingSource = roots.length > 0 ? "EXACT_SELF_LINK" : null;
+      if (roots.length === 0) {
+        roots = [...document.querySelectorAll('[role="article"]')].filter((article) => !article.parentElement?.closest('[role="article"]') && !isCommentDescendant(article));
+        rootBindingSource = roots.length > 0 ? "EXACT_PAGE_SINGLE_ROOT" : null;
+      }
+      lastRootCount = roots.length;
+      if (roots.length > 1) return { status: "FAILED", error: "FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: roots.length };
+      root = roots[0] || null;
+      if (root) {
+        const rootIsArticle = root.matches?.('[role="article"]') === true;
+        const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
+        author = [...root.querySelectorAll("h2 a, h3 a, strong a")].filter((node) => sameRoot(node) && !isCommentDescendant(node)).map(visibleText).find(Boolean) || null;
+        const messageNodes = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]')].filter((node) => sameRoot(node) && !isCommentDescendant(node));
+        rootText = messageNodes.map(visibleText).find(Boolean) || null;
+        if (author && rootText) break;
+      }
+      if (Date.now() < rootDeadline) await wait(Math.min(250, rootDeadline - Date.now()));
+    } while (Date.now() < rootDeadline);
+    if (!root) return { status: "FAILED", error: "FACEBOOK_GALLERY_ROOT_NOT_FOUND", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: lastRootCount };
+    if (!author || !rootText) return { status: "FAILED", error: !author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: lastRootCount };
     const rootIsArticle = root.matches?.('[role="article"]') === true;
     const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
-    const author = [...root.querySelectorAll("h2 a, h3 a, strong a")].filter(sameRoot).map(visibleText).find(Boolean) || null;
-    const messageNodes = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]')].filter((node) => sameRoot(node) && !isCommentDescendant(node));
-    const rootText = messageNodes.map(visibleText).find(Boolean) || null;
-    if (!author || !rootText) return Promise.resolve({ status: "FAILED", error: !author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, candidates: [], sourceMediaCount: 0 });
     const candidates = [];
     const seen = new Set();
     for (const anchor of root.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')) {
@@ -64,7 +89,7 @@
       seen.add(mediaId);
       candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
     }
-    return Promise.resolve({ status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true });
+    return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, rootCount: 1 };
   }
 
   async function resolveSearchMediaTile(options) {
