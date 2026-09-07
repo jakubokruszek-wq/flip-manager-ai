@@ -35,7 +35,7 @@ export type FacebookGalleryStatusResult = {
 
 type Row = Record<string, unknown>;
 
-export async function enqueueFacebookGalleryJob(listingId: string): Promise<{ jobId: string | null; status: FacebookGalleryStatus; listingId: string; message?: string }> {
+export async function enqueueFacebookGalleryJob(listingId: string): Promise<{ jobId: string | null; status: FacebookGalleryStatus; listingId: string; created?: boolean; message?: string }> {
   const supabase = createFacebookWatcherAdminClient();
   const listingResult = await supabase.from("listings").select("id,source,external_listing_id,original_url,gallery_status,gallery_job_id,lifecycle_status,manual_decision").eq("id", listingId).maybeSingle();
   const listing = row(listingResult.data);
@@ -47,34 +47,20 @@ export async function enqueueFacebookGalleryJob(listingId: string): Promise<{ jo
   const currentStatus = galleryStatus(listing.gallery_status);
   if (currentStatus === "COMPLETE") return { jobId: string(listing.gallery_job_id), status: "COMPLETE", listingId };
 
-  const existing = await supabase.from("facebook_scan_jobs").select("id,status").eq("job_type", "GALLERY_HYDRATION").eq("gallery_listing_id", listingId).in("status", ["queued", "running"]).maybeSingle();
-  if (existing.error) throw new Error(`FACEBOOK_GALLERY_JOB_QUERY_FAILED: ${existing.error.message}`);
-  if (existing.data?.id) {
-    const jobId = String(existing.data.id);
-    await supabase.from("listings").update({ gallery_status: existing.data.status === "running" ? "RUNNING" : "PENDING", gallery_job_id: jobId, gallery_requested_at: new Date().toISOString(), gallery_error: null }).eq("id", listingId);
-    return { jobId, status: existing.data.status === "running" ? "RUNNING" : "PENDING", listingId };
-  }
-
   const match = await supabase.from("listing_filter_matches").select("search_filter_id").eq("listing_id", listingId).order("last_matched_at", { ascending: false }).limit(1).maybeSingle();
   if (match.error || !match.data?.search_filter_id) throw new Error("FACEBOOK_GALLERY_FILTER_CONTEXT_MISSING");
-  const idempotencyKey = `gallery:${listingId}`;
-  const inserted = await supabase.from("facebook_scan_jobs").insert({
-    scan_run_id: crypto.randomUUID(), source_scan_id: null, search_filter_id: match.data.search_filter_id,
-    group_snapshot: [], idempotency_key: idempotencyKey, consumer_type: "BROWSER_EXTENSION",
-    job_type: "GALLERY_HYDRATION", priority: 100, gallery_listing_id: listingId,
-    gallery_post_id: postId, gallery_source_url: sourceUrl,
-  }).select("id").single();
-  if (inserted.error || !inserted.data?.id) {
-    if (inserted.error?.code === "23505") {
-      const retry = await supabase.from("facebook_scan_jobs").select("id,status").eq("job_type", "GALLERY_HYDRATION").eq("gallery_listing_id", listingId).in("status", ["queued", "running"]).maybeSingle();
-      if (retry.data?.id) return { jobId: String(retry.data.id), status: retry.data.status === "running" ? "RUNNING" : "PENDING", listingId };
-    }
-    throw new Error(`FACEBOOK_GALLERY_JOB_CREATE_FAILED: ${inserted.error?.message ?? "missing id"}`);
-  }
-  const jobId = String(inserted.data.id);
-  const update = await supabase.from("listings").update({ gallery_status: "PENDING", gallery_job_id: jobId, gallery_requested_at: new Date().toISOString(), gallery_completed_at: null, gallery_error: null }).eq("id", listingId);
-  if (update.error) throw new Error(`FACEBOOK_GALLERY_LISTING_UPDATE_FAILED: ${update.error.message}`);
-  return { jobId, status: "PENDING", listingId };
+  const enqueue = await supabase.rpc("enqueue_facebook_gallery_job", {
+    p_listing_id: listingId,
+    p_search_filter_id: match.data.search_filter_id,
+    p_post_id: postId,
+    p_source_url: sourceUrl,
+  }).single();
+  if (enqueue.error || !enqueue.data) throw new Error(`FACEBOOK_GALLERY_JOB_CREATE_FAILED: ${enqueue.error?.message ?? "missing result"}`);
+  const result = row(enqueue.data);
+  const jobId = string(result?.job_id);
+  const status = galleryStatus(result?.gallery_status);
+  if ((status === "PENDING" || status === "RUNNING") && !jobId) throw new Error("FACEBOOK_GALLERY_JOB_CREATE_FAILED: missing job id");
+  return { jobId, status, listingId, created: result?.job_created === true };
 }
 
 export async function getFacebookGalleryStatus(listingId: string): Promise<FacebookGalleryStatusResult> {

@@ -5,6 +5,8 @@ const path = require("node:path");
 const test = require("node:test");
 
 const migration = fs.readFileSync(path.join(__dirname, "../../supabase/migrations/20260906120000_add_on_demand_facebook_gallery.sql"), "utf8");
+const retryMigration = fs.readFileSync(path.join(__dirname, "../../supabase/migrations/20260907090000_atomic_gallery_retry_enqueue.sql"), "utf8");
+const galleryJobs = fs.readFileSync(path.join(__dirname, "gallery-jobs.ts"), "utf8");
 
 test("gallery migration keeps queue consumer routing atomic and prioritizes manual hydration", () => {
   assert.match(migration, /job_type text not null default 'SOURCE_SCAN'/);
@@ -21,4 +23,45 @@ test("gallery migration keeps failed/partial retries independent of listing life
   assert.match(migration, /gallery_status = 'RUNNING'/);
   assert.match(migration, /listings_gallery_status_check/);
   assert.match(migration, /gallery_listing_id uuid references public\.listings/);
+});
+
+test("gallery retry enqueue is one transaction serialized by the listing row", () => {
+  assert.match(retryMigration, /^begin;/m);
+  assert.match(retryMigration, /from public\.listings[\s\S]*where id = p_listing_id[\s\S]*for update;/i);
+  assert.match(retryMigration, /insert into public\.facebook_scan_jobs[\s\S]*update public\.listings[\s\S]*return query select new_job\.id/i);
+  assert.match(retryMigration, /commit;\s*$/i);
+});
+
+test("failed retry creates a fresh job while queued or running retries reuse the singleton", () => {
+  assert.match(retryMigration, /jobs\.status in \('queued', 'running'\)/);
+  assert.doesNotMatch(retryMigration, /jobs\.status in \([^)]*'failed'/);
+  assert.match(retryMigration, /'gallery:' \|\| p_listing_id::text \|\| ':' \|\| gen_random_uuid\(\)::text/);
+  assert.match(retryMigration, /gallery_job_id = new_job\.id/);
+  assert.match(retryMigration, /gallery_status = 'PENDING'/);
+  assert.match(retryMigration, /gallery_completed_at = null/);
+  assert.match(retryMigration, /gallery_error = null/);
+});
+
+test("complete and ineligible listings never enqueue a duplicate gallery job", () => {
+  const completeBranch = retryMigration.indexOf("if target.gallery_status = 'COMPLETE'");
+  const insertBranch = retryMigration.indexOf("insert into public.facebook_scan_jobs");
+  assert.ok(completeBranch >= 0 && completeBranch < insertBranch);
+  assert.match(retryMigration, /target\.lifecycle_status in \('REJECTED', 'ARCHIVED', 'STALE'\)/);
+  assert.match(retryMigration, /target\.manual_decision = 'REJECTED'/);
+});
+
+test("gallery retry preserves listing evidence, images, and business lifecycle", () => {
+  const updateClauses = [...retryMigration.matchAll(/update public\.listings([\s\S]*?)where id = p_listing_id;/gi)].map((match) => match[1]).join("\n");
+  assert.ok(updateClauses.length > 0);
+  assert.doesNotMatch(updateClauses, /\bimages\s*=/i);
+  assert.doesNotMatch(updateClauses, /\blifecycle_status\s*=/i);
+  assert.doesNotMatch(updateClauses, /\bmanual_decision\s*=/i);
+});
+
+test("gallery retry RPC is backend-only and application returns the atomic RPC result", () => {
+  assert.match(retryMigration, /revoke all on function public\.enqueue_facebook_gallery_job\(uuid, uuid, text, text\) from public, anon, authenticated;/);
+  assert.match(retryMigration, /grant execute on function public\.enqueue_facebook_gallery_job\(uuid, uuid, text, text\) to service_role;/);
+  assert.match(galleryJobs, /\.rpc\("enqueue_facebook_gallery_job"/);
+  assert.match(galleryJobs, /created: result\?\.job_created === true/);
+  assert.doesNotMatch(galleryJobs, /\.from\("facebook_scan_jobs"\)\.insert/);
 });

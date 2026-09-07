@@ -13,6 +13,7 @@ const galleryTraceMigration = fs.readFileSync(path.join(__dirname, "../../../sup
 const galleryTraceProbeMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906143000_extend_gallery_request_traces_render_probe.sql"), "utf8");
 const galleryTraceNativeMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906150000_extend_gallery_request_traces_native_events.sql"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
+const galleryRetryMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260907090000_atomic_gallery_retry_enqueue.sql"), "utf8");
 const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
 
 test("normal Flip Finder UI uses the queue scan result funnel", () => {
@@ -98,8 +99,9 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(galleryRoute, /enqueueFacebookGalleryJob/);
   assert.match(galleryRoute, /getFacebookGalleryStatus/);
   assert.match(inlineResults, /setInterval\(\(\) => void poll\(\), 2_000\)/);
-  assert.match(galleryJobs, /job_type: "GALLERY_HYDRATION"/);
-  assert.match(galleryJobs, /priority: 100/);
+  assert.match(galleryJobs, /\.rpc\("enqueue_facebook_gallery_job"/);
+  assert.match(galleryRetryMigration, /'GALLERY_HYDRATION'/);
+  assert.match(galleryRetryMigration, /\n    100,/);
   assert.match(galleryJobs, /EXACT_ROOT_STORY/);
 });
 
