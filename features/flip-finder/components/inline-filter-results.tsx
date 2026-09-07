@@ -61,7 +61,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch(`/api/flip-finder/search-filters/${filterId}/results${archiveOpen ? "?view=archive" : ""}`);
+      const response = await fetch(`/api/flip-finder/search-filters/${filterId}/results${archiveOpen ? "?view=archive" : ""}`, { cache: "no-store" });
       const payload: unknown = await readJson(response);
       if (!response.ok || !isResultsResponse(payload)) {
         throw new Error(readMessage(payload, "Nie udało się pobrać ofert."));

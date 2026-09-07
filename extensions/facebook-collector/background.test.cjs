@@ -18,6 +18,7 @@ const bridge = fs.readFileSync(path.join(__dirname, "collector-bridge.js"), "utf
 const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
 const imageBlocker = fs.readFileSync(path.join(__dirname, "image-blocker.js"), "utf8");
 const finderPage = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/components/flip-finder-page.tsx"), "utf8");
+const inlineFilterResults = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/components/inline-filter-results.tsx"), "utf8");
 const manualScan = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/server/manual-scan.ts"), "utf8");
 const scanProgressServer = fs.readFileSync(path.join(__dirname, "../../features/flip-finder/server/scan-progress.ts"), "utf8");
 const failRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/facebook/scans/[scanId]/fail/route.ts"), "utf8");
@@ -525,6 +526,11 @@ test("gallery root failures expose bounded, non-sensitive diagnostics", () => {
   assert.match(content, /currentPath: safePagePath\(location\.href\)/);
   assert.doesNotMatch(content, /document\.cookie|Authorization|leaseToken/);
   assert.match(content, /networkRecords\.size/);
+});
+
+test("gallery button reads terminal status without browser cache", () => {
+  assert.match(inlineFilterResults, /search-filters\/\$\{filterId\}\/results\$\{archiveOpen \? "\?view=archive" : ""\}`, \{ cache: "no-store" \}\)/);
+  assert.match(inlineFilterResults, /listings\/\$\{result\.id\}\/gallery`, \{ cache: "no-store" \}\)/);
 });
 
 test("source scans use a tab-scoped data-only image policy and gallery is the only media-enabled mode", () => {
