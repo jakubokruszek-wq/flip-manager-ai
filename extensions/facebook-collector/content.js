@@ -57,8 +57,17 @@
     let rootBindingSource = null;
     let author = null;
     let rootText = null;
+    let structuredRoot = null;
     let lastRootCount = 0;
     do {
+      const structuredEvidence = galleryStructuredRootEvidence(networkRecords.get(expectedPostId), expectedPostId, resolvedGroup, exactPath);
+      if (structuredEvidence) {
+        structuredRoot = structuredEvidence;
+        rootBindingSource = "EXACT_STRUCTURED_STORY";
+        author = structuredEvidence.author;
+        rootText = structuredEvidence.rootText;
+        break;
+      }
       const permalinkLinks = [...document.querySelectorAll("a[href]")].filter((anchor) => {
         if (isCommentDescendant(anchor)) return false;
         try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && exactPath.test(url.pathname); } catch { return false; }
@@ -85,23 +94,33 @@
       }
       if (Date.now() < rootDeadline) await wait(Math.min(250, rootDeadline - Date.now()));
     } while (Date.now() < rootDeadline);
-    if (!root) return { status: "FAILED", error: "FACEBOOK_GALLERY_ROOT_NOT_FOUND", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: lastRootCount };
+    if (!root && !structuredRoot) return { status: "FAILED", error: "FACEBOOK_GALLERY_ROOT_NOT_FOUND", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: lastRootCount };
     if (!author || !rootText) return { status: "FAILED", error: !author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: lastRootCount };
-    const rootIsArticle = root.matches?.('[role="article"]') === true;
-    const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
     const candidates = [];
     const seen = new Set();
-    for (const anchor of root.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')) {
-      if (!sameRoot(anchor) || isCommentDescendant(anchor)) continue;
-      let url;
-      try { url = new URL(anchor.href); } catch { continue; }
-      const mediaId = url.searchParams.get("fbid") || mediaIdFromUrl(url.toString());
-      const image = anchor.querySelector("img") || anchor.closest("div")?.querySelector("img");
-      const mediaUrl = image?.currentSrc || image?.src || null;
-      if (!mediaUrl || !/^https:\/\//i.test(mediaUrl) || !/^\d{5,30}$/.test(String(mediaId || "")) || seen.has(mediaId)) continue;
-      seen.add(mediaId);
-      candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
+    for (const media of structuredRoot?.media || []) {
+      const key = media.mediaId || media.url;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ url: media.url.slice(0, 2_000), mediaId: media.mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true });
     }
+    if (root) {
+      const rootIsArticle = root.matches?.('[role="article"]') === true;
+      const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
+      for (const anchor of root.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')) {
+        if (!sameRoot(anchor) || isCommentDescendant(anchor)) continue;
+        let url;
+        try { url = new URL(anchor.href); } catch { continue; }
+        const mediaId = url.searchParams.get("fbid") || mediaIdFromUrl(url.toString());
+        const image = anchor.querySelector("img") || anchor.closest("div")?.querySelector("img");
+        const mediaUrl = image?.currentSrc || image?.src || null;
+        const key = mediaId || mediaUrl;
+        if (!mediaUrl || !/^https:\/\//i.test(mediaUrl) || !/^\d{5,30}$/.test(String(mediaId || "")) || seen.has(key)) continue;
+        seen.add(key);
+        candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
+      }
+    }
+    if (candidates.length === 0) return { status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND", expectedPostId, candidates: [], sourceMediaCount: 0, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 };
     return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 };
   }
 
@@ -114,6 +133,17 @@
       .map(visibleText)
       .filter(Boolean);
     return { root, author, rootText: rootTexts.length === 1 ? rootTexts[0] : null };
+  }
+
+  function galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, exactPath) {
+    if (!record || record.postId !== expectedPostId || record.sourceType !== "GROUP" || String(record.sourceId || "") !== resolvedGroup || record.identityConfidence !== "EXACT" || !visibleString(record.author) || !visibleString(record.text)) return null;
+    try { const permalink = new URL(record.permalink); if (!/(^|\.)facebook\.com$/i.test(permalink.hostname) || !exactPath.test(permalink.pathname)) return null; } catch { return null; }
+    const media = (Array.isArray(record.media) ? record.media : []).flatMap((item) => {
+      if (!item || item.exactAssociation !== true || item.exactPostId !== expectedPostId || typeof item.url !== "string" || !/^https:\/\//i.test(item.url)) return [];
+      const mediaId = /^\d{5,30}$/.test(String(item.mediaId || "")) ? String(item.mediaId) : null;
+      return [{ url: item.url, mediaId }];
+    });
+    return { author: visibleString(record.author), rootText: visibleString(record.text), media };
   }
 
   async function resolveSearchMediaTile(options) {
@@ -689,6 +719,7 @@
     });
   }
   function visibleText(node) { return node?.innerText?.replace(/\s+/g, " ").trim().slice(0, 20_000) || null; }
+  function visibleString(value) { return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 20_000) || null : null; }
   function cardFingerprint(card) { const link = card.querySelector('a[href*="/posts/"], a[href*="story_fbid="]')?.href || ""; const text = visibleText(card)?.slice(0, 160) || ""; return link || text ? `${link}|${text}` : null; }
   function findScrollContainer() {
     const candidates = [document.scrollingElement, ...document.querySelectorAll('[role="feed"], [data-pagelet*="Feed"]')].filter(Boolean);

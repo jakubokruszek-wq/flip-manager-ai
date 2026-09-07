@@ -491,6 +491,10 @@ test("gallery exact-root matcher accepts posts and permalink routes for the exac
   assert.match(content, /EXACT_PAGE_SINGLE_ROOT/);
   assert.match(content, /!article\.parentElement\?\.closest\('\[role="article"\]'\)/);
   assert.match(content, /selfLinkRoots\.map\(galleryRootEvidence\)/);
+  assert.match(content, /galleryStructuredRootEvidence\(networkRecords\.get\(expectedPostId\)/);
+  assert.match(content, /record\.identityConfidence !== "EXACT"/);
+  assert.match(content, /item\.exactAssociation !== true \|\| item\.exactPostId !== expectedPostId/);
+  assert.match(content, /FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND/);
   assert.match(content, /rootTexts\.length === 1/);
   assert.match(content, /isCommentDescendant\(anchor\)/);
   assert.match(content, /roots\.length > 1/);
