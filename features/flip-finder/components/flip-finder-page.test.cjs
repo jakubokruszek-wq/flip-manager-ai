@@ -73,6 +73,7 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /GALLERY_BUTTON_CLICK_CAPTURE/);
   assert.match(inlineResults, /GALLERY_CARD_CLICK_CAPTURE/);
   assert.match(inlineResults, /GALLERY_BUTTON_RENDERED/);
+  assert.match(inlineResults, /cache: "no-store"/);
   assert.match(inlineResults, /GALLERY_NATIVE_POINTER_CAPTURE/);
   assert.match(inlineResults, /GALLERY_NATIVE_CLICK_CAPTURE/);
   assert.match(inlineResults, /GALLERY_CLIENT_EXCEPTION/);

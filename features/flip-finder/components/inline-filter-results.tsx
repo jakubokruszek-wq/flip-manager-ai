@@ -421,7 +421,7 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
     let cancelled = false;
     const poll = async () => {
       try {
-        const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`);
+        const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { cache: "no-store" });
         const payload: unknown = await readJson(response);
         if (cancelled || !response.ok || !payload || typeof payload !== "object") return;
         if ("status" in payload && isGalleryState(payload.status)) setStatus(payload.status);
