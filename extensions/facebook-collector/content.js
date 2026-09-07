@@ -60,23 +60,27 @@
     let lastRootCount = 0;
     do {
       const permalinkLinks = [...document.querySelectorAll("a[href]")].filter((anchor) => {
+        if (isCommentDescendant(anchor)) return false;
         try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && exactPath.test(url.pathname); } catch { return false; }
       });
-      let roots = [...new Set(permalinkLinks.map((anchor) => anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]")))] .filter(Boolean);
-      rootBindingSource = roots.length > 0 ? "EXACT_SELF_LINK" : null;
-      if (roots.length === 0) {
-        roots = [...document.querySelectorAll('[role="article"]')].filter((article) => !article.parentElement?.closest('[role="article"]') && !isCommentDescendant(article));
+      const selfLinkRoots = [...new Set(permalinkLinks.map((anchor) => anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]")))] .filter(Boolean);
+      let roots = selfLinkRoots.map(galleryRootEvidence).filter((evidence) => evidence.author && evidence.rootText).map((evidence) => evidence.root);
+      rootBindingSource = selfLinkRoots.length > 0 ? "EXACT_SELF_LINK" : null;
+      if (selfLinkRoots.length === 0) {
+        roots = [...document.querySelectorAll('[role="article"]')]
+          .filter((article) => !article.parentElement?.closest('[role="article"]') && !isCommentDescendant(article))
+          .map(galleryRootEvidence)
+          .filter((evidence) => evidence.author && evidence.rootText)
+          .map((evidence) => evidence.root);
         rootBindingSource = roots.length > 0 ? "EXACT_PAGE_SINGLE_ROOT" : null;
       }
       lastRootCount = roots.length;
       if (roots.length > 1) return { status: "FAILED", error: "FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: roots.length };
       root = roots[0] || null;
       if (root) {
-        const rootIsArticle = root.matches?.('[role="article"]') === true;
-        const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
-        author = [...root.querySelectorAll("h2 a, h3 a, strong a")].filter((node) => sameRoot(node) && !isCommentDescendant(node)).map(visibleText).find(Boolean) || null;
-        const messageNodes = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]')].filter((node) => sameRoot(node) && !isCommentDescendant(node));
-        rootText = messageNodes.map(visibleText).find(Boolean) || null;
+        const evidence = galleryRootEvidence(root);
+        author = evidence.author;
+        rootText = evidence.rootText;
         if (author && rootText) break;
       }
       if (Date.now() < rootDeadline) await wait(Math.min(250, rootDeadline - Date.now()));
@@ -99,6 +103,17 @@
       candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
     }
     return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 };
+  }
+
+  function galleryRootEvidence(root) {
+    const rootIsArticle = root?.matches?.('[role="article"]') === true;
+    const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
+    const author = [...root.querySelectorAll("h2 a, h3 a, strong a")].filter((node) => sameRoot(node) && !isCommentDescendant(node)).map(visibleText).find(Boolean) || null;
+    const rootTexts = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]')]
+      .filter((node) => sameRoot(node) && !isCommentDescendant(node))
+      .map(visibleText)
+      .filter(Boolean);
+    return { root, author, rootText: rootTexts.length === 1 ? rootTexts[0] : null };
   }
 
   async function resolveSearchMediaTile(options) {
