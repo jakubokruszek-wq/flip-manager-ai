@@ -119,6 +119,16 @@ export async function completeFacebookGalleryJob(input: {
   const expectedPostId = string(job.gallery_post_id);
   if (!listingId || !expectedPostId) throw new Error("FACEBOOK_GALLERY_JOB_TARGET_INVALID");
   if (input.status === "failed") {
+    // A gallery page can be unavailable to the bounded content-script
+    // resolver even though the source scan already persisted authoritative,
+    // exact-root media provenance for this same post. Reuse only that
+    // provenance; never infer media from a photo id, neighbour story, or
+    // unverified URL. This keeps gallery hydration fail-closed while making
+    // the explicit user action useful for media already proven at scan time.
+    if (input.errorCode === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {
+      const recovered = await recoverGalleryFromExactMetadata({ supabase, jobId: input.jobId, leaseToken: input.leaseToken, workerId: input.workerId, listingId, expectedPostId });
+      if (recovered) return recovered;
+    }
     const errorCode = input.errorCode ?? "FACEBOOK_GALLERY_FAILED";
     const diagnostics = sanitizeGalleryDiagnostics(input.gallery?.diagnostics);
     await markGalleryFailed(supabase, input.jobId, listingId, errorCode, diagnostics);
@@ -163,6 +173,97 @@ export async function completeFacebookGalleryJob(input: {
   }
   const result: FacebookGalleryJobResult = { jobId: input.jobId, listingId, postId: expectedPostId, status, sourceMediaCount, exactMediaCount, alreadyStored, downloadRequired, downloaded, storageSuccess, persistedTotal, errorCode };
   const finished = await supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: { kind: "GALLERY_HYDRATION", ...result }, error_code: errorCode, error_message: errorCode }).eq("id", input.jobId).eq("status", "running").eq("lease_token", input.leaseToken).eq("worker_id", input.workerId);
+  if (finished.error) throw new Error(`FACEBOOK_GALLERY_JOB_FINALIZE_FAILED: ${finished.error.message}`);
+  return result;
+}
+
+async function recoverGalleryFromExactMetadata(input: {
+  supabase: ReturnType<typeof createFacebookWatcherAdminClient>;
+  jobId: string;
+  leaseToken: string;
+  workerId: string;
+  listingId: string;
+  expectedPostId: string;
+}): Promise<FacebookGalleryJobResult | null> {
+  const metadataResult = await input.supabase.from("listing_source_metadata").select("metadata").eq("listing_id", input.listingId).eq("source", "facebook").maybeSingle();
+  if (metadataResult.error) return null;
+  const metadata = row(metadataResult.data?.metadata) ?? {};
+  const candidates = exactMetadataCandidates(metadata.mediaProvenance, input.expectedPostId);
+  if (candidates.length === 0) return null;
+  const listingResult = await input.supabase.from("listings").select("images,original_url").eq("id", input.listingId).maybeSingle();
+  const listing = row(listingResult.data);
+  if (listingResult.error || !listing) return null;
+  const existingImages = stringArray(listing.images);
+  const existingMediaIds = new Set(stringArray(metadata.galleryMediaIds));
+  return persistVerifiedGallery({
+    supabase: input.supabase,
+    jobId: input.jobId,
+    leaseToken: input.leaseToken,
+    workerId: input.workerId,
+    listingId: input.listingId,
+    expectedPostId: input.expectedPostId,
+    sourceMediaCount: candidates.length,
+    candidates,
+    existingImages,
+    existingMediaIds,
+    metadata,
+    sourceUrl: safeFacebookPostUrl(listing.original_url),
+    recoveryReason: "EXACT_ROOT_STORY_METADATA_REUSE",
+  });
+}
+
+function exactMetadataCandidates(value: unknown, expectedPostId: string): FacebookMediaCandidate[] {
+  if (!Array.isArray(value) || value.length > 50) return [];
+  return value.flatMap((entry): FacebookMediaCandidate[] => {
+    const item = row(entry);
+    const url = string(item?.normalizedMediaUrl);
+    const sourcePostId = string(item?.sourcePostId);
+    const storyRootPostId = string(item?.storyRootPostId);
+    const bindingMethod = string(item?.bindingMethod);
+    const classification = string(item?.classification);
+    const confidence = typeof item?.bindingConfidence === "number" && Number.isFinite(item.bindingConfidence) ? item.bindingConfidence : 0;
+    if (!url || !/^https:\/\/scontent[^/]*\.fbcdn\.net\//i.test(url) || sourcePostId !== expectedPostId || storyRootPostId !== expectedPostId || bindingMethod !== "EXACT_ROOT_STORY" || confidence < 0.9 || classification !== "PROPERTY_IMAGE") return [];
+    const mediaId = string(item?.mediaId);
+    return [{ url: url.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: Math.min(1, confidence), bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true }];
+  });
+}
+
+async function persistVerifiedGallery(input: {
+  supabase: ReturnType<typeof createFacebookWatcherAdminClient>;
+  jobId: string;
+  leaseToken: string;
+  workerId: string;
+  listingId: string;
+  expectedPostId: string;
+  sourceMediaCount: number;
+  candidates: FacebookMediaCandidate[];
+  existingImages: string[];
+  existingMediaIds: Set<string>;
+  metadata: Row;
+  sourceUrl: string | null;
+  recoveryReason?: string;
+}): Promise<FacebookGalleryJobResult> {
+  const validation = validateFacebookRevalidationCandidates(input.candidates, input.expectedPostId);
+  const verifiedCandidates = validation.verified as FacebookMediaCandidate[];
+  const exactMediaCount = verifiedCandidates.length;
+  const existingSet = new Set(input.existingImages);
+  const alreadyStored = verifiedCandidates.filter((candidate) => existingSet.has(candidate.url) || (candidate.mediaId ? input.existingMediaIds.has(candidate.mediaId) : false)).length;
+  const downloadRequired = Math.max(0, exactMediaCount - alreadyStored);
+  const missingCandidates = selectMissingGalleryCandidates(verifiedCandidates, input.existingMediaIds, existingSet);
+  const mirrored = await mirrorFacebookImages({ listingId: input.listingId, imageUrls: missingCandidates.map((candidate) => candidate.url), existingImages: input.existingImages, preserveExistingImages: true });
+  const downloaded = Math.max(0, mirrored.stats.uploadedCount);
+  const storageSuccess = downloaded;
+  const status: "PARTIAL" | "COMPLETE" = mirrored.stats.failedCount > 0 || input.sourceMediaCount > exactMediaCount || Boolean(input.recoveryReason) ? "PARTIAL" : "COMPLETE";
+  const errorCode = mirrored.stats.failedCount > 0 ? "FACEBOOK_GALLERY_STORAGE_PARTIAL" : input.sourceMediaCount > exactMediaCount ? "FACEBOOK_GALLERY_PROVENANCE_PARTIAL" : input.recoveryReason ? "FACEBOOK_GALLERY_ROOT_NOT_AVAILABLE_METADATA_REUSE" : null;
+  const now = new Date().toISOString();
+  await input.supabase.from("listings").update({ images: mirrored.images, gallery_status: status, gallery_completed_at: now, gallery_total: Math.max(input.sourceMediaCount, exactMediaCount, mirrored.images.length), gallery_persisted_count: mirrored.images.length, gallery_error: errorCode }).eq("id", input.listingId);
+  if (input.sourceUrl) {
+    const nextMediaIds = [...new Set([...input.existingMediaIds, ...collectGalleryMediaIds(verifiedCandidates)])];
+    const metadata = await input.supabase.from("listing_source_metadata").upsert({ listing_id: input.listingId, source: "facebook", source_post_url: input.sourceUrl, collected_at: now, metadata: { ...input.metadata, galleryMediaIds: nextMediaIds, galleryStatus: status, galleryUpdatedAt: now } }, { onConflict: "source,source_post_url" });
+    if (metadata.error) throw new Error(`FACEBOOK_GALLERY_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
+  }
+  const result: FacebookGalleryJobResult = { jobId: input.jobId, listingId: input.listingId, postId: input.expectedPostId, status, sourceMediaCount: input.sourceMediaCount, exactMediaCount, alreadyStored, downloadRequired, downloaded, storageSuccess, persistedTotal: mirrored.images.length, errorCode, diagnostics: input.recoveryReason ? { rootBindingSource: input.recoveryReason, rootCount: 1, expectedPostId: input.expectedPostId, exactMediaCount, mediaCount: input.sourceMediaCount } : null };
+  const finished = await input.supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: { kind: "GALLERY_HYDRATION", ...result }, error_code: errorCode, error_message: errorCode }).eq("id", input.jobId).eq("status", "running").eq("lease_token", input.leaseToken).eq("worker_id", input.workerId);
   if (finished.error) throw new Error(`FACEBOOK_GALLERY_JOB_FINALIZE_FAILED: ${finished.error.message}`);
   return result;
 }

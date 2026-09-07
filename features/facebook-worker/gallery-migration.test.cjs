@@ -73,3 +73,13 @@ test("failed gallery jobs retain only bounded root diagnostics", () => {
   assert.match(galleryJobs, /expectedRecord/);
   assert.doesNotMatch(galleryJobs, /leaseToken.*diagnostics|diagnostics.*leaseToken/i);
 });
+
+test("root-not-found recovery reuses only previously exact-bound metadata", () => {
+  assert.match(galleryJobs, /EXACT_ROOT_STORY_METADATA_REUSE/);
+  assert.match(galleryJobs, /sourcePostId !== expectedPostId/);
+  assert.match(galleryJobs, /storyRootPostId !== expectedPostId/);
+  assert.match(galleryJobs, /bindingMethod !== "EXACT_ROOT_STORY"/);
+  assert.match(galleryJobs, /classification !== "PROPERTY_IMAGE"/);
+  assert.match(galleryJobs, /scontent\[\^\/\]\*\\\.fbcdn\\\.net/);
+  assert.doesNotMatch(galleryJobs, /photo fbid.*postId|fbid.*expectedPostId/i);
+});
