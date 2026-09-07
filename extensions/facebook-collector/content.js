@@ -40,7 +40,7 @@
     try { expectedGroup = new URL(expectedUrl).pathname.match(/^\/groups\/([^/]+)(?:\/|$)/i)?.[1] || null; } catch { /* invalid source is rejected below */ }
     if (!expectedGroup) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_SOURCE_URL_INVALID", expectedPostId, candidates: [], sourceMediaCount: 0 });
     const permalinkLinks = [...document.querySelectorAll("a[href]")].filter((anchor) => {
-      try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && new RegExp(`^/groups/${escapeRegExp(expectedGroup)}/permalink/${expectedPostId}(?:/|$)`, "i").test(url.pathname); } catch { return false; }
+      try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && new RegExp(`^/groups/${escapeRegExp(expectedGroup)}/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i").test(url.pathname); } catch { return false; }
     });
     const roots = [...new Set(permalinkLinks.map((anchor) => anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]")))] .filter(Boolean);
     if (roots.length !== 1) return Promise.resolve({ status: "FAILED", error: roots.length === 0 ? "FACEBOOK_GALLERY_ROOT_NOT_FOUND" : "FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, candidates: [], sourceMediaCount: 0 });

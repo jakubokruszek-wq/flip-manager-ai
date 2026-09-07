@@ -578,7 +578,10 @@ async function collectGalleryHydration(job, requestId) {
       { timeoutMs: Math.min(30_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId } },
     );
     if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_FAILED") };
-    return { status: responseResult.response.result?.status === "FAILED" ? "FAILED" : "COMPLETE", gallery: { ...responseResult.response.result, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
+    if (responseResult.response.result?.status === "FAILED") {
+      return { status: "FAILED", error: String(responseResult.response.result.error || "FACEBOOK_GALLERY_FAILED"), gallery: responseResult.response.result };
+    }
+    return { status: "COMPLETE", gallery: { ...responseResult.response.result, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
   } catch (error) {
     return { status: "FAILED", error: collectorErrorCode(error) };
   } finally {

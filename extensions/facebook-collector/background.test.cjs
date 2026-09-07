@@ -479,6 +479,22 @@ test("on-demand gallery uses the existing exact-root queue path and never broade
   assert.doesNotMatch(content, /comment.*media|media.*comment/i);
 });
 
+test("gallery exact-root matcher accepts posts and permalink routes for the exact group and post", () => {
+  assert.match(content, /groups\/\$\{escapeRegExp\(expectedGroup\)\}\/\(\?:permalink\|posts\)\/\$\{expectedPostId\}/);
+  assert.match(content, /roots\.length !== 1/);
+  assert.match(content, /FACEBOOK_GALLERY_ROOT_NOT_FOUND/);
+  assert.match(content, /FACEBOOK_GALLERY_ROOT_AMBIGUOUS/);
+  assert.match(content, /FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING/);
+  assert.match(content, /FACEBOOK_GALLERY_ROOT_TEXT_MISSING/);
+});
+
+test("gallery hydration preserves the exact content-script terminal error", () => {
+  const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
+  assert.match(gallery, /responseResult\.response\.result\?\.status === "FAILED"/);
+  assert.match(gallery, /error: String\(responseResult\.response\.result\.error \|\| "FACEBOOK_GALLERY_FAILED"\)/);
+  assert.match(gallery, /gallery: responseResult\.response\.result/);
+});
+
 test("source scans use a tab-scoped data-only image policy and gallery is the only media-enabled mode", () => {
   assert.ok(manifest.permissions.includes("declarativeNetRequest"));
   assert.ok(manifest.permissions.includes("webRequest"));
