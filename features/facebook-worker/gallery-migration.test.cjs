@@ -65,3 +65,11 @@ test("gallery retry RPC is backend-only and application returns the atomic RPC r
   assert.match(galleryJobs, /created: result\?\.job_created === true/);
   assert.doesNotMatch(galleryJobs, /\.from\("facebook_scan_jobs"\)\.insert/);
 });
+
+test("failed gallery jobs retain only bounded root diagnostics", () => {
+  assert.match(galleryJobs, /sanitizeGalleryDiagnostics/);
+  assert.match(galleryJobs, /result_summary: \{ kind: "GALLERY_HYDRATION", status: "FAILED"/);
+  assert.match(galleryJobs, /networkRecordPostIds/);
+  assert.match(galleryJobs, /expectedRecord/);
+  assert.doesNotMatch(galleryJobs, /leaseToken.*diagnostics|diagnostics.*leaseToken/i);
+});

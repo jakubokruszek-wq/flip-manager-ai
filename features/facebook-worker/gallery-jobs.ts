@@ -22,6 +22,7 @@ export type FacebookGalleryJobResult = {
   storageSuccess: number;
   persistedTotal: number;
   errorCode?: string | null;
+  diagnostics?: GalleryFailureDiagnostics | null;
 };
 
 export type FacebookGalleryStatusResult = {
@@ -34,6 +35,30 @@ export type FacebookGalleryStatusResult = {
 };
 
 type Row = Record<string, unknown>;
+type GalleryFailureDiagnostics = {
+  elapsedMs?: number;
+  currentPath?: string | null;
+  expectedPostId?: string | null;
+  expectedGroup?: string | null;
+  resolvedGroup?: string | null;
+  rootBindingSource?: string | null;
+  rootCount?: number;
+  networkResponses?: number;
+  networkRecordCount?: number;
+  networkRecordPostIds?: string[];
+  expectedRecord?: {
+    postId?: string;
+    sourceType?: string;
+    sourceId?: string;
+    identityConfidence?: string;
+    permalinkPath?: string | null;
+    authorFound?: boolean;
+    rootTextFound?: boolean;
+    mediaCount?: number;
+    exactMediaCount?: number;
+  } | null;
+  [key: string]: unknown;
+};
 
 export async function enqueueFacebookGalleryJob(listingId: string): Promise<{ jobId: string | null; status: FacebookGalleryStatus; listingId: string; created?: boolean; message?: string }> {
   const supabase = createFacebookWatcherAdminClient();
@@ -84,7 +109,7 @@ export async function completeFacebookGalleryJob(input: {
   workerId: string;
   status: "completed" | "failed";
   errorCode?: string | null;
-  gallery?: { status?: string; expectedPostId?: string; sourceMediaCount?: number; candidates?: unknown[] };
+  gallery?: { status?: string; expectedPostId?: string; sourceMediaCount?: number; candidates?: unknown[]; diagnostics?: unknown };
 }): Promise<FacebookGalleryJobResult> {
   const supabase = createFacebookWatcherAdminClient();
   const jobResult = await supabase.from("facebook_scan_jobs").select("id,status,job_type,lease_token,worker_id,gallery_listing_id,gallery_post_id").eq("id", input.jobId).maybeSingle();
@@ -94,8 +119,10 @@ export async function completeFacebookGalleryJob(input: {
   const expectedPostId = string(job.gallery_post_id);
   if (!listingId || !expectedPostId) throw new Error("FACEBOOK_GALLERY_JOB_TARGET_INVALID");
   if (input.status === "failed") {
-    await markGalleryFailed(supabase, input.jobId, listingId, input.errorCode ?? "FACEBOOK_GALLERY_FAILED");
-    return { jobId: input.jobId, listingId, postId: expectedPostId, status: "FAILED", sourceMediaCount: 0, exactMediaCount: 0, alreadyStored: 0, downloadRequired: 0, downloaded: 0, storageSuccess: 0, persistedTotal: 0, errorCode: input.errorCode ?? "FACEBOOK_GALLERY_FAILED" };
+    const errorCode = input.errorCode ?? "FACEBOOK_GALLERY_FAILED";
+    const diagnostics = sanitizeGalleryDiagnostics(input.gallery?.diagnostics);
+    await markGalleryFailed(supabase, input.jobId, listingId, errorCode, diagnostics);
+    return { jobId: input.jobId, listingId, postId: expectedPostId, status: "FAILED", sourceMediaCount: 0, exactMediaCount: 0, alreadyStored: 0, downloadRequired: 0, downloaded: 0, storageSuccess: 0, persistedTotal: 0, errorCode, diagnostics };
   }
   if (input.gallery?.expectedPostId && input.gallery.expectedPostId !== expectedPostId) throw new Error("FACEBOOK_GALLERY_POST_ID_MISMATCH");
   const candidates = parseFacebookGalleryCandidates(input.gallery?.candidates, expectedPostId);
@@ -140,12 +167,48 @@ export async function completeFacebookGalleryJob(input: {
   return result;
 }
 
-async function markGalleryFailed(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, jobId: string, listingId: string, errorCode: string): Promise<void> {
+async function markGalleryFailed(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, jobId: string, listingId: string, errorCode: string, diagnostics: GalleryFailureDiagnostics | null = null): Promise<void> {
   const now = new Date().toISOString();
   await supabase.from("listings").update({ gallery_status: "FAILED", gallery_completed_at: now, gallery_error: errorCode }).eq("id", listingId);
-  const finished = await supabase.from("facebook_scan_jobs").update({ status: "failed", finished_at: now, leased_until: null, heartbeat_at: now, error_code: errorCode, error_message: errorCode }).eq("id", jobId).eq("status", "running");
+  const finished = await supabase.from("facebook_scan_jobs").update({ status: "failed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: { kind: "GALLERY_HYDRATION", status: "FAILED", errorCode, diagnostics }, error_code: errorCode, error_message: errorCode }).eq("id", jobId).eq("status", "running");
   if (finished.error) throw new Error(`FACEBOOK_GALLERY_JOB_FINALIZE_FAILED: ${finished.error.message}`);
 }
+
+function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics | null {
+  const input = row(value);
+  if (!input) return null;
+  const number = (key: string, max: number) => typeof input[key] === "number" && Number.isFinite(input[key]) ? Math.max(0, Math.min(max, Math.floor(input[key] as number))) : undefined;
+  const text = (key: string, max: number) => typeof input[key] === "string" && (input[key] as string).trim() ? (input[key] as string).slice(0, max) : null;
+  const bool = (key: string) => typeof input[key] === "boolean" ? input[key] as boolean : undefined;
+  const rawIds = Array.isArray(input.networkRecordPostIds) ? input.networkRecordPostIds : [];
+  const expected = row(input.expectedRecord);
+  return {
+    elapsedMs: number("elapsedMs", 120_000),
+    currentPath: text("currentPath", 500),
+    expectedPostId: text("expectedPostId", 30),
+    expectedGroup: text("expectedGroup", 120),
+    resolvedGroup: text("resolvedGroup", 120),
+    rootBindingSource: text("rootBindingSource", 80),
+    rootCount: number("rootCount", 50),
+    networkResponses: number("networkResponses", 200),
+    networkRecordCount: number("networkRecordCount", 200),
+    networkRecordPostIds: rawIds.filter((id): id is string => typeof id === "string" && /^\d{5,30}$/.test(id)).slice(0, 50),
+    expectedRecord: expected ? {
+      postId: typeof expected.postId === "string" ? expected.postId.slice(0, 30) : undefined,
+      sourceType: typeof expected.sourceType === "string" ? expected.sourceType.slice(0, 20) : undefined,
+      sourceId: typeof expected.sourceId === "string" ? expected.sourceId.slice(0, 120) : undefined,
+      identityConfidence: typeof expected.identityConfidence === "string" ? expected.identityConfidence.slice(0, 20) : undefined,
+      permalinkPath: typeof expected.permalinkPath === "string" ? expected.permalinkPath.slice(0, 500) : null,
+      authorFound: boolFrom(expected.authorFound),
+      rootTextFound: boolFrom(expected.rootTextFound),
+      mediaCount: finiteFrom(expected.mediaCount, 50),
+      exactMediaCount: finiteFrom(expected.exactMediaCount, 50),
+    } : null,
+  };
+}
+
+function boolFrom(value: unknown): boolean | undefined { return typeof value === "boolean" ? value : undefined; }
+function finiteFrom(value: unknown, max: number): number | undefined { return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(max, Math.floor(value))) : undefined; }
 
 export function parseFacebookGalleryCandidates(value: unknown, expectedPostId: string): FacebookMediaCandidate[] {
   if (!Array.isArray(value) || value.length > 50) return [];

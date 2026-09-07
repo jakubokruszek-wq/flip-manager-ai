@@ -32,17 +32,26 @@
   });
 
   async function hydrateFacebookGallery(options) {
-    if (options.imageMode !== GALLERY_HYDRATION_MEDIA_ALLOWED) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_IMAGE_MODE_INVALID", candidates: [], sourceMediaCount: 0 });
+    const startedAt = Date.now();
+    const galleryFailure = (error, expectedPostId, extra = {}) => ({
+      status: "FAILED",
+      error,
+      expectedPostId: expectedPostId || null,
+      candidates: [],
+      sourceMediaCount: 0,
+      diagnostics: galleryDiagnostics(startedAt, expectedPostId, extra),
+    });
+    if (options.imageMode !== GALLERY_HYDRATION_MEDIA_ALLOWED) return galleryFailure("FACEBOOK_GALLERY_IMAGE_MODE_INVALID", null);
     const expectedPostId = String(options.expectedPostId || "");
     const expectedUrl = String(options.expectedUrl || "");
     const resolvedUrl = String(options.resolvedUrl || "");
-    if (!/^\d{5,30}$/.test(expectedPostId)) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_POST_ID_INVALID", expectedPostId: null, candidates: [], sourceMediaCount: 0 });
+    if (!/^\d{5,30}$/.test(expectedPostId)) return galleryFailure("FACEBOOK_GALLERY_POST_ID_INVALID", null);
     let expectedGroup = null;
     try { expectedGroup = new URL(expectedUrl).pathname.match(/^\/groups\/([^/]+)(?:\/|$)/i)?.[1] || null; } catch { /* invalid source is rejected below */ }
-    if (!expectedGroup) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_SOURCE_URL_INVALID", expectedPostId, candidates: [], sourceMediaCount: 0 });
+    if (!expectedGroup) return galleryFailure("FACEBOOK_GALLERY_SOURCE_URL_INVALID", expectedPostId);
     let resolvedGroup = null;
     try { resolvedGroup = new URL(resolvedUrl).pathname.match(new RegExp(`^/groups/([^/]+)/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i"))?.[1] || null; } catch { /* invalid resolved URL is rejected below */ }
-    if (!resolvedGroup) return { status: "FAILED", error: "FACEBOOK_GALLERY_RESOLVED_URL_INVALID", expectedPostId, candidates: [], sourceMediaCount: 0 };
+    if (!resolvedGroup) return galleryFailure("FACEBOOK_GALLERY_RESOLVED_URL_INVALID", expectedPostId, { expectedGroup });
     const exactPath = new RegExp(`^/groups/${escapeRegExp(resolvedGroup)}/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i");
     let exactPageContext = false;
     try {
@@ -50,7 +59,7 @@
       const current = new URL(location.href);
       exactPageContext = /(^|\.)facebook\.com$/i.test(resolved.hostname) && /(^|\.)facebook\.com$/i.test(current.hostname) && exactPath.test(resolved.pathname) && exactPath.test(current.pathname);
     } catch { /* invalid runtime location remains fail-closed */ }
-    if (!exactPageContext) return { status: "FAILED", error: "FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH", expectedPostId, candidates: [], sourceMediaCount: 0 };
+    if (!exactPageContext) return galleryFailure("FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH", expectedPostId, { expectedGroup, resolvedGroup });
     const groupBindingSource = resolvedGroup === expectedGroup ? "EXACT_SOURCE_GROUP" : "DIRECT_NAVIGATION_REDIRECT";
     const rootDeadline = Date.now() + 8_000;
     let root = null;
@@ -84,7 +93,7 @@
         rootBindingSource = roots.length > 0 ? "EXACT_PAGE_SINGLE_ROOT" : null;
       }
       lastRootCount = roots.length;
-      if (roots.length > 1) return { status: "FAILED", error: "FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: roots.length };
+      if (roots.length > 1) return galleryFailure("FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: roots.length });
       root = roots[0] || null;
       if (root) {
         const evidence = galleryRootEvidence(root);
@@ -94,8 +103,8 @@
       }
       if (Date.now() < rootDeadline) await wait(Math.min(250, rootDeadline - Date.now()));
     } while (Date.now() < rootDeadline);
-    if (!root && !structuredRoot) return { status: "FAILED", error: "FACEBOOK_GALLERY_ROOT_NOT_FOUND", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: lastRootCount };
-    if (!author || !rootText) return { status: "FAILED", error: !author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, candidates: [], sourceMediaCount: 0, rootBindingSource, rootCount: lastRootCount };
+    if (!root && !structuredRoot) return galleryFailure("FACEBOOK_GALLERY_ROOT_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: lastRootCount });
+    if (!author || !rootText) return galleryFailure(!author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: lastRootCount });
     const candidates = [];
     const seen = new Set();
     for (const media of structuredRoot?.media || []) {
@@ -120,8 +129,36 @@
         candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
       }
     }
-    if (candidates.length === 0) return { status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND", expectedPostId, candidates: [], sourceMediaCount: 0, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 };
-    return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 };
+    if (candidates.length === 0) return galleryFailure("FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 });
+    return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1, diagnostics: galleryDiagnostics(startedAt, expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: 1 }) };
+  }
+
+  function galleryDiagnostics(startedAt, expectedPostId, extra = {}) {
+    const record = networkRecords.get(String(expectedPostId || ""));
+    return {
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      currentPath: safePagePath(location.href),
+      expectedPostId: /^\d{5,30}$/.test(String(expectedPostId || "")) ? String(expectedPostId) : null,
+      networkResponses: Math.min(200, Math.max(0, Number(networkResponses) || 0)),
+      networkRecordCount: Math.min(200, networkRecords.size),
+      networkRecordPostIds: [...networkRecords.keys()].filter((value) => /^\d{5,30}$/.test(String(value))).slice(0, 50),
+      expectedRecord: record ? {
+        postId: String(record.postId || "").slice(0, 30),
+        sourceType: String(record.sourceType || "").slice(0, 20),
+        sourceId: String(record.sourceId || "").slice(0, 120),
+        identityConfidence: String(record.identityConfidence || "").slice(0, 20),
+        permalinkPath: safePagePath(record.permalink),
+        authorFound: Boolean(String(record.author || "").trim()),
+        rootTextFound: Boolean(String(record.text || "").trim()),
+        mediaCount: Array.isArray(record.media) ? Math.min(50, record.media.length) : 0,
+        exactMediaCount: Array.isArray(record.media) ? Math.min(50, record.media.filter((item) => item?.exactAssociation === true && item?.exactPostId === String(expectedPostId)).length) : 0,
+      } : null,
+      ...extra,
+    };
+  }
+
+  function safePagePath(value) {
+    try { const url = new URL(String(value || ""), location.href); return `${url.origin}${url.pathname}`.slice(0, 500); } catch { return null; }
   }
 
   function galleryRootEvidence(root) {

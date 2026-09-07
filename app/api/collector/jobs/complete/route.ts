@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   const body = await request.text();
   try {
     const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, markHealthy: true });
-    const input = JSON.parse(body) as { jobId?: string; leaseToken?: string; status?: string; errorCode?: string | null; gallery?: { status?: string; expectedPostId?: string; sourceMediaCount?: number; candidates?: unknown[] } };
+    const input = JSON.parse(body) as { jobId?: string; leaseToken?: string; status?: string; errorCode?: string | null; gallery?: { status?: string; expectedPostId?: string; sourceMediaCount?: number; candidates?: unknown[]; diagnostics?: unknown } };
     if (!input.jobId || !input.leaseToken || !["completed", "failed"].includes(String(input.status))) return Response.json({ ok: false, code: "INVALID_PAYLOAD" }, { status: 400 });
     const supabase = createFacebookWatcherAdminClient();
     const jobType = await supabase.from("facebook_scan_jobs").select("job_type").eq("id", input.jobId).maybeSingle();

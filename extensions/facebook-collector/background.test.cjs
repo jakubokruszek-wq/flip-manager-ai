@@ -519,6 +519,14 @@ test("gallery hydration preserves the exact content-script terminal error", () =
   assert.match(gallery, /gallery: responseResult\.response\.result/);
 });
 
+test("gallery root failures expose bounded, non-sensitive diagnostics", () => {
+  assert.match(content, /networkRecordPostIds/);
+  assert.match(content, /expectedRecord/);
+  assert.match(content, /currentPath: safePagePath\(location\.href\)/);
+  assert.doesNotMatch(content, /document\.cookie|Authorization|leaseToken/);
+  assert.match(content, /networkRecords\.size/);
+});
+
 test("source scans use a tab-scoped data-only image policy and gallery is the only media-enabled mode", () => {
   assert.ok(manifest.permissions.includes("declarativeNetRequest"));
   assert.ok(manifest.permissions.includes("webRequest"));
