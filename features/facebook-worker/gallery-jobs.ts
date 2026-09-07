@@ -57,6 +57,16 @@ type GalleryFailureDiagnostics = {
     mediaCount?: number;
     exactMediaCount?: number;
   } | null;
+  page?: {
+    readyState?: string | null;
+    visibilityState?: string | null;
+    title?: string | null;
+    bodyTextLength?: number;
+    articleCount?: number;
+    mainCount?: number;
+    exactPostLinkCount?: number;
+    scriptCount?: number;
+  } | null;
   [key: string]: unknown;
 };
 
@@ -283,6 +293,7 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
   const bool = (key: string) => typeof input[key] === "boolean" ? input[key] as boolean : undefined;
   const rawIds = Array.isArray(input.networkRecordPostIds) ? input.networkRecordPostIds : [];
   const expected = row(input.expectedRecord);
+  const page = row(input.page);
   return {
     elapsedMs: number("elapsedMs", 120_000),
     currentPath: text("currentPath", 500),
@@ -304,6 +315,16 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
       rootTextFound: boolFrom(expected.rootTextFound),
       mediaCount: finiteFrom(expected.mediaCount, 50),
       exactMediaCount: finiteFrom(expected.exactMediaCount, 50),
+    } : null,
+    page: page ? {
+      readyState: typeof page.readyState === "string" ? page.readyState.slice(0, 20) : null,
+      visibilityState: typeof page.visibilityState === "string" ? page.visibilityState.slice(0, 20) : null,
+      title: typeof page.title === "string" ? page.title.slice(0, 160) : null,
+      bodyTextLength: finiteFrom(page.bodyTextLength, 50_000),
+      articleCount: finiteFrom(page.articleCount, 100),
+      mainCount: finiteFrom(page.mainCount, 20),
+      exactPostLinkCount: finiteFrom(page.exactPostLinkCount, 50),
+      scriptCount: finiteFrom(page.scriptCount, 250),
     } : null,
   };
 }

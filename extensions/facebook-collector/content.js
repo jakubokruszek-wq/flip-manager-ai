@@ -61,7 +61,10 @@
     } catch { /* invalid runtime location remains fail-closed */ }
     if (!exactPageContext) return galleryFailure("FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH", expectedPostId, { expectedGroup, resolvedGroup });
     const groupBindingSource = resolvedGroup === expectedGroup ? "EXACT_SOURCE_GROUP" : "DIRECT_NAVIGATION_REDIRECT";
-    const rootDeadline = Date.now() + 8_000;
+    // Facebook can finish the navigation before the group story is hydrated,
+    // especially in a background tab. Keep this bounded, but allow the
+    // dedicated gallery page enough time to expose the exact root.
+    const rootDeadline = Date.now() + 20_000;
     let root = null;
     let rootBindingSource = null;
     let author = null;
@@ -105,8 +108,8 @@
       }
       if (Date.now() < rootDeadline) await wait(Math.min(250, rootDeadline - Date.now()));
     } while (Date.now() < rootDeadline);
-    if (!root && !structuredRoot) return galleryFailure("FACEBOOK_GALLERY_ROOT_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: lastRootCount });
-    if (!author || !rootText) return galleryFailure(!author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: lastRootCount });
+    if (!root && !structuredRoot) return galleryFailure("FACEBOOK_GALLERY_ROOT_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: lastRootCount, page: galleryPageSnapshot(exactPath, expectedPostId) });
+    if (!author || !rootText) return galleryFailure(!author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: lastRootCount, page: galleryPageSnapshot(exactPath, expectedPostId) });
     const candidates = [];
     const seen = new Set();
     for (const media of structuredRoot?.media || []) {
@@ -166,12 +169,33 @@
   function galleryRootEvidence(root) {
     const rootIsArticle = root?.matches?.('[role="article"]') === true;
     const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
-    const author = [...root.querySelectorAll("h2 a, h3 a, strong a")].filter((node) => sameRoot(node) && !isCommentDescendant(node)).map(visibleText).find(Boolean) || null;
-    const rootTexts = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"]')]
+    const authorCandidates = [...root.querySelectorAll("h2 a, h3 a, strong a, [role=heading] a, [data-ad-rendering-role=profile_name]")]
+      .filter((node) => sameRoot(node) && !isCommentDescendant(node)).map(visibleText).filter(Boolean);
+    const authorNames = [...new Set(authorCandidates)];
+    const author = authorNames.length === 1 ? authorNames[0] : null;
+    const rootTexts = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="message"]')]
       .filter((node) => sameRoot(node) && !isCommentDescendant(node))
       .map(visibleText)
       .filter(Boolean);
-    return { root, author, rootText: rootTexts.length === 1 ? rootTexts[0] : null };
+    const uniqueRootTexts = [...new Set(rootTexts)];
+    return { root, author, rootText: uniqueRootTexts.length === 1 ? uniqueRootTexts[0] : null };
+  }
+
+  function galleryPageSnapshot(exactPath, expectedPostId) {
+    const links = [...document.querySelectorAll("a[href]")].filter((anchor) => {
+      try { return exactPath.test(new URL(anchor.href).pathname); } catch { return false; }
+    }).length;
+    return {
+      readyState: document.readyState,
+      visibilityState: document.visibilityState,
+      title: String(document.title || "").slice(0, 160),
+      bodyTextLength: Math.min(50_000, visibleText(document.body)?.length || 0),
+      articleCount: Math.min(100, document.querySelectorAll('[role="article"]').length),
+      mainCount: Math.min(20, document.querySelectorAll('[role="main"]').length),
+      exactPostLinkCount: Math.min(50, links),
+      scriptCount: Math.min(250, document.scripts.length),
+      expectedPostId: /^\d{5,30}$/.test(String(expectedPostId || "")) ? String(expectedPostId) : null,
+    };
   }
 
   function galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, exactPath) {

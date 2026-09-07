@@ -494,7 +494,7 @@ test("gallery exact-root matcher accepts posts and permalink routes for the exac
   assert.match(content, /FACEBOOK_GALLERY_RESOLVED_URL_INVALID/);
   assert.match(content, /DIRECT_NAVIGATION_REDIRECT/);
   assert.match(content, /exactPath\.test\(resolved\.pathname\) && exactPath\.test\(current\.pathname\)/);
-  assert.match(content, /rootDeadline = Date\.now\(\) \+ 8_000/);
+  assert.match(content, /rootDeadline = Date\.now\(\) \+ 20_000/);
   assert.match(content, /EXACT_SELF_LINK/);
   assert.match(content, /EXACT_PAGE_SINGLE_ROOT/);
   assert.match(content, /!article\.parentElement\?\.closest\('\[role="article"\]'\)/);
@@ -506,7 +506,7 @@ test("gallery exact-root matcher accepts posts and permalink routes for the exac
   assert.match(content, /record\.identityConfidence !== "EXACT"/);
   assert.match(content, /item\.exactAssociation !== true \|\| item\.exactPostId !== expectedPostId/);
   assert.match(content, /FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND/);
-  assert.match(content, /rootTexts\.length === 1/);
+  assert.match(content, /uniqueRootTexts\.length === 1/);
   assert.match(content, /isCommentDescendant\(anchor\)/);
   assert.match(content, /roots\.length > 1/);
   assert.match(content, /FACEBOOK_GALLERY_ROOT_NOT_FOUND/);
@@ -536,6 +536,8 @@ test("gallery root failures expose bounded, non-sensitive diagnostics", () => {
   assert.match(content, /currentPath: safePagePath\(location\.href\)/);
   assert.doesNotMatch(content, /document\.cookie|Authorization|leaseToken/);
   assert.match(content, /networkRecords\.size/);
+  assert.match(content, /galleryPageSnapshot/);
+  assert.match(content, /page: galleryPageSnapshot/);
 });
 
 test("gallery button reads terminal status without browser cache", () => {
