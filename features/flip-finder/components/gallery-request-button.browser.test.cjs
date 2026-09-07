@@ -139,7 +139,7 @@ async function waitForServer(url, timeoutMs = 60_000) {
   throw new Error("Local Next server did not become ready within 60 seconds");
 }
 
-async function preparePage(browser, baseUrl, { throwTraceFetch = false } = {}) {
+async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null } = {}) {
   const page = await browser.newPage();
   const traceRequests = [];
   let galleryRequests = 0;
@@ -160,6 +160,9 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false } = {}) {
       traceRequests.push(JSON.parse(request.postData() || "{}"));
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
     }
+    if (url.pathname === `/api/flip-finder/listings/${listingId}/gallery` && request.method() === "GET") {
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, status: galleryStatusResponse ?? initialGalleryStatus, total: 0, persistedCount: 0 }), status: 200 });
+    }
     if (url.pathname === `/api/flip-finder/listings/${listingId}/gallery` && request.method() === "POST") {
       galleryRequests += 1;
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, status: "PENDING", jobId: "22222222-2222-4222-8222-222222222222" }), status: 202 });
@@ -168,7 +171,8 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false } = {}) {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload), status: 200 });
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/results`) {
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify(resultsPayload), status: 200 });
+      const payload = initialGalleryStatus === result.galleryStatus ? resultsPayload : { ...resultsPayload, reviewResults: [{ ...result, galleryStatus: initialGalleryStatus }] };
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify(payload), status: 200 });
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
@@ -236,6 +240,13 @@ test("real Flip Finder gallery button keeps business click independent from trac
     const click = traces.find((entry) => entry.stage === "GALLERY_UI_CLICK");
     assert.ok(mount?.instanceId);
     assert.equal(click?.instanceId, mount.instanceId);
+    await testPage.page.close();
+  });
+
+  await t.test("a stale pending status is refreshed to terminal failure and enables retry", async () => {
+    const testPage = await preparePage(browser, baseUrl, { initialGalleryStatus: "PENDING", galleryStatusResponse: "FAILED" });
+    await testPage.page.waitForFunction(() => document.querySelector('[data-gallery-request-button="true"]')?.dataset.galleryStatus === "FAILED", null, { timeout: 10_000 });
+    assert.equal(await testPage.button.isEnabled(), true);
     await testPage.page.close();
   });
 });
