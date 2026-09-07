@@ -572,9 +572,17 @@ async function collectGalleryHydration(job, requestId) {
     await imagePolicy.attachTab(tab.id, { sessionId, mode: GALLERY_HYDRATION_MEDIA_MODE });
     await chrome.tabs.update(tab.id, { url: sourceUrl });
     await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline - Date.now())));
+    const resolvedTab = await chrome.tabs.get(tab.id);
+    const resolvedUrl = String(resolvedTab?.url || "");
+    let resolvedTargetValid = false;
+    try {
+      const target = new URL(resolvedUrl);
+      resolvedTargetValid = /(^|\.)facebook\.com$/i.test(target.hostname) && new RegExp(`^/groups/[^/]+/(?:posts|permalink)/${postId}(?:/|$)`, "i").test(target.pathname);
+    } catch { /* invalid redirect target remains fail-closed */ }
+    if (!resolvedTargetValid) return { status: "FAILED", error: "FACEBOOK_GALLERY_RESOLVED_URL_INVALID" };
     await waitForContentScript(tab.id, Math.min(10_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
     const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-      () => chrome.tabs.sendMessage(tab.id, { type: "HYDRATE_FACEBOOK_GALLERY", options: { expectedPostId: postId, expectedUrl: sourceUrl, imageMode: GALLERY_HYDRATION_MEDIA_MODE } }),
+      () => chrome.tabs.sendMessage(tab.id, { type: "HYDRATE_FACEBOOK_GALLERY", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl, imageMode: GALLERY_HYDRATION_MEDIA_MODE } }),
       { timeoutMs: Math.min(30_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId } },
     );
     if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_FAILED") };

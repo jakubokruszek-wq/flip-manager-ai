@@ -480,8 +480,12 @@ test("on-demand gallery uses the existing exact-root queue path and never broade
 });
 
 test("gallery exact-root matcher accepts posts and permalink routes for the exact group and post", () => {
-  assert.match(content, /groups\/\$\{escapeRegExp\(expectedGroup\)\}\/\(\?:permalink\|posts\)\/\$\{expectedPostId\}/);
+  assert.match(content, /expectedGroup = new URL\(expectedUrl\)\.pathname\.match/);
+  assert.match(content, /groups\/\$\{escapeRegExp\(resolvedGroup\)\}\/\(\?:permalink\|posts\)\/\$\{expectedPostId\}/);
   assert.match(content, /FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH/);
+  assert.match(content, /FACEBOOK_GALLERY_RESOLVED_URL_INVALID/);
+  assert.match(content, /DIRECT_NAVIGATION_REDIRECT/);
+  assert.match(content, /exactPath\.test\(resolved\.pathname\) && exactPath\.test\(current\.pathname\)/);
   assert.match(content, /rootDeadline = Date\.now\(\) \+ 8_000/);
   assert.match(content, /EXACT_SELF_LINK/);
   assert.match(content, /EXACT_PAGE_SINGLE_ROOT/);
@@ -491,6 +495,14 @@ test("gallery exact-root matcher accepts posts and permalink routes for the exac
   assert.match(content, /FACEBOOK_GALLERY_ROOT_AMBIGUOUS/);
   assert.match(content, /FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING/);
   assert.match(content, /FACEBOOK_GALLERY_ROOT_TEXT_MISSING/);
+});
+
+test("gallery background binds a Facebook vanity redirect to the same exact post before hydration", () => {
+  const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
+  assert.match(gallery, /const resolvedTab = await chrome\.tabs\.get\(tab\.id\)/);
+  assert.match(gallery, /FACEBOOK_GALLERY_RESOLVED_URL_INVALID/);
+  assert.match(gallery, /\(\?:posts\|permalink\)\/\$\{postId\}/);
+  assert.match(gallery, /expectedUrl: sourceUrl, resolvedUrl/);
 });
 
 test("gallery hydration preserves the exact content-script terminal error", () => {

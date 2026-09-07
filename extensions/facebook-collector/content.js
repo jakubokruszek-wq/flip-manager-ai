@@ -35,14 +35,23 @@
     if (options.imageMode !== GALLERY_HYDRATION_MEDIA_ALLOWED) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_IMAGE_MODE_INVALID", candidates: [], sourceMediaCount: 0 });
     const expectedPostId = String(options.expectedPostId || "");
     const expectedUrl = String(options.expectedUrl || "");
+    const resolvedUrl = String(options.resolvedUrl || "");
     if (!/^\d{5,30}$/.test(expectedPostId)) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_POST_ID_INVALID", expectedPostId: null, candidates: [], sourceMediaCount: 0 });
     let expectedGroup = null;
     try { expectedGroup = new URL(expectedUrl).pathname.match(/^\/groups\/([^/]+)(?:\/|$)/i)?.[1] || null; } catch { /* invalid source is rejected below */ }
     if (!expectedGroup) return Promise.resolve({ status: "FAILED", error: "FACEBOOK_GALLERY_SOURCE_URL_INVALID", expectedPostId, candidates: [], sourceMediaCount: 0 });
-    const exactPath = new RegExp(`^/groups/${escapeRegExp(expectedGroup)}/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i");
+    let resolvedGroup = null;
+    try { resolvedGroup = new URL(resolvedUrl).pathname.match(new RegExp(`^/groups/([^/]+)/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i"))?.[1] || null; } catch { /* invalid resolved URL is rejected below */ }
+    if (!resolvedGroup) return { status: "FAILED", error: "FACEBOOK_GALLERY_RESOLVED_URL_INVALID", expectedPostId, candidates: [], sourceMediaCount: 0 };
+    const exactPath = new RegExp(`^/groups/${escapeRegExp(resolvedGroup)}/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i");
     let exactPageContext = false;
-    try { const current = new URL(location.href); exactPageContext = /(^|\.)facebook\.com$/i.test(current.hostname) && exactPath.test(current.pathname); } catch { /* invalid runtime location remains fail-closed */ }
+    try {
+      const resolved = new URL(resolvedUrl);
+      const current = new URL(location.href);
+      exactPageContext = /(^|\.)facebook\.com$/i.test(resolved.hostname) && /(^|\.)facebook\.com$/i.test(current.hostname) && exactPath.test(resolved.pathname) && exactPath.test(current.pathname);
+    } catch { /* invalid runtime location remains fail-closed */ }
     if (!exactPageContext) return { status: "FAILED", error: "FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH", expectedPostId, candidates: [], sourceMediaCount: 0 };
+    const groupBindingSource = resolvedGroup === expectedGroup ? "EXACT_SOURCE_GROUP" : "DIRECT_NAVIGATION_REDIRECT";
     const rootDeadline = Date.now() + 8_000;
     let root = null;
     let rootBindingSource = null;
@@ -89,7 +98,7 @@
       seen.add(mediaId);
       candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
     }
-    return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, rootCount: 1 };
+    return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 };
   }
 
   async function resolveSearchMediaTile(options) {
