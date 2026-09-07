@@ -198,6 +198,14 @@
         if (evidence) return evidence;
       }
     }
+    const html = document.documentElement?.outerHTML || "";
+    if (html && html.length <= 4_000_000) {
+      const records = core.extractStructuredRecordsFromText(html, "GALLERY_HYDRATION_HTML", source, 0);
+      for (const record of records) {
+        const evidence = galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, exactPath);
+        if (evidence) return evidence;
+      }
+    }
     return null;
   }
 
