@@ -489,7 +489,9 @@ test("on-demand gallery uses the existing exact-root queue path and never broade
 
 test("gallery exact-root matcher accepts posts and permalink routes for the exact group and post", () => {
   assert.match(content, /expectedGroup = new URL\(expectedUrl\)\.pathname\.match/);
-  assert.match(content, /groups\/\$\{escapeRegExp\(resolvedGroup\)\}\/\(\?:permalink\|posts\)\/\$\{expectedPostId\}/);
+  assert.match(content, /groupNames = \[\.\.\.new Set\(\[resolvedGroup, expectedGroup\]/);
+  assert.match(content, /recordGroup !== resolvedGroup && recordGroup !== expectedGroup/);
+  assert.match(content, /groups\/\(\?:\$\{groupNames\}\)\/\(\?:permalink\|posts\)\/\$\{expectedPostId\}/);
   assert.match(content, /FACEBOOK_GALLERY_PAGE_CONTEXT_MISMATCH/);
   assert.match(content, /FACEBOOK_GALLERY_RESOLVED_URL_INVALID/);
   assert.match(content, /DIRECT_NAVIGATION_REDIRECT/);
@@ -500,7 +502,7 @@ test("gallery exact-root matcher accepts posts and permalink routes for the exac
   assert.match(content, /!article\.parentElement\?\.closest\('\[role="article"\]'\)/);
   assert.match(content, /selfLinkRoots\.map\(galleryRootEvidence\)/);
   assert.match(content, /galleryStructuredRootEvidence\(networkRecords\.get\(expectedPostId\)/);
-  assert.match(content, /galleryScriptStructuredRootEvidence\(expectedPostId, resolvedGroup, exactPath\)/);
+  assert.match(content, /galleryScriptStructuredRootEvidence\(expectedPostId, resolvedGroup, expectedGroup, exactPath\)/);
   assert.match(content, /document\.scripts/);
   assert.match(content, /document\.documentElement\?\.outerHTML/);
   assert.match(content, /record\.identityConfidence !== "EXACT"/);

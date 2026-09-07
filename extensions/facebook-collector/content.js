@@ -52,7 +52,8 @@
     let resolvedGroup = null;
     try { resolvedGroup = new URL(resolvedUrl).pathname.match(new RegExp(`^/groups/([^/]+)/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i"))?.[1] || null; } catch { /* invalid resolved URL is rejected below */ }
     if (!resolvedGroup) return galleryFailure("FACEBOOK_GALLERY_RESOLVED_URL_INVALID", expectedPostId, { expectedGroup });
-    const exactPath = new RegExp(`^/groups/${escapeRegExp(resolvedGroup)}/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i");
+    const groupNames = [...new Set([resolvedGroup, expectedGroup].filter(Boolean))].map(escapeRegExp).join("|");
+    const exactPath = new RegExp(`^/groups/(?:${groupNames})/(?:permalink|posts)/${expectedPostId}(?:/|$)`, "i");
     let exactPageContext = false;
     try {
       const resolved = new URL(resolvedUrl);
@@ -73,8 +74,8 @@
     let scriptStructuredRoot = null;
     let lastRootCount = 0;
     do {
-      scriptStructuredRoot = scriptStructuredRoot || galleryScriptStructuredRootEvidence(expectedPostId, resolvedGroup, exactPath);
-      const structuredEvidence = scriptStructuredRoot || galleryStructuredRootEvidence(networkRecords.get(expectedPostId), expectedPostId, resolvedGroup, exactPath);
+      scriptStructuredRoot = scriptStructuredRoot || galleryScriptStructuredRootEvidence(expectedPostId, resolvedGroup, expectedGroup, exactPath);
+      const structuredEvidence = scriptStructuredRoot || galleryStructuredRootEvidence(networkRecords.get(expectedPostId), expectedPostId, resolvedGroup, expectedGroup, exactPath);
       if (structuredEvidence) {
         structuredRoot = structuredEvidence;
         rootBindingSource = scriptStructuredRoot ? "EXACT_SCRIPT_STRUCTURED_STORY" : "EXACT_STRUCTURED_STORY";
@@ -198,8 +199,9 @@
     };
   }
 
-  function galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, exactPath) {
-    if (!record || record.postId !== expectedPostId || record.sourceType !== "GROUP" || String(record.sourceId || "") !== resolvedGroup || record.identityConfidence !== "EXACT" || !visibleString(record.author) || !visibleString(record.text)) return null;
+  function galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, expectedGroup, exactPath) {
+    const recordGroup = String(record?.sourceId || "");
+    if (!record || record.postId !== expectedPostId || record.sourceType !== "GROUP" || (recordGroup !== resolvedGroup && recordGroup !== expectedGroup) || record.identityConfidence !== "EXACT" || !visibleString(record.author) || !visibleString(record.text)) return null;
     try { const permalink = new URL(record.permalink); if (!/(^|\.)facebook\.com$/i.test(permalink.hostname) || !exactPath.test(permalink.pathname)) return null; } catch { return null; }
     const media = (Array.isArray(record.media) ? record.media : []).flatMap((item) => {
       if (!item || item.exactAssociation !== true || item.exactPostId !== expectedPostId || typeof item.url !== "string" || !/^https:\/\//i.test(item.url)) return [];
@@ -209,7 +211,7 @@
     return { author: visibleString(record.author), rootText: visibleString(record.text), media };
   }
 
-  function galleryScriptStructuredRootEvidence(expectedPostId, resolvedGroup, exactPath) {
+  function galleryScriptStructuredRootEvidence(expectedPostId, resolvedGroup, expectedGroup, exactPath) {
     const source = { sourceType: "GROUP", sourceId: resolvedGroup, allowGroupRedirect: true };
     let bytes = 0;
     for (const script of [...document.scripts].slice(0, 250)) {
@@ -218,7 +220,7 @@
       bytes += body.length;
       const records = core.extractStructuredRecordsFromText(body, "GALLERY_HYDRATION", source, 0);
       for (const record of records) {
-        const evidence = galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, exactPath);
+        const evidence = galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, expectedGroup, exactPath);
         if (evidence) return evidence;
       }
     }
@@ -226,7 +228,7 @@
     if (html && html.length <= 4_000_000) {
       const records = core.extractStructuredRecordsFromText(html, "GALLERY_HYDRATION_HTML", source, 0);
       for (const record of records) {
-        const evidence = galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, exactPath);
+        const evidence = galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, expectedGroup, exactPath);
         if (evidence) return evidence;
       }
     }
