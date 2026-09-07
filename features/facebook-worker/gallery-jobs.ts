@@ -136,7 +136,15 @@ export async function completeFacebookGalleryJob(input: {
     // unverified URL. This keeps gallery hydration fail-closed while making
     // the explicit user action useful for media already proven at scan time.
     if (input.errorCode === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {
-      const recovered = await recoverGalleryFromExactMetadata({ supabase, jobId: input.jobId, leaseToken: input.leaseToken, workerId: input.workerId, listingId, expectedPostId });
+      const recovered = await recoverGalleryFromExactMetadata({
+        supabase,
+        jobId: input.jobId,
+        leaseToken: input.leaseToken,
+        workerId: input.workerId,
+        listingId,
+        expectedPostId,
+        sourceDiagnostics: sanitizeGalleryDiagnostics(input.gallery?.diagnostics),
+      });
       if (recovered) return recovered;
     }
     const errorCode = input.errorCode ?? "FACEBOOK_GALLERY_FAILED";
@@ -194,6 +202,7 @@ async function recoverGalleryFromExactMetadata(input: {
   workerId: string;
   listingId: string;
   expectedPostId: string;
+  sourceDiagnostics: GalleryFailureDiagnostics | null;
 }): Promise<FacebookGalleryJobResult | null> {
   const metadataResult = await input.supabase.from("listing_source_metadata").select("metadata").eq("listing_id", input.listingId).eq("source", "facebook").maybeSingle();
   if (metadataResult.error) return null;
@@ -219,6 +228,7 @@ async function recoverGalleryFromExactMetadata(input: {
     metadata,
     sourceUrl: safeFacebookPostUrl(listing.original_url),
     recoveryReason: "EXACT_ROOT_STORY_METADATA_REUSE",
+    sourceDiagnostics: input.sourceDiagnostics,
   });
 }
 
@@ -252,6 +262,7 @@ async function persistVerifiedGallery(input: {
   metadata: Row;
   sourceUrl: string | null;
   recoveryReason?: string;
+  sourceDiagnostics?: GalleryFailureDiagnostics | null;
 }): Promise<FacebookGalleryJobResult> {
   const validation = validateFacebookRevalidationCandidates(input.candidates, input.expectedPostId);
   const verifiedCandidates = validation.verified as FacebookMediaCandidate[];
@@ -272,7 +283,28 @@ async function persistVerifiedGallery(input: {
     const metadata = await input.supabase.from("listing_source_metadata").upsert({ listing_id: input.listingId, source: "facebook", source_post_url: input.sourceUrl, collected_at: now, metadata: { ...input.metadata, galleryMediaIds: nextMediaIds, galleryStatus: status, galleryUpdatedAt: now } }, { onConflict: "source,source_post_url" });
     if (metadata.error) throw new Error(`FACEBOOK_GALLERY_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
   }
-  const result: FacebookGalleryJobResult = { jobId: input.jobId, listingId: input.listingId, postId: input.expectedPostId, status, sourceMediaCount: input.sourceMediaCount, exactMediaCount, alreadyStored, downloadRequired, downloaded, storageSuccess, persistedTotal: mirrored.images.length, errorCode, diagnostics: input.recoveryReason ? { rootBindingSource: input.recoveryReason, rootCount: 1, expectedPostId: input.expectedPostId, exactMediaCount, mediaCount: input.sourceMediaCount } : null };
+  const result: FacebookGalleryJobResult = {
+    jobId: input.jobId,
+    listingId: input.listingId,
+    postId: input.expectedPostId,
+    status,
+    sourceMediaCount: input.sourceMediaCount,
+    exactMediaCount,
+    alreadyStored,
+    downloadRequired,
+    downloaded,
+    storageSuccess,
+    persistedTotal: mirrored.images.length,
+    errorCode,
+    diagnostics: input.recoveryReason ? {
+      ...(input.sourceDiagnostics ?? {}),
+      rootBindingSource: input.recoveryReason,
+      rootCount: 1,
+      expectedPostId: input.expectedPostId,
+      exactMediaCount,
+      mediaCount: input.sourceMediaCount,
+    } : null,
+  };
   const finished = await input.supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: { kind: "GALLERY_HYDRATION", ...result }, error_code: errorCode, error_message: errorCode }).eq("id", input.jobId).eq("status", "running").eq("lease_token", input.leaseToken).eq("worker_id", input.workerId);
   if (finished.error) throw new Error(`FACEBOOK_GALLERY_JOB_FINALIZE_FAILED: ${finished.error.message}`);
   return result;
