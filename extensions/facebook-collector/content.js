@@ -67,12 +67,14 @@
     let author = null;
     let rootText = null;
     let structuredRoot = null;
+    let scriptStructuredRoot = null;
     let lastRootCount = 0;
     do {
-      const structuredEvidence = galleryStructuredRootEvidence(networkRecords.get(expectedPostId), expectedPostId, resolvedGroup, exactPath);
+      scriptStructuredRoot = scriptStructuredRoot || galleryScriptStructuredRootEvidence(expectedPostId, resolvedGroup, exactPath);
+      const structuredEvidence = scriptStructuredRoot || galleryStructuredRootEvidence(networkRecords.get(expectedPostId), expectedPostId, resolvedGroup, exactPath);
       if (structuredEvidence) {
         structuredRoot = structuredEvidence;
-        rootBindingSource = "EXACT_STRUCTURED_STORY";
+        rootBindingSource = scriptStructuredRoot ? "EXACT_SCRIPT_STRUCTURED_STORY" : "EXACT_STRUCTURED_STORY";
         author = structuredEvidence.author;
         rootText = structuredEvidence.rootText;
         break;
@@ -181,6 +183,22 @@
       return [{ url: item.url, mediaId }];
     });
     return { author: visibleString(record.author), rootText: visibleString(record.text), media };
+  }
+
+  function galleryScriptStructuredRootEvidence(expectedPostId, resolvedGroup, exactPath) {
+    const source = { sourceType: "GROUP", sourceId: resolvedGroup, allowGroupRedirect: true };
+    let bytes = 0;
+    for (const script of [...document.scripts].slice(0, 250)) {
+      const body = script.textContent || "";
+      if (!body || bytes + body.length > 4_000_000) continue;
+      bytes += body.length;
+      const records = core.extractStructuredRecordsFromText(body, "GALLERY_HYDRATION", source, 0);
+      for (const record of records) {
+        const evidence = galleryStructuredRootEvidence(record, expectedPostId, resolvedGroup, exactPath);
+        if (evidence) return evidence;
+      }
+    }
+    return null;
   }
 
   async function resolveSearchMediaTile(options) {
