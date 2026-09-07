@@ -77,6 +77,13 @@ test("SEARCH_DATA_FIRST avoids resolver tabs for parents already exact-bound in 
   assert.match(background, /images\.imported = 0/);
 });
 
+test("gallery retry remains actionable while backend status is stale pending or running", () => {
+  assert.match(inlineFilterResults, /if \(inFlightRef\.current \|\| busy \|\| status === "COMPLETE"\)/);
+  assert.match(inlineFilterResults, /disabled=\{busy \|\| status === "COMPLETE"\}/);
+  assert.match(inlineFilterResults, /status === "PENDING" \? "Oczekuje na pobranie galerii"/);
+  assert.match(inlineFilterResults, /status === "RUNNING" \? "Pobieranie galerii/);
+});
+
 test("SOURCE_SCAN resolves media in the primary tab and never creates child tabs", () => {
   const resolver = background.slice(background.indexOf("async function resolveSearchMediaTiles"), background.indexOf("async function collectGalleryHydration"));
   assert.match(resolver, /inPage: true/);

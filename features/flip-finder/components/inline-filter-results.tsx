@@ -445,7 +445,7 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
   if (!galleryEligible) return null;
   const request = async (traceId: string) => {
     recordGalleryTrace("GALLERY_HANDLER_ENTER", result, status, traceId);
-    if (inFlightRef.current || busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE") {
+    if (inFlightRef.current || busy || status === "COMPLETE") {
       recordGalleryTrace("GALLERY_GUARD_BLOCKED", result, status, traceId, { guard: inFlightRef.current ? "IN_FLIGHT" : status });
       return;
     }
@@ -486,7 +486,7 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
     captureGalleryTrace("GALLERY_BUTTON_CLICK_CAPTURE", event, result, status, traceId);
   };
   const label = status === "PENDING" ? "Oczekuje na pobranie galerii" : status === "RUNNING" ? "Pobieranie galerii…" : status === "PARTIAL" ? `Pobrano ${persisted}/${Math.max(total, persisted)} zdjęć` : status === "COMPLETE" ? `Galeria: ${persisted} zdjęć` : status === "FAILED" ? "Ponów pobieranie zdjęć" : "POBIERZ ZDJĘCIA";
-  return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-client-build={CLIENT_BUILD_ID} data-gallery-action="request" data-gallery-instance-id={instanceId} data-gallery-request-button="true" data-gallery-status={status} data-gallery-trace-id={traceId} data-listing-id={result.id} data-post-id={galleryPostId(result) ?? ""} disabled={busy || status === "PENDING" || status === "RUNNING" || status === "COMPLETE"} onClick={handleClick} onClickCapture={handleClickCapture} onPointerDownCapture={handlePointerDownCapture} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
+  return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-client-build={CLIENT_BUILD_ID} data-gallery-action="request" data-gallery-instance-id={instanceId} data-gallery-request-button="true" data-gallery-status={status} data-gallery-trace-id={traceId} data-listing-id={result.id} data-post-id={galleryPostId(result) ?? ""} disabled={busy || status === "COMPLETE"} onClick={handleClick} onClickCapture={handleClickCapture} onPointerDownCapture={handlePointerDownCapture} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
 }
 
 function isGalleryState(value: unknown): value is GalleryState {
