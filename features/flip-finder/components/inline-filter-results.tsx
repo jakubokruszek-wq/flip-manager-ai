@@ -414,7 +414,16 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
     if (renderProbeSentRef.current) return;
     if (!galleryEligible) return;
     renderProbeSentRef.current = true;
-    recordGalleryTrace("GALLERY_BUTTON_RENDERED", result, status, traceId, { clientBuild: CLIENT_BUILD_ID, component: "GalleryRequestButton", buttonRendered: true });
+    let disabled: boolean | undefined;
+    let pointerEvents: string | null = null;
+    try {
+      const renderedButton = document.querySelector<HTMLElement>(`[data-gallery-trace-id="${traceId}"]`);
+      disabled = renderedButton instanceof HTMLButtonElement ? renderedButton.disabled : undefined;
+      pointerEvents = renderedButton ? window.getComputedStyle(renderedButton).pointerEvents : null;
+    } catch {
+      // Render diagnostics must never affect the gallery action.
+    }
+    recordGalleryTrace("GALLERY_BUTTON_RENDERED", result, status, traceId, { clientBuild: CLIENT_BUILD_ID, component: "GalleryRequestButton", buttonRendered: true, disabled, pointerEvents });
   }, [galleryEligible, result, status, traceId]);
   useEffect(() => {
     if (status !== "PENDING" && status !== "RUNNING") return;

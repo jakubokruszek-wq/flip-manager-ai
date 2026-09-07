@@ -531,6 +531,7 @@ test("gallery root failures expose bounded, non-sensitive diagnostics", () => {
 test("gallery button reads terminal status without browser cache", () => {
   assert.match(inlineFilterResults, /search-filters\/\$\{filterId\}\/results\$\{archiveOpen \? "\?view=archive" : ""\}`, \{ cache: "no-store" \}\)/);
   assert.match(inlineFilterResults, /listings\/\$\{result\.id\}\/gallery`, \{ cache: "no-store" \}\)/);
+  assert.match(inlineFilterResults, /GALLERY_BUTTON_RENDERED[\s\S]*disabled[\s\S]*pointerEvents/);
 });
 
 test("source scans use a tab-scoped data-only image policy and gallery is the only media-enabled mode", () => {
