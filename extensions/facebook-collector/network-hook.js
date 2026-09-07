@@ -14,7 +14,13 @@
       if (!relevant(url, contentType) || body.length > MAX_BODY_BYTES) return;
       const source = core.canonicalSource(location.href);
       if (!source) return;
-      const records = core.extractStructuredRecordsFromText(body, "NETWORK", source, 0);
+      // Facebook may redirect a vanity group URL to its numeric group id while
+      // response payloads still contain the vanity permalink. The final tab
+      // URL is the binding authority; normalize that payload only for this
+      // passive network observer. Gallery hydration still requires the exact
+      // final group/post URL and exact media association.
+      const extractionSource = source.sourceType === "GROUP" ? { ...source, allowGroupRedirect: true } : source;
+      const records = core.extractStructuredRecordsFromText(body, "NETWORK", extractionSource, 0);
       if (!records.length) return;
       window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records } }, location.origin);
     } catch { /* passive observer must never affect Facebook */ }

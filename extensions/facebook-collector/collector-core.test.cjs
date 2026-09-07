@@ -24,6 +24,18 @@ test("extracts exact structured post-media binding and rejects foreign, avatar a
   assert.equal(post.text, "Na sprzedaż 50 m2");
 });
 
+test("network extraction normalizes a vanity group permalink after numeric redirect", () => {
+  const redirectedSource = { sourceType: "GROUP", sourceId: "1350200629551011", sourceUrl: "https://www.facebook.com/groups/1350200629551011/", allowGroupRedirect: true };
+  const body = JSON.stringify({ __typename: "Story", post_id: "1749121366325600", permalink_url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1749121366325600/", message: { text: "Na sprzedaż 44 m2" }, actor: { name: "Exact Author" }, attachments: [{ __typename: "Photo", media_id: "28074641558832168", image: { uri: "https://scontent.xx.fbcdn.net/exact.jpg" } }] });
+  const [post] = core.extractStructuredRecordsFromText(body, "NETWORK", redirectedSource, 0);
+  assert.equal(post.postId, "1749121366325600");
+  assert.equal(post.sourceId, "1350200629551011");
+  assert.match(post.permalink, /\/groups\/1350200629551011\/posts\/1749121366325600\//);
+  assert.equal(post.identityConfidence, "EXACT");
+  assert.equal(post.media[0].exactAssociation, true);
+  assert.equal(core.extractStructuredRecordsFromText(body, "NETWORK", { ...redirectedSource, allowGroupRedirect: false }, 0).length, 0);
+});
+
 test("scroll contract requires three scrolls and three consecutive empty iterations", () => {
   assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 1, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 1, consecutiveNoVisibleGrowth: 1, consecutiveOldNewPosts: 0 }), null);
   assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 2, consecutiveOldNewPosts: 0 }), null);

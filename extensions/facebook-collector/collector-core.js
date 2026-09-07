@@ -42,11 +42,13 @@
     const sourceType = source?.sourceType || (url.pathname.startsWith("/groups/") ? "GROUP" : "PROFILE");
     const resolvedSourceId = sourceId || source?.sourceId;
     if (!resolvedSourceId) return null;
-    if (source && (resolvedSourceId !== source.sourceId || sourceType !== source.sourceType)) return null;
+    if (source && sourceType !== source.sourceType) return null;
+    if (source && resolvedSourceId !== source.sourceId && source.allowGroupRedirect !== true) return null;
+    const canonicalSourceId = source?.allowGroupRedirect === true && sourceType === "GROUP" ? source.sourceId : resolvedSourceId;
     const permalink = sourceType === "GROUP"
-      ? `https://www.facebook.com/groups/${resolvedSourceId}/posts/${postId}/`
-      : `https://www.facebook.com/${resolvedSourceId}/posts/${postId}/`;
-    return { postId, permalink, sourceId: resolvedSourceId, sourceType };
+      ? `https://www.facebook.com/groups/${canonicalSourceId}/posts/${postId}/`
+      : `https://www.facebook.com/${canonicalSourceId}/posts/${postId}/`;
+    return { postId, permalink, sourceId: canonicalSourceId, sourceType };
   }
 
   function mergeRecords(records, limit = 100) {
