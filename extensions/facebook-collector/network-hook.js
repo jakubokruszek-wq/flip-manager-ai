@@ -5,6 +5,7 @@
   globalThis.__flipCollectorNetworkObserver = true;
   const MAX_BODY_BYTES = 2_000_000;
   let galleryContext = null;
+  const recentViewerBodies = [];
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin || event.data?.channel !== "FLIP_COLLECTOR_GALLERY_CONTEXT") return;
@@ -12,13 +13,14 @@
     const expectedUrl = String(event.data.payload?.expectedUrl || "");
     if (!/^\d{5,30}$/.test(expectedPostId) || !/^https:\/\/(?:www\.)?facebook\.com\/groups\//i.test(expectedUrl)) return;
     galleryContext = { expectedPostId, expectedUrl: expectedUrl.slice(0, 500) };
+    for (const item of recentViewerBodies.splice(0)) emit(item.url, item.method, item.status, item.contentType, item.body, false);
   });
 
   function relevant(url, contentType) {
     return /(?:graphql|api\/graphql|relay|ajax|groups\/feed|CometGroup)/i.test(url) || /json|javascript/i.test(contentType || "");
   }
 
-  function emit(url, method, status, contentType, body) {
+  function emit(url, method, status, contentType, body, remember = true) {
     try {
       if (!relevant(url, contentType) || body.length > MAX_BODY_BYTES) return;
       const source = core.canonicalSource(location.href);
@@ -47,7 +49,17 @@
           };
         }
       }
-      if (!records.length && !galleryProof) return;
+      if (!records.length && !galleryProof) {
+        if (remember && viewerContext) {
+          recentViewerBodies.push({ url, method, status, contentType, body });
+          while (recentViewerBodies.length > 4) recentViewerBodies.shift();
+          setTimeout(() => {
+            const index = recentViewerBodies.findIndex((item) => item.body === body);
+            if (index >= 0) recentViewerBodies.splice(index, 1);
+          }, 15_000);
+        }
+        return;
+      }
       window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records, galleryProof } }, location.origin);
     } catch { /* passive observer must never affect Facebook */ }
   }
