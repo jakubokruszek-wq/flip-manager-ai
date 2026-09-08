@@ -84,7 +84,10 @@
         break;
       }
       const permalinkLinks = [...document.querySelectorAll("a[href]")].filter((anchor) => {
-        if (isCommentDescendant(anchor)) return false;
+        const article = anchor.closest('[role="article"]');
+        // A top-level post card may contain a comments-labelled wrapper.
+        // Only nested article descendants are comment candidates here.
+        if (article?.parentElement?.closest('[role="article"]') || (!article && isCommentDescendant(anchor))) return false;
         try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && exactPath.test(url.pathname); } catch { return false; }
       });
       const selfLinkRoots = [...new Set(permalinkLinks.map((anchor) => {
