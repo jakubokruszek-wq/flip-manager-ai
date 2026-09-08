@@ -130,9 +130,12 @@
     }
     if (root) {
       const rootIsArticle = root.matches?.('[role="article"]') === true;
-      const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
+      const sameRoot = (node) => {
+        if (rootIsArticle) return node.closest('[role="article"]') === root;
+        return !isCommentDescendant(node);
+      };
       for (const anchor of root.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')) {
-        if (!sameRoot(anchor) || isCommentDescendant(anchor)) continue;
+        if (!sameRoot(anchor)) continue;
         let url;
         try { url = new URL(anchor.href); } catch { continue; }
         const mediaId = url.searchParams.get("fbid") || mediaIdFromUrl(url.toString());
@@ -178,13 +181,16 @@
 
   function galleryRootEvidence(root) {
     const rootIsArticle = root?.matches?.('[role="article"]') === true;
-    const sameRoot = (node) => !rootIsArticle || node.closest('[role="article"]') === root;
+    const sameRoot = (node) => {
+      if (rootIsArticle) return node.closest('[role="article"]') === root;
+      return !isCommentDescendant(node);
+    };
     const authorCandidates = [...root.querySelectorAll("h2 a, h3 a, strong a, [role=heading] a, [data-ad-rendering-role=profile_name]")]
-      .filter((node) => sameRoot(node) && !isCommentDescendant(node)).map(visibleText).filter(Boolean);
+      .filter((node) => sameRoot(node)).map(visibleText).filter(Boolean);
     const authorNames = [...new Set(authorCandidates)];
     const author = authorNames.length === 1 ? authorNames[0] : null;
     const rootTexts = [...root.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="message"]')]
-      .filter((node) => sameRoot(node) && !isCommentDescendant(node))
+      .filter((node) => sameRoot(node))
       .map(visibleText)
       .filter(Boolean);
     const uniqueRootTexts = [...new Set(rootTexts)];
