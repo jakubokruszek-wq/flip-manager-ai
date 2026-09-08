@@ -63,6 +63,14 @@ type GalleryFailureDiagnostics = {
     title?: string | null;
     bodyTextLength?: number;
     articleCount?: number;
+    topLevelArticleCount?: number;
+    topLevelExactArticleCount?: number;
+    topLevelExactArticleDetails?: Array<{
+      authorSelectorMatches?: number;
+      messageSelectorMatches?: number;
+      photoLinkCount?: number;
+      bodyTextLength?: number;
+    }>;
     mainCount?: number;
     exactPostLinkCount?: number;
     scriptCount?: number;
@@ -360,6 +368,18 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
       title: typeof page.title === "string" ? page.title.slice(0, 160) : null,
       bodyTextLength: finiteFrom(page.bodyTextLength, 50_000),
       articleCount: finiteFrom(page.articleCount, 100),
+      topLevelArticleCount: finiteFrom(page.topLevelArticleCount, 100),
+      topLevelExactArticleCount: finiteFrom(page.topLevelExactArticleCount, 20),
+      topLevelExactArticleDetails: Array.isArray(page.topLevelExactArticleDetails) ? page.topLevelExactArticleDetails.slice(0, 20).flatMap((entry) => {
+        const detail = row(entry);
+        if (!detail) return [];
+        return [{
+          authorSelectorMatches: finiteFrom(detail.authorSelectorMatches, 50),
+          messageSelectorMatches: finiteFrom(detail.messageSelectorMatches, 50),
+          photoLinkCount: finiteFrom(detail.photoLinkCount, 50),
+          bodyTextLength: finiteFrom(detail.bodyTextLength, 20_000),
+        }];
+      }) : [],
       mainCount: finiteFrom(page.mainCount, 20),
       exactPostLinkCount: finiteFrom(page.exactPostLinkCount, 50),
       scriptCount: finiteFrom(page.scriptCount, 250),

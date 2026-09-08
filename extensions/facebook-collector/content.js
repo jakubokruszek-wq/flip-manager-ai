@@ -201,12 +201,27 @@
     const links = [...document.querySelectorAll("a[href]")].filter((anchor) => {
       try { return exactPath.test(new URL(anchor.href).pathname); } catch { return false; }
     }).length;
+    const articles = [...document.querySelectorAll('[role="article"]')];
+    const topLevelArticles = articles.filter((article) => !article.parentElement?.closest('[role="article"]'));
+    const exactArticleDetails = topLevelArticles.filter((article) => [...article.querySelectorAll("a[href]")].some((anchor) => {
+      try { return exactPath.test(new URL(anchor.href).pathname); } catch { return false; }
+    })).slice(0, 20).map((article) => ({
+      authorSelectorMatches: article.querySelectorAll("h2 a, h3 a, strong a, [role=heading] a, [data-ad-rendering-role=profile_name]").length,
+      messageSelectorMatches: article.querySelectorAll('[data-ad-preview="message"], [data-testid="post_message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="message"]').length,
+      photoLinkCount: [...article.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')].filter((anchor) => {
+        try { return /(^|\.)facebook\.com$/i.test(new URL(anchor.href).hostname); } catch { return false; }
+      }).length,
+      bodyTextLength: Math.min(20_000, visibleText(article)?.length || 0),
+    }));
     return {
       readyState: document.readyState,
       visibilityState: document.visibilityState,
       title: String(document.title || "").slice(0, 160),
       bodyTextLength: Math.min(50_000, visibleText(document.body)?.length || 0),
       articleCount: Math.min(100, document.querySelectorAll('[role="article"]').length),
+      topLevelArticleCount: Math.min(100, topLevelArticles.length),
+      topLevelExactArticleCount: exactArticleDetails.length,
+      topLevelExactArticleDetails: exactArticleDetails,
       mainCount: Math.min(20, document.querySelectorAll('[role="main"]').length),
       exactPostLinkCount: Math.min(50, links),
       scriptCount: Math.min(250, document.scripts.length),
