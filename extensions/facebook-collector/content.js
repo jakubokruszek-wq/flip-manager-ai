@@ -87,7 +87,13 @@
         if (isCommentDescendant(anchor)) return false;
         try { const url = new URL(anchor.href); return /(^|\.)facebook\.com$/i.test(url.hostname) && exactPath.test(url.pathname); } catch { return false; }
       });
-      const selfLinkRoots = [...new Set(permalinkLinks.map((anchor) => anchor.closest('[role="article"]') || anchor.closest("[data-pagelet]")))] .filter(Boolean);
+      const selfLinkRoots = [...new Set(permalinkLinks.map((anchor) => {
+        const article = anchor.closest('[role="article"]');
+        // A timestamp/permalink inside a nested comment can point at the
+        // same post. Only the top-level article is eligible as the root card.
+        if (article?.parentElement?.closest('[role="article"]')) return null;
+        return article || anchor.closest("[data-pagelet]");
+      }))].filter(Boolean);
       let roots = selfLinkRoots.map(galleryRootEvidence).filter((evidence) => evidence.author && evidence.rootText).map((evidence) => evidence.root);
       rootBindingSource = selfLinkRoots.length > 0 ? "EXACT_SELF_LINK" : null;
       if (selfLinkRoots.length === 0) {
