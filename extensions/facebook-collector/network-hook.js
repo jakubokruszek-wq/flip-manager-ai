@@ -34,11 +34,14 @@
       const extractionSource = source?.sourceType === "GROUP" ? { ...source, allowGroupRedirect: true } : source;
       const records = source ? core.extractStructuredRecordsFromText(body, "NETWORK", extractionSource, 0) : [];
       let galleryProof = null;
+      let galleryAudit = null;
       if (viewerContext) {
         const gallerySource = galleryContext?.expectedPostId === viewerContext.postId ? core.canonicalSource(galleryContext.expectedUrl) : null;
         if (gallerySource) gallerySource.allowGroupRedirect = true;
-        const proof = core.resolveGalleryMediaSetFromText(body, gallerySource, viewerContext.postId, viewerContext.mediaId);
-        if (proof.status === "VERIFIED" && proof.currentMediaId === viewerContext.mediaId && proof.expectedPostId === viewerContext.postId) {
+        const proof = galleryContext?.expectedPostId === viewerContext.postId
+          ? core.resolveGalleryMediaSetFromText(body, gallerySource, viewerContext.postId, viewerContext.mediaId)
+          : null;
+        if (proof?.status === "VERIFIED" && proof.currentMediaId === viewerContext.mediaId && proof.expectedPostId === viewerContext.postId) {
           galleryProof = {
             status: "VERIFIED",
             expectedPostId: proof.expectedPostId,
@@ -46,6 +49,12 @@
             mediaIds: Array.isArray(proof.mediaIds) ? proof.mediaIds.slice(0, 50) : [],
             permalink: typeof proof.permalink === "string" ? proof.permalink.slice(0, 500) : null,
             candidate: proof.candidate || null,
+          };
+        }
+        if (!galleryProof && galleryContext?.expectedPostId === viewerContext.postId) {
+          galleryAudit = {
+            ...core.inspectGalleryMediaPayload(body, viewerContext.postId, viewerContext.mediaId),
+            proofReason: proof?.reason || "GALLERY_VIEWER_CONTEXT_NOT_PROVEN",
           };
         }
       }
@@ -58,9 +67,10 @@
             if (index >= 0) recentViewerBodies.splice(index, 1);
           }, 15_000);
         }
+        if (galleryAudit) window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records: [], galleryProof: null, galleryAudit } }, location.origin);
         return;
       }
-      window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records, galleryProof } }, location.origin);
+      window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records, galleryProof, galleryAudit } }, location.origin);
     } catch { /* passive observer must never affect Facebook */ }
   }
 

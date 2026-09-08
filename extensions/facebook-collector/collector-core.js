@@ -646,12 +646,127 @@
   }
 
   function parseJsonBodies(text) {
-    const cleanText = text.replace(/^for\s*\(;;\);\s*/, "").trim();
+    const input = String(text || "").replace(/^\uFEFF/, "").slice(0, 4_000_000);
     const roots = [];
-    for (const candidate of [cleanText, ...cleanText.split(/\r?\n/).filter((line) => /^[\[{]/.test(line.trim()))]) {
-      try { roots.push(JSON.parse(candidate)); } catch { /* diagnostic parser is fail-safe */ }
+    const seen = new Set();
+    const maxRoots = 96;
+    const maxNested = 48;
+    let nestedAttempts = 0;
+
+    const add = (value) => {
+      if (roots.length >= maxRoots || value === null || typeof value !== "object") return;
+      let fingerprint = null;
+      try { fingerprint = JSON.stringify(value).slice(0, 2_000_000); } catch { return; }
+      if (!fingerprint || seen.has(fingerprint)) return;
+      seen.add(fingerprint);
+      roots.push(value);
+      collectEmbedded(value, 0);
+    };
+    const decodeEscaped = (value) => String(value || "")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#x27;|&#39;/gi, "'")
+      .replace(/&amp;/gi, "&")
+      .replace(/\\u0022/gi, '"')
+      .replace(/\\u0027/gi, "'");
+    const tryCandidate = (candidate) => {
+      if (roots.length >= maxRoots || !candidate) return;
+      const clean = decodeEscaped(String(candidate).replace(/^\s*for\s*\(;;\);\s*/, "").trim());
+      if (!clean || clean.length > 4_000_000) return;
+      try {
+        const parsed = JSON.parse(clean);
+        if (typeof parsed === "string") {
+          const nested = parsed.trim();
+          if (/^[\[{]/.test(nested)) tryCandidate(nested);
+        } else add(parsed);
+        return;
+      } catch { /* bounded structural scan below */ }
+      const first = clean.search(/[\[{]/);
+      if (first < 0) return;
+      let start = -1;
+      let quote = false;
+      let escaped = false;
+      const stack = [];
+      for (let index = first; index < clean.length && roots.length < maxRoots; index += 1) {
+        const char = clean[index];
+        if (quote) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === '"') quote = false;
+          continue;
+        }
+        if (char === '"') { quote = true; continue; }
+        if (char === "{" || char === "[") {
+          if (stack.length === 0) start = index;
+          stack.push(char === "{" ? "}" : "]");
+          continue;
+        }
+        if ((char === "}" || char === "]") && stack.length && stack[stack.length - 1] === char) {
+          stack.pop();
+          if (stack.length === 0 && start >= 0) {
+            try { add(JSON.parse(clean.slice(start, index + 1))); } catch { /* fail closed */ }
+            start = -1;
+          }
+        }
+      }
+    };
+    const collectEmbedded = (value, depth) => {
+      if (depth >= 6 || nestedAttempts >= maxNested || value === null) return;
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (/^[\[{]/.test(trimmed) && trimmed.length <= 1_500_000) {
+          nestedAttempts += 1;
+          tryCandidate(trimmed);
+        }
+        return;
+      }
+      if (typeof value !== "object") return;
+      const children = Array.isArray(value) ? value : Object.values(value);
+      for (const child of children) {
+        if (roots.length >= maxRoots || nestedAttempts >= maxNested) break;
+        collectEmbedded(child, depth + 1);
+      }
+    };
+
+    tryCandidate(input);
+    for (const line of input.split(/\r?\n/)) {
+      if (roots.length >= maxRoots) break;
+      const trimmed = line.trim();
+      if (trimmed) tryCandidate(trimmed);
     }
     return roots;
+  }
+
+  function inspectGalleryMediaPayload(text, expectedPostId, expectedMediaId) {
+    const roots = parseJsonBodies(String(text || "").slice(0, 4_000_000));
+    const postId = scalarId(expectedPostId);
+    const mediaId = scalarId(expectedMediaId);
+    let currMediaFound = false;
+    let containerStoryFound = false;
+    let parentPostIdFound = false;
+    let attachmentBindingFound = false;
+    for (const parsed of roots) walk(parsed, (node) => {
+      if (!isObject(node)) return;
+      if (mediaId && scalarId(node.id) === mediaId && String(node.__typename || node.typename || "").toLowerCase() === "photo") {
+        currMediaFound = true;
+        if (isObject(node.container_story)) {
+          containerStoryFound = true;
+          const parent = exactMediaBoundStoryPostId(node.container_story, mediaId);
+          parentPostIdFound ||= Boolean(parent);
+          const tracking = exactGalleryTrackingSet(node.container_story, postId, mediaId);
+          attachmentBindingFound ||= Boolean(tracking && !tracking.conflict && tracking.mediaIds.includes(mediaId));
+        }
+      }
+    }, 16);
+    return {
+      expectedPostId: postId,
+      currentMediaId: mediaId,
+      rootCount: roots.length,
+      currMediaFound,
+      containerStoryFound,
+      parentPostIdFound,
+      attachmentBindingFound,
+      firstFailedHop: attachmentBindingFound ? null : !roots.length ? "SEARCH_PAYLOAD_NOT_FOUND" : !currMediaFound ? "SEARCH_CURR_MEDIA_NOT_FOUND" : !containerStoryFound ? "SEARCH_CONTAINER_STORY_MISSING" : !parentPostIdFound ? "SEARCH_PARENT_POST_ID_MISSING" : "SEARCH_MEDIA_CROSSCHECK_FAILED",
+    };
   }
 
   function walk(value, visitor, maxDepth = 8, depth = 0, seen = new Set()) {
@@ -685,5 +800,5 @@
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
 })(globalThis);

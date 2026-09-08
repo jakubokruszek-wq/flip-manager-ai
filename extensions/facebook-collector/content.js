@@ -7,6 +7,7 @@
   const GALLERY_HYDRATION_MEDIA_ALLOWED = "GALLERY_HYDRATION_MEDIA_ALLOWED";
   const networkRecords = new Map();
   const galleryNetworkProofs = new Map();
+  const galleryNetworkAudits = new Map();
   let networkResponses = 0;
 
   window.addEventListener("message", (event) => {
@@ -14,6 +15,22 @@
     networkResponses += 1;
     for (const record of event.data.payload?.records || []) networkRecords.set(record.postId, record);
     const proof = event.data.payload?.galleryProof;
+    const audit = event.data.payload?.galleryAudit;
+    if (audit && typeof audit === "object") {
+      const auditPostId = String(audit.expectedPostId || event.data.payload?.postId || "");
+      const auditMediaId = String(audit.currentMediaId || "");
+      if (/^\d{5,30}$/.test(auditPostId) && /^\d{5,30}$/.test(auditMediaId)) {
+        galleryNetworkAudits.set(`${auditPostId}:${auditMediaId}`, {
+          rootCount: Number.isFinite(Number(audit.rootCount)) ? Number(audit.rootCount) : 0,
+          currMediaFound: audit.currMediaFound === true,
+          containerStoryFound: audit.containerStoryFound === true,
+          parentPostIdFound: audit.parentPostIdFound === true,
+          attachmentBindingFound: audit.attachmentBindingFound === true,
+          firstFailedHop: typeof audit.firstFailedHop === "string" ? audit.firstFailedHop.slice(0, 120) : null,
+          proofReason: typeof audit.proofReason === "string" ? audit.proofReason.slice(0, 120) : null,
+        });
+      }
+    }
     if (proof?.status === "VERIFIED" && /^\d{5,30}$/.test(String(proof.expectedPostId || "")) && /^\d{5,30}$/.test(String(proof.currentMediaId || ""))) {
       galleryNetworkProofs.set(`${proof.expectedPostId}:${proof.currentMediaId}`, {
         status: "VERIFIED",
@@ -26,6 +43,7 @@
     }
     while (networkRecords.size > 200) networkRecords.delete(networkRecords.keys().next().value);
     while (galleryNetworkProofs.size > 50) galleryNetworkProofs.delete(galleryNetworkProofs.keys().next().value);
+    while (galleryNetworkAudits.size > 50) galleryNetworkAudits.delete(galleryNetworkAudits.keys().next().value);
   });
 
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
@@ -189,6 +207,7 @@
     if (!viewerContext) return failure("FACEBOOK_GALLERY_VIEWER_CONTEXT_MISMATCH");
     window.postMessage({ channel: "FLIP_COLLECTOR_GALLERY_CONTEXT", payload: { expectedPostId, expectedUrl: String(options.expectedUrl || "").slice(0, 500) } }, location.origin);
     const networkProof = galleryNetworkProofs.get(`${expectedPostId}:${mediaId}`);
+    const networkAuditKey = `${expectedPostId}:${mediaId}`;
     if (networkProof && galleryNetworkProofIsExact(networkProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
       return {
         status: "VERIFIED",
@@ -207,6 +226,21 @@
     const payloadDeadline = Math.min(deadline, Date.now() + 2_000);
     let lastReason = "GALLERY_VIEWER_PAYLOAD_NOT_FOUND";
     do {
+      const replayedProof = galleryNetworkProofs.get(networkAuditKey);
+      if (replayedProof && galleryNetworkProofIsExact(replayedProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
+        return {
+          status: "VERIFIED",
+          expectedPostId,
+          currentMediaId: mediaId,
+          mediaIds: replayedProof.mediaIds,
+          permalink: replayedProof.permalink,
+          authorFound: true,
+          rootTextFound: true,
+          candidate: replayedProof.candidate,
+          networkProof: true,
+          diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), networkProof: true, attachmentCount: replayedProof.mediaIds.length },
+        };
+      }
       let bytes = 0;
       for (const script of [...document.scripts].slice(0, 250)) {
         const body = script.textContent || "";
@@ -222,9 +256,9 @@
       const traversal = await inspectExactGalleryCarousel(expectedPostId, mediaId, deadline);
       if (traversal.status === "VERIFIED") return traversal;
       lastReason = traversal.error || lastReason;
-      return failure(lastReason, traversal.diagnostics || {});
+      return failure(lastReason, { ...(traversal.diagnostics || {}), networkResponseCount: networkResponses, networkAudit: galleryNetworkAudits.get(networkAuditKey) || null });
     }
-    return failure(lastReason, { scriptCount: Math.min(250, document.scripts.length), readyState: document.readyState, visibilityState: document.visibilityState });
+    return failure(lastReason, { scriptCount: Math.min(250, document.scripts.length), readyState: document.readyState, visibilityState: document.visibilityState, networkResponseCount: networkResponses, networkAudit: galleryNetworkAudits.get(networkAuditKey) || null });
   }
 
   function galleryNetworkProofIsExact(proof, expectedPostId, mediaId, expectedUrl, resolvedUrl) {

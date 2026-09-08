@@ -374,6 +374,36 @@ test("gallery network proof accepts an exact group permalink without viewer DOM"
   assert.equal(result.candidate.bindingProvenance, "EXACT_ROOT_STORY");
 });
 
+test("gallery parser accepts Facebook anti-XSSI and concatenated JSON responses", () => {
+  const postId = "1749121366325600";
+  const mediaId = "28459992303624928";
+  const story = { __typename: "Story", post_id: postId, url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`, actors: [{ name: "Exact Author" }], message: { text: "Exact root" }, tracking: { top_level_post_id: postId, photo_attachments_list: [mediaId, "28459993423624816"] } };
+  const payload = { __typename: "Photo", id: mediaId, image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" }, container_story: story };
+  const body = `for (;;);${JSON.stringify(payload)}\n${JSON.stringify({ unrelated: true })}`;
+  const result = core.resolveGalleryMediaSetFromText(body, { ...source, allowGroupRedirect: true }, postId, mediaId);
+  assert.equal(result.status, "VERIFIED");
+  assert.deepEqual(result.mediaIds, [mediaId, "28459993423624816"].sort());
+  assert.deepEqual(core.inspectGalleryMediaPayload(body, postId, mediaId), {
+    expectedPostId: postId,
+    currentMediaId: mediaId,
+    rootCount: 2,
+    currMediaFound: true,
+    containerStoryFound: true,
+    parentPostIdFound: true,
+    attachmentBindingFound: true,
+    firstFailedHop: null,
+  });
+});
+
+test("gallery parser unwraps a bounded JSON-encoded response without weakening binding", () => {
+  const postId = "1749121366325600";
+  const mediaId = "28459992303624928";
+  const payload = { __typename: "Photo", id: mediaId, container_story: { __typename: "Story", post_id: postId, url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`, actors: [{ name: "Exact Author" }], message: { text: "Exact root" }, tracking: { top_level_post_id: postId, photo_attachments_list: [mediaId] } }, image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" } };
+  const result = core.resolveGalleryMediaSetFromText(JSON.stringify(JSON.stringify(payload)), null, postId, mediaId);
+  assert.equal(result.status, "VERIFIED");
+  assert.deepEqual(result.mediaIds, [mediaId]);
+});
+
 test("gallery viewer stays fail-closed without attachment binding or with a foreign parent", () => {
   const postId = "1749121366325600";
   const mediaId = "28459992303624928";
