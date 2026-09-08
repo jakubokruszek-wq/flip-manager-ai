@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { galleryMediaIds, selectMissingGalleryCandidates } from "./gallery-policy.ts";
+import { galleryMediaIds, gallerySeedMediaFromProvenance, selectMissingGalleryCandidates } from "./gallery-policy.ts";
 import type { FacebookMediaCandidate } from "./types";
 
 function candidate(mediaId: string, url = `https://scontent.xx.fbcdn.net/${mediaId}.jpg`): FacebookMediaCandidate {
@@ -19,4 +19,20 @@ test("gallery download plan preserves existing urls and empty input", () => {
   const source = [candidate("1", "https://storage.example/one.jpg"), candidate("2")];
   assert.deepEqual(selectMissingGalleryCandidates(source, new Set(), new Set(["https://storage.example/one.jpg"])).map((item) => item.mediaId), ["2"]);
   assert.deepEqual(selectMissingGalleryCandidates([], new Set(), new Set()), []);
+});
+
+test("gallery viewer seeds require exact-root provenance and recover the Facebook photo id", () => {
+  const exact = {
+    sourcePostId: "1749121366325600",
+    storyRootPostId: "1749121366325600",
+    normalizedMediaUrl: "https://scontent-waw2-2.xx.fbcdn.net/v/t39.30808-6/791849411_28459992303624928_2386612899756008195_n.jpg?x=1",
+    bindingMethod: "EXACT_ROOT_STORY",
+    bindingConfidence: 1,
+    classification: "PROPERTY_IMAGE",
+  };
+  assert.deepEqual(gallerySeedMediaFromProvenance([exact], "1749121366325600"), [{ mediaId: "28459992303624928" }]);
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...exact, mediaId: "28459992263624932" }], "1749121366325600"), [{ mediaId: "28459992263624932" }]);
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...exact, storyRootPostId: "999999" }], "1749121366325600"), []);
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...exact, bindingConfidence: 0.5 }], "1749121366325600"), []);
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...exact, normalizedMediaUrl: "https://example.com/image.jpg" }], "1749121366325600"), []);
 });

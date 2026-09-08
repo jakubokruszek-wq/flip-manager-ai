@@ -257,6 +257,7 @@ async function importAutomatedFacebook(input: {
   const persistedPublishedAt = preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt);
   const bindingSummary = facebookMediaBindingSummary(normalized, externalId);
   const mediaProvenance = (normalized.mediaCandidates ?? []).map((candidate) => ({
+    mediaId: candidate.mediaId ?? null,
     sourcePostId: candidate.expectedPostId,
     storyRootPostId: candidate.storyRootPostId ?? null,
     normalizedMediaUrl: candidate.url,

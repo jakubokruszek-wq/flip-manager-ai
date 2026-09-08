@@ -335,6 +335,73 @@
     return { status: "VERIFIED", records: [{ ...record, media: exactMedia, resolvedFromMediaTile: true, mediaIds: [mediaId], parentResolutionEvidence: record.identityReasons || [] }], reasons: ["SEARCH_MEDIA_EXACT_PARENT_PROVEN"] };
   }
 
+  // A persisted exact-root image is only a navigation seed. The viewer must
+  // independently prove that the current photo and the complete attachment
+  // list belong to the expected top-level story before any URL is accepted.
+  function resolveGalleryMediaSetFromText(text, source, expectedPostId, expectedMediaId) {
+    const postId = scalarId(expectedPostId);
+    const mediaId = scalarId(expectedMediaId);
+    const unverified = (reason, extra = {}) => ({ status: "UNVERIFIED", reason, mediaIds: [], candidate: null, ...extra });
+    if (!text || !source || !postId || !mediaId) return unverified("GALLERY_VIEWER_INPUT_INVALID");
+    const roots = parseJsonBodies(String(text).slice(0, 4_000_000));
+    const parentIds = new Set();
+    const proofs = [];
+    for (const parsed of roots) walk(parsed, (node) => {
+      if (!isObject(node) || scalarId(node.id) !== mediaId || String(node.__typename || node.typename || "").toLowerCase() !== "photo") return;
+      const story = node.container_story;
+      if (!isObject(story)) return;
+      const parentPostId = exactMediaBoundStoryPostId(story, mediaId);
+      if (parentPostId) parentIds.add(parentPostId);
+      if (parentPostId !== postId) return;
+      const tracking = exactGalleryTrackingSet(story, postId, mediaId);
+      if (!tracking || tracking.conflict || tracking.mediaIds.length === 0) return;
+      const link = findPermalink(story, postId, source) || canonicalParentLink(postId, source);
+      const rootStory = findExactRootStoryNode(story, postId) || story;
+      const author = findAuthor(rootStory);
+      const rootText = findRootMessage(rootStory);
+      const url = mediaUrl(node);
+      if (!link || link.postId !== postId || !author || !rootText || !url) return;
+      proofs.push({ mediaIds: tracking.mediaIds, url, permalink: link.permalink });
+    }, 16);
+    if ([...parentIds].some((candidate) => candidate !== postId)) return unverified("GALLERY_VIEWER_CONFLICTING_PARENT_IDS", { parentIds: [...parentIds].slice(0, 10) });
+    if (proofs.length === 0) return unverified("GALLERY_VIEWER_EXACT_MEDIA_PARENT_NOT_PROVEN", { parentIds: [...parentIds].slice(0, 10) });
+    const mediaSets = [...new Set(proofs.map((proof) => proof.mediaIds.join(",")))];
+    if (mediaSets.length !== 1) return unverified("GALLERY_VIEWER_CONFLICTING_MEDIA_SETS");
+    const urls = [...new Set(proofs.map((proof) => proof.url))];
+    if (urls.length === 0) return unverified("GALLERY_VIEWER_MEDIA_URL_MISSING");
+    return {
+      status: "VERIFIED",
+      reason: null,
+      expectedPostId: postId,
+      currentMediaId: mediaId,
+      mediaIds: proofs[0].mediaIds,
+      permalink: proofs[0].permalink,
+      authorFound: true,
+      rootTextFound: true,
+      candidate: {
+        url: urls[0], mediaId, expectedPostId: postId, storyRootPostId: postId, boundPostId: postId,
+        bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true,
+        foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95,
+        structuredPostMediaProvenance: true,
+      },
+    };
+  }
+
+  function exactGalleryTrackingSet(story, postId, mediaId) {
+    const sets = [];
+    walkPath(story, (node, path) => {
+      if (!isObject(node)) return;
+      if (path.length && /(?:comment|feedback|caption)/i.test(path.join("."))) return false;
+      const tracking = parseMediaTracking(node.tracking, mediaId);
+      if (scalarId(tracking?.top_level_post_id) !== postId || !Array.isArray(tracking.photo_attachments_list)) return;
+      const ids = unique(tracking.photo_attachments_list.map(scalarId).filter(Boolean)).slice(0, 50).sort();
+      if (ids.includes(mediaId)) sets.push(ids);
+    }, 8);
+    if (sets.length === 0) return null;
+    const serialized = [...new Set(sets.map((ids) => ids.join(",")))];
+    return { conflict: serialized.length !== 1, mediaIds: sets[0] };
+  }
+
   function evaluateHealth(input) {
     const visible = finite(input.visibleCardCount);
     const captured = finite(input.capturedPostCount);
@@ -570,5 +637,5 @@
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
 })(globalThis);

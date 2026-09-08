@@ -564,6 +564,7 @@ async function resolveSearchMediaTiles({ tabId, tiles, source, query, deadlineMs
 async function collectGalleryHydration(job, requestId) {
   const postId = String(job.galleryPostId || "");
   const sourceUrl = String(job.gallerySourceUrl || "");
+  const seedMediaIds = [...new Set((Array.isArray(job.gallerySeedMediaIds) ? job.gallerySeedMediaIds : []).map(String).filter((value) => /^\d{5,30}$/.test(value)))].slice(0, 10);
   if (!/^\d{5,30}$/.test(postId) || !/^https:\/\/(?:www\.)?facebook\.com\//i.test(sourceUrl)) return { status: "FAILED", error: "FACEBOOK_GALLERY_TARGET_INVALID" };
   let tab = null;
   const deadline = Date.now() + GALLERY_JOB_TIMEOUT_MS;
@@ -598,7 +599,47 @@ async function collectGalleryHydration(job, requestId) {
       if (responseResult.response.result?.status === "FAILED") return { status: "FAILED", error: String(responseResult.response.result.error || "FACEBOOK_GALLERY_FAILED"), gallery: responseResult.response.result };
       return { status: "COMPLETE", gallery: { ...responseResult.response.result, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
     };
+    const inspectViewerMedia = async (mediaId) => {
+      const viewerUrl = canonicalGalleryPhotoUrl(postId, mediaId);
+      await chrome.tabs.update(tab.id, { url: viewerUrl, active: true });
+      await waitForTab(tab.id, Math.min(12_000, Math.max(1, deadline - Date.now())));
+      const viewerTab = await chrome.tabs.get(tab.id);
+      const viewerResolvedUrl = String(viewerTab?.url || viewerUrl);
+      await waitForContentScript(tab.id, Math.min(6_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
+      const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
+        () => chrome.tabs.sendMessage(tab.id, { type: "INSPECT_FACEBOOK_GALLERY_VIEWER_MEDIA", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl: viewerResolvedUrl, mediaId, imageMode: GALLERY_HYDRATION_MEDIA_MODE, waitMs: Math.min(6_000, Math.max(500, deadline - Date.now() - 500)) } }),
+        { timeoutMs: Math.min(8_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId, mediaId } },
+      );
+      if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_VIEWER_FAILED") };
+      if (responseResult.response.result?.status !== "VERIFIED") return { status: "FAILED", error: String(responseResult.response.result?.error || "FACEBOOK_GALLERY_VIEWER_EXACT_BINDING_FAILED"), diagnostics: responseResult.response.result?.diagnostics || null };
+      return responseResult.response.result;
+    };
+    const hydrateFromViewer = async (seedMediaId) => {
+      const first = await inspectViewerMedia(seedMediaId);
+      if (first.status !== "VERIFIED") return { status: "FAILED", error: first.error, gallery: { status: "FAILED", error: first.error, expectedPostId: postId, sourceMediaCount: 0, candidates: [], diagnostics: { viewerSeedMediaId: seedMediaId, viewer: first.diagnostics || null } } };
+      const mediaIds = [...new Set((Array.isArray(first.mediaIds) ? first.mediaIds : []).map(String).filter((value) => /^\d{5,30}$/.test(value)))].slice(0, 50);
+      if (!mediaIds.includes(seedMediaId) || mediaIds.length === 0) return { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_ATTACHMENT_SET_INVALID", gallery: { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_ATTACHMENT_SET_INVALID", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates: [], diagnostics: { viewerSeedMediaId: seedMediaId, attachmentMediaIds: mediaIds } } };
+      const candidates = [];
+      for (const mediaId of mediaIds) {
+        if (deadline - Date.now() < 2_000) return { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_DEADLINE", gallery: { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_DEADLINE", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates: [], diagnostics: { viewerSeedMediaId: seedMediaId, attachmentCount: mediaIds.length, verifiedCount: candidates.length } } };
+        const proof = mediaId === seedMediaId ? first : await inspectViewerMedia(mediaId);
+        const proofIds = [...new Set((Array.isArray(proof.mediaIds) ? proof.mediaIds : []).map(String).filter((value) => /^\d{5,30}$/.test(value)))].sort();
+        if (proof.status !== "VERIFIED" || proof.currentMediaId !== mediaId || !sameStringSet(proofIds, [...mediaIds].sort()) || !proof.candidate) {
+          const error = proof.error || "FACEBOOK_GALLERY_VIEWER_MEDIA_SET_INCOMPLETE";
+          return { status: "FAILED", error, gallery: { status: "FAILED", error, expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates: [], diagnostics: { viewerSeedMediaId: seedMediaId, attachmentCount: mediaIds.length, verifiedCount: candidates.length, failedMediaId: mediaId, viewer: proof.diagnostics || null } } };
+        }
+        candidates.push(proof.candidate);
+      }
+      return { status: "COMPLETE", gallery: { status: "COMPLETE", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource: "EXACT_VIEWER_TRACKING", groupBindingSource: "EXACT_VIEWER_PARENT", rootCount: 1, diagnostics: { viewerSeedMediaId: seedMediaId, attachmentCount: mediaIds.length, verifiedCount: candidates.length }, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
+    };
     let result = await hydrate(resolvedUrl, resolvedUrl);
+    if (result.status === "FAILED" && result.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {
+      for (const seedMediaId of seedMediaIds) {
+        const viewerResult = await hydrateFromViewer(seedMediaId);
+        if (viewerResult.status === "COMPLETE") return viewerResult;
+        result = viewerResult;
+      }
+    }
     if (result.status === "FAILED" && result.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {
       const permalinkUrl = canonicalGalleryPermalink(resolvedUrl, postId);
       if (permalinkUrl && permalinkUrl !== resolvedUrl && deadline - Date.now() > 2_000) {
@@ -953,6 +994,15 @@ function canonicalGalleryPermalink(value, postId) {
     const group = url.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/\d{5,30}(?:\/|$)/i)?.[1];
     return group && /^\d{5,30}$/.test(String(postId || "")) ? `https://www.facebook.com/groups/${group}/permalink/${postId}/` : null;
   } catch { return null; }
+}
+
+function canonicalGalleryPhotoUrl(postId, mediaId) {
+  if (!/^\d{5,30}$/.test(String(postId || "")) || !/^\d{5,30}$/.test(String(mediaId || ""))) return null;
+  return `https://www.facebook.com/photo/?fbid=${encodeURIComponent(mediaId)}&set=pcb.${encodeURIComponent(postId)}`;
+}
+
+function sameStringSet(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 function failureDiagnostics(context, tabId) { return { stage: context?.lastStage || "SOURCE_COLLECTION", query: context?.query || undefined, tabId, source: context?.source || "facebook", elapsedMs: context?.deadline ? Date.now() - context.deadline.startedAt : undefined }; }
 async function waitForTab(tabId, timeoutMs) {

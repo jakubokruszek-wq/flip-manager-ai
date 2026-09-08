@@ -325,3 +325,40 @@ test("search media resolver derives a canonical source permalink only from verif
   assert.equal(record.permalink, `https://www.facebook.com/groups/${source.sourceId}/posts/${postId}/`);
   assert.equal(record.identityConfidence, "EXACT");
 });
+
+test("gallery viewer enumerates the exact parent attachment set without treating fbid as postId", () => {
+  const postId = "1749121366325600";
+  const mediaId = "28459992303624928";
+  const mediaIds = [mediaId, "28459993423624816", "28459993913624767"];
+  const gallerySource = { ...source, allowGroupRedirect: true };
+  const payload = JSON.stringify({
+    __typename: "Photo",
+    id: mediaId,
+    image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" },
+    container_story: {
+      __typename: "Story",
+      post_id: postId,
+      url: `https://www.facebook.com/groups/1350200629551011/posts/${postId}/`,
+      actors: [{ name: "Exact Author" }],
+      message: { text: "Exact root message" },
+      tracking: JSON.stringify({ top_level_post_id: postId, photo_attachments_list: mediaIds }),
+    },
+  });
+  const result = core.resolveGalleryMediaSetFromText(payload, gallerySource, postId, mediaId);
+  assert.equal(result.status, "VERIFIED");
+  assert.deepEqual(result.mediaIds, [...mediaIds].sort());
+  assert.equal(result.candidate.mediaId, mediaId);
+  assert.equal(result.candidate.boundPostId, postId);
+  assert.notEqual(result.candidate.boundPostId, mediaId);
+});
+
+test("gallery viewer stays fail-closed without attachment binding or with a foreign parent", () => {
+  const postId = "1749121366325600";
+  const mediaId = "28459992303624928";
+  const gallerySource = { ...source, allowGroupRedirect: true };
+  const story = { __typename: "Story", post_id: postId, url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`, actors: [{ name: "Exact Author" }], message: { text: "Exact root" } };
+  const withoutBinding = JSON.stringify({ __typename: "Photo", id: mediaId, image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" }, container_story: story });
+  assert.equal(core.resolveGalleryMediaSetFromText(withoutBinding, gallerySource, postId, mediaId).status, "UNVERIFIED");
+  const foreign = JSON.stringify({ __typename: "Photo", id: mediaId, image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" }, container_story: { ...story, post_id: "999999999999999", tracking: JSON.stringify({ top_level_post_id: "999999999999999", photo_attachments_list: [mediaId] }) } });
+  assert.equal(core.resolveGalleryMediaSetFromText(foreign, gallerySource, postId, mediaId).status, "UNVERIFIED");
+});

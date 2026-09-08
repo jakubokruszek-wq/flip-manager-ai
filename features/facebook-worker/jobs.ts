@@ -12,6 +12,7 @@ import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeF
 import { aggregateFacebookVisionRun, summarizeFacebookVisionUsage } from "./openai-pricing";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 import { FACEBOOK_PRODUCTION_SOURCE_ID, isFacebookProductionSource, normalizeFacebookSourceUrl } from "@/features/collector/facebook-production";
+import { gallerySeedMediaFromProvenance } from "./gallery-policy";
 
 type Row = Record<string, unknown>;
 const LEASE_SECONDS = 180;
@@ -113,15 +114,26 @@ export async function claimFacebookJob(workerId: string, consumerType: FacebookJ
   const row = Array.isArray(result.data) ? asRow(result.data[0]) : asRow(result.data);
   if (!row) return null;
   const jobType = row.job_type === "GALLERY_HYDRATION" ? "GALLERY_HYDRATION" : "SOURCE_SCAN";
+  const galleryListingId = nullableString(row.gallery_listing_id);
+  const galleryPostId = nullableString(row.gallery_post_id);
+  let gallerySeedMediaIds: string[] = [];
+  if (jobType === "GALLERY_HYDRATION" && galleryListingId && galleryPostId) {
+    const metadataResult = await supabase.from("listing_source_metadata").select("metadata").eq("listing_id", galleryListingId).eq("source", "facebook").maybeSingle();
+    if (!metadataResult.error) {
+      const metadata = asRow(metadataResult.data?.metadata);
+      gallerySeedMediaIds = gallerySeedMediaFromProvenance(metadata?.mediaProvenance, galleryPostId).map((seed) => seed.mediaId);
+    }
+  }
   return {
     id: requiredString(row.id), runId: requiredString(row.scan_run_id), sourceScanId: nullableString(row.source_scan_id), filterId: requiredString(row.search_filter_id),
     group: jobType === "SOURCE_SCAN" ? parseFacebookGroupSnapshot(row.group_snapshot) : { id: "gallery", name: "Gallery hydration", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/", type: "GROUP" }, leaseToken: requiredString(row.lease_token), leasedUntil: requiredString(row.leased_until), attempts: nonnegativeInteger(row.attempts),
     jobType,
     imageMode: jobType === "GALLERY_HYDRATION" ? "GALLERY_HYDRATION_MEDIA_ALLOWED" : "SOURCE_SCAN_DATA_ONLY",
     priority: nonnegativeInteger(row.priority ?? 0),
-    galleryListingId: nullableString(row.gallery_listing_id),
-    galleryPostId: nullableString(row.gallery_post_id),
+    galleryListingId,
+    galleryPostId,
     gallerySourceUrl: nullableString(row.gallery_source_url),
+    gallerySeedMediaIds,
   };
 }
 

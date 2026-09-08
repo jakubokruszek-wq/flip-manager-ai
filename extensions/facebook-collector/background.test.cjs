@@ -483,6 +483,13 @@ test("on-demand gallery uses the existing exact-root queue path and never broade
   assert.match(background, /HYDRATE_FACEBOOK_GALLERY/);
   assert.match(background, /GALLERY_JOB_TIMEOUT_MS/);
   assert.match(content, /HYDRATE_FACEBOOK_GALLERY/);
+  assert.match(content, /INSPECT_FACEBOOK_GALLERY_VIEWER_MEDIA/);
+  assert.match(content, /resolveGalleryMediaSetFromText/);
+  assert.match(background, /gallerySeedMediaIds/);
+  assert.match(background, /canonicalGalleryPhotoUrl/);
+  assert.match(background, /set=pcb\.\$\{encodeURIComponent\(postId\)\}/);
+  assert.match(background, /sameStringSet/);
+  assert.match(background, /FACEBOOK_GALLERY_VIEWER_MEDIA_SET_INCOMPLETE/);
   assert.match(content, /expectedGroup/);
   assert.match(content, /EXACT_ROOT_STORY/);
   assert.match(content, /foreignPostIdsDetected: \[\]/);

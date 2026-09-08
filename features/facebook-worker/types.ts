@@ -289,6 +289,7 @@ export type FacebookWorkerJob = {
   galleryListingId?: string | null;
   galleryPostId?: string | null;
   gallerySourceUrl?: string | null;
+  gallerySeedMediaIds?: string[];
 };
 
 export type FacebookCompletion = {

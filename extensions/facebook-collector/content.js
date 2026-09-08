@@ -22,6 +22,10 @@
       void hydrateFacebookGallery(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
       return true;
     }
+    if (message?.type === "INSPECT_FACEBOOK_GALLERY_VIEWER_MEDIA") {
+      void inspectFacebookGalleryViewerMedia(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+      return true;
+    }
     if (message?.type === "RESOLVE_SEARCH_MEDIA_TILE") {
       void resolveSearchMediaTile(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
       return true;
@@ -149,6 +153,42 @@
     }
     if (candidates.length === 0) return galleryFailure("FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 });
     return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1, diagnostics: galleryDiagnostics(startedAt, expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: 1 }) };
+  }
+
+  async function inspectFacebookGalleryViewerMedia(options) {
+    const startedAt = Date.now();
+    const expectedPostId = String(options.expectedPostId || "");
+    const mediaId = String(options.mediaId || "");
+    const source = core.canonicalSource(String(options.expectedUrl || ""));
+    if (source) source.allowGroupRedirect = true;
+    const failure = (error, extra = {}) => ({ status: "FAILED", error, expectedPostId: /^\d{5,30}$/.test(expectedPostId) ? expectedPostId : null, currentMediaId: /^\d{5,30}$/.test(mediaId) ? mediaId : null, mediaIds: [], candidate: null, diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), ...extra } });
+    if (options.imageMode !== GALLERY_HYDRATION_MEDIA_ALLOWED) return failure("FACEBOOK_GALLERY_IMAGE_MODE_INVALID");
+    if (!source || source.sourceType !== "GROUP" || !/^\d{5,30}$/.test(expectedPostId) || !/^\d{5,30}$/.test(mediaId)) return failure("FACEBOOK_GALLERY_VIEWER_INPUT_INVALID");
+    let viewerContext = false;
+    try {
+      const current = new URL(location.href);
+      const set = current.searchParams.get("set") || "";
+      viewerContext = /(^|\.)facebook\.com$/i.test(current.hostname)
+        && /^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname)
+        && current.searchParams.get("fbid") === mediaId
+        && set === `pcb.${expectedPostId}`;
+    } catch { /* invalid viewer context remains fail-closed */ }
+    if (!viewerContext) return failure("FACEBOOK_GALLERY_VIEWER_CONTEXT_MISMATCH");
+    const deadline = Date.now() + Math.min(6_000, Math.max(500, Number(options.waitMs) || 6_000));
+    let lastReason = "GALLERY_VIEWER_PAYLOAD_NOT_FOUND";
+    do {
+      let bytes = 0;
+      for (const script of [...document.scripts].slice(0, 250)) {
+        const body = script.textContent || "";
+        if (!body || bytes + body.length > 4_000_000) continue;
+        bytes += body.length;
+        const proof = core.resolveGalleryMediaSetFromText(body, source, expectedPostId, mediaId);
+        if (proof.status === "VERIFIED") return { ...proof, status: "VERIFIED", diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), scriptCount: Math.min(250, document.scripts.length), attachmentCount: proof.mediaIds.length } };
+        if (proof.reason && proof.reason !== "GALLERY_VIEWER_EXACT_MEDIA_PARENT_NOT_PROVEN") lastReason = proof.reason;
+      }
+      if (Date.now() < deadline) await wait(Math.min(250, deadline - Date.now()));
+    } while (Date.now() < deadline);
+    return failure(lastReason, { scriptCount: Math.min(250, document.scripts.length), readyState: document.readyState, visibilityState: document.visibilityState });
   }
 
   function galleryDiagnostics(startedAt, expectedPostId, extra = {}) {
