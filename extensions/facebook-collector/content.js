@@ -212,7 +212,7 @@
       closedCycle: false,
     };
     const capture = async (previousMediaId = null) => {
-      const frame = await waitForGalleryViewerFrame(expectedPostId, previousMediaId, Math.min(deadline, Date.now() + 3_000));
+      const frame = await waitForGalleryViewerFrame(expectedPostId, previousMediaId, Math.min(deadline, Date.now() + 8_000));
       if (!frame) return null;
       const prior = seen.get(frame.mediaId);
       if (prior && prior !== frame.url) return { error: "GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT" };
@@ -223,7 +223,7 @@
       return { ...frame, repeated: Boolean(prior) };
     };
     const first = await capture();
-    if (!first) return { status: "FAILED", error: "GALLERY_VIEWER_CURRENT_IMAGE_NOT_FOUND", diagnostics };
+    if (!first) return { status: "FAILED", error: "GALLERY_VIEWER_CURRENT_IMAGE_NOT_FOUND", diagnostics: { ...diagnostics, dom: galleryViewerDomSnapshot(expectedPostId) } };
     if (first.mediaId !== seedMediaId) return { status: "FAILED", error: "GALLERY_VIEWER_SEED_CONTEXT_MISMATCH", diagnostics: { ...diagnostics, currentMediaId: first.mediaId } };
 
     let current = first;
@@ -233,7 +233,7 @@
       next.click();
       diagnostics.nextClicks += 1;
       const advanced = await capture(current.mediaId);
-      if (!advanced) return { status: "FAILED", error: "GALLERY_VIEWER_NEXT_NAVIGATION_STALLED", diagnostics: { ...diagnostics, frameCount: frames.length } };
+      if (!advanced) return { status: "FAILED", error: "GALLERY_VIEWER_NEXT_NAVIGATION_STALLED", diagnostics: { ...diagnostics, frameCount: frames.length, dom: galleryViewerDomSnapshot(expectedPostId) } };
       if (advanced.error) return { status: "FAILED", error: advanced.error, diagnostics };
       if (advanced.mediaId === seedMediaId) { diagnostics.closedCycle = true; break; }
       if (advanced.repeated) {
@@ -249,7 +249,7 @@
         previous.click();
         diagnostics.previousClicks += 1;
         const moved = await capture(current.mediaId);
-        if (!moved) return { status: "FAILED", error: "GALLERY_VIEWER_PREVIOUS_NAVIGATION_STALLED", diagnostics: { ...diagnostics, frameCount: frames.length } };
+        if (!moved) return { status: "FAILED", error: "GALLERY_VIEWER_PREVIOUS_NAVIGATION_STALLED", diagnostics: { ...diagnostics, frameCount: frames.length, dom: galleryViewerDomSnapshot(expectedPostId) } };
         if (moved.error) return { status: "FAILED", error: moved.error, diagnostics };
         current = moved;
       }
@@ -282,21 +282,51 @@
     try { current = new URL(location.href); } catch { return null; }
     const mediaId = current.searchParams.get("fbid") || "";
     if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("set") !== `pcb.${expectedPostId}` || !/^\d{5,30}$/.test(mediaId)) return null;
-    const images = [...document.querySelectorAll('img[src]')].map((image) => {
+    const images = [...document.querySelectorAll('img[src], [role="img"], [style*="background-image"]')].map((image) => {
       const url = String(image.currentSrc || image.src || "");
+      const background = !url ? extractBackgroundImageUrl(image) : "";
+      const mediaUrl = url || background;
       let hostMatches = false;
-      try { hostMatches = /(^|\.)fbcdn\.net$/i.test(new URL(url).hostname); } catch { /* invalid image */ }
+      try { hostMatches = /(^|\.)fbcdn\.net$/i.test(new URL(mediaUrl).hostname); } catch { /* invalid image */ }
       const rect = image.getBoundingClientRect();
       const style = getComputedStyle(image);
-      const visible = hostMatches && rect.width >= 160 && rect.height >= 120 && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0;
+      const naturalArea = Math.max(0, Number(image.naturalWidth || 0) * Number(image.naturalHeight || 0));
+      const layoutArea = Math.max(0, rect.width * rect.height);
+      const usableSize = layoutArea >= 160 * 120 || naturalArea >= 320 * 240 || image.getAttribute("data-visualcompletion") === "media-vc-image";
+      const visible = hostMatches && usableSize && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0;
       const preferred = image.getAttribute("data-visualcompletion") === "media-vc-image" ? 1 : 0;
-      return { image, url, visible, preferred, area: Math.max(0, rect.width * rect.height) };
+      return { image, url: mediaUrl, visible, preferred, area: Math.max(layoutArea, naturalArea) };
     }).filter((item) => item.visible).sort((left, right) => right.preferred - left.preferred || right.area - left.area);
     if (images.length === 0) return null;
     const best = images[0];
     const conflicting = images.find((item, index) => index > 0 && item.preferred === best.preferred && item.area >= best.area * 0.9 && item.url !== best.url);
     if (conflicting) return null;
     return { mediaId, setPostId: expectedPostId, url: best.url.slice(0, 2_000), image: best.image };
+  }
+
+  function extractBackgroundImageUrl(node) {
+    const value = node?.style?.backgroundImage || getComputedStyle(node).backgroundImage || "";
+    const match = value.match(/url\(["']?(https?:[^"')]+)["']?\)/i);
+    return match?.[1] || "";
+  }
+
+  function galleryViewerDomSnapshot(expectedPostId) {
+    let currentUrl = null;
+    let currentSet = null;
+    try { const url = new URL(location.href); currentUrl = safePagePath(url.href); currentSet = url.searchParams.get("set") || null; } catch { /* bounded diagnostics */ }
+    const imageNodes = [...document.querySelectorAll('img[src], [role="img"], [style*="background-image"]')];
+    const fbcdnCount = imageNodes.filter((node) => {
+      const value = String(node.currentSrc || node.src || extractBackgroundImageUrl(node) || "");
+      try { return /(^|\.)fbcdn\.net$/i.test(new URL(value).hostname); } catch { return false; }
+    }).length;
+    return {
+      currentUrl,
+      currentSet: typeof currentSet === "string" ? currentSet.slice(0, 80) : null,
+      expectedSet: `pcb.${expectedPostId}`,
+      imageNodeCount: Math.min(200, imageNodes.length),
+      fbcdnImageNodeCount: Math.min(200, fbcdnCount),
+      buttonLabels: [...document.querySelectorAll('button[aria-label], [role="button"][aria-label], a[aria-label]')].map((node) => String(node.getAttribute("aria-label") || "").slice(0, 120)).filter(Boolean).slice(0, 40),
+    };
   }
 
   function galleryViewerControl(direction, image) {
