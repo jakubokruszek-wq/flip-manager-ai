@@ -342,7 +342,7 @@
     const postId = scalarId(expectedPostId);
     const mediaId = scalarId(expectedMediaId);
     const unverified = (reason, extra = {}) => ({ status: "UNVERIFIED", reason, mediaIds: [], candidate: null, ...extra });
-    if (!text || !source || !postId || !mediaId) return unverified("GALLERY_VIEWER_INPUT_INVALID");
+    if (!text || !postId || !mediaId) return unverified("GALLERY_VIEWER_INPUT_INVALID");
     const roots = parseJsonBodies(String(text).slice(0, 4_000_000));
     const parentIds = new Set();
     const proofs = [];

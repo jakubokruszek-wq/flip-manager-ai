@@ -6,13 +6,26 @@
   const SOURCE_SCAN_DATA_ONLY = "SOURCE_SCAN_DATA_ONLY";
   const GALLERY_HYDRATION_MEDIA_ALLOWED = "GALLERY_HYDRATION_MEDIA_ALLOWED";
   const networkRecords = new Map();
+  const galleryNetworkProofs = new Map();
   let networkResponses = 0;
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin || event.data?.channel !== "FLIP_COLLECTOR_NETWORK") return;
     networkResponses += 1;
     for (const record of event.data.payload?.records || []) networkRecords.set(record.postId, record);
+    const proof = event.data.payload?.galleryProof;
+    if (proof?.status === "VERIFIED" && /^\d{5,30}$/.test(String(proof.expectedPostId || "")) && /^\d{5,30}$/.test(String(proof.currentMediaId || ""))) {
+      galleryNetworkProofs.set(`${proof.expectedPostId}:${proof.currentMediaId}`, {
+        status: "VERIFIED",
+        expectedPostId: String(proof.expectedPostId),
+        currentMediaId: String(proof.currentMediaId),
+        mediaIds: Array.isArray(proof.mediaIds) ? proof.mediaIds.filter((id) => /^\d{5,30}$/.test(String(id))).slice(0, 50).map(String) : [],
+        permalink: typeof proof.permalink === "string" ? proof.permalink.slice(0, 500) : null,
+        candidate: proof.candidate && typeof proof.candidate === "object" ? proof.candidate : null,
+      });
+    }
     while (networkRecords.size > 200) networkRecords.delete(networkRecords.keys().next().value);
+    while (galleryNetworkProofs.size > 50) galleryNetworkProofs.delete(galleryNetworkProofs.keys().next().value);
   });
 
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
@@ -174,6 +187,22 @@
         && set === `pcb.${expectedPostId}`;
     } catch { /* invalid viewer context remains fail-closed */ }
     if (!viewerContext) return failure("FACEBOOK_GALLERY_VIEWER_CONTEXT_MISMATCH");
+    window.postMessage({ channel: "FLIP_COLLECTOR_GALLERY_CONTEXT", payload: { expectedPostId, expectedUrl: String(options.expectedUrl || "").slice(0, 500) } }, location.origin);
+    const networkProof = galleryNetworkProofs.get(`${expectedPostId}:${mediaId}`);
+    if (networkProof && galleryNetworkProofIsExact(networkProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
+      return {
+        status: "VERIFIED",
+        expectedPostId,
+        currentMediaId: mediaId,
+        mediaIds: networkProof.mediaIds,
+        permalink: networkProof.permalink,
+        authorFound: true,
+        rootTextFound: true,
+        candidate: networkProof.candidate,
+        networkProof: true,
+        diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), networkProof: true, attachmentCount: networkProof.mediaIds.length },
+      };
+    }
     const deadline = Date.now() + Math.min(45_000, Math.max(2_000, Number(options.waitMs) || 45_000));
     const payloadDeadline = Math.min(deadline, Date.now() + 2_000);
     let lastReason = "GALLERY_VIEWER_PAYLOAD_NOT_FOUND";
@@ -196,6 +225,31 @@
       return failure(lastReason, traversal.diagnostics || {});
     }
     return failure(lastReason, { scriptCount: Math.min(250, document.scripts.length), readyState: document.readyState, visibilityState: document.visibilityState });
+  }
+
+  function galleryNetworkProofIsExact(proof, expectedPostId, mediaId, expectedUrl, resolvedUrl) {
+    const candidate = proof?.candidate;
+    const allowedGroups = [expectedUrl, resolvedUrl].flatMap((value) => {
+      try { return [new URL(value).pathname.match(/^\/groups\/([^/]+)/i)?.[1] || null]; } catch { return []; }
+    }).filter(Boolean);
+    let permalinkGroup = null;
+    try { permalinkGroup = new URL(String(proof?.permalink || "")).pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\//i)?.[1] || null; } catch { /* exact binding fails closed */ }
+    return proof?.status === "VERIFIED"
+      && proof.expectedPostId === expectedPostId
+      && proof.currentMediaId === mediaId
+      && Array.isArray(proof.mediaIds)
+      && proof.mediaIds.includes(mediaId)
+      && Boolean(permalinkGroup && allowedGroups.includes(permalinkGroup))
+      && candidate?.expectedPostId === expectedPostId
+      && candidate?.storyRootPostId === expectedPostId
+      && candidate?.boundPostId === expectedPostId
+      && candidate?.bindingProvenance === "EXACT_ROOT_STORY"
+      && candidate?.rootStoryUnique === true
+      && candidate?.mediaId === mediaId
+      && Array.isArray(candidate.foreignPostIdsDetected)
+      && candidate.foreignPostIdsDetected.length === 0
+      && typeof candidate.url === "string"
+      && /^https:\/\//i.test(candidate.url);
   }
 
   async function inspectExactGalleryCarousel(expectedPostId, seedMediaId, deadline) {

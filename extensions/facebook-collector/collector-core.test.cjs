@@ -352,6 +352,28 @@ test("gallery viewer enumerates the exact parent attachment set without treating
   assert.notEqual(result.candidate.boundPostId, mediaId);
 });
 
+test("gallery network proof accepts an exact group permalink without viewer DOM", () => {
+  const postId = "1749121366325600";
+  const mediaId = "28459992303624928";
+  const payload = JSON.stringify({
+    __typename: "Photo",
+    id: mediaId,
+    image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" },
+    container_story: {
+      __typename: "Story",
+      post_id: postId,
+      url: `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${postId}/`,
+      actors: [{ name: "Exact Author" }],
+      message: { text: "Exact root message" },
+      tracking: { top_level_post_id: postId, photo_attachments_list: [mediaId, "28459993423624816"] },
+    },
+  });
+  const result = core.resolveGalleryMediaSetFromText(payload, null, postId, mediaId);
+  assert.equal(result.status, "VERIFIED");
+  assert.deepEqual(result.mediaIds, [mediaId, "28459993423624816"].sort());
+  assert.equal(result.candidate.bindingProvenance, "EXACT_ROOT_STORY");
+});
+
 test("gallery viewer stays fail-closed without attachment binding or with a foreign parent", () => {
   const postId = "1749121366325600";
   const mediaId = "28459992303624928";

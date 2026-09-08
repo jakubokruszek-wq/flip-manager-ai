@@ -4,6 +4,15 @@
   if (!core || globalThis.__flipCollectorNetworkObserver) return;
   globalThis.__flipCollectorNetworkObserver = true;
   const MAX_BODY_BYTES = 2_000_000;
+  let galleryContext = null;
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.origin !== location.origin || event.data?.channel !== "FLIP_COLLECTOR_GALLERY_CONTEXT") return;
+    const expectedPostId = String(event.data.payload?.expectedPostId || "");
+    const expectedUrl = String(event.data.payload?.expectedUrl || "");
+    if (!/^\d{5,30}$/.test(expectedPostId) || !/^https:\/\/(?:www\.)?facebook\.com\/groups\//i.test(expectedUrl)) return;
+    galleryContext = { expectedPostId, expectedUrl: expectedUrl.slice(0, 500) };
+  });
 
   function relevant(url, contentType) {
     return /(?:graphql|api\/graphql|relay|ajax|groups\/feed|CometGroup)/i.test(url) || /json|javascript/i.test(contentType || "");
@@ -13,17 +22,44 @@
     try {
       if (!relevant(url, contentType) || body.length > MAX_BODY_BYTES) return;
       const source = core.canonicalSource(location.href);
-      if (!source) return;
+      const viewerContext = galleryViewerContext();
+      if (!source && !viewerContext) return;
       // Facebook may redirect a vanity group URL to its numeric group id while
       // response payloads still contain the vanity permalink. The final tab
       // URL is the binding authority; normalize that payload only for this
       // passive network observer. Gallery hydration still requires the exact
       // final group/post URL and exact media association.
-      const extractionSource = source.sourceType === "GROUP" ? { ...source, allowGroupRedirect: true } : source;
-      const records = core.extractStructuredRecordsFromText(body, "NETWORK", extractionSource, 0);
-      if (!records.length) return;
-      window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records } }, location.origin);
+      const extractionSource = source?.sourceType === "GROUP" ? { ...source, allowGroupRedirect: true } : source;
+      const records = source ? core.extractStructuredRecordsFromText(body, "NETWORK", extractionSource, 0) : [];
+      let galleryProof = null;
+      if (viewerContext) {
+        const gallerySource = galleryContext?.expectedPostId === viewerContext.postId ? core.canonicalSource(galleryContext.expectedUrl) : null;
+        if (gallerySource) gallerySource.allowGroupRedirect = true;
+        const proof = core.resolveGalleryMediaSetFromText(body, gallerySource, viewerContext.postId, viewerContext.mediaId);
+        if (proof.status === "VERIFIED" && proof.currentMediaId === viewerContext.mediaId && proof.expectedPostId === viewerContext.postId) {
+          galleryProof = {
+            status: "VERIFIED",
+            expectedPostId: proof.expectedPostId,
+            currentMediaId: proof.currentMediaId,
+            mediaIds: Array.isArray(proof.mediaIds) ? proof.mediaIds.slice(0, 50) : [],
+            permalink: typeof proof.permalink === "string" ? proof.permalink.slice(0, 500) : null,
+            candidate: proof.candidate || null,
+          };
+        }
+      }
+      if (!records.length && !galleryProof) return;
+      window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records, galleryProof } }, location.origin);
     } catch { /* passive observer must never affect Facebook */ }
+  }
+
+  function galleryViewerContext() {
+    try {
+      const current = new URL(location.href);
+      const postId = current.searchParams.get("set")?.match(/^pcb\.(\d{5,30})$/i)?.[1] || null;
+      const mediaId = current.searchParams.get("fbid");
+      if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || !postId || !/^\d{5,30}$/.test(String(mediaId || ""))) return null;
+      return { postId, mediaId: String(mediaId) };
+    } catch { return null; }
   }
 
   const nativeFetch = globalThis.fetch.bind(globalThis);
