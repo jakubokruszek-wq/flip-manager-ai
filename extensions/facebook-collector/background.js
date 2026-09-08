@@ -571,7 +571,12 @@ async function collectGalleryHydration(job, requestId) {
   const imagePolicy = globalThis.FlipCollectorImagePolicy;
   imagePolicy?.startSession?.(sessionId, GALLERY_HYDRATION_MEDIA_MODE);
   try {
-    tab = await chrome.tabs.create({ url: "about:blank", active: false });
+    // Facebook serves only a lightweight post shell to an inactive tab. That
+    // shell contains exact self-links but not the root story or its complete
+    // media set, which forced gallery hydration into the one-image metadata
+    // fallback. Gallery hydration is an explicit user action, so make this
+    // dedicated tab active while the bounded exact-root proof runs.
+    tab = await chrome.tabs.create({ url: "about:blank", active: true });
     await imagePolicy.attachTab(tab.id, { sessionId, mode: GALLERY_HYDRATION_MEDIA_MODE });
     await chrome.tabs.update(tab.id, { url: sourceUrl });
     await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline - Date.now())));

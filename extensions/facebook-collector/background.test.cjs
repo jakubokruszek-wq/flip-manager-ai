@@ -104,6 +104,8 @@ test("in-page verified roots are terminal retry successes without structured pay
 test("GALLERY_HYDRATION remains the only flow allowed to open a dedicated tab", () => {
   const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
   assert.match(gallery, /chrome\.tabs\.create/);
+  assert.match(gallery, /chrome\.tabs\.create\(\{ url: "about:blank", active: true \}\)/);
+  assert.doesNotMatch(gallery, /chrome\.tabs\.create\(\{ url: "about:blank", active: false \}\)/);
   assert.match(gallery, /GALLERY_HYDRATION_MEDIA_MODE/);
   assert.match(gallery, /HYDRATE_FACEBOOK_GALLERY/);
 });
