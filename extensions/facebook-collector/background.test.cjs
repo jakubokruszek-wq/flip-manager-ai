@@ -523,6 +523,8 @@ test("gallery background binds a Facebook vanity redirect to the same exact post
   assert.match(gallery, /FACEBOOK_GALLERY_RESOLVED_URL_INVALID/);
   assert.match(gallery, /\(\?:posts\|permalink\)\/\$\{postId\}/);
   assert.match(gallery, /expectedUrl: sourceUrl, resolvedUrl/);
+  assert.match(gallery, /canonicalGalleryPermalink\(resolvedUrl, postId\)/);
+  assert.match(gallery, /result\.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND"/);
 });
 
 test("gallery hydration preserves the exact content-script terminal error", () => {

@@ -584,15 +584,29 @@ async function collectGalleryHydration(job, requestId) {
     } catch { /* invalid redirect target remains fail-closed */ }
     if (!resolvedTargetValid) return { status: "FAILED", error: "FACEBOOK_GALLERY_RESOLVED_URL_INVALID" };
     await waitForContentScript(tab.id, Math.min(10_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
-    const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-      () => chrome.tabs.sendMessage(tab.id, { type: "HYDRATE_FACEBOOK_GALLERY", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl, imageMode: GALLERY_HYDRATION_MEDIA_MODE } }),
-      { timeoutMs: Math.min(30_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId } },
-    );
-    if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_FAILED") };
-    if (responseResult.response.result?.status === "FAILED") {
-      return { status: "FAILED", error: String(responseResult.response.result.error || "FACEBOOK_GALLERY_FAILED"), gallery: responseResult.response.result };
+    const hydrate = async (pageUrl, pageResolvedUrl) => {
+      const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
+        () => chrome.tabs.sendMessage(tab.id, { type: "HYDRATE_FACEBOOK_GALLERY", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl: pageResolvedUrl, imageMode: GALLERY_HYDRATION_MEDIA_MODE } }),
+        { timeoutMs: Math.min(30_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId, pageUrl } },
+      );
+      if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_FAILED") };
+      if (responseResult.response.result?.status === "FAILED") return { status: "FAILED", error: String(responseResult.response.result.error || "FACEBOOK_GALLERY_FAILED"), gallery: responseResult.response.result };
+      return { status: "COMPLETE", gallery: { ...responseResult.response.result, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
+    };
+    let result = await hydrate(resolvedUrl, resolvedUrl);
+    if (result.status === "FAILED" && result.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {
+      const permalinkUrl = canonicalGalleryPermalink(resolvedUrl, postId);
+      if (permalinkUrl && permalinkUrl !== resolvedUrl && deadline - Date.now() > 2_000) {
+        await chrome.tabs.update(tab.id, { url: permalinkUrl });
+        await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline - Date.now())));
+        const permalinkTab = await chrome.tabs.get(tab.id);
+        const permalinkResolvedUrl = String(permalinkTab?.url || permalinkUrl);
+        await waitForContentScript(tab.id, Math.min(10_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
+        result = await hydrate(permalinkUrl, permalinkResolvedUrl);
+      }
     }
-    return { status: "COMPLETE", gallery: { ...responseResult.response.result, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
+    if (result.status === "FAILED") return result;
+    return result;
   } catch (error) {
     return { status: "FAILED", error: collectorErrorCode(error) };
   } finally {
@@ -928,6 +942,13 @@ function safeImageRuleDiagnostics(value) {
 }
 function collectorErrorCode(error) { return typeof error?.code === "string" ? error.code.slice(0, 120) : safeError(error).split(":", 1)[0]; }
 function updateCollectionContext(context, stage, query) { if (!context) return; context.lastStage = stage; context.query = query; }
+function canonicalGalleryPermalink(value, postId) {
+  try {
+    const url = new URL(String(value || ""));
+    const group = url.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/\d{5,30}(?:\/|$)/i)?.[1];
+    return group && /^\d{5,30}$/.test(String(postId || "")) ? `https://www.facebook.com/groups/${group}/permalink/${postId}/` : null;
+  } catch { return null; }
+}
 function failureDiagnostics(context, tabId) { return { stage: context?.lastStage || "SOURCE_COLLECTION", query: context?.query || undefined, tabId, source: context?.source || "facebook", elapsedMs: context?.deadline ? Date.now() - context.deadline.startedAt : undefined }; }
 async function waitForTab(tabId, timeoutMs) {
   const start = Date.now();
