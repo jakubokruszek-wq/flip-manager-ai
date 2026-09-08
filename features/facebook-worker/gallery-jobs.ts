@@ -91,6 +91,16 @@ type GalleryViewerFailureDiagnostics = {
   closedCycle?: boolean;
   frameCount?: number;
   mediaIds?: string[];
+  networkResponseCount?: number;
+  networkAudit?: {
+    rootCount?: number;
+    currMediaFound?: boolean;
+    containerStoryFound?: boolean;
+    parentPostIdFound?: boolean;
+    attachmentBindingFound?: boolean;
+    firstFailedHop?: string | null;
+    proofReason?: string | null;
+  } | null;
   dom?: {
     currentUrl?: string | null;
     currentSet?: string | null;
@@ -428,6 +438,8 @@ function sanitizeGalleryViewerDiagnostics(value: unknown): GalleryViewerFailureD
     closedCycle: boolFrom(input.closedCycle),
     frameCount: finiteFrom(input.frameCount, 50),
     mediaIds: rawMediaIds.filter((id): id is string => typeof id === "string" && /^\d{5,30}$/.test(id)).slice(0, 50),
+    networkResponseCount: finiteFrom(input.networkResponseCount, 200),
+    networkAudit: sanitizeGalleryNetworkAudit(input.networkAudit),
     dom: dom ? {
       currentUrl: typeof dom.currentUrl === "string" ? dom.currentUrl.slice(0, 500) : null,
       currentSet: typeof dom.currentSet === "string" ? dom.currentSet.slice(0, 80) : null,
@@ -436,6 +448,20 @@ function sanitizeGalleryViewerDiagnostics(value: unknown): GalleryViewerFailureD
       fbcdnImageNodeCount: finiteFrom(dom.fbcdnImageNodeCount, 200),
       buttonLabels: Array.isArray(dom.buttonLabels) ? dom.buttonLabels.filter((label): label is string => typeof label === "string").slice(0, 40).map((label) => label.slice(0, 120)) : [],
     } : null,
+  };
+}
+
+function sanitizeGalleryNetworkAudit(value: unknown): GalleryViewerFailureDiagnostics["networkAudit"] {
+  const input = row(value);
+  if (!input) return null;
+  return {
+    rootCount: finiteFrom(input.rootCount, 100),
+    currMediaFound: boolFrom(input.currMediaFound),
+    containerStoryFound: boolFrom(input.containerStoryFound),
+    parentPostIdFound: boolFrom(input.parentPostIdFound),
+    attachmentBindingFound: boolFrom(input.attachmentBindingFound),
+    firstFailedHop: typeof input.firstFailedHop === "string" ? input.firstFailedHop.slice(0, 120) : null,
+    proofReason: typeof input.proofReason === "string" ? input.proofReason.slice(0, 120) : null,
   };
 }
 
