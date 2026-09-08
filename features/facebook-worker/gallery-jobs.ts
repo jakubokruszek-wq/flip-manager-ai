@@ -75,7 +75,30 @@ type GalleryFailureDiagnostics = {
     exactPostLinkCount?: number;
     scriptCount?: number;
   } | null;
+  viewer?: GalleryViewerFailureDiagnostics | null;
   [key: string]: unknown;
+};
+
+type GalleryViewerFailureDiagnostics = {
+  readyState?: string | null;
+  visibilityState?: string | null;
+  seedMediaId?: string | null;
+  currentMediaId?: string | null;
+  nextClicks?: number;
+  previousClicks?: number;
+  nextBoundary?: boolean;
+  previousBoundary?: boolean;
+  closedCycle?: boolean;
+  frameCount?: number;
+  mediaIds?: string[];
+  dom?: {
+    currentUrl?: string | null;
+    currentSet?: string | null;
+    expectedSet?: string | null;
+    imageNodeCount?: number;
+    fbcdnImageNodeCount?: number;
+    buttonLabels?: string[];
+  } | null;
 };
 
 export async function enqueueFacebookGalleryJob(listingId: string): Promise<{ jobId: string | null; status: FacebookGalleryStatus; listingId: string; created?: boolean; message?: string }> {
@@ -336,10 +359,10 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
   if (!input) return null;
   const number = (key: string, max: number) => typeof input[key] === "number" && Number.isFinite(input[key]) ? Math.max(0, Math.min(max, Math.floor(input[key] as number))) : undefined;
   const text = (key: string, max: number) => typeof input[key] === "string" && (input[key] as string).trim() ? (input[key] as string).slice(0, max) : null;
-  const bool = (key: string) => typeof input[key] === "boolean" ? input[key] as boolean : undefined;
   const rawIds = Array.isArray(input.networkRecordPostIds) ? input.networkRecordPostIds : [];
   const expected = row(input.expectedRecord);
   const page = row(input.page);
+  const viewer = sanitizeGalleryViewerDiagnostics(input.viewer);
   return {
     elapsedMs: number("elapsedMs", 120_000),
     currentPath: text("currentPath", 500),
@@ -383,6 +406,35 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
       mainCount: finiteFrom(page.mainCount, 20),
       exactPostLinkCount: finiteFrom(page.exactPostLinkCount, 50),
       scriptCount: finiteFrom(page.scriptCount, 250),
+    } : null,
+    viewer,
+  };
+}
+
+function sanitizeGalleryViewerDiagnostics(value: unknown): GalleryViewerFailureDiagnostics | null {
+  const input = row(value);
+  if (!input) return null;
+  const dom = row(input.dom);
+  const rawMediaIds = Array.isArray(input.mediaIds) ? input.mediaIds : [];
+  return {
+    readyState: typeof input.readyState === "string" ? input.readyState.slice(0, 20) : null,
+    visibilityState: typeof input.visibilityState === "string" ? input.visibilityState.slice(0, 20) : null,
+    seedMediaId: typeof input.seedMediaId === "string" && /^\d{5,30}$/.test(input.seedMediaId) ? input.seedMediaId : null,
+    currentMediaId: typeof input.currentMediaId === "string" && /^\d{5,30}$/.test(input.currentMediaId) ? input.currentMediaId : null,
+    nextClicks: finiteFrom(input.nextClicks, 50),
+    previousClicks: finiteFrom(input.previousClicks, 50),
+    nextBoundary: boolFrom(input.nextBoundary),
+    previousBoundary: boolFrom(input.previousBoundary),
+    closedCycle: boolFrom(input.closedCycle),
+    frameCount: finiteFrom(input.frameCount, 50),
+    mediaIds: rawMediaIds.filter((id): id is string => typeof id === "string" && /^\d{5,30}$/.test(id)).slice(0, 50),
+    dom: dom ? {
+      currentUrl: typeof dom.currentUrl === "string" ? dom.currentUrl.slice(0, 500) : null,
+      currentSet: typeof dom.currentSet === "string" ? dom.currentSet.slice(0, 80) : null,
+      expectedSet: typeof dom.expectedSet === "string" ? dom.expectedSet.slice(0, 80) : null,
+      imageNodeCount: finiteFrom(dom.imageNodeCount, 200),
+      fbcdnImageNodeCount: finiteFrom(dom.fbcdnImageNodeCount, 200),
+      buttonLabels: Array.isArray(dom.buttonLabels) ? dom.buttonLabels.filter((label): label is string => typeof label === "string").slice(0, 40).map((label) => label.slice(0, 120)) : [],
     } : null,
   };
 }

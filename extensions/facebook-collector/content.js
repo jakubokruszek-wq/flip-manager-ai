@@ -282,32 +282,87 @@
     try { current = new URL(location.href); } catch { return null; }
     const mediaId = current.searchParams.get("fbid") || "";
     if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("set") !== `pcb.${expectedPostId}` || !/^\d{5,30}$/.test(mediaId)) return null;
-    const images = [...document.querySelectorAll('img[src], [role="img"], [style*="background-image"]')].map((image) => {
-      const url = String(image.currentSrc || image.src || "");
-      const background = !url ? extractBackgroundImageUrl(image) : "";
-      const mediaUrl = url || background;
+    const imageNodes = [
+      ...document.querySelectorAll('img, video, [role="img"], [data-visualcompletion], [data-imgperflogname], [style*="background-image"]'),
+    ];
+    // Some Facebook viewer builds put the media URL in a class-driven
+    // background image on an otherwise anonymous div. Inspect only a bounded
+    // number of elements and only when the normal media nodes are empty.
+    const hasImageCandidate = imageNodes.some((node) => galleryViewerImageCandidates(node).some((candidate) => isLikelyFacebookMediaUrl(candidate.url)));
+    if (!hasImageCandidate) {
+      for (const node of [...document.querySelectorAll("*")].slice(0, 2_000)) {
+        const background = getComputedStyle(node).backgroundImage || "";
+        if (background.includes("url(")) imageNodes.push(node);
+      }
+    }
+    const images = imageNodes.flatMap((image) => galleryViewerImageCandidates(image).map((candidate) => {
+      const mediaUrl = candidate.url;
       let hostMatches = false;
-      try { hostMatches = /(^|\.)fbcdn\.net$/i.test(new URL(mediaUrl).hostname); } catch { /* invalid image */ }
+      try {
+        const host = new URL(mediaUrl).hostname;
+        hostMatches = /(^|\.)fbcdn\.net$/i.test(host)
+          || /(^|\.)fbsbx\.com$/i.test(host)
+          || /(^|\.)facebook\.com$/i.test(host);
+      } catch { /* invalid image */ }
       const rect = image.getBoundingClientRect();
       const style = getComputedStyle(image);
       const naturalArea = Math.max(0, Number(image.naturalWidth || 0) * Number(image.naturalHeight || 0));
       const layoutArea = Math.max(0, rect.width * rect.height);
-      const usableSize = layoutArea >= 160 * 120 || naturalArea >= 320 * 240 || image.getAttribute("data-visualcompletion") === "media-vc-image";
+      const usableSize = layoutArea >= 160 * 120 || naturalArea >= 320 * 240
+        || image.getAttribute("data-visualcompletion") === "media-vc-image"
+        || candidate.meta === true;
       const visible = hostMatches && usableSize && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0;
-      const preferred = image.getAttribute("data-visualcompletion") === "media-vc-image" ? 1 : 0;
-      return { image, url: mediaUrl, visible, preferred, area: Math.max(layoutArea, naturalArea) };
-    }).filter((item) => item.visible).sort((left, right) => right.preferred - left.preferred || right.area - left.area);
+      const preferred = (image.getAttribute("data-visualcompletion") === "media-vc-image" ? 3 : 0)
+        + (candidate.meta === true ? 2 : 0)
+        + (candidate.current === true ? 1 : 0);
+      return { image, url: mediaUrl, visible, preferred, area: Math.max(layoutArea, naturalArea), meta: candidate.meta === true };
+    })).filter((item) => item.visible).sort((left, right) => right.preferred - left.preferred || right.area - left.area || right.url.length - left.url.length);
     if (images.length === 0) return null;
     const best = images[0];
-    const conflicting = images.find((item, index) => index > 0 && item.preferred === best.preferred && item.area >= best.area * 0.9 && item.url !== best.url);
+    const conflicting = images.find((item, index) => index > 0 && item.preferred === best.preferred && best.area > 0 && item.area >= best.area * 0.9 && item.url !== best.url);
     if (conflicting) return null;
     return { mediaId, setPostId: expectedPostId, url: best.url.slice(0, 2_000), image: best.image };
   }
 
+  function galleryViewerImageCandidates(node) {
+    const values = [];
+    const add = (value, flags = {}) => {
+      const url = String(value || "").trim();
+      if (!/^https?:\/\//i.test(url) || values.some((entry) => entry.url === url)) return;
+      values.push({ url, ...flags });
+    };
+    add(node.currentSrc, { current: true });
+    add(node.src, { current: true });
+    add(node.poster, { current: true });
+    for (const name of ["src", "data-src", "data-lazy-src", "data-original", "data-image-url", "data-uri", "data-imgsrc"]) add(node.getAttribute?.(name));
+    const srcset = node.getAttribute?.("srcset");
+    if (srcset) {
+      for (const entry of srcset.split(",")) add(entry.trim().split(/\s+/)[0]);
+    }
+    for (const url of extractBackgroundImageUrls(node)) add(url);
+    const hasFacebookMedia = values.some((entry) => isLikelyFacebookMediaUrl(entry.url));
+    if (!hasFacebookMedia && node.matches?.("[role=img], [data-visualcompletion], [data-imgperflogname]")) {
+      for (const selector of ['meta[property="og:image"]', 'link[rel="image_src"]']) {
+        for (const element of document.querySelectorAll(selector)) add(element.getAttribute("content") || element.getAttribute("href"), { meta: true });
+      }
+    }
+    return values;
+  }
+
+  function isLikelyFacebookMediaUrl(value) {
+    try {
+      const host = new URL(value).hostname;
+      return /(^|\.)fbcdn\.net$/i.test(host) || /(^|\.)fbsbx\.com$/i.test(host);
+    } catch { return false; }
+  }
+
   function extractBackgroundImageUrl(node) {
+    return extractBackgroundImageUrls(node)[0] || "";
+  }
+
+  function extractBackgroundImageUrls(node) {
     const value = node?.style?.backgroundImage || getComputedStyle(node).backgroundImage || "";
-    const match = value.match(/url\(["']?(https?:[^"')]+)["']?\)/i);
-    return match?.[1] || "";
+    return [...value.matchAll(/url\(["']?(https?:[^"')]+)["']?\)/gi)].map((match) => match[1]).filter(Boolean);
   }
 
   function galleryViewerDomSnapshot(expectedPostId) {
