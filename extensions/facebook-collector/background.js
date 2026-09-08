@@ -223,7 +223,10 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
   const imagePolicy = globalThis.FlipCollectorImagePolicy;
   imagePolicy?.startSession?.(scanId, imageMode);
   const collection = (async () => {
-    tab = await chrome.tabs.create({ url: "about:blank", active: false });
+    // Facebook does not fully hydrate the exact post card in a hidden tab.
+    // Gallery hydration is an explicit user action, so keep only this
+    // dedicated tab active while the bounded root/media proof runs.
+    tab = await chrome.tabs.create({ url: "about:blank", active: true });
     context.sourceTabDiagnostics.primaryTabId = Number.isInteger(tab?.id) ? tab.id : null;
     if (!imagePolicy?.attachTab) throw new Error("SOURCE_SCAN_IMAGE_BLOCKER_UNAVAILABLE");
     await imagePolicy.attachTab(tab.id, { sessionId: scanId, mode: imageMode });
