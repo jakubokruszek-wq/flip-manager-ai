@@ -298,11 +298,17 @@ async function persistVerifiedGallery(input: {
     errorCode,
     diagnostics: input.recoveryReason ? {
       ...(input.sourceDiagnostics ?? {}),
-      rootBindingSource: input.recoveryReason,
-      rootCount: 1,
+      rootBindingSource: input.sourceDiagnostics?.rootBindingSource ?? null,
+      rootCount: input.sourceDiagnostics?.rootCount ?? 0,
       expectedPostId: input.expectedPostId,
-      exactMediaCount,
-      mediaCount: input.sourceMediaCount,
+      exactMediaCount: input.sourceDiagnostics?.exactMediaCount ?? 0,
+      mediaCount: input.sourceDiagnostics?.mediaCount ?? 0,
+      metadataFallback: {
+        rootBindingSource: input.recoveryReason,
+        rootCount: 1,
+        exactMediaCount,
+        mediaCount: input.sourceMediaCount,
+      },
     } : null,
   };
   const finished = await input.supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: { kind: "GALLERY_HYDRATION", ...result }, error_code: errorCode, error_message: errorCode }).eq("id", input.jobId).eq("status", "running").eq("lease_token", input.leaseToken).eq("worker_id", input.workerId);
