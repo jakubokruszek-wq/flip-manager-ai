@@ -387,6 +387,54 @@
     };
   }
 
+  // Facebook's photo viewer does not consistently retain its Relay payload in
+  // document scripts. A bounded carousel traversal is still exact evidence
+  // when it starts from an already exact-root media seed, every visited URL
+  // remains in the same pcb.<postId> set, and the traversal proves both media
+  // boundaries (or closes the cycle). URL context alone is intentionally not
+  // sufficient.
+  function resolveGalleryViewerTraversal(frames, expectedPostId, expectedSeedMediaId, coverage) {
+    const postId = scalarId(expectedPostId);
+    const seedMediaId = scalarId(expectedSeedMediaId);
+    const unverified = (reason) => ({ status: "UNVERIFIED", reason, mediaIds: [], candidates: [] });
+    if (!postId || !seedMediaId || !Array.isArray(frames) || frames.length === 0 || frames.length > 50) return unverified("GALLERY_VIEWER_TRAVERSAL_INPUT_INVALID");
+    const coverageProven = coverage?.closedCycle === true || (coverage?.nextBoundary === true && coverage?.previousBoundary === true);
+    if (!coverageProven) return unverified("GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN");
+    const byMediaId = new Map();
+    for (const raw of frames) {
+      if (!isObject(raw)) return unverified("GALLERY_VIEWER_TRAVERSAL_FRAME_INVALID");
+    }
+    for (const raw of frames) {
+      const mediaId = scalarId(raw.mediaId);
+      const setPostId = scalarId(raw.setPostId);
+      const url = clean(raw.url);
+      if (!mediaId || setPostId !== postId || !isFacebookCdnUrl(url)) return unverified("GALLERY_VIEWER_TRAVERSAL_BINDING_INVALID");
+      const previous = byMediaId.get(mediaId);
+      if (previous && previous !== url) return unverified("GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT");
+      byMediaId.set(mediaId, url);
+    }
+    if (!byMediaId.has(seedMediaId)) return unverified("GALLERY_VIEWER_TRAVERSAL_SEED_MISSING");
+    // A one-frame DOM result cannot distinguish a genuine one-photo post from
+    // controls that Facebook has not hydrated. Keep that case fail-closed and
+    // let the existing exact metadata remain PARTIAL.
+    if (byMediaId.size < 2) return unverified("GALLERY_VIEWER_TRAVERSAL_SINGLE_FRAME_UNPROVEN");
+    const mediaIds = [...byMediaId.keys()];
+    const candidates = mediaIds.map((mediaId) => ({
+      url: byMediaId.get(mediaId), mediaId, expectedPostId: postId, storyRootPostId: postId, boundPostId: postId,
+      bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true,
+      foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95,
+      structuredPostMediaProvenance: false,
+    }));
+    return { status: "VERIFIED", reason: null, expectedPostId: postId, currentMediaId: seedMediaId, mediaIds, candidates, traversalComplete: true };
+  }
+
+  function isFacebookCdnUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return url.protocol === "https:" && /(^|\.)fbcdn\.net$/i.test(url.hostname);
+    } catch { return false; }
+  }
+
   function exactGalleryTrackingSet(story, postId, mediaId) {
     const sets = [];
     walkPath(story, (node, path) => {
@@ -637,5 +685,5 @@
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
 })(globalThis);

@@ -362,3 +362,32 @@ test("gallery viewer stays fail-closed without attachment binding or with a fore
   const foreign = JSON.stringify({ __typename: "Photo", id: mediaId, image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" }, container_story: { ...story, post_id: "999999999999999", tracking: JSON.stringify({ top_level_post_id: "999999999999999", photo_attachments_list: [mediaId] }) } });
   assert.equal(core.resolveGalleryMediaSetFromText(foreign, gallerySource, postId, mediaId).status, "UNVERIFIED");
 });
+
+test("gallery viewer carousel proves a complete exact pcb traversal from an exact seed", () => {
+  const postId = "1749121366325600";
+  const seedMediaId = "28459992303624928";
+  const frames = [seedMediaId, "28459993423624816", "28459993913624767"].map((mediaId) => ({
+    mediaId,
+    setPostId: postId,
+    url: `https://scontent-waw2-2.xx.fbcdn.net/${mediaId}.jpg`,
+  }));
+  const result = core.resolveGalleryViewerTraversal(frames, postId, seedMediaId, { closedCycle: true, nextBoundary: false, previousBoundary: false });
+  assert.equal(result.status, "VERIFIED");
+  assert.equal(result.candidates.length, 3);
+  assert.deepEqual(result.mediaIds, frames.map((frame) => frame.mediaId));
+  assert.ok(result.candidates.every((candidate) => candidate.boundPostId === postId && candidate.bindingProvenance === "EXACT_ROOT_STORY"));
+});
+
+test("gallery viewer carousel remains fail-closed for incomplete, foreign, conflicting, or single-frame traversal", () => {
+  const postId = "1749121366325600";
+  const seedMediaId = "28459992303624928";
+  const frames = [
+    { mediaId: seedMediaId, setPostId: postId, url: "https://scontent.xx.fbcdn.net/seed.jpg" },
+    { mediaId: "28459993423624816", setPostId: postId, url: "https://scontent.xx.fbcdn.net/second.jpg" },
+  ];
+  assert.equal(core.resolveGalleryViewerTraversal(frames, postId, seedMediaId, {}).status, "UNVERIFIED");
+  assert.equal(core.resolveGalleryViewerTraversal([{ ...frames[0], setPostId: "999999999999999" }, frames[1]], postId, seedMediaId, { closedCycle: true }).status, "UNVERIFIED");
+  assert.equal(core.resolveGalleryViewerTraversal([frames[0], { ...frames[0], url: "https://scontent.xx.fbcdn.net/conflict.jpg" }], postId, seedMediaId, { closedCycle: true }).status, "UNVERIFIED");
+  assert.equal(core.resolveGalleryViewerTraversal([frames[0]], postId, seedMediaId, { nextBoundary: true, previousBoundary: true }).status, "UNVERIFIED");
+  assert.equal(core.resolveGalleryViewerTraversal(frames, postId, "999999999999999", { closedCycle: true }).status, "UNVERIFIED");
+});

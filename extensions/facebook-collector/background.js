@@ -607,8 +607,8 @@ async function collectGalleryHydration(job, requestId) {
       const viewerResolvedUrl = String(viewerTab?.url || viewerUrl);
       await waitForContentScript(tab.id, Math.min(6_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
       const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-        () => chrome.tabs.sendMessage(tab.id, { type: "INSPECT_FACEBOOK_GALLERY_VIEWER_MEDIA", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl: viewerResolvedUrl, mediaId, imageMode: GALLERY_HYDRATION_MEDIA_MODE, waitMs: Math.min(6_000, Math.max(500, deadline - Date.now() - 500)) } }),
-        { timeoutMs: Math.min(8_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId, mediaId } },
+        () => chrome.tabs.sendMessage(tab.id, { type: "INSPECT_FACEBOOK_GALLERY_VIEWER_MEDIA", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl: viewerResolvedUrl, mediaId, seedRootProvenanceVerified: seedMediaIds.includes(mediaId), imageMode: GALLERY_HYDRATION_MEDIA_MODE, waitMs: Math.min(45_000, Math.max(2_000, deadline - Date.now() - 2_000)) } }),
+        { timeoutMs: Math.min(50_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId, mediaId } },
       );
       if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_VIEWER_FAILED") };
       if (responseResult.response.result?.status !== "VERIFIED") return { status: "FAILED", error: String(responseResult.response.result?.error || "FACEBOOK_GALLERY_VIEWER_EXACT_BINDING_FAILED"), diagnostics: responseResult.response.result?.diagnostics || null };
@@ -619,6 +619,10 @@ async function collectGalleryHydration(job, requestId) {
       if (first.status !== "VERIFIED") return { status: "FAILED", error: first.error, gallery: { status: "FAILED", error: first.error, expectedPostId: postId, sourceMediaCount: 0, candidates: [], diagnostics: { viewerSeedMediaId: seedMediaId, viewer: first.diagnostics || null } } };
       const mediaIds = [...new Set((Array.isArray(first.mediaIds) ? first.mediaIds : []).map(String).filter((value) => /^\d{5,30}$/.test(value)))].slice(0, 50);
       if (!mediaIds.includes(seedMediaId) || mediaIds.length === 0) return { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_ATTACHMENT_SET_INVALID", gallery: { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_ATTACHMENT_SET_INVALID", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates: [], diagnostics: { viewerSeedMediaId: seedMediaId, attachmentMediaIds: mediaIds } } };
+      const traversedCandidates = Array.isArray(first.candidates) ? first.candidates : [];
+      if (first.traversalComplete === true && traversedCandidates.length === mediaIds.length && traversedCandidates.every((candidate) => candidate?.expectedPostId === postId && candidate?.storyRootPostId === postId && candidate?.boundPostId === postId && mediaIds.includes(String(candidate?.mediaId || "")))) {
+        return { status: "COMPLETE", gallery: { status: "COMPLETE", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates: traversedCandidates, authorFound: true, rootTextFound: true, rootBindingSource: "EXACT_VIEWER_PCB_CAROUSEL", groupBindingSource: "EXACT_VIEWER_PARENT", rootCount: 1, diagnostics: { viewerSeedMediaId: seedMediaId, attachmentCount: mediaIds.length, verifiedCount: traversedCandidates.length, traversal: first.diagnostics || null }, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
+      }
       const candidates = [];
       for (const mediaId of mediaIds) {
         if (deadline - Date.now() < 2_000) return { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_DEADLINE", gallery: { status: "FAILED", error: "FACEBOOK_GALLERY_VIEWER_DEADLINE", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates: [], diagnostics: { viewerSeedMediaId: seedMediaId, attachmentCount: mediaIds.length, verifiedCount: candidates.length } } };
