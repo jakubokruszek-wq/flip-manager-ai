@@ -238,6 +238,17 @@
     do {
       const replayedProof = galleryNetworkProofs.get(networkAuditKey);
       if (replayedProof && galleryNetworkProofIsExact(replayedProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
+        if (options.seedRootProvenanceVerified === true) {
+          const traversal = await inspectExactGalleryCarousel(expectedPostId, mediaId, deadline, replayedProof);
+          if (traversal.status === "VERIFIED") {
+            const traversedIds = new Set(traversal.mediaIds || []);
+            if (!replayedProof.mediaIds.every((id) => traversedIds.has(id) || traversal.candidates?.some((candidate) => candidate.mediaId === id))) {
+              return failure("GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH", { ...(traversal.diagnostics || {}), structuredMediaIds: replayedProof.mediaIds.slice(0, 50) });
+            }
+            return { ...traversal, permalink: replayedProof.permalink, networkProof: true, diagnostics: { ...(traversal.diagnostics || {}), networkProof: true, structuredAttachmentCount: replayedProof.mediaIds.length } };
+          }
+          return failure(traversal.error || "GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN", { ...(traversal.diagnostics || {}), networkResponseCount: networkResponses, networkAudit: galleryNetworkAudits.get(networkAuditKey) || null, structuredAttachmentCount: replayedProof.mediaIds.length });
+        }
         return {
           status: "VERIFIED",
           expectedPostId,

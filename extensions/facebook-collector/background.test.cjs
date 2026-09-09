@@ -557,6 +557,17 @@ test("gallery hydration requires bounded carousel coverage instead of treating t
   assert.match(gallery, /structuredAttachmentCount: mediaIds\.length/);
 });
 
+test("late structured gallery proof still requires complete carousel traversal", () => {
+  const lateProofBranch = content.indexOf("const replayedProof = galleryNetworkProofs.get(networkAuditKey)");
+  const nextPayloadStage = content.indexOf("let bytes = 0", lateProofBranch);
+  assert.ok(lateProofBranch >= 0 && nextPayloadStage > lateProofBranch);
+  const branch = content.slice(lateProofBranch, nextPayloadStage);
+  assert.match(branch, /seedRootProvenanceVerified === true/);
+  assert.match(branch, /inspectExactGalleryCarousel\(expectedPostId, mediaId, deadline, replayedProof\)/);
+  assert.match(branch, /GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH/);
+  assert.match(branch, /GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN/);
+});
+
 test("gallery viewer tolerates Facebook stripping fbid while retaining the exact pcb set", () => {
   assert.match(content, /currentMediaId === mediaId \|\| !currentMediaId/);
   assert.match(content, /payload: \{ expectedPostId, expectedUrl: String\(options\.expectedUrl \|\| ""\)\.slice\(0, 500\), mediaId \}/);
