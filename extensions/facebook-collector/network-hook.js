@@ -36,7 +36,7 @@
       const records = source ? core.extractStructuredRecordsFromText(body, "NETWORK", extractionSource, 0) : [];
       let galleryProof = null;
       let galleryAudit = null;
-      if (viewerContext) {
+      if (viewerContext?.mediaId) {
         const gallerySource = galleryContext?.expectedPostId === viewerContext.postId ? core.canonicalSource(galleryContext.expectedUrl) : null;
         if (gallerySource) gallerySource.allowGroupRedirect = true;
         const proof = galleryContext?.expectedPostId === viewerContext.postId
@@ -80,9 +80,14 @@
       const current = new URL(location.href);
       const postId = current.searchParams.get("set")?.match(/^pcb\.(\d{5,30})$/i)?.[1] || null;
       const queryMediaId = current.searchParams.get("fbid") || "";
-      const mediaId = /^\d{5,30}$/.test(queryMediaId) ? queryMediaId : galleryContext?.expectedPostId === postId ? galleryContext.mediaId : "";
-      if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || !postId || !/^\d{5,30}$/.test(String(mediaId || ""))) return null;
-      return { postId, mediaId: String(mediaId) };
+      const mediaId = /^\d{5,30}$/.test(queryMediaId) ? queryMediaId : galleryContext?.expectedPostId === postId && /^\d{5,30}$/.test(galleryContext.mediaId || "") ? galleryContext.mediaId : null;
+      // Keep buffering bounded viewer responses even when Comet has already
+      // removed `fbid` from the URL. The exact media id is supplied later by
+      // the content script from the persisted exact-bound seed; no proof is
+      // accepted until the replay has a matching media id and attachment
+      // binding.
+      if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || !postId) return null;
+      return { postId, mediaId: mediaId ? String(mediaId) : null };
     } catch { return null; }
   }
 

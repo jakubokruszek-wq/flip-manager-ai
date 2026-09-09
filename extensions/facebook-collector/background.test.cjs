@@ -551,7 +551,10 @@ test("gallery viewer tolerates Facebook stripping fbid while retaining the exact
   assert.match(content, /payload: \{ expectedPostId, expectedUrl: String\(options\.expectedUrl \|\| ""\)\.slice\(0, 500\), mediaId \}/);
   assert.match(content, /galleryViewerFrame\(expectedPostId, fallbackMediaId\)/);
   assert.match(networkHook, /galleryContext = \{ expectedPostId, expectedUrl: expectedUrl\.slice\(0, 500\), mediaId \}/);
-  assert.match(networkHook, /galleryContext\?\.expectedPostId === postId \? galleryContext\.mediaId/);
+  assert.match(networkHook, /galleryContext\?\.expectedPostId === postId/);
+  assert.match(networkHook, /galleryContext\.mediaId/);
+  assert.match(networkHook, /Keep buffering bounded viewer responses/);
+  assert.match(networkHook, /if \(viewerContext\?\.mediaId\)/);
 });
 
 test("gallery hydration preserves the exact content-script terminal error", () => {
