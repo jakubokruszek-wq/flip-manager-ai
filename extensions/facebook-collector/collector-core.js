@@ -8,6 +8,11 @@
   ];
   const ID_KEYS = new Set(["post_id", "postId", "story_fbid", "story_id", "storyId"]);
   const MEDIA_ID_KEYS = new Set(["media_id", "mediaId", "photo_id", "photoId", "video_id", "videoId"]);
+  // Viewer responses do not always expose the current photo as `id`. Some
+  // Comet payloads use the media fbid/photo_fbid fields instead. These are
+  // accepted only as a media identifier; post identity still comes solely
+  // from the exact root story/tracking binding below.
+  const GALLERY_MEDIA_ID_KEYS = new Set([...MEDIA_ID_KEYS, "fbid", "photo_fbid", "photoFbid", "media_fbid", "mediaFbid"]);
   const PERMALINK_KEYS = new Set(["permalink", "permalink_url", "url"]);
   const TIME_KEYS = new Set(["creation_time", "publish_time", "timestamp", "created_time"]);
 
@@ -256,6 +261,20 @@
     } catch { return null; }
   }
 
+  function galleryMediaId(node) {
+    if (!isObject(node)) return null;
+    return scalarId(node.id) || firstKey(node, GALLERY_MEDIA_ID_KEYS);
+  }
+
+  function isGalleryPhotoNode(node, mediaId) {
+    if (!isObject(node) || galleryMediaId(node) !== mediaId) return false;
+    const type = String(node.__typename || node.typename || "").toLowerCase();
+    if (type === "photo" || /(?:photo|image)/.test(type)) return true;
+    // A few viewer responses omit __typename. Requiring both an exact
+    // container story and a Facebook image URL keeps this fail-closed.
+    return isObject(node.container_story) && Boolean(mediaUrl(node));
+  }
+
   function canonicalParentLink(postId, source) {
     if (!source?.sourceUrl || !/^\d{5,30}$/.test(postId)) return null;
     const base = source.sourceUrl.endsWith("/") ? source.sourceUrl : `${source.sourceUrl}/`;
@@ -268,7 +287,7 @@
     const roots = parseJsonBodies(String(text).slice(0, 4_000_000));
     const records = [];
     for (const root of roots) walk(root, (node) => {
-      if (!isObject(node) || scalarId(node.id) !== mediaId || String(node.__typename || node.typename || "").toLowerCase() !== "photo") return;
+      if (!isGalleryPhotoNode(node, mediaId)) return;
       const story = node.container_story;
       if (!isObject(story)) return;
       const postId = exactMediaBoundStoryPostId(story, mediaId);
@@ -347,7 +366,7 @@
     const parentIds = new Set();
     const proofs = [];
     for (const parsed of roots) walk(parsed, (node) => {
-      if (!isObject(node) || scalarId(node.id) !== mediaId || String(node.__typename || node.typename || "").toLowerCase() !== "photo") return;
+      if (!isGalleryPhotoNode(node, mediaId)) return;
       const story = node.container_story;
       if (!isObject(story)) return;
       const parentPostId = exactMediaBoundStoryPostId(story, mediaId);
@@ -746,7 +765,7 @@
     let attachmentBindingFound = false;
     for (const parsed of roots) walk(parsed, (node) => {
       if (!isObject(node)) return;
-      if (mediaId && scalarId(node.id) === mediaId && String(node.__typename || node.typename || "").toLowerCase() === "photo") {
+      if (mediaId && isGalleryPhotoNode(node, mediaId)) {
         currMediaFound = true;
         if (isObject(node.container_story)) {
           containerStoryFound = true;
