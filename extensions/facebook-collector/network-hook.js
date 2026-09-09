@@ -4,6 +4,8 @@
   if (!core || globalThis.__flipCollectorNetworkObserver) return;
   globalThis.__flipCollectorNetworkObserver = true;
   const MAX_BODY_BYTES = 2_000_000;
+  const MAX_VIEWER_BUFFER_ITEMS = 16;
+  const MAX_VIEWER_BUFFER_BYTES = 8_000_000;
   let galleryContext = null;
   const recentViewerBodies = [];
 
@@ -61,11 +63,14 @@
       }
       if (remember && viewerContext && !galleryProof) {
         recentViewerBodies.push({ url, method, status, contentType, body });
-        while (recentViewerBodies.length > 4) recentViewerBodies.shift();
+        while (
+          recentViewerBodies.length > MAX_VIEWER_BUFFER_ITEMS
+          || recentViewerBodies.reduce((total, item) => total + item.body.length, 0) > MAX_VIEWER_BUFFER_BYTES
+        ) recentViewerBodies.shift();
         setTimeout(() => {
           const index = recentViewerBodies.findIndex((item) => item.body === body);
           if (index >= 0) recentViewerBodies.splice(index, 1);
-        }, 15_000);
+        }, 30_000);
       }
       if (!records.length && !galleryProof) {
         if (galleryAudit) window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records: [], galleryProof: null, galleryAudit } }, location.origin);

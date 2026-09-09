@@ -407,6 +407,60 @@ test("gallery network proof accepts Comet media fbid fields without treating the
   });
 });
 
+test("gallery network proof resolves a complete exact Story attachment set without container_story", () => {
+  const postId = "1749121366325600";
+  const mediaId = "28459992303624928";
+  const mediaIds = [mediaId, "28459993423624816", "28459993913624767"];
+  const payload = JSON.stringify({
+    data: {
+      node: {
+        __typename: "Story",
+        id: postId,
+        url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/" + postId + "/",
+        actors: [{ name: "Exact Author" }],
+        message: { text: "Exact root message" },
+        tracking: { top_level_post_id: postId, photo_attachments_list: mediaIds },
+        attachments: mediaIds.map((id) => ({
+          media: {
+            __typename: "Photo",
+            fbid: id,
+            image: { uri: "https://scontent.xx.fbcdn.net/" + id + ".jpg" },
+          },
+        })),
+      },
+    },
+  });
+  const result = core.resolveGalleryMediaSetFromText(payload, null, postId, mediaId);
+  assert.equal(result.status, "VERIFIED");
+  assert.deepEqual(result.mediaIds, [...mediaIds].sort());
+  assert.equal(result.candidate.mediaId, mediaId);
+  assert.equal(result.candidate.boundPostId, postId);
+});
+
+test("gallery exact Story proof rejects foreign tracking and comment-only seed media", () => {
+  const postId = "1749121366325600";
+  const mediaId = "28459992303624928";
+  const exactStory = {
+    __typename: "Story",
+    id: postId,
+    url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/" + postId + "/",
+    actors: [{ name: "Exact Author" }],
+    message: { text: "Exact root message" },
+  };
+  const foreignTracking = JSON.stringify({
+    ...exactStory,
+    tracking: { top_level_post_id: "999999999999999", photo_attachments_list: [mediaId] },
+    attachments: [{ media: { __typename: "Photo", fbid: mediaId, image: { uri: "https://scontent.xx.fbcdn.net/" + mediaId + ".jpg" } } }],
+  });
+  assert.equal(core.resolveGalleryMediaSetFromText(foreignTracking, null, postId, mediaId).status, "UNVERIFIED");
+  const commentOnly = JSON.stringify({
+    ...exactStory,
+    tracking: { top_level_post_id: postId, photo_attachments_list: [mediaId] },
+    comments: [{ media: { __typename: "Photo", fbid: mediaId, image: { uri: "https://scontent.xx.fbcdn.net/" + mediaId + ".jpg" } } }],
+  });
+  assert.equal(core.resolveGalleryMediaSetFromText(commentOnly, null, postId, mediaId).status, "UNVERIFIED");
+});
+
 test("gallery parser accepts Facebook anti-XSSI and concatenated JSON responses", () => {
   const postId = "1749121366325600";
   const mediaId = "28459992303624928";

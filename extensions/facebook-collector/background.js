@@ -599,6 +599,14 @@ async function collectGalleryHydration(job, requestId) {
       if (responseResult.response.result?.status === "FAILED") return { status: "FAILED", error: String(responseResult.response.result.error || "FACEBOOK_GALLERY_FAILED"), gallery: responseResult.response.result };
       return { status: "COMPLETE", gallery: { ...responseResult.response.result, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
     };
+    const hydrateRootPage = async () => {
+      await chrome.tabs.update(tab.id, { url: resolvedUrl, active: true });
+      await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline - Date.now())));
+      const rootTab = await chrome.tabs.get(tab.id);
+      const rootResolvedUrl = String(rootTab?.url || resolvedUrl);
+      await waitForContentScript(tab.id, Math.min(10_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
+      return hydrate(resolvedUrl, rootResolvedUrl);
+    };
     const inspectViewerMedia = async (mediaId) => {
       const viewerUrl = canonicalGalleryPhotoUrl(postId, mediaId);
       await chrome.tabs.update(tab.id, { url: viewerUrl, active: true });
@@ -642,7 +650,7 @@ async function collectGalleryHydration(job, requestId) {
     // attempted. The bounded root-page path remains the safe fallback.
     let result = seedMediaIds.length > 0 ? await hydrateFromViewer(seedMediaIds[0]) : await hydrate(resolvedUrl, resolvedUrl);
     if (result.status === "FAILED" && seedMediaIds.length > 0) {
-      const rootResult = await hydrate(resolvedUrl, resolvedUrl);
+      const rootResult = await hydrateRootPage();
       if (rootResult.status === "COMPLETE" || result.error === "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT") result = rootResult;
     }
     if (result.status === "FAILED" && result.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {

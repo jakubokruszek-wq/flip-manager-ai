@@ -543,7 +543,9 @@ test("gallery background binds a Facebook vanity redirect to the same exact post
 test("gallery hydration attempts exact seeded viewer proof before the slower root-page fallback", () => {
   const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
   assert.match(gallery, /let result = seedMediaIds\.length > 0 \? await hydrateFromViewer\(seedMediaIds\[0\]\) : await hydrate\(resolvedUrl, resolvedUrl\)/);
-  assert.match(gallery, /const rootResult = await hydrate\(resolvedUrl, resolvedUrl\)/);
+  assert.match(gallery, /const hydrateRootPage = async \(\) =>/);
+  assert.match(gallery, /chrome\.tabs\.update\(tab\.id, \{ url: resolvedUrl, active: true \}\)/);
+  assert.match(gallery, /const rootResult = await hydrateRootPage\(\)/);
 });
 
 test("gallery viewer tolerates Facebook stripping fbid while retaining the exact pcb set", () => {
@@ -555,6 +557,8 @@ test("gallery viewer tolerates Facebook stripping fbid while retaining the exact
   assert.match(networkHook, /galleryContext\.mediaId/);
   assert.match(networkHook, /Keep buffering bounded viewer responses/);
   assert.match(networkHook, /remember && viewerContext && !galleryProof/);
+  assert.match(networkHook, /MAX_VIEWER_BUFFER_ITEMS = 16/);
+  assert.match(networkHook, /MAX_VIEWER_BUFFER_BYTES = 8_000_000/);
   assert.match(networkHook, /if \(viewerContext\?\.mediaId\)/);
 });
 

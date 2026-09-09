@@ -383,6 +383,29 @@
       if (!link || link.postId !== postId || !author || !rootText || !url) return;
       proofs.push({ mediaIds: tracking.mediaIds, url, permalink: link.permalink });
     }, 16);
+    // Some Comet viewer responses carry the exact Story and its complete
+    // photo_attachments_list without repeating container_story on the current
+    // media node. Accept that shape only when the Story itself is exact-bound,
+    // has root author/text, the tracking set contains the persisted exact seed,
+    // and the seed's CDN URL is found inside that same Story subtree.
+    for (const parsed of roots) {
+      for (const parentId of galleryTrackingParentIds(parsed, mediaId)) parentIds.add(parentId);
+      walkPath(parsed, (story, path) => {
+        if (!isObject(story)) return;
+        const location = path.join(".");
+        if (path.length && /(?:comment|feedback|caption|actor|author|profile|avatar|shared|recommended)/i.test(location)) return false;
+        if (exactStoryRootPostId(story) !== postId) return true;
+        const tracking = exactGalleryTrackingSet(story, postId, mediaId);
+        if (!tracking || tracking.conflict || tracking.mediaIds.length === 0) return true;
+        const link = findPermalink(story, postId, source) || canonicalParentLink(postId, source);
+        const author = findAuthor(story);
+        const rootText = findRootMessage(story);
+        const url = findExactGalleryMediaUrl(story, mediaId);
+        if (!link || link.postId !== postId || !author || !rootText || !url) return true;
+        proofs.push({ mediaIds: tracking.mediaIds, url, permalink: link.permalink });
+        return false;
+      }, 16);
+    }
     if ([...parentIds].some((candidate) => candidate !== postId)) return unverified("GALLERY_VIEWER_CONFLICTING_PARENT_IDS", { parentIds: [...parentIds].slice(0, 10) });
     if (proofs.length === 0) return unverified("GALLERY_VIEWER_EXACT_MEDIA_PARENT_NOT_PROVEN", { parentIds: [...parentIds].slice(0, 10) });
     const mediaSets = [...new Set(proofs.map((proof) => proof.mediaIds.join(",")))];
@@ -405,6 +428,33 @@
         structuredPostMediaProvenance: true,
       },
     };
+  }
+
+  function galleryTrackingParentIds(value, mediaId) {
+    const ids = new Set();
+    walkPath(value, (node, path) => {
+      if (!isObject(node)) return;
+      const location = path.join(".");
+      if (path.length && /(?:comment|feedback|caption|actor|author|profile|avatar|shared|recommended)/i.test(location)) return false;
+      const tracking = parseMediaTracking(node.tracking, mediaId);
+      if (!tracking || !Array.isArray(tracking.photo_attachments_list) || !tracking.photo_attachments_list.some((id) => scalarId(id) === mediaId)) return;
+      const parentId = scalarId(tracking.top_level_post_id);
+      if (parentId) ids.add(parentId);
+    }, 16);
+    return ids;
+  }
+
+  function findExactGalleryMediaUrl(story, mediaId) {
+    const urls = [];
+    walkPath(story, (node, path) => {
+      if (!isObject(node)) return;
+      const location = path.join(".");
+      if (path.length && /(?:comment|feedback|caption|actor|author|profile|avatar|shared|recommended)/i.test(location)) return false;
+      if (galleryMediaId(node, mediaId) !== mediaId) return;
+      const url = mediaUrl(node);
+      if (url && isFacebookCdnUrl(url)) urls.push(url);
+    }, 12);
+    return unique(urls).sort((left, right) => right.length - left.length)[0] || null;
   }
 
   // Facebook's photo viewer does not consistently retain its Relay payload in
