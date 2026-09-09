@@ -12,7 +12,7 @@ import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeF
 import { aggregateFacebookVisionRun, summarizeFacebookVisionUsage } from "./openai-pricing";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 import { FACEBOOK_PRODUCTION_SOURCE_ID, isFacebookProductionSource, normalizeFacebookSourceUrl } from "@/features/collector/facebook-production";
-import { gallerySeedMediaFromProvenance } from "./gallery-policy";
+import { gallerySeedMediaFromCollectorBatches, gallerySeedMediaFromProvenance } from "./gallery-policy";
 
 type Row = Record<string, unknown>;
 const LEASE_SECONDS = 180;
@@ -123,6 +123,19 @@ export async function claimFacebookJob(workerId: string, consumerType: FacebookJ
       const metadata = asRow(metadataResult.data?.metadata);
       gallerySeedMediaIds = gallerySeedMediaFromProvenance(metadata?.mediaProvenance, galleryPostId).map((seed) => seed.mediaId);
     }
+    if (gallerySeedMediaIds.length === 0) {
+      const gallerySourceUrl = nullableString(row.gallery_source_url);
+      const gallerySourceId = facebookGroupIdFromUrl(gallerySourceUrl);
+      if (gallerySourceUrl && gallerySourceId) {
+        const historyResult = await supabase.from("collector_scan_batches")
+          .select("payload")
+          .eq("source_id", gallerySourceId)
+          .contains("payload", { posts: [{ postId: galleryPostId }] })
+          .order("received_at", { ascending: false })
+          .limit(20);
+        if (!historyResult.error) gallerySeedMediaIds = gallerySeedMediaFromCollectorBatches(historyResult.data, galleryPostId, gallerySourceUrl).map((seed) => seed.mediaId);
+      }
+    }
   }
   return {
     id: requiredString(row.id), runId: requiredString(row.scan_run_id), sourceScanId: nullableString(row.source_scan_id), filterId: requiredString(row.search_filter_id),
@@ -135,6 +148,10 @@ export async function claimFacebookJob(workerId: string, consumerType: FacebookJ
     gallerySourceUrl: nullableString(row.gallery_source_url),
     gallerySeedMediaIds,
   };
+}
+
+function facebookGroupIdFromUrl(value: string | null): string | null {
+  try { return new URL(String(value || "")).pathname.match(/^\/groups\/([^/]+)(?:\/|$)/i)?.[1] ?? null; } catch { return null; }
 }
 
 export async function heartbeatFacebookJob(input: { jobId: string; leaseToken: string; workerId: string }): Promise<string> {
