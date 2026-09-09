@@ -539,6 +539,12 @@ test("gallery background binds a Facebook vanity redirect to the same exact post
   assert.match(gallery, /result\.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND"/);
 });
 
+test("gallery hydration attempts exact seeded viewer proof before the slower root-page fallback", () => {
+  const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
+  assert.match(gallery, /let result = seedMediaIds\.length > 0 \? await hydrateFromViewer\(seedMediaIds\[0\]\) : await hydrate\(resolvedUrl, resolvedUrl\)/);
+  assert.match(gallery, /const rootResult = await hydrate\(resolvedUrl, resolvedUrl\)/);
+});
+
 test("gallery hydration preserves the exact content-script terminal error", () => {
   const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
   assert.match(gallery, /responseResult\.response\.result\?\.status === "FAILED"/);

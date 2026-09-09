@@ -636,7 +636,15 @@ async function collectGalleryHydration(job, requestId) {
       }
       return { status: "COMPLETE", gallery: { status: "COMPLETE", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource: "EXACT_VIEWER_TRACKING", groupBindingSource: "EXACT_VIEWER_PARENT", rootCount: 1, diagnostics: { viewerSeedMediaId: seedMediaId, attachmentCount: mediaIds.length, verifiedCount: candidates.length }, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
     };
-    let result = await hydrate(resolvedUrl, resolvedUrl);
+    // An exact persisted media seed is already provenance-bound to this post.
+    // Prefer the dedicated viewer's structured/network proof first so a slow
+    // root-page shell cannot consume the response window before the proof is
+    // attempted. The bounded root-page path remains the safe fallback.
+    let result = seedMediaIds.length > 0 ? await hydrateFromViewer(seedMediaIds[0]) : await hydrate(resolvedUrl, resolvedUrl);
+    if (result.status === "FAILED" && seedMediaIds.length > 0) {
+      const rootResult = await hydrate(resolvedUrl, resolvedUrl);
+      if (rootResult.status === "COMPLETE" || result.error === "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT") result = rootResult;
+    }
     if (result.status === "FAILED" && result.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {
       for (const seedMediaId of seedMediaIds) {
         const viewerResult = await hydrateFromViewer(seedMediaId);
