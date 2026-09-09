@@ -6,6 +6,7 @@ import { validateFacebookRevalidationCandidates } from "./image-revalidation";
 import type { FacebookMediaCandidate } from "./types";
 import { galleryMediaIds as collectGalleryMediaIds, selectMissingGalleryCandidates } from "./gallery-policy";
 import { safeFacebookPostUrl } from "./facebook-post-url";
+import { deriveMonotonicGalleryFailure } from "./gallery-state";
 
 export type FacebookGalleryStatus = "NOT_REQUESTED" | "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "FAILED";
 
@@ -190,8 +191,8 @@ export async function completeFacebookGalleryJob(input: {
     }
     const errorCode = input.errorCode ?? "FACEBOOK_GALLERY_FAILED";
     const diagnostics = sanitizeGalleryDiagnostics(input.gallery?.diagnostics);
-    await markGalleryFailed(supabase, input.jobId, listingId, errorCode, diagnostics);
-    return { jobId: input.jobId, listingId, postId: expectedPostId, status: "FAILED", sourceMediaCount: 0, exactMediaCount: 0, alreadyStored: 0, downloadRequired: 0, downloaded: 0, storageSuccess: 0, persistedTotal: 0, errorCode, diagnostics };
+    const state = await markGalleryFailed(supabase, input.jobId, listingId, errorCode, diagnostics);
+    return { jobId: input.jobId, listingId, postId: expectedPostId, status: state.status, sourceMediaCount: 0, exactMediaCount: 0, alreadyStored: 0, downloadRequired: 0, downloaded: 0, storageSuccess: 0, persistedTotal: state.persistedTotal, errorCode, diagnostics };
   }
   if (input.gallery?.expectedPostId && input.gallery.expectedPostId !== expectedPostId) throw new Error("FACEBOOK_GALLERY_POST_ID_MISMATCH");
   const candidates = parseFacebookGalleryCandidates(input.gallery?.candidates, expectedPostId);
@@ -211,8 +212,8 @@ export async function completeFacebookGalleryJob(input: {
   const alreadyStored = verifiedCandidates.filter((candidate) => existingSet.has(candidate.url) || (candidate.mediaId ? existingMediaIds.has(candidate.mediaId) : false)).length;
   const downloadRequired = Math.max(0, exactMediaCount - alreadyStored);
   if (input.gallery?.status === "FAILED") {
-    await markGalleryFailed(supabase, input.jobId, listingId, "FACEBOOK_GALLERY_CONTENT_FAILED");
-    return { jobId: input.jobId, listingId, postId: expectedPostId, status: "FAILED", sourceMediaCount, exactMediaCount, alreadyStored, downloadRequired, downloaded: 0, storageSuccess: 0, persistedTotal: existingImages.length, errorCode: "FACEBOOK_GALLERY_CONTENT_FAILED" };
+    const state = await markGalleryFailed(supabase, input.jobId, listingId, "FACEBOOK_GALLERY_CONTENT_FAILED");
+    return { jobId: input.jobId, listingId, postId: expectedPostId, status: state.status, sourceMediaCount, exactMediaCount, alreadyStored, downloadRequired, downloaded: 0, storageSuccess: 0, persistedTotal: state.persistedTotal, errorCode: "FACEBOOK_GALLERY_CONTENT_FAILED" };
   }
   const missingCandidates = selectMissingGalleryCandidates(verifiedCandidates, existingMediaIds, existingSet);
   const mirrored = await mirrorFacebookImages({ listingId, imageUrls: missingCandidates.map((candidate) => candidate.url), existingImages, preserveExistingImages: true });
@@ -357,11 +358,27 @@ async function persistVerifiedGallery(input: {
   return result;
 }
 
-async function markGalleryFailed(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, jobId: string, listingId: string, errorCode: string, diagnostics: GalleryFailureDiagnostics | null = null): Promise<void> {
+async function markGalleryFailed(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, jobId: string, listingId: string, errorCode: string, diagnostics: GalleryFailureDiagnostics | null = null): Promise<{ status: "FAILED" | "PARTIAL" | "COMPLETE"; persistedTotal: number; total: number }> {
   const now = new Date().toISOString();
-  await supabase.from("listings").update({ gallery_status: "FAILED", gallery_completed_at: now, gallery_error: errorCode }).eq("id", listingId);
+  const listingResult = await supabase.from("listings").select("images,gallery_status,gallery_persisted_count,gallery_total").eq("id", listingId).maybeSingle();
+  if (listingResult.error || !listingResult.data) throw new Error("FACEBOOK_GALLERY_LISTING_READ_FAILED");
+  const listing = row(listingResult.data) ?? {};
+  const existingImages = stringArray(listing.images);
+  const metadataResult = await supabase.from("listing_source_metadata").select("metadata").eq("listing_id", listingId).eq("source", "facebook").maybeSingle();
+  const metadata = row(metadataResult.data?.metadata) ?? {};
+  const exactMetadataCount = stringArray(metadata.galleryMediaIds).length;
+  const state = deriveMonotonicGalleryFailure({
+    currentStatus: listing.gallery_status,
+    imageCount: existingImages.length,
+    persistedCount: boundedCount(listing.gallery_persisted_count, 0),
+    total: boundedCount(listing.gallery_total, 0),
+    exactMetadataCount,
+  });
+  const listingUpdate = await supabase.from("listings").update({ gallery_status: state.status, gallery_completed_at: now, gallery_error: errorCode, gallery_persisted_count: state.persistedTotal, gallery_total: state.total }).eq("id", listingId);
+  if (listingUpdate.error) throw new Error(`FACEBOOK_GALLERY_LISTING_UPDATE_FAILED: ${listingUpdate.error.message}`);
   const finished = await supabase.from("facebook_scan_jobs").update({ status: "failed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: { kind: "GALLERY_HYDRATION", status: "FAILED", errorCode, diagnostics }, error_code: errorCode, error_message: errorCode }).eq("id", jobId).eq("status", "running");
   if (finished.error) throw new Error(`FACEBOOK_GALLERY_JOB_FINALIZE_FAILED: ${finished.error.message}`);
+  return state;
 }
 
 function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics | null {

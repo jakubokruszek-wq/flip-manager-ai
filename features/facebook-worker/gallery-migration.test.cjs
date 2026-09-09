@@ -74,6 +74,16 @@ test("failed gallery jobs retain only bounded root diagnostics", () => {
   assert.doesNotMatch(galleryJobs, /leaseToken.*diagnostics|diagnostics.*leaseToken/i);
 });
 
+test("failed hydration keeps the listing gallery lifecycle monotonic", () => {
+  assert.match(galleryJobs, /deriveMonotonicGalleryFailure/);
+  assert.match(galleryJobs, /select\("images,gallery_status,gallery_persisted_count,gallery_total"\)/);
+  assert.match(galleryJobs, /gallery_status: state\.status/);
+  assert.match(galleryJobs, /gallery_persisted_count: state\.persistedTotal/);
+  assert.match(galleryJobs, /gallery_total: state\.total/);
+  assert.match(galleryJobs, /status: state\.status/);
+  assert.match(galleryJobs, /currentStatus: listing\.gallery_status/);
+});
+
 test("root-not-found recovery reuses only previously exact-bound metadata", () => {
   assert.match(galleryJobs, /EXACT_ROOT_STORY_METADATA_REUSE/);
   assert.match(galleryJobs, /sourcePostId !== expectedPostId/);
