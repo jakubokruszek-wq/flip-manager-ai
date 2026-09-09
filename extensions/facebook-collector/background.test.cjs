@@ -10,6 +10,7 @@ const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8"
 const runtime = fs.readFileSync(path.join(__dirname, "collector-runtime.js"), "utf8");
 const preflight = fs.readFileSync(path.join(__dirname, "collector-preflight.js"), "utf8");
 const content = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+const networkHook = fs.readFileSync(path.join(__dirname, "network-hook.js"), "utf8");
 const popup = fs.readFileSync(path.join(__dirname, "popup.js"), "utf8");
 const pairing = fs.readFileSync(path.join(__dirname, "pairing.js"), "utf8");
 const options = fs.readFileSync(path.join(__dirname, "options.js"), "utf8");
@@ -543,6 +544,14 @@ test("gallery hydration attempts exact seeded viewer proof before the slower roo
   const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
   assert.match(gallery, /let result = seedMediaIds\.length > 0 \? await hydrateFromViewer\(seedMediaIds\[0\]\) : await hydrate\(resolvedUrl, resolvedUrl\)/);
   assert.match(gallery, /const rootResult = await hydrate\(resolvedUrl, resolvedUrl\)/);
+});
+
+test("gallery viewer tolerates Facebook stripping fbid while retaining the exact pcb set", () => {
+  assert.match(content, /currentMediaId === mediaId \|\| !currentMediaId/);
+  assert.match(content, /payload: \{ expectedPostId, expectedUrl: String\(options\.expectedUrl \|\| ""\)\.slice\(0, 500\), mediaId \}/);
+  assert.match(content, /galleryViewerFrame\(expectedPostId, fallbackMediaId\)/);
+  assert.match(networkHook, /galleryContext = \{ expectedPostId, expectedUrl: expectedUrl\.slice\(0, 500\), mediaId \}/);
+  assert.match(networkHook, /galleryContext\?\.expectedPostId === postId \? galleryContext\.mediaId/);
 });
 
 test("gallery hydration preserves the exact content-script terminal error", () => {

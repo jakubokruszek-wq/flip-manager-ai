@@ -199,13 +199,19 @@
     try {
       const current = new URL(location.href);
       const set = current.searchParams.get("set") || "";
+      const currentMediaId = current.searchParams.get("fbid") || "";
       viewerContext = /(^|\.)facebook\.com$/i.test(current.hostname)
         && /^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname)
-        && current.searchParams.get("fbid") === mediaId
+        && (currentMediaId === mediaId || !currentMediaId)
         && set === `pcb.${expectedPostId}`;
     } catch { /* invalid viewer context remains fail-closed */ }
     if (!viewerContext) return failure("FACEBOOK_GALLERY_VIEWER_CONTEXT_MISMATCH");
-    window.postMessage({ channel: "FLIP_COLLECTOR_GALLERY_CONTEXT", payload: { expectedPostId, expectedUrl: String(options.expectedUrl || "").slice(0, 500) } }, location.origin);
+    // Facebook's Comet viewer may strip `fbid` from the visible URL after
+    // hydration while retaining the exact `pcb.<postId>` set. The seed media
+    // id came from previously exact-bound provenance, so pass it to the MAIN
+    // world network observer as bounded context; it is never promoted to a
+    // post id and remains subject to the structured attachment proof.
+    window.postMessage({ channel: "FLIP_COLLECTOR_GALLERY_CONTEXT", payload: { expectedPostId, expectedUrl: String(options.expectedUrl || "").slice(0, 500), mediaId } }, location.origin);
     const networkProof = galleryNetworkProofs.get(`${expectedPostId}:${mediaId}`);
     const networkAuditKey = `${expectedPostId}:${mediaId}`;
     if (networkProof && galleryNetworkProofIsExact(networkProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
@@ -299,8 +305,8 @@
       previousBoundary: false,
       closedCycle: false,
     };
-    const capture = async (previousMediaId = null) => {
-      const frame = await waitForGalleryViewerFrame(expectedPostId, previousMediaId, Math.min(deadline, Date.now() + 8_000));
+    const capture = async (previousMediaId = null, fallbackMediaId = null) => {
+      const frame = await waitForGalleryViewerFrame(expectedPostId, previousMediaId, Math.min(deadline, Date.now() + 8_000), fallbackMediaId);
       if (!frame) return null;
       const prior = seen.get(frame.mediaId);
       if (prior && prior !== frame.url) return { error: "GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT" };
@@ -310,7 +316,7 @@
       }
       return { ...frame, repeated: Boolean(prior) };
     };
-    const first = await capture();
+    const first = await capture(null, seedMediaId);
     if (!first) return { status: "FAILED", error: "GALLERY_VIEWER_CURRENT_IMAGE_NOT_FOUND", diagnostics: { ...diagnostics, dom: galleryViewerDomSnapshot(expectedPostId) } };
     if (first.mediaId !== seedMediaId) return { status: "FAILED", error: "GALLERY_VIEWER_SEED_CONTEXT_MISMATCH", diagnostics: { ...diagnostics, currentMediaId: first.mediaId } };
 
@@ -356,19 +362,20 @@
     };
   }
 
-  async function waitForGalleryViewerFrame(expectedPostId, previousMediaId, deadline) {
+  async function waitForGalleryViewerFrame(expectedPostId, previousMediaId, deadline, fallbackMediaId = null) {
     while (Date.now() < deadline) {
-      const frame = galleryViewerFrame(expectedPostId);
+      const frame = galleryViewerFrame(expectedPostId, fallbackMediaId);
       if (frame && (!previousMediaId || frame.mediaId !== previousMediaId)) return frame;
       await wait(Math.min(100, Math.max(1, deadline - Date.now())));
     }
     return null;
   }
 
-  function galleryViewerFrame(expectedPostId) {
+  function galleryViewerFrame(expectedPostId, fallbackMediaId = null) {
     let current;
     try { current = new URL(location.href); } catch { return null; }
-    const mediaId = current.searchParams.get("fbid") || "";
+    const queryMediaId = current.searchParams.get("fbid") || "";
+    const mediaId = /^\d{5,30}$/.test(queryMediaId) ? queryMediaId : String(fallbackMediaId || "");
     if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("set") !== `pcb.${expectedPostId}` || !/^\d{5,30}$/.test(mediaId)) return null;
     const imageNodes = [
       ...document.querySelectorAll('img, video, [role="img"], [data-visualcompletion], [data-imgperflogname], [style*="background-image"]'),

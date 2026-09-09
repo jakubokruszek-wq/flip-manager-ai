@@ -11,8 +11,9 @@
     if (event.source !== window || event.origin !== location.origin || event.data?.channel !== "FLIP_COLLECTOR_GALLERY_CONTEXT") return;
     const expectedPostId = String(event.data.payload?.expectedPostId || "");
     const expectedUrl = String(event.data.payload?.expectedUrl || "");
-    if (!/^\d{5,30}$/.test(expectedPostId) || !/^https:\/\/(?:www\.)?facebook\.com\/groups\//i.test(expectedUrl)) return;
-    galleryContext = { expectedPostId, expectedUrl: expectedUrl.slice(0, 500) };
+    const mediaId = String(event.data.payload?.mediaId || "");
+    if (!/^\d{5,30}$/.test(expectedPostId) || !/^\d{5,30}$/.test(mediaId) || !/^https:\/\/(?:www\.)?facebook\.com\/groups\//i.test(expectedUrl)) return;
+    galleryContext = { expectedPostId, expectedUrl: expectedUrl.slice(0, 500), mediaId };
     for (const item of recentViewerBodies.splice(0)) emit(item.url, item.method, item.status, item.contentType, item.body, false);
   });
 
@@ -78,7 +79,8 @@
     try {
       const current = new URL(location.href);
       const postId = current.searchParams.get("set")?.match(/^pcb\.(\d{5,30})$/i)?.[1] || null;
-      const mediaId = current.searchParams.get("fbid");
+      const queryMediaId = current.searchParams.get("fbid") || "";
+      const mediaId = /^\d{5,30}$/.test(queryMediaId) ? queryMediaId : galleryContext?.expectedPostId === postId ? galleryContext.mediaId : "";
       if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || !postId || !/^\d{5,30}$/.test(String(mediaId || ""))) return null;
       return { postId, mediaId: String(mediaId) };
     } catch { return null; }
