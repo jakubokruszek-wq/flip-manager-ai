@@ -470,7 +470,9 @@
     if (!postId || !seedMediaId || !Array.isArray(frames) || frames.length === 0 || frames.length > 50) return unverified("GALLERY_VIEWER_TRAVERSAL_INPUT_INVALID");
     const coverageProven = coverage?.closedCycle === true || (coverage?.nextBoundary === true && coverage?.previousBoundary === true);
     if (!coverageProven) return unverified("GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN");
-    const byMediaId = new Map();
+    const byFrameKey = new Map();
+    const mediaUrls = new Map();
+    let seedFound = false;
     for (const raw of frames) {
       if (!isObject(raw)) return unverified("GALLERY_VIEWER_TRAVERSAL_FRAME_INVALID");
     }
@@ -478,19 +480,26 @@
       const mediaId = scalarId(raw.mediaId);
       const setPostId = scalarId(raw.setPostId);
       const url = clean(raw.url);
-      if (!mediaId || setPostId !== postId || !isFacebookCdnUrl(url)) return unverified("GALLERY_VIEWER_TRAVERSAL_BINDING_INVALID");
-      const previous = byMediaId.get(mediaId);
+      const urlKey = facebookCdnUrlKey(url);
+      if (setPostId !== postId || !urlKey) return unverified("GALLERY_VIEWER_TRAVERSAL_BINDING_INVALID");
+      const key = `url:${urlKey}`;
+      const previous = byFrameKey.get(key);
       if (previous && previous !== url) return unverified("GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT");
-      byMediaId.set(mediaId, url);
+      const priorMediaUrl = mediaId ? mediaUrls.get(mediaId) : null;
+      if (priorMediaUrl && priorMediaUrl !== urlKey) return unverified("GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT");
+      byFrameKey.set(key, { mediaId, url });
+      if (mediaId) mediaUrls.set(mediaId, urlKey);
+      seedFound ||= mediaId === seedMediaId;
     }
-    if (!byMediaId.has(seedMediaId)) return unverified("GALLERY_VIEWER_TRAVERSAL_SEED_MISSING");
+    if (!seedFound) return unverified("GALLERY_VIEWER_TRAVERSAL_SEED_MISSING");
     // A one-frame DOM result cannot distinguish a genuine one-photo post from
     // controls that Facebook has not hydrated. Keep that case fail-closed and
     // let the existing exact metadata remain PARTIAL.
-    if (byMediaId.size < 2) return unverified("GALLERY_VIEWER_TRAVERSAL_SINGLE_FRAME_UNPROVEN");
-    const mediaIds = [...byMediaId.keys()];
-    const candidates = mediaIds.map((mediaId) => ({
-      url: byMediaId.get(mediaId), mediaId, expectedPostId: postId, storyRootPostId: postId, boundPostId: postId,
+    if (byFrameKey.size < 2) return unverified("GALLERY_VIEWER_TRAVERSAL_SINGLE_FRAME_UNPROVEN");
+    const entries = [...byFrameKey.values()];
+    const mediaIds = entries.flatMap((entry) => entry.mediaId ? [entry.mediaId] : []);
+    const candidates = entries.map(({ mediaId, url }) => ({
+      url, mediaId, expectedPostId: postId, storyRootPostId: postId, boundPostId: postId,
       bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true,
       foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95,
       structuredPostMediaProvenance: false,
@@ -503,6 +512,13 @@
       const url = new URL(String(value || ""));
       return url.protocol === "https:" && /(^|\.)fbcdn\.net$/i.test(url.hostname);
     } catch { return false; }
+  }
+
+  function facebookCdnUrlKey(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return /(^|\.)fbcdn\.net$/i.test(url.hostname) ? `${url.hostname}${url.pathname}` : null;
+    } catch { return null; }
   }
 
   function exactGalleryTrackingSet(story, postId, mediaId) {

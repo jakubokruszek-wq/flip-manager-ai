@@ -530,3 +530,19 @@ test("gallery viewer carousel remains fail-closed for incomplete, foreign, confl
   assert.equal(core.resolveGalleryViewerTraversal([frames[0]], postId, seedMediaId, { nextBoundary: true, previousBoundary: true }).status, "UNVERIFIED");
   assert.equal(core.resolveGalleryViewerTraversal(frames, postId, "999999999999999", { closedCycle: true }).status, "UNVERIFIED");
 });
+
+test("gallery viewer carousel accepts exact pcb frames whose fbid was stripped after the exact seed", () => {
+  const postId = "1749121366325600";
+  const seedMediaId = "28459992263624932";
+  const frames = [
+    { mediaId: seedMediaId, setPostId: postId, url: "https://scontent.xx.fbcdn.net/seed.jpg?token=one" },
+    { mediaId: null, setPostId: postId, url: "https://scontent.xx.fbcdn.net/two.jpg?token=two" },
+    { mediaId: null, setPostId: postId, url: "https://scontent.xx.fbcdn.net/three.jpg?token=three" },
+  ];
+  const result = core.resolveGalleryViewerTraversal(frames, postId, seedMediaId, { nextBoundary: true, previousBoundary: true });
+  assert.equal(result.status, "VERIFIED");
+  assert.equal(result.candidates.length, 3);
+  assert.deepEqual(result.mediaIds, [seedMediaId]);
+  assert.equal(result.candidates[1].mediaId, null);
+  assert.equal(result.candidates[1].boundPostId, postId);
+});

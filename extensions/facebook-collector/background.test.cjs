@@ -548,6 +548,15 @@ test("gallery hydration attempts exact seeded viewer proof before the slower roo
   assert.match(gallery, /const rootResult = await hydrateRootPage\(\)/);
 });
 
+test("gallery hydration requires bounded carousel coverage instead of treating the structured preview set as complete", () => {
+  const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
+  assert.match(content, /inspectExactGalleryCarousel\(expectedPostId, mediaId, deadline, networkProof\)/);
+  assert.match(content, /GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH/);
+  assert.match(gallery, /first\.traversalComplete === true/);
+  assert.match(gallery, /sourceMediaCount: traversedCandidates\.length/);
+  assert.match(gallery, /structuredAttachmentCount: mediaIds\.length/);
+});
+
 test("gallery viewer tolerates Facebook stripping fbid while retaining the exact pcb set", () => {
   assert.match(content, /currentMediaId === mediaId \|\| !currentMediaId/);
   assert.match(content, /payload: \{ expectedPostId, expectedUrl: String\(options\.expectedUrl \|\| ""\)\.slice\(0, 500\), mediaId \}/);

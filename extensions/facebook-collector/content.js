@@ -212,23 +212,27 @@
     // world network observer as bounded context; it is never promoted to a
     // post id and remains subject to the structured attachment proof.
     window.postMessage({ channel: "FLIP_COLLECTOR_GALLERY_CONTEXT", payload: { expectedPostId, expectedUrl: String(options.expectedUrl || "").slice(0, 500), mediaId } }, location.origin);
-    const networkProof = galleryNetworkProofs.get(`${expectedPostId}:${mediaId}`);
     const networkAuditKey = `${expectedPostId}:${mediaId}`;
+    const deadline = Date.now() + Math.min(45_000, Math.max(2_000, Number(options.waitMs) || 45_000));
+    const networkProof = galleryNetworkProofs.get(networkAuditKey);
     if (networkProof && galleryNetworkProofIsExact(networkProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
+      if (options.seedRootProvenanceVerified === true) {
+        const traversal = await inspectExactGalleryCarousel(expectedPostId, mediaId, deadline, networkProof);
+        if (traversal.status === "VERIFIED") {
+          const traversedIds = new Set(traversal.mediaIds || []);
+          if (!networkProof.mediaIds.every((id) => traversedIds.has(id) || traversal.candidates?.some((candidate) => candidate.mediaId === id))) {
+            return failure("GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH", { ...(traversal.diagnostics || {}), structuredMediaIds: networkProof.mediaIds.slice(0, 50) });
+          }
+          return { ...traversal, permalink: networkProof.permalink, networkProof: true, diagnostics: { ...(traversal.diagnostics || {}), networkProof: true, structuredAttachmentCount: networkProof.mediaIds.length } };
+        }
+        return failure(traversal.error || "GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN", { ...(traversal.diagnostics || {}), networkResponseCount: networkResponses, networkAudit: galleryNetworkAudits.get(networkAuditKey) || null, structuredAttachmentCount: networkProof.mediaIds.length });
+      }
       return {
-        status: "VERIFIED",
-        expectedPostId,
-        currentMediaId: mediaId,
-        mediaIds: networkProof.mediaIds,
-        permalink: networkProof.permalink,
-        authorFound: true,
-        rootTextFound: true,
-        candidate: networkProof.candidate,
-        networkProof: true,
-        diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), networkProof: true, attachmentCount: networkProof.mediaIds.length },
+        status: "VERIFIED", expectedPostId, currentMediaId: mediaId, mediaIds: networkProof.mediaIds,
+        permalink: networkProof.permalink, authorFound: true, rootTextFound: true, candidate: networkProof.candidate,
+        networkProof: true, diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), networkProof: true, attachmentCount: networkProof.mediaIds.length },
       };
     }
-    const deadline = Date.now() + Math.min(45_000, Math.max(2_000, Number(options.waitMs) || 45_000));
     const payloadDeadline = Math.min(deadline, Date.now() + 2_000);
     let lastReason = "GALLERY_VIEWER_PAYLOAD_NOT_FOUND";
     do {
@@ -292,7 +296,7 @@
       && /^https:\/\//i.test(candidate.url);
   }
 
-  async function inspectExactGalleryCarousel(expectedPostId, seedMediaId, deadline) {
+  async function inspectExactGalleryCarousel(expectedPostId, seedMediaId, deadline, seedProof = null) {
     const frames = [];
     const seen = new Map();
     const diagnostics = {
@@ -305,18 +309,22 @@
       previousBoundary: false,
       closedCycle: false,
     };
-    const capture = async (previousMediaId = null, fallbackMediaId = null) => {
-      const frame = await waitForGalleryViewerFrame(expectedPostId, previousMediaId, Math.min(deadline, Date.now() + 8_000), fallbackMediaId);
+    const capture = async (previousFrameKey = null, fallbackMediaId = null, proof = null) => {
+      const proofCandidate = proof?.candidate;
+      const proofFrame = proofCandidate && galleryNetworkProofIsExact(proof, expectedPostId, seedMediaId, String(proof.permalink || ""), String(location.href || ""))
+        ? { mediaId: seedMediaId, setPostId: expectedPostId, url: proofCandidate.url, image: null, frameKey: galleryViewerUrlKey(proofCandidate.url) }
+        : null;
+      const frame = proofFrame || await waitForGalleryViewerFrame(expectedPostId, previousFrameKey, Math.min(deadline, Date.now() + 8_000), fallbackMediaId);
       if (!frame) return null;
-      const prior = seen.get(frame.mediaId);
+      const prior = seen.get(frame.frameKey);
       if (prior && prior !== frame.url) return { error: "GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT" };
       if (!prior) {
-        seen.set(frame.mediaId, frame.url);
+        seen.set(frame.frameKey, frame.url);
         frames.push(frame);
       }
       return { ...frame, repeated: Boolean(prior) };
     };
-    const first = await capture(null, seedMediaId);
+    const first = await capture(null, seedMediaId, seedProof);
     if (!first) return { status: "FAILED", error: "GALLERY_VIEWER_CURRENT_IMAGE_NOT_FOUND", diagnostics: { ...diagnostics, dom: galleryViewerDomSnapshot(expectedPostId) } };
     if (first.mediaId !== seedMediaId) return { status: "FAILED", error: "GALLERY_VIEWER_SEED_CONTEXT_MISMATCH", diagnostics: { ...diagnostics, currentMediaId: first.mediaId } };
 
@@ -326,10 +334,10 @@
       if (!next) { diagnostics.nextBoundary = true; break; }
       next.click();
       diagnostics.nextClicks += 1;
-      const advanced = await capture(current.mediaId);
+      const advanced = await capture(current.frameKey);
       if (!advanced) return { status: "FAILED", error: "GALLERY_VIEWER_NEXT_NAVIGATION_STALLED", diagnostics: { ...diagnostics, frameCount: frames.length, dom: galleryViewerDomSnapshot(expectedPostId) } };
       if (advanced.error) return { status: "FAILED", error: advanced.error, diagnostics };
-      if (advanced.mediaId === seedMediaId) { diagnostics.closedCycle = true; break; }
+      if (advanced.frameKey === first.frameKey) { diagnostics.closedCycle = true; break; }
       if (advanced.repeated) {
         return { status: "FAILED", error: "GALLERY_VIEWER_TRAVERSAL_NON_SEED_CYCLE", diagnostics: { ...diagnostics, repeatedMediaId: advanced.mediaId } };
       }
@@ -342,7 +350,7 @@
         if (!previous) { diagnostics.previousBoundary = true; break; }
         previous.click();
         diagnostics.previousClicks += 1;
-        const moved = await capture(current.mediaId);
+        const moved = await capture(current.frameKey);
         if (!moved) return { status: "FAILED", error: "GALLERY_VIEWER_PREVIOUS_NAVIGATION_STALLED", diagnostics: { ...diagnostics, frameCount: frames.length, dom: galleryViewerDomSnapshot(expectedPostId) } };
         if (moved.error) return { status: "FAILED", error: moved.error, diagnostics };
         current = moved;
@@ -362,10 +370,10 @@
     };
   }
 
-  async function waitForGalleryViewerFrame(expectedPostId, previousMediaId, deadline, fallbackMediaId = null) {
+  async function waitForGalleryViewerFrame(expectedPostId, previousFrameKey, deadline, fallbackMediaId = null) {
     while (Date.now() < deadline) {
       const frame = galleryViewerFrame(expectedPostId, fallbackMediaId);
-      if (frame && (!previousMediaId || frame.mediaId !== previousMediaId)) return frame;
+      if (frame && (!previousFrameKey || frame.frameKey !== previousFrameKey)) return frame;
       await wait(Math.min(100, Math.max(1, deadline - Date.now())));
     }
     return null;
@@ -375,8 +383,8 @@
     let current;
     try { current = new URL(location.href); } catch { return null; }
     const queryMediaId = current.searchParams.get("fbid") || "";
-    const mediaId = /^\d{5,30}$/.test(queryMediaId) ? queryMediaId : String(fallbackMediaId || "");
-    if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("set") !== `pcb.${expectedPostId}` || !/^\d{5,30}$/.test(mediaId)) return null;
+    const mediaId = /^\d{5,30}$/.test(queryMediaId) ? queryMediaId : /^\d{5,30}$/.test(String(fallbackMediaId || "")) ? String(fallbackMediaId) : null;
+    if (!/^\/photo(?:\.php)?(?:\/|$)/i.test(current.pathname) || current.searchParams.get("set") !== `pcb.${expectedPostId}`) return null;
     const imageNodes = [
       ...document.querySelectorAll('img, video, [role="img"], [data-visualcompletion], [data-imgperflogname], [style*="background-image"]'),
     ];
@@ -416,7 +424,13 @@
     const best = images[0];
     const conflicting = images.find((item, index) => index > 0 && item.preferred === best.preferred && best.area > 0 && item.area >= best.area * 0.9 && item.url !== best.url);
     if (conflicting) return null;
-    return { mediaId, setPostId: expectedPostId, url: best.url.slice(0, 2_000), image: best.image };
+    let urlKey = null;
+    try { const url = new URL(best.url); urlKey = `${url.hostname}${url.pathname}`; } catch { /* invalid URL rejected above */ }
+    return { mediaId, setPostId: expectedPostId, url: best.url.slice(0, 2_000), image: best.image, frameKey: `url:${urlKey}` };
+  }
+
+  function galleryViewerUrlKey(value) {
+    try { const url = new URL(String(value || "")); return `url:${url.hostname}${url.pathname}`; } catch { return null; }
   }
 
   function galleryViewerImageCandidates(node) {
