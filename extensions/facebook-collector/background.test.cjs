@@ -554,6 +554,7 @@ test("gallery viewer tolerates Facebook stripping fbid while retaining the exact
   assert.match(networkHook, /galleryContext\?\.expectedPostId === postId/);
   assert.match(networkHook, /galleryContext\.mediaId/);
   assert.match(networkHook, /Keep buffering bounded viewer responses/);
+  assert.match(networkHook, /remember && viewerContext && !galleryProof/);
   assert.match(networkHook, /if \(viewerContext\?\.mediaId\)/);
 });
 

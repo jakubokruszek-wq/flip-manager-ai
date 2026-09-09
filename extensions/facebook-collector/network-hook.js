@@ -59,15 +59,15 @@
           };
         }
       }
+      if (remember && viewerContext && !galleryProof) {
+        recentViewerBodies.push({ url, method, status, contentType, body });
+        while (recentViewerBodies.length > 4) recentViewerBodies.shift();
+        setTimeout(() => {
+          const index = recentViewerBodies.findIndex((item) => item.body === body);
+          if (index >= 0) recentViewerBodies.splice(index, 1);
+        }, 15_000);
+      }
       if (!records.length && !galleryProof) {
-        if (remember && viewerContext) {
-          recentViewerBodies.push({ url, method, status, contentType, body });
-          while (recentViewerBodies.length > 4) recentViewerBodies.shift();
-          setTimeout(() => {
-            const index = recentViewerBodies.findIndex((item) => item.body === body);
-            if (index >= 0) recentViewerBodies.splice(index, 1);
-          }, 15_000);
-        }
         if (galleryAudit) window.postMessage({ channel: "FLIP_COLLECTOR_NETWORK", payload: { url: sanitizedPath(url), method, status, contentType: String(contentType || "").slice(0, 120), size: body.length, records: [], galleryProof: null, galleryAudit } }, location.origin);
         return;
       }
