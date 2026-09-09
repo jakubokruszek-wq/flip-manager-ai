@@ -287,7 +287,7 @@
     const roots = parseJsonBodies(String(text).slice(0, 4_000_000));
     const records = [];
     for (const root of roots) walk(root, (node) => {
-      if (!isGalleryPhotoNode(node, mediaId)) return;
+      if (!isObject(node) || scalarId(node.id) !== mediaId || String(node.__typename || node.typename || "").toLowerCase() !== "photo") return;
       const story = node.container_story;
       if (!isObject(story)) return;
       const postId = exactMediaBoundStoryPostId(story, mediaId);
