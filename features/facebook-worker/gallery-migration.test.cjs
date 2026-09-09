@@ -74,6 +74,15 @@ test("failed gallery jobs retain only bounded root diagnostics", () => {
   assert.doesNotMatch(galleryJobs, /leaseToken.*diagnostics|diagnostics.*leaseToken/i);
 });
 
+test("successful gallery jobs retain bounded carousel coverage diagnostics", () => {
+  assert.match(galleryJobs, /const diagnostics = sanitizeGalleryDiagnostics\(input\.gallery\?\.diagnostics\)/);
+  assert.match(galleryJobs, /errorCode, diagnostics \};/);
+  assert.match(galleryJobs, /const traversal = sanitizeGalleryViewerDiagnostics\(input\.traversal\)/);
+  assert.match(galleryJobs, /structuredAttachmentCount: number\("structuredAttachmentCount", 50\)/);
+  assert.match(galleryJobs, /attachmentCount: number\("attachmentCount", 50\)/);
+  assert.match(galleryJobs, /verifiedCount: number\("verifiedCount", 50\)/);
+});
+
 test("failed hydration keeps the listing gallery lifecycle monotonic", () => {
   assert.match(galleryJobs, /deriveMonotonicGalleryFailure/);
   assert.match(galleryJobs, /select\("images,gallery_status,gallery_persisted_count,gallery_total"\)/);

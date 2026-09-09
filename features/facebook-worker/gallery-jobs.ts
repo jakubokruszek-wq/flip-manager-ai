@@ -77,6 +77,11 @@ type GalleryFailureDiagnostics = {
     scriptCount?: number;
   } | null;
   viewer?: GalleryViewerFailureDiagnostics | null;
+  viewerSeedMediaId?: string | null;
+  structuredAttachmentCount?: number;
+  attachmentCount?: number;
+  verifiedCount?: number;
+  traversal?: GalleryViewerFailureDiagnostics | null;
   [key: string]: unknown;
 };
 
@@ -196,6 +201,7 @@ export async function completeFacebookGalleryJob(input: {
   if (input.gallery?.expectedPostId && input.gallery.expectedPostId !== expectedPostId) throw new Error("FACEBOOK_GALLERY_POST_ID_MISMATCH");
   const candidates = parseFacebookGalleryCandidates(input.gallery?.candidates, expectedPostId);
   const sourceMediaCount = boundedCount(input.gallery?.sourceMediaCount, candidates.length);
+  const diagnostics = sanitizeGalleryDiagnostics(input.gallery?.diagnostics);
   const listingResult = await supabase.from("listings").select("images,original_url").eq("id", listingId).maybeSingle();
   const listing = row(listingResult.data);
   if (listingResult.error || !listing) throw new Error("FACEBOOK_GALLERY_LISTING_NOT_FOUND");
@@ -230,7 +236,7 @@ export async function completeFacebookGalleryJob(input: {
     const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourcePostUrl, collected_at: now, metadata: { ...existingMetadata, galleryMediaIds: nextMediaIds, galleryStatus: status, galleryUpdatedAt: now } }, { onConflict: "source,source_post_url" });
     if (metadata.error) throw new Error(`FACEBOOK_GALLERY_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
   }
-  const result: FacebookGalleryJobResult = { jobId: input.jobId, listingId, postId: expectedPostId, status, sourceMediaCount, exactMediaCount, alreadyStored, downloadRequired, downloaded, storageSuccess, persistedTotal, errorCode };
+  const result: FacebookGalleryJobResult = { jobId: input.jobId, listingId, postId: expectedPostId, status, sourceMediaCount, exactMediaCount, alreadyStored, downloadRequired, downloaded, storageSuccess, persistedTotal, errorCode, diagnostics };
   const finished = await supabase.from("facebook_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: { kind: "GALLERY_HYDRATION", ...result }, error_code: errorCode, error_message: errorCode }).eq("id", input.jobId).eq("status", "running").eq("lease_token", input.leaseToken).eq("worker_id", input.workerId);
   if (finished.error) throw new Error(`FACEBOOK_GALLERY_JOB_FINALIZE_FAILED: ${finished.error.message}`);
   return result;
@@ -393,6 +399,7 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
   const expected = row(input.expectedRecord);
   const page = row(input.page);
   const viewer = sanitizeGalleryViewerDiagnostics(input.viewer);
+  const traversal = sanitizeGalleryViewerDiagnostics(input.traversal);
   return {
     elapsedMs: number("elapsedMs", 120_000),
     currentPath: text("currentPath", 500),
@@ -438,6 +445,11 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
       scriptCount: finiteFrom(page.scriptCount, 250),
     } : null,
     viewer,
+    viewerSeedMediaId: typeof input.viewerSeedMediaId === "string" && /^\d{5,30}$/.test(input.viewerSeedMediaId) ? input.viewerSeedMediaId : null,
+    structuredAttachmentCount: number("structuredAttachmentCount", 50),
+    attachmentCount: number("attachmentCount", 50),
+    verifiedCount: number("verifiedCount", 50),
+    traversal,
   };
 }
 
