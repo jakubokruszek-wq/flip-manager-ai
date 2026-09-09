@@ -25,7 +25,7 @@ export function deriveMonotonicGalleryFailure(input: {
   const persistedTotal = Math.max(imageCount, persistedCount);
   const hasPriorResult = persistedTotal > 0 || exactMetadataCount > 0;
   const currentStatus = input.currentStatus === "COMPLETE" ? "COMPLETE" : input.currentStatus === "PARTIAL" ? "PARTIAL" : null;
-  const status: MonotonicGalleryStatus = !hasPriorResult ? "FAILED" : currentStatus === "COMPLETE" ? "COMPLETE" : "PARTIAL";
+  const status: MonotonicGalleryStatus = currentStatus === "COMPLETE" ? "COMPLETE" : !hasPriorResult ? "FAILED" : "PARTIAL";
   return { status, persistedTotal, total: Math.max(total, persistedTotal) };
 }
 

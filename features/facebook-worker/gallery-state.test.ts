@@ -20,6 +20,10 @@ test("complete gallery never degrades after a failed retry", () => {
   assert.deepEqual(deriveMonotonicGalleryFailure({ currentStatus: "COMPLETE", imageCount: 7, persistedCount: 7, total: 7, exactMetadataCount: 7 }), { status: "COMPLETE", persistedTotal: 7, total: 7 });
 });
 
+test("complete status remains monotonic even if legacy counters are inconsistent", () => {
+  assert.deepEqual(deriveMonotonicGalleryFailure({ currentStatus: "COMPLETE", imageCount: 0, persistedCount: 0, total: 0, exactMetadataCount: 0 }), { status: "COMPLETE", persistedTotal: 0, total: 0 });
+});
+
 test("empty incoming failure does not erase existing images or counts", () => {
   const before = { imageCount: 1, persistedCount: 1, total: 7 };
   const after = deriveMonotonicGalleryFailure({ currentStatus: "PARTIAL", ...before, exactMetadataCount: 1 });
