@@ -177,20 +177,19 @@ export async function completeFacebookGalleryJob(input: {
     // provenance; never infer media from a photo id, neighbour story, or
     // unverified URL. This keeps gallery hydration fail-closed while making
     // the explicit user action useful for media already proven at scan time.
-    if (input.errorCode === "FACEBOOK_GALLERY_ROOT_NOT_FOUND") {
-      const recovered = await recoverGalleryFromExactMetadata({
-        supabase,
-        jobId: input.jobId,
-        leaseToken: input.leaseToken,
-        workerId: input.workerId,
-        listingId,
-        expectedPostId,
-        sourceDiagnostics: sanitizeGalleryDiagnostics(input.gallery?.diagnostics),
-      });
-      if (recovered) return recovered;
-    }
     const errorCode = input.errorCode ?? "FACEBOOK_GALLERY_FAILED";
     const diagnostics = sanitizeGalleryDiagnostics(input.gallery?.diagnostics);
+    const recovered = await recoverGalleryFromExactMetadata({
+      supabase,
+      jobId: input.jobId,
+      leaseToken: input.leaseToken,
+      workerId: input.workerId,
+      listingId,
+      expectedPostId,
+      failureErrorCode: errorCode,
+      sourceDiagnostics: diagnostics,
+    });
+    if (recovered) return recovered;
     const state = await markGalleryFailed(supabase, input.jobId, listingId, errorCode, diagnostics);
     return { jobId: input.jobId, listingId, postId: expectedPostId, status: state.status, sourceMediaCount: 0, exactMediaCount: 0, alreadyStored: 0, downloadRequired: 0, downloaded: 0, storageSuccess: 0, persistedTotal: state.persistedTotal, errorCode, diagnostics };
   }
@@ -244,6 +243,7 @@ async function recoverGalleryFromExactMetadata(input: {
   workerId: string;
   listingId: string;
   expectedPostId: string;
+  failureErrorCode: string;
   sourceDiagnostics: GalleryFailureDiagnostics | null;
 }): Promise<FacebookGalleryJobResult | null> {
   const metadataResult = await input.supabase.from("listing_source_metadata").select("metadata").eq("listing_id", input.listingId).eq("source", "facebook").maybeSingle();
@@ -255,6 +255,7 @@ async function recoverGalleryFromExactMetadata(input: {
   const listing = row(listingResult.data);
   if (listingResult.error || !listing) return null;
   const existingImages = stringArray(listing.images);
+  if (existingImages.length === 0) return null;
   const existingMediaIds = new Set(stringArray(metadata.galleryMediaIds));
   return persistVerifiedGallery({
     supabase: input.supabase,
@@ -270,6 +271,7 @@ async function recoverGalleryFromExactMetadata(input: {
     metadata,
     sourceUrl: safeFacebookPostUrl(listing.original_url),
     recoveryReason: "EXACT_ROOT_STORY_METADATA_REUSE",
+    failureErrorCode: input.failureErrorCode,
     sourceDiagnostics: input.sourceDiagnostics,
   });
 }
@@ -304,6 +306,7 @@ async function persistVerifiedGallery(input: {
   metadata: Row;
   sourceUrl: string | null;
   recoveryReason?: string;
+  failureErrorCode?: string;
   sourceDiagnostics?: GalleryFailureDiagnostics | null;
 }): Promise<FacebookGalleryJobResult> {
   const validation = validateFacebookRevalidationCandidates(input.candidates, input.expectedPostId);
@@ -317,7 +320,7 @@ async function persistVerifiedGallery(input: {
   const downloaded = Math.max(0, mirrored.stats.uploadedCount);
   const storageSuccess = downloaded;
   const status: "PARTIAL" | "COMPLETE" = mirrored.stats.failedCount > 0 || input.sourceMediaCount > exactMediaCount || Boolean(input.recoveryReason) ? "PARTIAL" : "COMPLETE";
-  const errorCode = mirrored.stats.failedCount > 0 ? "FACEBOOK_GALLERY_STORAGE_PARTIAL" : input.sourceMediaCount > exactMediaCount ? "FACEBOOK_GALLERY_PROVENANCE_PARTIAL" : input.recoveryReason ? "FACEBOOK_GALLERY_ROOT_NOT_AVAILABLE_METADATA_REUSE" : null;
+  const errorCode = mirrored.stats.failedCount > 0 ? "FACEBOOK_GALLERY_STORAGE_PARTIAL" : input.sourceMediaCount > exactMediaCount ? "FACEBOOK_GALLERY_PROVENANCE_PARTIAL" : input.failureErrorCode ?? (input.recoveryReason ? "FACEBOOK_GALLERY_ROOT_NOT_AVAILABLE_METADATA_REUSE" : null);
   const now = new Date().toISOString();
   await input.supabase.from("listings").update({ images: mirrored.images, gallery_status: status, gallery_completed_at: now, gallery_total: Math.max(input.sourceMediaCount, exactMediaCount, mirrored.images.length), gallery_persisted_count: mirrored.images.length, gallery_error: errorCode }).eq("id", input.listingId);
   if (input.sourceUrl) {

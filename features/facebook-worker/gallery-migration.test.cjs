@@ -86,6 +86,8 @@ test("failed hydration keeps the listing gallery lifecycle monotonic", () => {
 
 test("root-not-found recovery reuses only previously exact-bound metadata", () => {
   assert.match(galleryJobs, /EXACT_ROOT_STORY_METADATA_REUSE/);
+  assert.match(galleryJobs, /failureErrorCode: errorCode/);
+  assert.match(galleryJobs, /if \(existingImages\.length === 0\) return null/);
   assert.match(galleryJobs, /sourcePostId !== expectedPostId/);
   assert.match(galleryJobs, /storyRootPostId !== expectedPostId/);
   assert.match(galleryJobs, /bindingMethod !== "EXACT_ROOT_STORY"/);
