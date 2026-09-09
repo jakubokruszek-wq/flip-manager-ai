@@ -261,13 +261,14 @@
     } catch { return null; }
   }
 
-  function galleryMediaId(node) {
+  function galleryMediaId(node, expectedMediaId = null) {
     if (!isObject(node)) return null;
-    return scalarId(node.id) || firstKey(node, GALLERY_MEDIA_ID_KEYS);
+    const ids = [scalarId(node.id), firstKey(node, GALLERY_MEDIA_ID_KEYS)].filter(Boolean);
+    return ids.find((id) => !expectedMediaId || id === expectedMediaId) || null;
   }
 
   function isGalleryPhotoNode(node, mediaId) {
-    if (!isObject(node) || galleryMediaId(node) !== mediaId) return false;
+    if (!isObject(node) || galleryMediaId(node, mediaId) !== mediaId) return false;
     const type = String(node.__typename || node.typename || "").toLowerCase();
     if (type === "photo" || /(?:photo|image)/.test(type)) return true;
     // A few viewer responses omit __typename. Requiring both an exact

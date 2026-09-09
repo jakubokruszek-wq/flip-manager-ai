@@ -379,6 +379,7 @@ test("gallery network proof accepts Comet media fbid fields without treating the
   const mediaId = "28459992303624928";
   const payload = JSON.stringify({
     __typename: "Photo",
+    id: postId,
     fbid: mediaId,
     image: { uri: "https://scontent.xx.fbcdn.net/current.jpg" },
     container_story: {
