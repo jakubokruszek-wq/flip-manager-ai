@@ -132,7 +132,19 @@
         if (article?.parentElement?.closest('[role="article"]')) return null;
         return article || exactLinkedGalleryRoot(anchor, expectedGroup, expectedPostId);
       }))].filter(Boolean);
-      let roots = collapseEquivalentGalleryRoots(selfLinkRoots);
+      const collapsedSelfLinkRoots = collapseEquivalentGalleryRoots(selfLinkRoots);
+      const titleBoundSelfLinkRoots = collapseEquivalentGalleryRoots(selfLinkRoots.filter((candidate) => {
+        const evidence = galleryRootEvidence(candidate);
+        return evidence.rootText && galleryPageTitleMatchesRootText(evidence.rootText);
+      }));
+      // Exact post pages can render a root story plus a comment/accessibility
+      // copy that links back to the same permalink. When more than one
+      // semantic root remains, the document title is an independent binding
+      // to the exact root message. Never use this discriminator if it does not
+      // leave exactly one root.
+      let roots = collapsedSelfLinkRoots.length > 1 && titleBoundSelfLinkRoots.length === 1
+        ? titleBoundSelfLinkRoots
+        : collapsedSelfLinkRoots;
       rootBindingSource = roots.length > 0 ? "EXACT_SELF_LINK" : null;
       if (roots.length === 0) {
         const pageRoots = [...document.querySelectorAll('[role="article"]')]
@@ -144,7 +156,7 @@
         rootBindingSource = roots.length > 0 ? "EXACT_PAGE_TITLE_STORY" : null;
       }
       lastRootCount = roots.length;
-      if (roots.length > 1) return galleryFailure("FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: roots.length });
+      if (roots.length > 1) return galleryFailure("FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: roots.length, selfLinkRootCount: collapsedSelfLinkRoots.length, titleBoundRootCount: titleBoundSelfLinkRoots.length, page: galleryPageSnapshot(exactPath, expectedPostId) });
       root = roots[0] || null;
       if (root) {
         const evidence = galleryRootEvidence(root);
