@@ -80,6 +80,9 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(inlineResults, /GALLERY_BUTTON_MOUNT/);
   assert.match(inlineResults, /GALLERY_BUTTON_UNMOUNT/);
   assert.match(inlineResults, /GalleryRequestButton/);
+  assert.match(inlineResults, /void onChangedRef\.current\?\.\(\)/);
+  assert.match(inlineResults, /Pobrano \$\{persisted\} zdjęć · pobierz pozostałe/);
+  assert.match(inlineResults, /result\.images\.length > 1/);
   assert.match(inlineResults, /buttonRendered: true/);
   assert.match(inlineResults, /CLIENT_BUILD_ID/);
   assert.match(inlineResults, /result\.source/);

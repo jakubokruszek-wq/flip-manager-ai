@@ -142,9 +142,9 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
       {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / MATCHED <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
       {data && reviewCount > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewCount}</p><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div></div><div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard key={result.id} result={result} onChanged={() => void load()} />)}</div></section> : null}
       {data ? <div className="flex items-center justify-between border-t border-border/60 pt-4"><div><h2 className="font-semibold">ARCHIWUM</h2><p className="mt-1 text-sm text-muted-foreground">Stare i odrzucone rekordy są ukryte w głównym Finderze.</p></div><Button onClick={() => setArchiveOpen((current) => !current)} type="button" variant="outline">{archiveOpen ? "Ukryj archiwum" : "Pokaż archiwum"}</Button></div> : null}
-      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} key={result.id} marketType={data.filter.marketType ?? null} result={result} />)}</div></section> : null}
+      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} key={result.id} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
       <div className="grid gap-4 lg:grid-cols-2">
-        {renderedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} result={result} />)}
+        {renderedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
       </div>
     </section>
   );
@@ -392,18 +392,21 @@ function captureGalleryTrace(
   }
 }
 
-function GalleryRequestButton({ result, traceId: providedTraceId }: { result: FilterResult; traceId?: string }) {
+function GalleryRequestButton({ result, traceId: providedTraceId, onChanged }: { result: FilterResult; traceId?: string; onChanged?: () => void }) {
   const [status, setStatus] = useState<GalleryState>(result.galleryStatus ?? "NOT_REQUESTED");
   const [persisted, setPersistedValue] = useState(result.galleryPersistedCount ?? 0);
   const [total, setTotalValue] = useState(result.galleryTotal ?? 0);
   const [busy, setBusy] = useState(false);
   const inFlightRef = useRef(false);
+  const terminalRefreshRef = useRef<string | null>(null);
+  const onChangedRef = useRef(onChanged);
   const renderProbeSentRef = useRef(false);
   const [localTraceId] = useState(createGalleryTraceId);
   const [instanceId] = useState(createGalleryTraceId);
   const traceId = providedTraceId ?? localTraceId;
   const galleryEligible = result.source === "facebook" && result.lifecycleStatus !== "REJECTED" && result.lifecycleStatus !== "ARCHIVED" && result.lifecycleStatus !== "STALE" && result.manualDecision !== "REJECTED";
   const lifecycleSnapshotRef = useRef({ result, status, traceId, instanceId, galleryEligible });
+  useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
   useEffect(() => {
     const snapshot = lifecycleSnapshotRef.current;
     if (!snapshot.galleryEligible) return;
@@ -433,7 +436,13 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
         const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { cache: "no-store" });
         const payload: unknown = await readJson(response);
         if (cancelled || !response.ok || !payload || typeof payload !== "object") return;
-        if ("status" in payload && isGalleryState(payload.status)) setStatus(payload.status);
+        if ("status" in payload && isGalleryState(payload.status)) {
+          setStatus(payload.status);
+          if ((payload.status === "PARTIAL" || payload.status === "COMPLETE" || payload.status === "FAILED") && terminalRefreshRef.current !== payload.status) {
+            terminalRefreshRef.current = payload.status;
+            void onChangedRef.current?.();
+          }
+        }
         if ("persistedCount" in payload && typeof payload.persistedCount === "number") setPersistedValue(payload.persistedCount);
         if ("total" in payload && typeof payload.total === "number") setTotalValue(payload.total);
       } catch { /* bounded UI refresh; the durable job remains authoritative */ }
@@ -485,7 +494,7 @@ function GalleryRequestButton({ result, traceId: providedTraceId }: { result: Fi
   const handleClickCapture = (event: MouseEvent<HTMLButtonElement>) => {
     captureGalleryTrace("GALLERY_BUTTON_CLICK_CAPTURE", event, result, status, traceId);
   };
-  const label = status === "PENDING" ? "Oczekuje na pobranie galerii" : status === "RUNNING" ? "Pobieranie galerii…" : status === "PARTIAL" ? `Pobrano ${persisted}/${Math.max(total, persisted)} zdjęć` : status === "COMPLETE" ? `Galeria: ${persisted} zdjęć` : status === "FAILED" ? "Ponów pobieranie zdjęć" : "POBIERZ ZDJĘCIA";
+  const label = status === "PENDING" ? "Oczekuje na pobranie galerii" : status === "RUNNING" ? "Pobieranie galerii…" : status === "PARTIAL" ? (total > persisted ? `Pobrano ${persisted}/${total} zdjęć` : `Pobrano ${persisted} zdjęć · pobierz pozostałe`) : status === "COMPLETE" ? `Galeria: ${persisted} zdjęć` : status === "FAILED" ? "Ponów pobieranie zdjęć" : "POBIERZ ZDJĘCIA";
   return <Button aria-label={`${label} dla oferty`} className="min-h-10" data-client-build={CLIENT_BUILD_ID} data-gallery-action="request" data-gallery-instance-id={instanceId} data-gallery-request-button="true" data-gallery-status={status} data-gallery-trace-id={traceId} data-listing-id={result.id} data-post-id={galleryPostId(result) ?? ""} disabled={busy || status === "COMPLETE"} onClick={handleClick} onClickCapture={handleClickCapture} onPointerDownCapture={handlePointerDownCapture} type="button" variant="outline">{busy ? "Zlecanie…" : label}</Button>;
 }
 
@@ -518,7 +527,7 @@ function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChan
   const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, result, result.galleryStatus ?? "NOT_REQUESTED", traceId);
   };
-  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ReviewListingCardContent onChanged={onChanged} result={result} /><GalleryRequestButton result={result} traceId={traceId} /></div>;
+  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ReviewListingCardContent onChanged={onChanged} result={result} /><GalleryRequestButton onChanged={onChanged} result={result} traceId={traceId} /></div>;
 }
 
 function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
@@ -708,6 +717,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           {result.thumbnailUrl ? (
             <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover transition-transform duration-500 group-hover:scale-[1.035]" fill sizes="(max-width: 640px) 100vw, 300px" src={result.thumbnailUrl} />
           ) : <Placeholder />}
+          {result.images.length > 1 ? <span className="absolute right-3 top-3 rounded-full bg-black/75 px-2.5 py-1 text-xs font-semibold text-white">{result.images.length} zdjęć</span> : null}
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
           <div className="absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
             <StatusBadge status={result.listingStatus} />
@@ -794,7 +804,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   );
 }
 
-export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
+export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void }) {
   const [traceId] = useState(createGalleryTraceId);
   const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
@@ -802,7 +812,7 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
   const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
   };
-  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton result={props.result} traceId={traceId} /></div></div>;
+  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div></div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {

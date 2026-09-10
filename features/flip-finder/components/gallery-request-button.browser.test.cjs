@@ -143,6 +143,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   const page = await browser.newPage();
   const traceRequests = [];
   let galleryRequests = 0;
+  let resultsRequests = 0;
   if (throwTraceFetch) {
     await page.addInitScript(() => {
       const realFetch = window.fetch.bind(window);
@@ -171,7 +172,9 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload), status: 200 });
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/results`) {
-      const payload = initialGalleryStatus === result.galleryStatus ? resultsPayload : { ...resultsPayload, reviewResults: [{ ...result, galleryStatus: initialGalleryStatus }] };
+      resultsRequests += 1;
+      const terminalRefresh = resultsRequests > 1 && (galleryStatusResponse === "PARTIAL" || galleryStatusResponse === "COMPLETE" || galleryStatusResponse === "FAILED");
+      const payload = initialGalleryStatus === result.galleryStatus && !terminalRefresh ? resultsPayload : { ...resultsPayload, reviewResults: [{ ...result, galleryStatus: terminalRefresh ? galleryStatusResponse : initialGalleryStatus, galleryPersistedCount: terminalRefresh ? 2 : 0, galleryTotal: terminalRefresh ? 2 : 0, images: terminalRefresh ? ["https://example.com/stored-1.jpg", "https://example.com/stored-2.jpg"] : [], thumbnailUrl: terminalRefresh ? "https://example.com/stored-1.jpg" : null }] };
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(payload), status: 200 });
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
@@ -179,7 +182,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
   const button = page.locator(`[data-gallery-request-button="true"][data-listing-id="${listingId}"]`);
   await button.waitFor({ state: "visible", timeout: 20_000 });
-  return { page, button, traceRequests, galleryRequestCount: () => galleryRequests };
+  return { page, button, traceRequests, galleryRequestCount: () => galleryRequests, resultsRequestCount: () => resultsRequests };
 }
 
 async function sessionStages(page) {
@@ -247,6 +250,13 @@ test("real Flip Finder gallery button keeps business click independent from trac
     const testPage = await preparePage(browser, baseUrl, { initialGalleryStatus: "PENDING", galleryStatusResponse: "FAILED" });
     await testPage.page.waitForFunction(() => document.querySelector('[data-gallery-request-button="true"]')?.dataset.galleryStatus === "FAILED", null, { timeout: 10_000 });
     assert.equal(await testPage.button.isEnabled(), true);
+    await testPage.page.close();
+  });
+
+  await t.test("a terminal gallery state refreshes the listing images without a page reload", async () => {
+    const testPage = await preparePage(browser, baseUrl, { initialGalleryStatus: "PENDING", galleryStatusResponse: "COMPLETE" });
+    await testPage.page.waitForFunction(() => document.querySelector('img[src="https://example.com/stored-1.jpg"]') !== null, null, { timeout: 10_000 });
+    assert.ok(testPage.resultsRequestCount() >= 2, `terminal gallery should refresh results; server output: ${output}`);
     await testPage.page.close();
   });
 });
