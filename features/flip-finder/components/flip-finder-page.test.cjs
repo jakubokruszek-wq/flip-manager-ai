@@ -15,6 +15,8 @@ const galleryTraceNativeMigration = fs.readFileSync(path.join(__dirname, "../../
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
 const galleryRetryMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260907090000_atomic_gallery_retry_enqueue.sql"), "utf8");
 const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
+const historyRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/history/route.ts"), "utf8");
+const historyAuth = fs.readFileSync(path.join(__dirname, "../server/history-clear-auth.ts"), "utf8");
 
 test("normal Flip Finder UI uses the queue scan result funnel", () => {
   assert.match(page, /WYNIK OSTATNIEGO SKANU/);
@@ -36,6 +38,22 @@ test("saved listings database is labeled independently from the latest scan", ()
   assert.match(inlineResults, /BAZA OFERT/);
   assert.match(inlineResults, /Aktywne zapisane oferty:/);
   assert.doesNotMatch(inlineResults, /Znalezione oferty:/);
+});
+
+test("search history can be cleared explicitly without deleting filters or sources", () => {
+  assert.match(inlineResults, /Wyczyść historię wyszukiwania/);
+  assert.match(inlineResults, /window\.confirm\(/);
+  assert.match(inlineResults, /fetch\("\/api\/flip-finder\/history"/);
+  assert.match(inlineResults, /method: "DELETE"/);
+  assert.match(inlineResults, /x-flip-finder-action": "clear-search-history"/);
+  assert.match(historyRoute, /authorizeHistoryClear/);
+  assert.match(historyRoute, /HISTORY_CLEAR_SCAN_ACTIVE/);
+  assert.match(historyRoute, /from\("listings"\)/);
+  assert.match(historyRoute, /\.delete\(\)/);
+  assert.doesNotMatch(historyRoute, /from\("search_filters"\).*delete/);
+  assert.doesNotMatch(historyRoute, /from\("watched_facebook_sources"\).*delete/);
+  assert.match(historyAuth, /same-origin/);
+  assert.match(historyAuth, /clear-search-history/);
 });
 
 test("archive is opt-in and fetched separately from the main finder", () => {

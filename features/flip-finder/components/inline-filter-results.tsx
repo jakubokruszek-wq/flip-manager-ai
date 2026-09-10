@@ -56,6 +56,8 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
   const [source, setSource] = useState<FilterResult["source"] | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const [historyMessage, setHistoryMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => installGalleryNativeCapture(), []);
@@ -78,6 +80,38 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     const timeoutId = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timeoutId);
   }, [load]);
+
+  const clearSearchHistory = async () => {
+    if (clearingHistory) return;
+    const confirmed = window.confirm("Usunąć całą historię znalezionych ofert? Znikną oferty, snapshoty i dopasowania. Filtry oraz źródła pozostaną bez zmian.");
+    if (!confirmed) return;
+
+    setClearingHistory(true);
+    setHistoryMessage(null);
+    try {
+      const response = await fetch("/api/flip-finder/history", {
+        method: "DELETE",
+        headers: { "x-flip-finder-action": "clear-search-history" },
+        credentials: "same-origin",
+      });
+      const payload: unknown = await readJson(response);
+      if (!response.ok) {
+        const fallback = response.status === 409
+          ? "Poczekaj na zakończenie bieżącego skanu i spróbuj ponownie."
+          : "Nie udało się wyczyścić historii wyszukiwania.";
+        throw new Error(readMessage(payload, fallback));
+      }
+      const deleted = isDeletedHistoryResponse(payload) ? payload.deletedListings : 0;
+      setArchiveOpen(false);
+      setQuery("");
+      setHistoryMessage(`Historia wyczyszczona. Usunięto ${deleted} ofert.`);
+      await load();
+    } catch (reason) {
+      setHistoryMessage(reason instanceof Error ? reason.message : "Nie udało się wyczyścić historii wyszukiwania.");
+    } finally {
+      setClearingHistory(false);
+    }
+  };
 
   const allResults = useMemo(() => data?.results ?? [], [data?.results]);
   const filteredResults = useMemo(() => {
@@ -105,6 +139,8 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
   return (
     <section aria-label="Oferty dopasowane do aktywnego filtra" className="space-y-4">
       {data ? <><div className="flex items-center justify-between gap-3"><div><p className="font-semibold">BAZA OFERT</p><p className="mt-1 text-sm text-muted-foreground">Aktywne zapisane oferty: <strong className="text-foreground">{data.total}</strong></p><p className="mt-1 text-xs font-medium text-foreground/80">{activeSourcesSummary(activeSources)}</p></div><button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source ? <span className="size-2 rounded-full bg-primary" /> : null}</button><div className="hidden flex-wrap items-center gap-2 sm:flex"><SourceCount label="Razem" value={data.total} active={source === null} onClick={() => setSource(null)} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => setSource(item)} />)}</div></div><p className="text-xs text-muted-foreground">{latestActiveScansText(data.sourceScans, activeSources)}</p>{historicalSources.length ? <p className="text-xs text-muted-foreground/80">Historyczne wyniki z wyłączonych źródeł: {historicalSources.map((item) => `${sourceLabel(item)} (${sourceCounts[item]})`).join(", ")}</p> : null}{filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><p className="mt-3 text-xs text-muted-foreground">{activeSourcesSummary(activeSources)}</p><div className="mt-5 grid grid-cols-2 gap-2"><SourceCount label="Wszystkie" value={data.total} active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />)}</div></div></div> : null}</> : null}
+      {data ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-3"><p className="text-xs text-muted-foreground">Czyści oferty i ich historię. Nie usuwa filtrów ani źródeł.</p><Button disabled={clearingHistory} onClick={() => void clearSearchHistory()} type="button" variant="outline">{clearingHistory ? "Czyszczenie…" : "Wyczyść historię wyszukiwania"}</Button></div> : null}
+      {historyMessage ? <p className="rounded-lg border border-border/60 p-3 text-sm" role="status">{historyMessage}</p> : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <input
           aria-label="Szukaj ofert"
@@ -882,6 +918,7 @@ function measure(value: number | null, unit: string): string { return typeof val
 function dateTime(value: string): string { const date = new Date(value); return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("pl-PL", { dateStyle: "short", timeStyle: "short" }).format(date); }
 async function readJson(response: Response): Promise<unknown> { try { return await response.json(); } catch { return null; } }
 function readMessage(value: unknown, fallback: string): string { return value !== null && typeof value === "object" && "message" in value && typeof value.message === "string" && value.message.trim() ? value.message : fallback; }
+function isDeletedHistoryResponse(value: unknown): value is { deletedListings: number } { return value !== null && typeof value === "object" && "deletedListings" in value && typeof value.deletedListings === "number"; }
 function isUpdatedPropertyImport(value: unknown): boolean { return value !== null && typeof value === "object" && "status" in value && value.status === "updated"; }
 function isPropertyImportResponse(value: unknown): value is { status: "created" | "updated"; propertyId: string } { return value !== null && typeof value === "object" && "status" in value && (value.status === "created" || value.status === "updated") && "propertyId" in value && typeof value.propertyId === "string" && value.propertyId.trim().length > 0; }
 function isPriceHistoryResponse(value: unknown): value is PriceHistoryResponse { return value !== null && typeof value === "object" && "listingId" in value && typeof value.listingId === "string" && "currentPrice" in value && (value.currentPrice === null || typeof value.currentPrice === "number") && "history" in value && Array.isArray(value.history) && value.history.every((entry) => entry !== null && typeof entry === "object" && "price" in entry && (entry.price === null || typeof entry.price === "number") && "capturedAt" in entry && typeof entry.capturedAt === "string"); }
