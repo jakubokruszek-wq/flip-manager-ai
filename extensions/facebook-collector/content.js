@@ -132,7 +132,7 @@
         if (article?.parentElement?.closest('[role="article"]')) return null;
         return article || exactLinkedGalleryRoot(anchor, expectedGroup, expectedPostId);
       }))].filter(Boolean);
-      let roots = selfLinkRoots.map(galleryRootEvidence).filter((evidence) => evidence.author && evidence.rootText).map((evidence) => evidence.root);
+      let roots = collapseEquivalentGalleryRoots(selfLinkRoots);
       rootBindingSource = roots.length > 0 ? "EXACT_SELF_LINK" : null;
       if (roots.length === 0) {
         const pageRoots = [...document.querySelectorAll('[role="article"]')]
@@ -140,7 +140,7 @@
           .map(galleryRootEvidence)
           .filter((evidence) => evidence.author && evidence.rootText && galleryPageTitleMatchesRootText(evidence.rootText))
           .map((evidence) => evidence.root);
-        roots = [...new Set(pageRoots)];
+        roots = collapseEquivalentGalleryRoots(pageRoots);
         rootBindingSource = roots.length > 0 ? "EXACT_PAGE_TITLE_STORY" : null;
       }
       lastRootCount = roots.length;
@@ -573,6 +573,24 @@
     const words = normalize(rootText).split(" ").filter(Boolean);
     const prefix = words.slice(0, Math.min(8, words.length)).join(" ");
     return prefix.length >= 18 && title.includes(prefix);
+  }
+
+  function collapseEquivalentGalleryRoots(input) {
+    const groups = new Map();
+    for (const root of [...new Set(input || [])]) {
+      const evidence = galleryRootEvidence(root);
+      if (!evidence.author || !evidence.rootText) continue;
+      const signature = `${evidence.author.normalize("NFKC").trim()}\u0000${evidence.rootText.normalize("NFKC").trim()}`;
+      const prior = groups.get(signature) || [];
+      prior.push(root);
+      groups.set(signature, prior);
+    }
+    return [...groups.values()].map((equivalentRoots) => equivalentRoots.sort((left, right) => {
+      const leftMedia = left.querySelectorAll?.('a[href*="/photo/"], a[href*="/photo.php"]')?.length || 0;
+      const rightMedia = right.querySelectorAll?.('a[href*="/photo/"], a[href*="/photo.php"]')?.length || 0;
+      if (leftMedia !== rightMedia) return rightMedia - leftMedia;
+      return (left.querySelectorAll?.("*")?.length || 0) - (right.querySelectorAll?.("*")?.length || 0);
+    })[0]);
   }
 
   function galleryPageSnapshot(exactPath, expectedPostId) {

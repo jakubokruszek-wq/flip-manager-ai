@@ -515,8 +515,10 @@ test("gallery exact-root matcher accepts posts and permalink routes for the exac
   assert.match(content, /exactLinkedGalleryRoot\(anchor, expectedGroup, expectedPostId\)/);
   assert.match(content, /linkedPostIds\.size === 1 && linkedPostIds\.has\(expectedPostId\)/);
   assert.match(content, /galleryPageTitleMatchesRootText\(evidence\.rootText\)/);
+  assert.match(content, /collapseEquivalentGalleryRoots\(selfLinkRoots\)/);
+  assert.match(content, /const signature = `\$\{evidence\.author\.normalize\("NFKC"\)\.trim\(\)\}\\u0000\$\{evidence\.rootText\.normalize\("NFKC"\)\.trim\(\)\}`/);
+  assert.match(content, /if \(leftMedia !== rightMedia\) return rightMedia - leftMedia/);
   assert.match(content, /!article\.parentElement\?\.closest\('\[role="article"\]'\)/);
-  assert.match(content, /selfLinkRoots\.map\(galleryRootEvidence\)/);
   assert.match(content, /galleryStructuredRootEvidence\(networkRecords\.get\(expectedPostId\)/);
   assert.match(content, /galleryScriptStructuredRootEvidence\(expectedPostId, resolvedGroup, expectedGroup, exactPath\)/);
   assert.match(content, /document\.scripts/);
