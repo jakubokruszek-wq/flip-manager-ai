@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   displayMetric,
+  firstSeenLabel,
   parseResultSort,
   publicationLabel,
   resultLocation,
@@ -196,8 +197,8 @@ function ListingResultCard({ result }: { result: FilterResult }) {
               <dd>{publicationLabel(result.publishedAt).replace("Opublikowano: ", "")}</dd>
             </div>
             <div className="flex flex-wrap justify-between gap-x-3">
-              <dt>Pierwsze dopasowanie</dt>
-              <dd>{formatDateTime(result.firstMatchedAt)}</dd>
+              <dt>Data znalezienia</dt>
+              <dd>{firstSeenLabel(result.firstSeenAt).replace("Znaleziono: ", "")}</dd>
             </div>
             <div className="flex flex-wrap justify-between gap-x-3">
               <dt>Ostatnie sprawdzenie</dt>

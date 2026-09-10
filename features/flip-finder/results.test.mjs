@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterResultsByText, publicationLabel, resultLocation, sortResults, sourceDomainMatchesSource, sourceLabelForResult } from "./results.ts";
+import { filterResultsByText, firstSeenLabel, publicationLabel, resultLocation, sortResults, sourceDomainMatchesSource, sourceLabelForResult } from "./results.ts";
 
 const results = [
   result({ id: "olx-baluty", title: "Mieszkanie do remontu przy Wielkopolskiej", district: "Bałuty", city: "Łódź", source: "olx" }),
@@ -40,6 +40,11 @@ test("filters by city and normalizes equivalent Unicode forms", () => {
 test("publication label uses the source publication date", () => {
   assert.match(publicationLabel("2026-08-22T18:42:12.000Z"), /^Opublikowano:/);
   assert.equal(publicationLabel(null), "Data publikacji: nieznana");
+});
+
+test("first seen label uses the first collector observation date", () => {
+  assert.match(firstSeenLabel("2026-08-22T18:42:12.000Z"), /^Znaleziono:/);
+  assert.equal(firstSeenLabel(null), "Znaleziono: brak danych");
 });
 
 test("result location does not repeat the same city or district", () => {

@@ -216,6 +216,11 @@ export function publicationLabel(value: string | null | undefined): string {
   return `Opublikowano: ${new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
 }
 
+export function firstSeenLabel(value: string | null | undefined): string {
+  if (!value || !Number.isFinite(Date.parse(value))) return "Znaleziono: brak danych";
+  return `Znaleziono: ${new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
+}
+
 export function resultLocation(
   address: string | null,
   district: string | null,

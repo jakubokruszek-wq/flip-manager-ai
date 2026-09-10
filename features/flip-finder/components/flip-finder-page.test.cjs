@@ -54,6 +54,8 @@ test("review counter and rendered cards use the same current-filter dataset", ()
 test("review cards expose safe image and persisted source provenance", () => {
   assert.match(inlineResults, /result\.thumbnailUrl \? <SafeImage/);
   assert.match(inlineResults, /sourceLabelForResult\(result\.source\)/);
+  assert.match(inlineResults, /firstSeenLabel\(result\.firstSeenAt\)/);
+  assert.match(inlineResults, /publicationLabel\(result\.publishedAt\)/);
   assert.doesNotMatch(inlineResults, /target="_blank">Facebook <ExternalLink/);
 });
 
