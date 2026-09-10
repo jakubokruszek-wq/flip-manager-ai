@@ -565,6 +565,7 @@ async function collectGalleryHydration(job, requestId) {
   const postId = String(job.galleryPostId || "");
   const sourceUrl = String(job.gallerySourceUrl || "");
   const seedMediaIds = [...new Set((Array.isArray(job.gallerySeedMediaIds) ? job.gallerySeedMediaIds : []).map(String).filter((value) => /^\d{5,30}$/.test(value)))].slice(0, 10);
+  const trustedSeedMediaIds = new Set(seedMediaIds);
   if (!/^\d{5,30}$/.test(postId) || !/^https:\/\/(?:www\.)?facebook\.com\//i.test(sourceUrl)) return { status: "FAILED", error: "FACEBOOK_GALLERY_TARGET_INVALID" };
   let tab = null;
   const deadline = Date.now() + GALLERY_JOB_TIMEOUT_MS;
@@ -615,7 +616,7 @@ async function collectGalleryHydration(job, requestId) {
       const viewerResolvedUrl = String(viewerTab?.url || viewerUrl);
       await waitForContentScript(tab.id, Math.min(6_000, Math.max(1, deadline - Date.now())), { injectImmediately: true });
       const responseResult = await globalThis.FlipCollectorRuntime.sendMessageWithTimeout(
-        () => chrome.tabs.sendMessage(tab.id, { type: "INSPECT_FACEBOOK_GALLERY_VIEWER_MEDIA", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl: viewerResolvedUrl, mediaId, seedRootProvenanceVerified: seedMediaIds.includes(mediaId), imageMode: GALLERY_HYDRATION_MEDIA_MODE, waitMs: Math.min(45_000, Math.max(2_000, deadline - Date.now() - 2_000)) } }),
+        () => chrome.tabs.sendMessage(tab.id, { type: "INSPECT_FACEBOOK_GALLERY_VIEWER_MEDIA", options: { expectedPostId: postId, expectedUrl: sourceUrl, resolvedUrl: viewerResolvedUrl, mediaId, seedRootProvenanceVerified: trustedSeedMediaIds.has(mediaId), imageMode: GALLERY_HYDRATION_MEDIA_MODE, waitMs: Math.min(45_000, Math.max(2_000, deadline - Date.now() - 2_000)) } }),
         { timeoutMs: Math.min(50_000, Math.max(1, deadline - Date.now())), timeoutCode: "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT", diagnostics: { requestId, tabId: tab.id, postId, mediaId } },
       );
       if (!responseResult.response?.ok) return { status: "FAILED", error: String(responseResult.response?.error || "FACEBOOK_GALLERY_VIEWER_FAILED") };
@@ -649,6 +650,21 @@ async function collectGalleryHydration(job, requestId) {
     // root-page shell cannot consume the response window before the proof is
     // attempted. The bounded root-page path remains the safe fallback.
     let result = seedMediaIds.length > 0 ? await hydrateFromViewer(seedMediaIds[0]) : await hydrate(resolvedUrl, resolvedUrl);
+    if (seedMediaIds.length === 0 && result.status === "COMPLETE") {
+      const rootCandidates = Array.isArray(result.gallery?.candidates) ? result.gallery.candidates : [];
+      const exactSeed = rootCandidates.find((candidate) => /^\d{5,30}$/.test(String(candidate?.mediaId || ""))
+        && candidate?.expectedPostId === postId
+        && candidate?.storyRootPostId === postId
+        && candidate?.boundPostId === postId
+        && candidate?.bindingProvenance === "EXACT_ROOT_STORY"
+        && candidate?.rootStoryUnique === true);
+      if (!exactSeed) {
+        return { status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND", gallery: { ...result.gallery, status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND" } };
+      }
+      const discoveredSeedMediaId = String(exactSeed.mediaId);
+      trustedSeedMediaIds.add(discoveredSeedMediaId);
+      result = await hydrateFromViewer(discoveredSeedMediaId);
+    }
     if (result.status === "FAILED" && seedMediaIds.length > 0) {
       const rootResult = await hydrateRootPage();
       if (rootResult.status === "COMPLETE" || result.error === "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT") result = rootResult;

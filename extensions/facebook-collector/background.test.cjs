@@ -511,7 +511,10 @@ test("gallery exact-root matcher accepts posts and permalink routes for the exac
   assert.match(content, /exactPath\.test\(resolved\.pathname\) && exactPath\.test\(current\.pathname\)/);
   assert.match(content, /rootDeadline = Date\.now\(\) \+ 20_000/);
   assert.match(content, /EXACT_SELF_LINK/);
-  assert.match(content, /EXACT_PAGE_SINGLE_ROOT/);
+  assert.match(content, /EXACT_PAGE_TITLE_STORY/);
+  assert.match(content, /exactLinkedGalleryRoot\(anchor, expectedGroup, expectedPostId\)/);
+  assert.match(content, /linkedPostIds\.size === 1 && linkedPostIds\.has\(expectedPostId\)/);
+  assert.match(content, /galleryPageTitleMatchesRootText\(evidence\.rootText\)/);
   assert.match(content, /!article\.parentElement\?\.closest\('\[role="article"\]'\)/);
   assert.match(content, /selfLinkRoots\.map\(galleryRootEvidence\)/);
   assert.match(content, /galleryStructuredRootEvidence\(networkRecords\.get\(expectedPostId\)/);
@@ -546,6 +549,17 @@ test("gallery hydration attempts exact seeded viewer proof before the slower roo
   assert.match(gallery, /const hydrateRootPage = async \(\) =>/);
   assert.match(gallery, /chrome\.tabs\.update\(tab\.id, \{ url: resolvedUrl, active: true \}\)/);
   assert.match(gallery, /const rootResult = await hydrateRootPage\(\)/);
+});
+
+test("gallery hydration upgrades an exact root-page media seed to bounded carousel proof", () => {
+  const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
+  assert.match(gallery, /const trustedSeedMediaIds = new Set\(seedMediaIds\)/);
+  assert.match(gallery, /seedRootProvenanceVerified: trustedSeedMediaIds\.has\(mediaId\)/);
+  assert.match(gallery, /rootCandidates\.find/);
+  assert.match(gallery, /bindingProvenance === "EXACT_ROOT_STORY"/);
+  assert.match(gallery, /trustedSeedMediaIds\.add\(discoveredSeedMediaId\)/);
+  assert.match(gallery, /result = await hydrateFromViewer\(discoveredSeedMediaId\)/);
+  assert.match(gallery, /FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND/);
 });
 
 test("gallery hydration requires bounded carousel coverage instead of treating the structured preview set as complete", () => {

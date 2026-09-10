@@ -130,17 +130,18 @@
         // A timestamp/permalink inside a nested comment can point at the
         // same post. Only the top-level article is eligible as the root card.
         if (article?.parentElement?.closest('[role="article"]')) return null;
-        return article || anchor.closest("[data-pagelet]");
+        return article || exactLinkedGalleryRoot(anchor, expectedGroup, expectedPostId);
       }))].filter(Boolean);
       let roots = selfLinkRoots.map(galleryRootEvidence).filter((evidence) => evidence.author && evidence.rootText).map((evidence) => evidence.root);
-      rootBindingSource = selfLinkRoots.length > 0 ? "EXACT_SELF_LINK" : null;
-      if (selfLinkRoots.length === 0) {
-        roots = [...document.querySelectorAll('[role="article"]')]
+      rootBindingSource = roots.length > 0 ? "EXACT_SELF_LINK" : null;
+      if (roots.length === 0) {
+        const pageRoots = [...document.querySelectorAll('[role="article"]')]
           .filter((article) => !article.parentElement?.closest('[role="article"]') && !isCommentDescendant(article))
           .map(galleryRootEvidence)
-          .filter((evidence) => evidence.author && evidence.rootText)
+          .filter((evidence) => evidence.author && evidence.rootText && galleryPageTitleMatchesRootText(evidence.rootText))
           .map((evidence) => evidence.root);
-        rootBindingSource = roots.length > 0 ? "EXACT_PAGE_SINGLE_ROOT" : null;
+        roots = [...new Set(pageRoots)];
+        rootBindingSource = roots.length > 0 ? "EXACT_PAGE_TITLE_STORY" : null;
       }
       lastRootCount = roots.length;
       if (roots.length > 1) return galleryFailure("FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: roots.length });
@@ -536,6 +537,38 @@
       .filter(Boolean);
     const uniqueRootTexts = [...new Set(rootTexts)];
     return { root, author, rootText: uniqueRootTexts.length === 1 ? uniqueRootTexts[0] : null };
+  }
+
+  // On current Facebook post pages the exact permalink controls can be
+  // rendered beside (rather than inside) the role=article node. Walk only a
+  // small ancestor chain and accept the first container that has one root
+  // author, one root message and no link to a different group post. This is
+  // still an exact self-link proof; the final URL alone is never sufficient.
+  function exactLinkedGalleryRoot(anchor, expectedGroup, expectedPostId) {
+    let candidate = anchor?.parentElement || null;
+    for (let depth = 0; candidate && depth < 12; depth += 1, candidate = candidate.parentElement) {
+      if (candidate === document.body || candidate === document.documentElement || candidate.matches?.('[role="main"]')) break;
+      if (isCommentDescendant(candidate)) continue;
+      const evidence = galleryRootEvidence(candidate);
+      if (!evidence.author || !evidence.rootText) continue;
+      const linkedPostIds = new Set([...candidate.querySelectorAll("a[href]")].flatMap((link) => {
+        try {
+          const url = new URL(link.href);
+          const match = url.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})(?:\/|$)/i);
+          return match && match[1] === expectedGroup ? [match[2]] : [];
+        } catch { return []; }
+      }));
+      if (linkedPostIds.size === 1 && linkedPostIds.has(expectedPostId)) return candidate;
+    }
+    return null;
+  }
+
+  function galleryPageTitleMatchesRootText(rootText) {
+    const normalize = (value) => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    const title = normalize(document.title);
+    const words = normalize(rootText).split(" ").filter(Boolean);
+    const prefix = words.slice(0, Math.min(8, words.length)).join(" ");
+    return prefix.length >= 18 && title.includes(prefix);
   }
 
   function galleryPageSnapshot(exactPath, expectedPostId) {
