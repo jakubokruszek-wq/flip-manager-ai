@@ -571,6 +571,12 @@ test("gallery hydration requires bounded carousel coverage instead of treating t
   assert.match(gallery, /structuredAttachmentCount: mediaIds\.length/);
 });
 
+test("gallery carousel ignores rotating CDN signatures but rejects conflicting explicit media ids", () => {
+  assert.match(content, /frameKey intentionally excludes that volatile query string/);
+  assert.match(content, /prior\?\.mediaId && frame\.mediaId && prior\.mediaId !== frame\.mediaId/);
+  assert.match(content, /seen\.set\(frame\.frameKey, \{ url: frame\.url, mediaId: frame\.mediaId \|\| null \}\)/);
+});
+
 test("every structured gallery proof path requires complete carousel traversal", () => {
   const viewer = content.slice(content.indexOf("async function inspectFacebookGalleryViewerMedia"), content.indexOf("function galleryNetworkProofIsExact"));
   assert.match(viewer, /const finishStructuredProof = async \(proof, diagnostics = \{\}\) =>/);

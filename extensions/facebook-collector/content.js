@@ -306,9 +306,13 @@
       const frame = proofFrame || await waitForGalleryViewerFrame(expectedPostId, previousFrameKey, Math.min(deadline, Date.now() + 8_000), fallbackMediaId);
       if (!frame) return null;
       const prior = seen.get(frame.frameKey);
-      if (prior && prior !== frame.url) return { error: "GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT" };
+      // Facebook refreshes signed CDN query parameters while the carousel is
+      // open. frameKey intentionally excludes that volatile query string, so
+      // a new signed URL for the same CDN path is the same frame, not foreign
+      // media. A conflicting explicit media id remains fail-closed.
+      if (prior?.mediaId && frame.mediaId && prior.mediaId !== frame.mediaId) return { error: "GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT" };
       if (!prior) {
-        seen.set(frame.frameKey, frame.url);
+        seen.set(frame.frameKey, { url: frame.url, mediaId: frame.mediaId || null });
         frames.push(frame);
       }
       return { ...frame, repeated: Boolean(prior) };

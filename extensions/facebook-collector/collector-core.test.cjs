@@ -546,3 +546,17 @@ test("gallery viewer carousel accepts exact pcb frames whose fbid was stripped a
   assert.equal(result.candidates[1].mediaId, null);
   assert.equal(result.candidates[1].boundPostId, postId);
 });
+
+test("gallery carousel treats refreshed signed CDN query parameters as the same exact frame", () => {
+  const postId = "1749121366325600";
+  const seedMediaId = "28459992263624932";
+  const frames = [
+    { mediaId: seedMediaId, setPostId: postId, url: "https://scontent.xx.fbcdn.net/seed.jpg?oe=one&token=old" },
+    { mediaId: "28459993423624816", setPostId: postId, url: "https://scontent.xx.fbcdn.net/second.jpg?oe=one&token=old" },
+    { mediaId: seedMediaId, setPostId: postId, url: "https://scontent.xx.fbcdn.net/seed.jpg?oe=two&token=refreshed" },
+  ];
+  const result = core.resolveGalleryViewerTraversal(frames, postId, seedMediaId, { closedCycle: true });
+  assert.equal(result.status, "VERIFIED");
+  assert.equal(result.candidates.length, 2);
+  assert.deepEqual(result.mediaIds, [seedMediaId, "28459993423624816"]);
+});

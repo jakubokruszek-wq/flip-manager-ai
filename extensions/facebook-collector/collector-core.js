@@ -484,10 +484,10 @@
       if (setPostId !== postId || !urlKey) return unverified("GALLERY_VIEWER_TRAVERSAL_BINDING_INVALID");
       const key = `url:${urlKey}`;
       const previous = byFrameKey.get(key);
-      if (previous && previous !== url) return unverified("GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT");
+      if (previous?.mediaId && mediaId && previous.mediaId !== mediaId) return unverified("GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT");
       const priorMediaUrl = mediaId ? mediaUrls.get(mediaId) : null;
       if (priorMediaUrl && priorMediaUrl !== urlKey) return unverified("GALLERY_VIEWER_TRAVERSAL_MEDIA_CONFLICT");
-      byFrameKey.set(key, { mediaId, url });
+      if (!previous) byFrameKey.set(key, { mediaId, url });
       if (mediaId) mediaUrls.set(mediaId, urlKey);
       seedFound ||= mediaId === seedMediaId;
     }
