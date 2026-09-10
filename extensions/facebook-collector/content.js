@@ -214,53 +214,30 @@
     window.postMessage({ channel: "FLIP_COLLECTOR_GALLERY_CONTEXT", payload: { expectedPostId, expectedUrl: String(options.expectedUrl || "").slice(0, 500), mediaId } }, location.origin);
     const networkAuditKey = `${expectedPostId}:${mediaId}`;
     const deadline = Date.now() + Math.min(45_000, Math.max(2_000, Number(options.waitMs) || 45_000));
-    const networkProof = galleryNetworkProofs.get(networkAuditKey);
-    if (networkProof && galleryNetworkProofIsExact(networkProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
+    const finishStructuredProof = async (proof, diagnostics = {}) => {
       if (options.seedRootProvenanceVerified === true) {
-        const traversal = await inspectExactGalleryCarousel(expectedPostId, mediaId, deadline, networkProof);
+        const traversal = await inspectExactGalleryCarousel(expectedPostId, mediaId, deadline, proof);
         if (traversal.status === "VERIFIED") {
           const traversedIds = new Set(traversal.mediaIds || []);
-          if (!networkProof.mediaIds.every((id) => traversedIds.has(id) || traversal.candidates?.some((candidate) => candidate.mediaId === id))) {
-            return failure("GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH", { ...(traversal.diagnostics || {}), structuredMediaIds: networkProof.mediaIds.slice(0, 50) });
+          if (!proof.mediaIds.every((id) => traversedIds.has(id) || traversal.candidates?.some((candidate) => candidate.mediaId === id))) {
+            return failure("GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH", { ...(traversal.diagnostics || {}), structuredMediaIds: proof.mediaIds.slice(0, 50) });
           }
-          return { ...traversal, permalink: networkProof.permalink, networkProof: true, diagnostics: { ...(traversal.diagnostics || {}), networkProof: true, structuredAttachmentCount: networkProof.mediaIds.length } };
+          return { ...traversal, permalink: proof.permalink, networkProof: proof.networkProof === true, diagnostics: { ...(traversal.diagnostics || {}), ...diagnostics, structuredAttachmentCount: proof.mediaIds.length } };
         }
-        return failure(traversal.error || "GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN", { ...(traversal.diagnostics || {}), networkResponseCount: networkResponses, networkAudit: galleryNetworkAudits.get(networkAuditKey) || null, structuredAttachmentCount: networkProof.mediaIds.length });
+        return failure(traversal.error || "GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN", { ...(traversal.diagnostics || {}), ...diagnostics, networkResponseCount: networkResponses, networkAudit: galleryNetworkAudits.get(networkAuditKey) || null, structuredAttachmentCount: proof.mediaIds.length });
       }
-      return {
-        status: "VERIFIED", expectedPostId, currentMediaId: mediaId, mediaIds: networkProof.mediaIds,
-        permalink: networkProof.permalink, authorFound: true, rootTextFound: true, candidate: networkProof.candidate,
-        networkProof: true, diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), networkProof: true, attachmentCount: networkProof.mediaIds.length },
-      };
+      return { ...proof, status: "VERIFIED", diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), ...diagnostics, attachmentCount: proof.mediaIds.length } };
+    };
+    const networkProof = galleryNetworkProofs.get(networkAuditKey);
+    if (networkProof && galleryNetworkProofIsExact(networkProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
+      return finishStructuredProof({ ...networkProof, networkProof: true }, { networkProof: true });
     }
     const payloadDeadline = Math.min(deadline, Date.now() + 2_000);
     let lastReason = "GALLERY_VIEWER_PAYLOAD_NOT_FOUND";
     do {
       const replayedProof = galleryNetworkProofs.get(networkAuditKey);
       if (replayedProof && galleryNetworkProofIsExact(replayedProof, expectedPostId, mediaId, String(options.expectedUrl || ""), String(options.resolvedUrl || ""))) {
-        if (options.seedRootProvenanceVerified === true) {
-          const traversal = await inspectExactGalleryCarousel(expectedPostId, mediaId, deadline, replayedProof);
-          if (traversal.status === "VERIFIED") {
-            const traversedIds = new Set(traversal.mediaIds || []);
-            if (!replayedProof.mediaIds.every((id) => traversedIds.has(id) || traversal.candidates?.some((candidate) => candidate.mediaId === id))) {
-              return failure("GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH", { ...(traversal.diagnostics || {}), structuredMediaIds: replayedProof.mediaIds.slice(0, 50) });
-            }
-            return { ...traversal, permalink: replayedProof.permalink, networkProof: true, diagnostics: { ...(traversal.diagnostics || {}), networkProof: true, structuredAttachmentCount: replayedProof.mediaIds.length } };
-          }
-          return failure(traversal.error || "GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN", { ...(traversal.diagnostics || {}), networkResponseCount: networkResponses, networkAudit: galleryNetworkAudits.get(networkAuditKey) || null, structuredAttachmentCount: replayedProof.mediaIds.length });
-        }
-        return {
-          status: "VERIFIED",
-          expectedPostId,
-          currentMediaId: mediaId,
-          mediaIds: replayedProof.mediaIds,
-          permalink: replayedProof.permalink,
-          authorFound: true,
-          rootTextFound: true,
-          candidate: replayedProof.candidate,
-          networkProof: true,
-          diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), networkProof: true, attachmentCount: replayedProof.mediaIds.length },
-        };
+        return finishStructuredProof({ ...replayedProof, networkProof: true }, { networkProof: true });
       }
       let bytes = 0;
       for (const script of [...document.scripts].slice(0, 250)) {
@@ -268,7 +245,7 @@
         if (!body || bytes + body.length > 4_000_000) continue;
         bytes += body.length;
         const proof = core.resolveGalleryMediaSetFromText(body, source, expectedPostId, mediaId);
-        if (proof.status === "VERIFIED") return { ...proof, status: "VERIFIED", diagnostics: { elapsedMs: Math.max(0, Date.now() - startedAt), currentPath: safePagePath(location.href), scriptCount: Math.min(250, document.scripts.length), attachmentCount: proof.mediaIds.length } };
+        if (proof.status === "VERIFIED") return finishStructuredProof(proof, { scriptCount: Math.min(250, document.scripts.length) });
         if (proof.reason && proof.reason !== "GALLERY_VIEWER_EXACT_MEDIA_PARENT_NOT_PROVEN") lastReason = proof.reason;
       }
       if (Date.now() < payloadDeadline) await wait(Math.min(250, payloadDeadline - Date.now()));

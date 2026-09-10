@@ -550,22 +550,22 @@ test("gallery hydration attempts exact seeded viewer proof before the slower roo
 
 test("gallery hydration requires bounded carousel coverage instead of treating the structured preview set as complete", () => {
   const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
-  assert.match(content, /inspectExactGalleryCarousel\(expectedPostId, mediaId, deadline, networkProof\)/);
+  assert.match(content, /inspectExactGalleryCarousel\(expectedPostId, mediaId, deadline, proof\)/);
   assert.match(content, /GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH/);
   assert.match(gallery, /first\.traversalComplete === true/);
   assert.match(gallery, /sourceMediaCount: traversedCandidates\.length/);
   assert.match(gallery, /structuredAttachmentCount: mediaIds\.length/);
 });
 
-test("late structured gallery proof still requires complete carousel traversal", () => {
-  const lateProofBranch = content.indexOf("const replayedProof = galleryNetworkProofs.get(networkAuditKey)");
-  const nextPayloadStage = content.indexOf("let bytes = 0", lateProofBranch);
-  assert.ok(lateProofBranch >= 0 && nextPayloadStage > lateProofBranch);
-  const branch = content.slice(lateProofBranch, nextPayloadStage);
-  assert.match(branch, /seedRootProvenanceVerified === true/);
-  assert.match(branch, /inspectExactGalleryCarousel\(expectedPostId, mediaId, deadline, replayedProof\)/);
-  assert.match(branch, /GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH/);
-  assert.match(branch, /GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN/);
+test("every structured gallery proof path requires complete carousel traversal", () => {
+  const viewer = content.slice(content.indexOf("async function inspectFacebookGalleryViewerMedia"), content.indexOf("function galleryNetworkProofIsExact"));
+  assert.match(viewer, /const finishStructuredProof = async \(proof, diagnostics = \{\}\) =>/);
+  assert.match(viewer, /inspectExactGalleryCarousel\(expectedPostId, mediaId, deadline, proof\)/);
+  assert.match(viewer, /return finishStructuredProof\(\{ \.\.\.networkProof, networkProof: true \}, \{ networkProof: true \}\)/);
+  assert.match(viewer, /return finishStructuredProof\(\{ \.\.\.replayedProof, networkProof: true \}, \{ networkProof: true \}\)/);
+  assert.match(viewer, /proof\.status === "VERIFIED"\) return finishStructuredProof\(proof, \{ scriptCount:/);
+  assert.match(viewer, /GALLERY_VIEWER_TRAVERSAL_STRUCTURED_SET_MISMATCH/);
+  assert.match(viewer, /GALLERY_VIEWER_TRAVERSAL_COVERAGE_UNPROVEN/);
 });
 
 test("gallery viewer tolerates Facebook stripping fbid while retaining the exact pcb set", () => {
