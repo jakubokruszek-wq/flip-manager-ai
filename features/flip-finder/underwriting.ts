@@ -20,6 +20,7 @@ export type UnderwritingSettings = {
   minimumROI: number;
   targetNegotiationBufferPercent: number;
   marketResalePerM2: { low: number; base: number; high: number };
+  marketResaleProvenance: "MARKET_ASSUMPTION" | "USER_ASSUMPTION";
 };
 
 export const DEFAULT_UNDERWRITING_SETTINGS: UnderwritingSettings = {
@@ -39,6 +40,7 @@ export const DEFAULT_UNDERWRITING_SETTINGS: UnderwritingSettings = {
   minimumROI: 12,
   targetNegotiationBufferPercent: 5,
   marketResalePerM2: { low: 8_500, base: 9_500, high: 10_500 },
+  marketResaleProvenance: "MARKET_ASSUMPTION",
 };
 
 export type UnderwritingInput = {
@@ -218,7 +220,7 @@ function effectiveResale(input: UnderwritingInput, settings: UnderwritingSetting
   const supplied = input.resalePerM2;
   if (positive(supplied?.base ?? null) !== null) return { low: positive(supplied?.low ?? null) ?? supplied!.base!, base: supplied!.base, high: positive(supplied?.high ?? null) ?? supplied!.base!, provenance: supplied!.provenance, confidence: clamp(supplied!.confidence, 0, 100) };
   const market = settings.marketResalePerM2;
-  if (positive(market.base) !== null) return { ...market, provenance: "MARKET_ASSUMPTION", confidence: 35 };
+  if (positive(market.base) !== null) return { ...market, provenance: settings.marketResaleProvenance, confidence: settings.marketResaleProvenance === "USER_ASSUMPTION" ? 55 : 35 };
   return { low: null, base: null, high: null, provenance: "UNKNOWN", confidence: 0 };
 }
 

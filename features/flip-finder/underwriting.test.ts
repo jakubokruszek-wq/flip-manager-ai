@@ -67,3 +67,8 @@ test("overrides preserve source values externally and change only effective calc
   assert.equal(result.provenance.askingPrice, "USER_ASSUMPTION");
   assert.equal(base.askingPrice, 300_000);
 });
+test("edited market resale is auditable as a user assumption", () => {
+  const result = calculateUnderwriting({ ...base, resalePerM2: undefined }, { ...DEFAULT_UNDERWRITING_SETTINGS, marketResalePerM2: { low: 9_000, base: 10_000, high: 11_000 }, marketResaleProvenance: "USER_ASSUMPTION" });
+  assert.equal(result.provenance.resalePricePerM2, "USER_ASSUMPTION");
+  assert.equal(result.scenarios.base.resalePerM2, 10_000);
+});
