@@ -27,6 +27,8 @@ import {
   type ResultSort,
 } from "@/features/flip-finder/results";
 import { priorityLabel } from "@/features/flip-finder/opportunity-score";
+import { calculateResultUnderwriting, loadUnderwritingSettings, UnderwritingPanel } from "@/features/flip-finder/components/underwriting-panel";
+import { DEFAULT_UNDERWRITING_SETTINGS } from "@/features/flip-finder/underwriting";
 import { activeSourcesSummary, latestActiveScansText, sourceLabel } from "@/features/flip-finder/source-summary";
 import type { SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
@@ -59,8 +61,15 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
   const [clearingHistory, setClearingHistory] = useState(false);
   const [historyMessage, setHistoryMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [underwritingSettings, setUnderwritingSettings] = useState(DEFAULT_UNDERWRITING_SETTINGS);
 
   useEffect(() => installGalleryNativeCapture(), []);
+  useEffect(() => {
+    const refresh = () => setUnderwritingSettings(loadUnderwritingSettings());
+    const timeout = window.setTimeout(refresh, 0);
+    window.addEventListener("flip-underwriting-settings", refresh);
+    return () => { window.clearTimeout(timeout); window.removeEventListener("flip-underwriting-settings", refresh); };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -113,7 +122,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     }
   };
 
-  const allResults = useMemo(() => data?.results ?? [], [data?.results]);
+  const allResults = useMemo(() => (data?.results ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.results, underwritingSettings]);
   const filteredResults = useMemo(() => {
     const textFiltered = filterResultsByText(allResults, query);
     return source ? textFiltered.filter((result) => result.source === source) : textFiltered;
@@ -122,7 +131,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
     () => sortResults(filteredResults, sort),
     [filteredResults, sort],
   );
-  const reviewResults = useMemo(() => data?.reviewResults ?? [], [data?.reviewResults]);
+  const reviewResults = useMemo(() => (data?.reviewResults ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.reviewResults, underwritingSettings]);
   const sortedReviewResults = useMemo(() => sortResults(reviewResults, "opportunity"), [reviewResults]);
   const reviewBuckets = useMemo(() => reviewCounts(sortedReviewResults), [sortedReviewResults]);
   const visibleReviewResults = sortedReviewResults;
@@ -131,6 +140,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
   const activeSources = data?.filter.sources ?? [];
   const historicalSources = (["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
+  const dealOfDay = useMemo(() => selectDealOfDay([...allResults, ...reviewResults]), [allResults, reviewResults]);
 
   if (error) {
     return <p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</p>;
@@ -141,6 +151,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
       {data ? <><div className="flex items-center justify-between gap-3"><div><p className="font-semibold">BAZA OFERT</p><p className="mt-1 text-sm text-muted-foreground">Aktywne zapisane oferty: <strong className="text-foreground">{data.total}</strong></p><p className="mt-1 text-xs font-medium text-foreground/80">{activeSourcesSummary(activeSources)}</p></div><button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source ? <span className="size-2 rounded-full bg-primary" /> : null}</button><div className="hidden flex-wrap items-center gap-2 sm:flex"><SourceCount label="Razem" value={data.total} active={source === null} onClick={() => setSource(null)} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => setSource(item)} />)}</div></div><p className="text-xs text-muted-foreground">{latestActiveScansText(data.sourceScans, activeSources)}</p>{historicalSources.length ? <p className="text-xs text-muted-foreground/80">Historyczne wyniki z wyłączonych źródeł: {historicalSources.map((item) => `${sourceLabel(item)} (${sourceCounts[item]})`).join(", ")}</p> : null}{filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><p className="mt-3 text-xs text-muted-foreground">{activeSourcesSummary(activeSources)}</p><div className="mt-5 grid grid-cols-2 gap-2"><SourceCount label="Wszystkie" value={data.total} active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />)}</div></div></div> : null}</> : null}
       {data ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-3"><p className="text-xs text-muted-foreground">Czyści oferty i ich historię. Nie usuwa filtrów ani źródeł.</p><Button disabled={clearingHistory} onClick={() => void clearSearchHistory()} type="button" variant="outline">{clearingHistory ? "Czyszczenie…" : "Wyczyść historię wyszukiwania"}</Button></div> : null}
       {historyMessage ? <p className="rounded-lg border border-border/60 p-3 text-sm" role="status">{historyMessage}</p> : null}
+      {data ? <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Okazja dnia</p>{dealOfDay ? <div className="mt-2 flex flex-wrap items-end justify-between gap-3"><div><p className="font-bold">{cleanDisplayText(dealOfDay.title) || "Oferta inwestycyjna"}</p><p className="text-sm text-muted-foreground">{dealOfDay.underwriting?.decision} · Flip Score {dealOfDay.underwriting?.flipScore}/100 · zysk bazowy {currency(dealOfDay.underwriting?.profitBase ?? null)}</p></div><span className="text-sm font-semibold">Pewność {dealOfDay.underwriting?.confidenceScore}%</span></div> : <p className="mt-2 text-sm text-muted-foreground">Brak okazji spełniającej dzisiejszy próg.</p>}</section> : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <input
           aria-label="Szukaj ofert"
@@ -553,7 +564,7 @@ function ReviewListingCardContent({ result, onChanged }: { result: FilterResult;
   const title = result.opportunityScore == null ? titleBase : `${titleBase} · ${result.opportunityScore}/100${result.opportunityPriority ? ` ${priorityLabel(result.opportunityPriority)}` : ""}`;
   const location = dedupeLocationText(result.locationText) ?? "Lokalizacja nieznana";
   const missing = friendlyMissingFields((result.opportunityMissingFields ?? result.missingFields ?? []).filter((field) => !(field === "buildingType" && result.buildingType)));
-  return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-lg bg-muted">{result.thumbnailUrl ? <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover" fill sizes="(max-width: 640px) 100vw, 420px" src={result.thumbnailUrl} /> : <Placeholder />}</div><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">{result.opportunityPriority ?? "DO OCENY"}</span></div><OpportunitySummary result={result} /><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><div className="mt-3 space-y-1 text-xs text-muted-foreground"><p>{firstSeenLabel(result.firstSeenAt)}</p><p>{publicationLabel(result.publishedAt)}</p></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}{result.sourceConflict ? " · Źródło wymaga weryfikacji" : ""}</p><div className="mt-3 flex gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">{sourceLabelForResult(result.source)} <ExternalLink className="size-3" /></a> : null}</div></article>;
+  return <article className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4"><div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-lg bg-muted">{result.thumbnailUrl ? <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover" fill sizes="(max-width: 640px) 100vw, 420px" src={result.thumbnailUrl} /> : <Placeholder />}</div><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="rounded-full border border-amber-400/40 px-2 py-1 text-xs font-semibold">{result.underwriting?.decision ?? "DO OCENY"}</span></div><OpportunitySummary result={result} /><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><span>Cena: {result.price == null ? "brak" : `${result.price.toLocaleString("pl-PL")} zł`}</span><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><div className="mt-3 space-y-1 text-xs text-muted-foreground"><p>{firstSeenLabel(result.firstSeenAt)}</p><p>{publicationLabel(result.publishedAt)}</p></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}{result.sourceConflict ? " · Źródło wymaga weryfikacji" : ""}</p><details className="mt-3 rounded-xl border bg-background"><summary className="cursor-pointer px-3 py-2 text-sm font-bold">ANALIZA FLIPA</summary><UnderwritingPanel result={result} /></details><div className="mt-3 flex flex-wrap gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">{sourceLabelForResult(result.source)} <ExternalLink className="size-3" /></a> : null}</div></article>;
 }
 
 function ReviewListingCard({ result, onChanged }: { result: FilterResult; onChanged: () => void }) {
@@ -571,7 +582,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   const [expanded, setExpanded] = useState(false);
   const [crmImporting, setCrmImporting] = useState(false);
   const [crmToast, setCrmToast] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"details" | "calculator" | "analysis" | "price-history" | "market" | "renovation-visualizer">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "underwriting" | "calculator" | "analysis" | "price-history" | "market" | "renovation-visualizer">("details");
   const [priceHistory, setPriceHistory] = useState<PriceHistoryResponse | null>(null);
   const [priceHistoryError, setPriceHistoryError] = useState<string | null>(null);
   const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
@@ -796,13 +807,14 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
         </div>
         <div className="flex snap-x gap-1 overflow-x-auto border-b border-border/70 px-5 py-3 sm:px-8" role="tablist">
           <button aria-selected={activeTab === "details"} className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-2 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${activeTab === "details" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setActiveTab("details")} role="tab" type="button">Informacje</button>
+          <button aria-selected={activeTab === "underwriting"} className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-2 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${activeTab === "underwriting" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setActiveTab("underwriting")} role="tab" type="button">Analiza flipa</button>
           <button aria-selected={activeTab === "calculator"} className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-2 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${activeTab === "calculator" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setActiveTab("calculator")} role="tab" type="button">Kalkulator</button>
           <button aria-selected={activeTab === "analysis"} className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-2 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${activeTab === "analysis" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setActiveTab("analysis")} role="tab" type="button">Analiza AI</button>
           <button aria-selected={activeTab === "market"} className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-2 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${activeTab === "market" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setActiveTab("market")} role="tab" type="button">Rynek</button>
           <button aria-selected={activeTab === "price-history"} className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-2 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${activeTab === "price-history" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setActiveTab("price-history")} role="tab" type="button">Historia ceny</button>
           <button aria-selected={activeTab === "renovation-visualizer"} className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-2 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${activeTab === "renovation-visualizer" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`} onClick={() => setActiveTab("renovation-visualizer")} role="tab" type="button">AI Renovation Studio</button>
         </div>
-        {activeTab === "details" ? <div className="space-y-7 px-5 py-6 sm:px-8 sm:py-8">
+        {activeTab === "underwriting" ? <UnderwritingPanel result={result} /> : activeTab === "details" ? <div className="space-y-7 px-5 py-6 sm:px-8 sm:py-8">
           <div className="grid gap-3 sm:grid-cols-2">
             {result.images.length > 0 ? result.images.map((image, index) => <div className={`relative aspect-[4/3] overflow-hidden rounded-xl bg-muted ${index === 0 ? "sm:col-span-2" : ""}`} key={image}><SafeImage alt={`${title} — zdjęcie ${index + 1}`} fill sizes="(max-width: 640px) 100vw, 50vw" src={image} /></div>) : <div className="flex aspect-[16/9] items-center justify-center rounded-xl bg-muted px-4 text-center text-sm text-muted-foreground sm:col-span-2">Brak zweryfikowanego zdjęcia</div>}
           </div>
@@ -854,7 +866,25 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
 
 function OpportunitySummary({ result }: { result: FilterResult }) {
   if (result.opportunityScore == null && result.expectedArv == null && result.estimatedProfit == null) return null;
-  return <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.05] p-3 text-xs"><Metric label="Opportunity score" value={result.opportunityScore == null ? "Brak" : `${result.opportunityScore}/100`} /><Metric label="Priorytet" value={result.opportunityPriority ?? "Brak"} /><Metric label="ARV" value={currency(result.expectedArv ?? null)} /><Metric label="Potencjalny zysk" value={currency(result.estimatedProfit ?? null)} /><Metric label="ROI" value={result.estimatedRoi == null ? "Brak" : `${result.estimatedRoi}%`} /><Metric label="Pewność ekonomii" value={result.economicsConfidence ?? "Brak"} /><Metric label="Pewność ARV" value={result.arvConfidence ?? "Brak"} /><Metric label="Pewność danych" value={result.dataConfidence ?? "Brak"} /></div>;
+  const enteredRange = result.hasPriceDrop && (result.underwriting?.decision === "GOOD" || result.underwriting?.decision === "HOT");
+  return <div className="mt-3 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.05] p-3 text-xs"><div className="grid grid-cols-2 gap-2"><Metric label="Decyzja" value={result.underwriting?.decision ?? "DO ANALIZY"} /><Metric label="Flip Score" value={result.underwriting ? `${result.underwriting.flipScore}/100` : result.opportunityScore == null ? "Brak" : `${result.opportunityScore}/100`} /><Metric label="Sprzedaż bazowa" value={currency(result.underwriting?.scenarios.base.resaleValue ?? result.expectedArv ?? null)} /><Metric label="Remont" value={currency(result.underwriting?.renovationTotal ?? result.estimatedRenovationCost ?? null)} /><Metric label="Zysk bazowy" value={currency(result.underwriting?.profitBase ?? result.estimatedProfit ?? null)} /><Metric label="Max zakup" value={currency(result.underwriting?.maxPurchasePrice ?? null)} /><Metric label="ROI" value={result.underwriting?.roiBase == null ? "Brak" : `${result.underwriting.roiBase}%`} /><Metric label="Pewność" value={result.underwriting ? `${result.underwriting.confidenceScore}%` : result.dataConfidence ?? "Brak"} /></div>{result.hasPriceDrop && result.priceDropAmount ? <p className="mt-3 border-t border-emerald-500/20 pt-2 font-semibold">Cena spadła o {currency(result.priceDropAmount)}.{enteredRange ? " Oferta weszła w zakres opłacalności." : " Underwriting został przeliczony."}</p> : null}</div>;
+}
+
+function selectDealOfDay(results: FilterResult[]): FilterResult | null {
+  return results.filter((result) => {
+    const analysis = result.underwriting;
+    if (!analysis || result.manualDecision === "REJECTED" || !["ACTIVE", "REVIEW"].includes(result.lifecycleStatus ?? "")) return false;
+    return (analysis.decision === "HOT" || analysis.decision === "GOOD" || (analysis.decision === "REVIEW" && analysis.confidenceScore >= 70 && analysis.flipScore >= 75)) && result.price !== null;
+  }).sort((left, right) => {
+    const a = left.underwriting!; const b = right.underwriting!;
+    return (b.flipScore + b.confidenceScore * 0.2 + (b.profitBase ?? 0) / 10_000) - (a.flipScore + a.confidenceScore * 0.2 + (a.profitBase ?? 0) / 10_000);
+  })[0] ?? null;
+}
+
+function applySettings(result: FilterResult, settings: typeof DEFAULT_UNDERWRITING_SETTINGS): FilterResult {
+  if (!result.underwriting) return result;
+  const underwriting = calculateResultUnderwriting(result, settings);
+  return { ...result, underwriting, opportunityScore: underwriting.flipScore, estimatedProfit: underwriting.profitBase, estimatedRoi: underwriting.roiBase };
 }
 function Placeholder() { return <div className="flex size-full items-center justify-center px-4 text-center text-sm text-muted-foreground">Brak zweryfikowanego zdjęcia</div>; }
 function SafeImage({ alt, className, fill, sizes, src }: { alt: string; className?: string; fill?: boolean; sizes: string; src: string }) {

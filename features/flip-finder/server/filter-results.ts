@@ -423,10 +423,11 @@ function opportunityFields(
   filter: SearchFilter,
   decisionBucket: "MATCHED" | "REVIEW" | "REJECTED",
   comps: ResaleCompRecord[],
-): Pick<FilterResult, "opportunityScore" | "opportunityPriority" | "economicsConfidence" | "arvConfidence" | "dataConfidence" | "compCount" | "conservativeArv" | "expectedArv" | "optimisticArv" | "grossSpread" | "estimatedRenovationCost" | "estimatedProfit" | "estimatedRoi" | "marketDiscountPct" | "opportunityMissingFields"> {
+): Pick<FilterResult, "opportunityScore" | "opportunityPriority" | "economicsConfidence" | "arvConfidence" | "dataConfidence" | "compCount" | "conservativeArv" | "expectedArv" | "optimisticArv" | "grossSpread" | "estimatedRenovationCost" | "estimatedProfit" | "estimatedRoi" | "marketDiscountPct" | "opportunityMissingFields" | "underwriting"> {
   const assessment = calculateOpportunityAssessment({
     id: listing.id,
     source: listing.source,
+    sourceUrl: listing.originalUrl,
     lifecycleStatus: listing.lifecycleStatus,
     decisionBucket,
     manualDecision: listing.manualDecision,
@@ -438,6 +439,8 @@ function opportunityFields(
     district: listing.district,
     address: listing.address,
     buildingType: listing.buildingType,
+    ownership: listing.ownership,
+    galleryAvailable: listing.images.length > 0,
     floor: listing.floor,
     title: listing.title,
     description: listing.description,
@@ -460,6 +463,7 @@ function opportunityFields(
     estimatedRoi: assessment.estimatedRoi,
     marketDiscountPct: assessment.marketDiscountPct,
     opportunityMissingFields: assessment.missingFields,
+    underwriting: assessment.underwriting,
   } : {
     opportunityScore: null,
     opportunityPriority: null,
@@ -476,6 +480,7 @@ function opportunityFields(
     estimatedRoi: null,
     marketDiscountPct: null,
     opportunityMissingFields: [],
+    underwriting: null,
   };
 }
 

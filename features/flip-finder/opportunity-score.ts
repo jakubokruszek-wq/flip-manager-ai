@@ -3,6 +3,7 @@ import { evaluateListingAgainstFilter } from "./filter-evaluation.ts";
 import { ANALYSIS_RULES, renovationScope } from "../ai-analysis/rules.ts";
 import { calculateResaleArv, selectResaleComps, type ResaleArv } from "../market-intelligence/resale-arv.ts";
 import type { ResaleCompRecord } from "../market-intelligence/resale-comps.ts";
+import { calculateUnderwriting, type UnderwritingResult } from "./underwriting.ts";
 
 export const OPPORTUNITY_PRIORITIES = ["TOP", "HIGH", "MEDIUM", "LOW"] as const;
 export type OpportunityPriority = (typeof OPPORTUNITY_PRIORITIES)[number];
@@ -23,6 +24,7 @@ export const OPPORTUNITY_QUALITY_GUARDS = {
 export type OpportunityListingInput = {
   id: string;
   source: string;
+  sourceUrl?: string;
   lifecycleStatus?: string | null;
   decisionBucket?: "MATCHED" | "REVIEW" | "REJECTED";
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -34,6 +36,9 @@ export type OpportunityListingInput = {
   district: string | null;
   address: string | null;
   buildingType: string | null;
+  ownership?: string | null;
+  totalFloors?: string | null;
+  galleryAvailable?: boolean;
   floor: string | null;
   title: string | null;
   description: string | null;
@@ -58,6 +63,7 @@ export type OpportunityAssessment = {
   marketDiscountPct: number | null;
   missingFields: string[];
   calculatedAt: string;
+  underwriting: UnderwritingResult;
 };
 
 /**
@@ -103,24 +109,43 @@ export function calculateOpportunityAssessment(
     marketDiscountPct,
     arvConfidence,
   });
-  const score = scoreOpportunity({
-    input,
-    filter,
-    price,
-    area,
-    pricePerSqm,
-    marketDiscountPct,
-    estimatedProfit,
-    arvConfidence,
-    dataConfidence,
-    comparables,
+  const underwriting = calculateUnderwriting({
+    listingId: input.id,
+    source: input.source,
+    sourceUrl: input.sourceUrl ?? "",
+    lifecycleStatus: input.lifecycleStatus ?? null,
+    decisionBucket: input.decisionBucket ?? "REVIEW",
+    manualDecision: input.manualDecision ?? null,
+    city: input.city,
+    district: input.district,
+    street: input.address,
+    areaM2: input.area,
+    rooms: input.rooms,
+    floor: input.floor,
+    floorsTotal: input.totalFloors ?? null,
+    buildingType: input.buildingType,
+    yearBuilt: null,
+    ownership: input.ownership ?? null,
+    condition: `${input.title ?? ""} ${input.description ?? ""}`,
+    monthlyFee: null,
+    askingPrice: input.price,
+    askingPricePerM2: pricePerSqm,
+    resalePerM2: {
+      low: area && arv.conservativePrice ? arv.conservativePrice / area : null,
+      base: area && arv.expectedPrice ? arv.expectedPrice / area : null,
+      high: area && arv.optimisticPrice ? arv.optimisticPrice / area : null,
+      provenance: "DERIVED",
+      confidence: arvConfidence === "HIGH" ? 90 : arvConfidence === "MEDIUM" ? 65 : 0,
+    },
+    missingFields: input.missingFields,
+    galleryAvailable: input.galleryAvailable ?? false,
   });
 
   return {
-    score,
-    priority: priorityForBusiness(score, {
-      estimatedProfit,
-      estimatedRoi,
+    score: underwriting.flipScore,
+    priority: priorityForBusiness(underwriting.flipScore, {
+      estimatedProfit: underwriting.profitBase,
+      estimatedRoi: underwriting.roiBase,
       marketDiscountPct,
       arvConfidence,
     }),
@@ -132,12 +157,13 @@ export function calculateOpportunityAssessment(
     expectedArv: arv.expectedPrice,
     optimisticArv: arv.optimisticPrice,
     grossSpread: arv.expectedPrice !== null && price !== null ? arv.expectedPrice - price : null,
-    estimatedRenovationCost: renovationCost,
-    estimatedProfit,
-    estimatedRoi,
+    estimatedRenovationCost: underwriting.renovationTotal,
+    estimatedProfit: underwriting.profitBase,
+    estimatedRoi: underwriting.roiBase,
     marketDiscountPct,
     missingFields: missingFields(input),
     calculatedAt: new Date(now).toISOString(),
+    underwriting,
   };
 }
 
@@ -214,7 +240,7 @@ function hasHardFilterViolation(input: OpportunityListingInput, filter: SearchFi
   return decision.bucket === "REJECTED";
 }
 
-function scoreOpportunity(input: {
+export function scoreOpportunity(input: {
   input: OpportunityListingInput;
   filter: SearchFilter;
   price: number | null;

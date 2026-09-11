@@ -1,6 +1,7 @@
 import type { PropertyListingResult } from "@/features/properties/types/property";
 import { dedupeLocationText } from "./display-format.ts";
 import type { OpportunityPriority, OpportunityConfidence } from "./opportunity-score";
+import type { UnderwritingResult } from "./underwriting";
 
 export type ResultSort =
   | "newest"
@@ -40,6 +41,7 @@ export type FilterResult = PropertyListingResult & {
   marketDiscountPct?: number | null;
   opportunityMissingFields?: string[];
   sourceConflict?: boolean;
+  underwriting?: UnderwritingResult | null;
 };
 
 /** Returns the canonical host family expected for a persisted source. */
