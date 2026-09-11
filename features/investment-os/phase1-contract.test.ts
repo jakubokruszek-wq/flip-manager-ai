@@ -11,8 +11,14 @@ test("migration keeps one additive deal per listing with backend-only writes", (
   assert.match(migration, /alter table public\.deals enable row level security/i);
   assert.match(migration, /create table if not exists public\.deal_outcomes/i);
   assert.match(migration, /create table if not exists public\.director_scorecards/i);
+  assert.match(migration, /create table if not exists public\.deal_evidence/i);
+  assert.match(migration, /create table if not exists public\.director_runs/i);
+  assert.match(migration, /create table if not exists public\.director_information_requests/i);
   assert.match(migration, /alter table public\.deal_outcomes enable row level security/i);
   assert.match(migration, /alter table public\.director_scorecards enable row level security/i);
+  assert.match(migration, /alter table public\.deal_evidence enable row level security/i);
+  assert.match(migration, /alter table public\.director_runs enable row level security/i);
+  assert.match(migration, /alter table public\.director_information_requests enable row level security/i);
   assert.match(migration, /revoke all[\s\S]+from anon, authenticated/i);
   assert.match(migration, /grant select, insert, update[\s\S]+to service_role/i);
   assert.match(migration, /revoke all on function public\.set_investment_os_updated_at\(\) from public, anon, authenticated/i);
@@ -23,4 +29,6 @@ test("Investment Desk exposes CEO, directors, provenance-safe overrides and rese
   for (const label of ["CEO", "Zespół inwestycyjny", "Cena ofertowa", "Pierwsza oferta", "Cel zakupu", "Maksimum", "Flip Score", "Confidence", "Deal playbook", "Dissent", "Walk-away", "Reset do źródła"]) assert.match(desk, new RegExp(label));
   assert.match(desk, /x-flip-finder-action/);
   assert.doesNotMatch(desk, /computedProfit|computedScore/);
+  assert.match(desk, /Evidence Fabric i narzędzia/);
+  assert.match(desk, /Najwyższa wartość informacji/);
 });

@@ -4,9 +4,17 @@ export const DIRECTOR_STATUSES = ["NOT_RUN", "READY", "RUNNING", "COMPLETE", "ST
 export type DirectorStatus = (typeof DIRECTOR_STATUSES)[number];
 export type DirectorName = "SCOUT" | "VERIFY" | "MARKET" | "UNDERWRITER" | "CEO";
 export type DealStage = "DISCOVERED" | "VERIFYING" | "VERIFIED" | "MARKET_READY" | "UNDERWRITTEN" | "DECISION_READY" | "ACQUISITION" | "RENOVATION" | "SALE" | "CLOSED";
+export type AnalysisLevel = 0 | 1 | 2 | 3;
 export type EvidenceClass = "FACT" | "ASSUMPTION" | "ESTIMATE" | "PREDICTION" | "USER_OVERRIDE" | "UNKNOWN";
+export type EvidenceSourceType = "OFFICIAL_PRIMARY" | "VERIFIED_STRUCTURED_DATA" | "DIRECT_OBSERVATION" | "MULTIPLE_INDEPENDENT_SOURCES" | "REPUTABLE_SECONDARY" | "USER_PROVIDED" | "AI_INFERENCE" | "UNKNOWN";
+export type ToolClass = "INTERNAL_DATABASE" | "DETERMINISTIC_ENGINE" | "AI_LLM" | "VISION" | "DOCUMENT_ANALYSIS" | "CURRENT_RESEARCH" | "MAP_LOCATION" | "COMPARABLE_ANALYSIS" | "HISTORICAL_MODEL" | "INDEPENDENT_VALIDATOR";
 export type ValidationStatus = "PASS" | "FAIL" | "BLOCKED";
 export type PredictionMetric = { metric: "RESALE_VALUE" | "RENOVATION_COST" | "DURATION_DAYS" | "PROFIT"; value: number; unit: "PLN" | "DAYS"; confidence: number; predictedAt: string };
+export type EvidenceItem = { id: string; dealId: string; type: EvidenceClass; sourceType: EvidenceSourceType; sourceName: string; value: unknown; sourceUrl: string | null; documentId: string | null; observedAt: string | null; validFrom: string | null; validUntil: string | null; reliability: number; confidence: number; directorWhoRequested: DirectorName; verificationStatus: "VERIFIED" | "UNVERIFIED" | "CONFLICT" | "STALE"; conflictsWith: string[] };
+export type ToolPolicyStep = { order: number; tool: ToolClass; purpose: string; minimumLevel: AnalysisLevel; required: boolean };
+export type DirectorExecution = { toolsRequested: ToolClass[]; toolsSucceeded: ToolClass[]; toolsFailed: Array<{ tool: ToolClass; reason: string }>; evidenceCount: number; conflictCount: number; elapsedMs: number };
+export type InformationRequest = { id: string; field: string; question: string; priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"; valueOfInformation: number; decisionImpact: Array<"REJECT" | "HOLD" | "NEGOTIATE" | "BUY">; requestedBy: DirectorName | "RISK" | "LEGAL"; evidenceNeeded: string; status: "OPEN" | "RESOLVED" | "DISMISSED" };
+export type DirectorTrackRecord = { director: DirectorName | "RISK" | "LEGAL"; dealCount: number; medianErrorPercent: number | null; p90ErrorPercent: number | null; confidenceCalibration: string | null; criticalMisses: number; computedAt: string | null };
 
 export type ValidationCheck = { code: string; passed: boolean; detail: string };
 export type ValidationResult = {
@@ -47,6 +55,10 @@ export type DirectorOutput<T> = {
   freshUntil: string | null;
   vetoes: Array<{ code: string; source: DirectorName | "RISK" | "LEGAL"; reason: string }>;
   predictions: PredictionMetric[];
+  toolPolicy: ToolPolicyStep[];
+  execution: DirectorExecution;
+  informationRequests: InformationRequest[];
+  asOf: string;
 };
 
 export type FactValue<T> = {
@@ -96,7 +108,11 @@ export type MarketResult = {
   confidencePenalty: number;
   observedAt: string | null;
   evidenceId: string | null;
+  priceEvidenceType: "ASKING" | "TRANSACTION" | "MIXED" | "USER_ASSUMPTION";
+  comparables: MarketComparableEvidence[];
 };
+
+export type MarketComparableEvidence = { id: string; source: string; sourceUrl: string | null; pricePerM2: number; similarityScore: number; dataQuality: number; freshnessDays: number | null; distanceMeters: number | null; adjustments: string[]; weight: number; outlierReason: string | null; priceEvidenceType: "ASKING" | "TRANSACTION" };
 
 export type CeoResult = {
   decision: "HOT" | "GOOD" | "REVIEW" | "TOO_EXPENSIVE" | "REJECT";
@@ -126,6 +142,10 @@ export type CeoResult = {
   criticalGates: Array<{ fact: string; passed: boolean; reason: string }>;
   humanApprovalRequired: true;
   autonomousPurchaseAllowed: false;
+  nextBestQuestions: InformationRequest[];
+  deepDiveRecommended: boolean;
+  deepDiveReason: string | null;
+  directorTrackRecords: DirectorTrackRecord[];
 };
 
 export type DealPlaybook = {
@@ -149,6 +169,9 @@ export type CanonicalDeal = {
   underwriting: DirectorOutput<UnderwritingResult>;
   ceo: DirectorOutput<CeoResult>;
   playbook: DealPlaybook;
+  evidenceFabric: EvidenceItem[];
+  informationRequests: InformationRequest[];
+  analysisLevel: AnalysisLevel;
   createdAt: string;
   updatedAt: string;
 };
@@ -174,6 +197,8 @@ export type MarketEvidence = {
   confidencePenalty: number;
   observedAt: string | null;
   evidenceId: string | null;
+  priceEvidenceType: "ASKING" | "TRANSACTION" | "MIXED" | "USER_ASSUMPTION";
+  comparables: MarketComparableEvidence[];
 };
 
 export type DealListingInput = {
@@ -194,6 +219,8 @@ export type InvestmentDecisionPolicy = {
   minimumBuyConfidence: number;
   maximumMarketFallbackLevel: number;
   maximumMarketAgeDays: number;
+  minimumMarketComparableCount: number;
+  deepDiveValueThresholdPLN: number;
 };
 
 export const DEFAULT_INVESTMENT_DECISION_POLICY: InvestmentDecisionPolicy = {
@@ -201,6 +228,8 @@ export const DEFAULT_INVESTMENT_DECISION_POLICY: InvestmentDecisionPolicy = {
   minimumBuyConfidence: 80,
   maximumMarketFallbackLevel: 3,
   maximumMarketAgeDays: 90,
+  minimumMarketComparableCount: 3,
+  deepDiveValueThresholdPLN: 400_000,
 };
 
 export type BuildDealInput = {
@@ -212,4 +241,6 @@ export type BuildDealInput = {
   now: string;
   createdAt?: string;
   policy?: InvestmentDecisionPolicy;
+  requestedAnalysisLevel?: AnalysisLevel;
+  directorTrackRecords?: DirectorTrackRecord[];
 };
