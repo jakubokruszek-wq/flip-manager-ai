@@ -2,6 +2,7 @@
 
 importScripts("collector-core.js");
 importScripts("collector-runtime.js");
+importScripts("collector-flow.js");
 importScripts("pairing-status.js");
 importScripts("collector-preflight.js");
 importScripts("image-blocker.js");
@@ -32,6 +33,7 @@ const SEARCH_TILE_RESOLUTION_RESERVE_MS = 8_000;
 const COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000;
 const COLLECT_SOURCE_RESPONSE_GRACE_MS = 20_000;
 const SOURCE_COLLECTION_DEADLINE_MS = 360_000;
+const SOURCE_FINALIZATION_RESERVE_MS = 20_000;
 const FAIL_REPORT_TIMEOUT_MS = 10_000;
 const JOB_LEASE_RENEW_INTERVAL_MS = 60_000;
 const SEARCH_TILE_CONTENT_SCRIPT_READY_TIMEOUT_MS = 3_000;
@@ -206,6 +208,7 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
   const deadline = runtime.createDeadline(SOURCE_COLLECTION_DEADLINE_MS);
   const context = {
     deadline,
+    timeline: globalThis.FlipCollectorFlow.createStageTimeline(),
     lastStage: "FACEBOOK_TAB_CREATE",
     query: null,
     source: selectedSource.sourceId,
@@ -226,14 +229,18 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
     // Facebook does not fully hydrate the exact post card in a hidden tab.
     // Gallery hydration is an explicit user action, so keep only this
     // dedicated tab active while the bounded root/media proof runs.
+    context.timeline.start("TAB_OPEN");
     tab = await chrome.tabs.create({ url: "about:blank", active: true });
+    context.timeline.finish("TAB_OPEN");
     context.sourceTabDiagnostics.primaryTabId = Number.isInteger(tab?.id) ? tab.id : null;
     if (!imagePolicy?.attachTab) throw new Error("SOURCE_SCAN_IMAGE_BLOCKER_UNAVAILABLE");
     await imagePolicy.attachTab(tab.id, { sessionId: scanId, mode: imageMode });
+    context.timeline.start("PAGE_READY");
     await chrome.tabs.update(tab.id, { url: selectedSource.sourceUrl });
     context.lastStage = "FACEBOOK_TAB_LOAD";
     deadline.assertActive(failureDiagnostics(context, tab?.id));
     await waitForTab(tab.id, Math.min(30_000, Math.max(1, deadline.remainingMs())));
+    context.timeline.finish("PAGE_READY");
     deadline.assertActive(failureDiagnostics(context, tab.id));
     return collectTabSource(tab.id, selectedSource.sourceUrl, scanId, requestId, context, selectedSource, imageMode);
   })();
@@ -241,6 +248,7 @@ async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId 
     return await Promise.race([collection, deadline.timeout]);
   } catch (error) {
     const errorCode = collectorErrorCode(error);
+    context.timeline.finish(context.lastStage, "FAIL", errorCode);
     const imageRule = safeImageRuleDiagnostics(error?.diagnostics);
     const diagnostics = { ...failureDiagnostics(context, tab?.id), ...runtime.safeDiagnostics(error?.diagnostics || {}), ...(imageRule ? { imageRule } : {}), errorCode };
     const traceStage = errorCode === "SOURCE_COLLECTION_DEADLINE_EXCEEDED" ? "SOURCE_COLLECTION_TIMEOUT" : "COLLECTOR_START_FAILED";
@@ -332,23 +340,37 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, scanId, startedAt: new Date().toISOString() });
   const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
   updateCollectionContext(collectionContext, "MAIN_FEED", null);
+  collectionContext?.timeline.start("MAIN_FEED_START");
   const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED", imageMode }, { requestId, source: source.sourceId, collectionContext });
+  collectionContext?.timeline.finish("MAIN_FEED_START");
+  collectionContext?.timeline.start("MAIN_FEED_DONE");
+  collectionContext?.timeline.finish("MAIN_FEED_DONE");
   let posts = primary.posts;
   const searchRuns = [];
   const mainFeedIds = new Set(primary.posts.map((post) => post.postId));
   const searchStartedAtMs = Date.now();
   let searchBudgetExhausted = false;
   if (primary.source.sourceType === "GROUP") {
+    collectionContext?.timeline.start("SEARCH_START");
     for (let queryIndex = 0; queryIndex < ACTIVE_SEARCH_QUERIES.length; queryIndex += 1) {
       const query = ACTIVE_SEARCH_QUERIES[queryIndex];
       const queryStartedAtMs = Date.now();
+      const queryStage = `SEARCH_QUERY_${queryIndex + 1}_DONE`;
+      collectionContext?.timeline.start(queryStage);
+      if ((collectionContext?.deadline.remainingMs() ?? Infinity) < SEARCH_LIMITS.discoveryBudgetMs + SEARCH_TILE_RESOLUTION_RESERVE_MS + SEARCH_QUERY_CLEANUP_RESERVE_MS + SOURCE_FINALIZATION_RESERVE_MS) {
+        collectionContext?.timeline.finish(queryStage, "PARTIAL", "SOURCE_DEADLINE_CRITICAL");
+        appendUnexecutedSearchRuns(searchRuns, queryIndex, "SOURCE_DEADLINE_CRITICAL");
+        break;
+      }
       const searchRemaining = SEARCH_LIMITS.hardTimeBudgetMs - (queryStartedAtMs - searchStartedAtMs);
       if (searchRemaining < SEARCH_LIMITS.discoveryBudgetMs + SEARCH_TILE_RESOLUTION_RESERVE_MS + SEARCH_BUDGET_SAFETY_MS) {
+        collectionContext?.timeline.finish(queryStage, "PARTIAL", "SEARCH_GLOBAL_TIME_BUDGET");
         searchBudgetExhausted = true;
         appendUnexecutedSearchRuns(searchRuns, queryIndex, "SEARCH_GLOBAL_TIME_BUDGET");
         break;
       }
       if (posts.length >= PRODUCTION_LIMITS.maxPosts) {
+        collectionContext?.timeline.finish(queryStage, "PARTIAL", "MERGED_MAX_POSTS");
         appendUnexecutedSearchRuns(searchRuns, queryIndex, "MERGED_MAX_POSTS");
         break;
       }
@@ -379,11 +401,16 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
         const mergedSearch = mergePosts([...posts, ...queryPosts]);
         const newUnique = mergedSearch.filter((post) => !beforeIds.has(post.postId));
         searchRuns.push(searchTelemetry({ query, search: { ...search, posts: queryPosts }, tileResolution, mainFeedIds, newUnique, tabLoadDiagnostics, discoveryDurationMs: search.discoveryDurationMs ?? discoveryEndedAtMs - discoveryStartedAtMs, resolutionDurationMs: Date.now() - discoveryEndedAtMs, durationMs: Date.now() - queryStartedAtMs }));
+        collectionContext?.timeline.finish(queryStage, searchRuns.at(-1)?.status === "HEALTHY" ? "PASS" : "PARTIAL", searchRuns.at(-1)?.stopReason || null);
         posts = mergedSearch.slice(0, PRODUCTION_LIMITS.maxPosts);
       } catch (error) {
         const reason = safeError(error);
         searchRuns.push(failedSearchTelemetry(query, Date.now() - queryStartedAtMs, reason, tabLoadDiagnostics));
-        if (reason === "COLLECT_SOURCE_RESPONSE_TIMEOUT" || reason === "SOURCE_COLLECTION_DEADLINE_EXCEEDED") throw error;
+        collectionContext?.timeline.finish(queryStage, "PARTIAL", reason);
+        if (globalThis.FlipCollectorFlow.searchFailureDisposition(reason) === "STOP") {
+          appendUnexecutedSearchRuns(searchRuns, queryIndex + 1, "SOURCE_DEADLINE_CRITICAL");
+          break;
+        }
         if (reason === "SEARCH_GLOBAL_TIME_BUDGET" || Date.now() - searchStartedAtMs >= SEARCH_LIMITS.hardTimeBudgetMs) {
           searchBudgetExhausted = true;
           appendUnexecutedSearchRuns(searchRuns, queryIndex + 1, "SEARCH_GLOBAL_TIME_BUDGET");
@@ -391,6 +418,7 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
         }
       }
     }
+    collectionContext?.timeline.finish("SEARCH_START", searchRuns.every((run) => run.executed && run.status === "HEALTHY") ? "PASS" : "PARTIAL", searchRuns.find((run) => !run.executed || run.status !== "HEALTHY")?.stopReason || null);
     if (Date.now() - searchStartedAtMs < SEARCH_LIMITS.hardTimeBudgetMs) {
       await chrome.tabs.update(tabId, { url: primary.source.sourceUrl });
     }
@@ -415,9 +443,15 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   collectionContext?.deadline.assertActive(failureDiagnostics(collectionContext, tabId));
   const imageNetworkDiagnostics = globalThis.FlipCollectorImagePolicy?.snapshot?.(scanId) || null;
   const sourceTabDiagnostics = collectionContext?.sourceTabDiagnostics || { primaryTabId: tabId, childTabsCreated: 0, postNavigations: 0, mediaNavigations: 0, photoViewerNavigations: 0, inPageParentResolved: 0, structuredParentResolved: 0, unverifiedWithoutNavigation: 0 };
-  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], sourceTabDiagnostics, imageMode, imageNetworkDiagnostics, posts };
+  collectionContext?.timeline.start("RESULT_SERIALIZED");
+  collectionContext?.timeline.finish("RESULT_SERIALIZED");
+  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], sourceTabDiagnostics, stageTelemetry: collectionContext?.timeline.snapshot() || [], imageMode, imageNetworkDiagnostics, posts };
   await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
+  collectionContext?.timeline.start("RESULT_RECEIVED");
   const upload = await uploadBatch(batch);
+  collectionContext?.timeline.finish("RESULT_RECEIVED");
+  collectionContext?.timeline.start("PERSIST_DONE");
+  collectionContext?.timeline.finish("PERSIST_DONE");
   // SEARCH_DATA_FIRST deliberately does not download or mirror media. Keep
   // this counter honest: verified candidates are provenance evidence, not
   // downloaded images. Gallery hydration is an explicit later operation.
@@ -428,7 +462,9 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
 }
 
 async function collectFromTab(tabId, options, traceContext = {}) {
+  if (!options.searchMode) traceContext.collectionContext?.timeline.start("CONTENT_READY");
   await waitForContentScript(tabId);
+  if (!options.searchMode) traceContext.collectionContext?.timeline.finish("CONTENT_READY");
   const runtime = globalThis.FlipCollectorRuntime;
   const collectionContext = traceContext.collectionContext;
   const query = options.searchQuery || "MAIN_FEED";
@@ -902,6 +938,7 @@ function healthAfterSearch(primary, captured, searchTelemetrySummary, durationMs
   const improved = captured > primary.capturedPostCount;
   const reasons = improved ? primary.reasons.filter((reason) => !["COLLECTOR_LOW_CAPTURE_COUNT", "COLLECTOR_LOW_CAPTURE_RATIO", "COLLECTOR_GROWING_FEED_WITHOUT_NEW_IDS"].includes(reason)) : primary.reasons;
   if (searchTelemetrySummary.budgetExhausted) reasons.push("COLLECTOR_SEARCH_GLOBAL_TIME_BUDGET");
+  if (searchTelemetrySummary.queriesExecuted < searchTelemetrySummary.queriesPlanned) reasons.push("COLLECTOR_SEARCH_INCOMPLETE");
   if (searchRuns.some((run) => run.executed && run.status === "FAILED")) reasons.push("COLLECTOR_SEARCH_QUERY_FAILED");
   if (searchRuns.some((run) => run.executed && run.status === "DEGRADED")) reasons.push("COLLECTOR_SEARCH_QUERY_DEGRADED");
   const stopReason = searchTelemetrySummary.budgetExhausted ? "SEARCH_GLOBAL_TIME_BUDGET" : improved ? "SEARCH_FALLBACK_COMPLETED" : primary.stopReason;

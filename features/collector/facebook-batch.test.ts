@@ -12,6 +12,17 @@ test("normalizes a healthy exact-source collector batch and deduplicates posts",
   assert.equal(batch.posts[0]?.media[0]?.exactAssociation, true);
 });
 
+test("keeps only bounded safe collector stage telemetry", () => {
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222",
+    sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-09-11T20:00:00Z",
+    health: { status: "DEGRADED", visibleCardCount: 1, capturedPostCount: 0, scrolls: 3, durationMs: 100, stopReason: "SEARCH_PARTIAL", reasons: [] },
+    stageTelemetry: [{ stage: "SEARCH_QUERY_3_DONE", startedAt: "2026-09-11T20:00:00Z", finishedAt: "2026-09-11T20:00:40Z", elapsedMs: 40_000, status: "PARTIAL", errorCode: "COLLECT_SOURCE_RESPONSE_TIMEOUT", cookie: "must-not-survive" }],
+    posts: [],
+  });
+  assert.deepEqual(batch.stageTelemetry, [{ stage: "SEARCH_QUERY_3_DONE", startedAt: "2026-09-11T20:00:00.000Z", finishedAt: "2026-09-11T20:00:40.000Z", elapsedMs: 40_000, status: "PARTIAL", errorCode: "COLLECT_SOURCE_RESPONSE_TIMEOUT" }]);
+});
+
 test("normalizes bounded per-query search telemetry without affecting post identity", () => {
   const batch = normalizeFacebookCollectorBatch({
     scanId: "11111111-1111-4111-8111-111111111111",

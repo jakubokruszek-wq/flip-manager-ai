@@ -268,6 +268,7 @@ export type CollectorScanFunnel = {
     hardRejectedUnique: number;
   };
   hardRejectReasons: Record<string, number>;
+  stages: Array<{ stage: string; startedAt: string; finishedAt: string | null; elapsedMs: number | null; status: string; errorCode: string | null }>;
 };
 
 export type OpenAICostWindow = {

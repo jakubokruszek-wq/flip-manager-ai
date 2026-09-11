@@ -270,6 +270,14 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
   const mainFeedMatched = matchedPosts.size > 0 ? matchedPosts.size : Math.min(sellProperty, matched);
   const mainFeedReview = reviewPosts.size;
   const hardRejectedUnique = summarizeHardRejects([...decisionByPost].map(([postId, item]) => ({ postId, decision: item.decision === "MATCHED" || item.decision === "REVIEW" || item.decision === "REJECTED" ? item.decision : null }))).unique;
+  const stages = payloads.flatMap((payload) => Array.isArray(payload.stageTelemetry) ? payload.stageTelemetry.map(row).filter((item): item is Row => item !== null) : []).slice(-24).map((item) => ({
+    stage: string(item.stage) ?? "UNKNOWN",
+    startedAt: string(item.startedAt) ?? "",
+    finishedAt: string(item.finishedAt),
+    elapsedMs: typeof item.elapsedMs === "number" ? item.elapsedMs : null,
+    status: string(item.status) ?? "RUNNING",
+    errorCode: string(item.errorCode),
+  }));
   const rejected = hardRejectedUnique;
   const otherExact = Math.max(0, exactFromPayload.length - sellProperty - rent);
   return {
@@ -313,6 +321,7 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
       hardRejectedUnique,
     },
     hardRejectReasons,
+    stages,
   };
 }
 

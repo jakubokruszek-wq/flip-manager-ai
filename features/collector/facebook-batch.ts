@@ -39,6 +39,15 @@ export type CollectorSourceTabDiagnostics = {
   unverifiedWithoutNavigation: number;
 };
 
+export type CollectorStageTelemetry = {
+  stage: string;
+  startedAt: string;
+  finishedAt: string | null;
+  elapsedMs: number | null;
+  status: "RUNNING" | "PASS" | "PARTIAL" | "FAIL";
+  errorCode: string | null;
+};
+
 export type CollectorMediaRecord = {
   url: string;
   mediaId: string | null;
@@ -252,6 +261,7 @@ export type FacebookCollectorBatch = {
   imageMode: CollectorImageMode;
   imageNetworkDiagnostics: CollectorImageNetworkDiagnostics | null;
   sourceTabDiagnostics?: CollectorSourceTabDiagnostics;
+  stageTelemetry?: CollectorStageTelemetry[];
   mainFeedTelemetry?: CollectorMainFeedDiagnostic[];
   posts: CollectorPostRecord[];
 };
@@ -277,9 +287,22 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
     imageMode: imageMode(value.imageMode),
     imageNetworkDiagnostics: normalizeImageNetworkDiagnostics(value.imageNetworkDiagnostics, value.imageMode),
     sourceTabDiagnostics: normalizeSourceTabDiagnostics(value.sourceTabDiagnostics),
+    stageTelemetry: normalizeStageTelemetry(value.stageTelemetry),
     mainFeedTelemetry: normalizeMainFeedTelemetry(value.mainFeedTelemetry),
     posts: deduped,
   };
+}
+
+function normalizeStageTelemetry(value: unknown): CollectorStageTelemetry[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 24).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const stage = nullableString(item.stage, 80);
+    const startedAt = nullableIsoTimestamp(item.startedAt);
+    if (!stage || !startedAt) return [];
+    const status = item.status === "PASS" || item.status === "PARTIAL" || item.status === "FAIL" ? item.status : "RUNNING";
+    return [{ stage, startedAt, finishedAt: nullableIsoTimestamp(item.finishedAt), elapsedMs: Number.isFinite(item.elapsedMs) ? boundedInteger(item.elapsedMs, 0, 600_000) : null, status, errorCode: nullableString(item.errorCode, 120) }];
+  });
 }
 
 function normalizeSourceTabDiagnostics(value: unknown): CollectorSourceTabDiagnostics {
