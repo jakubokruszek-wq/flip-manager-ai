@@ -22,6 +22,7 @@ import {
   type WorkerJobStatus,
 } from "@/features/flip-finder/scan-progress";
 import type { ListingSource } from "@/features/flip-finder";
+import { summarizeHardRejects } from "@/features/flip-finder/funnel-summary";
 
 type Row = Record<string, unknown>;
 const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
@@ -234,7 +235,7 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
   // Per-post persistence diagnostics live in the immutable queue job result;
   // collector_scan_batches intentionally keeps only the aggregate batch result.
   // Read both locations for compatibility with older/manual batch writers.
-  const imageDiagnostics = projectImagePersistenceDiagnostics([
+  const rawPersistenceDiagnostics = [
     ...batchRows.flatMap((batch) => {
       const result = row(batch.result);
       return Array.isArray(result?.persistenceDiagnostics) ? result.persistenceDiagnostics : [];
@@ -243,16 +244,34 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
       const result = row(job.result_summary);
       return Array.isArray(result?.persistenceDiagnostics) ? result.persistenceDiagnostics : [];
     }),
-  ]);
+  ];
+  const imageDiagnostics = projectImagePersistenceDiagnostics(rawPersistenceDiagnostics);
   const imageNetworkDiagnostics = aggregateImageNetworkDiagnostics(payloads);
   const sourceTabDiagnostics = aggregateSourceTabDiagnostics(payloads);
-  const buildingTypeUnverified = countWarningMatches(warnings, /BUILDING(?:_TYPE)?_(?:UNVERIFIED|UNKNOWN)/i);
-  const outsideLodz = countWarningMatches(warnings, /(?:OUTSIDE|LOCATION).*LODZ/i);
-  const tenement = countWarningMatches(warnings, /(?:TENEMENT|KAMIENICA)/i);
-  const duplicate = countWarningMatches(warnings, /DUPLICATE/i);
-  const ageCutoff = posts.filter((post) => isOlderThanCollectorCutoff(string(post.publishedAt), stringFromPayloads(payloads, "collectedAt"))).length;
-  const rejected = Math.max(0, collected - matched);
-  const known = identityUnverified + rent + buildingTypeUnverified + outsideLodz + tenement + duplicate + ageCutoff;
+  const decisionRows = rawPersistenceDiagnostics.map(row).filter((item): item is Row => item !== null);
+  const decisionByPost = new Map<string, Row>();
+  for (const item of decisionRows) {
+    const postId = safeNumericId(item.postId);
+    if (postId && !decisionByPost.has(postId)) decisionByPost.set(postId, item);
+  }
+  const skippedRows = jobRows.flatMap((job) => {
+    const result = row(job.result_summary);
+    return Array.isArray(result?.skippedDiagnostics) ? result.skippedDiagnostics.map(row).filter((item): item is Row => item !== null) : [];
+  });
+  for (const item of skippedRows) {
+    const postId = safeNumericId(item.post_id);
+    if (postId && item.reason_code === "FACEBOOK_PROPERTY_FILTER_REJECTED" && !decisionByPost.has(postId)) {
+      decisionByPost.set(postId, { postId, decision: "REJECTED", decisionReasons: ["property_filter"] });
+    }
+  }
+  const matchedPosts = new Set([...decisionByPost].filter(([, item]) => item.decision === "MATCHED").map(([postId]) => postId));
+  const reviewPosts = new Set([...decisionByPost].filter(([, item]) => item.decision === "REVIEW").map(([postId]) => postId));
+  const hardRejectReasons = summarizeHardRejects([...decisionByPost].map(([postId, item]) => ({ postId, decision: item.decision === "MATCHED" || item.decision === "REVIEW" || item.decision === "REJECTED" ? item.decision : null, decisionReasons: Array.isArray(item.decisionReasons) ? item.decisionReasons.filter((reason): reason is string => typeof reason === "string") : [] }))).reasons;
+  const mainFeedMatched = matchedPosts.size > 0 ? matchedPosts.size : Math.min(sellProperty, matched);
+  const mainFeedReview = reviewPosts.size;
+  const hardRejectedUnique = summarizeHardRejects([...decisionByPost].map(([postId, item]) => ({ postId, decision: item.decision === "MATCHED" || item.decision === "REVIEW" || item.decision === "REJECTED" ? item.decision : null }))).unique;
+  const rejected = hardRejectedUnique;
+  const otherExact = Math.max(0, exactFromPayload.length - sellProperty - rent);
   return {
     collected,
     exact: exactFromPayload.length,
@@ -261,15 +280,15 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
     listingsCreated: sum(facebookScans, "listings_created"),
     listingsUpdated: sum(facebookScans, "listings_updated"),
     rejections: {
-      identityUnverified,
+      identityUnverified: 0,
       searchParentUnverified: search.tilesUnverified,
-      buildingTypeUnverified,
-      rent,
-      ageCutoff,
-      outsideLodz,
-      tenement,
-      duplicate,
-      other: Math.max(0, rejected - known),
+      buildingTypeUnverified: hardRejectReasons.buildingTypeUnverified ?? 0,
+      rent: hardRejectReasons.rent ?? 0,
+      ageCutoff: hardRejectReasons.ageCutoff ?? 0,
+      outsideLodz: hardRejectReasons.outsideLocation ?? 0,
+      tenement: hardRejectReasons.excludedBuildingType ?? 0,
+      duplicate: hardRejectReasons.duplicate ?? 0,
+      other: hardRejectReasons.other ?? 0,
     },
     search: {
       queriesExecuted: search.queriesExecuted,
@@ -282,8 +301,21 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
     imageMode: imageNetworkDiagnostics.imageMode,
     imageNetworkDiagnostics,
     sourceTabDiagnostics,
+    mainFeed: {
+      collected,
+      identityExact: exactFromPayload.length,
+      identityUnverified,
+      sellProperty,
+      rentProperty: rent,
+      otherExact,
+      matched: mainFeedMatched,
+      review: mainFeedReview,
+      hardRejectedUnique,
+    },
+    hardRejectReasons,
   };
 }
+
 
 function aggregateSourceTabDiagnostics(payloads: Row[]): CollectorSourceTabDiagnostics {
   const diagnostics = payloads.map((payload) => row(payload.sourceTabDiagnostics)).filter((value): value is Row => value !== null);
@@ -499,10 +531,6 @@ function safeFacebookPermalink(value: unknown): string | null {
 }
 
 function countWarnings(warnings: string[], pattern: RegExp): number { return warnings.reduce((total, warning) => total + (warning.match(pattern)?.[1] ? Number(warning.match(pattern)![1]) || 0 : 0), 0); }
-function countWarningMatches(warnings: string[], pattern: RegExp): number { return warnings.filter((warning) => pattern.test(warning)).length; }
-function stringFromPayloads(payloads: Row[], key: string): string | null { for (const payload of payloads) { const value = string(payload[key]); if (value) return value; } return null; }
-function isOlderThanCollectorCutoff(publishedAt: string | null, collectedAt: string | null): boolean { const publishedMs = publishedAt ? Date.parse(publishedAt) : Number.NaN; const collectedMs = collectedAt ? Date.parse(collectedAt) : Number.NaN; return Number.isFinite(publishedMs) && Number.isFinite(collectedMs) && collectedMs - publishedMs > 72 * 60 * 60 * 1_000; }
-
 function configuredBudget(): number | null {
   const parsed = Number(process.env.OPENAI_MONTHLY_BUDGET_USD);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;

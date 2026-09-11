@@ -23,6 +23,10 @@ test("normal Flip Finder UI uses the queue scan result funnel", () => {
   assert.match(page, /Zebrane posty/);
   assert.match(page, /Zweryfikowane EXACT/);
   assert.match(page, /SELL_PROPERTY/);
+  assert.match(page, /Odrzucone twardo/);
+  assert.match(page, /Do oceny/);
+  assert.match(page, /hardRejectedUnique/);
+  assert.doesNotMatch(page, /Math\.max\(0, collected - matched\)/);
   assert.match(page, /ODRZUCONE/);
   assert.match(page, /Nowe zapisane oferty/);
   assert.match(page, /Zaktualizowane/);

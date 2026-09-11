@@ -163,7 +163,7 @@ test("projects bounded image persistence diagnostics without secrets or image UR
     exactBoundCandidates: 2, relevanceAccepted: 2, relevanceRejected: 0, imagePersistenceAttempted: true,
     storageUploadAttempted: 2, storageUploadSuccess: 2, storageUploadFailed: 0, storageFailureReason: null,
     imagesBeforeUpdate: 0, imagesAfterUpdate: 2, thumbnailBeforePresent: false, thumbnailAfterPresent: true,
-    imageReasonCode: "NONE", reasonCodes: [],
+    imageReasonCode: "NONE", reasonCodes: [], decisionReasons: [],
   });
   assert.doesNotMatch(JSON.stringify(diagnostic), /leaseToken|workerSecret|normalizedMediaUrl|scontent/);
 });
@@ -177,6 +177,11 @@ test("image persistence diagnostics are capped at fifty records", () => {
   const projected = projectImagePersistenceDiagnostics(values);
   assert.equal(projected.length, 50);
   assert.equal(projected[49].imagesAfterUpdate, 49);
+});
+
+test("decision reasons remain bounded and separate from image reason codes", () => {
+  const [diagnostic] = projectImagePersistenceDiagnostics([{ postId: "1582049850279825", decision: "REJECTED", decisionReasons: ["max_price_per_sqm", "area_max", "unsafe value!" ] }]);
+  assert.deepEqual(diagnostic?.decisionReasons, ["max_price_per_sqm", "area_max"]);
 });
 
 function unit(index: number, status: ScanWorkUnit["status"], source: ScanWorkUnit["source"] = "facebook"): ScanWorkUnit {

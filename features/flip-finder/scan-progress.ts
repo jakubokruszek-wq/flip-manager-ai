@@ -171,6 +171,7 @@ export type CollectorImagePersistenceDiagnostic = {
   thumbnailAfterPresent: boolean;
   imageReasonCode: string;
   reasonCodes: string[];
+  decisionReasons: string[];
 };
 
 export type CollectorImageNetworkDiagnostics = {
@@ -255,6 +256,18 @@ export type CollectorScanFunnel = {
   imageMode: "SOURCE_SCAN_DATA_ONLY" | "GALLERY_HYDRATION_MEDIA_ALLOWED";
   imageNetworkDiagnostics: CollectorImageNetworkDiagnostics;
   sourceTabDiagnostics: CollectorSourceTabDiagnostics;
+  mainFeed: {
+    collected: number;
+    identityExact: number;
+    identityUnverified: number;
+    sellProperty: number;
+    rentProperty: number;
+    otherExact: number;
+    matched: number;
+    review: number;
+    hardRejectedUnique: number;
+  };
+  hardRejectReasons: Record<string, number>;
 };
 
 export type OpenAICostWindow = {
@@ -403,6 +416,9 @@ export function projectImagePersistenceDiagnostics(value: unknown, limit = 50): 
       const reasonCodes = Array.isArray(item.reasonCodes)
         ? item.reasonCodes.filter((reason): reason is string => typeof reason === "string" && /^[A-Z0-9_:-]{1,120}$/.test(reason)).slice(0, 20)
         : [];
+      const decisionReasons = Array.isArray(item.decisionReasons)
+        ? item.decisionReasons.filter((reason): reason is string => typeof reason === "string" && /^[a-z0-9_:-]{1,120}$/i.test(reason)).slice(0, 20)
+        : [];
       return {
         postId: numericId(item.postId),
         listingId: safeUuid(item.listingId),
@@ -426,6 +442,7 @@ export function projectImagePersistenceDiagnostics(value: unknown, limit = 50): 
         thumbnailAfterPresent: typeof item.thumbnailAfterPresent === "boolean" ? item.thumbnailAfterPresent : afterCount > 0,
         imageReasonCode: typeof item.imageReasonCode === "string" ? item.imageReasonCode.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "NONE",
         reasonCodes,
+        decisionReasons,
       };
     });
 }

@@ -63,6 +63,7 @@ export function facebookImagePersistenceDiagnostics(input: {
   existingImages: string[];
   finalListingImages: string[];
   imageProvenance?: FacebookImageProvenanceDiagnostic[];
+  decisionReasons?: string[];
 }) {
   const existing = new Set(input.existingImages);
   const persistedNewImageCount = input.finalListingImages.filter((image) => !existing.has(image)).length;
@@ -113,6 +114,7 @@ export function facebookImagePersistenceDiagnostics(input: {
     persistedImageCount: input.finalListingImages.length,
     imageReasonCode,
     reasonCodes: imageReasonCode === "NONE" ? [] : [imageReasonCode],
+    ...(input.decisionReasons ? { decisionReasons: [...new Set(input.decisionReasons.filter((reason) => /^[a-z0-9_:-]{1,120}$/i.test(reason)))].slice(0, 20) } : {}),
     imageProvenance: input.imageProvenance ?? [],
   };
 }

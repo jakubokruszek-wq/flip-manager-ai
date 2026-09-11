@@ -352,6 +352,7 @@ export type FacebookCompletionResult = {
     persistedImageCount: number;
     imageReasonCode: string;
     reasonCodes: string[];
+    decisionReasons?: string[];
   }>;
   postCache: FacebookPostCacheEntry[];
   ageCache: FacebookAgeCacheEntry[];

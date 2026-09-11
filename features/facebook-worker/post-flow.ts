@@ -34,6 +34,7 @@ export type FacebookPersistenceDiagnostics = {
   persistedImageCount: number;
   imageReasonCode: string;
   reasonCodes: string[];
+  decisionReasons?: string[];
   imageProvenance: FacebookImageProvenanceDiagnostic[];
 };
 
