@@ -1,6 +1,6 @@
 export const UNDERWRITING_DECISIONS = ["HOT", "GOOD", "REVIEW", "TOO_EXPENSIVE", "REJECT"] as const;
 export type UnderwritingDecision = (typeof UNDERWRITING_DECISIONS)[number];
-export type ValueProvenance = "EXTRACTED" | "DERIVED" | "USER_ASSUMPTION" | "MARKET_ASSUMPTION" | "UNKNOWN";
+export type ValueProvenance = "EXTRACTED" | "DERIVED" | "USER_ASSUMPTION" | "MARKET_ASSUMPTION" | "MANUAL_OVERRIDE" | "UNKNOWN";
 export type RenovationMode = "LIGHT" | "STANDARD" | "FULL";
 
 export type UnderwritingSettings = {

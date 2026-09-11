@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { ModulePageShell } from "@/components/shared/module-page-shell";
 import { AlertSettings } from "@/features/alerts/components/alert-settings";
 import { PushSettings } from "@/features/push/components/push-settings";
-import { UnderwritingSettingsPanel } from "@/features/flip-finder/components/underwriting-panel";
+import { InvestmentOsSettings } from "@/features/investment-os/components/investment-settings";
 
 import { FEATURE_TITLE } from "../constants";
 
@@ -12,5 +12,5 @@ export const settingsMetadata: Metadata = {
 };
 
 export function SettingsPage() {
-  return <div className="space-y-6"><ModulePageShell title={FEATURE_TITLE} /><UnderwritingSettingsPanel /><PushSettings /><AlertSettings /></div>;
+  return <div className="space-y-6"><ModulePageShell title={FEATURE_TITLE} /><InvestmentOsSettings /><PushSettings /><AlertSettings /></div>;
 }
