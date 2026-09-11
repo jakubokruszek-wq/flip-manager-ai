@@ -56,8 +56,32 @@ create table if not exists public.underwriting_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.deal_outcomes (
+  deal_id uuid primary key references public.deals(id) on delete cascade,
+  actual_resale_value numeric check (actual_resale_value is null or actual_resale_value >= 0),
+  actual_renovation_cost numeric check (actual_renovation_cost is null or actual_renovation_cost >= 0),
+  actual_duration_days integer check (actual_duration_days is null or actual_duration_days >= 0),
+  actual_profit numeric,
+  risk_misses jsonb not null default '[]'::jsonb check (jsonb_typeof(risk_misses) = 'array'),
+  closed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.director_scorecards (
+  director text primary key check (director in ('SCOUT','VERIFY','MARKET','UNDERWRITER','CEO','RISK','LEGAL')),
+  deal_count integer not null default 0 check (deal_count >= 0),
+  median_error_percent numeric,
+  p90_error_percent numeric,
+  confidence_calibration text,
+  critical_misses integer not null default 0 check (critical_misses >= 0),
+  metrics jsonb not null default '{}'::jsonb check (jsonb_typeof(metrics) = 'object'),
+  computed_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
 insert into public.underwriting_settings(id, version, values)
-values ('default', 1, '{"renovationPerM2":{"LIGHT":1000,"STANDARD":1800,"FULL":2700},"contingencyPercent":10,"purchaseTaxPercent":2,"fixedPurchaseCosts":3500,"purchaseCommissionPercent":0,"holdingMonths":6,"monthlyHoldingCost":1500,"financingEnabled":false,"financingAnnualRatePercent":9,"financingLoanPercent":70,"salesCostPercent":2,"minimumProfitPLN":50000,"minimumMarginPercent":12,"minimumROI":12,"targetNegotiationBufferPercent":5,"marketResalePerM2":{"low":0,"base":0,"high":0},"marketResaleProvenance":"USER_ASSUMPTION"}'::jsonb)
+values ('default', 1, '{"renovationPerM2":{"LIGHT":1000,"STANDARD":1800,"FULL":2700},"contingencyPercent":10,"purchaseTaxPercent":2,"fixedPurchaseCosts":3500,"purchaseCommissionPercent":0,"holdingMonths":6,"monthlyHoldingCost":1500,"financingEnabled":false,"financingAnnualRatePercent":9,"financingLoanPercent":70,"salesCostPercent":2,"minimumProfitPLN":50000,"minimumMarginPercent":12,"minimumROI":12,"targetNegotiationBufferPercent":5,"marketResalePerM2":{"low":0,"base":0,"high":0},"marketResaleProvenance":"USER_ASSUMPTION","decisionPolicy":{"criticalBuyFacts":["identity","askingPrice","areaM2","city","ownership","legalStatus","marketEvidence","renovationScope","economics","riskReview"],"minimumBuyConfidence":80,"maximumMarketFallbackLevel":3,"maximumMarketAgeDays":90}}'::jsonb)
 on conflict (id) do nothing;
 
 create or replace function public.set_investment_os_updated_at()
@@ -73,13 +97,19 @@ drop trigger if exists market_assumptions_set_updated_at on public.market_assump
 create trigger market_assumptions_set_updated_at before update on public.market_assumptions for each row execute function public.set_investment_os_updated_at();
 drop trigger if exists underwriting_settings_set_updated_at on public.underwriting_settings;
 create trigger underwriting_settings_set_updated_at before update on public.underwriting_settings for each row execute function public.set_investment_os_updated_at();
+drop trigger if exists deal_outcomes_set_updated_at on public.deal_outcomes;
+create trigger deal_outcomes_set_updated_at before update on public.deal_outcomes for each row execute function public.set_investment_os_updated_at();
+drop trigger if exists director_scorecards_set_updated_at on public.director_scorecards;
+create trigger director_scorecards_set_updated_at before update on public.director_scorecards for each row execute function public.set_investment_os_updated_at();
 
 alter table public.deals enable row level security;
 alter table public.deal_fact_overrides enable row level security;
 alter table public.market_assumptions enable row level security;
 alter table public.underwriting_settings enable row level security;
+alter table public.deal_outcomes enable row level security;
+alter table public.director_scorecards enable row level security;
 
-revoke all on table public.deals, public.deal_fact_overrides, public.market_assumptions, public.underwriting_settings from anon, authenticated;
-grant select, insert, update on table public.deals, public.deal_fact_overrides, public.market_assumptions, public.underwriting_settings to service_role;
+revoke all on table public.deals, public.deal_fact_overrides, public.market_assumptions, public.underwriting_settings, public.deal_outcomes, public.director_scorecards from anon, authenticated;
+grant select, insert, update on table public.deals, public.deal_fact_overrides, public.market_assumptions, public.underwriting_settings, public.deal_outcomes, public.director_scorecards to service_role;
 
 commit;

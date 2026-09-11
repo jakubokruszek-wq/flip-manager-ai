@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateUnderwriting, DEFAULT_UNDERWRITING_SETTINGS, type UnderwritingInput } from "./underwriting.ts";
+import { calculateUnderwriting, DEFAULT_UNDERWRITING_SETTINGS, validateMaxPurchaseBoundary, type UnderwritingInput } from "./underwriting.ts";
 
 const base: UnderwritingInput = {
   listingId: "real", source: "facebook", sourceUrl: "https://facebook.com/groups/1/posts/2", lifecycleStatus: "ACTIVE", decisionBucket: "MATCHED", manualDecision: null,
@@ -71,4 +71,12 @@ test("edited market resale is auditable as a user assumption", () => {
   const result = calculateUnderwriting({ ...base, resalePerM2: undefined }, { ...DEFAULT_UNDERWRITING_SETTINGS, marketResalePerM2: { low: 9_000, base: 10_000, high: 11_000 }, marketResaleProvenance: "USER_ASSUMPTION" });
   assert.equal(result.provenance.resalePricePerM2, "USER_ASSUMPTION");
   assert.equal(result.scenarios.base.resalePerM2, 10_000);
+});
+
+test("max buy includes ROI and independent boundary validation", () => {
+  const settings = { ...DEFAULT_UNDERWRITING_SETTINGS, renovationPerM2: { ...DEFAULT_UNDERWRITING_SETTINGS.renovationPerM2, FULL: 1_000 }, minimumProfitPLN: 1_000, minimumMarginPercent: 1, minimumROI: 50 };
+  const result = calculateUnderwriting(base, settings);
+  assert.equal(validateMaxPurchaseBoundary(base, settings, result.maxPurchasePrice).status, "PASS");
+  const withoutRoi = calculateUnderwriting(base, { ...settings, minimumROI: 0 });
+  assert.ok(result.maxPurchasePrice! < withoutRoi.maxPurchasePrice!);
 });

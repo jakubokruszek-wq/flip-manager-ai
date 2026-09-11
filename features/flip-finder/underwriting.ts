@@ -117,6 +117,11 @@ export type UnderwritingResult = {
   resaleConfidence: number;
 };
 
+export type MaxPurchaseBoundaryValidation = {
+  status: "PASS" | "FAIL" | "BLOCKED";
+  checks: Array<{ code: string; passed: boolean; detail: string }>;
+};
+
 /** All PLN arithmetic is rounded through integer grosze at every monetary boundary. */
 export function calculateUnderwriting(input: UnderwritingInput, settings: UnderwritingSettings = DEFAULT_UNDERWRITING_SETTINGS): UnderwritingResult {
   const area = positive(input.areaM2);
@@ -205,10 +210,43 @@ function scenario(purchase: number | null, area: number | null, resalePerM2: num
 function maxBuy(area: number | null, resalePerM2: number | null, renovation: number | null, holdingMonths: number, holding: number, additional: number, settings: UnderwritingSettings): number | null {
   if (area === null || resalePerM2 === null || renovation === null) return null;
   const resale = money(area * resalePerM2);
-  const requiredProfit = Math.max(settings.minimumProfitPLN, resale * pct(settings.minimumMarginPercent));
   const fixed = settings.fixedPurchaseCosts + renovation + renovation * pct(settings.contingencyPercent) + holding + additional + resale * pct(settings.salesCostPercent);
   const purchaseFactor = 1 + pct(settings.purchaseTaxPercent + settings.purchaseCommissionPercent) + (settings.financingEnabled ? pct(settings.financingLoanPercent) * pct(settings.financingAnnualRatePercent) * holdingMonths / 12 : 0);
-  return money(Math.max(0, (resale - requiredProfit - fixed) / purchaseFactor));
+  const byProfit = (resale - settings.minimumProfitPLN - fixed) / purchaseFactor;
+  const byMargin = (resale * (1 - pct(settings.minimumMarginPercent)) - fixed) / purchaseFactor;
+  const byRoi = (resale / (1 + pct(settings.minimumROI)) - fixed) / purchaseFactor;
+  return money(Math.max(0, Math.min(byProfit, byMargin, byRoi)));
+}
+
+/** Independent invariant check. It does not trust the director decision or score. */
+export function validateMaxPurchaseBoundary(input: UnderwritingInput, settings: UnderwritingSettings, maxPurchasePrice: number | null): MaxPurchaseBoundaryValidation {
+  const area = positive(input.areaM2);
+  const resale = effectiveResale(input, settings).base;
+  const renovationMode = input.renovationMode ?? inferRenovationMode(input.condition);
+  const renovationPerM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[renovationMode];
+  const renovation = area === null ? null : money(area * renovationPerM2);
+  if (area === null || resale === null || renovation === null || maxPurchasePrice === null) return { status: "BLOCKED", checks: [{ code: "MAX_BUY_INPUTS_PRESENT", passed: false, detail: "Missing area, resale, renovation or max purchase price." }] };
+  const holdingMonths = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
+  const holding = money(holdingMonths * settings.monthlyHoldingCost);
+  const additional = nonnegative(input.additionalCostsOverride) ?? 0;
+  const at = (purchase: number) => {
+    const value = scenario(purchase, area, resale, renovation, holdingMonths, holding, additional, settings);
+    return {
+      profit: value.profit,
+      margin: value.profit !== null && value.resaleValue !== null ? ratio(value.profit, value.resaleValue) : null,
+      roi: value.profit !== null && value.totalProjectCost !== null ? ratio(value.profit, value.totalProjectCost) : null,
+      rawMargin: value.profit !== null && value.resaleValue !== null ? value.profit / value.resaleValue * 100 : null,
+      rawRoi: value.profit !== null && value.totalProjectCost !== null ? value.profit / value.totalProjectCost * 100 : null,
+    };
+  };
+  const below = at(Math.max(0, maxPurchasePrice - 1));
+  const above = at(maxPurchasePrice + 1);
+  const meets = (value: ReturnType<typeof at>) => value.profit !== null && value.profit >= settings.minimumProfitPLN && (value.rawMargin ?? -Infinity) >= settings.minimumMarginPercent && (value.rawRoi ?? -Infinity) >= settings.minimumROI;
+  const checks = [
+    { code: "MAX_BUY_MINUS_ONE_PASSES", passed: meets(below), detail: `profit=${below.profit};margin=${below.margin};roi=${below.roi}` },
+    { code: "MAX_BUY_PLUS_ONE_FAILS", passed: !meets(above), detail: `profit=${above.profit};margin=${above.margin};roi=${above.roi}` },
+  ];
+  return { status: checks.every((check) => check.passed) ? "PASS" : "FAIL", checks };
 }
 
 function purchaseCostsFor(purchase: number, settings: UnderwritingSettings): number { return money(settings.fixedPurchaseCosts + purchase * pct(settings.purchaseTaxPercent + settings.purchaseCommissionPercent)); }

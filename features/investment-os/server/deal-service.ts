@@ -5,13 +5,15 @@ import { calculateResaleArv, selectResaleComps } from "@/features/market-intelli
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
 import { DEFAULT_UNDERWRITING_SETTINGS, type UnderwritingSettings } from "@/features/flip-finder/underwriting";
 import { buildCanonicalDeal, downstreamForChange, fingerprintsEqual } from "../engine";
+import { DEFAULT_INVESTMENT_DECISION_POLICY, type InvestmentDecisionPolicy } from "../types";
 import type { CanonicalDeal, DealFactOverrides, DealListingInput, MarketEvidence } from "../types";
 
 type Row = Record<string, unknown>;
+type InvestmentSettings = UnderwritingSettings & { decisionPolicy: InvestmentDecisionPolicy };
 
 export async function getInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
   const db = createAdminClient();
-  const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images").eq("id", listingId).maybeSingle();
+  const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
   if (error) throw error;
   if (!listing) return null;
   const existing = await db.from("deals").select("*").eq("listing_id", listingId).maybeSingle();
@@ -20,10 +22,12 @@ export async function getInvestmentDeal(listingId: string): Promise<CanonicalDea
   const overridesResult = existing.data ? await db.from("deal_fact_overrides").select("values").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
   if (overridesResult.error) throw overridesResult.error;
   const settings = await loadSettings(db);
-  const listingInput = toListingInput(listing as Row);
+  const { data: latestSnapshot, error: snapshotError } = await db.from("listing_snapshots").select("id,captured_at,price,raw_data").eq("listing_id", listingId).order("captured_at", { ascending: false }).limit(1).maybeSingle();
+  if (snapshotError) throw snapshotError;
+  const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null);
   const market = await resolveMarketEvidence(db, listingInput);
   const now = new Date().toISOString();
-  const deal = buildCanonicalDeal({ dealId, listing: listingInput, overrides: object(overridesResult.data?.values) as DealFactOverrides, market, settings, now, createdAt: text(existing.data?.created_at) ?? undefined });
+  const deal = buildCanonicalDeal({ dealId, listing: listingInput, overrides: object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: text(existing.data?.created_at) ?? undefined });
   const old = existing.data ? toCanonicalDeal(existing.data as Row) : null;
   const settled = old && [old.scout, old.verify, old.market, old.underwriting, old.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
   if (old && settled && fingerprintsEqual(old, deal)) return old;
@@ -96,7 +100,7 @@ export async function saveMarketAssumption(value: unknown): Promise<Row> {
   return data as Row;
 }
 
-async function loadSettings(db: ReturnType<typeof createAdminClient>): Promise<UnderwritingSettings> {
+async function loadSettings(db: ReturnType<typeof createAdminClient>): Promise<InvestmentSettings> {
   const { data, error } = await db.from("underwriting_settings").select("values").eq("id", "default").maybeSingle();
   if (error) throw error;
   return validateSettings(data?.values ?? DEFAULT_UNDERWRITING_SETTINGS);
@@ -108,18 +112,36 @@ async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, l
   const comps = (rows ?? []).map(toComp).filter((item): item is ResaleCompRecord => item !== null);
   const selected = selectResaleComps({ id: listing.id, area: listing.areaM2, rooms: listing.rooms, city: listing.city, district: listing.district, address: listing.street, buildingType: listing.buildingType, floor: listing.floor }, comps);
   const arv = calculateResaleArv({ area: listing.areaM2 }, selected);
-  if (arv.conservativePrice && arv.expectedPrice && arv.optimisticPrice && listing.areaM2) return { id: null, matchedBy: "RESALE_COMPS", low: arv.conservativePrice / listing.areaM2, base: arv.expectedPrice / listing.areaM2, high: arv.optimisticPrice / listing.areaM2, confidence: Math.min(90, 45 + selected.length * 5), provenance: "DERIVED", compCount: selected.length };
+  if (arv.conservativePrice && arv.expectedPrice && arv.optimisticPrice && listing.areaM2) {
+    const observedAt = selected.map((item) => item.lastSeenAt).sort().at(-1) ?? null;
+    return { id: null, matchedBy: "RESALE_COMPS", low: arv.conservativePrice / listing.areaM2, base: arv.expectedPrice / listing.areaM2, high: arv.optimisticPrice / listing.areaM2, confidence: Math.min(90, 45 + selected.length * 5), provenance: "DERIVED", compCount: selected.length, fallbackLevel: 0, fallbackReason: "DIRECT_COMPARABLE_SET", confidencePenalty: 0, observedAt, evidenceId: selected.length ? `resale-comps:${selected.map((item) => item.id).sort().join(",")}` : null };
+  }
   const { data: assumptions, error: assumptionError } = await db.from("market_assumptions").select("*").eq("active", true).eq("city", listing.city ?? "").order("effective_from", { ascending: false });
   if (assumptionError) throw assumptionError;
   const matched = (assumptions ?? []).map((row) => ({ row: row as Row, score: assumptionScore(row as Row, listing) })).filter((item) => item.score >= 0).sort((a, b) => b.score - a.score)[0]?.row;
   if (!matched) return null;
-  return { id: text(matched.id), matchedBy: assumptionMatchLabel(matched), low: number(matched.resale_price_per_m2_low), base: number(matched.resale_price_per_m2_base), high: number(matched.resale_price_per_m2_high), confidence: number(matched.confidence), provenance: matched.provenance === "MARKET_ASSUMPTION" ? "MARKET_ASSUMPTION" : "USER_ASSUMPTION", compCount: 0 };
+  const specificity = assumptionScore(matched, listing);
+  const fallbackLevel = specificity >= 15 ? 1 : specificity >= 9 ? 2 : specificity >= 5 ? 3 : 4;
+  const confidencePenalty = fallbackLevel * 5;
+  return { id: text(matched.id), matchedBy: assumptionMatchLabel(matched), low: number(matched.resale_price_per_m2_low), base: number(matched.resale_price_per_m2_base), high: number(matched.resale_price_per_m2_high), confidence: number(matched.confidence), provenance: matched.provenance === "MARKET_ASSUMPTION" ? "MARKET_ASSUMPTION" : "USER_ASSUMPTION", compCount: 0, fallbackLevel, fallbackReason: fallbackLevel === 1 ? "SPECIFIC_MARKET_ASSUMPTION" : fallbackLevel === 2 ? "DISTRICT_MARKET_FALLBACK" : fallbackLevel === 3 ? "PROPERTY_PROFILE_FALLBACK" : "CITY_ONLY_FALLBACK", confidencePenalty, observedAt: text(matched.effective_from) ?? text(matched.updated_at) ?? null, evidenceId: text(matched.id) };
 }
 
-function toListingInput(row: Row): DealListingInput {
+function toListingInput(row: Row, snapshot: Row | null): DealListingInput {
   const lifecycle = text(row.lifecycle_status); const manual = row.manual_decision === "ACCEPTED" || row.manual_decision === "REJECTED" ? row.manual_decision : null;
   const externalListingId = text(row.external_listing_id); const sourceUrl = text(row.original_url)!; const source = text(row.source)!;
-  return { id: text(row.id)!, source, sourceUrl, externalListingId, lifecycleStatus: lifecycle, decisionBucket: lifecycle === "REJECTED" ? "REJECTED" : lifecycle === "REVIEW" ? "REVIEW" : "MATCHED", manualDecision: manual, city: text(row.city), district: text(row.district), street: text(row.address), areaM2: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: text(row.floor), floorsTotal: null, buildingType: text(row.building_type), yearBuilt: null, ownership: text(row.ownership), condition: text(row.description), monthlyFee: nullableNumber(row.rent), askingPrice: nullableNumber(row.price), askingPricePerM2: nullableNumber(row.price_per_sqm), galleryStatus: text(row.gallery_status), imageCount: Array.isArray(row.images) ? row.images.length : 0, identityExact: source !== "facebook" || exactFacebookUrl(sourceUrl, externalListingId) };
+  const observedAt = text(row.last_seen_at) ?? text(row.updated_at);
+  return { id: text(row.id)!, source, sourceUrl, externalListingId, lifecycleStatus: lifecycle, decisionBucket: lifecycle === "REJECTED" ? "REJECTED" : lifecycle === "REVIEW" ? "REVIEW" : "MATCHED", manualDecision: manual, city: text(row.city), district: text(row.district), street: text(row.address), areaM2: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: text(row.floor), floorsTotal: null, buildingType: text(row.building_type), yearBuilt: null, ownership: text(row.ownership), condition: text(row.description), monthlyFee: nullableNumber(row.rent), askingPrice: nullableNumber(row.price), askingPricePerM2: nullableNumber(row.price_per_sqm), galleryStatus: text(row.gallery_status), imageCount: Array.isArray(row.images) ? row.images.length : 0, identityExact: source !== "facebook" || exactFacebookUrl(sourceUrl, externalListingId), observedAt, conflicts: detectSnapshotConflicts(row, snapshot, observedAt) };
+}
+
+function detectSnapshotConflicts(listing: Row, snapshot: Row | null, observedAt: string | null): DealListingInput["conflicts"] {
+  if (!snapshot || !observedAt || !text(snapshot.captured_at) || Math.abs(Date.parse(observedAt) - Date.parse(text(snapshot.captured_at)!)) > 600_000) return [];
+  const raw = object(snapshot.raw_data); const id = text(snapshot.id) ?? "latest";
+  const candidates: Array<{ field: "askingPrice" | "areaM2" | "rooms"; listingValue: number | null; rawValue: number | null }> = [
+    { field: "askingPrice", listingValue: nullableNumber(listing.price), rawValue: firstNumber(raw, ["price", "askingPrice", "asking_price"]) },
+    { field: "areaM2", listingValue: nullableNumber(listing.area), rawValue: firstNumber(raw, ["area", "areaM2", "area_m2"]) },
+    { field: "rooms", listingValue: nullableNumber(listing.rooms), rawValue: firstNumber(raw, ["rooms", "roomCount", "room_count"]) },
+  ];
+  return candidates.filter((item) => item.listingValue !== null && item.rawValue !== null && Math.abs(item.listingValue - item.rawValue) > 0.01).map((item) => ({ field: item.field, values: [{ value: item.listingValue!, source: "LISTING", observedAt, evidenceId: `listing:${text(listing.id)}:${item.field}` }, { value: item.rawValue!, source: "LATEST_SNAPSHOT_RAW", observedAt: text(snapshot.captured_at), evidenceId: `snapshot:${id}:${item.field}` }] }));
 }
 
 function toComp(row: Row): ResaleCompRecord | null {
@@ -133,7 +155,7 @@ function toComp(row: Row): ResaleCompRecord | null {
 function toDealRow(deal: CanonicalDeal): Row { return { id: deal.id, listing_id: deal.listingId, stage: deal.stage, facts_fingerprint: deal.factsFingerprint, facts: deal.facts, scout: deal.scout, verify: deal.verify, market: deal.market, underwriting: deal.underwriting, ceo: deal.ceo, playbook: deal.playbook, created_at: deal.createdAt, updated_at: deal.updatedAt }; }
 function toCanonicalDeal(row: Row): CanonicalDeal { return { id: text(row.id)!, listingId: text(row.listing_id)!, stage: text(row.stage)! as CanonicalDeal["stage"], factsFingerprint: text(row.facts_fingerprint)!, facts: object(row.facts) as CanonicalDeal["facts"], scout: object(row.scout) as CanonicalDeal["scout"], verify: object(row.verify) as CanonicalDeal["verify"], market: object(row.market) as CanonicalDeal["market"], underwriting: object(row.underwriting) as CanonicalDeal["underwriting"], ceo: object(row.ceo) as CanonicalDeal["ceo"], playbook: object(row.playbook) as CanonicalDeal["playbook"], createdAt: text(row.created_at)!, updatedAt: text(row.updated_at)! }; }
 function sanitizeOverrides(value: DealFactOverrides): DealFactOverrides { const allowed = new Set(["city","district","street","areaM2","rooms","floor","floorsTotal","buildingType","yearBuilt","ownership","condition","monthlyFee","askingPrice","resalePerM2","renovationPerM2","holdingMonths","additionalCosts"]); return Object.fromEntries(Object.entries(value).filter(([key, item]) => allowed.has(key) && (item === null || typeof item === "string" || typeof item === "number") && !(typeof item === "number" && (!Number.isFinite(item) || item < 0)))); }
-function validateSettings(value: unknown): UnderwritingSettings { const v = object(value); const renovation = object(v.renovationPerM2), market = object(v.marketResalePerM2); const result: UnderwritingSettings = { ...DEFAULT_UNDERWRITING_SETTINGS, ...v, renovationPerM2: { LIGHT: nonnegative(renovation.LIGHT), STANDARD: nonnegative(renovation.STANDARD), FULL: nonnegative(renovation.FULL) }, marketResalePerM2: { low: nonnegative(market.low), base: nonnegative(market.base), high: nonnegative(market.high) }, marketResaleProvenance: "USER_ASSUMPTION" } as UnderwritingSettings; for (const key of ["contingencyPercent","purchaseTaxPercent","purchaseCommissionPercent","salesCostPercent","financingAnnualRatePercent","financingLoanPercent","minimumMarginPercent","minimumROI","targetNegotiationBufferPercent"] as const) if (result[key] < 0 || result[key] > 100) throw new Error(`INVALID_SETTING_${key}`); return result; }
+function validateSettings(value: unknown): InvestmentSettings { const v = object(value); const renovation = object(v.renovationPerM2), market = object(v.marketResalePerM2), policy = object(v.decisionPolicy); const critical = Array.isArray(policy.criticalBuyFacts) ? policy.criticalBuyFacts.filter((item): item is InvestmentDecisionPolicy["criticalBuyFacts"][number] => typeof item === "string" && DEFAULT_INVESTMENT_DECISION_POLICY.criticalBuyFacts.includes(item as InvestmentDecisionPolicy["criticalBuyFacts"][number])) : DEFAULT_INVESTMENT_DECISION_POLICY.criticalBuyFacts; const decisionPolicy: InvestmentDecisionPolicy = { criticalBuyFacts: critical.length ? [...new Set(critical)] : DEFAULT_INVESTMENT_DECISION_POLICY.criticalBuyFacts, minimumBuyConfidence: bounded(policy.minimumBuyConfidence, DEFAULT_INVESTMENT_DECISION_POLICY.minimumBuyConfidence, 0, 100), maximumMarketFallbackLevel: bounded(policy.maximumMarketFallbackLevel, DEFAULT_INVESTMENT_DECISION_POLICY.maximumMarketFallbackLevel, 0, 4), maximumMarketAgeDays: bounded(policy.maximumMarketAgeDays, DEFAULT_INVESTMENT_DECISION_POLICY.maximumMarketAgeDays, 1, 365) }; const result: InvestmentSettings = { ...DEFAULT_UNDERWRITING_SETTINGS, ...v, renovationPerM2: { LIGHT: nonnegative(renovation.LIGHT), STANDARD: nonnegative(renovation.STANDARD), FULL: nonnegative(renovation.FULL) }, marketResalePerM2: { low: nonnegative(market.low), base: nonnegative(market.base), high: nonnegative(market.high) }, marketResaleProvenance: "USER_ASSUMPTION", decisionPolicy } as InvestmentSettings; for (const key of ["contingencyPercent","purchaseTaxPercent","purchaseCommissionPercent","salesCostPercent","financingAnnualRatePercent","financingLoanPercent","minimumMarginPercent","minimumROI","targetNegotiationBufferPercent"] as const) if (result[key] < 0 || result[key] > 100) throw new Error(`INVALID_SETTING_${key}`); return result; }
 function validateAssumption(value: unknown): Row { const v = object(value); const city = text(v.city); const low = positive(v.low), base = positive(v.base), high = positive(v.high), confidence = number(v.confidence); if (!city || !low || !base || !high || low > base || base > high || confidence < 0 || confidence > 100) throw new Error("INVALID_MARKET_ASSUMPTION"); return { city: city.slice(0, 100), district: text(v.district)?.slice(0, 100) ?? null, building_type: text(v.buildingType)?.slice(0, 100) ?? null, area_min: nullableNumber(v.areaMin), area_max: nullableNumber(v.areaMax), rooms: nullableNumber(v.rooms), resale_price_per_m2_low: low, resale_price_per_m2_base: base, resale_price_per_m2_high: high, confidence, provenance: "USER_ASSUMPTION", active: true }; }
 function assumptionScore(row: Row, listing: DealListingInput): number { let score = 1; if (!same(text(row.city), listing.city)) return -1; if (row.district && !same(text(row.district), listing.district)) return -1; if (row.district) score += 8; if (row.building_type && !same(text(row.building_type), listing.buildingType)) return -1; if (row.building_type) score += 4; if (row.rooms != null && number(row.rooms) !== listing.rooms) return -1; if (row.rooms != null) score += 2; const area = listing.areaM2; if ((row.area_min != null || row.area_max != null) && (area == null || (row.area_min != null && area < number(row.area_min)) || (row.area_max != null && area > number(row.area_max)))) return -1; if (row.area_min != null || row.area_max != null) score += 3; return score; }
 function assumptionMatchLabel(row: Row): string { return [row.city, row.district, row.building_type, row.area_min != null || row.area_max != null ? `${row.area_min ?? "*"}-${row.area_max ?? "*"}m2` : null, row.rooms != null ? `${row.rooms} rooms` : null].filter(Boolean).join(" + "); }
@@ -142,9 +164,11 @@ function same(a: string | null, b: string | null): boolean { return Boolean(a &&
 function normalize(v: string): string { return v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim(); }
 function exactFacebookUrl(url: string, postId: string | null): boolean { if (!postId || !/^\d+$/.test(postId)) return false; try { const parsed = new URL(url); return /(^|\.)facebook\.com$/i.test(parsed.hostname) && new RegExp(`/(?:posts|permalink)/${postId}(?:/|$)`).test(parsed.pathname); } catch { return false; } }
 function object(value: unknown): Row { return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {}; }
+function firstNumber(row: Row, keys: string[]): number | null { for (const key of keys) { const value = nullableNumber(row[key]); if (value !== null) return value; } return null; }
 function text(value: unknown): string | null { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function number(value: unknown): number { return typeof value === "number" && Number.isFinite(value) ? value : 0; }
 function nullableNumber(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
 function positive(value: unknown): number | null { const v = number(value); return v > 0 ? v : null; }
 function nonnegative(value: unknown): number { const v = number(value); if (v < 0) throw new Error("INVALID_NONNEGATIVE_SETTING"); return v; }
+function bounded(value: unknown, fallback: number, min: number, max: number): number { const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback; if (parsed < min || parsed > max) throw new Error("INVALID_DECISION_POLICY"); return parsed; }
 function bool(value: unknown): boolean | null { return value === true ? true : value === false ? false : null; }

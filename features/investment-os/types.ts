@@ -4,8 +4,22 @@ export const DIRECTOR_STATUSES = ["NOT_RUN", "READY", "RUNNING", "COMPLETE", "ST
 export type DirectorStatus = (typeof DIRECTOR_STATUSES)[number];
 export type DirectorName = "SCOUT" | "VERIFY" | "MARKET" | "UNDERWRITER" | "CEO";
 export type DealStage = "DISCOVERED" | "VERIFYING" | "VERIFIED" | "MARKET_READY" | "UNDERWRITTEN" | "DECISION_READY" | "ACQUISITION" | "RENOVATION" | "SALE" | "CLOSED";
+export type EvidenceClass = "FACT" | "ASSUMPTION" | "ESTIMATE" | "PREDICTION" | "USER_OVERRIDE" | "UNKNOWN";
+export type ValidationStatus = "PASS" | "FAIL" | "BLOCKED";
+export type PredictionMetric = { metric: "RESALE_VALUE" | "RENOVATION_COST" | "DURATION_DAYS" | "PROFIT"; value: number; unit: "PLN" | "DAYS"; confidence: number; predictedAt: string };
 
-export type ProvenanceEntry = { field: string; provenance: ValueProvenance; sourceId?: string | null };
+export type ValidationCheck = { code: string; passed: boolean; detail: string };
+export type ValidationResult = {
+  status: ValidationStatus;
+  validator: "INDEPENDENT_RULE_VALIDATOR";
+  version: number;
+  inputFingerprint: string;
+  checkedAt: string;
+  checks: ValidationCheck[];
+  reasonCodes: string[];
+};
+
+export type ProvenanceEntry = { field: string; provenance: ValueProvenance; classification?: EvidenceClass; sourceId?: string | null; observedAt?: string | null; evidenceId?: string | null; assumptionId?: string | null };
 export type DirectorOutput<T> = {
   director: DirectorName;
   status: DirectorStatus;
@@ -26,6 +40,13 @@ export type DirectorOutput<T> = {
   nextBestActions: string[];
   decisionTriggers: string[];
   whatWouldChangeMyMind: string[];
+  validation: ValidationResult;
+  fallbackLevel: number;
+  fallbackReason: string | null;
+  confidencePenalty: number;
+  freshUntil: string | null;
+  vetoes: Array<{ code: string; source: DirectorName | "RISK" | "LEGAL"; reason: string }>;
+  predictions: PredictionMetric[];
 };
 
 export type FactValue<T> = {
@@ -34,7 +55,14 @@ export type FactValue<T> = {
   effectiveValue: T | null;
   provenance: ValueProvenance;
   confidence: number;
+  classification: EvidenceClass;
+  source: string;
+  observedAt: string | null;
+  evidenceId: string | null;
+  assumptionId: string | null;
 };
+
+export type FactConflict = { field: keyof DealFacts; values: Array<{ value: string | number; source: string; observedAt: string | null; evidenceId: string }> };
 
 export type DealFacts = {
   city: FactValue<string>; district: FactValue<string>; street: FactValue<string>;
@@ -63,6 +91,11 @@ export type MarketResult = {
   assumptionMatchedBy: string;
   assumptionId: string | null;
   compCount: number;
+  fallbackLevel: number;
+  fallbackReason: string | null;
+  confidencePenalty: number;
+  observedAt: string | null;
+  evidenceId: string | null;
 };
 
 export type CeoResult = {
@@ -89,6 +122,10 @@ export type CeoResult = {
   conditionsToProceed: string[];
   walkAwayConditions: string[];
   nextBestAction: string;
+  redTeam: Array<{ risk: "RESALE_DOWNSIDE" | "RENOVATION_OVERRUN" | "HOLDING_DELAY" | "LIQUIDITY" | "LEGAL" | "MISSING_DATA" | "SENSITIVITY"; finding: string; severity: "LOW" | "MEDIUM" | "HIGH" }>;
+  criticalGates: Array<{ fact: string; passed: boolean; reason: string }>;
+  humanApprovalRequired: true;
+  autonomousPurchaseAllowed: false;
 };
 
 export type DealPlaybook = {
@@ -132,6 +169,11 @@ export type MarketEvidence = {
   confidence: number;
   provenance: "DERIVED" | "USER_ASSUMPTION" | "MARKET_ASSUMPTION";
   compCount: number;
+  fallbackLevel: number;
+  fallbackReason: string | null;
+  confidencePenalty: number;
+  observedAt: string | null;
+  evidenceId: string | null;
 };
 
 export type DealListingInput = {
@@ -143,6 +185,22 @@ export type DealListingInput = {
   buildingType: string | null; yearBuilt: number | null; ownership: string | null; condition: string | null;
   monthlyFee: number | null; askingPrice: number | null; askingPricePerM2: number | null;
   galleryStatus: string | null; imageCount: number; identityExact: boolean;
+  observedAt: string | null;
+  conflicts: FactConflict[];
+};
+
+export type InvestmentDecisionPolicy = {
+  criticalBuyFacts: Array<"identity" | "askingPrice" | "areaM2" | "city" | "ownership" | "legalStatus" | "marketEvidence" | "renovationScope" | "economics" | "riskReview">;
+  minimumBuyConfidence: number;
+  maximumMarketFallbackLevel: number;
+  maximumMarketAgeDays: number;
+};
+
+export const DEFAULT_INVESTMENT_DECISION_POLICY: InvestmentDecisionPolicy = {
+  criticalBuyFacts: ["identity", "askingPrice", "areaM2", "city", "ownership", "legalStatus", "marketEvidence", "renovationScope", "economics", "riskReview"],
+  minimumBuyConfidence: 80,
+  maximumMarketFallbackLevel: 3,
+  maximumMarketAgeDays: 90,
 };
 
 export type BuildDealInput = {
@@ -153,4 +211,5 @@ export type BuildDealInput = {
   settings: UnderwritingSettings;
   now: string;
   createdAt?: string;
+  policy?: InvestmentDecisionPolicy;
 };
