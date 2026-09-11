@@ -205,6 +205,33 @@ $$;
 revoke all on function public.apply_investment_override(uuid, jsonb, text[], jsonb, text) from public, anon, authenticated;
 grant execute on function public.apply_investment_override(uuid, jsonb, text[], jsonb, text) to service_role;
 
+create or replace function public.confirm_investment_override(
+  p_override_event_id uuid,
+  p_deal_id uuid,
+  p_field text,
+  p_user_id text,
+  p_reason text,
+  p_confirmed_at timestamptz default now()
+)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare confirmation_id uuid;
+begin
+  if p_override_event_id is null or p_deal_id is null or nullif(trim(p_field), '') is null or nullif(trim(p_user_id), '') is null or nullif(trim(p_reason), '') is null then
+    raise exception 'OVERRIDE_CONFIRMATION_INVALID';
+  end if;
+  insert into public.deal_fact_override_confirmations(override_event_id, deal_id, field, user_id, reason, confirmed_at)
+  values (p_override_event_id, p_deal_id, left(trim(p_field), 120), left(trim(p_user_id), 200), left(trim(p_reason), 500), coalesce(p_confirmed_at, now()))
+  on conflict (override_event_id, user_id) do nothing
+  returning id into confirmation_id;
+  if confirmation_id is null then
+    select id into confirmation_id from public.deal_fact_override_confirmations where override_event_id = p_override_event_id and user_id = left(trim(p_user_id), 200) limit 1;
+  end if;
+  return confirmation_id;
+end;
+$$;
+revoke all on function public.confirm_investment_override(uuid, uuid, text, text, text, timestamptz) from public, anon, authenticated;
+grant execute on function public.confirm_investment_override(uuid, uuid, text, text, text, timestamptz) to service_role;
+
 create or replace function public.prevent_investment_history_mutation()
 returns trigger language plpgsql as $$
 begin
