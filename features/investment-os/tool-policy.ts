@@ -22,6 +22,18 @@ export const DIRECTOR_TOOL_POLICIES: Record<DirectorName, ToolPolicyStep[]> = {
     { order: 1, tool: "INDEPENDENT_VALIDATOR", purpose: "Consume only validated director outputs and enforce vetoes", minimumLevel: 1, required: true },
     { order: 2, tool: "HISTORICAL_MODEL", purpose: "Consider calibrated director track records when outcomes exist", minimumLevel: 2, required: false },
   ],
+  RISK: [
+    { order: 1, tool: "INDEPENDENT_VALIDATOR", purpose: "Evaluate deterministic legal and risk gates", minimumLevel: 1, required: true },
+  ],
+  RENOVATION: [
+    { order: 1, tool: "DETERMINISTIC_ENGINE", purpose: "Evaluate observed renovation scope and costs", minimumLevel: 1, required: true },
+  ],
+  CFO: [
+    { order: 1, tool: "DETERMINISTIC_ENGINE", purpose: "Evaluate capital and portfolio constraints", minimumLevel: 2, required: true },
+  ],
+  ACQUISITION: [
+    { order: 1, tool: "DETERMINISTIC_ENGINE", purpose: "Evaluate acquisition thresholds", minimumLevel: 2, required: true },
+  ],
 };
 
 export function policyFor(director: DirectorName, level: AnalysisLevel): ToolPolicyStep[] {

@@ -89,8 +89,9 @@ test("manual override changes effective fact without destroying source and reset
 });
 
 test("dependency graph invalidates only required downstream directors", () => {
-  assert.deepEqual(downstreamForChange(["buildingType"]), ["VERIFY", "MARKET", "UNDERWRITER", "CEO"]);
-  assert.deepEqual(downstreamForChange(["galleryStatus"]), ["VERIFY", "CEO"]);
+  assert.deepEqual(downstreamForChange(["buildingType"]), ["MARKET", "UNDERWRITER", "CEO"]);
+  assert.deepEqual(downstreamForChange(["askingPrice"]), ["UNDERWRITER", "CEO"]);
+  assert.deepEqual(downstreamForChange(["galleryStatus"]), []);
   assert.deepEqual(downstreamForChange(["MARKET_ASSUMPTION"]), ["MARKET", "UNDERWRITER", "CEO"]);
   assert.deepEqual(downstreamForChange(["UNDERWRITING_SETTINGS"]), ["UNDERWRITER", "CEO"]);
 });

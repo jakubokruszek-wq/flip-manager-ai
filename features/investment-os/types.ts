@@ -1,18 +1,20 @@
 import type { UnderwritingResult, UnderwritingSettings, ValueProvenance } from "../flip-finder/underwriting.ts";
 
-export const DIRECTOR_STATUSES = ["NOT_RUN", "READY", "RUNNING", "COMPLETE", "STALE", "BLOCKED", "FAILED"] as const;
+export const DIRECTOR_STATUSES = ["NOT_RUN", "READY", "QUEUED", "RUNNING", "COMPLETE", "STALE", "BLOCKED", "FAILED"] as const;
 export type DirectorStatus = (typeof DIRECTOR_STATUSES)[number];
-export type DirectorName = "SCOUT" | "VERIFY" | "MARKET" | "UNDERWRITER" | "CEO";
+export type DirectorName = "SCOUT" | "VERIFY" | "MARKET" | "UNDERWRITER" | "CEO" | "RISK" | "RENOVATION" | "CFO" | "ACQUISITION";
 export type DealStage = "DISCOVERED" | "VERIFYING" | "VERIFIED" | "MARKET_READY" | "UNDERWRITTEN" | "DECISION_READY" | "ACQUISITION" | "RENOVATION" | "SALE" | "CLOSED";
 export type AnalysisLevel = 0 | 1 | 2 | 3;
 export type EvidenceClass = "FACT" | "ASSUMPTION" | "ESTIMATE" | "PREDICTION" | "USER_OVERRIDE" | "UNKNOWN";
+export type EvidenceType = "LISTING_OBSERVATION" | "PRICE_OBSERVATION" | "DOCUMENT_OBSERVATION" | "USER_INSPECTION" | "MANUAL_INPUT" | "AI_EXTRACTION" | "VISION_OBSERVATION" | "MARKET_COMPARABLE" | "MARKET_TRANSACTION" | "RENOVATION_QUOTE" | "ACTUAL_OUTCOME";
 export type EvidenceSourceType = "OFFICIAL_PRIMARY" | "VERIFIED_STRUCTURED_DATA" | "DIRECT_OBSERVATION" | "MULTIPLE_INDEPENDENT_SOURCES" | "REPUTABLE_SECONDARY" | "USER_PROVIDED" | "AI_INFERENCE" | "UNKNOWN";
 export type ToolClass = "INTERNAL_DATABASE" | "DETERMINISTIC_ENGINE" | "AI_LLM" | "VISION" | "DOCUMENT_ANALYSIS" | "CURRENT_RESEARCH" | "MAP_LOCATION" | "COMPARABLE_ANALYSIS" | "HISTORICAL_MODEL" | "INDEPENDENT_VALIDATOR";
 export type ValidationStatus = "PASS" | "FAIL" | "BLOCKED";
 export type PredictionMetric = { metric: "RESALE_VALUE" | "RENOVATION_COST" | "DURATION_DAYS" | "PROFIT"; value: number; unit: "PLN" | "DAYS"; confidence: number; predictedAt: string };
-export type EvidenceItem = { id: string; dealId: string; type: EvidenceClass; sourceType: EvidenceSourceType; sourceName: string; value: unknown; sourceUrl: string | null; documentId: string | null; observedAt: string | null; validFrom: string | null; validUntil: string | null; reliability: number; confidence: number; directorWhoRequested: DirectorName; verificationStatus: "VERIFIED" | "UNVERIFIED" | "CONFLICT" | "STALE"; conflictsWith: string[] };
+export type EvidenceItem = { id: string; dealId: string; type: EvidenceClass; evidenceType?: EvidenceType; field?: string | null; sourceType: EvidenceSourceType; sourceName: string; value: unknown; sourceUrl: string | null; documentId: string | null; observedAt: string | null; validFrom: string | null; validUntil: string | null; reliability: number; confidence: number; directorWhoRequested: DirectorName; verificationStatus: "VERIFIED" | "UNVERIFIED" | "CONFLICT" | "STALE"; conflictsWith: string[]; supersedesEvidenceId?: string | null; contentHash?: string };
 export type ToolPolicyStep = { order: number; tool: ToolClass; purpose: string; minimumLevel: AnalysisLevel; required: boolean };
 export type DirectorExecution = { toolsRequested: ToolClass[]; toolsSucceeded: ToolClass[]; toolsFailed: Array<{ tool: ToolClass; reason: string }>; evidenceCount: number; conflictCount: number; elapsedMs: number };
+export type ConfidenceAxes = { data: number | null; method: number | null; market: number | null };
 export type InformationRequest = { id: string; field: string; question: string; priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"; valueOfInformation: number; decisionImpact: Array<"REJECT" | "HOLD" | "NEGOTIATE" | "BUY">; requestedBy: DirectorName | "RISK" | "LEGAL"; evidenceNeeded: string; status: "OPEN" | "RESOLVED" | "DISMISSED" };
 export type DirectorTrackRecord = { director: DirectorName | "RISK" | "LEGAL"; dealCount: number; medianErrorPercent: number | null; p90ErrorPercent: number | null; confidenceCalibration: string | null; criticalMisses: number; computedAt: string | null };
 
@@ -35,6 +37,7 @@ export type DirectorOutput<T> = {
   inputFingerprint: string;
   computedAt: string;
   confidence: number;
+  confidenceAxes: ConfidenceAxes;
   result: T | null;
   missingFields: string[];
   warnings: string[];
@@ -61,7 +64,33 @@ export type DirectorOutput<T> = {
   asOf: string;
 };
 
+export type FoundationDirectorName = "VERIFY" | "MARKET" | "RISK" | "RENOVATION" | "UNDERWRITER" | "CFO" | "ACQUISITION";
+export type DirectorRunContract = {
+  id: string; dealId: string; director: FoundationDirectorName; status: DirectorStatus;
+  inputFingerprint: string; directorVersion: number; attempt: number;
+  queuedAt: string; startedAt: string | null; finishedAt: string | null;
+  failureReason: string | null; createdAt: string;
+};
+export type DirectorOutputContract<T = unknown> = {
+  runId: string; dealId: string; director: FoundationDirectorName;
+  inputFingerprint: string; directorVersion: number; result: T | null;
+  confidence: ConfidenceAxes; evidenceIds: string[]; missingFields: string[];
+  conflicts: string[]; warnings: string[]; recommendation: string;
+  reasonCodes: string[]; nextBestActions: string[]; decisionTriggers: string[];
+  whatWouldChangeMyMind: string[]; computedAt: string;
+};
+export type CeoInternalState = "HOT" | "GOOD" | "REVIEW" | "TOO_EXPENSIVE" | "REJECT";
+export type CeoUserFacingAction = "JEDZ_OBEJRZEC" | "NEGOCJUJ" | "KUP" | "HOLD" | "ODRZUC";
+export type CeoDecisionContract = {
+  dealId: string; decisionVersion: number; internalState: CeoInternalState;
+  userFacingAction: CeoUserFacingAction; gateResults: Array<{ code: string; passed: boolean; reason: string }>;
+  dissent: string[]; conditionsToProceed: string[]; walkAwayConditions: string[];
+  missingCriticalInformation: string[]; reasonCodes: string[];
+  sourceDirectorOutputIds: string[]; createdAt: string;
+};
+
 export type FactValue<T> = {
+  field: string;
   sourceValue: T | null;
   overrideValue: T | null;
   effectiveValue: T | null;
@@ -72,6 +101,10 @@ export type FactValue<T> = {
   observedAt: string | null;
   evidenceId: string | null;
   assumptionId: string | null;
+  sourceEvidenceIds: string[];
+  conflictStatus: "NONE" | "CRITICAL";
+  freshness: "CURRENT" | "STALE" | "UNKNOWN";
+  resolutionReason: string;
 };
 
 export type FactConflict = { field: keyof DealFacts; values: Array<{ value: string | number; source: string; observedAt: string | null; evidenceId: string }> };
