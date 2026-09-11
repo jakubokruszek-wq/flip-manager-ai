@@ -11,6 +11,7 @@ test("migration keeps one additive deal per listing with backend-only writes", (
   assert.match(migration, /alter table public\.deals enable row level security/i);
   assert.match(migration, /revoke all[\s\S]+from anon, authenticated/i);
   assert.match(migration, /grant select, insert, update[\s\S]+to service_role/i);
+  assert.match(migration, /revoke all on function public\.set_investment_os_updated_at\(\) from public, anon, authenticated/i);
   assert.doesNotMatch(migration, /drop table|delete from public\.listings/i);
 });
 

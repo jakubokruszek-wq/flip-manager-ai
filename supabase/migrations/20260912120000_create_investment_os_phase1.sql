@@ -61,6 +61,8 @@ on conflict (id) do nothing;
 
 create or replace function public.set_investment_os_updated_at()
 returns trigger language plpgsql as $$ begin new.updated_at = now(); return new; end; $$;
+revoke all on function public.set_investment_os_updated_at() from public, anon, authenticated;
+grant execute on function public.set_investment_os_updated_at() to service_role;
 
 drop trigger if exists deals_set_updated_at on public.deals;
 create trigger deals_set_updated_at before update on public.deals for each row execute function public.set_investment_os_updated_at();
