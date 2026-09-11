@@ -24,6 +24,16 @@ test("builds five structured directors and three deterministic scenarios", () =>
   assert.ok(deal.underwriting.result.scenarios.conservative.resaleValue! < deal.underwriting.result.scenarios.base.resaleValue!);
   assert.ok(deal.underwriting.result.scenarios.base.resaleValue! < deal.underwriting.result.scenarios.optimistic.resaleValue!);
   assert.equal(deal.stage, "DECISION_READY");
+  assert.equal(typeof deal.ceo.result?.investmentThesis, "string");
+  assert.ok(deal.ceo.result?.conditionsToProceed.length);
+  assert.ok(deal.playbook.sellerQuestions.length);
+  assert.ok(deal.playbook.negotiationPlan.length);
+  for (const director of [deal.scout, deal.verify, deal.market, deal.underwriting, deal.ceo]) {
+    assert.equal(typeof director.finding, "string");
+    assert.ok(director.recommendation);
+    assert.ok(Array.isArray(director.evidence));
+    assert.ok(Array.isArray(director.whatWouldChangeMyMind));
+  }
 });
 
 test("missing market evidence blocks market and prevents fake profit", () => {

@@ -11,6 +11,7 @@ create table if not exists public.deals (
   market jsonb not null default '{}'::jsonb check (jsonb_typeof(market) = 'object'),
   underwriting jsonb not null default '{}'::jsonb check (jsonb_typeof(underwriting) = 'object'),
   ceo jsonb not null default '{}'::jsonb check (jsonb_typeof(ceo) = 'object'),
+  playbook jsonb not null default '{}'::jsonb check (jsonb_typeof(playbook) = 'object'),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint deals_listing_id_key unique (listing_id)

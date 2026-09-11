@@ -16,7 +16,7 @@ test("migration keeps one additive deal per listing with backend-only writes", (
 });
 
 test("Investment Desk exposes CEO, directors, provenance-safe overrides and reset", () => {
-  for (const label of ["CEO", "Zespół inwestycyjny", "Cena ofertowa", "Pierwsza oferta", "Cel zakupu", "Maksimum", "Flip Score", "Confidence", "Reset do źródła"]) assert.match(desk, new RegExp(label));
+  for (const label of ["CEO", "Zespół inwestycyjny", "Cena ofertowa", "Pierwsza oferta", "Cel zakupu", "Maksimum", "Flip Score", "Confidence", "Deal playbook", "Dissent", "Walk-away", "Reset do źródła"]) assert.match(desk, new RegExp(label));
   assert.match(desk, /x-flip-finder-action/);
   assert.doesNotMatch(desk, /computedProfit|computedScore/);
 });

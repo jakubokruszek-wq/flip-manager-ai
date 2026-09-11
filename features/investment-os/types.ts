@@ -18,6 +18,14 @@ export type DirectorOutput<T> = {
   warnings: string[];
   reasonCodes: string[];
   provenance: ProvenanceEntry[];
+  finding: string;
+  recommendation: string;
+  evidence: string[];
+  risks: string[];
+  missingData: string[];
+  nextBestActions: string[];
+  decisionTriggers: string[];
+  whatWouldChangeMyMind: string[];
 };
 
 export type FactValue<T> = {
@@ -72,6 +80,24 @@ export type CeoResult = {
   risks: string[];
   missingBeforeViewing: string[];
   missingBeforePurchase: string[];
+  recommendation: string;
+  investmentThesis: string;
+  bearCase: string;
+  baseCase: string;
+  bullCase: string;
+  dissent: string[];
+  conditionsToProceed: string[];
+  walkAwayConditions: string[];
+  nextBestAction: string;
+};
+
+export type DealPlaybook = {
+  beforeCall: string[];
+  sellerQuestions: string[];
+  viewingChecklist: string[];
+  negotiationPlan: string[];
+  documentsRequired: string[];
+  conditionsBeforePurchase: string[];
 };
 
 export type CanonicalDeal = {
@@ -85,6 +111,7 @@ export type CanonicalDeal = {
   market: DirectorOutput<MarketResult>;
   underwriting: DirectorOutput<UnderwritingResult>;
   ceo: DirectorOutput<CeoResult>;
+  playbook: DealPlaybook;
   createdAt: string;
   updatedAt: string;
 };
