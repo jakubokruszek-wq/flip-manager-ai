@@ -149,7 +149,7 @@ async function main() {
 
   const client = createClient(apiUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
   const listingId = randomUUID();
-  const postId = `9${randomInt(100_000_000_000_000, 999_999_999_999_999)}`;
+  const postId = randomInt(900_000_000_000_000, 1_000_000_000_000_000).toString();
   const groupId = "123456789012345";
   const now = new Date().toISOString();
   const fixture = {
