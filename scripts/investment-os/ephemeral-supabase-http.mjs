@@ -45,6 +45,8 @@ function ensureLoopback(rawUrl, label) {
   const parsed = new URL(rawUrl);
   assert.ok(["http:", "postgres:", "postgresql:"].includes(parsed.protocol), `${label} protocol is not local/test-safe`);
   assert.ok(allowedHosts.has(parsed.hostname), `${label} is not loopback; remote connections are forbidden`);
+  assert.equal(parsed.search, "", `${label} connection options are disallowed`);
+  assert.equal(parsed.hash, "", `${label} URI fragments are disallowed`);
   return parsed;
 }
 
@@ -71,7 +73,7 @@ function runSupabaseStatus() {
   return parseCliEnv(result.stdout);
 }
 
-function assertHistoricalPropertiesEquivalence(databaseUrl) {
+function assertCanonicalPropertiesReplay(databaseUrl) {
   const helper = path.join(appDir, "scripts", "investment-os", "ephemeral-properties-baseline.sh");
   assert.ok(fs.existsSync(helper), "historical properties baseline harness is missing");
   const result = spawnSync("bash", [helper, "assert"], {
@@ -82,10 +84,10 @@ function assertHistoricalPropertiesEquivalence(databaseUrl) {
   });
   const output = redact(`${result.stdout ?? ""}${result.stderr ?? ""}`);
   if (result.error || result.status !== 0) {
-    throw new Error(`LOCAL_PROPERTIES_PRODUCTION_EQUIVALENCE_FAILED:${output.slice(-4_000)}`);
+    throw new Error(`LOCAL_PROPERTIES_CANONICAL_REPLAY_FAILED:${output.slice(-4_000)}`);
   }
   process.stdout.write(output);
-  log("- Local Supabase historical properties equivalence: PASS");
+  log("- Local Supabase canonical properties replay: PASS");
 }
 
 async function readJson(response) {
@@ -143,7 +145,7 @@ async function main() {
   const api = ensureLoopback(apiUrl, "Supabase API URL");
   const database = ensureLoopback(databaseUrl, "Supabase DB URL");
   log(`- Job B Supabase endpoint host: ${api.hostname}; DB host: ${database.hostname}; remote connections: NONE`);
-  assertHistoricalPropertiesEquivalence(databaseUrl);
+  assertCanonicalPropertiesReplay(databaseUrl);
 
   const client = createClient(apiUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
   const listingId = randomUUID();

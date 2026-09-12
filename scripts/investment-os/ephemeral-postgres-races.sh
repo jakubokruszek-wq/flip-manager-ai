@@ -14,6 +14,16 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL is required for the ephemeral PostgreSQL service." >&2
   exit 1
 fi
+if [[ ! "$DATABASE_URL" =~ ^postgres(ql)?://[^/@?#]*@?(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?/[^?#]*$ ]]; then
+  echo "Refusing non-loopback DATABASE_URL; ephemeral PostgreSQL proof may not contact a remote database." >&2
+  exit 1
+fi
+for name in PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGSERVICE PGSERVICEFILE; do
+  if [[ -n "${!name:-}" ]]; then
+    echo "Refusing PostgreSQL connection override $name; ephemeral proof may not contact a remote database." >&2
+    exit 1
+  fi
+done
 
 summary() {
   printf '%s\n' "$*"
@@ -102,11 +112,11 @@ for migration in "${migrations[@]}"; do
 done
 
 if ! bash "$PROPERTIES_BASELINE_HARNESS" assert; then
-  echo "PRODUCT BLOCKER: reconstructed public.properties does not match the supplied Production schema proof." >&2
-  summary "- Historical properties equivalence: FAIL (PRODUCT/MIGRATION BLOCKER)"
+  echo "CANONICAL REPLAY BLOCKER: reconstructed public.properties does not match the repository schema assertions." >&2
+  summary "- Canonical properties replay: FAIL (SCHEMA ASSERTION)"
   exit 1
 fi
-summary "- Historical properties column/constraint/index/RLS/policy equivalence: PASS"
+summary "- Canonical properties columns/constraints/indexes/RLS/policies: PASS"
 
 if ! psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -q <<'SQL'
 DO $$
