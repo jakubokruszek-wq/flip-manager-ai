@@ -71,6 +71,23 @@ function runSupabaseStatus() {
   return parseCliEnv(result.stdout);
 }
 
+function assertHistoricalPropertiesEquivalence(databaseUrl) {
+  const helper = path.join(appDir, "scripts", "investment-os", "ephemeral-properties-baseline.sh");
+  assert.ok(fs.existsSync(helper), "historical properties baseline harness is missing");
+  const result = spawnSync("bash", [helper, "assert"], {
+    cwd: appDir,
+    env: { ...process.env, DATABASE_URL: databaseUrl },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  const output = redact(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+  if (result.error || result.status !== 0) {
+    throw new Error(`LOCAL_PROPERTIES_PRODUCTION_EQUIVALENCE_FAILED:${output.slice(-4_000)}`);
+  }
+  process.stdout.write(output);
+  log("- Local Supabase historical properties equivalence: PASS");
+}
+
 async function readJson(response) {
   const text = await response.text();
   try { return JSON.parse(text); } catch { return { nonJson: true, snippet: redact(text.slice(0, 240)) }; }
@@ -126,6 +143,7 @@ async function main() {
   const api = ensureLoopback(apiUrl, "Supabase API URL");
   const database = ensureLoopback(databaseUrl, "Supabase DB URL");
   log(`- Job B Supabase endpoint host: ${api.hostname}; DB host: ${database.hostname}; remote connections: NONE`);
+  assertHistoricalPropertiesEquivalence(databaseUrl);
 
   const client = createClient(apiUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
   const listingId = randomUUID();

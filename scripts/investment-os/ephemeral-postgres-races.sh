@@ -7,6 +7,8 @@ MIGRATION_DIR="supabase/migrations"
 LISTING_ID="9b978638-2284-4f6a-a425-6a6c34f11a01"
 INITIAL_DEAL_ID="519db8aa-a7dc-4895-a74b-cc416ce7e101"
 RACE_DEAL_ID="519db8aa-a7dc-4895-a74b-cc416ce7e102"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROPERTIES_BASELINE_HARNESS="$SCRIPT_DIR/ephemeral-properties-baseline.sh"
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL is required for the ephemeral PostgreSQL service." >&2
@@ -69,8 +71,17 @@ END
 $$;
 ALTER ROLE service_role BYPASSRLS;
 SQL
+then
+  echo "ENVIRONMENTAL BLOCKER: unable to create disposable PostgreSQL role equivalents." >&2
+  exit 1
+fi
 
 summary "- Local platform role equivalents created: anon, authenticated, service_role (service_role BYPASSRLS)"
+if ! bash "$PROPERTIES_BASELINE_HARNESS" apply; then
+  echo "CI HARNESS BLOCKER: ephemeral historical properties baseline did not apply." >&2
+  exit 1
+fi
+summary "- Historical public.properties baseline: PASS (ephemeral PostgreSQL only)"
 summary "- Full repository migration chain: 36/36"
 
 mkdir -p "$RUNNER_TEMP/investment-os-postgres-logs"
@@ -84,13 +95,20 @@ for migration in "${migrations[@]}"; do
       -e 's#(postgres(ql)?://[^:/ ]+):[^@/ ]+@#\1:REDACTED@#g' \
       -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED_JWT]/g' \
       "$log" >&2
-    summary "- Migration chain: FAIL at `$migration` (PRODUCT/MIGRATION BLOCKER)"
+    summary "- Migration chain: FAIL at $migration (PRODUCT/MIGRATION BLOCKER)"
     exit 1
   fi
   printf 'Applied migration: %s\n' "$migration"
 done
 
-psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -q <<'SQL'
+if ! bash "$PROPERTIES_BASELINE_HARNESS" assert; then
+  echo "PRODUCT BLOCKER: reconstructed public.properties does not match the supplied Production schema proof." >&2
+  summary "- Historical properties equivalence: FAIL (PRODUCT/MIGRATION BLOCKER)"
+  exit 1
+fi
+summary "- Historical properties column/constraint/index/RLS/policy equivalence: PASS"
+
+if ! psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -q <<'SQL'
 DO $$
 DECLARE
   v_listing_att smallint;

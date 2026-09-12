@@ -34,12 +34,13 @@ jobs:
           allowed=(
             ".github/workflows/investment-os-ephemeral.yml"
             "scripts/investment-os/ephemeral-postgres-races.sh"
+            "scripts/investment-os/ephemeral-properties-baseline.sh"
             "scripts/investment-os/ephemeral-supabase-http.mjs"
             "vercel.json"
           )
           for path in "${changed[@]}"; do
             case "$path" in
-              ".github/workflows/investment-os-ephemeral.yml"|"scripts/investment-os/ephemeral-postgres-races.sh"|"scripts/investment-os/ephemeral-supabase-http.mjs"|"vercel.json") ;;
+              ".github/workflows/investment-os-ephemeral.yml"|"scripts/investment-os/ephemeral-postgres-races.sh"|"scripts/investment-os/ephemeral-properties-baseline.sh"|"scripts/investment-os/ephemeral-supabase-http.mjs"|"vercel.json") ;;
               *) echo "Forbidden diff from reviewed baseline: $path" >&2; exit 1 ;;
             esac
           done
@@ -117,6 +118,11 @@ jobs:
         with:
           version: 2.84.2
 
+      - name: Install PostgreSQL client for local schema verification
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
       - name: Install application dependencies
         run: npm ci
 
@@ -135,6 +141,9 @@ jobs:
           cd "$SUPABASE_WORKDIR"
           supabase init --yes
           mkdir -p supabase/migrations
+          bash "$GITHUB_WORKSPACE/scripts/investment-os/ephemeral-properties-baseline.sh" emit > \
+            supabase/migrations/20260719000000_historical_properties_baseline.sql
+          test -s supabase/migrations/20260719000000_historical_properties_baseline.sql
           phase1_hash="$(sha256sum "$GITHUB_WORKSPACE/supabase/migrations/20260912120000_create_investment_os_phase1.sql" | awk '{print toupper($1)}')"
           cas_hash="$(sha256sum "$GITHUB_WORKSPACE/supabase/migrations/20260912180000_investment_os_deal_cas.sql" | awk '{print toupper($1)}')"
           test "$phase1_hash" = "0F283BC5E2B351A6F500D140242E55CFEB6D44B936CAF52D1FCF99F4A5E6270D"
@@ -145,10 +154,10 @@ jobs:
           done
           actual="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
           expected="$(find "$GITHUB_WORKSPACE/supabase/migrations" -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
-          test "$actual" = "$expected"
+          test "$actual" = "$((expected + 1))"
           test ! -e supabase/.temp/project-ref
           echo "SUPABASE_WORKDIR=$SUPABASE_WORKDIR" >> "$GITHUB_ENV"
-          echo "Copied $actual repository migrations into the ephemeral runner directory."
+          echo "Created one historical baseline plus $expected repository migrations in the ephemeral runner directory."
 
       - name: Start and reset only the local Supabase stack
         shell: bash
