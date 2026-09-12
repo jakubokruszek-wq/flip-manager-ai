@@ -5,10 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { FilterResult } from "@/features/flip-finder/results";
 import type { CanonicalDeal, DealFactOverrides, DirectorOutput } from "../types";
+import { loadInvestmentDeal } from "../investment-client";
 
 export function InvestmentDesk({ result }: { result: FilterResult }) {
   const [deal, setDeal] = useState<CanonicalDeal | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState<string | null>(null); const [saving, setSaving] = useState(false);
-  const load = useCallback(async () => { try { const response = await fetch(`/api/flip-finder/listings/${result.id}/investment`, { cache: "no-store" }); const body = await response.json(); if (!response.ok || !body.deal) throw new Error(body.message ?? "Investment Desk niedostępny"); setDeal(body.deal); } catch (cause) { setError(cause instanceof Error ? cause.message : "Investment Desk niedostępny"); } finally { setLoading(false); } }, [result.id]);
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setDeal(await loadInvestmentDeal(result.id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Investment Desk niedostępny");
+    } finally { setLoading(false); }
+  }, [result.id]);
   useEffect(() => { const timeout = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timeout); }, [load]);
   const save = async (overrides: DealFactOverrides) => { setSaving(true); setError(null); try { const response = await fetch(`/api/flip-finder/listings/${result.id}/investment`, { method: "PUT", headers: { "content-type": "application/json", "x-flip-finder-action": "investment-os" }, body: JSON.stringify({ overrides }) }); const body = await response.json(); if (!response.ok || !body.deal) throw new Error(body.message ?? "Nie udało się zapisać"); setDeal(body.deal); } catch (cause) { setError(cause instanceof Error ? cause.message : "Nie udało się zapisać"); } finally { setSaving(false); } };
   if (loading) return <div className="px-5 py-10 text-sm text-muted-foreground sm:px-8">Dyrektorzy analizują aktualne dane…</div>;

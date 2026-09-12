@@ -7,44 +7,62 @@ import { DEFAULT_UNDERWRITING_SETTINGS, type UnderwritingSettings } from "@/feat
 import { buildCanonicalDeal, downstreamForChange, fingerprint, fingerprintsEqual } from "../engine";
 import { DEFAULT_INVESTMENT_DECISION_POLICY, type InvestmentDecisionPolicy } from "../types";
 import type { CanonicalDeal, DealFactOverrides, DealListingInput, DirectorTrackRecord, EvidenceItem, MarketEvidence } from "../types";
+import { commitDealCas, initializeDealWithCas, InvestmentDealVersionConflict, type VersionedDealCandidate } from "./deal-cas";
 
 type Row = Record<string, unknown>;
 type InvestmentSettings = UnderwritingSettings & { decisionPolicy: InvestmentDecisionPolicy };
 
 export async function getInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
   const db = createAdminClient();
-  const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
-  if (error) throw error;
-  if (!listing) return null;
-  const existing = await db.from("deals").select("*").eq("listing_id", listingId).maybeSingle();
-  if (existing.error && existing.error.code !== "PGRST116") throw existing.error;
-  const dealId = text(existing.data?.id) ?? crypto.randomUUID();
-  const overridesResult = existing.data ? await db.from("deal_fact_overrides").select("values").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
-  if (overridesResult.error) throw overridesResult.error;
-  const settings = await loadSettings(db);
-  const { data: latestSnapshot, error: snapshotError } = await db.from("listing_snapshots").select("id,captured_at,price,raw_data").eq("listing_id", listingId).order("captured_at", { ascending: false }).limit(1).maybeSingle();
-  if (snapshotError) throw snapshotError;
-  const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null);
-  const market = await resolveMarketEvidence(db, listingInput);
-  const trackRecords = await loadDirectorTrackRecords(db);
-  const now = new Date().toISOString();
-  const deal = buildCanonicalDeal({ dealId, listing: listingInput, overrides: object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: text(existing.data?.created_at) ?? undefined, directorTrackRecords: trackRecords });
-  const old = existing.data ? toCanonicalDeal(existing.data as Row) : null;
-  const settled = old && [old.scout, old.verify, old.market, old.underwriting, old.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
-  if (old && settled && fingerprintsEqual(old, deal)) { await persistIntelligence(db, old); return old; }
-  if (!old || !fingerprintsEqual(old, deal) || !settled) {
-    const { error: writeError } = await db.from("deals").upsert(toDealRow(deal), { onConflict: "listing_id" });
-    if (writeError) throw writeError;
-  }
-  await persistIntelligence(db, deal);
+  const stored = await readStoredDeal(db, listingId);
+  return stored?.deal ?? null;
+}
+
+export async function initializeInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
+  const db = createAdminClient();
+  const deal = await initializeDealWithCas<CanonicalDeal | null>({
+    compute: async (): Promise<VersionedDealCandidate<CanonicalDeal | null>> => {
+      const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
+      if (error) throw error;
+      if (!listing) return { value: null, expectedVersion: 0, sourceUpdatedAt: null, unchanged: true };
+      const existing = await readStoredDeal(db, listingId);
+      const dealId = existing?.deal.id ?? crypto.randomUUID();
+      const overridesResult = existing ? await db.from("deal_fact_overrides").select("values").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
+      if (overridesResult.error) throw overridesResult.error;
+      const settings = await loadSettings(db);
+      const { data: latestSnapshot, error: snapshotError } = await db.from("listing_snapshots").select("id,captured_at,price,raw_data").eq("listing_id", listingId).order("captured_at", { ascending: false }).limit(1).maybeSingle();
+      if (snapshotError) throw snapshotError;
+      const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null);
+      const market = await resolveMarketEvidence(db, listingInput);
+      const trackRecords = await loadDirectorTrackRecords(db);
+      const now = new Date().toISOString();
+      const deal = buildCanonicalDeal({ dealId, listing: listingInput, overrides: object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords });
+      const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
+      const sourceUpdatedAt = text(listing.updated_at);
+      if (existing && settled && fingerprintsEqual(existing.deal, deal) && existing.sourceUpdatedAt === sourceUpdatedAt) return { value: existing.deal, expectedVersion: existing.version, sourceUpdatedAt, unchanged: true };
+      return { value: deal, expectedVersion: existing?.version ?? 0, sourceUpdatedAt };
+    },
+    commit: async (candidate) => commitDealCas(async () => {
+      const { data, error } = await db.rpc("persist_investment_deal_cas", { p_deal: toDealRow(candidate.value as CanonicalDeal), p_expected_version: candidate.expectedVersion, p_source_updated_at: candidate.sourceUpdatedAt });
+      if (error) throw error;
+      return parseVersion(data);
+    }),
+    readCurrent: async () => {
+      const current = await readStoredDeal(db, listingId);
+      return current ? { value: current.deal, sourceUpdatedAt: current.sourceUpdatedAt } : null;
+    },
+  });
+  if (deal) await persistIntelligence(db, deal);
   return deal;
 }
 
 export async function saveDealOverrides(listingId: string, values: DealFactOverrides): Promise<{ deal: CanonicalDeal; invalidated: string[] }> {
-  const current = await getInvestmentDeal(listingId);
+  await initializeInvestmentDeal(listingId);
+  const db = createAdminClient();
+  const currentStored = await readStoredDeal(db, listingId);
+  const current = currentStored?.deal ?? null;
   if (!current) throw new Error("DEAL_LISTING_NOT_FOUND");
   const clean = sanitizeOverrides(values);
-  const db = createAdminClient();
   const { data: previousRow, error: previousError } = await db.from("deal_fact_overrides").select("values").eq("deal_id", current.id).maybeSingle();
   if (previousError) throw previousError;
   const previous = object(previousRow?.values); const cleanRow = object(clean); const changed = [...new Set([...Object.keys(previous), ...Object.keys(cleanRow)].filter((key) => previous[key] !== cleanRow[key]))];
@@ -57,9 +75,9 @@ export async function saveDealOverrides(listingId: string, values: DealFactOverr
     const overrideValue = Object.prototype.hasOwnProperty.call(cleanRow, field) ? cleanRow[field] : null;
     return { field, overrideValue, sourceEvidenceIds: fact.sourceEvidenceIds, conflictStatus: fact.sourceValue !== null && overrideValue !== null && !Object.is(fact.sourceValue, overrideValue) ? "CRITICAL" : "NONE", contentHash: fingerprint({ dealId: current.id, field, overrideValue, sourceEvidenceIds: fact.sourceEvidenceIds }) };
   });
-  const { error } = await db.rpc("apply_investment_override", { p_deal_id: current.id, p_values: clean, p_invalidated: [...invalidated], p_events: events, p_user_id: "application" });
+  const { error } = await db.rpc("apply_investment_override_cas", { p_deal_id: current.id, p_expected_version: currentStored!.version, p_values: clean, p_invalidated: [...invalidated], p_events: events, p_user_id: "application" });
   if (error) throw error;
-  const deal = await getInvestmentDeal(listingId);
+  const deal = await initializeInvestmentDeal(listingId);
   if (!deal) throw new Error("DEAL_RECOMPUTE_FAILED");
   return { deal, invalidated: [...invalidated] };
 }
@@ -72,10 +90,10 @@ export async function saveInvestmentSettings(value: unknown): Promise<Underwriti
   const { data: current } = await db.from("underwriting_settings").select("version").eq("id", "default").maybeSingle();
   const { error } = await db.from("underwriting_settings").upsert({ id: "default", version: number(current?.version) + 1, values: settings }, { onConflict: "id" });
   if (error) throw error;
-  const { data: deals, error: dealsError } = await db.from("deals").select("id,underwriting,ceo");
+  const { data: deals, error: dealsError } = await db.from("deals").select("id,version");
   if (dealsError) throw dealsError;
   for (const row of deals ?? []) {
-    await db.from("deals").update({ underwriting: { ...object(row.underwriting), status: "STALE" }, ceo: { ...object(row.ceo), status: "STALE" } }).eq("id", row.id);
+    await markDealStaleCas(db, text(row.id)!, number(row.version), ["UNDERWRITER", "CEO"]);
   }
   return settings;
 }
@@ -90,16 +108,37 @@ export async function saveMarketAssumption(value: unknown): Promise<Row> {
   const input = validateAssumption(value); const db = createAdminClient();
   const { data, error } = await db.from("market_assumptions").insert(input).select("*").single();
   if (error) throw error;
-  const query = db.from("deals").select("id,facts,market,underwriting,ceo");
+  const query = db.from("deals").select("id,version,facts");
   const { data: deals, error: dealsError } = await query;
   if (dealsError) throw dealsError;
   for (const deal of deals ?? []) {
     const facts = object(deal.facts); const city = effectiveText(facts.city); const district = effectiveText(facts.district);
     const assumptionCity = text(input.city); const assumptionDistrict = text(input.district);
     if (!same(city, assumptionCity) || (assumptionDistrict && !same(district, assumptionDistrict))) continue;
-    await db.from("deals").update({ market: { ...object(deal.market), status: "STALE" }, underwriting: { ...object(deal.underwriting), status: "STALE" }, ceo: { ...object(deal.ceo), status: "STALE" } }).eq("id", deal.id);
+    await markDealStaleCas(db, text(deal.id)!, number(deal.version), ["MARKET", "UNDERWRITER", "CEO"]);
   }
   return data as Row;
+}
+
+type StoredDeal = { deal: CanonicalDeal; version: number; sourceUpdatedAt: string | null };
+
+async function readStoredDeal(db: ReturnType<typeof createAdminClient>, listingId: string): Promise<StoredDeal | null> {
+  const { data, error } = await db.from("deals").select("*").eq("listing_id", listingId).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return { deal: toCanonicalDeal(data as Row), version: number(data.version), sourceUpdatedAt: text(data.source_updated_at) };
+}
+
+async function markDealStaleCas(db: ReturnType<typeof createAdminClient>, dealId: string, expectedVersion: number, directors: string[]): Promise<void> {
+  const { data, error } = await db.rpc("mark_investment_deal_stale_cas", { p_deal_id: dealId, p_expected_version: expectedVersion, p_directors: directors });
+  if (error) throw error;
+  if (parseVersion(data) === null) throw new InvestmentDealVersionConflict();
+}
+
+function parseVersion(value: unknown): number | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const raw = candidate && typeof candidate === "object" ? (candidate as Row).version : candidate;
+  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : null;
 }
 
 async function loadSettings(db: ReturnType<typeof createAdminClient>): Promise<InvestmentSettings> {

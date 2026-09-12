@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCanonicalDeal, materialFactSnapshot, fingerprint } from "./engine.ts";
 import { asUntrustedContent } from "./untrusted-content.ts";
-import { addMoney, divideMoney, moneyCents, multiplyByRate, percentToBasisPoints, subtractMoney } from "./money.ts";
+import { addMoney, divideMoney, formatPLN, moneyCents, moneyToPLN, multiplyByRate, percentToBasisPoints, subtractMoney } from "./money.ts";
 import { affectedDirectors, declaredInputSnapshot, validateDependencyGraph, type DependencyDefinition } from "./dependencies.ts";
 import { canTransition, isStaleWrite, shouldReuseComplete, transitionRun, type DirectorRunState } from "./director-state.ts";
 import { confirmOverrideDespiteConflict, resolveEffectiveFact } from "./fact-resolver.ts";
@@ -62,11 +62,17 @@ test("run state is monotonic and stale writes cannot publish", () => {
 test("money uses integer grosze and explicit basis points", () => {
   const a = moneyCents(100.01), b = moneyCents(0.02);
   assert.equal(addMoney(a, b), 10003);
+  assert.equal(moneyToPLN(addMoney(a, b)), 100.03);
   assert.equal(subtractMoney(a, b), 9999);
   assert.equal(multiplyByRate(moneyCents(100), percentToBasisPoints(10)), 1000);
   assert.equal(divideMoney(moneyCents(10.01), 2), 501);
+  assert.equal(moneyCents(1.005), 101);
+  assert.equal(multiplyByRate(moneyCents(1.01), percentToBasisPoints(50)), 51);
+  assert.equal(divideMoney(moneyCents(0.03), 2), 2);
   assert.equal(percentToBasisPoints(12.5), 1250);
   assert.throws(() => percentToBasisPoints(100.1), /RATE_OUT_OF_RANGE/);
+  assert.match(formatPLN(moneyCents(0.01)), /0,01/);
+  assert.match(formatPLN(moneyCents(0.01)), /zł/);
 });
 
 test("external listing content is bounded data, never instructions", () => {

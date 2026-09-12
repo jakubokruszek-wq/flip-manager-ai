@@ -1,3 +1,5 @@
+import { addMoney, divideMoneyByQuantity, moneyCents, moneyToPLN, multiplyByFraction, multiplyByRate, multiplyMoneyByQuantity, percentToBasisPoints, subtractMoney, type BasisPoints, type MoneyCents } from "../investment-os/money.ts";
+
 export const UNDERWRITING_DECISIONS = ["HOT", "GOOD", "REVIEW", "TOO_EXPENSIVE", "REJECT"] as const;
 export type UnderwritingDecision = (typeof UNDERWRITING_DECISIONS)[number];
 export type ValueProvenance = "EXTRACTED" | "DERIVED" | "USER_ASSUMPTION" | "MARKET_ASSUMPTION" | "MANUAL_OVERRIDE" | "UNKNOWN";
@@ -122,37 +124,84 @@ export type MaxPurchaseBoundaryValidation = {
   checks: Array<{ code: string; passed: boolean; detail: string }>;
 };
 
+export type MaxPurchaseThresholds = { profit: boolean; margin: boolean; roi: boolean };
+const ALL_MAX_PURCHASE_THRESHOLDS: MaxPurchaseThresholds = { profit: true, margin: true, roi: true };
+
+type FinanceConfig = {
+  fixedPurchaseCosts: MoneyCents;
+  monthlyHoldingCost: MoneyCents;
+  contingencyRate: BasisPoints;
+  purchaseTaxRate: BasisPoints;
+  purchaseCommissionRate: BasisPoints;
+  financingLoanRate: BasisPoints;
+  financingAnnualRate: BasisPoints;
+  salesRate: BasisPoints;
+  minimumProfit: MoneyCents;
+  minimumMargin: BasisPoints;
+  minimumROI: BasisPoints;
+  targetBuffer: BasisPoints;
+  holdingMonths: number;
+  financingEnabled: boolean;
+};
+
+type InternalScenario = {
+  resalePerM2: MoneyCents | null;
+  resaleValue: MoneyCents | null;
+  renovationTotal: MoneyCents | null;
+  totalProjectCost: MoneyCents | null;
+  profit: MoneyCents | null;
+  purchaseCosts: MoneyCents | null;
+  financingCosts: MoneyCents | null;
+  contingency: MoneyCents | null;
+  salesCosts: MoneyCents | null;
+};
+
 /** All PLN arithmetic is rounded through integer grosze at every monetary boundary. */
 export function calculateUnderwriting(input: UnderwritingInput, settings: UnderwritingSettings = DEFAULT_UNDERWRITING_SETTINGS): UnderwritingResult {
   const area = positive(input.areaM2);
   const sourcePrice = positive(input.askingPrice);
-  const purchasePrice = positive(input.priceOverride) ?? sourcePrice;
+  const sourcePriceCents = sourcePrice === null ? null : moneyCents(sourcePrice);
+  const purchasePriceCents = positive(input.priceOverride) === null ? sourcePriceCents : moneyCents(input.priceOverride!);
   const renovationMode = input.renovationMode ?? inferRenovationMode(input.condition);
   const renovationPerM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[renovationMode];
+  const renovationPerM2Cents = moneyCents(renovationPerM2);
   const holdingMonths = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
-  const additionalCosts = nonnegative(input.additionalCostsOverride) ?? 0;
+  const additionalCostsCents = moneyCents(nonnegative(input.additionalCostsOverride) ?? 0);
+  const finance = financeConfig(settings, holdingMonths);
   const resale = effectiveResale(input, settings);
-  const renovationBase = area === null ? null : money(area * renovationPerM2);
-  const conservativeRenovation = renovationBase === null ? null : money(renovationBase * 1.15);
-  const optimisticRenovation = renovationBase === null ? null : money(renovationBase * 0.95);
-  const holdingCosts = money(holdingMonths * settings.monthlyHoldingCost);
-  const baseScenario = scenario(purchasePrice, area, resale.base, renovationBase, holdingMonths, holdingCosts, additionalCosts, settings);
-  const conservative = scenario(purchasePrice, area, resale.low, conservativeRenovation, holdingMonths, holdingCosts, additionalCosts, settings);
-  const optimistic = scenario(purchasePrice, area, resale.high, optimisticRenovation, holdingMonths, holdingCosts, additionalCosts, settings);
-  const maxPurchasePrice = maxBuy(area, resale.base, renovationBase, holdingMonths, holdingCosts, additionalCosts, settings);
-  const targetPurchasePrice = maxPurchasePrice === null ? null : money(maxPurchasePrice * (1 - pct(settings.targetNegotiationBufferPercent)));
-  const discountNeeded = sourcePrice !== null && targetPurchasePrice !== null ? money(Math.max(0, sourcePrice - targetPurchasePrice)) : null;
-  const discountNeededPercent = discountNeeded !== null && sourcePrice !== null ? ratio(discountNeeded, sourcePrice) : null;
-  const marginBase = baseScenario.profit !== null && baseScenario.resaleValue !== null ? ratio(baseScenario.profit, baseScenario.resaleValue) : null;
-  const roiBase = baseScenario.profit !== null && baseScenario.totalProjectCost !== null ? ratio(baseScenario.profit, baseScenario.totalProjectCost) : null;
+  const renovationBaseCents = area === null ? null : multiplyMoneyByQuantity(renovationPerM2Cents, area);
+  const conservativeRenovationCents = renovationBaseCents === null ? null : multiplyByFraction(renovationBaseCents, BigInt(115), BigInt(100));
+  const optimisticRenovationCents = renovationBaseCents === null ? null : multiplyByFraction(renovationBaseCents, BigInt(95), BigInt(100));
+  const holdingCostsCents = multiplyMoneyByQuantity(finance.monthlyHoldingCost, holdingMonths);
+  const baseScenarioCents = scenarioCents(purchasePriceCents, area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, finance);
+  const conservativeCents = scenarioCents(purchasePriceCents, area, resale.low, conservativeRenovationCents, holdingCostsCents, additionalCostsCents, finance);
+  const optimisticCents = scenarioCents(purchasePriceCents, area, resale.high, optimisticRenovationCents, holdingCostsCents, additionalCostsCents, finance);
+  const maxPurchaseCents = maxBuyCents(area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, finance, ALL_MAX_PURCHASE_THRESHOLDS);
+  const targetPurchaseCents = maxPurchaseCents === null ? null : multiplyByRate(maxPurchaseCents, (10_000 - Number(finance.targetBuffer)) as BasisPoints);
+  const discountNeededCents = sourcePriceCents !== null && targetPurchaseCents !== null ? (subtractMoney(sourcePriceCents, targetPurchaseCents) > 0 ? subtractMoney(sourcePriceCents, targetPurchaseCents) : moneyCents(0)) : null;
+  const discountNeededPercent = discountNeededCents !== null && sourcePriceCents !== null ? ratioCents(discountNeededCents, sourcePriceCents) : null;
+  const marginBase = baseScenarioCents.profit !== null && baseScenarioCents.resaleValue !== null ? ratioCents(baseScenarioCents.profit, baseScenarioCents.resaleValue) : null;
+  const roiBase = baseScenarioCents.profit !== null && baseScenarioCents.totalProjectCost !== null ? ratioCents(baseScenarioCents.profit, baseScenarioCents.totalProjectCost) : null;
+  const baseScenario = toPublicScenario(baseScenarioCents);
+  const conservative = toPublicScenario(conservativeCents);
+  const optimistic = toPublicScenario(optimisticCents);
+  const purchasePrice = purchasePriceCents === null ? null : moneyToPLN(purchasePriceCents);
+  const maxPurchasePrice = maxPurchaseCents === null ? null : moneyToPLN(maxPurchaseCents);
+  const targetPurchasePrice = targetPurchaseCents === null ? null : moneyToPLN(targetPurchaseCents);
+  const discountNeeded = discountNeededCents === null ? null : moneyToPLN(discountNeededCents);
+  const renovationTotal = renovationBaseCents === null ? null : moneyToPLN(renovationBaseCents);
+  const holdingCosts = moneyToPLN(holdingCostsCents);
   const missingFields = collectMissing(input, resale.base);
   const confidenceScore = confidence(input, resale.confidence, missingFields);
-  const scored = score({ input, sourcePrice, maxPurchasePrice, baseScenario, marginBase, roiBase, confidenceScore });
-  const decision = decide(input, sourcePrice, maxPurchasePrice, baseScenario.profit, marginBase, roiBase, confidenceScore, missingFields, settings);
-  const purchaseCosts = purchasePrice === null ? null : purchaseCostsFor(purchasePrice, settings);
-  const financingCosts = purchasePrice === null ? null : financingFor(purchasePrice, holdingMonths, settings);
-  const contingency = renovationBase === null ? null : money(renovationBase * pct(settings.contingencyPercent));
-  const salesCosts = baseScenario.resaleValue === null ? null : money(baseScenario.resaleValue * pct(settings.salesCostPercent));
+  const scored = score({ input, sourcePriceCents, maxPurchaseCents, profitCents: baseScenarioCents.profit, marginBase, roiBase, confidenceScore });
+  const decision = decide(input, sourcePriceCents, maxPurchaseCents, baseScenarioCents, confidenceScore, missingFields, finance);
+  const purchaseCosts = baseScenarioCents.purchaseCosts === null ? null : moneyToPLN(baseScenarioCents.purchaseCosts);
+  const financingCosts = baseScenarioCents.financingCosts === null ? null : moneyToPLN(baseScenarioCents.financingCosts);
+  const contingency = baseScenarioCents.contingency === null ? null : moneyToPLN(baseScenarioCents.contingency);
+  const salesCosts = baseScenarioCents.salesCosts === null ? null : moneyToPLN(baseScenarioCents.salesCosts);
+  const askingPricePerM2Cents = positive(input.askingPricePerM2) !== null
+    ? moneyCents(input.askingPricePerM2!)
+    : sourcePriceCents !== null && area !== null ? divideMoneyByQuantity(sourcePriceCents, area) : null;
   return {
     listingId: input.listingId,
     provenance: {
@@ -168,10 +217,10 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
       profit: baseScenario.profit === null ? "UNKNOWN" : "DERIVED",
     },
     purchasePrice,
-    askingPricePerM2: positive(input.askingPricePerM2) ?? (sourcePrice !== null && area !== null ? money(sourcePrice / area) : null),
+    askingPricePerM2: askingPricePerM2Cents === null ? null : moneyToPLN(askingPricePerM2Cents),
     renovationMode,
-    renovationPerM2,
-    renovationTotal: renovationBase,
+    renovationPerM2: moneyToPLN(renovationPerM2Cents),
+    renovationTotal,
     purchaseTransactionCosts: purchaseCosts,
     holdingCosts,
     financingCosts,
@@ -179,9 +228,9 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
     contingency,
     totalProjectCost: baseScenario.totalProjectCost,
     scenarios: { conservative, base: baseScenario, optimistic },
-    profitLow: conservative.profit,
-    profitBase: baseScenario.profit,
-    profitHigh: optimistic.profit,
+    profitLow: publicMoney(conservativeCents.profit),
+    profitBase: publicMoney(baseScenarioCents.profit),
+    profitHigh: publicMoney(optimisticCents.profit),
     marginBase,
     roiBase,
     maxPurchasePrice,
@@ -192,92 +241,180 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
     confidenceScore,
     decision,
     scoreComponents: scored.components,
-    redFlags: redFlags(input, maxPurchasePrice, sourcePrice, baseScenario.profit, resale.confidence),
-    strengths: strengths(input, baseScenario.profit, marginBase, roiBase, maxPurchasePrice, sourcePrice),
+    redFlags: redFlags(input, maxPurchaseCents, sourcePriceCents, baseScenarioCents.profit, resale.confidence),
+    strengths: strengths(input, baseScenarioCents.profit, marginBase, roiBase, maxPurchaseCents, sourcePriceCents),
     missingFields,
     resaleConfidence: resale.confidence,
   };
 }
 
-function scenario(purchase: number | null, area: number | null, resalePerM2: number | null, renovation: number | null, holdingMonths: number, holding: number, additional: number, settings: UnderwritingSettings): UnderwritingScenario {
-  const resaleValue = area !== null && resalePerM2 !== null ? money(area * resalePerM2) : null;
-  if (purchase === null || resaleValue === null || renovation === null) return { resalePerM2, resaleValue, renovationTotal: renovation, totalProjectCost: null, profit: null };
-  const contingency = money(renovation * pct(settings.contingencyPercent));
-  const total = money(purchase + purchaseCostsFor(purchase, settings) + financingFor(purchase, holdingMonths, settings) + renovation + contingency + holding + additional + resaleValue * pct(settings.salesCostPercent));
-  return { resalePerM2, resaleValue, renovationTotal: renovation, totalProjectCost: total, profit: money(resaleValue - total) };
+function scenarioCents(purchase: MoneyCents | null, area: number | null, resalePerM2: MoneyCents | null, renovation: MoneyCents | null, holding: MoneyCents, additional: MoneyCents, finance: FinanceConfig): InternalScenario {
+  const resaleValue = area !== null && resalePerM2 !== null ? multiplyMoneyByQuantity(resalePerM2, area) : null;
+  if (purchase === null || resaleValue === null || renovation === null) return { resalePerM2, resaleValue, renovationTotal: renovation, totalProjectCost: null, profit: null, purchaseCosts: null, financingCosts: null, contingency: null, salesCosts: null };
+  const purchaseCosts = addMoney(
+    finance.fixedPurchaseCosts,
+    addMoney(multiplyByRate(purchase, finance.purchaseTaxRate), multiplyByRate(purchase, finance.purchaseCommissionRate)),
+  );
+  const financingCosts = financingCostsCents(purchase, finance, finance.holdingMonths);
+  const contingency = multiplyByRate(renovation, finance.contingencyRate);
+  const salesCosts = multiplyByRate(resaleValue, finance.salesRate);
+  const totalProjectCost = [purchase, purchaseCosts, financingCosts, renovation, contingency, holding, additional, salesCosts].reduce(addMoney, moneyCents(0));
+  return { resalePerM2, resaleValue, renovationTotal: renovation, totalProjectCost, profit: subtractMoney(resaleValue, totalProjectCost), purchaseCosts, financingCosts, contingency, salesCosts };
 }
 
-function maxBuy(area: number | null, resalePerM2: number | null, renovation: number | null, holdingMonths: number, holding: number, additional: number, settings: UnderwritingSettings): number | null {
+function independentValidatorScenario(purchase: MoneyCents, area: number, resalePerM2: MoneyCents, renovation: MoneyCents, holding: MoneyCents, additional: MoneyCents, finance: FinanceConfig): Pick<InternalScenario, "resaleValue" | "totalProjectCost" | "profit"> {
+  // Separate validator path: reconstruct each cash flow from the raw inputs instead of calculator scenario output.
+  const grossExit = multiplyMoneyByQuantity(resalePerM2, area);
+  const renovationReserve = multiplyByRate(renovation, finance.contingencyRate);
+  const saleFee = multiplyByRate(grossExit, finance.salesRate);
+  const acquisitionTaxAndCommission = addMoney(
+    multiplyByRate(purchase, finance.purchaseTaxRate),
+    multiplyByRate(purchase, finance.purchaseCommissionRate),
+  );
+  const capitalCost = finance.financingEnabled
+    ? multiplyByFraction(purchase, BigInt(finance.financingLoanRate) * BigInt(finance.financingAnnualRate) * BigInt(Math.round(finance.holdingMonths * 1_000)), BigInt(10_000) * BigInt(10_000) * BigInt(12_000))
+    : moneyCents(0);
+  const totalProjectCost = [purchase, finance.fixedPurchaseCosts, acquisitionTaxAndCommission, capitalCost, renovation, renovationReserve, holding, additional, saleFee].reduce(addMoney, moneyCents(0));
+  return { resaleValue: grossExit, totalProjectCost, profit: subtractMoney(grossExit, totalProjectCost) };
+}
+
+function passesThresholds(value: Pick<InternalScenario, "profit" | "resaleValue" | "totalProjectCost">, finance: FinanceConfig, thresholds: MaxPurchaseThresholds): boolean {
+  const checks = thresholdChecks(value, finance);
+  return thresholdNames(thresholds).every((key) => checks[key]);
+}
+
+function thresholdChecks(value: Pick<InternalScenario, "profit" | "resaleValue" | "totalProjectCost">, finance: FinanceConfig): Record<keyof MaxPurchaseThresholds, boolean> {
+  const profit = value.profit;
+  return {
+    profit: profit !== null && profit >= finance.minimumProfit,
+    margin: profit !== null && value.resaleValue !== null && ratioAtLeast(profit, value.resaleValue, finance.minimumMargin),
+    roi: profit !== null && value.totalProjectCost !== null && ratioAtLeast(profit, value.totalProjectCost, finance.minimumROI),
+  };
+}
+
+function ratioAtLeast(numerator: MoneyCents, denominator: MoneyCents, threshold: BasisPoints): boolean {
+  return denominator > 0 && BigInt(numerator) * BigInt(10_000) >= BigInt(denominator) * BigInt(threshold);
+}
+
+function thresholdNames(thresholds: MaxPurchaseThresholds): Array<keyof MaxPurchaseThresholds> {
+  return (Object.keys(thresholds) as Array<keyof MaxPurchaseThresholds>).filter((key) => thresholds[key]);
+}
+
+function toPublicScenario(value: InternalScenario): UnderwritingScenario {
+  return { resalePerM2: publicMoney(value.resalePerM2), resaleValue: publicMoney(value.resaleValue), renovationTotal: publicMoney(value.renovationTotal), totalProjectCost: publicMoney(value.totalProjectCost), profit: publicMoney(value.profit) };
+}
+
+function publicMoney(value: MoneyCents | null): number | null { return value === null ? null : moneyToPLN(value); }
+
+function ratioCents(value: MoneyCents | null, base: MoneyCents | null): number | null {
+  if (value === null || base === null) return null;
+  if (base <= 0) return 0;
+  const numerator = BigInt(value) * BigInt(10_000);
+  const denominator = BigInt(base);
+  const sign = numerator < BigInt(0) ? BigInt(-1) : BigInt(1);
+  const magnitude = numerator < BigInt(0) ? -numerator : numerator;
+  return Number(sign * ((magnitude * BigInt(2) + denominator) / (denominator * BigInt(2)))) / 100;
+}
+
+/** Calculator-side MAX BUY search. It uses calculator scenarios and cent-level binary search. */
+function maxBuyCents(area: number | null, resalePerM2: MoneyCents | null, renovation: MoneyCents | null, holding: MoneyCents, additional: MoneyCents, finance: FinanceConfig, thresholds: MaxPurchaseThresholds): MoneyCents | null {
   if (area === null || resalePerM2 === null || renovation === null) return null;
-  const resale = money(area * resalePerM2);
-  const fixed = settings.fixedPurchaseCosts + renovation + renovation * pct(settings.contingencyPercent) + holding + additional + resale * pct(settings.salesCostPercent);
-  const purchaseFactor = 1 + pct(settings.purchaseTaxPercent + settings.purchaseCommissionPercent) + (settings.financingEnabled ? pct(settings.financingLoanPercent) * pct(settings.financingAnnualRatePercent) * holdingMonths / 12 : 0);
-  const byProfit = (resale - settings.minimumProfitPLN - fixed) / purchaseFactor;
-  const byMargin = (resale * (1 - pct(settings.minimumMarginPercent)) - fixed) / purchaseFactor;
-  const byRoi = (resale / (1 + pct(settings.minimumROI)) - fixed) / purchaseFactor;
-  return money(Math.max(0, Math.min(byProfit, byMargin, byRoi)));
+  const resaleValue = multiplyMoneyByQuantity(resalePerM2, area);
+  const passes = (purchase: MoneyCents) => passesThresholds(scenarioCents(purchase, area, resalePerM2, renovation, holding, additional, finance), finance, thresholds);
+  let low = 0;
+  let high = Number(resaleValue);
+  if (!passes(moneyCents(0))) return moneyCents(0);
+  while (low < high) {
+    const middle = Math.floor((low + high + 1) / 2);
+    if (passes(middle as MoneyCents)) low = middle;
+    else high = middle - 1;
+  }
+  return low as MoneyCents;
+}
+
+/** Exposed for the exhaustive active-threshold boundary matrix. Production underwriting uses all three criteria. */
+export function calculateMaxPurchaseForThresholds(input: UnderwritingInput, settings: UnderwritingSettings, thresholds: MaxPurchaseThresholds): number | null {
+  const area = positive(input.areaM2);
+  const resalePerM2 = effectiveResale(input, settings).base;
+  const mode = input.renovationMode ?? inferRenovationMode(input.condition);
+  const perM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[mode];
+  const renovation = area === null ? null : multiplyMoneyByQuantity(moneyCents(perM2), area);
+  const months = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
+  const finance = financeConfig(settings, months);
+  const holding = multiplyMoneyByQuantity(finance.monthlyHoldingCost, months);
+  const additional = moneyCents(nonnegative(input.additionalCostsOverride) ?? 0);
+  const value = maxBuyCents(area, resalePerM2, renovation, holding, additional, finance, thresholds);
+  return value === null ? null : moneyToPLN(value);
 }
 
 /** Independent invariant check. It does not trust the director decision or score. */
-export function validateMaxPurchaseBoundary(input: UnderwritingInput, settings: UnderwritingSettings, maxPurchasePrice: number | null): MaxPurchaseBoundaryValidation {
+export function validateMaxPurchaseBoundary(input: UnderwritingInput, settings: UnderwritingSettings, maxPurchasePrice: number | null, thresholds: MaxPurchaseThresholds = ALL_MAX_PURCHASE_THRESHOLDS): MaxPurchaseBoundaryValidation {
   const area = positive(input.areaM2);
-  const resale = effectiveResale(input, settings).base;
+  const resalePerM2 = effectiveResale(input, settings).base;
   const renovationMode = input.renovationMode ?? inferRenovationMode(input.condition);
-  const renovationPerM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[renovationMode];
-  const renovation = area === null ? null : money(area * renovationPerM2);
-  if (area === null || resale === null || renovation === null || maxPurchasePrice === null) return { status: "BLOCKED", checks: [{ code: "MAX_BUY_INPUTS_PRESENT", passed: false, detail: "Missing area, resale, renovation or max purchase price." }] };
-  const holdingMonths = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
-  const holding = money(holdingMonths * settings.monthlyHoldingCost);
-  const additional = nonnegative(input.additionalCostsOverride) ?? 0;
-  const at = (purchase: number) => {
-    const value = scenario(purchase, area, resale, renovation, holdingMonths, holding, additional, settings);
-    return {
-      profit: value.profit,
-      margin: value.profit !== null && value.resaleValue !== null ? ratio(value.profit, value.resaleValue) : null,
-      roi: value.profit !== null && value.totalProjectCost !== null ? ratio(value.profit, value.totalProjectCost) : null,
-      rawMargin: value.profit !== null && value.resaleValue !== null ? value.profit / value.resaleValue * 100 : null,
-      rawRoi: value.profit !== null && value.totalProjectCost !== null ? value.profit / value.totalProjectCost * 100 : null,
-    };
-  };
-  const below = at(Math.max(0, maxPurchasePrice - 1));
-  const above = at(maxPurchasePrice + 1);
-  const meets = (value: ReturnType<typeof at>) => value.profit !== null && value.profit >= settings.minimumProfitPLN && (value.rawMargin ?? -Infinity) >= settings.minimumMarginPercent && (value.rawRoi ?? -Infinity) >= settings.minimumROI;
+  const perM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[renovationMode];
+  if (area === null || resalePerM2 === null || maxPurchasePrice === null) return { status: "BLOCKED", checks: [{ code: "MAX_BUY_INPUTS_PRESENT", passed: false, detail: "Missing area, resale, renovation or max purchase price." }] };
+  const renovation = multiplyMoneyByQuantity(moneyCents(perM2), area);
+  const months = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
+  const finance = financeConfig(settings, months);
+  const holding = multiplyMoneyByQuantity(finance.monthlyHoldingCost, months);
+  const additional = moneyCents(nonnegative(input.additionalCostsOverride) ?? 0);
+  const maxCents = moneyCents(maxPurchasePrice);
+  const belowCents = Number(maxCents) > 0 ? (Number(maxCents) - 1) as MoneyCents : moneyCents(0);
+  const aboveCents = (Number(maxCents) + 1) as MoneyCents;
+  // Deliberately independent formula: do not call scenarioCents() or maxBuyCents().
+  const below = independentValidatorScenario(belowCents, area, resalePerM2, renovation, holding, additional, finance);
+  const above = independentValidatorScenario(aboveCents, area, resalePerM2, renovation, holding, additional, finance);
+  const belowChecks = thresholdChecks(below, finance);
+  const aboveChecks = thresholdChecks(above, finance);
+  const belowPass = thresholdNames(thresholds).every((key) => belowChecks[key]);
+  const grossExitCapFailed = BigInt(aboveCents) > BigInt(below.resaleValue ?? 0);
+  const aboveFail = thresholdNames(thresholds).some((key) => !aboveChecks[key]) || grossExitCapFailed;
   const checks = [
-    { code: "MAX_BUY_MINUS_ONE_PASSES", passed: meets(below), detail: `profit=${below.profit};margin=${below.margin};roi=${below.roi}` },
-    { code: "MAX_BUY_PLUS_ONE_FAILS", passed: !meets(above), detail: `profit=${above.profit};margin=${above.margin};roi=${above.roi}` },
+    { code: "MAX_BUY_MINUS_ONE_PASSES", passed: belowPass, detail: `delta=-0.01 PLN;profit=${publicMoney(below.profit)};margin=${ratioCents(below.profit, below.resaleValue)};roi=${ratioCents(below.profit, below.totalProjectCost)}` },
+    { code: "MAX_BUY_PLUS_ONE_FAILS", passed: aboveFail, detail: `delta=+0.01 PLN;profit=${publicMoney(above.profit)};margin=${ratioCents(above.profit, above.resaleValue)};roi=${ratioCents(above.profit, above.totalProjectCost)};grossExitCap=${grossExitCapFailed}` },
   ];
   return { status: checks.every((check) => check.passed) ? "PASS" : "FAIL", checks };
 }
 
-function purchaseCostsFor(purchase: number, settings: UnderwritingSettings): number { return money(settings.fixedPurchaseCosts + purchase * pct(settings.purchaseTaxPercent + settings.purchaseCommissionPercent)); }
-function financingFor(purchase: number, months: number, settings: UnderwritingSettings): number { return settings.financingEnabled ? money(purchase * pct(settings.financingLoanPercent) * pct(settings.financingAnnualRatePercent) * months / 12) : 0; }
+function financeConfig(settings: UnderwritingSettings, holdingMonths = settings.holdingMonths): FinanceConfig {
+  return { fixedPurchaseCosts: moneyCents(settings.fixedPurchaseCosts), monthlyHoldingCost: moneyCents(settings.monthlyHoldingCost), contingencyRate: percentToBasisPoints(settings.contingencyPercent), purchaseTaxRate: percentToBasisPoints(settings.purchaseTaxPercent), purchaseCommissionRate: percentToBasisPoints(settings.purchaseCommissionPercent), financingLoanRate: percentToBasisPoints(settings.financingLoanPercent), financingAnnualRate: percentToBasisPoints(settings.financingAnnualRatePercent), salesRate: percentToBasisPoints(settings.salesCostPercent), minimumProfit: moneyCents(settings.minimumProfitPLN), minimumMargin: percentToBasisPoints(settings.minimumMarginPercent), minimumROI: percentToBasisPoints(settings.minimumROI), targetBuffer: percentToBasisPoints(settings.targetNegotiationBufferPercent), holdingMonths, financingEnabled: settings.financingEnabled };
+}
 
-function effectiveResale(input: UnderwritingInput, settings: UnderwritingSettings): { low: number | null; base: number | null; high: number | null; provenance: ValueProvenance; confidence: number } {
+function financingCostsCents(purchase: MoneyCents, finance: FinanceConfig, months: number): MoneyCents {
+  if (!finance.financingEnabled) return moneyCents(0);
+  const monthScale = BigInt(1_000);
+  const monthCount = BigInt(Math.round(months * Number(monthScale)));
+  return multiplyByFraction(purchase, BigInt(finance.financingLoanRate) * BigInt(finance.financingAnnualRate) * monthCount, BigInt(10_000) * BigInt(10_000) * BigInt(12) * monthScale);
+}
+
+function effectiveResale(input: UnderwritingInput, settings: UnderwritingSettings): { low: MoneyCents | null; base: MoneyCents | null; high: MoneyCents | null; provenance: ValueProvenance; confidence: number } {
   const override = positive(input.resalePerM2Override);
-  if (override !== null) return { low: money(override * 0.95), base: override, high: money(override * 1.05), provenance: "USER_ASSUMPTION", confidence: 65 };
+  if (override !== null) { const cents = moneyCents(override); return { low: multiplyByFraction(cents, BigInt(95), BigInt(100)), base: cents, high: multiplyByFraction(cents, BigInt(105), BigInt(100)), provenance: "USER_ASSUMPTION", confidence: 65 }; }
   const supplied = input.resalePerM2;
-  if (positive(supplied?.base ?? null) !== null) return { low: positive(supplied?.low ?? null) ?? supplied!.base!, base: supplied!.base, high: positive(supplied?.high ?? null) ?? supplied!.base!, provenance: supplied!.provenance, confidence: clamp(supplied!.confidence, 0, 100) };
+  if (positive(supplied?.base ?? null) !== null) return { low: moneyCents(positive(supplied?.low ?? null) ?? supplied!.base!), base: moneyCents(supplied!.base!), high: moneyCents(positive(supplied?.high ?? null) ?? supplied!.base!), provenance: supplied!.provenance, confidence: clamp(supplied!.confidence, 0, 100) };
   const market = settings.marketResalePerM2;
-  if (positive(market.base) !== null) return { ...market, provenance: settings.marketResaleProvenance, confidence: settings.marketResaleProvenance === "USER_ASSUMPTION" ? 55 : 35 };
+  if (positive(market.base) !== null) return { low: moneyCents(market.low), base: moneyCents(market.base), high: moneyCents(market.high), provenance: settings.marketResaleProvenance, confidence: settings.marketResaleProvenance === "USER_ASSUMPTION" ? 55 : 35 };
   return { low: null, base: null, high: null, provenance: "UNKNOWN", confidence: 0 };
 }
 
-function decide(input: UnderwritingInput, asking: number | null, max: number | null, profit: number | null, margin: number | null, roi: number | null, confidenceScore: number, missing: string[], settings: UnderwritingSettings): UnderwritingDecision {
+function decide(input: UnderwritingInput, asking: MoneyCents | null, max: MoneyCents | null, scenario: InternalScenario, confidenceScore: number, missing: string[], finance: FinanceConfig): UnderwritingDecision {
   if (input.manualDecision === "REJECTED" || input.decisionBucket === "REJECTED" || ["REJECTED", "ARCHIVED", "STALE"].includes(input.lifecycleStatus ?? "")) return "REJECT";
+  const profit = scenario.profit;
   if (profit === null || asking === null || max === null) return "REVIEW";
   if (asking > max) return "TOO_EXPENSIVE";
   const criticalMissing = missing.some((field) => ["area", "price", "location", "resale", "buildingType", "ownership"].includes(field));
   if (criticalMissing && input.manualDecision !== "ACCEPTED") return "REVIEW";
-  const passes = profit >= settings.minimumProfitPLN && (margin ?? -Infinity) >= settings.minimumMarginPercent && (roi ?? -Infinity) >= settings.minimumROI;
+  const passes = passesThresholds(scenario, finance, ALL_MAX_PURCHASE_THRESHOLDS);
   if (!passes) return "TOO_EXPENSIVE";
-  return confidenceScore >= 75 && profit >= settings.minimumProfitPLN * 1.5 ? "HOT" : "GOOD";
+  return confidenceScore >= 75 && BigInt(profit) * BigInt(2) >= BigInt(finance.minimumProfit) * BigInt(3) ? "HOT" : "GOOD";
 }
 
-function score(args: { input: UnderwritingInput; sourcePrice: number | null; maxPurchasePrice: number | null; baseScenario: UnderwritingScenario; marginBase: number | null; roiBase: number | null; confidenceScore: number }): { total: number; components: Array<{ label: string; points: number }> } {
-  const economics = args.baseScenario.profit === null ? 0 : clamp(Math.round(args.baseScenario.profit / 5_000), -10, 25);
+function score(args: { input: UnderwritingInput; sourcePriceCents: MoneyCents | null; maxPurchaseCents: MoneyCents | null; profitCents: MoneyCents | null; marginBase: number | null; roiBase: number | null; confidenceScore: number }): { total: number; components: Array<{ label: string; points: number }> } {
+  const economics = args.profitCents === null ? 0 : clamp(Math.round(Number(args.profitCents) / 500_000), -10, 25);
   const margin = args.marginBase === null ? 0 : clamp(Math.round(args.marginBase), -10, 20);
   const roi = args.roiBase === null ? 0 : clamp(Math.round(args.roiBase * 0.8), -10, 20);
-  const purchase = args.sourcePrice !== null && args.maxPurchasePrice !== null ? (args.sourcePrice <= args.maxPurchasePrice ? 15 : clamp(Math.round(15 - (args.sourcePrice - args.maxPurchasePrice) / 5_000), -10, 14)) : 0;
+  const purchase = args.sourcePriceCents !== null && args.maxPurchaseCents !== null ? (args.sourcePriceCents <= args.maxPurchaseCents ? 15 : clamp(Math.round(15 - Number(subtractMoney(args.sourcePriceCents, args.maxPurchaseCents)) / 500_000), -10, 14)) : 0;
   const liquidity = (positive(args.input.areaM2) !== null && args.input.areaM2! >= 25 && args.input.areaM2! <= 70 ? 6 : 2) + (positive(args.input.rooms) !== null && args.input.rooms! <= 4 ? 4 : 1);
   const evidence = Math.round(args.confidenceScore * 0.1);
   const components = [{ label: "Ekonomia", points: economics }, { label: "Marża", points: margin }, { label: "ROI", points: roi }, { label: "Cena zakupu", points: purchase }, { label: "Płynność", points: liquidity }, { label: "Jakość danych", points: evidence }];
@@ -311,9 +448,9 @@ function collectMissing(input: UnderwritingInput, resale: number | null): string
   return [...fields];
 }
 
-function redFlags(input: UnderwritingInput, max: number | null, asking: number | null, profit: number | null, resaleConfidence: number): string[] {
+function redFlags(input: UnderwritingInput, max: MoneyCents | null, asking: MoneyCents | null, profit: MoneyCents | null, resaleConfidence: number): string[] {
   const flags: string[] = [];
-  if (asking !== null && max !== null && asking > max) flags.push(`Cena ofertowa przekracza maksimum o ${money(asking - max)} zł`);
+  if (asking !== null && max !== null && asking > max) flags.push(`Cena ofertowa przekracza maksimum o ${moneyToPLN(subtractMoney(asking, max))} zł`);
   if (profit !== null && profit < 0) flags.push("Ujemny zysk w scenariuszu bazowym");
   if (!input.buildingType) flags.push("Niezweryfikowany typ budynku");
   if (!input.ownership) flags.push("Brak informacji o własności");
@@ -321,9 +458,9 @@ function redFlags(input: UnderwritingInput, max: number | null, asking: number |
   return flags;
 }
 
-function strengths(input: UnderwritingInput, profit: number | null, margin: number | null, roi: number | null, max: number | null, asking: number | null): string[] {
+function strengths(input: UnderwritingInput, profit: MoneyCents | null, margin: number | null, roi: number | null, max: MoneyCents | null, asking: MoneyCents | null): string[] {
   const values: string[] = [];
-  if (profit !== null && profit >= 50_000) values.push("Zysk bazowy co najmniej 50 000 zł");
+  if (profit !== null && profit >= moneyCents(50_000)) values.push("Zysk bazowy co najmniej 50 000 zł");
   if (margin !== null && margin >= 12) values.push("Marża bazowa co najmniej 12%");
   if (roi !== null && roi >= 12) values.push("ROI bazowe co najmniej 12%");
   if (asking !== null && max !== null && asking <= max) values.push("Cena mieści się w maksymalnej cenie zakupu");
@@ -332,9 +469,6 @@ function strengths(input: UnderwritingInput, profit: number | null, margin: numb
 }
 
 function inferRenovationMode(condition: string | null): RenovationMode { return condition && /general|do remontu|wymaga remontu/i.test(condition) ? "FULL" : condition && /odświe|częściow/i.test(condition) ? "LIGHT" : "STANDARD"; }
-function money(value: number): number { return Math.round(Math.round(value * 100)) / 100; }
-function ratio(value: number, base: number): number { return base > 0 ? Math.round(value / base * 10_000) / 100 : 0; }
-function pct(value: number): number { return clamp(value, 0, 100) / 100; }
 function positive(value: number | null | undefined): number | null { return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null; }
 function nonnegative(value: number | null | undefined): number | null { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null; }
 function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min)); }
