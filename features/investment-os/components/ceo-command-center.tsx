@@ -1,5 +1,5 @@
 import type { CanonicalDeal } from "../types";
-import { pln, StatusPill } from "./investment-ui";
+import { formatInvestmentRisk, pln, StatusPill } from "./investment-ui";
 
 export function CeoCommandCenter({ deal, onOpenPlaybook }: { deal: CanonicalDeal; onOpenPlaybook: () => void }) {
   const ceo = deal.ceo.result;
@@ -11,7 +11,10 @@ export function CeoCommandCenter({ deal, onOpenPlaybook }: { deal: CanonicalDeal
   const missingSummary = missingBeforePurchase.length
     ? `${missingBeforePurchase.slice(0, 2).map(labelMissingField).join(" · ")}${missingBeforePurchase.length > 2 ? ` · +${missingBeforePurchase.length - 2}` : ""}`
     : "Brak pozycji zgłoszonych przez CEO w aktualnej analizie.";
-  const nextAction = ceo?.nextBestAction || "Uzupełnij dane krytyczne i ponownie oceń warunki zakupu.";
+  const nextAction = ceo?.action === "NEGOCJUJ" && ceo.openingOffer != null
+    ? `Oferta otwierająca: ${pln(ceo.openingOffer)}.`
+    : ceo?.nextBestAction || "Uzupełnij dane krytyczne i ponownie oceń warunki zakupu.";
+  const formattedPrimaryRisk = primaryRisk ? formatInvestmentRisk(primaryRisk) : null;
 
   return (
     <section aria-labelledby="command-center-title" className="min-w-0 max-w-full overflow-hidden rounded-2xl bg-foreground text-background shadow-sm">
@@ -21,7 +24,7 @@ export function CeoCommandCenter({ deal, onOpenPlaybook }: { deal: CanonicalDeal
           <h2 className="mt-1 text-xl font-semibold tracking-tight sm:text-2xl" id="command-center-title">{action}</h2>
           <p className="mt-1 max-w-3xl text-sm leading-5 text-background/75">{ceo?.headline ?? "Decyzja jest ograniczona przez brak wymaganych danych."}</p>
         </div>
-        <StatusPill status={deal.ceo.status} />
+        <StatusPill label={deal.ceo.status === "COMPLETE" ? "ANALIZA GOTOWA" : undefined} status={deal.ceo.status} />
       </div>
 
       <div className="grid gap-2 px-3 py-2 sm:grid-cols-2 sm:p-4 lg:grid-cols-4">
@@ -31,10 +34,7 @@ export function CeoCommandCenter({ deal, onOpenPlaybook }: { deal: CanonicalDeal
         <div className="hidden sm:block"><CommandMetric label="Flip Score" value={ceo ? `${ceo.flipScore}/100` : "—"} detail={`Confidence ${ceo ? `${ceo.confidence}/100` : "—"}`} /></div>
       </div>
 
-      <div className="mx-3 mb-3 hidden rounded-lg border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs text-background/90 sm:mx-4 sm:block">
-        {primaryRisk ? <p><span className="font-semibold uppercase tracking-wide text-amber-200">Największe ryzyko</span><span className="ml-2">{primaryRisk}</span></p> : null}
-        <p className={primaryRisk ? "mt-1" : ""} data-command-missing-info><span className="font-semibold uppercase tracking-wide text-background/65">Czego jeszcze nie wiemy</span><span className="ml-2">{missingSummary}</span></p>
-      </div>
+      <RiskAndMissingInfo missingSummary={missingSummary} primaryRisk={formattedPrimaryRisk} className="mx-3 mb-3 hidden sm:mx-4 sm:block" />
 
       <div className="mx-3 mb-3 flex items-center gap-2 rounded-xl border border-background/15 bg-background/5 p-2.5 sm:mx-4 sm:mb-4 sm:justify-between sm:gap-4 sm:px-4 sm:py-3">
         <div className="min-w-0 flex-1">
@@ -49,10 +49,7 @@ export function CeoCommandCenter({ deal, onOpenPlaybook }: { deal: CanonicalDeal
         <CommandMetric label="ROI" value={underwriting?.roiBase == null ? "—" : `${underwriting.roiBase.toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%`} detail="Względem kosztu projektu" />
         <CommandMetric label="Flip Score" value={ceo ? `${ceo.flipScore}/100` : "—"} detail={`Confidence ${ceo ? `${ceo.confidence}/100` : "—"}`} />
       </div>
-      <div className="mx-3 mb-3 rounded-lg border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs text-background/90 sm:hidden">
-        {primaryRisk ? <p><span className="font-semibold uppercase tracking-wide text-amber-200">Największe ryzyko</span><span className="ml-2">{primaryRisk}</span></p> : null}
-        <p className={primaryRisk ? "mt-1" : ""} data-command-missing-info><span className="font-semibold uppercase tracking-wide text-background/65">Czego jeszcze nie wiemy</span><span className="ml-2">{missingSummary}</span></p>
-      </div>
+      <RiskAndMissingInfo missingSummary={missingSummary} primaryRisk={formattedPrimaryRisk} className="mx-3 mb-3 sm:hidden" />
       <div className="hidden gap-2 px-4 pb-4 sm:grid sm:grid-cols-2 lg:grid-cols-4">
         <CommandMetric label="ASKING" value={pln(deal.facts.askingPrice.effectiveValue)} />
         <CommandMetric label="OPENING OFFER" value={pln(ceo?.openingOffer)} />
@@ -70,6 +67,19 @@ export function CeoCommandCenter({ deal, onOpenPlaybook }: { deal: CanonicalDeal
       </details>
     </section>
   );
+}
+
+function RiskAndMissingInfo({ primaryRisk, missingSummary, className }: { primaryRisk: string | null; missingSummary: string; className: string }) {
+  return <div className={`grid gap-3 rounded-lg border border-amber-300/25 bg-amber-300/10 px-3 py-3 text-xs text-background/90 sm:grid-cols-2 ${className}`}>
+    {primaryRisk ? <div className="space-y-1" data-command-primary-risk>
+      <p className="font-semibold uppercase tracking-wide text-amber-900">NAJWIĘKSZE RYZYKO</p>
+      <p className="leading-5">{primaryRisk}</p>
+    </div> : null}
+    <div className="space-y-1" data-command-missing-info>
+      <p className="font-semibold uppercase tracking-wide text-background/65">BRAKUJĄCE INFORMACJE</p>
+      <p className="leading-5">{missingSummary}</p>
+    </div>
+  </div>;
 }
 
 function labelMissingField(field: string): string {

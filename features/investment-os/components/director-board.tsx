@@ -1,5 +1,5 @@
 import type { CanonicalDeal, DirectorOutput } from "../types";
-import { SectionHeading, StatusPill } from "./investment-ui";
+import { formatInvestmentRisk, SectionHeading, StatusPill } from "./investment-ui";
 
 export function DirectorBoard({ deal }: { deal: CanonicalDeal }) {
   const active = [deal.scout, deal.verify, deal.market, deal.underwriting, deal.ceo];
@@ -21,20 +21,22 @@ export function DirectorBoard({ deal }: { deal: CanonicalDeal }) {
 function DirectorCard({ output }: { output: DirectorOutput<unknown> }) {
   const signal = output.status === "STALE" ? "STALE" : output.status === "BLOCKED" || output.status === "FAILED" || output.validation.status === "FAIL" ? "BLOCKED" : output.missingFields.length ? "MISSING DATA" : output.status === "COMPLETE" && output.validation.status === "PASS" ? "PASS" : "CHECK";
   const signalStyle = signal === "PASS" ? "text-emerald-700 dark:text-emerald-300" : signal === "BLOCKED" || signal === "MISSING DATA" || signal === "STALE" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground";
+  const collapsedFinding = meaningfulFinding(output);
   return <article className="rounded-xl border border-border/70 bg-background/50 p-4">
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div><h4 className="text-xs font-semibold uppercase tracking-[0.14em]">{output.director}</h4><p className={`mt-1 text-xs font-semibold ${signalStyle}`}>{signal}</p></div>
-      <StatusPill status={output.status} />
+      <StatusPill label={output.director === "CEO" && output.status === "COMPLETE" ? "ANALIZA GOTOWA" : undefined} status={output.status} />
     </div>
     <p className="mt-3 text-xs text-muted-foreground">Confidence <span className="font-semibold text-foreground">{output.confidence}%</span> · validator <span className="font-semibold text-foreground">{output.validation.status}</span></p>
-    <p className="mt-3 line-clamp-3 text-sm leading-5">{output.finding || "Brak podsumowania."}</p>
-    <p className="mt-2 line-clamp-2 text-sm font-medium leading-5 text-foreground">{output.recommendation || "Brak rekomendacji."}</p>
+    {collapsedFinding ? <p className="mt-3 line-clamp-3 text-sm leading-5" data-director-collapsed-finding>{collapsedFinding}</p> : null}
     {output.missingFields.length ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Brak danych: {output.missingFields.slice(0, 3).join(", ")}{output.missingFields.length > 3 ? ` +${output.missingFields.length - 3}` : ""}</p> : null}
     <details className="mt-3 border-t border-border/70 pt-2 text-xs">
       <summary className="min-h-8 cursor-pointer py-1 font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">Evidence, ryzyka i warunki zmiany</summary>
       <div className="mt-2 space-y-2 text-muted-foreground">
+        <p><strong className="text-foreground">Finding:</strong> {output.finding || "Brak podsumowania."}</p>
+        <p><strong className="text-foreground">Recommendation:</strong> {output.recommendation || "Brak rekomendacji."}</p>
         <FieldList title="Evidence" values={output.evidence} />
-        <FieldList title="Ryzyka" values={output.risks} />
+        <FieldList title="Ryzyka" values={output.risks.map(formatInvestmentRisk)} />
         <FieldList title="Missing data" values={output.missingData} />
         <FieldList title="Next best actions" values={output.nextBestActions} />
         <FieldList title="Decision triggers" values={output.decisionTriggers} />
@@ -44,6 +46,21 @@ function DirectorCard({ output }: { output: DirectorOutput<unknown> }) {
       </div>
     </details>
   </article>;
+}
+
+function meaningfulFinding(output: DirectorOutput<unknown>): string | null {
+  const finding = output.finding?.trim();
+  if (finding && !isGenericFinding(finding)) return finding;
+  const warning = output.warnings.find((item) => item.trim() && !isGenericFinding(item.trim()));
+  if (warning) return formatInvestmentRisk(warning);
+  if (output.missingFields.length) return `Wymaga uzupełnienia: ${output.missingFields.slice(0, 2).join(", ")}${output.missingFields.length > 2 ? ` +${output.missingFields.length - 2}` : ""}.`;
+  return null;
+}
+
+function isGenericFinding(value: string): boolean {
+  return /^(?:[A-Z_ ]+ completed with confidence \d+\.?|[A-Z_ ]+ blocked by evidence or validation\.)$/.test(value)
+    || value === "Pass only validated output downstream."
+    || value === "Execute only the conditional human-approved action.";
 }
 
 function FieldList({ title, values }: { title: string; values: string[] }) {

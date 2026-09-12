@@ -42,7 +42,7 @@ test("Investment Command Center keeps the API contract and presents the CEO deci
   assert.match(command, /nextBestAction/);
   assert.match(command, /Otwórz plan działania/);
   assert.match(command, /missingBeforePurchase/);
-  assert.match(command, /Czego jeszcze nie wiemy/);
+  assert.match(command, /BRAKUJĄCE INFORMACJE/);
   assert.match(desk, /<CeoCommandCenter/);
   assert.doesNotMatch(`${desk}${command}`, /computedProfit|computedScore/);
 });

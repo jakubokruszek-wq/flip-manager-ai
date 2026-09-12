@@ -5,6 +5,13 @@ export function pln(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? "—" : new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 }).format(value);
 }
 
+export function formatInvestmentRisk(value: string): string {
+  const match = /^Cena ofertowa przekracza maksimum o (\d+(?:\.\d+)?) zł$/.exec(value);
+  if (!match) return value;
+  const amount = Number(match[1]);
+  return Number.isFinite(amount) ? `Cena ofertowa przekracza maksimum o ${pln(amount)}` : value;
+}
+
 export function numeric(value: number | null | undefined, maximumFractionDigits = 1): string {
   return value == null || !Number.isFinite(value) ? "—" : new Intl.NumberFormat("pl-PL", { maximumFractionDigits }).format(value);
 }

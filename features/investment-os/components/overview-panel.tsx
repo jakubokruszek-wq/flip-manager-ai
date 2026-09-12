@@ -1,11 +1,11 @@
 import type { CanonicalDeal } from "../types";
-import { ContentList, PanelCard } from "./investment-ui";
+import { ContentList, formatInvestmentRisk, PanelCard } from "./investment-ui";
 
 export function OverviewPanel({ deal }: { deal: CanonicalDeal }) {
   const ceo = deal.ceo.result;
   return <div className="grid gap-3 lg:grid-cols-2">
     <ContentList title="Mocne strony" values={ceo?.strengths ?? []} />
-    <ContentList title="Najważniejsze ryzyka" values={ceo?.risks ?? []} />
+    <ContentList title="Najważniejsze ryzyka" values={(ceo?.risks ?? []).map(formatInvestmentRisk)} />
     <ContentList title="Brakujące informacje przed zakupem" values={ceo?.missingBeforePurchase ?? []} />
     <PanelCard title="Investment thesis"><p>{ceo?.investmentThesis ?? "Brak zatwierdzonej tezy dla obecnego stanu danych."}</p></PanelCard>
     <PanelCard title="Scenariusze CEO">
