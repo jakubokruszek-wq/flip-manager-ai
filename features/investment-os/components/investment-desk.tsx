@@ -1,60 +1,95 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { FilterResult } from "@/features/flip-finder/results";
-import type { CanonicalDeal, DealFactOverrides, DirectorOutput } from "../types";
+import type { CanonicalDeal, DealFactOverrides } from "../types";
 import { loadInvestmentDeal } from "../investment-client";
+import { CeoCommandCenter } from "./ceo-command-center";
+import { DealHealth } from "./deal-health";
+import { DirectorBoard } from "./director-board";
+import { DecisionWorkspace } from "./decision-workspace";
+import { type WorkspaceTab } from "./workspace-tabs";
+import { OverridePanel } from "./override-panel";
 
 export function InvestmentDesk({ result }: { result: FilterResult }) {
-  const [deal, setDeal] = useState<CanonicalDeal | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState<string | null>(null); const [saving, setSaving] = useState(false);
+  const [deal, setDeal] = useState<CanonicalDeal | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<WorkspaceTab>("OVERVIEW");
+
   const load = useCallback(async () => {
     setError(null);
     try {
       setDeal(await loadInvestmentDeal(result.id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Investment Desk niedostępny");
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }, [result.id]);
-  useEffect(() => { const timeout = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timeout); }, [load]);
-  const save = async (overrides: DealFactOverrides) => { setSaving(true); setError(null); try { const response = await fetch(`/api/flip-finder/listings/${result.id}/investment`, { method: "PUT", headers: { "content-type": "application/json", "x-flip-finder-action": "investment-os" }, body: JSON.stringify({ overrides }) }); const body = await response.json(); if (!response.ok || !body.deal) throw new Error(body.message ?? "Nie udało się zapisać"); setDeal(body.deal); } catch (cause) { setError(cause instanceof Error ? cause.message : "Nie udało się zapisać"); } finally { setSaving(false); } };
-  if (loading) return <div className="px-5 py-10 text-sm text-muted-foreground sm:px-8">Dyrektorzy analizują aktualne dane…</div>;
-  if (!deal) return <div className="px-5 py-8 sm:px-8"><p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error ?? "Investment Desk niedostępny"}</p></div>;
-  const ceo = deal.ceo.result; const u = deal.underwriting.result;
-  return <div className="space-y-6 px-5 py-6 sm:px-8 sm:py-8">
-    <section className="rounded-2xl bg-foreground p-5 text-background"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold tracking-[.2em] opacity-60">CEO</p><h2 className="mt-1 text-3xl font-black">{ceo?.action ?? "HOLD / ZBIERZ DANE"}</h2><p className="mt-2 max-w-2xl text-sm opacity-75">{ceo?.headline ?? "Analiza zależności jest zablokowana."}</p></div><span className="rounded-full border border-background/25 px-3 py-1 text-sm font-bold">{deal.ceo.status}</span></div>
-      <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4"><Hero label="Cena ofertowa" value={pln(deal.facts.askingPrice.effectiveValue)} /><Hero label="Pierwsza oferta" value={pln(ceo?.openingOffer ?? null)} /><Hero label="Cel zakupu" value={pln(ceo?.targetPurchasePrice ?? null)} /><Hero label="Maksimum" value={pln(ceo?.maxPurchasePrice ?? null)} /></div>
-      <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4"><Hero label="Zysk bazowy" value={pln(ceo?.expectedProfitBase ?? null)} /><Hero label="Zysk ostrożny" value={pln(ceo?.expectedProfitConservative ?? null)} /><Hero label="Flip Score" value={ceo ? `${ceo.flipScore}/100` : "—"} /><Hero label="Confidence" value={ceo ? `${ceo.confidence}/100` : "—"} /></div>
-    </section>
-    {result.hasPriceDrop && result.priceDropAmount ? <p className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm font-semibold">Cena spadła o {pln(result.priceDropAmount)}. {ceo?.decision === "GOOD" || ceo?.decision === "HOT" ? "Oferta weszła w zakres opłacalności." : "Dyrektorzy przeliczyli aktualną cenę."}</p> : null}
-    <section><h3 className="text-lg font-bold">Zespół inwestycyjny</h3><div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-5"><DirectorCard output={deal.scout} /><DirectorCard output={deal.verify} /><DirectorCard output={deal.market} /><DirectorCard output={deal.underwriting} /><DirectorCard output={deal.ceo} /></div></section>
-    <p className="rounded-xl border p-3 text-sm">Poziom analizy: <strong>{deal.analysisLevel}</strong> · evidence items: <strong>{deal.evidenceFabric.length}</strong>{ceo?.deepDiveRecommended ? ` · DEEP DIVE: ${ceo.deepDiveReason}` : ""}</p>
-    {deal.market.result ? <section className="grid gap-3 sm:grid-cols-3"><Metric label="Resale low" value={pln(deal.market.result.resaleValueLow)} /><Metric label="Resale base" value={pln(deal.market.result.resaleValueBase)} /><Metric label="Resale high" value={pln(deal.market.result.resaleValueHigh)} /><p className="sm:col-span-3 text-xs text-muted-foreground">Źródło: {deal.market.result.assumptionMatchedBy} · typ ceny: {deal.market.result.priceEvidenceType} · comps: {deal.market.result.compCount} · confidence {deal.market.confidence}% · fallback L{deal.market.fallbackLevel} ({deal.market.fallbackReason ?? "brak"}) · ważne do {deal.market.freshUntil ?? "nieustalone"}</p>{deal.market.result.comparables.length ? <div className="sm:col-span-3"><List title="Najważniejsze comps" values={deal.market.result.comparables.slice(0, 5).map((comp) => `${comp.source} · ${pln(comp.pricePerM2)}/m² · similarity ${comp.similarityScore} · quality ${comp.dataQuality} · weight ${comp.weight}`)} /></div> : null}</section> : <Blocked title="MARKET" reasons={deal.market.reasonCodes} />}
-    {u ? <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Remont" value={pln(u.renovationTotal)} /><Metric label="Całkowity koszt bazowy" value={pln(u.totalProjectCost)} /><Metric label="Marża bazowa" value={pct(u.marginBase)} /><Metric label="ROI bazowe" value={pct(u.roiBase)} /></section> : <Blocked title="UNDERWRITER" reasons={deal.underwriting.reasonCodes} />}
-    <section className="grid gap-3 md:grid-cols-3"><List title="Mocne strony" values={ceo?.strengths ?? []} /><List title="Ryzyka" values={ceo?.risks ?? []} /><List title="Przed zakupem" values={ceo?.missingBeforePurchase ?? []} /></section>
-    {ceo ? <section className="space-y-3 rounded-2xl border p-4"><h3 className="font-bold">Decyzja CEO</h3><p className="text-sm">{ceo.investmentThesis}</p><p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs font-semibold">Decyzja człowieka wymagana: TAK · autonomiczny zakup: NIE</p><div className="grid gap-3 md:grid-cols-3"><Metric label="Bear case" value={ceo.bearCase} /><Metric label="Base case" value={ceo.baseCase} /><Metric label="Bull case" value={ceo.bullCase} /></div><div className="grid gap-3 md:grid-cols-3"><List title="Dissent" values={ceo.dissent} /><List title="Warunki działania" values={ceo.conditionsToProceed} /><List title="Walk-away" values={ceo.walkAwayConditions} /></div><div className="grid gap-3 md:grid-cols-2"><List title="Niespełnione bramki" values={ceo.criticalGates.filter((gate) => !gate.passed).map((gate) => gate.reason)} /><List title="Red team" values={ceo.redTeam.map((item) => `${item.severity}: ${item.finding}`)} /></div><List title="Kalibracja dyrektorów" values={ceo.directorTrackRecords.map((record) => `${record.director}: ${record.dealCount} wyników · mediana błędu ${record.medianErrorPercent ?? "brak"}% · krytyczne pominięcia ${record.criticalMisses}`)} /><p className="rounded-lg bg-muted p-3 text-sm font-semibold">Next best action: {ceo.nextBestAction}</p></section> : null}
-    <section><h3 className="text-lg font-bold">Deal playbook</h3><div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-3"><List title="Przed telefonem" values={deal.playbook.beforeCall} /><List title="Pytania do sprzedającego" values={deal.playbook.sellerQuestions} /><List title="Checklista oględzin" values={deal.playbook.viewingChecklist} /><List title="Plan negocjacji" values={deal.playbook.negotiationPlan} /><List title="Wymagane dokumenty" values={deal.playbook.documentsRequired} /><List title="Warunki przed zakupem" values={deal.playbook.conditionsBeforePurchase} /></div></section>
-    <section><h3 className="text-lg font-bold">Najwyższa wartość informacji</h3><div className="mt-3 grid gap-3 md:grid-cols-3">{(ceo?.nextBestQuestions ?? []).map((request) => <article className="rounded-xl border p-4" key={request.id}><p className="text-xs font-bold">{request.priority} · VOI {request.valueOfInformation}</p><p className="mt-2 text-sm font-semibold">{request.question}</p><p className="mt-2 text-xs text-muted-foreground">Wpływ: {request.decisionImpact.join(", ")} · evidence: {request.evidenceNeeded}</p></article>)}</div></section>
-    <details className="rounded-xl border p-4"><summary className="cursor-pointer font-bold">Audyt faktów i provenance</summary><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[820px] text-left text-xs"><thead><tr className="border-b"><th className="py-2">Pole</th><th>Źródło</th><th>Override</th><th>Efektywne</th><th>Klasa</th><th>Provenance</th><th>Observed</th><th>Evidence ID</th></tr></thead><tbody>{Object.entries(deal.facts).map(([name, fact]) => <tr className="border-b border-border/50" key={name}><td className="py-2 font-medium">{name}</td><td>{display(fact.sourceValue)}</td><td>{display(fact.overrideValue)}</td><td>{display(fact.effectiveValue)}</td><td>{fact.classification}</td><td>{fact.provenance}</td><td>{fact.observedAt ?? "—"}</td><td>{fact.evidenceId ?? fact.assumptionId ?? "—"}</td></tr>)}</tbody></table></div></details>
-    <details className="rounded-xl border p-4"><summary className="cursor-pointer font-bold">Evidence Fabric i narzędzia</summary><div className="mt-3 space-y-2 text-xs">{deal.evidenceFabric.map((item) => <p key={item.id}><strong>{item.type}</strong> · {item.sourceType} · {item.sourceName} · {item.verificationStatus} · {item.id}</p>)}</div></details>
-    <OverrideEditor deal={deal} disabled={saving} onSave={save} />
-    {error ? <p className="text-sm text-destructive">{error}</p> : null}
-  </div>;
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timeout);
+  }, [load]);
+
+  const save = async (overrides: DealFactOverrides) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/investment`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-flip-finder-action": "investment-os" },
+        body: JSON.stringify({ overrides }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.deal) throw new Error(body.message ?? "Nie udało się zapisać");
+      setDeal(body.deal);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Nie udało się zapisać");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <InvestmentDeskSkeleton />;
+  if (!deal) {
+    return (
+      <div className="space-y-4 px-4 py-5 sm:px-7 sm:py-7" role="status">
+        <header>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Investment Command Center</p>
+          <h2 className="mt-1 text-xl font-semibold">Analiza niedostępna</h2>
+        </header>
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          {error ?? "Nie udało się wczytać analizy tej oferty."}
+          <button className="ml-3 rounded-md underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setLoading(true); void load(); }} type="button">Spróbuj ponownie</button>
+        </div>
+      </div>
+    );
+  }
+
+  const ceo = deal.ceo.result;
+  return (
+    <div className="min-w-0 max-w-full space-y-5 px-4 py-5 sm:px-7 sm:py-7">
+      <CeoCommandCenter deal={deal} onOpenPlaybook={() => setActiveWorkspaceTab("PLAYBOOK")} />
+      <DealHealth deal={deal} />
+      <DirectorBoard deal={deal} />
+      <DecisionWorkspace deal={deal} activeTab={activeWorkspaceTab} onTabChange={setActiveWorkspaceTab} />
+      <OverridePanel deal={deal} disabled={saving} onSave={save} />
+      {error ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">{error}</p> : null}
+      <p className="text-xs text-muted-foreground">Poziom analizy: <strong className="font-medium text-foreground">{deal.analysisLevel}</strong> · evidence items: <strong className="font-medium text-foreground">{deal.evidenceFabric.length}</strong>{ceo?.deepDiveRecommended ? ` · deep dive: ${ceo.deepDiveReason ?? "zalecany"}` : ""}</p>
+    </div>
+  );
 }
 
-function OverrideEditor({ deal, disabled, onSave }: { deal: CanonicalDeal; disabled: boolean; onSave: (value: DealFactOverrides) => Promise<void> }) {
-  const [values, setValues] = useState<Record<string, string>>({});
-  const change = (name: string, value: string) => setValues((current) => ({ ...current, [name]: value }));
-  const payload = (): DealFactOverrides => Object.fromEntries(Object.entries(values).filter(([, value]) => value.trim() !== "").map(([key, value]) => [key, ["city","district","street","buildingType","ownership","condition","floor","floorsTotal"].includes(key) ? value.trim() : Number(value)]));
-  return <section className="rounded-2xl border bg-muted/20 p-4"><div><h3 className="font-bold">Nadpisania tego dealu</h3><p className="text-xs text-muted-foreground">Source value pozostaje w audycie. Zapis zmienia tylko effective value i przelicza zależne dyrekcje.</p></div><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Field label="Cena zakupu" name="askingPrice" placeholder={deal.facts.askingPrice.effectiveValue} value={values.askingPrice} onChange={change} /><Field label="Resale zł/m²" name="resalePerM2" placeholder={deal.market.result?.resalePricePerM2Base ?? null} value={values.resalePerM2} onChange={change} /><Field label="Remont zł/m²" name="renovationPerM2" placeholder={deal.underwriting.result?.renovationPerM2 ?? null} value={values.renovationPerM2} onChange={change} /><Field label="Miesiące utrzymania" name="holdingMonths" placeholder={null} value={values.holdingMonths} onChange={change} /></div><div className="mt-4 flex gap-2"><Button disabled={disabled} onClick={() => void onSave(payload())} type="button">Zapisz i przelicz</Button><Button disabled={disabled} onClick={() => { setValues({}); void onSave({}); }} type="button" variant="outline">Reset do źródła</Button></div></section>;
+function InvestmentDeskSkeleton() {
+  return (
+    <div aria-label="Wczytywanie Investment Command Center" className="space-y-4 px-4 py-5 sm:px-7 sm:py-7" role="status">
+      <div className="h-56 animate-pulse rounded-2xl bg-muted sm:h-52" />
+      <div className="grid gap-3 sm:grid-cols-3"><div className="h-24 animate-pulse rounded-xl bg-muted" /><div className="h-24 animate-pulse rounded-xl bg-muted" /><div className="h-24 animate-pulse rounded-xl bg-muted" /></div>
+      <div className="h-32 animate-pulse rounded-2xl bg-muted" />
+      <span className="sr-only">Trwa wczytywanie analizy inwestycyjnej.</span>
+    </div>
+  );
 }
-function Field({ label, name, value, placeholder, onChange }: { label: string; name: string; value?: string; placeholder: number | null; onChange: (name: string, value: string) => void }) { return <label><span className="mb-1 block text-xs text-muted-foreground">{label}</span><Input min="0" onChange={(event) => onChange(name, event.target.value)} placeholder={placeholder == null ? "brak" : String(Math.round(placeholder))} type="number" value={value ?? ""} /></label>; }
-function DirectorCard({ output }: { output: DirectorOutput<unknown> }) { return <article className="rounded-xl border p-3"><p className="text-xs font-bold tracking-wider">{output.director}</p><p className="mt-1 font-bold">{output.status}</p><p className="mt-1 text-xs text-muted-foreground">Confidence {output.confidence}% · validator {output.validation.status}</p><p className="mt-2 text-xs">{output.finding}</p><p className="mt-2 text-xs font-semibold">{output.recommendation}</p>{output.missingFields.length ? <p className="mt-2 text-xs text-amber-700">Brak: {output.missingFields.slice(0, 3).join(", ")}</p> : null}<details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">Evidence, walidacja i triggery</summary><p className="mt-1">Evidence: {output.evidence.slice(0, 4).join(", ") || "brak"}</p><p className="mt-1">Walidacja: {output.validation.checks.map((check) => `${check.passed ? "PASS" : "FAIL"} ${check.code}`).join(", ")}</p><p className="mt-1">Ryzyka: {output.risks.join(", ") || "brak"}</p><p className="mt-1">Next: {output.nextBestActions.join(", ")}</p><p className="mt-1">Zmiana decyzji: {output.whatWouldChangeMyMind.join(", ")}</p></details></article>; }
-function Hero({ label, value }: { label: string; value: string }) { return <div><p className="text-xs opacity-60">{label}</p><p className="mt-1 text-lg font-bold">{value}</p></div>; }
-function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-lg font-bold">{value}</p></div>; }
-function Blocked({ title, reasons }: { title: string; reasons: string[] }) { return <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm"><strong>{title}: BLOCKED</strong><p className="mt-1 text-muted-foreground">{reasons.join(", ")}</p></div>; }
-function List({ title, values }: { title: string; values: string[] }) { return <div className="rounded-xl border p-4"><h4 className="font-bold">{title}</h4><ul className="mt-2 space-y-1 text-sm text-muted-foreground">{values.length ? values.map((value) => <li key={value}>• {value}</li>) : <li>Brak</li>}</ul></div>; }
-function pln(value: number | null): string { return value == null ? "—" : new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 }).format(value); }
-function pct(value: number | null): string { return value == null ? "—" : `${value.toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%`; }
-function display(value: unknown): string { return value == null || value === "" ? "—" : typeof value === "number" ? value.toLocaleString("pl-PL") : String(value); }
