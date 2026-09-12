@@ -181,7 +181,7 @@ alter table public.underwriting_settings enable row level security;
 alter table public.deal_outcomes enable row level security;
 alter table public.director_scorecards enable row level security;
 
-revoke all on table public.deals, public.deal_evidence, public.director_runs, public.director_information_requests, public.deal_fact_overrides, public.market_assumptions, public.underwriting_settings, public.deal_outcomes, public.director_scorecards from anon, authenticated;
+revoke all on table public.deals, public.deal_evidence, public.director_runs, public.director_information_requests, public.deal_fact_overrides, public.market_assumptions, public.underwriting_settings, public.deal_outcomes, public.director_scorecards from public, anon, authenticated, service_role;
 grant select, insert, update on table public.deals, public.deal_evidence, public.director_runs, public.director_information_requests, public.deal_fact_overrides, public.market_assumptions, public.underwriting_settings, public.deal_outcomes, public.director_scorecards to service_role;
 
 commit;

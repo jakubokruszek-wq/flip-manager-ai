@@ -12,8 +12,7 @@ test("foundation migration is additive, append-only and backend-only", () => {
   assert.match(migration, /INVESTMENT_HISTORY_APPEND_ONLY/);
   assert.match(migration, /apply_investment_override/);
   assert.match(migration, /confirm_investment_override/);
-  assert.match(migration, /revoke all on table[\s\S]+from anon, authenticated/);
+  assert.match(migration, /revoke all on table[\s\S]+from public, anon, authenticated, service_role/);
   assert.match(migration, /grant select, insert on table[\s\S]+to service_role/);
-  assert.match(migration, /revoke update, delete on table[\s\S]+from service_role/);
-  assert.doesNotMatch(migration, /drop table|delete from public\\.listings/i);
+  assert.doesNotMatch(migration, /drop\s+(?:table|column)|truncate|delete\s+from\s+public\.listings/i);
 });

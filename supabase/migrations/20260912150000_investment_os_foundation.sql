@@ -269,8 +269,7 @@ alter table public.director_outputs enable row level security;
 alter table public.ceo_decisions enable row level security;
 alter table public.deal_actual_outcomes enable row level security;
 
-revoke all on table public.deal_evidence, public.director_runs, public.listing_fact_observations, public.deal_fact_override_events, public.deal_fact_override_confirmations, public.evidence_conflicts, public.director_outputs, public.ceo_decisions, public.deal_actual_outcomes from anon, authenticated;
+revoke all on table public.deal_evidence, public.director_runs, public.listing_fact_observations, public.deal_fact_override_events, public.deal_fact_override_confirmations, public.evidence_conflicts, public.director_outputs, public.ceo_decisions, public.deal_actual_outcomes from public, anon, authenticated, service_role;
 grant select, insert on table public.deal_evidence, public.director_runs, public.listing_fact_observations, public.deal_fact_override_events, public.deal_fact_override_confirmations, public.evidence_conflicts, public.director_outputs, public.ceo_decisions, public.deal_actual_outcomes to service_role;
-revoke update, delete on table public.deal_evidence, public.director_runs, public.listing_fact_observations, public.deal_fact_override_events, public.deal_fact_override_confirmations, public.evidence_conflicts, public.director_outputs, public.ceo_decisions, public.deal_actual_outcomes from service_role;
 
 commit;
