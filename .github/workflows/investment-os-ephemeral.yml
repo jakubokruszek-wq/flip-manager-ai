@@ -1,0 +1,202 @@
+name: Investment OS Ephemeral Database Proof
+
+on:
+  push:
+    branches:
+      - ci/investment-os-ephemeral
+
+permissions:
+  contents: read
+
+concurrency:
+  group: investment-os-ephemeral-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REVIEWED_SHA: 5320ff77d92e330c9e330b0fb9028121a4aec70a
+
+jobs:
+  immutable-artifact-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enforce reviewed application baseline and Vercel guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/ci/investment-os-ephemeral"
+          git cat-file -e "$REVIEWED_SHA^{commit}"
+          mapfile -t changed < <(git diff --name-only "$REVIEWED_SHA" "$GITHUB_SHA")
+          allowed=(
+            ".github/workflows/investment-os-ephemeral.yml"
+            "scripts/investment-os/ephemeral-postgres-races.sh"
+            "scripts/investment-os/ephemeral-supabase-http.mjs"
+            "vercel.json"
+          )
+          for path in "${changed[@]}"; do
+            case "$path" in
+              ".github/workflows/investment-os-ephemeral.yml"|"scripts/investment-os/ephemeral-postgres-races.sh"|"scripts/investment-os/ephemeral-supabase-http.mjs"|"vercel.json") ;;
+              *) echo "Forbidden diff from reviewed baseline: $path" >&2; exit 1 ;;
+            esac
+          done
+          for path in app features workers supabase/migrations extensions; do
+            if ! git diff --quiet "$REVIEWED_SHA" "$GITHUB_SHA" -- "$path"; then
+              echo "Application/migration immutability guard failed: $path" >&2
+              exit 1
+            fi
+          done
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+
+          const current = JSON.parse(fs.readFileSync('vercel.json', 'utf8'));
+          const baseline = JSON.parse(execFileSync('git', ['show', `${process.env.REVIEWED_SHA}:vercel.json`], { encoding: 'utf8' }));
+          assert.deepEqual(current.crons, baseline.crons, 'cron configuration changed');
+          const pattern = 'ci/investment-os-*';
+          assert.equal(current.git?.deploymentEnabled?.[pattern], false, 'CI deployment guard missing');
+          const match = (branch) => branch.startsWith('ci/investment-os-') && !branch.slice('ci/investment-os-'.length).includes('/');
+          assert.equal(match('ci/investment-os-ephemeral'), true, 'mission branch must match the Vercel glob');
+          assert.equal(match('main'), false, 'main must not match the Vercel glob');
+          assert.equal(match('feature/example'), false, 'ordinary feature branch must not match the Vercel glob');
+          console.log('Vercel JSON, unchanged crons, and branch deployment guard: PASS');
+          NODE
+
+  real-postgresql:
+    runs-on: ubuntu-latest
+    needs: immutable-artifact-guard
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: investment_os
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d investment_os"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/investment_os
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Apply all migrations and run real PostgreSQL races
+        run: bash scripts/investment-os/ephemeral-postgres-races.sh
+
+  real-local-supabase-http:
+    runs-on: ubuntu-latest
+    needs: immutable-artifact-guard
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: supabase/setup-cli@v3
+        with:
+          version: 2.84.2
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Create isolated Supabase project in runner temp
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SUPABASE_WORKDIR="$RUNNER_TEMP/investment-os-supabase"
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_ID SUPABASE_DB_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_SECRET_KEY; do
+            if [ -n "${!name:-}" ]; then
+              echo "Remote Supabase environment variable unexpectedly present: $name" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$SUPABASE_WORKDIR"
+          cd "$SUPABASE_WORKDIR"
+          supabase init --yes
+          mkdir -p supabase/migrations
+          phase1_hash="$(sha256sum "$GITHUB_WORKSPACE/supabase/migrations/20260912120000_create_investment_os_phase1.sql" | awk '{print toupper($1)}')"
+          cas_hash="$(sha256sum "$GITHUB_WORKSPACE/supabase/migrations/20260912180000_investment_os_deal_cas.sql" | awk '{print toupper($1)}')"
+          test "$phase1_hash" = "0F283BC5E2B351A6F500D140242E55CFEB6D44B936CAF52D1FCF99F4A5E6270D"
+          test "$cas_hash" = "E0F8FD969B825ADD0FF8BD8BAF0B36AB6E8665941A4BF11DE2C50D5D125D099A"
+          cp "$GITHUB_WORKSPACE"/supabase/migrations/*.sql supabase/migrations/
+          for migration in "$GITHUB_WORKSPACE"/supabase/migrations/*.sql; do
+            cmp --silent "$migration" "supabase/migrations/$(basename "$migration")"
+          done
+          actual="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
+          expected="$(find "$GITHUB_WORKSPACE/supabase/migrations" -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
+          test "$actual" = "$expected"
+          test ! -e supabase/.temp/project-ref
+          echo "SUPABASE_WORKDIR=$SUPABASE_WORKDIR" >> "$GITHUB_ENV"
+          echo "Copied $actual repository migrations into the ephemeral runner directory."
+
+      - name: Start and reset only the local Supabase stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SUPABASE_WORKDIR"
+          if ! supabase start > "$RUNNER_TEMP/supabase-start.log" 2>&1; then
+            sed -E \
+              -e 's#(postgres(ql)?://[^:/ ]+):[^@/ ]+@#\1:REDACTED@#g' \
+              -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED_JWT]/g' \
+              -e 's/sb_(secret|publishable)_[A-Za-z0-9_-]+/[REDACTED_SUPABASE_KEY]/g' \
+              -e 's/(password|secret|token|service[_ -]?role[_ -]?key)([[:space:]]*[:=][[:space:]]*)[^[:space:],;]+/\1\2[REDACTED]/Ig' \
+              "$RUNNER_TEMP/supabase-start.log" >&2
+            exit 1
+          fi
+          if ! supabase db reset --local --no-seed > "$RUNNER_TEMP/supabase-reset.log" 2>&1; then
+            sed -E \
+              -e 's#(postgres(ql)?://[^:/ ]+):[^@/ ]+@#\1:REDACTED@#g' \
+              -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED_JWT]/g' \
+              -e 's/sb_(secret|publishable)_[A-Za-z0-9_-]+/[REDACTED_SUPABASE_KEY]/g' \
+              -e 's/(password|secret|token|service[_ -]?role[_ -]?key)([[:space:]]*[:=][[:space:]]*)[^[:space:],;]+/\1\2[REDACTED]/Ig' \
+              "$RUNNER_TEMP/supabase-reset.log" >&2
+            exit 1
+          fi
+          echo "Local Supabase stack started; local migration reset completed. No linked project was configured."
+
+      - name: Run actual Next HTTP initialize race against local Supabase
+        run: node scripts/investment-os/ephemeral-supabase-http.mjs
+
+      - name: Stop and delete ephemeral local Supabase data
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${SUPABASE_WORKDIR:-}" ] && [ -d "$SUPABASE_WORKDIR" ]; then
+            cd "$SUPABASE_WORKDIR"
+            supabase stop --no-backup > "$RUNNER_TEMP/supabase-stop.log" 2>&1
+            status=$?
+            if [ $status -ne 0 ]; then
+              sed -E \
+                -e 's#(postgres(ql)?://[^:/ ]+):[^@/ ]+@#\1:REDACTED@#g' \
+                -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED_JWT]/g' \
+                -e 's/sb_(secret|publishable)_[A-Za-z0-9_-]+/[REDACTED_SUPABASE_KEY]/g' \
+                -e 's/(password|secret|token|service[_ -]?role[_ -]?key)([[:space:]]*[:=][[:space:]]*)[^[:space:],;]+/\1\2[REDACTED]/Ig' \
+                "$RUNNER_TEMP/supabase-stop.log" >&2
+              exit $status
+            fi
+            echo "Ephemeral Supabase containers and data volumes stopped/deleted."
+          else
+            echo "No Supabase workdir was created; nothing to stop."
+          fi

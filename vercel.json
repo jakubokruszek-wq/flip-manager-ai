@@ -1,5 +1,10 @@
 {
   "crons": [
 { "path": "/api/jobs/facebook-watch", "schedule": "0 8 * * *" }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "ci/investment-os-*": false
+    }
+  }
 }
