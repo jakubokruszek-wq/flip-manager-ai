@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { BedDouble, BrainCircuit, Clock3, ExternalLink, MapPin, Plus, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ type PriceHistoryResponse = {
   history: Array<{ price: number | null; capturedAt: string }>;
 };
 
-export function InlineFilterResults({ filterId }: { filterId: string }) {
+export const InlineFilterResults = memo(function InlineFilterResults({ filterId }: { filterId: string }) {
   const [data, setData] = useState<ResultsResponse | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ResultSort>("opportunity");
@@ -212,7 +212,7 @@ export function InlineFilterResults({ filterId }: { filterId: string }) {
       {data ? <details className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.035] px-3 py-2"><summary className="cursor-pointer text-xs font-semibold text-emerald-700 outline-none focus-visible:ring-2 focus-visible:ring-primary">Okazja dnia{dealOfDay ? ` · ${cleanDisplayText(dealOfDay.title) || "Oferta inwestycyjna"} · ${dealOfDay.underwriting?.flipScore ?? "—"}/100` : " · brak oferty ponad próg"}</summary>{dealOfDay ? <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3"><p className="text-xs text-muted-foreground">{decisionLabelForUi(dealOfDay.underwriting?.decision)} · zysk bazowy {currency(dealOfDay.underwriting?.profitBase ?? null)} · pewność {dealOfDay.underwriting?.confidenceScore}%</p><Link className="text-xs font-semibold text-gold underline-offset-4 hover:underline" href={`/deals/${encodeURIComponent(dealOfDay.id)}`}>Otwórz Deal Room</Link></div> : <p className="mt-3 text-xs text-muted-foreground">Brak okazji spełniającej dzisiejszy próg.</p>}</details> : null}
     </section>
   );
-}
+});
 
 type GalleryState = NonNullable<FilterResult["galleryStatus"]>;
 

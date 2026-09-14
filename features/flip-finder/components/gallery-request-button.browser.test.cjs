@@ -139,11 +139,33 @@ async function waitForServer(url, timeoutMs = 60_000) {
   throw new Error("Local Next server did not become ready within 60 seconds");
 }
 
-async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null } = {}) {
+function makeScanStressResults(cardCount) {
+  if (!cardCount) return resultsPayload;
+  const activeResults = Array.from({ length: cardCount }, (_, index) => ({
+    ...result,
+    id: index === 0 ? listingId : `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    title: `Stress scan listing ${index + 1}`,
+    decisionBucket: "MATCHED",
+    lifecycleStatus: "ACTIVE",
+    reviewReason: null,
+    missingFields: [],
+  }));
+  return {
+    ...resultsPayload,
+    results: activeResults,
+    reviewResults: [],
+    counts: { active: cardCount, review: 0, archived: 0 },
+    total: cardCount,
+  };
+}
+
+async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0 } = {}) {
   const page = await browser.newPage();
   const traceRequests = [];
   let galleryRequests = 0;
+  let scanRequests = 0;
   let resultsRequests = 0;
+  const pageResultsPayload = makeScanStressResults(activeCardCount);
   if (throwTraceFetch) {
     await page.addInitScript(() => {
       const realFetch = window.fetch.bind(window);
@@ -168,13 +190,22 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
       galleryRequests += 1;
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, status: "PENDING", jobId: "22222222-2222-4222-8222-222222222222" }), status: 202 });
     }
+    if (url.pathname === `/api/flip-finder/search-filters/${filterId}/scan` && request.method() === "POST") {
+      scanRequests += 1;
+      if (scanResponseDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, scanResponseDelayMs));
+      return route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ scannedCount: 3, matchedCount: 1, newCount: 0, updatedCount: 1, priceDropCount: 0, status: "completed" }),
+        status: 200,
+      });
+    }
     if (url.pathname === "/api/flip-finder/search-filters") {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload), status: 200 });
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/results`) {
       resultsRequests += 1;
       const terminalRefresh = resultsRequests > 1 && (galleryStatusResponse === "PARTIAL" || galleryStatusResponse === "COMPLETE" || galleryStatusResponse === "FAILED");
-      const payload = initialGalleryStatus === result.galleryStatus && !terminalRefresh ? resultsPayload : { ...resultsPayload, reviewResults: [{ ...result, galleryStatus: terminalRefresh ? galleryStatusResponse : initialGalleryStatus, galleryPersistedCount: terminalRefresh ? 2 : 0, galleryTotal: terminalRefresh ? 2 : 0, images: terminalRefresh ? ["https://example.com/stored-1.jpg", "https://example.com/stored-2.jpg"] : [], thumbnailUrl: terminalRefresh ? "https://example.com/stored-1.jpg" : null }] };
+      const payload = initialGalleryStatus === result.galleryStatus && !terminalRefresh ? pageResultsPayload : { ...pageResultsPayload, reviewResults: [{ ...result, galleryStatus: terminalRefresh ? galleryStatusResponse : initialGalleryStatus, galleryPersistedCount: terminalRefresh ? 2 : 0, galleryTotal: terminalRefresh ? 2 : 0, images: terminalRefresh ? ["https://example.com/stored-1.jpg", "https://example.com/stored-2.jpg"] : [], thumbnailUrl: terminalRefresh ? "https://example.com/stored-1.jpg" : null }] };
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(payload), status: 200 });
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
@@ -182,7 +213,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
   const button = page.locator(`[data-gallery-request-button="true"][data-listing-id="${listingId}"]`);
   await button.waitFor({ state: "visible", timeout: 20_000 });
-  return { page, button, traceRequests, galleryRequestCount: () => galleryRequests, resultsRequestCount: () => resultsRequests };
+  return { page, button, traceRequests, galleryRequestCount: () => galleryRequests, scanRequestCount: () => scanRequests, resultsRequestCount: () => resultsRequests };
 }
 
 async function sessionStages(page) {
@@ -259,4 +290,36 @@ test("real Flip Finder gallery button keeps business click independent from trac
     assert.ok(testPage.resultsRequestCount() >= 2, `terminal gallery should refresh results; server output: ${output}`);
     await testPage.page.close();
   });
+
+  for (const cardCount of [50, 250]) {
+    await t.test(`Skanuj keeps pending responsive and preserves ${cardCount} result cards`, async () => {
+    const testPage = await preparePage(browser, baseUrl, { scanResponseDelayMs: 500, activeCardCount: cardCount });
+    const cards = testPage.page.locator('[data-finder-offers] > div.contents');
+    const initialFirstCard = await cards.nth(0).innerText();
+    const initialLastCard = await cards.nth(cardCount - 1).innerText();
+    assert.equal(await cards.count(), cardCount);
+    const scanButton = testPage.page.getByRole("button", { name: "Skanuj oferty" });
+    const refreshedResults = testPage.page.waitForResponse((response) => new URL(response.url()).pathname === `/api/flip-finder/search-filters/${filterId}/results`);
+
+    await scanButton.click();
+    await testPage.page.waitForFunction(() => {
+      const button = Array.from(document.querySelectorAll("button")).find((item) => item.textContent?.includes("Skanowanie"));
+      return button instanceof HTMLButtonElement && button.disabled;
+    }, null, { timeout: 5_000 });
+
+    assert.equal(testPage.scanRequestCount(), 1, `scan POST should begin once before the delayed response; server output: ${output}`);
+    assert.equal(await cards.count(), cardCount, "pending scan must not alter the current result set");
+    assert.equal(await cards.nth(0).innerText(), initialFirstCard);
+    assert.equal(await cards.nth(cardCount - 1).innerText(), initialLastCard);
+
+    await testPage.page.waitForFunction(() => document.body.textContent?.includes("Znaleziono 0 nowych dopasowań"), null, { timeout: 10_000 });
+    await refreshedResults;
+    assert.equal(testPage.scanRequestCount(), 1, "one user click must not create duplicate scan requests");
+    assert.ok(testPage.resultsRequestCount() >= 2, "completed scan must still refresh the Finder results");
+    assert.equal(await cards.count(), cardCount, "completed scan must preserve the fixture result count");
+    assert.equal(await cards.nth(0).innerText(), initialFirstCard);
+    assert.equal(await cards.nth(cardCount - 1).innerText(), initialLastCard);
+    await testPage.page.close();
+    });
+  }
 });
