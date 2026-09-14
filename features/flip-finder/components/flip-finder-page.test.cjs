@@ -21,8 +21,8 @@ const historyAuth = fs.readFileSync(path.join(__dirname, "../server/history-clea
 test("normal Flip Finder UI uses the queue scan result funnel", () => {
   assert.match(page, /WYNIK OSTATNIEGO SKANU/);
   assert.match(page, /Zebrane posty/);
-  assert.match(page, /Zweryfikowane EXACT/);
-  assert.match(page, /SELL_PROPERTY/);
+  assert.match(page, /Zweryfikowana tożsamość/);
+  assert.match(page, /Oferty sprzedaży/);
   assert.match(page, /Odrzucone twardo/);
   assert.match(page, /Do oceny/);
   assert.match(page, /hardRejectedUnique/);
@@ -40,8 +40,31 @@ test("normal Flip Finder UI uses the queue scan result funnel", () => {
 
 test("saved listings database is labeled independently from the latest scan", () => {
   assert.match(inlineResults, /BAZA OFERT/);
+  assert.match(inlineResults, /AKTYWNE \/ DOPASOWANE/);
+  assert.doesNotMatch(inlineResults, /AKTYWNE \/ MATCHED/);
   assert.match(inlineResults, /Aktywne zapisane oferty:/);
   assert.doesNotMatch(inlineResults, /Znalezione oferty:/);
+});
+
+test("Finder keeps offer results primary and hides filter configuration until requested", () => {
+  assert.match(page, /Ustawienia filtra/);
+  assert.match(page, /<details className="relative">[\s\S]*FilterActions filter=\{activeFilter\}/);
+  assert.match(inlineResults, /Źródła i historia skanów/);
+  assert.match(inlineResults, /Historia wyszukiwania i działania/);
+  assert.match(inlineResults, /function QuickInvestmentPreview/);
+  assert.doesNotMatch(inlineResults, /import \{ InvestmentDesk \}/);
+});
+
+test("Finder exposes a keyboard-accessible one-click Deal Room route outside the expandable card control", () => {
+  assert.match(inlineResults, /import Link from "next\/link"/);
+  assert.match(inlineResults, /href=\{`\/deals\/\$\{encodeURIComponent\(result\.id\)\}`\}>Otwórz Deal Room/);
+  const listingArticle = inlineResults.indexOf('<article className="ui-card ui-card-hover group overflow-hidden">');
+  const dealRoomCta = inlineResults.indexOf("Otwórz Deal Room", listingArticle);
+  const expandableButton = inlineResults.indexOf('<button aria-expanded={expanded}', listingArticle);
+  assert.ok(listingArticle >= 0 && dealRoomCta > listingArticle && expandableButton > dealRoomCta, "the gold Deal Room CTA must precede, and remain outside, the expandable button");
+  assert.match(inlineResults, /inline-flex min-h-10 items-center rounded-xl bg-gold/);
+  assert.match(inlineResults, /focus-visible:ring-2/);
+  assert.doesNotMatch(inlineResults, /role="button"\s+tabIndex=\{0\}/);
 });
 
 test("search history can be cleared explicitly without deleting filters or sources", () => {
@@ -61,9 +84,10 @@ test("search history can be cleared explicitly without deleting filters or sourc
 });
 
 test("archive is opt-in and fetched separately from the main finder", () => {
-  assert.match(inlineResults, /Pokaż archiwum/);
+  assert.match(inlineResults, /Historia ofert/);
   assert.match(inlineResults, /view=archive/);
   assert.match(inlineResults, /archiveOpen \? \(data\?\.archivedResults/);
+  assert.doesNotMatch(inlineResults, /<h2 className="font-semibold">ARCHIWUM<\/h2>/);
 });
 
 test("review counter and rendered cards use the same current-filter dataset", () => {

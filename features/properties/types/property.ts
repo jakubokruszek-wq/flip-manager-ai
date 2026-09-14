@@ -63,6 +63,8 @@ export type PropertyFields = {
 /** CRM representation of a property. */
 export type Property = PropertyFields & {
   id: string;
+  /** Existing canonical Finder listing, when this CRM record was imported from it. */
+  listingId: string | null;
   imageUrl: string | null;
   address: string;
   status: PropertyStatus;

@@ -85,7 +85,7 @@ export function VisionCostPanel({ progress }: { progress: ScanProgressResponse }
 }
 
 function ProgressDetail({ label, value }: { label: string; value: string }) { return <div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 truncate font-medium" title={value}>{value}</p></div>; }
-function CostMetric({ label, value }: { label: string; value: string }) { return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-0.5 font-mono font-semibold">{value}</dd></div>; }
+function CostMetric({ label, value }: { label: string; value: string }) { return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-0.5 tabular-nums font-semibold">{value}</dd></div>; }
 function sourceLabel(source: string): string { return source === "olx" ? "OLX" : source === "otodom" ? "Otodom" : source === "morizon" ? "Morizon" : "Facebook"; }
 function jobStatusLabel(status: string): string { return status === "queued" ? "oczekuje" : status === "running" ? "w toku" : status === "failed" ? "błąd" : "zakończony"; }
 function statusLabel(status: ScanProgressResponse["status"]): string { return status === "queued" ? "W kolejce" : status === "running" ? "W toku" : status === "completed" ? "Zakończony" : status === "partial" ? "Częściowo zakończony" : "Błąd"; }

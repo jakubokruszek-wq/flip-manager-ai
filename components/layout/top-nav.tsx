@@ -14,7 +14,7 @@ type TopNavProps = {
   title?: string;
 };
 
-export function TopNav({ title = "Dashboard" }: TopNavProps) {
+export function TopNav({ title = "Pulpit" }: TopNavProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {

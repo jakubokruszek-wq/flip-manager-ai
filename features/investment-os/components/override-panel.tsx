@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { CanonicalDeal, DealFactOverrides } from "../types";
-import { SectionHeading } from "./investment-ui";
+import { formatPLNDisplay, SectionHeading } from "./investment-ui";
 
 type OverrideField = "askingPrice" | "resalePerM2" | "renovationPerM2" | "holdingMonths";
 type OverrideDraft = Partial<Record<OverrideField, string>>;
@@ -23,8 +23,8 @@ export function OverridePanel({ deal, disabled, onSave }: { deal: CanonicalDeal;
   const reset = () => { setValues({}); void onSave({}); };
 
   return <section aria-labelledby="overrides-title" className="min-w-0 max-w-full space-y-3 rounded-2xl border border-border/80 bg-muted/20 p-4 sm:p-5">
-    <SectionHeading eyebrow="05 · human-controlled inputs" id="overrides-title" title="Assumptions & overrides" aside={<span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">Manualne założenia · wymagają decyzji człowieka</span>} />
-    <p className="max-w-3xl text-xs leading-5 text-muted-foreground">System value pozostaje widoczne. Zapis zmienia tylko effective value w zakresie istniejącego kontraktu override i przelicza zależne dyrekcje.</p>
+    <SectionHeading eyebrow="05 · dane kontrolowane przez użytkownika" id="overrides-title" title="Założenia i korekty" aside={<span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">Ręczne założenia · wymagają decyzji człowieka</span>} />
+    <p className="max-w-3xl text-xs leading-5 text-muted-foreground">Wartość źródłowa pozostaje widoczna. Zapis zmienia tylko wartość efektywną w zakresie istniejącego kontraktu korekt i przelicza zależne dyrekcje.</p>
 
     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
       <OverrideCard label="Cena zakupu" unit="PLN" system={asking.sourceValue} manual={asking.overrideValue} effective={asking.effectiveValue} draft={values.askingPrice} onChange={(value) => update("askingPrice", value)} placeholder={asking.effectiveValue} disabled={disabled} />
@@ -36,19 +36,24 @@ export function OverridePanel({ deal, disabled, onSave }: { deal: CanonicalDeal;
     <div className="flex flex-col gap-2 border-t border-border/70 pt-3 sm:flex-row">
       <Button className="min-h-10" disabled={disabled} onClick={save} type="button">Zapisz i przelicz</Button>
       <Button className="min-h-10" disabled={disabled} onClick={reset} type="button" variant="outline">Reset do źródła</Button>
-      <p className="self-center text-xs text-muted-foreground">Draft nie zmienia wyniku, dopóki go nie zapiszesz.</p>
+      <p className="self-center text-xs text-muted-foreground">Szkic nie zmienia wyniku, dopóki go nie zapiszesz.</p>
     </div>
   </section>;
 }
 
 function OverrideCard({ label, unit, system, manual, effective, draft, onChange, placeholder, disabled, manualUnavailable = false }: { label: string; unit: string; system: number | string | null; manual: number | string | null; effective: number | string | null; draft?: string; onChange: (value: string) => void; placeholder: number | null; disabled: boolean; manualUnavailable?: boolean }) {
-  const displayValue = (value: number | string | null) => value == null || value === "" ? "—" : typeof value === "number" ? new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 }).format(value) : value;
+  const displayValue = (value: number | string | null) => {
+    if (value == null || value === "") return "—";
+    const amount = typeof value === "number" ? value : Number(value);
+    if (unit.startsWith("PLN") && Number.isFinite(amount)) return `${formatPLNDisplay(amount)}${unit === "PLN/m²" ? "/m²" : ""}`;
+    return typeof value === "number" ? new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 }).format(value) : value;
+  };
   const draftNumber = draft?.trim() ? Number(draft) : null;
-  const manualValue = draft?.trim() ? `${draftNumber != null && Number.isFinite(draftNumber) ? displayValue(draftNumber) : "niepoprawna wartość"} · draft` : manualUnavailable ? "nieudostępnione" : displayValue(manual);
+  const manualValue = draft?.trim() ? `${draftNumber != null && Number.isFinite(draftNumber) ? displayValue(draftNumber) : "niepoprawna wartość"} · szkic` : manualUnavailable ? "nieudostępnione" : displayValue(manual);
   return <article className="min-w-0 rounded-xl border border-border/70 bg-background/65 p-3">
     <div className="flex items-start justify-between gap-2"><h4 className="text-sm font-semibold">{label}</h4><span className="text-[10px] text-muted-foreground">{unit}</span></div>
-    <dl className="mt-3 space-y-1.5 text-xs"><ValueRow label="SYSTEM" value={displayValue(system)} /><ValueRow label="MANUAL" value={manualValue} /><ValueRow label="EFFECTIVE" value={displayValue(effective)} strong /></dl>
-    {manualUnavailable ? <p className="mt-2 text-[10px] leading-4 text-muted-foreground">Rozbicie system/manual nie jest udostępnione w bieżącym CanonicalDeal.</p> : null}
+    <dl className="mt-3 space-y-1.5 text-xs"><ValueRow label="ŹRÓDŁOWA" value={displayValue(system)} /><ValueRow label="RĘCZNA" value={manualValue} /><ValueRow label="EFEKTYWNA" value={displayValue(effective)} strong /></dl>
+    {manualUnavailable ? <p className="mt-2 text-[10px] leading-4 text-muted-foreground">Rozbicie wartości źródłowej i ręcznej nie jest udostępnione w bieżącym CanonicalDeal.</p> : null}
     <label className="mt-3 block"><span className="mb-1 block text-[11px] font-medium text-muted-foreground">Nowa wartość ręczna</span><Input autoComplete="off" disabled={disabled} inputMode="decimal" min="0" onChange={(event) => onChange(event.target.value)} placeholder={placeholder == null ? "brak danych" : String(Math.round(placeholder))} type="number" value={draft ?? ""} /></label>
   </article>;
 }

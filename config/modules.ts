@@ -16,7 +16,7 @@ import type { FeatureId, ModuleDefinition } from "@/types";
 export const modules: ModuleDefinition[] = [
   {
     id: "dashboard",
-    title: "Dashboard",
+    title: "Pulpit",
     href: "/dashboard",
     icon: LayoutDashboard,
   },
@@ -87,5 +87,5 @@ export function getModuleByHref(pathname: string): ModuleDefinition | undefined 
 }
 
 export function getModuleTitle(href: string): string {
-  return getModuleByHref(href)?.title ?? "Dashboard";
+  return getModuleByHref(href)?.title ?? "Pulpit";
 }

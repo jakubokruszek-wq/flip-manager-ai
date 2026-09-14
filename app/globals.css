@@ -6,47 +6,57 @@
 
 :root,
 .dark {
-  --surface: #0d0f12;
-  --surface-elevated: #181a1f;
-  --surface-muted: #202126;
-  --surface-hover: #272a31;
-  --border: #2b2d33;
-  --muted-foreground: #9b9ca2;
-  --ring: #ebc158;
-  --background: #0d0f12;
-  --foreground: #f5f2ec;
-  --card: #181a1f;
-  --card-foreground: #f5f2ec;
-  --popover: #202126;
-  --popover-foreground: #f5f2ec;
-  --primary: #ebc158;
-  --gold: #ebc158;
+  --surface: #0b0d0f;
+  --surface-elevated: #15191e;
+  --surface-muted: #1b2026;
+  --surface-hover: #20262d;
+  --border: rgba(244, 241, 234, 0.08);
+  --font-ui: var(--font-geist-sans), Arial, sans-serif;
+  --type-display: clamp(2.5rem, 4vw, 3.75rem);
+  --type-page-title: clamp(1.75rem, 2.7vw, 2.25rem);
+  --type-section-title: clamp(1.125rem, 1.55vw, 1.375rem);
+  --type-card-title: 0.9375rem;
+  --type-body: 0.9375rem;
+  --type-caption: 0.75rem;
+  --type-financial-hero: clamp(0.9375rem, 1.2vw + 0.2rem, 1.375rem);
+  --type-financial-standard: clamp(0.875rem, 0.8vw + 0.4rem, 1.0625rem);
+  --type-badge: 0.6875rem;
+  --muted-foreground: #a7abb1;
+  --ring: #e8c96a;
+  --background: #0b0d0f;
+  --foreground: #f4f1ea;
+  --card: #15191e;
+  --card-foreground: #f4f1ea;
+  --popover: #1b2026;
+  --popover-foreground: #f4f1ea;
+  --primary: #d6b35a;
+  --gold: #d6b35a;
   --gold-muted: #8f7331;
-  --success: #45c46a;
-  --warning: #f2a93b;
-  --danger: #ef5350;
+  --success: #69a982;
+  --warning: #d7a652;
+  --danger: #c96c6c;
   --primary-foreground: #17130a;
-  --secondary: #202126;
-  --secondary-foreground: #f5f2ec;
-  --muted: #202126;
-  --accent: #202126;
-  --accent-foreground: #f5f2ec;
-  --destructive: #ef5350;
-  --input: #2b2d33;
-  --chart-1: #ebc158;
-  --chart-2: #45c46a;
-  --chart-3: #ef5350;
-  --chart-4: #9b9ca2;
-  --chart-5: #f5f2ec;
-  --radius: 1rem;
-  --sidebar: #181a1f;
-  --sidebar-foreground: #f5f2ec;
-  --sidebar-primary: #ebc158;
+  --secondary: #1b2026;
+  --secondary-foreground: #f4f1ea;
+  --muted: #1b2026;
+  --accent: #20262d;
+  --accent-foreground: #f4f1ea;
+  --destructive: #c96c6c;
+  --input: #20262d;
+  --chart-1: #d6b35a;
+  --chart-2: #69a982;
+  --chart-3: #c96c6c;
+  --chart-4: #a7abb1;
+  --chart-5: #f4f1ea;
+  --radius: 1.125rem;
+  --sidebar: #111418;
+  --sidebar-foreground: #f4f1ea;
+  --sidebar-primary: #d6b35a;
   --sidebar-primary-foreground: #17130a;
-  --sidebar-accent: #202126;
-  --sidebar-accent-foreground: #f5f2ec;
-  --sidebar-border: #2b2d33;
-  --sidebar-ring: #ebc158;
+  --sidebar-accent: #20262d;
+  --sidebar-accent-foreground: #f4f1ea;
+  --sidebar-border: rgba(244, 241, 234, 0.08);
+  --sidebar-ring: #e8c96a;
 }
 
 @theme inline {
@@ -64,8 +74,8 @@
   --color-border: var(--border);
   --color-muted-foreground: var(--muted-foreground);
   --color-ring: var(--ring);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist-sans), Arial, sans-serif;
+  --font-mono: var(--font-geist-sans), Arial, sans-serif;
   --font-heading: Georgia, Cambria, "Times New Roman", serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -128,8 +138,8 @@ input[type="search"]::-webkit-search-cancel-button {
   body {
     @apply bg-background text-foreground antialiased;
     background-image:
-      radial-gradient(ellipse 70% 45% at 50% -20%, color-mix(in srgb, var(--gold) 10%, transparent), transparent 70%),
-      radial-gradient(ellipse 45% 30% at 100% 0%, color-mix(in srgb, var(--gold) 4%, transparent), transparent 70%);
+      radial-gradient(ellipse 72% 45% at 48% -20%, color-mix(in srgb, var(--gold) 9%, transparent), transparent 70%),
+      radial-gradient(ellipse 38% 30% at 100% 0%, color-mix(in srgb, var(--gold) 3%, transparent), transparent 70%);
     background-attachment: fixed;
   }
 
@@ -139,20 +149,30 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 @layer components {
+  .type-display { font-family: var(--font-ui); font-size: var(--type-display); font-weight: 600; letter-spacing: -0.045em; line-height: 1.05; }
+  .type-page-title { font-family: var(--font-heading); font-size: var(--type-page-title); font-weight: 600; letter-spacing: -0.035em; line-height: 1.15; }
+  .type-section-title { font-family: var(--font-ui); font-size: var(--type-section-title); font-weight: 650; letter-spacing: -0.025em; line-height: 1.25; }
+  .type-card-title { font-family: var(--font-ui); font-size: var(--type-card-title); font-weight: 600; line-height: 1.35; }
+  .type-body { font-family: var(--font-ui); font-size: var(--type-body); line-height: 1.55; }
+  .type-caption { font-family: var(--font-ui); font-size: var(--type-caption); line-height: 1.4; }
+  .type-financial-hero { font-family: var(--font-ui); font-size: var(--type-financial-hero); font-variant-numeric: tabular-nums lining-nums; font-weight: 650; letter-spacing: -0.035em; line-height: 1.1; white-space: nowrap; }
+  .type-financial-standard { font-family: var(--font-ui); font-size: var(--type-financial-standard); font-variant-numeric: tabular-nums lining-nums; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; }
+  .type-badge { font-family: var(--font-ui); font-size: var(--type-badge); font-weight: 650; letter-spacing: 0.035em; line-height: 1.25; }
+
   .ui-card {
-    @apply rounded-2xl border border-border/80 bg-card/90 shadow-[0_16px_45px_-28px_rgba(0,0,0,0.95)] backdrop-blur-sm;
+    @apply rounded-[1.125rem] border border-border bg-card/95 shadow-[0_18px_52px_-32px_rgba(0,0,0,1)] backdrop-blur-sm;
   }
 
   .ui-card-hover {
-    @apply transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out hover:-translate-y-0.5 hover:border-gold/25 hover:bg-surface-elevated/95 hover:shadow-[0_22px_52px_-26px_rgba(0,0,0,1)];
+    @apply transition-[transform,border-color,box-shadow,background-color] duration-300 ease-out hover:-translate-y-0.5 hover:border-gold/30 hover:bg-surface-elevated hover:shadow-[0_22px_56px_-28px_rgba(0,0,0,1)];
   }
 
   .ui-section {
-    @apply rounded-2xl border border-border/80 bg-card/90 p-5 shadow-[0_16px_45px_-28px_rgba(0,0,0,0.95)] backdrop-blur-sm sm:p-6;
+    @apply rounded-[1.125rem] border border-border bg-card/95 p-5 shadow-[0_18px_52px_-32px_rgba(0,0,0,1)] backdrop-blur-sm sm:p-6;
   }
 
   .ui-metric {
-    @apply rounded-xl border border-border/70 bg-surface-elevated/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] transition-colors duration-200 hover:border-gold/20 hover:bg-surface-hover/70;
+    @apply rounded-2xl border border-border bg-surface-elevated/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] transition-colors duration-200 hover:border-gold/25 hover:bg-surface-hover/80;
   }
 
   .ui-badge {
@@ -160,19 +180,19 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 
   .ui-tabs {
-    @apply inline-flex items-center gap-1 rounded-xl border border-border/70 bg-surface/80 p-1;
+    @apply inline-flex items-center gap-1 rounded-2xl border border-border bg-surface/80 p-1;
   }
 
   .ui-tab {
-    @apply rounded-lg px-3 py-1.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-surface-hover hover:text-foreground;
+    @apply rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-surface-hover hover:text-foreground;
   }
 
   .ui-tab-active {
-    @apply bg-surface-elevated text-foreground shadow-sm ring-1 ring-border/70;
+    @apply bg-surface-elevated text-foreground shadow-sm ring-1 ring-gold/15;
   }
 
   .ui-table-shell {
-    @apply overflow-hidden rounded-2xl border border-border/80 bg-card/90 shadow-[0_16px_45px_-28px_rgba(0,0,0,0.95)];
+    @apply overflow-hidden rounded-[1.125rem] border border-border bg-card/95 shadow-[0_18px_52px_-32px_rgba(0,0,0,1)];
   }
 
   .ui-data-table thead {
@@ -192,7 +212,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 
   .ui-empty-state {
-    @apply flex min-h-48 flex-col items-center justify-center rounded-2xl border border-border/80 bg-card/90 px-6 py-10 text-center shadow-[0_16px_45px_-28px_rgba(0,0,0,0.95)] backdrop-blur-sm;
+    @apply flex min-h-48 flex-col items-center justify-center rounded-[1.125rem] border border-border bg-card/95 px-6 py-10 text-center shadow-[0_18px_52px_-32px_rgba(0,0,0,1)] backdrop-blur-sm;
   }
 
   .ui-skeleton {
@@ -200,7 +220,7 @@ input[type="search"]::-webkit-search-cancel-button {
   }
 
   .ui-chart {
-    @apply overflow-hidden rounded-2xl border border-border/80 bg-card/90 p-5 shadow-[0_16px_45px_-28px_rgba(0,0,0,0.95)] backdrop-blur-sm sm:p-6;
+    @apply overflow-hidden rounded-[1.125rem] border border-border bg-card/95 p-5 shadow-[0_18px_52px_-32px_rgba(0,0,0,1)] backdrop-blur-sm sm:p-6;
     background-image: linear-gradient(180deg, color-mix(in srgb, var(--gold) 2%, transparent), transparent 60%);
   }
 }

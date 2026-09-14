@@ -13,7 +13,7 @@ export const PROPERTY_TABLE_COLUMNS = [
   { key: "image", label: "Zdjęcie" },
   { key: "address", label: "Adres" },
   { key: "status", label: "Status" },
-  { key: "flipScore", label: "Flip Score" },
+  { key: "flipScore", label: "Ocena inwestycji" },
   { key: "purchasePrice", label: "Cena zakupu" },
   { key: "renovationCost", label: "Koszt remontu" },
   { key: "expectedSalePrice", label: "Przewidywana sprzedaż" },

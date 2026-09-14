@@ -51,6 +51,8 @@ test("active state matches exact and nested routes without activating Dashboard 
 });
 
 test("nested pages receive the correct top navigation title", () => {
+  assert.equal(getModuleTitle("/dashboard"), "Pulpit");
+  assert.equal(getModuleTitle("/unknown"), "Pulpit");
   assert.equal(getModuleTitle("/properties/new"), "Nieruchomości");
   assert.equal(getModuleTitle("/facebook-watcher/groups"), "Facebook Watcher");
   assert.equal(getModuleTitle("/flip-finder/filters/new"), "Flip Finder");

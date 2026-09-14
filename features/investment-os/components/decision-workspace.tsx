@@ -10,7 +10,7 @@ import { RisksPanel } from "./risks-panel";
 import { nextWorkspaceTab, WORKSPACE_TABS, type WorkspaceTab } from "./workspace-tabs";
 
 const TAB_LABELS: Record<WorkspaceTab, string> = {
-  OVERVIEW: "Overview", MARKET: "Market", ECONOMICS: "Economics", RISKS: "Risks", PLAYBOOK: "Playbook", AUDIT: "Audit",
+  OVERVIEW: "Podsumowanie", MARKET: "Rynek", ECONOMICS: "Finanse", RISKS: "Ryzyka", PLAYBOOK: "Plan działania", AUDIT: "Źródła i audyt",
 };
 
 export function DecisionWorkspace({ deal, activeTab, onTabChange }: { deal: CanonicalDeal; activeTab: WorkspaceTab; onTabChange: (tab: WorkspaceTab) => void }) {
@@ -25,11 +25,11 @@ export function DecisionWorkspace({ deal, activeTab, onTabChange }: { deal: Cano
   };
 
   return <section aria-labelledby={`${prefix}-heading`} className="min-w-0 max-w-full space-y-3">
-    <SectionHeading eyebrow="04 · decision workspace" id={`${prefix}-heading`} title="Deal workspace" />
-    <div aria-label="Sekcje analizy deala" className="flex gap-1 overflow-x-auto rounded-xl border border-border/70 bg-muted/35 p-1" onKeyDown={onTabKeyDown} role="tablist">
+    <SectionHeading eyebrow="04 · obszar decyzji" id={`${prefix}-heading`} title="Obszar decyzji" />
+    <div aria-label="Sekcje analizy oferty" className="ui-tabs flex w-full gap-1 overflow-x-auto" onKeyDown={onTabKeyDown} role="tablist">
       {WORKSPACE_TABS.map((tab) => <button aria-controls={`${prefix}-panel`} aria-selected={activeTab === tab} className={`min-h-10 shrink-0 rounded-lg px-3 text-xs font-semibold outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${activeTab === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-workspace-tab={tab} id={`${prefix}-tab-${tab}`} key={tab} onClick={() => onTabChange(tab)} role="tab" tabIndex={activeTab === tab ? 0 : -1} type="button">{TAB_LABELS[tab]}</button>)}
     </div>
-    <div aria-labelledby={`${prefix}-tab-${activeTab}`} className="min-h-40 rounded-xl border border-border/70 bg-muted/10 p-3 sm:p-4" id={`${prefix}-panel`} role="tabpanel" tabIndex={0}>
+    <div aria-labelledby={`${prefix}-tab-${activeTab}`} className="min-h-40 rounded-2xl border border-border bg-card/55 p-3 sm:p-4" id={`${prefix}-panel`} role="tabpanel" tabIndex={0}>
       {activeTab === "OVERVIEW" ? <OverviewPanel deal={deal} /> : null}
       {activeTab === "MARKET" ? <MarketPanel deal={deal} /> : null}
       {activeTab === "ECONOMICS" ? <EconomicsPanel deal={deal} /> : null}

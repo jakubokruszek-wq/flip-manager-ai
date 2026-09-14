@@ -17,7 +17,7 @@ function toProperty(row: Record<string, unknown>): PropertyWithInvestmentAnalysi
   const district = stringOrNull(row.district);
   const city = stringOrNull(row.city);
   return {
-    id: stringValue(row.id), imageUrl: firstImage(images), address,
+    id: stringValue(row.id), listingId: stringOrNull(row.listing_id), imageUrl: firstImage(images), address,
     status: propertyStatus(row.status), updatedAt: stringValue(row.updated_at) || stringValue(row.created_at),
     source: propertySource(row.source), externalListingId: stringOrNull(row.external_listing_id), originalUrl: stringOrNull(row.original_url), normalizedUrl: stringOrNull(row.normalized_url),
     title: stringOrNull(row.title), description: stringOrNull(row.notes), price, pricePerSqm: price !== null && area !== null && area > 0 ? price / area : null, averagePricePerSqm: null,

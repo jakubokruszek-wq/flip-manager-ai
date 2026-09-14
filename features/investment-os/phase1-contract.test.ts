@@ -36,9 +36,9 @@ test("Investment Command Center keeps the API contract and presents the CEO deci
   assert.match(desk, /\/api\/flip-finder\/listings\/\$\{result\.id\}\/investment/);
   assert.match(desk, /"x-flip-finder-action": "investment-os"/);
   assert.match(desk, /JSON\.stringify\(\{ overrides \}\)/);
-  assert.match(command, /MAX BUY/);
-  assert.match(command, /OPENING OFFER/);
-  assert.match(command, /TARGET/);
+  assert.match(command, /Maks\. cena zakupu/);
+  assert.match(command, /Oferta otwierająca/);
+  assert.match(command, /Cel negocjacyjny/);
   assert.match(command, /nextBestAction/);
   assert.match(command, /Otwórz plan działania/);
   assert.match(command, /missingBeforePurchase/);
@@ -48,7 +48,7 @@ test("Investment Command Center keeps the API contract and presents the CEO deci
 });
 
 test("decision workspace exposes actual directors, progressive details, and accessible sections", () => {
-  assert.match(board, /NOT AVAILABLE \/ FUTURE/);
+  assert.match(board, /NIEDOSTĘPNY W TEJ ANALIZIE/);
   assert.match(board, /output\.validation\.checks/);
   assert.match(board, /output\.whatWouldChangeMyMind/);
   assert.match(workspace, /OVERVIEW/);
@@ -62,7 +62,7 @@ test("decision workspace exposes actual directors, progressive details, and acce
   assert.match(audit, /sourceValue/);
   assert.match(audit, /overrideValue/);
   assert.match(audit, /effectiveValue/);
-  assert.match(audit, /Evidence Fabric/);
+  assert.match(audit, /Sieć dowodów/);
 });
 
 test("override reset and save semantics stay scoped to the existing override endpoint", () => {

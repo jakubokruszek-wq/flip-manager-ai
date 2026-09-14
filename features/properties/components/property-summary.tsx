@@ -14,15 +14,15 @@ export function PropertySummary({ values }: PropertySummaryProps) {
 
   return (
     <header className="space-y-4">
-      <span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
-        {values.source || "Otodom"}
+      <span className="ui-badge border-success/25 bg-success/10 text-success">
+        {sourceLabel(values.source)}
       </span>
 
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+        <h1 className="type-page-title">
           {values.title || "Oferta bez tytułu"}
         </h1>
-        <p className="text-3xl font-bold tracking-tight">{formatCurrency(price)}</p>
+        <p className="type-financial-hero">{formatCurrency(price)}</p>
       </div>
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
@@ -51,7 +51,7 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="space-y-1">
       <dt className="text-sm text-muted-foreground">{label}</dt>
-      <dd className="font-semibold">{value}</dd>
+      <dd className="type-financial-standard">{value}</dd>
     </div>
   );
 }
@@ -75,4 +75,9 @@ function formatPricePerSquareMeter(value: number | null): string {
   return value === null
     ? "—"
     : `${new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 0 }).format(value)} zł/m²`;
+}
+
+function sourceLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return ({ otodom: "Otodom", facebook: "Facebook", olx: "OLX", morizon: "Morizon", gratka: "Gratka", manual: "Wpis ręczny" } as Record<string, string>)[normalized] ?? "Źródło nieustalone";
 }

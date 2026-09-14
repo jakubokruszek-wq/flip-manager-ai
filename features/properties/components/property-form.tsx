@@ -32,7 +32,7 @@ export function PropertyForm({ values, saving, onChange, onSubmit, submitLabel =
       }}
     >
       <section aria-labelledby="basic-information" className="space-y-4 border-t pt-6">
-        <h2 id="basic-information" className="text-lg font-semibold">
+        <h2 id="basic-information" className="type-section-title">
           Informacje podstawowe
         </h2>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -67,7 +67,7 @@ export function PropertyForm({ values, saving, onChange, onSubmit, submitLabel =
       </section>
 
       <section aria-labelledby="location" className="space-y-4 border-t pt-6">
-        <h2 id="location" className="text-lg font-semibold">
+        <h2 id="location" className="type-section-title">
           Lokalizacja
         </h2>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -87,7 +87,7 @@ export function PropertyForm({ values, saving, onChange, onSubmit, submitLabel =
       </section>
 
       <section aria-labelledby="description" className="space-y-4 border-t pt-6">
-        <h2 id="description" className="text-lg font-semibold">
+        <h2 id="description" className="type-section-title">
           Opis
         </h2>
         <Textarea

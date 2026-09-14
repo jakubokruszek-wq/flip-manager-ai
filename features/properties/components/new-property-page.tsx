@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ImagePlus } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -87,8 +88,8 @@ export function NewPropertyPage() {
   const cancelFacebook = () => { setManualFacebook(false); setPostText(""); setImages([]); setImageUrls(""); setImportedProperty(null); setFormValues(null); setFacebookMeta(null); setFinderImport(null); setImportError(null); };
 
   return <div className="mx-auto max-w-4xl space-y-8">
-    <div><h1 className="text-3xl font-bold">Dodaj nieruchomość</h1><p className="mt-2 text-muted-foreground">Wklej link do ogłoszenia.</p></div>
-    <div className="space-y-5 rounded-xl border bg-card p-6">
+    <div className="border-b border-border pb-6"><h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">Dodaj nieruchomość</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">Wklej link do ogłoszenia, aby rozpocząć bezpieczny import danych.</p></div>
+    <div className="ui-section space-y-5">
       <Input aria-label="Link do ogłoszenia" placeholder="https://www.otodom.pl/... lub https://www.facebook.com/..." value={url} onChange={(event) => setUrl(event.target.value)} />
       {manualFacebook && <section className="space-y-4 rounded-xl border border-primary/30 bg-primary/5 p-4" onPaste={(event) => { const files = [...event.clipboardData.items].filter((item) => item.kind === "file" && item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => Boolean(file)); if (files.length) { event.preventDefault(); void uploadFiles(files); } }}>
         <div><h2 className="font-semibold">Facebook ogranicza automatyczne pobieranie tego posta.</h2><p className="mt-1 text-sm text-muted-foreground">Otwórz post na Facebooku → skopiuj tekst ogłoszenia → wklej go tutaj. Możesz również wkleić lub przeciągnąć zdjęcia.</p></div>
@@ -100,12 +101,12 @@ export function NewPropertyPage() {
       <Button className="w-full" disabled={importing || uploading || (manualFacebook && !postText.trim() && images.length === 0 && !imageUrls.trim())} onClick={handleImport}>{importing ? "Analizowanie..." : manualFacebook ? "Analizuj ogłoszenie" : "Importuj"}</Button>
       {manualFacebook && <Button className="w-full" variant="ghost" onClick={cancelFacebook}>Anuluj</Button>}{importError && <p className="text-sm text-destructive">{importError}</p>}
     </div>
-    {importedProperty && formValues && <article className="space-y-8 rounded-xl border bg-card p-5 sm:p-6">
+    {importedProperty && formValues && <article className="ui-section space-y-8">
       {facebookMeta && <section className="rounded-xl border border-primary/30 bg-primary/5 p-4"><h2 className="font-semibold">Rozpoznane dane</h2><div className="mt-3 grid gap-2 text-sm sm:grid-cols-2"><p>Lokalizacja: {[facebookMeta.neighborhood, formValues.city].filter(Boolean).join(", ") || "brak"}</p><p>Cena/m²: {pricePerSqm(formValues)}</p><p>Stan: {facebookMeta.condition === "renovation" ? "do remontu" : facebookMeta.condition === "ready" ? "do wejścia" : "brak danych"}</p><p>Sprzedający: {facebookMeta.sellerType === "private" ? "prywatny" : facebookMeta.sellerType === "agency" ? "pośrednik" : "brak danych"}</p><p>Źródło: Facebook</p><p>Confidence: {Math.round(facebookMeta.confidence * 100)}%</p></div></section>}
       <PropertyGallery images={images} title={formValues.title}/><PropertySummary values={formValues}/>
       {facebookMeta && <Button className="w-full" variant="secondary" disabled={finderSaving} onClick={handleFinderSave}>{finderSaving ? "Dodawanie..." : "Dodaj do Flip Findera"}</Button>}
       <PropertyForm values={formValues} saving={saving} onChange={handleFieldChange} onSubmit={handleSave} submitLabel={facebookMeta ? "Dodaj bezpośrednio do CRM" : undefined}/>
-      {saveError && <p className="text-sm text-destructive">{saveError}</p>}{finderResult && <p className="text-sm text-emerald-600">{finderResult}</p>}{saveSuccess && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-50"><p className="font-semibold">Nieruchomość została zapisana.</p><p className="mt-1">Zapisane kolumny: {saveSuccess.savedColumns.join(", ")}.</p></div>}
+      {saveError && <p className="text-sm text-destructive">{saveError}</p>}{finderResult && <p className="text-sm text-emerald-300">{finderResult}</p>}{saveSuccess && <div className="rounded-2xl border border-emerald-400/25 bg-emerald-400/[0.08] p-4 text-sm text-emerald-100"><p className="font-semibold">{finderImport ? "Ogłoszenie dodane." : "Nieruchomość zapisana."}</p>{finderImport ? <><p className="mt-1 text-emerald-100/80">Oferta ma kanoniczny rekord i jest gotowa do analizy.</p><Link className="mt-3 inline-flex min-h-10 items-center rounded-xl border border-emerald-300/30 bg-black/15 px-3 font-semibold text-emerald-100 outline-none transition hover:bg-emerald-300/10 focus-visible:ring-2 focus-visible:ring-emerald-300" href={`/deals/${encodeURIComponent(finderImport.listingId)}`}>Otwórz Deal Room</Link></> : <><p className="mt-1 text-emerald-100/80">Rekord jest widoczny jako najnowszy w Nieruchomościach. Deal Room wymaga kanonicznej oferty zapisanej przez Flip Finder.</p><Link className="mt-3 inline-flex min-h-10 items-center rounded-xl border border-emerald-300/30 bg-black/15 px-3 font-semibold text-emerald-100 outline-none transition hover:bg-emerald-300/10 focus-visible:ring-2 focus-visible:ring-emerald-300" href="/properties">Wróć do nieruchomości</Link></>}</div>}
     </article>}
   </div>;
 }

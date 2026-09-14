@@ -1,15 +1,15 @@
 import type { ReactNode } from "react";
 import type { DirectorStatus } from "../types";
+import { formatInvestmentText, formatKnownMoneyText, formatPercentDisplay, formatPLNDisplay } from "../presentation";
+
+export { formatInvestmentText, formatKnownMoneyText, formatPercentDisplay, formatPLNDisplay };
 
 export function pln(value: number | null | undefined): string {
-  return value == null || !Number.isFinite(value) ? "—" : new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 }).format(value);
+  return formatPLNDisplay(value);
 }
 
 export function formatInvestmentRisk(value: string): string {
-  const match = /^Cena ofertowa przekracza maksimum o (\d+(?:\.\d+)?) zł$/.exec(value);
-  if (!match) return value;
-  const amount = Number(match[1]);
-  return Number.isFinite(amount) ? `Cena ofertowa przekracza maksimum o ${pln(amount)}` : value;
+  return formatInvestmentText(value) ?? value;
 }
 
 export function numeric(value: number | null | undefined, maximumFractionDigits = 1): string {
@@ -17,7 +17,7 @@ export function numeric(value: number | null | undefined, maximumFractionDigits 
 }
 
 export function percent(value: number | null | undefined): string {
-  return value == null || !Number.isFinite(value) ? "—" : `${numeric(value)}%`;
+  return formatPercentDisplay(value);
 }
 
 export function display(value: unknown): string {
@@ -31,14 +31,14 @@ export function StatusPill({ status, label }: { status: DirectorStatus | string;
   const tone = status === "COMPLETE" || status === "READY" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
     : status === "BLOCKED" || status === "FAILED" || status === "STALE" ? "border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-300"
       : "border-border bg-muted/60 text-muted-foreground";
-  const readable = label ?? status.replaceAll("_", " ");
+  const readable = label ?? ({ COMPLETE: "GOTOWE", READY: "GOTOWE", BLOCKED: "ZABLOKOWANE", FAILED: "BŁĄD", STALE: "NIEAKTUALNE", RUNNING: "W TOKU", WAITING: "OCZEKUJE", PENDING: "OCZEKUJE", PARTIAL: "CZĘŚCIOWO", NOT_RUN: "NIEURUCHOMIONE" } as Record<string, string>)[status] ?? "DO SPRAWDZENIA";
   return <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${tone}`}>{readable}</span>;
 }
 
 export function MetricTile({ label, value, detail, emphasis = false }: { label: string; value: string; detail?: string; emphasis?: boolean }) {
   return <div className={`min-w-0 rounded-xl border border-border/70 p-3 ${emphasis ? "bg-primary/5" : "bg-background/50"}`}>
     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-    <p className={`mt-1 break-words font-semibold tabular-nums tracking-tight ${emphasis ? "text-xl sm:text-2xl" : "text-base"}`}>{value}</p>
+    <p className={`type-financial-standard mt-1 max-w-full ${emphasis ? "text-gold" : ""}`}>{value}</p>
     {detail ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{detail}</p> : null}
   </div>;
 }

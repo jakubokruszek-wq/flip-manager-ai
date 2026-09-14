@@ -193,7 +193,7 @@ test("real Flip Finder gallery button keeps business click independent from trac
   const port = await freePort();
   const root = path.resolve(__dirname, "../../..");
   const nextBin = require.resolve("next/dist/bin/next");
-  const server = spawn(process.execPath, [nextBin, "dev", "--hostname", "127.0.0.1", "--port", String(port)], {
+  const server = spawn(process.execPath, [nextBin, "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: root,
     env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
     stdio: ["ignore", "pipe", "pipe"],

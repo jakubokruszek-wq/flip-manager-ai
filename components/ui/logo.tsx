@@ -16,7 +16,7 @@ export function Logo({ collapsed = false, className }: LogoProps) {
         className,
       )}
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background shadow-sm">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gold/25 bg-gold/10 text-gold shadow-[0_8px_24px_-14px_rgba(0,0,0,1)]">
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -39,11 +39,11 @@ export function Logo({ collapsed = false, className }: LogoProps) {
       </span>
       {!collapsed && (
         <span className="flex min-w-0 flex-col">
-          <span className="truncate text-sm font-semibold tracking-tight text-foreground">
+          <span className="truncate font-heading text-base font-semibold tracking-tight text-foreground">
             Flip Manager
           </span>
           <span className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            AI
+            Investment OS
           </span>
         </span>
       )}
