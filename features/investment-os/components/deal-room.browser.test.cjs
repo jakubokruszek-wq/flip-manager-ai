@@ -43,15 +43,22 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   let currentDeal = deal;
   let notComputed = false;
   const investmentRequests = [];
+  const initializeRequests = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const investmentPath = `/api/flip-finder/listings/${listingId}/investment`;
     if (url.pathname === investmentPath || url.pathname === `${investmentPath}/initialize`) {
-      investmentRequests.push({ method: request.method(), path: url.pathname });
       if (url.pathname.endsWith("/initialize")) {
-        return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false, code: "UNEXPECTED_INITIALIZE" }) });
+        initializeRequests.push({ method: request.method(), path: url.pathname, headers: request.headers() });
+        if (initializeRequests.length === 1) {
+          return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false, message: "fixture failure" }) });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        notComputed = false;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, deal: currentDeal }) });
       }
+      investmentRequests.push({ method: request.method(), path: url.pathname });
       return notComputed
         ? route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false, code: "NOT_COMPUTED" }) })
         : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, deal: currentDeal }) });
@@ -66,6 +73,7 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   await page.screenshot({ path: path.join(reviewDir, "01-deal-room-top-v3.png"), fullPage: false });
   await page.screenshot({ path: path.join(reviewDir, "04-deal-room-desktop.png"), fullPage: true });
   assert.equal(await page.locator("[data-deal-room]").count(), 1);
+  assert.equal(await page.locator("[data-initialize-deal]").count(), 0, "an existing deal must not show the explicit initialize action");
   assert.ok(await page.getByText("Rekomendacja systemu", { exact: true }).first().isVisible());
   assert.equal(await page.getByText("Decyzja CEO", { exact: true }).count(), 0, "a deterministic action token must not be presented as an authored CEO decision");
   assert.equal(await page.getByText("Brak zapisanej rekomendacji CEO.", { exact: true }).count(), 0, "the action must not contradict a missing-CEO fallback");
@@ -146,12 +154,44 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   const mobileNegotiation = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }));
   assert.ok(mobileNegotiation.scrollWidth <= mobileNegotiation.width, JSON.stringify(mobileNegotiation));
   await page.screenshot({ path: path.join(reviewDir, "16-mobile-negotiation-v2.png"), fullPage: false });
-  notComputed = true;
+  const staleDeal = structuredClone(deal);
+  staleDeal.scout.status = "STALE";
+  currentDeal = staleDeal;
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator('[role="status"] h2').waitFor({ state: "visible" });
-  assert.match(await page.locator('[role="status"] h2').innerText(), /Analiza nie zosta/);
-  const latestInvestmentRequest = investmentRequests.at(-1);
-  assert.deepEqual(latestInvestmentRequest, { method: "GET", path: `/api/flip-finder/listings/${listingId}/investment` });
-  assert.equal(investmentRequests.some((request) => request.path.endsWith("/initialize") || request.method !== "GET"), false, "opening a NOT_COMPUTED Deal Room must stay read-only");
+  try { await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 8_000 }); }
+  catch (error) { console.error("Stale-deal reload diagnostics", { investmentRequests, body: await page.locator("body").innerText() }); throw error; }
+  assert.equal(await page.locator("[data-initialize-deal]").count(), 0, "a stale existing deal keeps its existing refresh flow, not the NOT_COMPUTED initialize CTA");
+  assert.equal(await page.getByRole("button", { name: "Odśwież analizę" }).count(), 1, "the established stale-deal refresh action remains available");
+
+  notComputed = true;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("[data-investment-initialize-state]").waitFor({ state: "visible" });
+  assert.match(await page.locator("[data-investment-initialize-state] h2").innerText(), /Analiza nie zosta/);
+  assert.equal(await page.getByRole("button", { name: "PRZYGOTUJ ANALIZĘ" }).count(), 1);
+  assert.equal(initializeRequests.length, 0, "opening a NOT_COMPUTED Deal Room must not initialize automatically");
+  assert.equal(investmentRequests.at(-1).method, "GET");
+  await page.screenshot({ path: path.join(reviewDir, "07-explicit-initialize-cta.png"), fullPage: false });
+
+  await page.getByRole("button", { name: "PRZYGOTUJ ANALIZĘ" }).click();
+  await page.getByRole("alert").getByText(/Nie udało się przygotować analizy/).waitFor({ state: "visible" });
+  assert.equal(initializeRequests.length, 1, "one explicit click sends one initialize request");
+  await page.waitForTimeout(250);
+  assert.equal(initializeRequests.length, 1, "a failed initialization must not retry automatically");
+  assert.equal(await page.getByRole("button", { name: "SPRÓBUJ PONOWNIE" }).count(), 1);
+  assert.equal(initializeRequests[0].method, "POST");
+  assert.equal(initializeRequests[0].headers["x-flip-finder-action"], "investment-os");
+
+  const getsBeforeSuccess = investmentRequests.filter((request) => request.method === "GET").length;
+  await page.getByRole("button", { name: "SPRÓBUJ PONOWNIE" }).evaluate((button) => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await page.getByRole("status").getByText("PRZYGOTOWUJĘ ANALIZĘ", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("button", { name: "PRZYGOTOWUJĘ ANALIZĘ" }).isDisabled(), true);
+  await page.locator("[data-deal-room]").waitFor({ state: "visible" });
+  assert.equal(initializeRequests.length, 2, "two immediate click events must be deduplicated to one retry POST");
+  assert.equal(investmentRequests.filter((request) => request.method === "GET").length, getsBeforeSuccess + 1, "a successful initialize must refetch the canonical GET before rendering the room");
+  assert.equal(await page.locator("[data-initialize-deal]").count(), 0, "the CTA disappears once the canonical deal is available");
+  assert.equal(await page.getByText("Maks. cena zakupu", { exact: true }).count(), 1, "the Premium Deal Room renders from the canonical GET result");
 });

@@ -26,16 +26,26 @@ test("Deal Room is a presentation over CanonicalDeal and does not add a second w
   assert.match(view, /Nie tworzymy pozorowanej historii/);
 });
 
-test("canonical listing route renders the room without initializing missing deals", () => {
+test("canonical listing route keeps GET read-only and exposes initialization only as an explicit NOT_COMPUTED action", () => {
   const route = read("app/(app)/deals/[listingId]/page.tsx");
   const desk = read("features/investment-os/components/investment-desk.tsx");
   const client = read("features/investment-os/investment-client.ts");
+  const getRoute = read("app/api/flip-finder/listings/[id]/investment/route.ts");
   assert.match(route, /<InvestmentDesk result=\{\{ id: listingId \}\} room \/>/);
   assert.match(desk, /if \(room\) return <DealRoomView/);
   assert.match(desk, /loadInvestmentDeal\(result\.id\)/);
   assert.match(client, /InvestmentDealNotComputedError/);
   assert.match(desk, /notComputed/);
-  assert.doesNotMatch(`${route}${desk}${client}`, /\/investment\/initialize|method:\s*["']POST["']/);
+  assert.match(getRoute, /investmentDealReadResponse\(\(await params\)\.id, getInvestmentDeal\)/);
+  assert.doesNotMatch(getRoute, /initializeInvestmentDeal|method:\s*["']POST["']/);
+  assert.match(desk, /if \(!notComputed \|\| initializationInFlight\.current\) return/);
+  assert.match(desk, /\/investment\/initialize/);
+  assert.match(desk, /method: "POST"/);
+  assert.match(desk, /data-initialize-deal/);
+  assert.match(desk, /onClick=\{\(\) => void initialize\(\)\}/);
+  const mountEffect = desk.match(/useEffect\(\(\) => \{([\s\S]*?)\}, \[load\]\);/);
+  assert.ok(mountEffect);
+  assert.doesNotMatch(mountEffect[1], /initialize|POST/);
 });
 
 test("property Deal Room link is available only for an existing canonical listing id", () => {

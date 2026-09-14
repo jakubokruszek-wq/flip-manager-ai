@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { FilterResult } from "@/features/flip-finder/results";
 import type { CanonicalDeal, DealFactOverrides } from "../types";
@@ -19,6 +19,9 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
   const [error, setError] = useState<string | null>(null);
   const [notComputed, setNotComputed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [initializing, setInitializing] = useState(false);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+  const initializationInFlight = useRef(false);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<WorkspaceTab>("OVERVIEW");
 
   const load = useCallback(async () => {
@@ -37,6 +40,38 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
       setLoading(false);
     }
   }, [result.id]);
+
+  const initialize = async () => {
+    if (!notComputed || initializationInFlight.current) return;
+    initializationInFlight.current = true;
+    setInitializing(true);
+    setInitializationError(null);
+    let initializeSucceeded = false;
+
+    try {
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/investment/initialize`, {
+        method: "POST",
+        headers: { "x-flip-finder-action": "investment-os" },
+      });
+      const body = await response.json().catch(() => null) as { deal?: CanonicalDeal; message?: string } | null;
+      if (!response.ok || !body?.deal) {
+        throw new Error(body?.message || "Nie udało się przygotować analizy.");
+      }
+      initializeSucceeded = true;
+
+      // Render only the canonical read model; the POST response is not the UI's source of truth.
+      setDeal(await loadInvestmentDeal(result.id));
+      setNotComputed(false);
+      setError(null);
+    } catch {
+      setInitializationError(initializeSucceeded
+        ? "Analiza została przygotowana, ale nie udało się jej wczytać. Spróbuj ponownie."
+        : "Nie udało się przygotować analizy. Możesz spróbować ponownie.");
+    } finally {
+      initializationInFlight.current = false;
+      setInitializing(false);
+    }
+  };
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 0);
@@ -66,21 +101,32 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
   if (!deal) {
     if (notComputed) {
       return (
-        <section className="ui-empty-state px-5 py-8 text-left sm:px-8" role="status">
+        <section className="ui-empty-state px-5 py-8 text-left sm:px-8" data-investment-initialize-state role="region" aria-labelledby="investment-initialize-title">
           <div className="w-full max-w-xl space-y-4">
             <div>
               <p className="type-badge uppercase text-gold">Pokój transakcji</p>
-              <h2 className="type-section-title mt-2">Analiza nie została jeszcze przygotowana</h2>
+              <h2 className="type-section-title mt-2" id="investment-initialize-title">Analiza nie została jeszcze przygotowana</h2>
             </div>
             <p className="text-sm leading-6 text-muted-foreground">
-              Ten widok odczytuje wyłącznie istniejącą analizę. Dla tej oferty nie ma jeszcze zapisanego deala; samo otwarcie strony niczego nie tworzy ani nie zapisuje.
+              Dla tej oferty nie ma jeszcze zapisanej analizy inwestycyjnej. Przygotujemy ją dopiero po Twoim poleceniu.
             </p>
+            {initializing ? <div className="rounded-xl border border-gold/20 bg-gold/[0.05] px-4 py-3" aria-live="polite" role="status">
+              <p className="text-sm font-semibold text-gold">PRZYGOTOWUJĘ ANALIZĘ</p>
+              <p className="mt-1 text-sm text-muted-foreground">Zespół inwestycyjny analizuje ofertę. To może chwilę potrwać.</p>
+            </div> : null}
+            {initializationError ? <p className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive" role="alert">{initializationError}</p> : null}
             <div className="flex flex-wrap gap-2">
-              <button className="inline-flex min-h-10 items-center rounded-xl border border-border px-4 text-sm font-semibold outline-none transition hover:border-gold/25 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setLoading(true); void load(); }} type="button">
-                Odśwież stan
+              <button
+                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-gold/50 bg-gold px-5 text-sm font-semibold text-[#17140c] shadow-[0_12px_30px_-18px_rgba(214,179,90,.85)] outline-none transition hover:bg-gold/90 focus-visible:ring-2 focus-visible:ring-gold disabled:cursor-wait disabled:opacity-65"
+                data-initialize-deal
+                disabled={initializing}
+                onClick={() => void initialize()}
+                type="button"
+              >
+                {initializing ? "PRZYGOTOWUJĘ ANALIZĘ" : initializationError ? "SPRÓBUJ PONOWNIE" : "PRZYGOTUJ ANALIZĘ"}
               </button>
               <Link className="inline-flex min-h-10 items-center rounded-xl border border-border px-4 text-sm font-semibold text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" href="/flip-finder">
-                Wróć do Findera
+                Wróć do Flip Findera
               </Link>
             </div>
           </div>

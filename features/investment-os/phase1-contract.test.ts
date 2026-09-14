@@ -34,6 +34,10 @@ test("migration keeps one additive deal per listing with backend-only writes", (
 test("Investment Command Center keeps the API contract and presents the CEO decision first", () => {
   assert.match(desk, /loadInvestmentDeal\(result\.id\)/);
   assert.match(desk, /\/api\/flip-finder\/listings\/\$\{result\.id\}\/investment/);
+  assert.match(desk, /\/investment\/initialize/);
+  assert.match(desk, /method: "POST"/);
+  assert.match(desk, /data-initialize-deal/);
+  assert.match(desk, /initializationInFlight\.current/);
   assert.match(desk, /"x-flip-finder-action": "investment-os"/);
   assert.match(desk, /JSON\.stringify\(\{ overrides \}\)/);
   assert.match(command, /Maks\. cena zakupu/);
@@ -73,5 +77,6 @@ test("override reset and save semantics stay scoped to the existing override end
   assert.match(overrides, /renovationPerM2/);
   assert.match(overrides, /holdingMonths/);
   assert.match(overrides, /Reset do źródła/);
-  assert.doesNotMatch(`${desk}${command}${board}${workspace}${overrides}${audit}`, /supabase|createInvestmentDeal|initialize/);
+  assert.doesNotMatch(`${command}${board}${workspace}${overrides}${audit}`, /supabase|createInvestmentDeal|initialize/);
+  assert.doesNotMatch(desk, /supabase|createInvestmentDeal/);
 });
