@@ -162,6 +162,72 @@ test("strong economics can remain high priority when secondary ownership data is
   }), "HIGH");
 });
 
+// -----------------------------------------------------------------------------
+// Ranking safety: a SUSPECT or MISSING price must never drive economics upside.
+// -----------------------------------------------------------------------------
+function suspectPriceListing(overrides: Partial<Parameters<typeof calculateOpportunityAssessment>[0]> = {}) {
+  return {
+    id: "suspect-1", source: "facebook", lifecycleStatus: "REVIEW" as const, decisionBucket: "REVIEW" as const,
+    price: 666, area: 38, rooms: 2, pricePerSqm: 666 / 38, city: "Łódź", district: "Chojny", address: "ul. Ogniskowa 8",
+    buildingType: null, floor: null, title: "Mieszkanie po remoncie", description: "Mieszkanie po generalnym remoncie",
+    missingFields: [], lastSeenAt: "2026-09-05T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("PRICE SUSPECT GUARD: a 666 zł price marked SUSPECT never produces price-driven profit, ROI or market discount", () => {
+  const assessment = calculateOpportunityAssessment(
+    { ...suspectPriceListing(), priceReliability: "SUSPECT" }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"),
+  );
+  assert.ok(assessment);
+  assert.equal(assessment.estimatedProfit, null);
+  assert.equal(assessment.estimatedRoi, null);
+  assert.equal(assessment.marketDiscountPct, null);
+  assert.equal(assessment.grossSpread, null);
+  assert.ok(assessment.missingFields.includes("price"));
+});
+
+test("FALSE 666 PLN OPPORTUNITY BLOCKED: even with strong comparables, a SUSPECT-priced listing cannot reach TOP priority", () => {
+  const assessment = calculateOpportunityAssessment(
+    { ...suspectPriceListing(), priceReliability: "SUSPECT" }, filter, [comp(18_000), comp(19_000)], Date.parse("2026-09-06T00:00:00.000Z"),
+  );
+  assert.ok(assessment);
+  assert.notEqual(assessment.priority, "TOP");
+  assert.notEqual(assessment.priority, "HIGH");
+});
+
+test("PRICE MISSING GUARD: priceReliability MISSING withholds economics even when a numeric price is present", () => {
+  const assessment = calculateOpportunityAssessment(
+    { ...suspectPriceListing(), priceReliability: "MISSING" }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"),
+  );
+  assert.ok(assessment);
+  assert.equal(assessment.estimatedProfit, null);
+  assert.equal(assessment.estimatedRoi, null);
+});
+
+test("SUSPECT price still allows other features to be evaluated (comps, data confidence, ARV)", () => {
+  const assessment = calculateOpportunityAssessment(
+    { ...suspectPriceListing(), priceReliability: "SUSPECT" }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"),
+  );
+  assert.ok(assessment);
+  assert.equal(assessment.compCount, 2);
+  assert.ok(assessment.expectedArv !== null);
+});
+
+test("VERIFIED / LIKELY REGRESSION: existing scoring for a trusted price is unchanged whether priceReliability is omitted, VERIFIED or LIKELY", () => {
+  const base = suspectPriceListing({ price: 249_000, pricePerSqm: 6_552.63 });
+  const withoutField = calculateOpportunityAssessment(base, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  const verified = calculateOpportunityAssessment({ ...base, priceReliability: "VERIFIED" }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  const likely = calculateOpportunityAssessment({ ...base, priceReliability: "LIKELY" }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  assert.ok(withoutField && verified && likely);
+  assert.equal(verified.score, withoutField.score);
+  assert.equal(verified.estimatedProfit, withoutField.estimatedProfit);
+  assert.equal(verified.estimatedRoi, withoutField.estimatedRoi);
+  assert.equal(verified.marketDiscountPct, withoutField.marketDiscountPct);
+  assert.equal(likely.score, withoutField.score);
+  assert.equal(likely.estimatedProfit, withoutField.estimatedProfit);
+});
+
 function comp(pricePerM2: number): ResaleCompRecord {
   return {
     id: `comp-${pricePerM2}`,

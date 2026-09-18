@@ -44,6 +44,16 @@ export type OpportunityListingInput = {
   description: string | null;
   missingFields: string[];
   lastSeenAt: string | null;
+  /**
+   * Deterministic, source-agnostic trust signal for `price` (populated today
+   * by Facebook Watcher's price-quality layer; simply absent/undefined for
+   * any source that doesn't produce it, which is treated as trusted so
+   * existing VERIFIED/LIKELY-equivalent scoring is unaffected). When SUSPECT
+   * or MISSING, `price` is never used to derive economics here — it is never
+   * replaced with a guessed or median value, only withheld from the upside
+   * calculation, so the listing can still be evaluated on its other fields.
+   */
+  priceReliability?: "VERIFIED" | "LIKELY" | "SUSPECT" | "MISSING";
 };
 
 export type OpportunityAssessment = {
@@ -93,14 +103,23 @@ export function calculateOpportunityAssessment(
   const arv = calculateResaleArv(subject, comparables);
   const price = positive(input.price);
   const area = positive(input.area);
-  const pricePerSqm = positive(input.pricePerSqm) ?? (price !== null && area !== null ? price / area : null);
+  // A SUSPECT/MISSING price is never used to derive economics: it is not
+  // replaced with a guessed, corrected or market-median value — it is simply
+  // withheld from the price-driven calculations below, exactly like a missing
+  // price already was. Everything else about the listing (area, location,
+  // comparables, evidence) is still evaluated normally.
+  const priceTrusted = input.priceReliability === undefined || input.priceReliability === "VERIFIED" || input.priceReliability === "LIKELY";
+  const effectivePrice = priceTrusted ? price : null;
+  // A precomputed `input.pricePerSqm` would itself have been derived from the
+  // untrusted raw price upstream, so it is withheld the same way when suspect.
+  const pricePerSqm = priceTrusted ? positive(input.pricePerSqm) ?? (effectivePrice !== null && area !== null ? effectivePrice / area : null) : null;
   const expectedPerSqm = arv.weightedPricePerSqm ?? arv.medianPricePerSqm;
   const marketDiscountPct = pricePerSqm !== null && expectedPerSqm !== null && expectedPerSqm > 0
     ? ((expectedPerSqm - pricePerSqm) / expectedPerSqm) * 100
     : null;
   const renovationCost = area === null ? null : renovationEstimate(area, input.title, input.description);
-  const estimatedProfit = estimateProfit(price, arv.expectedPrice, renovationCost);
-  const estimatedRoi = estimateRoi(price, renovationCost, estimatedProfit);
+  const estimatedProfit = estimateProfit(effectivePrice, arv.expectedPrice, renovationCost);
+  const estimatedRoi = estimateRoi(effectivePrice, renovationCost, estimatedProfit);
   const arvConfidence = confidenceForArv(comparables, arv);
   const dataConfidence = confidenceForData(input, pricePerSqm);
   const economicsConfidence = confidenceForEconomics({
@@ -128,7 +147,7 @@ export function calculateOpportunityAssessment(
     ownership: input.ownership ?? null,
     condition: `${input.title ?? ""} ${input.description ?? ""}`,
     monthlyFee: null,
-    askingPrice: input.price,
+    askingPrice: effectivePrice,
     askingPricePerM2: pricePerSqm,
     resalePerM2: {
       low: area && arv.conservativePrice ? arv.conservativePrice / area : null,
@@ -156,12 +175,12 @@ export function calculateOpportunityAssessment(
     conservativeArv: arv.conservativePrice,
     expectedArv: arv.expectedPrice,
     optimisticArv: arv.optimisticPrice,
-    grossSpread: arv.expectedPrice !== null && price !== null ? arv.expectedPrice - price : null,
+    grossSpread: arv.expectedPrice !== null && effectivePrice !== null ? arv.expectedPrice - effectivePrice : null,
     estimatedRenovationCost: underwriting.renovationTotal,
     estimatedProfit: underwriting.profitBase,
     estimatedRoi: underwriting.roiBase,
     marketDiscountPct,
-    missingFields: missingFields(input),
+    missingFields: missingFields(input, priceTrusted),
     calculatedAt: new Date(now).toISOString(),
     underwriting,
   };
@@ -334,9 +353,9 @@ function estimateRoi(price: number | null, renovationCost: number | null, profit
   return invested > 0 ? Math.round((profit / invested) * 1000) / 10 : null;
 }
 
-function missingFields(input: OpportunityListingInput): string[] {
+function missingFields(input: OpportunityListingInput, priceTrusted = true): string[] {
   const fields = new Set(input.missingFields);
-  if (input.price === null) fields.add("price");
+  if (input.price === null || !priceTrusted) fields.add("price");
   if (input.area === null) fields.add("area");
   if (input.rooms === null) fields.add("rooms");
   if (!input.address) fields.add("address");
