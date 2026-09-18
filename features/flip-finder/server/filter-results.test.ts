@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseFacebookPriceReliability as parsePriceReliability } from "../../facebook-watcher/price-quality.ts";
+import { parseFacebookPriceReliability as parsePriceReliability, resolveFacebookPriceReliabilityOnMetadataFailure as resolvePriceReliability } from "../../facebook-watcher/price-quality.ts";
 import { calculateOpportunityAssessment } from "../opportunity-score.ts";
 import type { SearchFilter } from "../index.ts";
 import type { ResaleCompRecord } from "../../market-intelligence/resale-comps.ts";
@@ -114,6 +114,71 @@ test("NO-METADATA BACKWARD COMPATIBILITY: a Facebook listing predating this feat
   assert.equal(priceReliability, undefined);
   const withField = calculateOpportunityAssessment({ ...listingInput({ price: 399_000, pricePerSqm: 399_000 / 38 }), priceReliability }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
   const withoutField = calculateOpportunityAssessment(listingInput({ price: 399_000, pricePerSqm: 399_000 / 38 }), filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  assert.ok(withField && withoutField);
+  assert.deepEqual(withField, withoutField);
+});
+
+// -----------------------------------------------------------------------------
+// Metadata query FAILURE safety: this must fail SAFE for Facebook (never fail
+// OPEN into trusted-by-default scoring), while every other source — which
+// never depended on this query for its own trust signal — is untouched.
+// -----------------------------------------------------------------------------
+test("resolveFacebookPriceReliabilityOnMetadataFailure: query success + no status found -> undefined (backward-compatible, trusted)", () => {
+  assert.equal(resolvePriceReliability("facebook", undefined, false), undefined);
+});
+test("resolveFacebookPriceReliabilityOnMetadataFailure: query success + a real status found -> that status wins regardless of the failure flag", () => {
+  assert.equal(resolvePriceReliability("facebook", "SUSPECT", false), "SUSPECT");
+  assert.equal(resolvePriceReliability("facebook", "VERIFIED", true), "VERIFIED");
+});
+test("resolveFacebookPriceReliabilityOnMetadataFailure: query FAILURE + Facebook + no status -> MISSING, never fabricated SUSPECT", () => {
+  assert.equal(resolvePriceReliability("facebook", undefined, true), "MISSING");
+});
+test("resolveFacebookPriceReliabilityOnMetadataFailure: query FAILURE + OLX/Otodom -> undefined, unaffected", () => {
+  assert.equal(resolvePriceReliability("olx", undefined, true), undefined);
+  assert.equal(resolvePriceReliability("otodom", undefined, true), undefined);
+});
+
+test("D. METADATA QUERY FAILURE + Facebook askingPrice=666: reliability resolves MISSING, no false TOP/HIGH", () => {
+  const priceReliability = resolvePriceReliability("facebook", undefined, true);
+  assert.equal(priceReliability, "MISSING");
+  const assessment = calculateOpportunityAssessment({ ...listingInput(), priceReliability }, filter, [comp(18_000), comp(19_000)], Date.parse("2026-09-06T00:00:00.000Z"));
+  assert.ok(assessment);
+  assert.equal(assessment.estimatedProfit, null);
+  assert.equal(assessment.estimatedRoi, null);
+  assert.equal(assessment.marketDiscountPct, null);
+  assert.notEqual(assessment.priority, "TOP");
+  assert.notEqual(assessment.priority, "HIGH");
+});
+
+test("E. METADATA QUERY FAILURE + Facebook askingPrice=399000: listing remains visible, price-driven metrics safely withheld", () => {
+  const priceReliability = resolvePriceReliability("facebook", undefined, true);
+  assert.equal(priceReliability, "MISSING");
+  const assessment = calculateOpportunityAssessment({ ...listingInput({ price: 399_000, pricePerSqm: 399_000 / 38 }), priceReliability }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  assert.ok(assessment, "the listing must still receive an assessment — never dropped from the Finder");
+  assert.equal(assessment.estimatedProfit, null);
+  assert.equal(assessment.estimatedRoi, null);
+  assert.equal(assessment.marketDiscountPct, null);
+  // Other, non-price-derived signals are still present:
+  assert.equal(assessment.compCount, 2);
+  assert.ok(assessment.expectedArv !== null);
+});
+
+test("F. METADATA QUERY FAILURE + OLX: scoring unchanged", () => {
+  const priceReliability = resolvePriceReliability("olx", undefined, true);
+  assert.equal(priceReliability, undefined);
+  const olxInput = listingInput({ id: "olx-1", source: "olx", price: 350_000, pricePerSqm: 350_000 / 38 });
+  const withField = calculateOpportunityAssessment({ ...olxInput, priceReliability }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  const withoutField = calculateOpportunityAssessment(olxInput, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  assert.ok(withField && withoutField);
+  assert.deepEqual(withField, withoutField);
+});
+
+test("G. METADATA QUERY FAILURE + Otodom: scoring unchanged", () => {
+  const priceReliability = resolvePriceReliability("otodom", undefined, true);
+  assert.equal(priceReliability, undefined);
+  const otodomInput = listingInput({ id: "otodom-1", source: "otodom", price: 420_000, pricePerSqm: 420_000 / 38 });
+  const withField = calculateOpportunityAssessment({ ...otodomInput, priceReliability }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
+  const withoutField = calculateOpportunityAssessment(otodomInput, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"));
   assert.ok(withField && withoutField);
   assert.deepEqual(withField, withoutField);
 });

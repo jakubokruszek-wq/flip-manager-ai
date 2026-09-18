@@ -20,7 +20,7 @@ import { createClient } from "@/lib/supabase/server";
 import { calculateOpportunityAssessment } from "@/features/flip-finder/opportunity-score";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
 import { visibleMembership } from "@/features/flip-finder/membership-reconciliation";
-import { parseFacebookPriceReliability, type FacebookPriceStatus } from "@/features/facebook-watcher/price-quality";
+import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadataFailure, type FacebookPriceStatus } from "@/features/facebook-watcher/price-quality";
 
 type Row = Record<string, unknown>;
 
@@ -200,7 +200,14 @@ export async function getFilterResults(filterId: string, includeArchived = false
       .eq("source", "facebook"),
   ]);
   const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
-  if (priceQualityResult.error) {
+  // Distinguish "the query ran and this Facebook listing simply has no
+  // priceQuality yet" (backward-compatible: trusted, same as before this
+  // feature existed) from "the query itself failed" (must not silently
+  // restore trusted-by-default scoring for Facebook, since Facebook price
+  // trust has no other source of truth). Only Facebook is affected either
+  // way — OLX/Otodom never depended on this query for their own trust signal.
+  const priceQualityMetadataQueryFailed = Boolean(priceQualityResult.error);
+  if (priceQualityMetadataQueryFailed) {
     console.error("FLIP FINDER PRICE RELIABILITY METADATA ERROR:", priceQualityResult.error);
   } else {
     for (const row of asRows(priceQualityResult.data)) {
@@ -235,7 +242,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     asRows(listingsResult.data)
       .map(toListingRow)
       .filter((listing): listing is ListingRow => listing !== null)
-      .map((listing) => [listing.id, { ...listing, priceReliability: priceReliabilityByListingId.get(listing.id) }]),
+      .map((listing) => [listing.id, { ...listing, priceReliability: resolveFacebookPriceReliabilityOnMetadataFailure(listing.source, priceReliabilityByListingId.get(listing.id), priceQualityMetadataQueryFailed) }]),
   );
   const snapshotsByListingId = new Map<string, SnapshotRow[]>();
 
@@ -692,6 +699,7 @@ function isRow(value: unknown): value is Row {
 function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
+
 
 
 function validIsoDate(value: unknown): string | null {

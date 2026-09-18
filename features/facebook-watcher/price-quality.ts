@@ -208,3 +208,21 @@ export function parseFacebookPriceReliability(metadata: unknown): FacebookPriceS
   const status = (priceQuality as Record<string, unknown>).status;
   return typeof status === "string" && (FACEBOOK_PRICE_STATUSES as readonly string[]).includes(status) ? status as FacebookPriceStatus : undefined;
 }
+
+/**
+ * Resolves the final `priceReliability` passed to the Opportunity Engine,
+ * distinguishing "the metadata query succeeded and this (possibly legacy)
+ * Facebook listing simply has no priceQuality yet" — backward-compatible,
+ * trusted, same as before this feature existed — from "the metadata query
+ * itself failed", which must fail SAFE for Facebook (whose price can only be
+ * trusted via that same metadata) rather than fail OPEN into trusted-by-
+ * default scoring. Every other source never depended on this query for its
+ * trust signal, so it is always left untouched either way. Never fabricates
+ * SUSPECT when MISSING is the correct state, never invents a price, and never
+ * makes the caller's request itself fail — only this one field changes.
+ */
+export function resolveFacebookPriceReliabilityOnMetadataFailure(source: string, status: FacebookPriceStatus | undefined, metadataQueryFailed: boolean): FacebookPriceStatus | undefined {
+  if (status) return status;
+  if (metadataQueryFailed && source === "facebook") return "MISSING";
+  return undefined;
+}
