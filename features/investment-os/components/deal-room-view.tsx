@@ -113,7 +113,7 @@ function BiggestRisk({ brain, deal }: { brain: BrainSnapshot; deal: CanonicalDea
 }
 
 function NextAction({ brain }: { brain: BrainSnapshot }) {
-  return <CompactCard icon={<ChevronRight className="size-5" />} label="Następny krok" tone="gold" value={brain.ceo.nextBestAction.title} detail={brain.ceo.nextBestAction.reason} />;
+  return <CompactCard icon={<ChevronRight className="size-5" />} label="Następny krok" tone="gold" value={brain.ceo.nextBestAction.title} detail="Działanie wskazane przez bieżącą analizę" />;
 }
 
 function CompactCard({ icon, label, value, detail, tone }: { icon: ReactNode; label: string; value: string; detail: string; tone: "green" | "amber" | "red" | "gold" }) {
