@@ -20,6 +20,7 @@ import { createClient } from "@/lib/supabase/server";
 import { calculateOpportunityAssessment } from "@/features/flip-finder/opportunity-score";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
 import { visibleMembership } from "@/features/flip-finder/membership-reconciliation";
+import { parseFacebookPriceReliability, type FacebookPriceStatus } from "@/features/facebook-watcher/price-quality";
 
 type Row = Record<string, unknown>;
 
@@ -87,7 +88,16 @@ type ListingRow = Pick<
   | "galleryError"
   | "galleryTotal"
   | "galleryPersistedCount"
->;
+> & {
+  /**
+   * Generic, source-agnostic price-trust signal for the Opportunity Engine.
+   * Populated today only from Facebook's own price-quality metadata (see
+   * priceReliabilityByListingId below); simply absent for any other source,
+   * which the engine already treats as trusted — so OLX/Otodom scoring is
+   * unaffected whether or not they ever gain this metadata.
+   */
+  priceReliability?: FacebookPriceStatus;
+};
 
 type SnapshotRow = {
   listingId: string;
@@ -173,14 +183,32 @@ export async function getFilterResults(filterId: string, includeArchived = false
     .in("id", listingIds)
     .eq("status", "active")
     .in("lifecycle_status", lifecycleStatuses);
-  const [listingsResultRaw, snapshotsResult] = await Promise.all([
+  const [listingsResultRaw, snapshotsResult, priceQualityResult] = await Promise.all([
     listingQuery,
     supabase
       .from("listing_snapshots")
       .select("listing_id,price,captured_at,raw_data")
       .in("listing_id", listingIds)
       .order("captured_at", { ascending: false }),
+    // One extra batched query (never per-listing) for Facebook's own price-quality
+    // signal. Filtered server-side to source=facebook, since only Facebook writes
+    // this metadata today; OLX/Otodom simply have no rows here and are unaffected.
+    supabase
+      .from("listing_source_metadata")
+      .select("listing_id,metadata")
+      .in("listing_id", listingIds)
+      .eq("source", "facebook"),
   ]);
+  const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
+  if (priceQualityResult.error) {
+    console.error("FLIP FINDER PRICE RELIABILITY METADATA ERROR:", priceQualityResult.error);
+  } else {
+    for (const row of asRows(priceQualityResult.data)) {
+      const listingId = nullableString(row.listing_id);
+      const status = parseFacebookPriceReliability(row.metadata);
+      if (listingId && status) priceReliabilityByListingId.set(listingId, status);
+    }
+  }
 
   let listingsResult: typeof listingsResultRaw = listingsResultRaw;
   if (listingsResult.error?.code === "42703") {
@@ -207,7 +235,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     asRows(listingsResult.data)
       .map(toListingRow)
       .filter((listing): listing is ListingRow => listing !== null)
-      .map((listing) => [listing.id, listing]),
+      .map((listing) => [listing.id, { ...listing, priceReliability: priceReliabilityByListingId.get(listing.id) }]),
   );
   const snapshotsByListingId = new Map<string, SnapshotRow[]>();
 
@@ -446,6 +474,7 @@ function opportunityFields(
     description: listing.description,
     missingFields: listing.missingFields ?? [],
     lastSeenAt: listing.lastSeenAt,
+    priceReliability: listing.priceReliability,
   }, filter, comps);
   return assessment ? {
     opportunityScore: assessment.score,
@@ -663,6 +692,7 @@ function isRow(value: unknown): value is Row {
 function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
+
 
 function validIsoDate(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {

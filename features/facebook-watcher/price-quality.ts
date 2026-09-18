@@ -193,3 +193,18 @@ export function facebookPriceReviewExplanation(quality: FacebookPriceQuality, pr
 function formatPln(value: number): string {
   return `${new Intl.NumberFormat("pl-PL").format(Math.round(value))} zł`;
 }
+
+/**
+ * Reads `listing_source_metadata.metadata.priceQuality.status` for the generic,
+ * source-agnostic `priceReliability` signal the Opportunity Engine consumes.
+ * Never guesses a status: any missing, malformed, or unrecognized shape —
+ * including every non-Facebook source's metadata, which never has this key —
+ * resolves to `undefined`, which the engine already treats as fully trusted.
+ */
+export function parseFacebookPriceReliability(metadata: unknown): FacebookPriceStatus | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined;
+  const priceQuality = (metadata as Record<string, unknown>).priceQuality;
+  if (!priceQuality || typeof priceQuality !== "object" || Array.isArray(priceQuality)) return undefined;
+  const status = (priceQuality as Record<string, unknown>).status;
+  return typeof status === "string" && (FACEBOOK_PRICE_STATUSES as readonly string[]).includes(status) ? status as FacebookPriceStatus : undefined;
+}
