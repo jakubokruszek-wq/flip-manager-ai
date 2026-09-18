@@ -11,6 +11,7 @@ import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { facebookScanStartFailure } from "./scan-start-errors";
+import { RECOVERABLE_SCAN_STATUSES, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
 export { scanStatus } from "./scan-start-errors";
 
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; matchDiagnostics: MatchDiagnosticSummary };
@@ -20,8 +21,6 @@ type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
 type ScanClock = { startedAt: string; startedMs: number };
 
-const STALE_SCAN_TIMEOUT_MS = 15 * 60 * 1000;
-const STALE_SCAN_MESSAGE = "Scan timed out";
 const SOURCE_TIMEOUT_MS = 75_000;
 const DATABASE_TIMEOUT_MS = 12_000;
 
@@ -42,7 +41,7 @@ export async function runManualOtodomScan(filterId: string, facebookSourceId?: s
   const sourceIds = [...sources.map((source) => source.id), ...(facebookEnabled ? ["facebook"] : [])];
   if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
   const supabase = await createClient();
-  await failStaleRunningScans(supabase, filterId, sourceIds);
+  await failStaleScans(supabase, filterId, sourceIds);
   const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", sourceIds).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
   if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
@@ -142,9 +141,14 @@ async function scanSource(source: SearchSource, filterId: string, filter: Loaded
   return result;
 }
 
-async function failStaleRunningScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
-  const staleBefore = new Date(Date.now() - STALE_SCAN_TIMEOUT_MS).toISOString();
-  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).eq("search_filter_id", filterId).in("source", sourceIds).eq("status", "running").lt("started_at", staleBefore).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+/**
+ * Releases the duplicate-scan lock held by scans that never reached a terminal
+ * state. It must cover every status the lock blocks on: a Facebook row stays
+ * "pending" until a collector claims it, so reaping only "running" left an
+ * unclaimed job blocking that filter's scans permanently.
+ */
+async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
+  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) throw statusError(500, "Nie udało się zwolnić wygasłej blokady skanu.");
 }
 

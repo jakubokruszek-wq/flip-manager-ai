@@ -9,24 +9,27 @@ import {
   type SearchFilterScan,
 } from "@/features/flip-finder/search-filter-contract";
 import { createClient } from "@/lib/supabase/server";
+import { selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT } from "./scan-lifecycle";
 
 type Row = Record<string, unknown>;
 
+const SOURCE_SCAN_COLUMNS =
+  "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message";
+
 export async function listSearchFilters(): Promise<SearchFilterListResponse> {
   const supabase = await createClient();
-  const [filtersResult, matchesResult, listingsResult, scansResult] = await Promise.all([
+  const [filtersResult, matchesResult, listingsResult, scansResult, completedScansResult] = await Promise.all([
     supabase.from("search_filters").select("*").order("updated_at", { ascending: false }),
     supabase.from("listing_filter_matches").select("search_filter_id").eq("is_current_match", true),
     supabase.from("listings").select("id,status,lifecycle_status"),
-    supabase.from("source_scans").select(
-      "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message",
-    ),
+    supabase.from("source_scans").select(SOURCE_SCAN_COLUMNS).order("started_at", { ascending: false }).limit(SOURCE_SCAN_PAGE_LIMIT),
+    supabase.from("source_scans").select(SOURCE_SCAN_COLUMNS).eq("status", "completed").not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(SOURCE_SCAN_PAGE_LIMIT),
   ]);
 
-  if (filtersResult.error || matchesResult.error || listingsResult.error || scansResult.error) {
+  if (filtersResult.error || matchesResult.error || listingsResult.error || scansResult.error || completedScansResult.error) {
     console.error(
       "FLIP FINDER LIST ERROR:",
-      filtersResult.error ?? matchesResult.error ?? listingsResult.error ?? scansResult.error,
+      filtersResult.error ?? matchesResult.error ?? listingsResult.error ?? scansResult.error ?? completedScansResult.error,
     );
     throw new Error("Nie udało się pobrać filtrów.");
   }
@@ -40,29 +43,10 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
     }
   }
 
-  const scans = asRows(scansResult.data)
-    .map(toSearchFilterScan)
-    .filter((scan): scan is SearchFilterScan => scan !== null);
-  const latestScans = new Map<string, SearchFilterScan>();
-  const latestCompletedScans = new Map<string, SearchFilterScan>();
-
-  for (const scan of scans) {
-    const latestScan = latestScans.get(scan.searchFilterId);
-    const scanIsActive = scan.status === "pending" || scan.status === "running";
-    const latestIsActive = latestScan?.status === "pending" || latestScan?.status === "running";
-    if (!latestScan || (scanIsActive && !latestIsActive) || (scanIsActive === latestIsActive && scan.startedAt > latestScan.startedAt)) {
-      latestScans.set(scan.searchFilterId, scan);
-    }
-
-    if (scan.status !== "completed" || !scan.finishedAt) {
-      continue;
-    }
-
-    const latestCompletedScan = latestCompletedScans.get(scan.searchFilterId);
-    if (!latestCompletedScan || scan.finishedAt > (latestCompletedScan.finishedAt ?? "")) {
-      latestCompletedScans.set(scan.searchFilterId, scan);
-    }
-  }
+  const toScans = (data: unknown) => asRows(data).map(toSearchFilterScan).filter((scan): scan is SearchFilterScan => scan !== null);
+  const scans = toScans(scansResult.data);
+  const latestScans = selectLatestScans(scans);
+  const latestCompletedScans = selectLatestCompletedScans(toScans(completedScansResult.data));
 
   const filters = asRows(filtersResult.data)
     .map(toSearchFilter)
