@@ -32,6 +32,9 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     street: textResult.street ?? vision.street,
     price: resolvedPrice.price,
     priceProvenance: resolvedPrice.price !== null ? (input.priceProvenance ?? (input.postText ? "AUTHORITATIVE_TEXT" : "VISION")) : textResult.priceProvenance,
+    // Vision's own `.price` reading is never authoritative (see resolvedPrice above);
+    // kept only so a text-vs-image price mismatch can be surfaced, not silently picked.
+    visionPriceCandidate: typeof vision.price === "number" ? vision.price : null,
     area: textResult.area ?? vision.area,
     rooms: textResult.rooms ?? vision.rooms,
     floor: textResult.floor ?? vision.floor,

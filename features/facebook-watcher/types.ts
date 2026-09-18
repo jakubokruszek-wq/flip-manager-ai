@@ -1,4 +1,5 @@
 import type { FacebookFieldConfidence, FacebookImageAssessment, FacebookIntentSource, FacebookListingIntent, FacebookMediaCandidate } from "../facebook-worker/types";
+import type { FacebookListingQualityGrade, FacebookPriceQuality } from "./price-quality";
 
 export type FacebookPriceProvenance = "AUTHORITATIVE_TEXT" | "VISION" | "HISTORICAL";
 
@@ -45,6 +46,8 @@ export type FacebookProperty = {
   street: string | null;
   price: number | null;
   priceProvenance?: FacebookPriceProvenance;
+  /** A secondary price candidate read directly off an image by Vision, kept only for conflict detection; never authoritative. */
+  visionPriceCandidate?: number | null;
   area: number | null;
   rooms: number | null;
   floor: number | null;
@@ -82,6 +85,8 @@ export type FacebookWatcherListing = FacebookProperty & {
   isNew: boolean;
   highPriority: boolean;
   crossSourceLinks: Array<{ source: string; url: string }>;
+  priceQuality?: FacebookPriceQuality;
+  listingQuality?: FacebookListingQualityGrade;
 };
 
 export const FACEBOOK_WORKFLOW_STATUSES = ["new", "review", "interesting", "crm", "rejected"] as const;

@@ -39,7 +39,7 @@ export type FacebookPriceResolution = {
   source: "EXPLICIT_TOTAL" | "THOUSANDS_TOTAL" | "DERIVED_FROM_PRICE_PER_M2" | "NONE";
 };
 
-const AUXILIARY_PRICE_CONTEXT = /(?:czynsz|opłat|kaucj|wyposażeni|mebl|remont|prowizj|telefon|tel\.?)[^\n]{0,24}$/i;
+const AUXILIARY_PRICE_CONTEXT = /(?:czynsz|opłat|kaucj|wyposażeni|mebl|remont|prowizj|telefon|tel\.?|\brat[ay]\b|zaliczk|przedpłat|\bmedi[ae]\b|administracj|wspólnot|fundusz\s*remontow\w*|abonament|ubezpieczeni|\bpodatek\b|\bpr[ąa]d\b|\bgaz\b|\bwod[ęya]\b|internet)[^\n]{0,24}$/i;
 
 export function resolveFacebookPrice(text: string, area: number | null): FacebookPriceResolution {
   const normalized = text.replace(/[\u00a0\u202f]/g, " ");
@@ -48,13 +48,17 @@ export function resolveFacebookPrice(text: string, area: number | null): Faceboo
     .filter((match) => !/^\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => decimalNumber(match[1], match[2]));
   const thousandsTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*(?:tys\.?|tysi(?:ąc(?:e|y)?)?)/giu))
     .filter((match) => !/^\s*(?:zł|pln)?\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
+  // Colloquial "399k" / "300 K" shorthand. `(?!\w)` keeps it from matching inside another
+  // word (e.g. "300km"), so only a bare k/K right after the digits counts.
+  const kNotationTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*[kK](?!\w)/g))
+    .filter((match) => !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
 
   const contextualTotals = Array.from(normalized.matchAll(/(?:^|[^\p{L}])(?:cena(?:\s+ofertowa)?|kwota(?:\s+do\s+negocjacji)?)\s*[:=-]?\s*(\d{1,3}(?:[\s.]\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?(?![\d])/giu));
   const contextual = singleValue(uniqueNumbers(contextualTotals, (match) => decimalNumber(match[1], match[2])));
   if (contextual !== null) return { price: contextual, pricePerM2: singleValue(perM2), source: "EXPLICIT_TOTAL" };
   const explicit = singleValue(explicitTotals);
   if (explicit !== null) return { price: explicit, pricePerM2: singleValue(perM2), source: "EXPLICIT_TOTAL" };
-  const thousands = singleValue(thousandsTotals);
+  const thousands = singleValue([...thousandsTotals, ...kNotationTotals]);
   if (thousands !== null) return { price: thousands, pricePerM2: singleValue(perM2), source: "THOUSANDS_TOTAL" };
   const unitPrice = singleValue(perM2);
   if (unitPrice !== null && area !== null && area > 0) {
@@ -64,7 +68,12 @@ export function resolveFacebookPrice(text: string, area: number | null): Faceboo
 }
 
 function decimalNumber(integer: string, decimals: string | undefined): number {
-  return Number(`${integer.replace(/\s/g, "")}${decimals ? `.${decimals}` : ""}`);
+  // `integer` may be a thousands-grouped literal using either a space or a dot as the
+  // group separator (see the `contextualTotals` pattern below, e.g. "665.500"). A dot
+  // here is structurally always a group separator, never a decimal point — a real
+  // fractional part only ever arrives separately, in `decimals`. Stripping it is what
+  // turns "cena: 665.500 PLN" into 665500 instead of misreading it as 665.5.
+  return Number(`${integer.replace(/[\s.]/g, "")}${decimals ? `.${decimals}` : ""}`);
 }
 
 function uniqueNumbers(matches: RegExpMatchArray[], convert: (match: RegExpMatchArray) => number): number[] {

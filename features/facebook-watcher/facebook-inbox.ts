@@ -45,7 +45,10 @@ export function sortFacebookInbox(items: FacebookWatcherListing[], sort: Faceboo
   });
 }
 
-export function opportunityLabel(score: number): string | null {
+export function opportunityLabel(score: number, priceSuspect = false): string | null {
+  // A suspect/missing price must never be presented as an opportunity, however
+  // high the (already-capped) numeric score is.
+  if (priceSuspect) return "Do weryfikacji ceny";
   if (score >= 90) return "Wyjątkowa okazja";
   if (score >= 85) return "Bardzo dobra";
   if (score >= 75) return "Warta analizy";
