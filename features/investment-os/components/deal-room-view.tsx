@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { CanonicalDeal, DealFactOverrides, DirectorOutput, InformationRequest } from "../types";
 import type { ValueProvenance } from "../../flip-finder/underwriting";
 import { DIRECTOR_DEPENDENCIES } from "../engine";
+import { buildDealBrain, type BrainDirectorId, type BrainProvenance, type BrainSnapshot } from "../brain";
 import { formatInvestmentText, formatKnownMoneyText, formatPercentDisplay, formatPLNDisplay, pln } from "./investment-ui";
 import { OverridePanel } from "./override-panel";
 
@@ -32,7 +33,8 @@ export function DealRoomView({ deal, saving, onRefresh, onSave }: { deal: Canoni
   const title = deal.facts.street.effectiveValue || deal.facts.district.effectiveValue || "Analizowana oferta";
   const location = [deal.facts.city.effectiveValue, deal.facts.district.effectiveValue].filter(Boolean).join(" · ");
   const sourceUrl = safeHttpUrl(deal.facts.sourceUrl.effectiveValue);
-  const directorCards = useMemo(() => buildDirectorCards(deal), [deal]);
+  const brain = useMemo(() => buildDealBrain(deal), [deal]);
+  const directorCards = useMemo(() => buildDirectorCards(deal, brain), [deal, brain]);
   const timeline = useMemo(() => buildTimeline(deal), [deal]);
 
   return <main className="mx-auto w-full max-w-[1720px] space-y-4 px-3 pb-10 pt-3 sm:px-6 lg:px-8" data-deal-room>
@@ -58,8 +60,8 @@ export function DealRoomView({ deal, saving, onRefresh, onSave }: { deal: Canoni
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <BuyGate deal={deal} />
           <Completeness deal={deal} />
-          <BiggestRisk deal={deal} />
-          <NextAction deal={deal} />
+          <BiggestRisk brain={brain} deal={deal} />
+          <NextAction brain={brain} />
         </div>
         <div className="xl:hidden"><Questions deal={deal} /></div>
         <DirectorCouncil directors={directorCards} expanded={expandedDirector} onToggle={setExpandedDirector} />
@@ -101,17 +103,17 @@ function Completeness({ deal }: { deal: CanonicalDeal }) {
   return <CompactCard icon={<Landmark className="size-5" />} label="Kompletność danych oferty" tone={missing ? "amber" : "green"} value={`${known}/5 danych kluczowych`} detail={missing ? `${missing} wymagają uzupełnienia` : "Kluczowe dane oferty są dostępne"} />;
 }
 
-function BiggestRisk({ deal }: { deal: CanonicalDeal }) {
+function BiggestRisk({ brain, deal }: { brain: BrainSnapshot; deal: CanonicalDeal }) {
+  const topConflict = brain.conflicts[0];
+  if (topConflict) return <CompactCard icon={<ShieldAlert className="size-5" />} label="Największe ryzyko" tone="red" value={topConflict.title} detail={topConflict.explanation} />;
   const ceo = deal.ceo.result;
   const blocked = ceo?.criticalGates.find((gate) => !gate.passed);
   const risk = ceo?.risks[0] || blocked?.reason || null;
   return <CompactCard icon={<ShieldAlert className="size-5" />} label="Największe ryzyko" tone={risk ? "red" : "amber"} value={risk ? polishRiskText(risk) : "Nie ustalono"} detail={risk ? "Na podstawie aktualnej analizy" : "Brak osobnego wyniku ryzyka"} />;
 }
 
-function NextAction({ deal }: { deal: CanonicalDeal }) {
-  const ceo = deal.ceo.result;
-  const action = ceo?.nextBestAction ? polishGeneratedText(ceo.nextBestAction) : null;
-  return <CompactCard icon={<ChevronRight className="size-5" />} label="Następny krok" tone="gold" value={action || "Oczekuje na wynik analizy"} detail={action ? "Działanie wskazane przez bieżącą analizę" : "Nie wyznaczono jeszcze wiarygodnego następnego kroku"} />;
+function NextAction({ brain }: { brain: BrainSnapshot }) {
+  return <CompactCard icon={<ChevronRight className="size-5" />} label="Następny krok" tone="gold" value={brain.ceo.nextBestAction.title} detail={brain.ceo.nextBestAction.reason} />;
 }
 
 function CompactCard({ icon, label, value, detail, tone }: { icon: ReactNode; label: string; value: string; detail: string; tone: "green" | "amber" | "red" | "gold" }) {
@@ -197,7 +199,10 @@ function EmptyState({ text }: { text: string }) { return <p className="mt-4 roun
 
 type RoomDirector = { id: string; label: string; status: string; confidence: number | null; finding: string | null; recommendation: string | null; evidence: string[]; missing: string[]; triggers: string[]; dependencies: string[] };
 type TimelineEvent = { id: string; at: string; actor: string; title: string; detail: string };
-function buildDirectorCards(deal: CanonicalDeal): RoomDirector[] { const available = new Map<string, DirectorOutput<unknown>>([["SCOUT", deal.scout as DirectorOutput<unknown>], ["VERIFY", deal.verify as DirectorOutput<unknown>], ["MARKET", deal.market as DirectorOutput<unknown>], ["UNDERWRITER", deal.underwriting as DirectorOutput<unknown>], ["CEO", deal.ceo as DirectorOutput<unknown>]]); return DIRECTORS.map((name) => { const output = available.get(name); const dependencies = (DIRECTOR_DEPENDENCIES[name as keyof typeof DIRECTOR_DEPENDENCIES] ?? []).map(directorLabel); return output ? { id: name, label: directorLabel(name), status: output.status, confidence: output.confidence, finding: polishGeneratedText(useful(output.finding)), recommendation: polishGeneratedText(useful(output.recommendation)), evidence: output.evidence.map(localizeEvidenceLine).filter((value) => useful(value) !== null), missing: (output.missingData.length ? output.missingData : output.missingFields).map(factLabel), triggers: (output.whatWouldChangeMyMind.length ? output.whatWouldChangeMyMind : output.decisionTriggers).map((value) => polishGeneratedText(useful(value))).filter((value): value is string => Boolean(value)), dependencies } : { id: name, label: directorLabel(name), status: "WAITING", confidence: null, finding: dependencies.length ? `Oczekuje na zapisane wyniki: ${dependencies.join(", ")}.` : "Oczekuje na osobny, zapisany wynik.", recommendation: null, evidence: [], missing: [], triggers: [], dependencies }; }); }
+const BRAIN_DIRECTOR_BY_UI_LABEL: Partial<Record<(typeof DIRECTORS)[number], BrainDirectorId>> = { RENOVATION: "RENOVATION", "RISK / LEGAL": "RISK_LEGAL", CFO: "CFO", ACQUISITION: "ACQUISITION", SALE: "SALE" };
+
+function buildDirectorCards(deal: CanonicalDeal, brain: BrainSnapshot): RoomDirector[] { const available = new Map<string, DirectorOutput<unknown>>([["SCOUT", deal.scout as DirectorOutput<unknown>], ["VERIFY", deal.verify as DirectorOutput<unknown>], ["MARKET", deal.market as DirectorOutput<unknown>], ["UNDERWRITER", deal.underwriting as DirectorOutput<unknown>], ["CEO", deal.ceo as DirectorOutput<unknown>]]); return DIRECTORS.map((name) => { const output = available.get(name); const dependencies = (DIRECTOR_DEPENDENCIES[name as keyof typeof DIRECTOR_DEPENDENCIES] ?? []).map(directorLabel); if (output) return { id: name, label: directorLabel(name), status: output.status, confidence: output.confidence, finding: polishGeneratedText(useful(output.finding)), recommendation: polishGeneratedText(useful(output.recommendation)), evidence: output.evidence.map(localizeEvidenceLine).filter((value) => useful(value) !== null), missing: (output.missingData.length ? output.missingData : output.missingFields).map(factLabel), triggers: (output.whatWouldChangeMyMind.length ? output.whatWouldChangeMyMind : output.decisionTriggers).map((value) => polishGeneratedText(useful(value))).filter((value): value is string => Boolean(value)), dependencies }; const brainId = BRAIN_DIRECTOR_BY_UI_LABEL[name]; const brainDirector = brainId ? brain.directors[brainId] : undefined; if (brainDirector) return { id: name, label: directorLabel(name), status: brainDirector.status, confidence: null, finding: brainDirector.summary, recommendation: brainDirector.recommendation, evidence: brainDirector.evidence.map(brainProvenanceLine), missing: brainDirector.missingInputs.map(factLabel), triggers: brainDirector.warnings, dependencies: brainDirector.dependencies.map(directorLabel) }; return { id: name, label: directorLabel(name), status: "WAITING", confidence: null, finding: dependencies.length ? `Oczekuje na zapisane wyniki: ${dependencies.join(", ")}.` : "Oczekuje na osobny, zapisany wynik.", recommendation: null, evidence: [], missing: [], triggers: [], dependencies }; }); }
+function brainProvenanceLine(item: BrainProvenance): string { const field = item.sourcePath.split(".").pop() ?? item.sourcePath; return `${factLabel(field)} · ${item.evidenceState === "MISSING" ? "brak dowodu" : item.evidenceState === "ASSUMPTION" ? "założenie" : "potwierdzone"}`; }
 type TimelineView = { executive: TimelineEvent[]; audit: TimelineEvent[] };
 function buildTimeline(deal: CanonicalDeal): TimelineView { const created = { id: "created", at: deal.createdAt, actor: "Zespół analityczny", title: "Utworzono analizę", detail: "Zapisano analizę inwestycyjną dla tej oferty." }; const executive: TimelineEvent[] = [created]; const directors = [deal.scout, deal.verify, deal.market, deal.underwriting, deal.ceo]; for (const output of directors) if (output.computedAt) executive.push({ id: `director-${output.director}-${output.computedAt}`, at: output.computedAt, actor: directorLabel(output.director), title: `Wynik: ${directorLabel(output.director)}`, detail: `${directorStatus(output.status).label}${output.confidence == null ? "" : ` · pewność ${formatPercentDisplay(output.confidence, 0)}`}.` }); const evidence: TimelineEvent[] = deal.evidenceFabric.flatMap((item) => item.observedAt ? [{ id: `evidence-${item.id}`, at: item.observedAt, actor: sourceNameLabel(item.sourceName), title: item.field ? `Dowód: ${factLabel(item.field)}` : `Dowód: ${evidenceTypeLabel(item.evidenceType)}`, detail: `${verificationLabel(item.verificationStatus)} · ${evidenceTypeLabel(item.evidenceType)}.` }] : []); const sortRecent = (events: TimelineEvent[]) => events.filter((event) => !Number.isNaN(Date.parse(event.at))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at)); return { executive: sortRecent(executive).slice(0, 7), audit: sortRecent([...executive, ...evidence]).slice(0, 80) }; }
 function directorStatus(status: string): { label: string; className: string } { if (status === "COMPLETE" || status === "READY") return { label: "GOTOWE", className: "bg-emerald-400/10 text-emerald-300" }; if (status === "RUNNING") return { label: "W TOKU", className: "bg-gold/10 text-gold" }; if (status === "BLOCKED" || status === "FAILED") return { label: "ZABLOKOWANE", className: "bg-red-400/10 text-red-200" }; if (status === "STALE") return { label: "NIEAKTUALNE", className: "bg-amber-400/10 text-amber-200" }; return { label: "OCZEKUJE", className: "bg-white/[0.06] text-muted-foreground" }; }
