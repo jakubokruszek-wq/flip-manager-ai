@@ -26,24 +26,33 @@ export type FacebookDuplicateState = (typeof FACEBOOK_DUPLICATE_STATES)[number];
 export const FACEBOOK_CONTENT_QUALITY_GRADES = ["HIGH", "MEDIUM", "LOW", "NEEDS_REVIEW"] as const;
 export type FacebookContentQualityGrade = (typeof FACEBOOK_CONTENT_QUALITY_GRADES)[number];
 
-export const FACEBOOK_SEARCH_ACCEPTANCE = ["CANDIDATE", "NEEDS_REVIEW", "OUT_OF_SCOPE"] as const;
-export type FacebookSearchAcceptance = (typeof FACEBOOK_SEARCH_ACCEPTANCE)[number];
+export const FACEBOOK_SEARCH_DECISIONS = ["NORMAL_CANDIDATE", "NEEDS_REVIEW", "REJECT_NON_APARTMENT", "REJECT_NON_SALE", "INACTIVE"] as const;
+export type FacebookSearchDecision = (typeof FACEBOOK_SEARCH_DECISIONS)[number];
+
+const NON_APARTMENT_PROPERTY_TYPES = new Set<FacebookPropertyType>(["HOUSE", "LAND", "COMMERCIAL", "ROOM", "GARAGE"]);
 
 // -----------------------------------------------------------------------------
 // Property type — the dimension the existing intent classifier never modeled.
 // "sprzedam mieszkanie w domu" describes an apartment; "sprzedam dom" does not.
 // -----------------------------------------------------------------------------
-const LAND_PATTERN = /\b(dzia[lł]k[\p{L}]*|grunt[\p{L}]*|parcel[\p{L}]*)\b/iu;
-const COMMERCIAL_PATTERN = /\b(lokal\s+u[zż]ytkow[\p{L}]*|lokal\s+us[lł]ugow[\p{L}]*|powierzchni[aę]?\s+(?:biurow|handlow)[\p{L}]*|biuro\s+na\s+sprzeda|magazyn[\p{L}]*|sklep[\p{L}]*\s+na\s+sprzeda)\b/iu;
+// Note: `\b` in JS regex is ASCII-only ("\w" excludes Polish diacritics), so a
+// pattern ending in `[\p{L}]*\b` silently fails to match a word that ends on a
+// diacritic (e.g. "garaż") because there is no word/non-word transition there.
+// `(?![\p{L}\d])` is used instead wherever an alternative can end that way —
+// the same technique already used elsewhere in extract-facebook-property.ts.
+const LAND_PATTERN = /\b(dzia[lł]k[\p{L}]*|grunt[\p{L}]*|parcel[\p{L}]*)(?![\p{L}\d])/iu;
+const COMMERCIAL_PATTERN = /\b(lokal\s+u[zż]ytkow[\p{L}]*|lokal\s+us[lł]ugow[\p{L}]*|powierzchni[aę]?\s+(?:biurow|handlow)[\p{L}]*|biuro\s+na\s+sprzeda|magazyn[\p{L}]*|sklep[\p{L}]*\s+na\s+sprzeda)(?![\p{L}\d])/iu;
 // A negative lookbehind excludes "w domu" (inside a house), which describes an
 // apartment's building, not a house-for-sale post.
-const HOUSE_PATTERN = /(?<!\bw\s)\b(dom(?:ek|u|ie|y|[oó]w)?|will[\p{L}]*|szeregow[\p{L}]*|bli[zź]niak[\p{L}]*)\b/iu;
-const GARAGE_ONLY_PATTERN = /\b(gara[zż][\p{L}]*|miejsce\s+postojow[\p{L}]*)\b/iu;
-const APARTMENT_PATTERN = /\b(mieszkani[\p{L}]*|kawalerk[\p{L}]*|apartament[\p{L}]*|\bm[2-6]\b)\b/iu;
+const HOUSE_PATTERN = /(?<!\bw\s)\b(dom(?:ek|u|ie|y|[oó]w)?|will[\p{L}]*|szeregow[\p{L}]*|bli[zź]niak[\p{L}]*)(?![\p{L}\d])/iu;
+const GARAGE_ONLY_PATTERN = /\b(gara[zż][\p{L}]*|miejsce\s+postojow[\p{L}]*)(?![\p{L}\d])/iu;
+// "mieszkan[\p{L}]*" (not "mieszkani...") so the colloquial diminutive
+// "mieszkanko" ("little apartment") is recognized just like "mieszkanie".
+const APARTMENT_PATTERN = /\b(mieszkan[\p{L}]*|kawalerk[\p{L}]*|apartament[\p{L}]*|\bm[2-6]\b)(?![\p{L}\d])/iu;
 // A single room, not a room-count mention: "pokój dla studentki" / "wynajmę
 // pokój" is a room; "3 pokoje" / "2-pokojowe" is an apartment's layout.
-const ROOM_PATTERN = /(?<!\d[\s-])\bpok(?:[oó]j|oju|oik)[\p{L}]*\b(?!\s*(?:z\s+kuchni|,?\s*kuchni))/iu;
-const ROOM_RENTAL_CONTEXT = /\b(dla\s+student|wynajm[\p{L}]*\s+pok|pok[\p{L}]*\s+(?:do\s+wynaj|w\s+mieszkani)|wsp[oó][lł]lokator[\p{L}]*)\b/iu;
+const ROOM_PATTERN = /(?<!\d[\s-])\bpok(?:[oó]j|oju|oik)[\p{L}]*(?![\p{L}\d])(?!\s*(?:z\s+kuchni|,?\s*kuchni))/iu;
+const ROOM_RENTAL_CONTEXT = /\b(dla\s+student|wynajm[\p{L}]*\s+pok|pok[\p{L}]*\s+(?:do\s+wynaj|w\s+mieszkani)|wsp[oó][lł]lokator[\p{L}]*)(?![\p{L}\d])/iu;
 
 export function classifyFacebookPropertyType(text: string): FacebookPropertyType {
   const value = text ?? "";
@@ -72,7 +81,10 @@ export function classifyFacebookSearchIntent(text: string, intent: Pick<Facebook
       if (propertyType === "HOUSE") return "HOUSE_FOR_SALE";
       if (propertyType === "LAND") return "LAND_FOR_SALE";
       if (propertyType === "COMMERCIAL") return "COMMERCIAL";
-      if (propertyType === "ROOM") return "UNKNOWN"; // selling a single room is not a modeled case; stays reviewable
+      // A room or garage being sold, or a "sell" post whose property type
+      // couldn't be determined at all, is never silently accepted as an
+      // apartment sale — it stays reviewable instead.
+      if (propertyType === "ROOM" || propertyType === "GARAGE" || propertyType === "UNKNOWN") return "UNKNOWN";
       return "APARTMENT_FOR_SALE";
     case "OTHER": return "DISCUSSION";
     default: return "UNKNOWN";
@@ -83,7 +95,7 @@ export function classifyFacebookSearchIntent(text: string, intent: Pick<Facebook
 // Availability — sold/reserved/inactive signals. Never deletes; only labels.
 // -----------------------------------------------------------------------------
 const SOLD_PATTERN = /\b(sprzedan[ey]|sprzedano|ju[zż]\s+sprzedane)\b/iu;
-const RESERVED_PATTERN = /\b(zarezerwowan[ey]|rezerwacj[\p{L}]*)\b/iu;
+const RESERVED_PATTERN = /\b(zarezerwowan[ey]|rezerwacj[\p{L}]*)(?![\p{L}\d])/iu;
 const INACTIVE_PATTERN = /\b(nieaktualn[ey]|aktualizacja\s*:?\s*nieaktualne|og[lł]oszenie\s+nieaktualne)\b/iu;
 
 export function classifyFacebookAvailability(text: string): FacebookAvailabilityState {
@@ -167,21 +179,40 @@ export function assessFacebookContentQuality(input: {
 }
 
 // -----------------------------------------------------------------------------
-// Search acceptance gate — decides whether a post should flow as a normal
-// apartment-sale candidate. Ambiguity always resolves to NEEDS_REVIEW, never
-// a fabricated classification and never a silent discard.
+// Mixed property — a whole building, a bundle of several properties, or a
+// residential+commercial combination is never silently treated as "the
+// apartment" even if the text also mentions "mieszkanie" somewhere in it.
 // -----------------------------------------------------------------------------
-export function facebookSearchAcceptance(input: {
+const MIXED_PROPERTY_PATTERN = /\b(mieszkalno[\s-]?u[zż]ytkow[\p{L}]*|mieszkalno[\s-]?us[lł]ugow[\p{L}]*|budynek\s+mieszkaln[\p{L}]*|kamienic[\p{L}]*|pakiet\s+(?:mieszka[\p{L}]*|nieruchomo[\p{L}]*)|kilka\s+mieszka[\p{L}]*|mieszkani[\p{L}]*\s+(?:i|oraz)\s+lokal[\p{L}]*)(?![\p{L}\d])/iu;
+
+export function classifyFacebookMixedProperty(text: string): boolean {
+  return MIXED_PROPERTY_PATTERN.test(text ?? "");
+}
+
+// -----------------------------------------------------------------------------
+// Search decision — the apartment-only acceptance gate. Property type is
+// checked ahead of sale intent, so a known non-apartment type (house, land,
+// commercial, room, garage) is always excluded the same way regardless of
+// whether it happens to also carry sell language. Ambiguity always resolves
+// to NEEDS_REVIEW, never a fabricated classification and never a silent
+// discard; nothing here ever deletes or rewrites a record.
+// -----------------------------------------------------------------------------
+export function classifyFacebookSearchDecision(input: {
   searchIntent: FacebookSearchIntent;
+  propertyType: FacebookPropertyType;
+  mixedProperty: boolean;
   sourceValid: boolean;
   locationState: FacebookLocationState;
   availability: FacebookAvailabilityState;
-}): FacebookSearchAcceptance {
-  if (input.availability !== "ACTIVE") return "NEEDS_REVIEW";
-  if (input.searchIntent === "UNKNOWN") return "NEEDS_REVIEW";
-  if (input.searchIntent !== "APARTMENT_FOR_SALE") return "OUT_OF_SCOPE";
-  if (!input.sourceValid) return "NEEDS_REVIEW";
-  if (input.locationState === "OUTSIDE_SCOPE") return "OUT_OF_SCOPE";
-  if (input.locationState === "AMBIGUOUS") return "NEEDS_REVIEW";
-  return "CANDIDATE";
+}): FacebookSearchDecision {
+  if (input.availability !== "ACTIVE") return "INACTIVE";
+  if (input.mixedProperty) return "NEEDS_REVIEW";
+  if (input.searchIntent === "APARTMENT_FOR_SALE" && input.propertyType === "APARTMENT") {
+    if (!input.sourceValid) return "NEEDS_REVIEW";
+    if (input.locationState === "AMBIGUOUS" || input.locationState === "OUTSIDE_SCOPE") return "NEEDS_REVIEW";
+    return "NORMAL_CANDIDATE";
+  }
+  if (NON_APARTMENT_PROPERTY_TYPES.has(input.propertyType)) return "REJECT_NON_APARTMENT";
+  if (input.searchIntent === "UNKNOWN" || input.propertyType === "UNKNOWN") return "NEEDS_REVIEW";
+  return "REJECT_NON_SALE";
 }
