@@ -159,7 +159,7 @@ function makeScanStressResults(cardCount) {
   };
 }
 
-async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0 } = {}) {
+async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0, scanFailure = null } = {}) {
   const page = await browser.newPage();
   const traceRequests = [];
   let galleryRequests = 0;
@@ -193,6 +193,9 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/scan` && request.method() === "POST") {
       scanRequests += 1;
       if (scanResponseDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, scanResponseDelayMs));
+      if (scanFailure) {
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify({ code: scanFailure.code, message: scanFailure.message }), status: scanFailure.status });
+      }
       return route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({ scannedCount: 3, matchedCount: 1, newCount: 0, updatedCount: 1, priceDropCount: 0, status: "completed" }),
@@ -322,4 +325,34 @@ test("real Flip Finder gallery button keeps business click independent from trac
     await testPage.page.close();
     });
   }
+
+  await t.test("SCAN START REGRESSION: a blocked scan shows the actionable reason and leaves the button retryable", async () => {
+    const cardCount = 50;
+    const testPage = await preparePage(browser, baseUrl, {
+      activeCardCount: cardCount,
+      scanResponseDelayMs: 300,
+      scanFailure: { status: 503, code: "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED", message: "Skan nie wystartował: żadna obsługiwana grupa Facebooka nie jest włączona. Włącz grupę na liście grup Facebooka i spróbuj ponownie." },
+    });
+    const cards = testPage.page.locator('[data-finder-offers] > div.contents');
+    assert.equal(await cards.count(), cardCount);
+    const scanButton = testPage.page.getByRole("button", { name: "Skanuj oferty" });
+
+    await scanButton.click();
+    await testPage.page.waitForFunction(() => {
+      const button = Array.from(document.querySelectorAll("button")).find((item) => item.textContent?.includes("Skanowanie"));
+      return button instanceof HTMLButtonElement && button.disabled;
+    }, null, { timeout: 5_000 });
+    assert.equal(testPage.scanRequestCount(), 1, `a blocked scan must still send exactly one POST; server output: ${output}`);
+
+    await testPage.page.waitForFunction(() => document.body.textContent?.includes("żadna obsługiwana grupa Facebooka nie jest włączona"), null, { timeout: 10_000 });
+    const bodyText = await testPage.page.evaluate(() => document.body.textContent || "");
+    assert.doesNotMatch(bodyText, /FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED/, "the internal code must never be shown to the user");
+    assert.doesNotMatch(bodyText, /Nie można uruchomić skanu dla wstrzymanego filtra/, "a blocked source must not be reported as a paused filter");
+
+    await scanButton.waitFor({ state: "visible", timeout: 5_000 });
+    assert.ok(await scanButton.isEnabled(), "a failed scan start must release the button so the user can retry");
+    assert.equal(testPage.scanRequestCount(), 1, "a failed scan start must not retry itself");
+    assert.equal(await cards.count(), cardCount, "a blocked scan must leave the Finder results usable");
+    await testPage.page.close();
+  });
 });
