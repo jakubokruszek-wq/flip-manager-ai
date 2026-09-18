@@ -1,5 +1,6 @@
 import type { FacebookFieldConfidence, FacebookImageAssessment, FacebookIntentSource, FacebookListingIntent, FacebookMediaCandidate } from "../facebook-worker/types";
 import type { FacebookListingQualityGrade, FacebookPriceQuality } from "./price-quality";
+import type { FacebookAvailabilityState, FacebookContentQualityGrade, FacebookFreshnessState, FacebookLocationState, FacebookPropertyType, FacebookSearchIntent } from "./search-quality";
 
 export type FacebookPriceProvenance = "AUTHORITATIVE_TEXT" | "VISION" | "HISTORICAL";
 
@@ -87,6 +88,12 @@ export type FacebookWatcherListing = FacebookProperty & {
   crossSourceLinks: Array<{ source: string; url: string }>;
   priceQuality?: FacebookPriceQuality;
   listingQuality?: FacebookListingQualityGrade;
+  searchIntent?: FacebookSearchIntent;
+  propertyType?: FacebookPropertyType;
+  availability?: FacebookAvailabilityState;
+  freshness?: FacebookFreshnessState;
+  locationState?: FacebookLocationState;
+  contentQuality?: FacebookContentQualityGrade;
 };
 
 export const FACEBOOK_WORKFLOW_STATUSES = ["new", "review", "interesting", "crm", "rejected"] as const;

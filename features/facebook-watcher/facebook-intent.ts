@@ -61,7 +61,10 @@ export function resolveFacebookListingIntent(
   const buySignal = signals.buySignals.length > 0;
   const sellSignal = signals.sellSignals.length > 0;
   const rentWantedSignal = /\b(szukam|poszukuje)\b[^.\n]{0,80}\b(wynajecia|najmu|wynajme)\b/u.test(normalized);
-  const rentOfferSignal = /\b(do wynajecia|wynajme|oferuje najem)\b/u.test(normalized) && !rentWantedSignal;
+  // A leading "nie" ("nie do wynajęcia" = "not for rent") negates the phrase; without
+  // this guard a sale post mentioning that it is *not* for rent would be misread as
+  // a rental offer before the sell signal below ever gets a chance to be checked.
+  const rentOfferSignal = /(?<!\bnie\s)\b(do wynajecia|wynajme|oferuje najem)\b/u.test(normalized) && !rentWantedSignal;
   const serviceSignal = /\b(uslugi remontowe|wykonczenia wnetrz|posrednictwo|agent nieruchomosci|fotografia nieruchomosci)\b/u.test(normalized);
 
   const normalizedVisionIntent = visionIntent ?? "UNKNOWN";
@@ -102,7 +105,9 @@ function normalizeIntentText(value: string): string {
 }
 
 function inspectNormalizedFacebookIntentSignals(normalized: string): FacebookIntentSignals {
-  const propertyContext = /\b(mieszkan[\p{L}\d]*|nieruchomo[\p{L}\d]*|kawalerk[\p{L}\d]*|apartament[\p{L}\d]*|pokoj[\p{L}\d]*|dom[\p{L}\d]*|lokal[\p{L}\d]*)\b/u.test(normalized);
+  // "M3"/"M2" etc. is the standard Polish shorthand for apartment size and is
+  // extremely common as the only property noun in short, terse posts/titles.
+  const propertyContext = /\b(mieszkan[\p{L}\d]*|nieruchomo[\p{L}\d]*|kawalerk[\p{L}\d]*|apartament[\p{L}\d]*|pokoj[\p{L}\d]*|dom[\p{L}\d]*|lokal[\p{L}\d]*|dzial[\p{L}]*k[\p{L}]*|grunt[\p{L}]*|parcel[\p{L}]*|m[2-6])\b/u.test(normalized);
   const buySignals = BUY_PATTERNS
     .filter(({ pattern, requiresPropertyContext }) => (!requiresPropertyContext || propertyContext) && pattern.test(normalized))
     .map(({ name }) => name);

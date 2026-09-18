@@ -4,7 +4,7 @@ import { resolveFacebookListingIntent } from "./facebook-intent.ts";
 
 const PLACES = [
   ["radogoszcz zachód", "Radogoszcz Zachód", "Bałuty"], ["radogoszcz", "Radogoszcz", "Bałuty"],
-  ["teofil", "Teofilów", "Bałuty"], ["retkini", "Retkinia", "Polesie"],
+  ["teofil", "Teofilów", "Bałuty"], ["retkini", "Retkinia", "Polesie"], ["dąbrow", "Dąbrowa", "Górna"],
 ] as const;
 const DISTRICTS = ["Bałuty", "Widzew", "Polesie", "Górna", "Śródmieście"];
 const FLAG_PHRASES = ["bezpośrednio", "bez pośredników", "do remontu", "generalny remont", "po babci", "pilnie", "okazja", "spadek", "do negocjacji", "prywatnie"];
