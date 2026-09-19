@@ -263,6 +263,7 @@ export type FacebookCollectorBatch = {
   sourceTabDiagnostics?: CollectorSourceTabDiagnostics;
   stageTelemetry?: CollectorStageTelemetry[];
   mainFeedTelemetry?: CollectorMainFeedDiagnostic[];
+  mainFeedSummary?: CollectorMainFeedSummary | null;
   posts: CollectorPostRecord[];
 };
 
@@ -289,6 +290,7 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
     sourceTabDiagnostics: normalizeSourceTabDiagnostics(value.sourceTabDiagnostics),
     stageTelemetry: normalizeStageTelemetry(value.stageTelemetry),
     mainFeedTelemetry: normalizeMainFeedTelemetry(value.mainFeedTelemetry),
+    mainFeedSummary: normalizeMainFeedSummary(value.mainFeedSummary),
     posts: deduped,
   };
 }
@@ -303,6 +305,66 @@ function normalizeStageTelemetry(value: unknown): CollectorStageTelemetry[] {
     const status = item.status === "PASS" || item.status === "PARTIAL" || item.status === "FAIL" ? item.status : "RUNNING";
     return [{ stage, startedAt, finishedAt: nullableIsoTimestamp(item.finishedAt), elapsedMs: Number.isFinite(item.elapsedMs) ? boundedInteger(item.elapsedMs, 0, 600_000) : null, status, errorCode: nullableString(item.errorCode, 120) }];
   });
+}
+
+export const COLLECTOR_ACQUISITION_MODES = ["NETWORK_FIRST", "SEARCH_ENABLED"] as const;
+export type CollectorAcquisitionMode = (typeof COLLECTOR_ACQUISITION_MODES)[number];
+export const COLLECTOR_FEED_DEPTH_MODES = ["CURRENT_DEPTH", "DEEPER_NETWORK_FEED"] as const;
+export type CollectorFeedDepthMode = (typeof COLLECTOR_FEED_DEPTH_MODES)[number];
+
+/** Per-scroll hydration measurement: how much of the fixed sleep was actually needed. */
+export type CollectorHydrationSample = { iteration: number; moved: boolean; plannedWaitMs: number; waitedMs: number; firstGrowthMs: number | null };
+
+export type CollectorMainFeedSummary = {
+  acquisitionMode: CollectorAcquisitionMode;
+  feedDepthMode: CollectorFeedDepthMode;
+  budgetMs: number;
+  maxScrolls: number;
+  maxPosts: number;
+  durationMs: number;
+  discoveryDurationMs: number;
+  scrolls: number;
+  visibleCardCount: number;
+  networkResponses: number;
+  postsDiscovered: number;
+  exactIdentities: number;
+  unverifiedIdentities: number;
+  networkSourcedPosts: number;
+  sellCandidates: number;
+  stopReason: string | null;
+  healthStatus: string | null;
+  hydrationSamples: CollectorHydrationSample[];
+};
+
+function normalizeMainFeedSummary(value: unknown): CollectorMainFeedSummary | null {
+  if (!isRecord(value)) return null;
+  const samples = Array.isArray(value.hydrationSamples) ? value.hydrationSamples.slice(0, 60) : [];
+  return {
+    acquisitionMode: typeof value.acquisitionMode === "string" && (COLLECTOR_ACQUISITION_MODES as readonly string[]).includes(value.acquisitionMode) ? value.acquisitionMode as CollectorAcquisitionMode : "NETWORK_FIRST",
+    feedDepthMode: typeof value.feedDepthMode === "string" && (COLLECTOR_FEED_DEPTH_MODES as readonly string[]).includes(value.feedDepthMode) ? value.feedDepthMode as CollectorFeedDepthMode : "CURRENT_DEPTH",
+    budgetMs: boundedInteger(value.budgetMs, 0, 600_000),
+    maxScrolls: boundedInteger(value.maxScrolls, 0, 500),
+    maxPosts: boundedInteger(value.maxPosts, 0, 1_000),
+    durationMs: boundedInteger(value.durationMs, 0, 600_000),
+    discoveryDurationMs: boundedInteger(value.discoveryDurationMs, 0, 600_000),
+    scrolls: boundedInteger(value.scrolls, 0, 500),
+    visibleCardCount: boundedInteger(value.visibleCardCount, 0, 5_000),
+    networkResponses: boundedInteger(value.networkResponses, 0, 100_000),
+    postsDiscovered: boundedInteger(value.postsDiscovered, 0, 1_000),
+    exactIdentities: boundedInteger(value.exactIdentities, 0, 1_000),
+    unverifiedIdentities: boundedInteger(value.unverifiedIdentities, 0, 1_000),
+    networkSourcedPosts: boundedInteger(value.networkSourcedPosts, 0, 1_000),
+    sellCandidates: boundedInteger(value.sellCandidates, 0, 1_000),
+    stopReason: nullableString(value.stopReason, 80),
+    healthStatus: nullableString(value.healthStatus, 40),
+    hydrationSamples: samples.filter(isRecord).map((sample) => ({
+      iteration: boundedInteger(sample.iteration, 0, 500),
+      moved: sample.moved === true,
+      plannedWaitMs: boundedInteger(sample.plannedWaitMs, 0, 60_000),
+      waitedMs: boundedInteger(sample.waitedMs, 0, 60_000),
+      firstGrowthMs: typeof sample.firstGrowthMs === "number" && Number.isFinite(sample.firstGrowthMs) ? boundedInteger(sample.firstGrowthMs, 0, 60_000) : null,
+    })),
+  };
 }
 
 function normalizeSourceTabDiagnostics(value: unknown): CollectorSourceTabDiagnostics {

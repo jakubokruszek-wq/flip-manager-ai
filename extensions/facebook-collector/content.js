@@ -823,6 +823,10 @@
     const initialHeight = document.documentElement.scrollHeight;
     let previousNetworkResponses = networkResponses;
     let stopReason = "MAX_SCROLLS";
+    // Measurement only: the post-scroll sleep keeps its exact duration. We just
+    // observe, inside it, when hydration actually landed, so the fixed 1600/800
+    // ms can later be replaced by a condition with evidence instead of a guess.
+    const hydrationSamples = [];
 
     for (let iteration = 0; ; iteration += 1) {
       if (searchMode) {
@@ -886,7 +890,23 @@
       if (decision) { stopReason = decision; break; }
       const moved = scrollContainer(container);
       scrolls += 1;
-      await wait(moved ? 1600 : 800);
+      const plannedWaitMs = moved ? 1600 : 800;
+      const hydrationProbe = () => {
+        const probeContainer = findScrollContainer();
+        return { scrollHeight: probeContainer.scrollHeight, cardCount: document.querySelectorAll('[role="article"]').length, networkResponses };
+      };
+      const hydrationBaseline = hydrationProbe();
+      const hydrationStartedAt = performance.now();
+      let firstGrowthMs = null;
+      for (let waited = 0; waited < plannedWaitMs; waited += 100) {
+        await wait(Math.min(100, plannedWaitMs - waited));
+        if (firstGrowthMs !== null) continue;
+        const probed = hydrationProbe();
+        if (probed.scrollHeight > hydrationBaseline.scrollHeight || probed.cardCount > hydrationBaseline.cardCount || probed.networkResponses > hydrationBaseline.networkResponses) {
+          firstGrowthMs = Math.round(performance.now() - hydrationStartedAt);
+        }
+      }
+      if (hydrationSamples.length < 60) hydrationSamples.push({ iteration, moved, plannedWaitMs, waitedMs: Math.round(performance.now() - hydrationStartedAt), firstGrowthMs });
     }
 
     const durationMs = Math.round(performance.now() - start);
@@ -935,7 +955,7 @@
         }
       }
     }
-    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, iterations: iterations.slice(0, 31), ...(searchMode ? { searchResultDiagnostics: [...searchResultDiagnostics.values()].slice(0, 200) } : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
+    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, networkResponses, hydrationSamples, iterations: iterations.slice(0, 31), ...(searchMode ? { searchResultDiagnostics: [...searchResultDiagnostics.values()].slice(0, 200) } : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {

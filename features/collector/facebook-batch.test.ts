@@ -5,6 +5,57 @@ import { evaluateCollectorHealth, normalizeFacebookCollectorBatch } from "./face
 
 const sourceId = "lodzsprzedazzakupwynajem";
 
+function batchWith(extra: Record<string, unknown>) {
+  return normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111",
+    batchId: "22222222-2222-4222-8222-222222222222",
+    sourceId,
+    sourceType: "GROUP",
+    sourceUrl: `https://www.facebook.com/groups/${sourceId}/`,
+    collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "HEALTHY", visibleCardCount: 0, capturedPostCount: 0, scrolls: 3, durationMs: 5000, stopReason: "NO_NEW_IDS", reasons: [] },
+    posts: [],
+    ...extra,
+  });
+}
+
+test("NETWORK-FIRST main feed telemetry survives the batch contract", () => {
+  const batch = batchWith({
+    acquisitionMode: "NETWORK_FIRST",
+    mainFeedSummary: {
+      acquisitionMode: "NETWORK_FIRST", feedDepthMode: "DEEPER_NETWORK_FEED", budgetMs: 110_000, maxScrolls: 45, maxPosts: 80,
+      durationMs: 16_137, discoveryDurationMs: 16_000, scrolls: 7, visibleCardCount: 22, networkResponses: 41,
+      postsDiscovered: 9, exactIdentities: 7, unverifiedIdentities: 2, networkSourcedPosts: 9, sellCandidates: 4,
+      stopReason: "NO_NEW_POSTS_AND_CARDS_3_SCROLLS", healthStatus: "HEALTHY",
+      hydrationSamples: [{ iteration: 0, moved: true, plannedWaitMs: 1600, waitedMs: 1604, firstGrowthMs: 300 }],
+    },
+  });
+  assert.equal(batch.mainFeedSummary?.acquisitionMode, "NETWORK_FIRST");
+  assert.equal(batch.mainFeedSummary?.feedDepthMode, "DEEPER_NETWORK_FEED");
+  assert.equal(batch.mainFeedSummary?.scrolls, 7);
+  assert.equal(batch.mainFeedSummary?.stopReason, "NO_NEW_POSTS_AND_CARDS_3_SCROLLS");
+  assert.equal(batch.mainFeedSummary?.networkSourcedPosts, 9);
+  assert.equal(batch.mainFeedSummary?.hydrationSamples[0]?.firstGrowthMs, 300);
+});
+
+test("main feed telemetry is bounded and tolerates a missing or malformed summary", () => {
+  assert.equal(batchWith({}).mainFeedSummary, null);
+  assert.equal(batchWith({ mainFeedSummary: "nonsense" }).mainFeedSummary, null);
+  const hostile = batchWith({
+    mainFeedSummary: {
+      acquisitionMode: "WHATEVER", feedDepthMode: "WHATEVER", scrolls: 10_000, postsDiscovered: -5,
+      durationMs: 10 ** 9, stopReason: "x".repeat(500), firstGrowthMs: "nope",
+      hydrationSamples: Array.from({ length: 500 }, (_, index) => ({ iteration: index, moved: true, plannedWaitMs: 1600, waitedMs: 1600, firstGrowthMs: null })),
+    },
+  });
+  assert.equal(hostile.mainFeedSummary?.acquisitionMode, "NETWORK_FIRST", "unknown modes fall back to the safe default");
+  assert.equal(hostile.mainFeedSummary?.feedDepthMode, "CURRENT_DEPTH");
+  assert.ok((hostile.mainFeedSummary?.scrolls ?? 0) <= 500);
+  assert.equal(hostile.mainFeedSummary?.postsDiscovered, 0);
+  assert.ok((hostile.mainFeedSummary?.stopReason ?? "").length <= 80);
+  assert.ok((hostile.mainFeedSummary?.hydrationSamples.length ?? 0) <= 60);
+});
+
 test("normalizes a healthy exact-source collector batch and deduplicates posts", () => {
   const post = { postId: "1577700267381450", permalink: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, sourceId, sourceType: "GROUP", author: "A", text: "Sprzedam mieszkanie", publishedAt: "2026-08-29T10:00:00Z", timestampText: "2 godz.", media: [{ url: "https://scontent.example/image.jpg", mediaId: "99", exactPostId: "1577700267381450", exactAssociation: true, discoveryLayers: ["DOM"] }], discoveryLayers: ["DOM", "NETWORK"], firstSeenIteration: 0 };
   const batch = normalizeFacebookCollectorBatch({ scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z", health: { status: "HEALTHY", visibleCardCount: 1, capturedPostCount: 1, scrolls: 3, durationMs: 5000, stopReason: "NO_NEW_IDS", reasons: [] }, posts: [post, post] });
