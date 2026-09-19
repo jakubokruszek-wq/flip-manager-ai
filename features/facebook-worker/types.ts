@@ -140,6 +140,8 @@ export type FacebookPerformanceMetrics = {
   ageCacheHits: number;
   agePageFallbacks: number;
   oldPostsSkippedBeforePageOpen: number;
+  /** Server-side skips for reliably dated posts older than the 72h window. */
+  oldPostsSkippedHeavyProcessing?: number;
   earlyStopOldBoundaryCount: number;
   feedTimestampCandidates: number;
   exactBoundFeedTimestamps: number;
@@ -373,7 +375,8 @@ export type FacebookSkipReasonCode =
   | "FACEBOOK_NON_SALE_POST"
   | "FACEBOOK_PROPERTY_FILTER_REJECTED"
   | "FACEBOOK_INTENT_UNKNOWN"
-  | "FACEBOOK_NON_APARTMENT_PROPERTY";
+  | "FACEBOOK_NON_APARTMENT_PROPERTY"
+  | "FACEBOOK_STALE_POST_OLDER_THAN_72H";
 
 export type FacebookJobState = {
   status: FacebookJobStatus;

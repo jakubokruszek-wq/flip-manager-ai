@@ -1,4 +1,5 @@
 import type { FacebookIntentSource, FacebookListingIntent, FacebookPostPerformanceTiming, FacebookPostSnapshot, FacebookSkipReasonCode } from "./types";
+import { classifyFacebookPostAgeZone } from "../facebook-watcher/post-age-zone.ts";
 
 export type FacebookPersistenceDiagnostics = {
   /** Safe per-post image/persistence trace. Optional for backwards-compatible batches. */
@@ -103,6 +104,7 @@ export type FacebookPostFlowSummary = {
   imagesMirrored: number;
   priceDrops: number;
   errors: number;
+  oldPostsSkippedHeavyProcessing: number;
   listingIds: string[];
   warnings: string[];
   skippedDiagnostics: FacebookSkippedDiagnostic[];
@@ -122,7 +124,7 @@ export async function processFacebookPostBatch(
   const summary: FacebookPostFlowSummary = {
     postsReceived: posts.length, postsProcessed: 0, listingsCreated: 0, listingsUpdated: 0,
     listingsSkipped: 0, matched: 0, newMatches: 0, extractionFailed: 0,
-    imagesMirrored: 0, priceDrops: 0, errors: 0, listingIds: [], warnings: [], skippedDiagnostics: [], persistenceDiagnostics: [], postTimings: [], reusablePosts: [],
+    imagesMirrored: 0, priceDrops: 0, errors: 0, oldPostsSkippedHeavyProcessing: 0, listingIds: [], warnings: [], skippedDiagnostics: [], persistenceDiagnostics: [], postTimings: [], reusablePosts: [],
   };
 
   for (const post of posts) {
@@ -142,6 +144,9 @@ export async function processFacebookPostBatch(
       summary.newMatches += result.matchCreated ? 1 : 0;
       summary.imagesMirrored += result.imagesMirrored;
       summary.priceDrops += result.priceDrops;
+      if (result.status === "skipped" && result.notProperty?.reasonCode === "FACEBOOK_STALE_POST_OLDER_THAN_72H" && classifyFacebookPostAgeZone(post.publishedAt) === "OLD") {
+        summary.oldPostsSkippedHeavyProcessing += 1;
+      }
       summary.warnings.push(...result.warnings);
       summary.persistenceDiagnostics.push(result.persistenceDiagnostics ?? createEmptyPersistenceDiagnostics(post));
       const persistenceMs = result.status === "reused" ? 0 : Date.now() - postStarted;

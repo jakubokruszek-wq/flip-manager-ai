@@ -30,6 +30,7 @@ import { shouldAutoEnrichFacebookImages } from "./auto-image-enrichment";
 import { enqueueFacebookGalleryJob } from "../facebook-worker/gallery-jobs";
 import { assessFacebookListingQuality, assessFacebookPriceQuality, FACEBOOK_PRICE_CATEGORIES, FACEBOOK_PRICE_SOURCES, FACEBOOK_PRICE_STATUSES, isFacebookPriceSuspect, PRICE_SUSPECT_SCORE_CAP, type FacebookListingQualityGrade, type FacebookPriceCategory, type FacebookPriceQuality, type FacebookPriceSource, type FacebookPriceStatus } from "./price-quality";
 import { assessFacebookContentQuality, classifyFacebookAvailability, classifyFacebookFreshness, classifyFacebookLocationState, classifyFacebookPropertyType, classifyFacebookSearchIntent, FACEBOOK_AVAILABILITY_STATES, FACEBOOK_CONTENT_QUALITY_GRADES, FACEBOOK_FRESHNESS_STATES, FACEBOOK_LOCATION_STATES, FACEBOOK_PROPERTY_TYPES, FACEBOOK_SEARCH_INTENTS } from "./search-quality";
+import { classifyFacebookPostAgeZone } from "./post-age-zone";
 
 type Row = Record<string, unknown>;
 
@@ -81,11 +82,14 @@ export type FacebookImportResult = {
     detectedFields: string[];
     classification?: "not_a_property" | "non_sale_intent";
     reasonCode?: import("../facebook-worker/types").FacebookSkipReasonCode;
+    listingIntent?: import("../facebook-worker/types").FacebookListingIntent;
+    intentSource?: import("../facebook-worker/types").FacebookIntentSource;
   };
 };
 
 export async function importFacebookWatcher(input: FacebookListingInput, context?: FacebookAutomatedImportContext): Promise<FacebookImportResult> {
   const normalized = await manualFacebookAdapter.importManual(input);
+  if (classifyFacebookPostAgeZone(normalized.publishedAt) === "OLD") return staleFacebookImportResult(normalized);
   const intent = resolveFacebookListingIntent(normalized.postText, normalized.listingIntent, normalized.intentConfidence);
   if (context && intent.intent !== "SELL_PROPERTY") {
     const extracted = skippedFacebookProperty(normalized, intent.intent, intent.confidence, intent.intentSource);
@@ -166,6 +170,20 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   await applyFilters(supabase, listingId, extracted, pricePerSqm);
   await recordFacebookGroupImport(normalized.groupName, status === "created", score >= 85 || extracted.sellerType === "private" && extracted.condition === "renovation");
   return { status, listingId, extracted, opportunityScore: score, listingCreated: status === "created", listingUpdated: status === "updated", matched: false, matchCreated: false, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops: 0, warnings: imageMirror.warnings };
+}
+
+function staleFacebookImportResult(input: FacebookListingInput): FacebookImportResult {
+  const listingIntent = input.listingIntent ?? "UNKNOWN";
+  const intentSource = input.intentSource ?? "UNKNOWN";
+  return {
+    status: "skipped", listingId: null, extracted: skippedFacebookProperty(input, listingIntent, input.intentConfidence ?? 0, intentSource),
+    opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false,
+    imagesMirrored: 0, priceDrops: 0, warnings: [],
+    notProperty: {
+      realEstateLanguage: true, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent",
+      reasonCode: "FACEBOOK_STALE_POST_OLDER_THAN_72H", listingIntent, intentSource,
+    },
+  };
 }
 
 function skippedFacebookProperty(input: FacebookListingInput, listingIntent: NonNullable<FacebookProperty["listingIntent"]>, intentConfidence: number, intentSource: NonNullable<FacebookProperty["intentSource"]>): FacebookProperty {

@@ -107,7 +107,7 @@ function parseCacheHit(value: unknown): FacebookPostSnapshot["cacheHit"] {
 }
 
 function parsePerformance(value: unknown): FacebookPerformanceMetrics {
-  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0, postTimings: [], totalNavigationMs: 0, totalVisionMs: 0, totalAgeFallbackMs: 0, cacheHitCount: 0, cacheMissCount: 0, discoveryTrace: [] };
+  if (value === null || value === undefined) return { postsDiscovered: 0, discoveredPostIds: [], duplicatePostIdsSkipped: 0, pageOpens: 0, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 0, discoveryScrolls: 0, feedAgeHits: 0, ageCacheHits: 0, agePageFallbacks: 0, oldPostsSkippedBeforePageOpen: 0, oldPostsSkippedHeavyProcessing: 0, earlyStopOldBoundaryCount: 0, feedTimestampCandidates: 0, exactBoundFeedTimestamps: 0, rejectedAmbiguousFeedTimestamps: 0, feedAgeHitRate: 0, duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 0, fullExtractionCacheMisses: 0, dedicatedPageReuses: 0, duplicateVisionCallsAvoided: 0, duplicatePageOpensAvoided: 0, postTimings: [], totalNavigationMs: 0, totalVisionMs: 0, totalAgeFallbackMs: 0, cacheHitCount: 0, cacheMissCount: 0, discoveryTrace: [] };
   const row = requireRow(value);
   return {
     postsDiscovered: nonnegativeInteger(row.postsDiscovered),
@@ -122,6 +122,7 @@ function parsePerformance(value: unknown): FacebookPerformanceMetrics {
     ageCacheHits: optionalNonnegativeInteger(row.ageCacheHits),
     agePageFallbacks: optionalNonnegativeInteger(row.agePageFallbacks),
     oldPostsSkippedBeforePageOpen: optionalNonnegativeInteger(row.oldPostsSkippedBeforePageOpen),
+    oldPostsSkippedHeavyProcessing: optionalNonnegativeInteger(row.oldPostsSkippedHeavyProcessing),
     earlyStopOldBoundaryCount: optionalNonnegativeInteger(row.earlyStopOldBoundaryCount),
     feedTimestampCandidates: optionalNonnegativeInteger(row.feedTimestampCandidates),
     exactBoundFeedTimestamps: optionalNonnegativeInteger(row.exactBoundFeedTimestamps),

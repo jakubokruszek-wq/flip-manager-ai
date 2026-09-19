@@ -68,6 +68,25 @@ test("Vision not-a-property is skipped without persistence", async () => {
   assert.equal(result.listingsCreated, 0);
 });
 
+test("73h post is skipped before persistence and heavy work", async () => {
+  const item = { ...post(vision(true)), publishedAt: new Date(Date.now() - 73 * 60 * 60_000).toISOString(), imageUrls: ["https://example.invalid/property.jpg"] };
+  let persistenceCalls = 0;
+  const result = await persistEligibleFacebookPost(item, async () => { persistenceCalls += 1; return persisted(); });
+  assert.equal(persistenceCalls, 0);
+  assert.equal(result.status, "skipped");
+  assert.equal(result.listingId, null);
+  assert.equal(result.imagesMirrored, 0);
+  assert.equal(result.notProperty?.reasonCode, "FACEBOOK_STALE_POST_OLDER_THAN_72H");
+});
+
+test("unknown publication date continues conservatively", async () => {
+  let persistenceCalls = 0;
+  const result = await persistEligibleFacebookPost(post(vision(true)), async () => { persistenceCalls += 1; return persisted(); });
+  assert.equal(persistenceCalls, 1);
+  assert.equal(result.status, "created");
+  assert.equal(result.notProperty, undefined);
+});
+
 test("buy request is gated before persistence, matching, score, alerts and price history", async () => {
   const text = "Kupię za gotówkę mieszkanie 1-2 pokoje (30-40m2) w Łodzi. Może być do remontu. Do 220 000 zł";
   const buy = { ...vision(true), listingIntent: "SELL_PROPERTY" as const, intentConfidence: 0.98, visibleText: "Mieszkanie w Łodzi", price: 220_000, area: 40, rooms: 2 };

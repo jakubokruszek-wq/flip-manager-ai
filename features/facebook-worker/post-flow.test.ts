@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { processFacebookPostBatch, redactFacebookPostPreview, type FacebookPostImportResult } from "./post-flow.ts";
+import { staleFacebookPostResult } from "./vision-adapter.ts";
 import type { FacebookPostSnapshot } from "./types.ts";
 
 function post(postId: string, text = "Sprzedam mieszkanie 45 m2, 2 pokoje, 350000 zl"): FacebookPostSnapshot {
@@ -39,6 +40,14 @@ test("not-a-property post is skipped", async () => {
   const result = await processFacebookPostBatch([post("2", "Spotkanie grupy w sobote")], async () => outcome({ status: "skipped", listingId: null, listingCreated: false, matched: false, matchCreated: false, imagesMirrored: 0 }));
   assert.equal(result.listingsSkipped, 1);
   assert.equal(result.listingsCreated, 0);
+});
+
+test("old-post skip is counted only for the deterministic stale reason", async () => {
+  const old = { ...post("old"), publishedAt: new Date(Date.now() - 73 * 60 * 60_000).toISOString() };
+  const result = await processFacebookPostBatch([old], async (item) => staleFacebookPostResult(item));
+  assert.equal(result.oldPostsSkippedHeavyProcessing, 1);
+  const unknown = await processFacebookPostBatch([{ ...post("unknown"), publishedAt: null }], async () => outcome({ status: "skipped", listingId: null, listingCreated: false, matched: false, matchCreated: false, imagesMirrored: 0 }));
+  assert.equal(unknown.oldPostsSkippedHeavyProcessing, 0);
 });
 
 test("one extraction failure does not stop the batch", async () => {

@@ -3,6 +3,7 @@ import type { FacebookMediaCandidate, FacebookPostSnapshot, FacebookVisionExtrac
 import { inspectFacebookIntentSignals, resolveFacebookListingIntent } from "../facebook-watcher/facebook-intent.ts";
 import type { FacebookPostImportResult } from "./post-flow.ts";
 import { resolveFacebookPrice } from "../facebook-watcher/extract-facebook-property.ts";
+import { classifyFacebookPostAgeZone } from "../facebook-watcher/post-age-zone.ts";
 
 const MIN_PROPERTY_IMAGE_CONFIDENCE = 0.8;
 
@@ -59,10 +60,23 @@ export async function persistEligibleFacebookPost(
   post: FacebookPostSnapshot,
   persist: (post: FacebookPostSnapshot) => Promise<FacebookPostImportResult>,
 ): Promise<FacebookPostImportResult> {
+  if (classifyFacebookPostAgeZone(post.publishedAt) === "OLD") return staleFacebookPostResult(post);
   const gate = evaluateFacebookPersistenceGate(post);
   if (gate.allowed) return persist(post);
   const detectedFields = post.vision ? detectedVisionFields(post.vision) : [];
   return { status: "skipped", listingId: null, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: post.vision?.isProperty === true, structuredFieldCount: detectedFields.length, detectedFields, classification: gate.intent === "UNKNOWN" && post.vision?.isProperty === false ? "not_a_property" : "non_sale_intent", reasonCode: gate.reasonCode ?? "FACEBOOK_INTENT_UNKNOWN", listingIntent: gate.intent, intentSource: gate.intentSource } };
+}
+
+/** Deterministic server skip for a reliably dated post outside the processing window. */
+export function staleFacebookPostResult(post: FacebookPostSnapshot): FacebookPostImportResult {
+  return {
+    status: "skipped", listingId: null, listingCreated: false, listingUpdated: false,
+    matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [],
+    notProperty: {
+      realEstateLanguage: true, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent",
+      reasonCode: "FACEBOOK_STALE_POST_OLDER_THAN_72H", listingIntent: "UNKNOWN", intentSource: "UNKNOWN",
+    },
+  };
 }
 
 export function facebookVisionToListingInput(post: FacebookPostSnapshot, groupName: string): FacebookListingInput {

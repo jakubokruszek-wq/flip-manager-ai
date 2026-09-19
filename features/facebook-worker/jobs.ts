@@ -7,7 +7,8 @@ import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/su
 import { assertFacebookSourceUrl, assertFacebookPostsBelongToGroup, parseFacebookGroupSnapshot } from "./completion";
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
-import { facebookVisionToListingInput, persistEligibleFacebookPost } from "./vision-adapter";
+import { facebookVisionToListingInput, persistEligibleFacebookPost, staleFacebookPostResult } from "./vision-adapter";
+import { classifyFacebookPostAgeZone } from "../facebook-watcher/post-age-zone";
 import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeFacebookGroupAssociationMetadata, readFacebookCachedMatch, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
 import { aggregateFacebookVisionRun, summarizeFacebookVisionUsage } from "./openai-pricing";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
@@ -258,6 +259,9 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   const filter = parseStoredFilter(sourceScan.data.filter_snapshot, searchFilterId);
   const activeListingsCache = await fetchFacebookActiveListingCandidates();
   const summary = await processFacebookPostBatch(input.posts, async (post) => {
+    // The server owns the stale-post decision. Check before cache reuse as
+    // cache association can otherwise mutate an existing listing.
+    if (classifyFacebookPostAgeZone(post.publishedAt) === "OLD") return staleFacebookPostResult(post);
     if (post.cacheHit && post.postId && post.permalink) {
       const validated = await getFacebookPostCache({ jobId: input.jobId, leaseToken: input.leaseToken, workerId: input.workerId, postIds: [post.postId] });
       const cache = validated[post.postId];
@@ -290,6 +294,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   input.performance.totalAgeFallbackMs = completionTimings.reduce((sum, timing) => sum + timing.ageFallbackMs, 0);
   input.performance.cacheHitCount = completionTimings.filter((timing) => timing.cacheHit).length;
   input.performance.cacheMissCount = completionTimings.filter((timing) => !timing.cacheHit).length;
+  input.performance.oldPostsSkippedHeavyProcessing = (input.performance.oldPostsSkippedHeavyProcessing ?? 0) + summary.oldPostsSkippedHeavyProcessing;
   const visionCost = summarizeFacebookVisionUsage(input.posts.map((post) => post.vision), input.performance.visionCalls);
   const openaiVisionCalls = input.posts.flatMap((post) => post.vision?.usage ? [{ postId: post.postId, usage: post.vision.usage }] : []);
   const result: FacebookCompletionResult = { source: "facebook", status: "completed", fetched: summary.postsReceived, normalized, durationMs: input.durationMs, postsReceived: summary.postsReceived, postsProcessed: summary.postsProcessed, listingsCreated: summary.listingsCreated, listingsUpdated: summary.listingsUpdated, listingsSkipped: summary.listingsSkipped, matched: summary.matched, newMatches: summary.newMatches, extractionFailed: summary.extractionFailed, imagesMirrored: summary.imagesMirrored, priceDrops: summary.priceDrops, errors: summary.errors, skippedDiagnostics: summary.skippedDiagnostics, persistenceDiagnostics: summary.persistenceDiagnostics, postCache: summary.reusablePosts.map((post) => ({ ...post, analyzedAt: now })), ageCache: input.ageCache, performance: input.performance, ...visionCost, openaiVisionCalls };

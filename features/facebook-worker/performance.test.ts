@@ -168,7 +168,7 @@ test("run performance summary aggregates age optimization counters", () => {
     postsDiscovered: 5, discoveredPostIds: ["1", "2"], duplicatePostIdsSkipped: 0,
     pageOpens: 1, visionCalls: 0, visionCacheHits: 0, knownPostSkips: 2, discoveryScrolls: 3,
     feedAgeHits: 2, ageCacheHits: 2, agePageFallbacks: 1,
-    oldPostsSkippedBeforePageOpen: 4, earlyStopOldBoundaryCount: 1,
+    oldPostsSkippedBeforePageOpen: 4, oldPostsSkippedHeavyProcessing: 3, earlyStopOldBoundaryCount: 1,
     feedTimestampCandidates: 6, exactBoundFeedTimestamps: 2,
     rejectedAmbiguousFeedTimestamps: 1, feedAgeHitRate: 0.4,
     duplicatePostIdsAcrossGroups: 0, fullExtractionCacheHits: 2, fullExtractionCacheMisses: 3,
@@ -178,6 +178,7 @@ test("run performance summary aggregates age optimization counters", () => {
   assert.equal(summary.ageCacheHits, 2);
   assert.equal(summary.agePageFallbacks, 1);
   assert.equal(summary.oldPostsSkippedBeforePageOpen, 4);
+  assert.equal(summary.oldPostsSkippedHeavyProcessing, 3);
   assert.equal(summary.earlyStopOldBoundaryCount, 1);
   assert.equal(summary.feedTimestampCandidates, 6);
   assert.equal(summary.exactBoundFeedTimestamps, 2);
