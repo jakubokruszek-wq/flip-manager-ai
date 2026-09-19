@@ -8,6 +8,37 @@ const CDN_A = "https://scontent-waw2-1.xx.fbcdn.net/v/t1/a.jpg?token=one";
 const CDN_B = "https://scontent.fwaw3-1.fna.fbcdn.net/v/t1/b.webp?token=two";
 const STABLE = "https://project.supabase.co/storage/v1/object/public/facebook-watcher-images/facebook/listing/existing.jpg";
 
+// -----------------------------------------------------------------------------
+// POC-1: prompt image mirroring must not depend on a Facebook browser session.
+// A scan-time scontent*.fbcdn.net URL is signed, so the mirror fetch must carry
+// no cookies, no Authorization and no credentials — otherwise "mirror straight
+// from the URL the scan already saw" could not replace photo-viewer navigation.
+// -----------------------------------------------------------------------------
+test("POC-1: the fbcdn mirror fetch sends no cookies, credentials or Authorization", async () => {
+  const seen: Array<{ url: string; init: RequestInit | undefined }> = [];
+  const result = await mirrorFacebookImageUrls("listing-poc", [CDN_A], {
+    fetchImpl: async (input, init) => { seen.push({ url: String(input), init }); return imageResponse(JPG, "image/jpeg"); },
+    upload: async ({ path }) => ({ publicUrl: storageUrl(path), uploaded: true }),
+  });
+  assert.equal(result.stats.uploadedCount, 1, "a signed fbcdn URL mirrors without any browser session");
+  assert.equal(seen.length, 1);
+  const headers = new Headers(seen[0]?.init?.headers);
+  assert.equal(headers.get("cookie"), null);
+  assert.equal(headers.get("authorization"), null);
+  assert.equal(seen[0]?.init?.credentials, undefined, "no ambient credentials may be attached");
+});
+
+test("POC-1: an expired or rejected signed URL degrades to a warning, never a throw", async () => {
+  const result = await mirrorFacebookImageUrls("listing-expired", [CDN_A], {
+    fetchImpl: async () => new Response("", { status: 403 }),
+    upload: async ({ path }) => ({ publicUrl: storageUrl(path), uploaded: true }),
+  });
+  assert.equal(result.stats.uploadedCount, 0);
+  assert.equal(result.stats.failedCount, 1);
+  assert.equal(result.images.length, 0);
+  assert.match(result.warnings.join(" "), /403/);
+});
+
 test("mirrors a valid Facebook JPG to a content-addressed path", async () => {
   const uploads: string[] = [];
   const result = await mirrorFacebookImageUrls("listing-1", [CDN_A], {
