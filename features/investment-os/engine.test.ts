@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_UNDERWRITING_SETTINGS } from "../flip-finder/underwriting.ts";
-import { buildCanonicalDeal, downstreamForChange, fingerprintsEqual } from "./engine.ts";
-import type { BuildDealInput } from "./types.ts";
+import { calculateUnderwriting, DEFAULT_UNDERWRITING_SETTINGS } from "../flip-finder/underwriting.ts";
+import { buildCanonicalDeal, ceoActionForDecision, downstreamForChange, fingerprintsEqual } from "./engine.ts";
+import type { BuildDealInput, DirectorOutput } from "./types.ts";
+
+// ceoActionForDecision only ever reads .result.maxPurchasePrice / .result.profitBase;
+// building a full ~25-field UnderwritingResult fixture for that would obscure what
+// each test is actually proving, so only those two fields are real and the rest of
+// the (unread) shape is asserted through the cast rather than fabricated data.
+function fakeUnderwriting(maxPurchasePrice: number | null, profitBase: number | null): DirectorOutput<ReturnType<typeof calculateUnderwriting>> {
+  return {
+    director: "UNDERWRITER", status: "COMPLETE", version: 1, inputFingerprint: "fp", computedAt: "2026-09-12T10:00:00.000Z",
+    confidence: 80, confidenceAxes: { data: 80, method: 80, market: 80 }, result: { maxPurchasePrice, profitBase }, missingFields: [], warnings: [],
+  } as unknown as DirectorOutput<ReturnType<typeof calculateUnderwriting>>;
+}
 
 function input(overrides: Partial<BuildDealInput> = {}): BuildDealInput {
   return {
@@ -222,4 +233,67 @@ test("CEO receives persisted calibration records without inventing missing histo
   assert.equal(deal.ceo.result?.directorTrackRecords[0]?.director, "MARKET");
   assert.equal(deal.ceo.result?.directorTrackRecords[0]?.dealCount, 12);
   assert.deepEqual(buildCanonicalDeal(input()).ceo.result?.directorTrackRecords, []);
+});
+
+// -----------------------------------------------------------------------------
+// PRODUCTION REGRESSION: asking 362 000 vs max buy ~152 897 (ratio ~2.37,
+// profit ~-163k) rendered as a plain "NEGOCJUJ" — indistinguishable from a
+// normal, economically reachable negotiation. An extreme, economically
+// unreachable gap must read as "ZA DROGA" instead.
+// -----------------------------------------------------------------------------
+const REGRESSION_ASKING = 362_000;
+const REGRESSION_MAX_BUY = 152_897;
+const REGRESSION_PROFIT = -163_285;
+
+test("I. extreme price gap (production case: 362k vs ~153k, negative profit) is ZA DROGA, never NEGOCJUJ", () => {
+  const action = ceoActionForDecision("TOO_EXPENSIVE", REGRESSION_ASKING, fakeUnderwriting(REGRESSION_MAX_BUY, REGRESSION_PROFIT), 70);
+  assert.equal(action, "ZA DROGA");
+  assert.notEqual(action, "NEGOCJUJ");
+});
+
+test("J. a small, realistic gap (10% over max buy, positive profit) can still be NEGOCJUJ", () => {
+  const maxBuy = 300_000;
+  const asking = maxBuy * 1.1;
+  const action = ceoActionForDecision("TOO_EXPENSIVE", asking, fakeUnderwriting(maxBuy, 15_000), 70);
+  assert.equal(action, "NEGOCJUJ");
+});
+
+test("a gap right at the small-gap boundary (20%) is still NEGOCJUJ, just past it is not", () => {
+  const maxBuy = 300_000;
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", maxBuy * 1.2, fakeUnderwriting(maxBuy, 10_000), 70), "NEGOCJUJ");
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", maxBuy * 1.2 + 1, fakeUnderwriting(maxBuy, 10_000), 70), "ZA DROGA");
+});
+
+test("a gap right at the extreme-gap boundary (75% over) is ZA DROGA even with positive profit", () => {
+  const maxBuy = 200_000;
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", maxBuy * 1.75, fakeUnderwriting(maxBuy, 5_000), 70), "ZA DROGA");
+});
+
+test("any negative profit is ZA DROGA regardless of how small the price gap looks", () => {
+  const maxBuy = 300_000;
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", maxBuy * 1.05, fakeUnderwriting(maxBuy, -1), 70), "ZA DROGA");
+});
+
+test("missing max-buy, missing profit, or low confidence never produces a confident label", () => {
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", 300_000, fakeUnderwriting(null, 10_000), 70), "HOLD / ZBIERZ DANE");
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", 300_000, fakeUnderwriting(250_000, null), 70), "HOLD / ZBIERZ DANE");
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", 300_000, fakeUnderwriting(250_000, 10_000), 30), "HOLD / ZBIERZ DANE");
+  assert.equal(ceoActionForDecision("TOO_EXPENSIVE", null, fakeUnderwriting(250_000, 10_000), 70), "HOLD / ZBIERZ DANE");
+});
+
+test("L. non-TOO_EXPENSIVE decisions are untouched by the extreme-price guard", () => {
+  assert.equal(ceoActionForDecision("HOT", 300_000, fakeUnderwriting(280_000, 40_000), 90), "KUP");
+  assert.equal(ceoActionForDecision("GOOD", 300_000, fakeUnderwriting(280_000, 20_000), 80), "JEDŹ OBEJRZEĆ");
+  assert.equal(ceoActionForDecision("REJECT", 300_000, fakeUnderwriting(280_000, 20_000), 80), "ODRZUĆ");
+  assert.equal(ceoActionForDecision("REVIEW", 300_000, fakeUnderwriting(280_000, 20_000), 80), "HOLD / ZBIERZ DANE");
+});
+
+test("the known production example end-to-end through buildCanonicalDeal reads ZA DROGA, not NEGOCJUJ", () => {
+  const deal = buildCanonicalDeal(input({
+    listing: { ...input().listing, askingPrice: REGRESSION_ASKING, areaM2: 32.94, city: "Łódź", district: null, street: null },
+    market: { ...input().market!, low: 8_500, base: 8_800, high: 9_200 },
+  }));
+  if (deal.ceo.result?.decision === "TOO_EXPENSIVE") {
+    assert.notEqual(deal.ceo.result.action, "NEGOCJUJ");
+  }
 });

@@ -80,7 +80,7 @@ export type DirectorOutputContract<T = unknown> = {
   whatWouldChangeMyMind: string[]; computedAt: string;
 };
 export type CeoInternalState = "HOT" | "GOOD" | "REVIEW" | "TOO_EXPENSIVE" | "REJECT";
-export type CeoUserFacingAction = "JEDZ_OBEJRZEC" | "NEGOCJUJ" | "KUP" | "HOLD" | "ODRZUC";
+export type CeoUserFacingAction = "JEDZ_OBEJRZEC" | "NEGOCJUJ" | "ZA_DROGA" | "KUP" | "HOLD" | "ODRZUC";
 export type CeoDecisionContract = {
   dealId: string; decisionVersion: number; internalState: CeoInternalState;
   userFacingAction: CeoUserFacingAction; gateResults: Array<{ code: string; passed: boolean; reason: string }>;
@@ -149,7 +149,7 @@ export type MarketComparableEvidence = { id: string; source: string; sourceUrl: 
 
 export type CeoResult = {
   decision: "HOT" | "GOOD" | "REVIEW" | "TOO_EXPENSIVE" | "REJECT";
-  action: "KUP" | "NEGOCJUJ" | "JEDŹ OBEJRZEĆ" | "HOLD / ZBIERZ DANE" | "ODRZUĆ";
+  action: "KUP" | "NEGOCJUJ" | "ZA DROGA" | "JEDŹ OBEJRZEĆ" | "HOLD / ZBIERZ DANE" | "ODRZUĆ";
   headline: string;
   openingOffer: number | null;
   targetPurchasePrice: number | null;

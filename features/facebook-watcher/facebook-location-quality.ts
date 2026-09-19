@@ -59,9 +59,36 @@ export function safeFacebookDisplayLocation(input: {
   if (input.source !== "facebook") return { address: input.address, district: input.district, city: input.city };
   const explicitCity = explicitPolishCity([input.title, input.description].filter(Boolean).join(" "));
   if (!explicitCity || !input.city || normalizeCity(explicitCity) === normalizeCity(input.city)) {
-    return { address: input.address, district: input.district, city: explicitCity ?? input.city };
+    const city = explicitCity ?? clean(input.city);
+    const district = clean(input.district);
+    return { address: safeStreet(input.address, district, city), district, city };
   }
-  return { address: firstAddressPart(input.address), district: null, city: explicitCity };
+  return { address: safeStreet(input.address, null, explicitCity), district: null, city: explicitCity };
+}
+
+/** Build a display location from trusted components without inventing a street. */
+export function composeFacebookLocation(input: {
+  street?: string | null;
+  neighborhood?: string | null;
+  district?: string | null;
+  city?: string | null;
+}): string | null {
+  const city = clean(input.city);
+  const district = clean(input.district);
+  const neighborhood = clean(input.neighborhood);
+  const street = safeStreet(input.street, district, city);
+  const values = street
+    ? [street, neighborhood, district, city]
+    : [city, district, neighborhood];
+  const present = values.filter((value): value is string => Boolean(value));
+  const seen = new Set<string>();
+  const unique = present.filter((value) => {
+    const key = normalizeCity(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return unique.length ? unique.join(", ") : null;
 }
 
 export function explicitPolishCity(value: string | null | undefined): string | null {
@@ -98,6 +125,13 @@ function firstAddressPart(value: string | null): string | null {
   return value?.split(",")[0]?.trim() || null;
 }
 
-function clean(value: string | null): string | null {
+function safeStreet(value: string | null | undefined, district: string | null, city: string | null): string | null {
+  const first = firstAddressPart(clean(value));
+  if (!first) return null;
+  const key = normalizeCity(first);
+  return key && (key === normalizeCity(city) || key === normalizeCity(district)) ? null : first;
+}
+
+function clean(value: string | null | undefined): string | null {
   return value?.trim() || null;
 }

@@ -141,7 +141,7 @@ function ListingResultCard({ result }: { result: FilterResult }) {
   const metrics = [
     price ? `Cena: ${price}` : null,
     displayMetric(result.area, "m²"),
-    pricePerSqm ? `${pricePerSqm}/m²` : null,
+    "Cena/m" + String.fromCharCode(0x00b2) + ": " + (pricePerSqm ?? String.fromCharCode(0x2014)),
     displayMetric(result.rooms, "pok."),
     result.floor ? `Piętro: ${result.floor}` : null,
   ].filter((metric): metric is string => metric !== null);

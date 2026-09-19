@@ -20,7 +20,7 @@ import { FACEBOOK_WORKFLOW_STATUSES, type FacebookListingInput, type FacebookWat
 import { recordFacebookGroupImport } from "@/features/facebook-groups/server";
 import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebookFieldConfidence } from "./facebook-data-quality";
 import { resolveFacebookListingIntent } from "./facebook-intent";
-import { reconcileFacebookLocation } from "./facebook-location-quality";
+import { composeFacebookLocation, reconcileFacebookLocation } from "./facebook-location-quality";
 import { exactBoundPropertyImages, facebookImagePersistenceDiagnostics, facebookImageProvenanceDiagnostics, facebookMediaBindingSummary, hasApprovedFacebookImageProvenance, preserveFacebookPublishedAt } from "./facebook-media-binding";
 import type { FacebookPersistenceDiagnostics } from "../facebook-worker/post-flow";
 import { evaluateFacebookApartmentSafety } from "./facebook-apartment-safety";
@@ -254,7 +254,7 @@ async function importAutomatedFacebook(input: {
   const contentQuality = assessFacebookContentQuality({ searchIntent, propertyType, priceStatus: priceQuality.status, areaKnown: effective.area !== null, locationState, freshness, availability });
   const rawScore = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
   const score = isFacebookPriceSuspect(priceQuality.status) ? Math.min(rawScore, PRICE_SUSPECT_SCORE_CAP) : rawScore;
-  const locationText = [effective.street, effective.neighborhood, effective.district, effective.city].filter(Boolean).join(", ") || null;
+  const locationText = composeFacebookLocation({ street: effective.street, neighborhood: effective.neighborhood, district: effective.district, city: effective.city });
   const baseDecision = evaluateListingAgainstFilter({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
   const safetyUnknown = apartmentUnknownFields(context.filter, buildingEvidence, effective.city);
   const decisionUnknownFields = [...new Set([...baseDecision.unknownFields, ...safetyUnknown])];

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reconcileFacebookLocation, safeFacebookDisplayLocation } from "./facebook-location-quality.ts";
+import { composeFacebookLocation, reconcileFacebookLocation, safeFacebookDisplayLocation } from "./facebook-location-quality.ts";
 import type { FacebookProperty } from "./types.ts";
 
 const base = {
@@ -61,4 +61,11 @@ test("configured Facebook group URL can override conflicting Vision city", () =>
   assert.equal(result.property.city, "Łódź");
   assert.equal(result.provenance.citySource, "GROUP_FALLBACK");
   assert.equal(result.provenance.conflict, true);
+});
+
+test("location components are deduplicated without manufacturing a street", () => {
+  const lodz = String.fromCodePoint(0x0141, 0x00f3, 0x0064, 0x017a);
+  assert.equal(composeFacebookLocation({ street: lodz, district: lodz, city: lodz }), lodz);
+  assert.equal(composeFacebookLocation({ street: lodz, district: "Widzew", city: lodz }), `${lodz}, Widzew`);
+  assert.equal(composeFacebookLocation({ street: "Piotrkowska 10", district: "Widzew", city: lodz }), `Piotrkowska 10, Widzew, ${lodz}`);
 });

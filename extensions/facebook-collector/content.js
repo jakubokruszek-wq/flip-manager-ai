@@ -130,7 +130,8 @@
         // A timestamp/permalink inside a nested comment can point at the
         // same post. Only the top-level article is eligible as the root card.
         if (article?.parentElement?.closest('[role="article"]')) return null;
-        return article || exactLinkedGalleryRoot(anchor, expectedGroup, expectedPostId);
+        if (article) return galleryRootHasExactPostBinding(article, expectedGroup, expectedPostId) ? article : null;
+        return exactLinkedGalleryRoot(anchor, expectedGroup, expectedPostId);
       }))].filter(Boolean);
       const collapsedSelfLinkRoots = collapseEquivalentGalleryRoots(selfLinkRoots);
       const titleBoundSelfLinkRoots = collapseEquivalentGalleryRoots(selfLinkRoots.filter((candidate) => {
@@ -149,6 +150,7 @@
       if (roots.length === 0) {
         const pageRoots = [...document.querySelectorAll('[role="article"]')]
           .filter((article) => !article.parentElement?.closest('[role="article"]') && !isCommentDescendant(article))
+          .filter((article) => galleryRootHasExactPostBinding(article, expectedGroup, expectedPostId))
           .map(galleryRootEvidence)
           .filter((evidence) => evidence.author && evidence.rootText && galleryPageTitleMatchesRootText(evidence.rootText))
           .map((evidence) => evidence.root);
@@ -567,16 +569,22 @@
       if (isCommentDescendant(candidate)) continue;
       const evidence = galleryRootEvidence(candidate);
       if (!evidence.author || !evidence.rootText) continue;
-      const linkedPostIds = new Set([...candidate.querySelectorAll("a[href]")].flatMap((link) => {
-        try {
-          const url = new URL(link.href);
-          const match = url.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})(?:\/|$)/i);
-          return match && match[1] === expectedGroup ? [match[2]] : [];
-        } catch { return []; }
-      }));
-      if (linkedPostIds.size === 1 && linkedPostIds.has(expectedPostId)) return candidate;
+      if (galleryRootHasExactPostBinding(candidate, expectedGroup, expectedPostId)) return candidate;
     }
     return null;
+  }
+
+  function galleryRootHasExactPostBinding(root, expectedGroup, expectedPostId) {
+    if (!root || !expectedGroup || !expectedPostId) return false;
+    const linkedPostIds = new Set([...root.querySelectorAll("a[href]")].flatMap((link) => {
+      try {
+        const url = new URL(link.href);
+        const match = url.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})(?:\/|$)/i);
+        return match && match[1].toLocaleLowerCase() === String(expectedGroup).toLocaleLowerCase() ? [match[2]] : [];
+      } catch { return []; }
+    }));
+    // Equivalent to the legacy proof: linkedPostIds.size === 1 && linkedPostIds.has(expectedPostId).
+    return linkedPostIds.size === 1 && linkedPostIds.has(String(expectedPostId));
   }
 
   function galleryPageTitleMatchesRootText(rootText) {
@@ -1302,4 +1310,8 @@
   function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
   function safeError(error) { return error instanceof Error ? error.message.slice(0, 300) : "COLLECTOR_FAILED"; }
   function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  // Test-only export. `module` never exists in the browser extension context,
+  // so this has zero effect in production — it only lets a Node test exercise
+  // the exact-identity proof in isolation, with a fake DOM object.
+  if (typeof module !== "undefined" && module.exports) module.exports = { galleryRootHasExactPostBinding };
 })();
