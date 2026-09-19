@@ -9,6 +9,53 @@ const context = vm.createContext({ globalThis: {}, Date, Map });
 vm.runInContext(fs.readFileSync(path.join(__dirname, "collector-flow.js"), "utf8"), context);
 const flow = context.globalThis.FlipCollectorFlow;
 
+const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
+const SEARCH_RESERVE_MS = 40_000;
+
+test("NETWORK-FIRST is the default: search stays off unless explicitly enabled", () => {
+  assert.equal(flow.isSearchPhaseEnabled(undefined), false);
+  assert.equal(flow.isSearchPhaseEnabled({}), false);
+  assert.equal(flow.isSearchPhaseEnabled({ searchPhaseEnabled: false }), false);
+  assert.equal(flow.resolveAcquisitionMode({}), "NETWORK_FIRST");
+});
+
+test("SEARCH remains available for fallback when the flag is explicitly set", () => {
+  assert.equal(flow.isSearchPhaseEnabled({ searchPhaseEnabled: true }), true);
+  assert.equal(flow.resolveAcquisitionMode({ searchPhaseEnabled: true }), "SEARCH_ENABLED");
+});
+
+test("a truthy-but-not-true flag value never silently enables search", () => {
+  for (const value of ["true", 1, {}, [], "yes"]) {
+    assert.equal(flow.isSearchPhaseEnabled({ searchPhaseEnabled: value }), false);
+  }
+});
+
+test("CURRENT_DEPTH reproduces today's feed budget exactly", () => {
+  const depth = flow.resolveFeedDepth({ mode: "CURRENT_DEPTH", limits: PRODUCTION_LIMITS, searchReserveMs: SEARCH_RESERVE_MS, searchEnabled: true });
+  assert.equal(depth.mode, "CURRENT_DEPTH");
+  assert.equal(depth.budgetMs, 70_000, "110s hard budget minus the 40s search reserve, as in production today");
+  assert.equal(depth.maxScrolls, 30);
+  assert.equal(depth.maxPosts, 50);
+});
+
+test("DEEPER_NETWORK_FEED returns the search reserve to the feed once search is off", () => {
+  const depth = flow.resolveFeedDepth({ mode: "DEEPER_NETWORK_FEED", limits: PRODUCTION_LIMITS, searchReserveMs: SEARCH_RESERVE_MS, searchEnabled: false });
+  assert.equal(depth.mode, "DEEPER_NETWORK_FEED");
+  assert.equal(depth.budgetMs, 110_000);
+  assert.ok(depth.maxScrolls > PRODUCTION_LIMITS.maxScrolls);
+  assert.ok(depth.maxPosts > PRODUCTION_LIMITS.maxPosts);
+});
+
+test("deeper feed can never be combined with an enabled search phase", () => {
+  const depth = flow.resolveFeedDepth({ mode: "DEEPER_NETWORK_FEED", limits: PRODUCTION_LIMITS, searchReserveMs: SEARCH_RESERVE_MS, searchEnabled: true });
+  assert.equal(depth.mode, "CURRENT_DEPTH", "the reserve must stay reserved while search can still consume it");
+  assert.equal(depth.budgetMs, 70_000);
+});
+
+test("a network-first scan with zero planned queries is COMPLETE, not PARTIAL", () => {
+  assert.equal(flow.collectorOutcome(true, [], 0), "COMPLETE");
+});
+
 test("MAIN FEED success and seven healthy SEARCH queries complete", () => {
   assert.equal(flow.collectorOutcome(true, Array.from({ length: 7 }, () => ({ executed: true, status: "HEALTHY" })), 7), "COMPLETE");
 });

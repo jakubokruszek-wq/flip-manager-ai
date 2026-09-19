@@ -28,6 +28,43 @@ const legacyClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/fac
 const workerJobs = fs.readFileSync(path.join(__dirname, "../../features/facebook-worker/jobs.ts"), "utf8");
 const leaseHeartbeatRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/jobs/heartbeat/route.ts"), "utf8");
 
+test("NETWORK-FIRST: the zero-yield search phase is gated behind an explicit flag", () => {
+  assert.match(background, /if \(searchPhaseEnabled && primary\.source\.sourceType === "GROUP"\)/, "the search loop must be gated, not deleted");
+  assert.match(background, /SEARCH_PHASE_STORAGE_KEY = "flipCollectorSearchPhaseEnabled"/);
+  assert.match(background, /searchPhaseEnabled: stored\?\.\[SEARCH_PHASE_STORAGE_KEY\] === true/, "absent config must mean search OFF");
+  assert.match(background, /isSearchPhaseEnabled\(acquisitionConfig\)/);
+});
+
+test("SEARCH stays in the source tree so it can be re-enabled for fallback", () => {
+  assert.match(background, /ACTIVE_SEARCH_QUERIES/);
+  assert.match(background, /resolveSearchMediaTiles/, "search resolution code must remain available");
+  assert.match(background, /function searchTelemetry/);
+});
+
+test("a network-first scan plans zero queries so it is not reported DEGRADED", () => {
+  assert.match(background, /queriesPlanned: searchPhaseEnabled \? ACTIVE_SEARCH_QUERIES\.length : 0/);
+});
+
+test("main feed telemetry reaches the uploaded batch and carries no message text", () => {
+  assert.match(background, /function mainFeedTelemetrySummary/);
+  assert.match(background, /mainFeedSummary, acquisitionMode,/, "summary and mode must be part of the uploaded batch");
+  assert.match(background, /stopReason: primary\?\.health\?\.stopReason/);
+  assert.match(background, /networkSourcedPosts:/);
+  const summarySource = background.slice(background.indexOf("function mainFeedTelemetrySummary"), background.indexOf("function searchTelemetry"));
+  assert.doesNotMatch(summarySource, /\btext:/, "feed telemetry must not copy post text");
+});
+
+test("feed depth is resolved from the shared flow module, never hardcoded at the call site", () => {
+  assert.match(background, /resolveFeedDepth\(\{ mode: acquisitionConfig\.feedDepthMode/);
+  assert.match(background, /minScrolls: feedDepth\.minScrolls, maxScrolls: feedDepth\.maxScrolls, maxPosts: feedDepth\.maxPosts, budgetMs: feedDepth\.budgetMs/);
+});
+
+test("hydration is measured without changing the existing wait duration", () => {
+  assert.match(content, /const plannedWaitMs = moved \? 1600 : 800;/, "the 1600/800 ms sleep must be preserved while it is being measured");
+  assert.match(content, /firstGrowthMs/);
+  assert.match(content, /hydrationSamples/);
+});
+
 test("declares scripting permission for bounded fallback injection", () => {
   assert.ok(manifest.permissions.includes("scripting"));
   assert.match(background, /chrome\.scripting\.executeScript/);

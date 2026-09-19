@@ -66,6 +66,23 @@ void DEFAULT_SOURCES;
 void SEARCH_QUERIES;
 void PRODUCTION_SEARCH_QUERIES;
 const ACTIVE_SEARCH_QUERIES = ["sprzedam", "na sprzeda\u017c", "mieszkanie", "do remontu", "\u0141\u00f3d\u017a", "2 pokoje", "3 pokoje"];
+/**
+ * Acquisition configuration. Both keys are absent by default, which selects
+ * NETWORK_FIRST + CURRENT_DEPTH \u2014 the search phase stays off unless explicitly
+ * switched back on, and the feed keeps today's budget until the deeper mode is
+ * explicitly requested. Storing them in chrome.storage.local keeps rollback
+ * instant and requires no extension redeploy.
+ */
+const SEARCH_PHASE_STORAGE_KEY = "flipCollectorSearchPhaseEnabled";
+const FEED_DEPTH_STORAGE_KEY = "flipCollectorFeedDepthMode";
+async function readAcquisitionConfig() {
+  const stored = await chrome.storage.local.get([SEARCH_PHASE_STORAGE_KEY, FEED_DEPTH_STORAGE_KEY]).catch(() => ({}));
+  const depthModes = globalThis.FlipCollectorFlow.FEED_DEPTH_MODES;
+  return {
+    searchPhaseEnabled: stored?.[SEARCH_PHASE_STORAGE_KEY] === true,
+    feedDepthMode: stored?.[FEED_DEPTH_STORAGE_KEY] === depthModes.DEEPER_NETWORK_FEED ? depthModes.DEEPER_NETWORK_FEED : depthModes.CURRENT_DEPTH,
+  };
+}
 const PHASE_MAIN_FEED = "Skanowanie feedu\u2026";
 const PHASE_FINALIZE = "Scalanie wynikow i analiza ofert\u2026";
 const PHASE_DONE = "Zakonczono";
@@ -338,10 +355,15 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   await recordStartTrace({ requestId, stage: "COLLECTOR_STARTED", status: "PASS" });
   const startedAtMs = Date.now();
   await setCollectorState({ status: "collecting", phase: "MAIN_FEED", progress: PHASE_MAIN_FEED, sourceUrl, scanId, startedAt: new Date().toISOString() });
-  const primaryBudgetMs = PRODUCTION_LIMITS.hardTimeBudgetMs - SEARCH_BUDGET_RESERVE_MS;
+  const acquisitionConfig = await readAcquisitionConfig();
+  const searchPhaseEnabled = globalThis.FlipCollectorFlow.isSearchPhaseEnabled(acquisitionConfig);
+  const acquisitionMode = globalThis.FlipCollectorFlow.resolveAcquisitionMode(acquisitionConfig);
+  const feedDepth = globalThis.FlipCollectorFlow.resolveFeedDepth({ mode: acquisitionConfig.feedDepthMode, limits: PRODUCTION_LIMITS, searchReserveMs: SEARCH_BUDGET_RESERVE_MS, searchEnabled: searchPhaseEnabled });
   updateCollectionContext(collectionContext, "MAIN_FEED", null);
   collectionContext?.timeline.start("MAIN_FEED_START");
-  const primary = await collectFromTab(tabId, { minScrolls: PRODUCTION_LIMITS.minScrolls, maxScrolls: PRODUCTION_LIMITS.maxScrolls, maxPosts: PRODUCTION_LIMITS.maxPosts, budgetMs: primaryBudgetMs, discoverySource: "MAIN_FEED", imageMode }, { requestId, source: source.sourceId, collectionContext });
+  const mainFeedStartedAtMs = Date.now();
+  const primary = await collectFromTab(tabId, { minScrolls: feedDepth.minScrolls, maxScrolls: feedDepth.maxScrolls, maxPosts: feedDepth.maxPosts, budgetMs: feedDepth.budgetMs, discoverySource: "MAIN_FEED", imageMode }, { requestId, source: source.sourceId, collectionContext });
+  const mainFeedDurationMs = Date.now() - mainFeedStartedAtMs;
   collectionContext?.timeline.finish("MAIN_FEED_START");
   collectionContext?.timeline.start("MAIN_FEED_DONE");
   collectionContext?.timeline.finish("MAIN_FEED_DONE");
@@ -350,7 +372,7 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   const mainFeedIds = new Set(primary.posts.map((post) => post.postId));
   const searchStartedAtMs = Date.now();
   let searchBudgetExhausted = false;
-  if (primary.source.sourceType === "GROUP") {
+  if (searchPhaseEnabled && primary.source.sourceType === "GROUP") {
     collectionContext?.timeline.start("SEARCH_START");
     for (let queryIndex = 0; queryIndex < ACTIVE_SEARCH_QUERIES.length; queryIndex += 1) {
       const query = ACTIVE_SEARCH_QUERIES[queryIndex];
@@ -426,7 +448,10 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   const searchTelemetrySummary = {
     hardTimeBudgetMs: SEARCH_LIMITS.hardTimeBudgetMs,
     durationMs: Date.now() - searchStartedAtMs,
-    queriesPlanned: ACTIVE_SEARCH_QUERIES.length,
+    // With the search phase disabled nothing is planned, so the "incomplete
+    // search" health reason must not fire and mark an otherwise clean
+    // network-first scan DEGRADED.
+    queriesPlanned: searchPhaseEnabled ? ACTIVE_SEARCH_QUERIES.length : 0,
     queriesExecuted: searchRuns.filter((run) => run.executed).length,
     budgetExhausted: searchBudgetExhausted || Date.now() - searchStartedAtMs >= SEARCH_LIMITS.hardTimeBudgetMs,
     queries: searchRuns,
@@ -445,7 +470,8 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   const sourceTabDiagnostics = collectionContext?.sourceTabDiagnostics || { primaryTabId: tabId, childTabsCreated: 0, postNavigations: 0, mediaNavigations: 0, photoViewerNavigations: 0, inPageParentResolved: 0, structuredParentResolved: 0, unverifiedWithoutNavigation: 0 };
   collectionContext?.timeline.start("RESULT_SERIALIZED");
   collectionContext?.timeline.finish("RESULT_SERIALIZED");
-  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], sourceTabDiagnostics, stageTelemetry: collectionContext?.timeline.snapshot() || [], imageMode, imageNetworkDiagnostics, posts };
+  const mainFeedSummary = mainFeedTelemetrySummary({ primary, acquisitionMode, feedDepth, durationMs: mainFeedDurationMs });
+  const batch = { scanId, batchId: crypto.randomUUID(), sourceId: primary.source.sourceId, sourceType: primary.source.sourceType, sourceUrl: primary.source.sourceUrl, collectedAt: new Date().toISOString(), health, searchTelemetry: searchTelemetrySummary, mainFeedTelemetry: primary.mainFeedTelemetry || [], mainFeedSummary, acquisitionMode, sourceTabDiagnostics, stageTelemetry: collectionContext?.timeline.snapshot() || [], imageMode, imageNetworkDiagnostics, posts };
   await recordStartTrace({ requestId, stage: "COLLECTOR_BATCH_CREATED", status: "PASS" });
   collectionContext?.timeline.start("RESULT_RECEIVED");
   const upload = await uploadBatch(batch);
@@ -943,6 +969,42 @@ function healthAfterSearch(primary, captured, searchTelemetrySummary, durationMs
   if (searchRuns.some((run) => run.executed && run.status === "DEGRADED")) reasons.push("COLLECTOR_SEARCH_QUERY_DEGRADED");
   const stopReason = searchTelemetrySummary.budgetExhausted ? "SEARCH_GLOBAL_TIME_BUDGET" : improved ? "SEARCH_FALLBACK_COMPLETED" : primary.stopReason;
   return { ...primary, status: reasons.length ? "DEGRADED" : "HEALTHY", capturedPostCount: captured, captureRatio: primary.visibleCardCount ? Math.min(1, captured / primary.visibleCardCount) : captured ? 1 : 0, durationMs, stopReason, reasons: [...new Set(reasons)] };
+}
+
+/**
+ * Summary telemetry for the network-first main feed. Until now only the search
+ * phase reported per-query timings, so feed depth could not be tuned from
+ * production data at all — the feed's scroll count and stop reason never left
+ * the extension. Carries no message text: counts, timings and reasons only.
+ */
+function mainFeedTelemetrySummary({ primary, acquisitionMode, feedDepth, durationMs }) {
+  const posts = Array.isArray(primary?.posts) ? primary.posts : [];
+  const diagnostics = Array.isArray(primary?.mainFeedTelemetry) ? primary.mainFeedTelemetry : [];
+  const evidence = primary?.discoveryEvidence ?? primary?.health?.discoveryEvidence ?? null;
+  const hydrationSamples = Array.isArray(primary?.hydrationSamples) ? primary.hydrationSamples.slice(0, 60) : [];
+  return {
+    acquisitionMode,
+    feedDepthMode: feedDepth?.mode ?? null,
+    budgetMs: feedDepth?.budgetMs ?? null,
+    maxScrolls: feedDepth?.maxScrolls ?? null,
+    maxPosts: feedDepth?.maxPosts ?? null,
+    durationMs,
+    discoveryDurationMs: primary?.discoveryDurationMs ?? primary?.health?.durationMs ?? null,
+    scrolls: primary?.health?.scrolls ?? 0,
+    scrollCount: primary?.scrollCount ?? primary?.health?.scrolls ?? 0,
+    visibleCardCount: primary?.health?.visibleCardCount ?? 0,
+    networkResponses: primary?.networkResponses ?? null,
+    postsDiscovered: posts.length,
+    exactIdentities: posts.filter((post) => post.identityConfidence === "EXACT").length,
+    unverifiedIdentities: posts.filter((post) => post.identityConfidence !== "EXACT").length,
+    networkSourcedPosts: diagnostics.filter((item) => item?.sourceLayer === "NETWORK").length,
+    sellCandidates: posts.filter(isLikelySellText).length,
+    stopReason: primary?.health?.stopReason ?? null,
+    captureRatio: primary?.health?.captureRatio ?? null,
+    healthStatus: primary?.health?.status ?? null,
+    hydrationSamples,
+    discoveryEvidence: evidence,
+  };
 }
 
 function searchTelemetry({ query, search, tileResolution, mainFeedIds, newUnique, tabLoadDiagnostics, discoveryDurationMs = null, resolutionDurationMs = null, durationMs }) {
