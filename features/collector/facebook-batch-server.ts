@@ -3,7 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import { processFacebookPostBatch, type FacebookPersistenceDiagnostics } from "@/features/facebook-worker/post-flow";
-import { importFacebookWatcher } from "@/features/facebook-watcher/server";
+import { fetchFacebookActiveListingCandidates, importFacebookWatcher } from "@/features/facebook-watcher/server";
 import type { SearchFilter } from "@/features/flip-finder";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -89,6 +89,10 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     const posts = collectorPostsForProcessing(batch, Date.now(), historicalIdentityConflicts);
     const unverifiedIdentityCount = batch.posts.filter((post) => post.identityConfidence !== "EXACT" || historicalIdentityConflicts.has(post.postId)).length;
     const authors = new Map(batch.posts.map((post) => [post.postId, post.author]));
+    // Fetched once for the whole batch instead of once per post; new listings
+    // created during processing are appended in-place (see server.ts) so
+    // duplicate detection never regresses within this batch.
+    const activeListingsCache = await fetchFacebookActiveListingCandidates();
     for (const target of targets) {
       const filter = target.filter;
       let sourceScanId = target.sourceScanId;
@@ -101,7 +105,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
         if (sourceScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_START_FAILED: ${sourceScan.error.message}`);
       }
       sourceScanIds.push(sourceScanId);
-      const summary = await processFacebookPostBatch(posts, (post) => importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: post.imageUrls, mediaCandidates: post.mediaCandidates, discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, ...COLLECTOR_IMAGE_IMPORT_OPTIONS }), { jobId: `collector:${batch.batchId}`, sourceScanId });
+      const summary = await processFacebookPostBatch(posts, (post) => importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: post.imageUrls, mediaCandidates: post.mediaCandidates, discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, activeListingsCache, ...COLLECTOR_IMAGE_IMPORT_OPTIONS }), { jobId: `collector:${batch.batchId}`, sourceScanId });
       processed = Math.max(processed, summary.postsProcessed);
       listingsCreated += summary.listingsCreated;
       listingsUpdated += summary.listingsUpdated;

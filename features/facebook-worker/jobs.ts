@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SearchFilter } from "@/features/flip-finder";
 import { getAlerts } from "@/features/alerts/server";
-import { importFacebookWatcher } from "@/features/facebook-watcher/server";
+import { fetchFacebookActiveListingCandidates, importFacebookWatcher } from "@/features/facebook-watcher/server";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { assertFacebookSourceUrl, assertFacebookPostsBelongToGroup, parseFacebookGroupSnapshot } from "./completion";
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
@@ -256,6 +256,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
   const sourceScan = await supabase.from("source_scans").select("filter_snapshot,warnings").eq("id", sourceScanId).maybeSingle();
   if (sourceScan.error || !sourceScan.data) throw new Error(`FACEBOOK_SOURCE_SCAN_READ_FAILED: ${sourceScan.error?.message ?? "missing source scan"}`);
   const filter = parseStoredFilter(sourceScan.data.filter_snapshot, searchFilterId);
+  const activeListingsCache = await fetchFacebookActiveListingCandidates();
   const summary = await processFacebookPostBatch(input.posts, async (post) => {
     if (post.cacheHit && post.postId && post.permalink) {
       const validated = await getFacebookPostCache({ jobId: input.jobId, leaseToken: input.leaseToken, workerId: input.workerId, postIds: [post.postId] });
@@ -274,6 +275,7 @@ export async function completeFacebookJob(input: FacebookCompletion): Promise<Fa
         groupUrl: group.url,
         postId: eligiblePost.postId,
         checkedAt: now,
+        activeListingsCache,
       });
       return { status: imported.status, listingId: imported.listingId, listingCreated: imported.listingCreated, listingUpdated: imported.listingUpdated, matched: imported.matched, matchCreated: imported.matchCreated, imagesMirrored: imported.imagesMirrored, priceDrops: imported.priceDrops, warnings: imported.warnings, notProperty: imported.notProperty, persistenceDiagnostics: imported.persistenceDiagnostics };
     });

@@ -26,10 +26,27 @@ import type { FacebookPersistenceDiagnostics } from "../facebook-worker/post-flo
 import { evaluateFacebookApartmentSafety } from "./facebook-apartment-safety";
 import { resolveFacebookBuildingEvidence, type FacebookBuildingEvidence } from "./facebook-building-evidence";
 import { syncResaleCompFromListing } from "@/features/market-intelligence/resale-comps-store";
+import { shouldAutoEnrichFacebookImages } from "./auto-image-enrichment";
+import { enqueueFacebookGalleryJob } from "../facebook-worker/gallery-jobs";
 import { assessFacebookListingQuality, assessFacebookPriceQuality, FACEBOOK_PRICE_CATEGORIES, FACEBOOK_PRICE_SOURCES, FACEBOOK_PRICE_STATUSES, isFacebookPriceSuspect, PRICE_SUSPECT_SCORE_CAP, type FacebookListingQualityGrade, type FacebookPriceCategory, type FacebookPriceQuality, type FacebookPriceSource, type FacebookPriceStatus } from "./price-quality";
 import { assessFacebookContentQuality, classifyFacebookAvailability, classifyFacebookFreshness, classifyFacebookLocationState, classifyFacebookPropertyType, classifyFacebookSearchIntent, FACEBOOK_AVAILABILITY_STATES, FACEBOOK_CONTENT_QUALITY_GRADES, FACEBOOK_FRESHNESS_STATES, FACEBOOK_LOCATION_STATES, FACEBOOK_PROPERTY_TYPES, FACEBOOK_SEARCH_INTENTS } from "./search-quality";
 
 type Row = Record<string, unknown>;
+
+/** The active-listing candidate shape `findExisting` fuzzy-matches against. */
+export type FacebookActiveListingCandidate = { id: string; source: string; title: string | null; price: number | null; area: number | null; district: string | null; address: string | null };
+
+/**
+ * Fetches the active-listings candidate set once for an entire scan/batch.
+ * `findExisting` used to run this same query, unfiltered, for every single
+ * post — a fixed cost repeated N times per scan instead of once.
+ */
+export async function fetchFacebookActiveListingCandidates(): Promise<FacebookActiveListingCandidate[]> {
+  const supabase = createFacebookWatcherAdminClient();
+  const { data, error } = await supabase.from("listings").select("id,source,title,price,area,district,address").eq("status", "active").limit(500);
+  if (error) throw new Error(`Nie udało się pobrać aktywnych ofert do porównania: ${error.message}`);
+  return (data ?? []).map((row) => ({ id: String(row.id), source: String(row.source), title: str(row.title), price: num(row.price), area: num(row.area), district: str(row.district), address: str(row.address) }));
+}
 
 export type FacebookAutomatedImportContext = {
   filter: SearchFilter;
@@ -39,6 +56,8 @@ export type FacebookAutomatedImportContext = {
   groupUrl: string;
   postId: string | null;
   checkedAt: string;
+  /** Pre-fetched once per scan/batch by the caller; see `fetchFacebookActiveListingCandidates`. */
+  activeListingsCache?: FacebookActiveListingCandidate[];
   preserveExistingImagesOnEmptyInput?: boolean;
   imageMode?: FacebookImageMode;
 };
@@ -97,7 +116,7 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   const sourceUrl = extracted.originalUrl ?? (context ? facebookPostUrl(context.groupUrl, context.postId) : `manual:${hash}`);
   const externalId = context?.postId ?? extracted.originalUrl?.match(/(?:posts|videos)\/(\d+)/)?.[1] ?? hash.slice(0, 32);
   const supabase = createFacebookWatcherAdminClient();
-  const existing = await findExisting(supabase, extracted, sourceUrl, externalId, hash);
+  const existing = await findExisting(supabase, extracted, sourceUrl, externalId, hash, context?.activeListingsCache);
   const now = context?.checkedAt ?? new Date().toISOString();
   if (context) return importAutomatedFacebook({ supabase, normalized, extracted, context, sourceUrl, externalId, existing, now, buildingType: apartmentSafety?.buildingType ?? null, buildingEvidence });
   let listingId = existing?.id;
@@ -253,6 +272,19 @@ async function importAutomatedFacebook(input: {
     priceDrops = saved.priceDrop;
     const scoreUpdate = await supabase.from("listings").update({ flip_score: score }).eq("id", listingId);
     if (scoreUpdate.error) throw new Error(`FACEBOOK_SCORE_PERSIST_FAILED: ${scoreUpdate.error.message}`);
+    // A pre-fetched cache is a snapshot from before this batch started. Append
+    // this newly created listing so a later, differently-worded post about the
+    // same property in the SAME batch can still be matched against it — never
+    // weaken intra-batch duplicate recall for the sake of the optimization.
+    if (listingCreated && context.activeListingsCache) {
+      context.activeListingsCache.push({ id: listingId, source: "facebook", title: effective.title, price: effective.price, area: effective.area, district: effective.district, address: locationText });
+    }
+  }
+
+  if (shouldAutoEnrichFacebookImages({ bucket: manualRejected ? "REJECTED" : decision.bucket, manualRejected, mirroredImageCount: imageMirror.images.length })) {
+    void enqueueFacebookGalleryJob(listingId).catch((reason) => {
+      console.warn("FACEBOOK_AUTO_GALLERY_ENQUEUE_DEFERRED", { listingId, bucket: decision.bucket, error: reason instanceof Error ? reason.message : "unknown" });
+    });
   }
 
   if (crossSourceMatch) {
@@ -402,14 +434,14 @@ function listingStateValues(state: FacebookListingState, metadata: Row) {
   };
 }
 
-async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, item: FacebookProperty, sourceUrl: string, externalId: string, hash: string): Promise<{id:string;source:string}|null> {
+async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, item: FacebookProperty, sourceUrl: string, externalId: string, hash: string, activeListingsCache?: FacebookActiveListingCandidate[]): Promise<{id:string;source:string}|null> {
   const metadata = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").eq("source_post_url", sourceUrl).maybeSingle();
   if (metadata.data?.listing_id) return { id: String(metadata.data.listing_id), source: "facebook" };
   const exact = await supabase.from("listings").select("id,source").or(`normalized_url.eq.${sourceUrl},and(source.eq.facebook,external_listing_id.eq.${externalId}),content_hash.eq.${hash}`).limit(1).maybeSingle();
   if (exact.data?.id) return { id: String(exact.data.id), source: String(exact.data.source) };
-  const { data } = await supabase.from("listings").select("id,source,title,price,area,district,address").eq("status", "active").limit(500);
-  for (const row of (data ?? []) as Row[]) {
-    if (isLikelySameFacebookProperty(item, { price: num(row.price), area: num(row.area), district: str(row.district), address: str(row.address) })) return { id: String(row.id), source: String(row.source) };
+  const candidates = activeListingsCache ?? await fetchFacebookActiveListingCandidates();
+  for (const row of candidates) {
+    if (isLikelySameFacebookProperty(item, { price: row.price, area: row.area, district: row.district, address: row.address })) return { id: row.id, source: row.source };
   }
   return null;
 }
