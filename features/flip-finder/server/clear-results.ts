@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
-import { selectClearResultsTargets, type ClearResultsScope } from "@/features/flip-finder/clear-results-targeting";
+import { selectClearResultsTargets, selectVisibleListingIds, type ClearResultsScope } from "@/features/flip-finder/clear-results-targeting";
 import type { ListingSource } from "@/features/flip-finder";
 
 export type { ClearResultsScope };
@@ -21,11 +21,16 @@ export async function clearFilterResults(filterId: string, scope: ClearResultsSc
   const supabase = await createClient();
   const matches = await supabase
     .from("listing_filter_matches")
-    .select("listing_id")
-    .eq("search_filter_id", filterId)
-    .eq("is_current_match", true);
+    .select("listing_id,is_current_match,match_reasons")
+    .eq("search_filter_id", filterId);
   if (matches.error) throw new Error("Nie udało się odczytać wyników filtra.");
-  const listingIds = [...new Set((matches.data ?? []).map((row) => String(row.listing_id)))];
+  const listingIds = selectVisibleListingIds(
+    (matches.data ?? []).map((row) => ({
+      listingId: String(row.listing_id),
+      isCurrentMatch: row.is_current_match === true,
+      matchReasons: Array.isArray(row.match_reasons) ? row.match_reasons.filter((reason): reason is string => typeof reason === "string") : [],
+    })),
+  );
   if (!listingIds.length) return { archivedCount: 0 };
 
   const candidates = await supabase

@@ -12,6 +12,7 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
     const result = await clearFilterResults(filterId, { source, olderThanDays });
     return Response.json({ ok: true, ...result });
   } catch (error) {
+    console.error("FLIP FINDER CLEAR RESULTS ERROR:", { filterId, error });
     return Response.json({ message: error instanceof Error ? error.message : "Nie udało się wyczyścić wyników." }, { status: 500 });
   }
 }

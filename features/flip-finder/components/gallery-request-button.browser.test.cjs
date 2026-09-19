@@ -159,7 +159,7 @@ function makeScanStressResults(cardCount) {
   };
 }
 
-async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0, scanFailure = null } = {}) {
+async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0, scanFailure = null, clearResultsFailure = null, clearResultsArchivedCount = 4 } = {}) {
   const page = await browser.newPage();
   const traceRequests = [];
   let galleryRequests = 0;
@@ -205,7 +205,10 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/clear-results` && request.method() === "POST") {
       clearResultsRequests += 1;
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, archivedCount: 4 }), status: 200 });
+      if (clearResultsFailure) {
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: clearResultsFailure.message }), status: clearResultsFailure.status });
+      }
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, archivedCount: clearResultsArchivedCount }), status: 200 });
     }
     if (url.pathname === "/api/flip-finder/search-filters") {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload), status: 200 });
@@ -228,7 +231,7 @@ async function sessionStages(page) {
   return page.evaluate(() => JSON.parse(sessionStorage.getItem("flipFinderGalleryRequestTraces") || "[]").map((entry) => entry.stage));
 }
 
-test("real Flip Finder gallery button keeps business click independent from trace and rerenders", { timeout: 120_000 }, async (t) => {
+test("real Flip Finder gallery button keeps business click independent from trace and rerenders", { timeout: 240_000 }, async (t) => {
   const port = await freePort();
   const root = path.resolve(__dirname, "../../..");
   const nextBin = require.resolve("next/dist/bin/next");
@@ -361,8 +364,40 @@ test("real Flip Finder gallery button keeps business click independent from trac
     await testPage.page.close();
   });
 
-  await t.test("C/J. Wyczyść wyniki asks for confirmation, sends exactly one POST, and never deletes canonical data", async () => {
+  await t.test("A. Wyczyść wyniki opens a confirmation dialog with no request", async () => {
     const testPage = await preparePage(browser, baseUrl, { activeCardCount: 5 });
+    const clearButton = testPage.page.getByRole("button", { name: "Wyczyść wyniki" });
+    await clearButton.waitFor({ state: "visible", timeout: 10_000 });
+
+    await clearButton.click();
+    const dialog = testPage.page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 5_000 });
+    const dialogText = await dialog.innerText();
+    assert.match(dialogText, /Wyczyścić aktualne wyniki\?/);
+    assert.match(dialogText, /przeniesione do historii/);
+    assert.ok(await dialog.getByRole("button", { name: "Anuluj" }).isVisible());
+    assert.ok(await dialog.getByRole("button", { name: "Wyczyść", exact: true }).isVisible());
+    assert.equal(testPage.clearResultsRequestCount(), 0, "opening the dialog must not itself send a request");
+    await testPage.page.close();
+  });
+
+  await t.test("B. Anuluj closes the dialog and sends no request", async () => {
+    const testPage = await preparePage(browser, baseUrl, { activeCardCount: 5 });
+    const clearButton = testPage.page.getByRole("button", { name: "Wyczyść wyniki" });
+    await clearButton.waitFor({ state: "visible", timeout: 10_000 });
+    await clearButton.click();
+    const dialog = testPage.page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 5_000 });
+
+    await dialog.getByRole("button", { name: "Anuluj" }).click();
+    await dialog.waitFor({ state: "hidden", timeout: 5_000 });
+    assert.equal(testPage.clearResultsRequestCount(), 0, "cancel must never send a mutation");
+    await testPage.page.close();
+  });
+
+  await t.test("C/D/G/J. confirming sends exactly one mutation, archives visible results, and cannot be double-submitted", async () => {
+    const cardCount = 5;
+    const testPage = await preparePage(browser, baseUrl, { activeCardCount: cardCount });
     const clearButton = testPage.page.getByRole("button", { name: "Wyczyść wyniki" });
     await clearButton.waitFor({ state: "visible", timeout: 10_000 });
 
@@ -370,15 +405,33 @@ test("real Flip Finder gallery button keeps business click independent from trac
     await clearButton.click();
     const dialog = testPage.page.getByRole("dialog");
     await dialog.waitFor({ state: "visible", timeout: 5_000 });
-    const confirmButton = dialog.getByRole("button", { name: "Wyczyść wyniki" });
-    await confirmButton.click();
+    const confirmButton = dialog.getByRole("button", { name: "Wyczyść", exact: true });
+    await Promise.all([confirmButton.click(), confirmButton.click().catch(() => {})]);
 
-    await testPage.page.waitForFunction(() => document.body.textContent?.includes("Wyczyszczono 4"), null, { timeout: 10_000 });
-    assert.equal(testPage.clearResultsRequestCount(), 1, "confirming must send exactly one clear-results request");
+    await testPage.page.waitForFunction(() => document.body.textContent?.includes("Wyniki przeniesiono do historii."), null, { timeout: 10_000 });
+    assert.equal(testPage.clearResultsRequestCount(), 1, "a rapid double-click must still send exactly one clear-results request");
 
     await confirmButton.click().catch(() => {});
     assert.equal(testPage.clearResultsRequestCount(), 1, "the dialog closes after success and cannot be double-submitted");
 
+    await testPage.page.close();
+  });
+
+  await t.test("F. a clear-results failure shows an actionable error, never a raw internal token", async () => {
+    const testPage = await preparePage(browser, baseUrl, { activeCardCount: 5, clearResultsFailure: { status: 500, message: "Nie udało się wyczyścić wyników." } });
+    const clearButton = testPage.page.getByRole("button", { name: "Wyczyść wyniki" });
+    await clearButton.waitFor({ state: "visible", timeout: 10_000 });
+    await clearButton.click();
+    const dialog = testPage.page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 5_000 });
+    const confirmButton = dialog.getByRole("button", { name: "Wyczyść", exact: true });
+    await confirmButton.click();
+
+    await testPage.page.waitForFunction(() => document.body.textContent?.includes("Nie udało się wyczyścić wyników."), null, { timeout: 10_000 });
+    assert.equal(testPage.clearResultsRequestCount(), 1);
+    assert.ok(await dialog.isVisible(), "the dialog must stay open on failure so the user can retry");
+    const dialogText = await dialog.innerText();
+    assert.doesNotMatch(dialogText, /Error:|TypeError|stack|node_modules/i, "no raw internal token may reach the UI");
     await testPage.page.close();
   });
 });

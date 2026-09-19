@@ -113,6 +113,7 @@ export function FlipFinderPage() {
   const [clearingResults, setClearingResults] = useState(false);
   const [clearResultsError, setClearResultsError] = useState<string | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
+  const clearingResultsRef = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -334,6 +335,8 @@ export function FlipFinderPage() {
   };
 
   const clearResults = async (filter: SearchFilterListItem) => {
+    if (clearingResultsRef.current) return;
+    clearingResultsRef.current = true;
     setClearingResults(true);
     setClearResultsError(null);
     try {
@@ -341,12 +344,13 @@ export function FlipFinderPage() {
       const payload: unknown = await readJson(response);
       if (!response.ok) throw new Error(readMessage(payload, "Nie udało się wyczyścić wyników."));
       const archivedCount = isRecordWithArchivedCount(payload) ? payload.archivedCount : 0;
-      setNotice(archivedCount > 0 ? `Wyczyszczono ${archivedCount} ${archivedCount === 1 ? "ofertę" : "ofert"} z bieżącego widoku. Historia pozostaje dostępna.` : "Brak ofert do wyczyszczenia.");
+      setNotice(archivedCount > 0 ? "Wyniki przeniesiono do historii." : "Brak ofert do wyczyszczenia.");
       setClearResultsOpen(false);
       setResultsRevision((current) => current + 1);
     } catch (reason) {
       setClearResultsError(reason instanceof Error ? reason.message : "Nie udało się wyczyścić wyników.");
     } finally {
+      clearingResultsRef.current = false;
       setClearingResults(false);
     }
   };
@@ -485,18 +489,21 @@ export function FlipFinderPage() {
           {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
           {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
-          <Dialog onOpenChange={setClearResultsOpen} open={clearResultsOpen}>
+          <Dialog onOpenChange={(open) => { if (!clearingResults) setClearResultsOpen(open); }} open={clearResultsOpen}>
             <DialogContent className="max-w-md">
               <DialogHeader>
-                <DialogTitle>Wyczyścić bieżące wyniki?</DialogTitle>
+                <DialogTitle>Wyczyścić aktualne wyniki?</DialogTitle>
                 <DialogDescription>
-                  Usuwa aktualne oferty z widoku roboczego tego filtra. Historia, zdjęcia, ceny i dopasowania rynkowe pozostają zapisane i dostępne w zakładce &quot;Historia ofert&quot;.
+                  Oferty zostaną przeniesione do historii. Nie zostaną trwale usunięte. Historia, zdjęcia, ceny i dopasowania rynkowe pozostają dostępne w zakładce &quot;Historia ofert&quot;.
                 </DialogDescription>
               </DialogHeader>
               {clearResultsError ? <p className="text-sm text-destructive">{clearResultsError}</p> : null}
               <DialogFooter>
+                <Button disabled={clearingResults} onClick={() => setClearResultsOpen(false)} variant="outline">
+                  Anuluj
+                </Button>
                 <Button disabled={clearingResults} onClick={() => void clearResults(activeFilter)} variant="destructive">
-                  {clearingResults ? "Czyszczenie…" : "Wyczyść wyniki"}
+                  {clearingResults ? "Wyczyszczam…" : "Wyczyść"}
                 </Button>
               </DialogFooter>
             </DialogContent>

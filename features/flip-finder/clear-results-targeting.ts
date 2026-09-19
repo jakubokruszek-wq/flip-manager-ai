@@ -1,4 +1,22 @@
 import type { ListingSource } from "@/features/flip-finder";
+import { visibleMembership } from "./membership-reconciliation.ts";
+
+export type ClearResultsMatch = { listingId: string; isCurrentMatch: boolean; matchReasons: string[] };
+
+/**
+ * Which listing ids are currently visible in the Finder for a filter, from its
+ * raw listing_filter_matches rows. `is_current_match` alone is NOT the same
+ * thing: a REVIEW-bucket listing (shown in the "Do oceny" tab) is intentionally
+ * persisted with is_current_match=false, so filtering on that flag alone
+ * silently drops every REVIEW result — exactly the state a filter is in
+ * whenever nothing has fully matched a filter's hard conditions yet. This must
+ * reuse the Finder's own visibility rule (visibleMembership), never a
+ * narrower, independently-maintained approximation of it.
+ */
+export function selectVisibleListingIds(matches: readonly ClearResultsMatch[]): string[] {
+  const visible = matches.filter((match) => visibleMembership({ isCurrentMatch: match.isCurrentMatch, matchReasons: match.matchReasons }));
+  return [...new Set(visible.map((match) => match.listingId))];
+}
 
 /** Only these lifecycle states are visible in the active Finder view; anything else is already hidden. */
 export const CLEARABLE_LIFECYCLE_STATUSES = ["ACTIVE", "REVIEW"] as const;
