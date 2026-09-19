@@ -1,7 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { COLLECTOR_BOOTSTRAP_MAX_WAIT_MS, COLLECTOR_BOOTSTRAP_POLL_INTERVAL_MS, COLLECTOR_READINESS_ATTEMPTS, COLLECTOR_READINESS_RETRY_DELAY_MS, latestScanCounters, retryCollectorReadiness, summarizeStartTrace, waitForCollectorBootstrap } from "./dashboard.ts";
+import { COLLECTOR_BOOTSTRAP_MAX_WAIT_MS, COLLECTOR_BOOTSTRAP_POLL_INTERVAL_MS, COLLECTOR_READINESS_ATTEMPTS, COLLECTOR_READINESS_RETRY_DELAY_MS, latestScanCounters, retryCollectorReadiness, scanNoOffersMessage, summarizeStartTrace, waitForCollectorBootstrap } from "./dashboard.ts";
+
+// -----------------------------------------------------------------------------
+// SCAN SUMMARY SEMANTICS: "Nowe zapisane oferty: 4" must never coexist with a
+// footnote claiming nothing was added.
+// -----------------------------------------------------------------------------
+
+test("I. 4 saved + 0 matched never claims that nothing was added", () => {
+  const message = scanNoOffersMessage(4, "Cena/m² powyżej limitu — 12");
+  assert.doesNotMatch(message, /nie zapisał żadnych/);
+  assert.match(message, /Zapisano 4 nowe oferty/);
+  assert.match(message, /żadna nie spełniła wszystkich warunków aktywnego filtra/);
+});
+
+test("zero saved and zero matched keeps the original honest message", () => {
+  const message = scanNoOffersMessage(0, "Cena/m² powyżej limitu — 12");
+  assert.match(message, /Ten skan nie zapisał żadnych nowych ofert/);
+});
+
+test("Polish pluralization: 1, 2, 5 and 22 saved offers each read naturally", () => {
+  assert.match(scanNoOffersMessage(1, "x"), /Zapisano 1 nową ofertę/);
+  assert.match(scanNoOffersMessage(2, "x"), /Zapisano 2 nowe oferty/);
+  assert.match(scanNoOffersMessage(5, "x"), /Zapisano 5 nowych ofert/);
+  assert.match(scanNoOffersMessage(22, "x"), /Zapisano 22 nowe oferty/);
+});
 
 test("maps persisted scan update and price-drop counters to the UI", () => {
   assert.deepEqual(

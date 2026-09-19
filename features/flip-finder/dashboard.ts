@@ -6,6 +6,27 @@ export function dashboardCount(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+/**
+ * The "no offers" scan footnote must never contradict the "Nowe zapisane
+ * oferty" metric shown next to it. A scan can persist records (NEEDS_REVIEW
+ * candidates, for example) while still matching zero of the active filter's
+ * hard conditions — that is a distinct, non-contradictory outcome from
+ * persisting nothing at all, and needs its own wording.
+ */
+export function scanNoOffersMessage(saved: number, topRejection: string): string {
+  return saved > 0
+    ? `Zapisano ${saved} ${polishNewOffersNoun(saved)}, ale żadna nie spełniła wszystkich warunków aktywnego filtra. Najwięcej rekordów odpadło na: ${topRejection}.`
+    : `Ten skan nie zapisał żadnych nowych ofert. Najwięcej rekordów odpadło na: ${topRejection}.`;
+}
+
+function polishNewOffersNoun(count: number): string {
+  if (count === 1) return "nową ofertę";
+  const lastDigit = count % 10;
+  const lastTwoDigits = count % 100;
+  const usesFewForm = lastDigit >= 2 && lastDigit <= 4 && !(lastTwoDigits >= 12 && lastTwoDigits <= 14);
+  return usesFewForm ? "nowe oferty" : "nowych ofert";
+}
+
 export const COLLECTOR_READINESS_ATTEMPTS = 3;
 export const COLLECTOR_READINESS_RETRY_DELAY_MS = 500;
 export const COLLECTOR_BOOTSTRAP_MAX_WAIT_MS = 3_000;
