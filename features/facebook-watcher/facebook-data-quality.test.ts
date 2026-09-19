@@ -9,7 +9,7 @@ import type { FacebookProperty } from "./types.ts";
 function property(overrides: Partial<FacebookProperty> = {}): FacebookProperty {
   return {
     title: "Mieszkanie Łódź", city: "Łódź", district: "Bałuty", neighborhood: null, street: null,
-    price: 161_000, area: 40, rooms: 2, floor: null, totalFloors: null, marketType: "secondary",
+    price: 161_000, pricePerM2: null, area: 40, rooms: 2, floor: null, totalFloors: null, marketType: "secondary",
     sellerType: "private", condition: "renovation", description: "40 m², 2 pokoje", originalUrl: null,
     images: [], confidence: 0.9, flags: [], ...overrides,
   };

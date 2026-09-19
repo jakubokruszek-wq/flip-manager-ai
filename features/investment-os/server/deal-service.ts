@@ -8,6 +8,7 @@ import { buildCanonicalDeal, downstreamForChange, fingerprint, fingerprintsEqual
 import { DEFAULT_INVESTMENT_DECISION_POLICY, type InvestmentDecisionPolicy } from "../types";
 import type { CanonicalDeal, DealFactOverrides, DealListingInput, DirectorTrackRecord, EvidenceItem, MarketEvidence } from "../types";
 import { commitDealCas, initializeDealWithCas, InvestmentDealVersionConflict, type VersionedDealCandidate } from "./deal-cas";
+import { classifyFacebookConditionFromText } from "@/features/facebook-watcher/extract-facebook-property";
 
 type Row = Record<string, unknown>;
 type InvestmentSettings = UnderwritingSettings & { decisionPolicy: InvestmentDecisionPolicy };
@@ -16,6 +17,18 @@ export async function getInvestmentDeal(listingId: string): Promise<CanonicalDea
   const db = createAdminClient();
   const stored = await readStoredDeal(db, listingId);
   return stored?.deal ?? null;
+}
+
+/**
+ * Presentation-only listing photos for the Deal Room gallery. Deliberately separate from
+ * `CanonicalDeal`/`toListingInput`: images are not a material investment fact and must never
+ * enter the facts fingerprint, so they are never persisted onto the deal or its facts.
+ */
+export async function getListingMedia(listingId: string): Promise<{ images: string[] }> {
+  const db = createAdminClient();
+  const { data, error } = await db.from("listings").select("images").eq("id", listingId).maybeSingle();
+  if (error) throw error;
+  return { images: Array.isArray(data?.images) ? data.images.filter((value): value is string => typeof value === "string") : [] };
 }
 
 export async function initializeInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
@@ -32,7 +45,8 @@ export async function initializeInvestmentDeal(listingId: string): Promise<Canon
       const settings = await loadSettings(db);
       const { data: latestSnapshot, error: snapshotError } = await db.from("listing_snapshots").select("id,captured_at,price,raw_data").eq("listing_id", listingId).order("captured_at", { ascending: false }).limit(1).maybeSingle();
       if (snapshotError) throw snapshotError;
-      const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null);
+      const facebookCondition = text(listing.source) === "facebook" ? await readFacebookCondition(db, listingId, text((listing as Row).description)) : null;
+      const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null, facebookCondition);
       const market = await resolveMarketEvidence(db, listingInput);
       const trackRecords = await loadDirectorTrackRecords(db);
       const now = new Date().toISOString();
@@ -173,11 +187,26 @@ async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, l
   return { id: text(matched.id), matchedBy: assumptionMatchLabel(matched), low: number(matched.resale_price_per_m2_low), base: number(matched.resale_price_per_m2_base), high: number(matched.resale_price_per_m2_high), confidence: number(matched.confidence), provenance: matched.provenance === "MARKET_ASSUMPTION" ? "MARKET_ASSUMPTION" : "USER_ASSUMPTION", compCount: 0, fallbackLevel, fallbackReason: fallbackLevel === 1 ? "SPECIFIC_MARKET_ASSUMPTION" : fallbackLevel === 2 ? "DISTRICT_MARKET_FALLBACK" : fallbackLevel === 3 ? "PROPERTY_PROFILE_FALLBACK" : "CITY_ONLY_FALLBACK", confidencePenalty, observedAt: text(matched.effective_from) ?? text(matched.updated_at) ?? null, evidenceId: text(matched.id), priceEvidenceType: "USER_ASSUMPTION", comparables: [] };
 }
 
-function toListingInput(row: Row, snapshot: Row | null): DealListingInput {
+function toListingInput(row: Row, snapshot: Row | null, facebookCondition: string | null = null): DealListingInput {
   const lifecycle = text(row.lifecycle_status); const manual = row.manual_decision === "ACCEPTED" || row.manual_decision === "REJECTED" ? row.manual_decision : null;
   const externalListingId = text(row.external_listing_id); const sourceUrl = text(row.original_url)!; const source = text(row.source)!;
   const observedAt = text(row.last_seen_at) ?? text(row.updated_at);
-  return { id: text(row.id)!, source, sourceUrl, externalListingId, lifecycleStatus: lifecycle, decisionBucket: lifecycle === "REJECTED" ? "REJECTED" : lifecycle === "REVIEW" ? "REVIEW" : "MATCHED", manualDecision: manual, city: text(row.city), district: text(row.district), street: text(row.address), areaM2: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: text(row.floor), floorsTotal: null, buildingType: text(row.building_type), yearBuilt: null, ownership: text(row.ownership), condition: text(row.description), monthlyFee: nullableNumber(row.rent), askingPrice: nullableNumber(row.price), askingPricePerM2: nullableNumber(row.price_per_sqm), galleryStatus: text(row.gallery_status), imageCount: Array.isArray(row.images) ? row.images.length : 0, identityExact: source !== "facebook" || exactFacebookUrl(sourceUrl, externalListingId), observedAt, conflicts: detectSnapshotConflicts(row, snapshot, observedAt) };
+  const condition = source === "facebook" ? facebookCondition : text(row.description);
+  return { id: text(row.id)!, source, sourceUrl, externalListingId, lifecycleStatus: lifecycle, decisionBucket: lifecycle === "REJECTED" ? "REJECTED" : lifecycle === "REVIEW" ? "REVIEW" : "MATCHED", manualDecision: manual, city: text(row.city), district: text(row.district), street: text(row.address), areaM2: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: text(row.floor), floorsTotal: null, buildingType: text(row.building_type), yearBuilt: null, ownership: text(row.ownership), condition, monthlyFee: nullableNumber(row.rent), askingPrice: nullableNumber(row.price), askingPricePerM2: nullableNumber(row.price_per_sqm), galleryStatus: text(row.gallery_status), imageCount: Array.isArray(row.images) ? row.images.length : 0, identityExact: source !== "facebook" || exactFacebookUrl(sourceUrl, externalListingId), observedAt, conflicts: detectSnapshotConflicts(row, snapshot, observedAt) };
+}
+
+/**
+ * Facebook's normalized condition ("renovation"/"ready"/null) is stored in
+ * `listing_source_metadata.metadata.condition`, never the raw description. When that
+ * metadata is missing, falls back to the same deterministic text classifier the extraction
+ * pipeline uses — never the whole description, and never an AI inference.
+ */
+async function readFacebookCondition(db: ReturnType<typeof createAdminClient>, listingId: string, description: string | null): Promise<string | null> {
+  const { data, error } = await db.from("listing_source_metadata").select("metadata").eq("listing_id", listingId).eq("source", "facebook").maybeSingle();
+  if (error) throw error;
+  const stored = text(object(data?.metadata).condition);
+  const resolved = stored === "renovation" || stored === "ready" ? stored : classifyFacebookConditionFromText(description ?? "");
+  return resolved === "renovation" ? "RENOVATION" : resolved === "ready" ? "READY" : null;
 }
 
 function detectSnapshotConflicts(listing: Row, snapshot: Row | null, observedAt: string | null): DealListingInput["conflicts"] {

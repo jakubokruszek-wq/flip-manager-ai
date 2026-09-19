@@ -31,6 +31,7 @@ import { enqueueFacebookGalleryJob } from "../facebook-worker/gallery-jobs";
 import { assessFacebookListingQuality, assessFacebookPriceQuality, FACEBOOK_PRICE_CATEGORIES, FACEBOOK_PRICE_SOURCES, FACEBOOK_PRICE_STATUSES, isFacebookPriceSuspect, PRICE_SUSPECT_SCORE_CAP, type FacebookListingQualityGrade, type FacebookPriceCategory, type FacebookPriceQuality, type FacebookPriceSource, type FacebookPriceStatus } from "./price-quality";
 import { assessFacebookContentQuality, classifyFacebookAvailability, classifyFacebookFreshness, classifyFacebookLocationState, classifyFacebookPropertyType, classifyFacebookSearchIntent, FACEBOOK_AVAILABILITY_STATES, FACEBOOK_CONTENT_QUALITY_GRADES, FACEBOOK_FRESHNESS_STATES, FACEBOOK_LOCATION_STATES, FACEBOOK_PROPERTY_TYPES, FACEBOOK_SEARCH_INTENTS } from "./search-quality";
 import { classifyFacebookPostAgeZone } from "./post-age-zone";
+import { resolveFacebookPricePerSqm } from "./extract-facebook-property";
 
 type Row = Record<string, unknown>;
 
@@ -139,7 +140,7 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
     Object.assign(extracted, locationResolution.property);
   }
   const existingImages = existingListingState.images;
-  const pricePerSqm = extracted.price && extracted.area ? extracted.price / extracted.area : null;
+  const pricePerSqm = resolveFacebookPricePerSqm(extracted);
   const priceQuality = assessFacebookPriceQuality({ price: extracted.price, area: extracted.area, sourceFacts: extracted.sourceFacts, listingIntent: extracted.listingIntent, priceProvenance: extracted.priceProvenance, postText: normalized.postText ?? null, visionPrice: extracted.visionPriceCandidate ?? null });
   const listingQuality = assessFacebookListingQuality({ priceQuality, area: extracted.area, city: extracted.city, district: extracted.district, street: extracted.street, originalUrl: extracted.originalUrl });
   const propertyType = classifyFacebookPropertyType(normalized.postText ?? "");
@@ -189,7 +190,7 @@ function staleFacebookImportResult(input: FacebookListingInput): FacebookImportR
 function skippedFacebookProperty(input: FacebookListingInput, listingIntent: NonNullable<FacebookProperty["listingIntent"]>, intentConfidence: number, intentSource: NonNullable<FacebookProperty["intentSource"]>): FacebookProperty {
   return {
     title: "Post Facebook pominięty", city: null, district: null, neighborhood: null, street: null,
-    price: null, area: null, rooms: null, floor: null, totalFloors: null, marketType: null,
+    price: null, pricePerM2: null, area: null, rooms: null, floor: null, totalFloors: null, marketType: null,
     sellerType: null, condition: null, description: null, originalUrl: input.url ?? null, images: [],
     confidence: 0, fieldConfidence: {}, flags: [], listingIntent, intentConfidence, intentSource, imageAssessments: [],
   };
@@ -243,7 +244,7 @@ async function importAutomatedFacebook(input: {
     ? dataFirstFacebookImageResult(existingState.images, boundImages.length)
     : await mirrorFacebookImages({ listingId: externalId, imageUrls: boundImages, existingImages: existingState.images, preserveExistingImages });
   effective.images = imageMirror.images;
-  const pricePerSqm = effective.price && effective.area ? effective.price / effective.area : null;
+  const pricePerSqm = resolveFacebookPricePerSqm(effective);
   const priceQuality = assessFacebookPriceQuality({ price: effective.price, area: effective.area, sourceFacts: effective.sourceFacts, listingIntent: effective.listingIntent, priceProvenance: effective.priceProvenance, postText: normalized.postText ?? null, visionPrice: effective.visionPriceCandidate ?? null });
   const listingQuality = assessFacebookListingQuality({ priceQuality, area: effective.area, city: effective.city, district: effective.district, street: effective.street, originalUrl: effective.originalUrl });
   const propertyType = classifyFacebookPropertyType(normalized.postText ?? "");
@@ -501,7 +502,7 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     const freshness = parseEnum(meta.freshness, FACEBOOK_FRESHNESS_STATES);
     const locationState = parseEnum(meta.locationState, FACEBOOK_LOCATION_STATES);
     const contentQuality = parseEnum(meta.contentQuality, FACEBOOK_CONTENT_QUALITY_GRADES);
-    return [{ listingId, title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), originalUrl: facebookUrl?.startsWith("http") ? facebookUrl : null, images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: str(row.group_name), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality }];
+    return [{ listingId, title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), originalUrl: facebookUrl?.startsWith("http") ? facebookUrl : null, images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: str(row.group_name), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality }];
   });
 }
 export async function updateFacebookWatcherWorkflow(listingId: string, input: { status?: FacebookWorkflowStatus; markRead?: boolean; crmPropertyId?: string }): Promise<void> {

@@ -27,7 +27,7 @@ const TABS: Array<{ id: RoomTab; label: string }> = [
 
 const DIRECTORS = ["SCOUT", "VERIFY", "MARKET", "RENOVATION", "UNDERWRITER", "RISK / LEGAL", "CFO", "ACQUISITION", "SALE", "CEO"] as const;
 
-export function DealRoomView({ deal, saving, onRefresh, onSave }: { deal: CanonicalDeal; saving: boolean; onRefresh: () => void; onSave: (overrides: DealFactOverrides) => Promise<void> }) {
+export function DealRoomView({ deal, images = [], saving, onRefresh, onSave }: { deal: CanonicalDeal; images?: string[]; saving: boolean; onRefresh: () => void; onSave: (overrides: DealFactOverrides) => Promise<void> }) {
   const [activeTab, setActiveTab] = useState<RoomTab>("SUMMARY");
   const [expandedDirector, setExpandedDirector] = useState<string | null>(null);
   const title = deal.facts.street.effectiveValue || deal.facts.district.effectiveValue || "Analizowana oferta";
@@ -54,6 +54,8 @@ export function DealRoomView({ deal, saving, onRefresh, onSave }: { deal: Canoni
       </div>
     </header>
 
+    <DealGallery images={images} />
+
     <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="order-2 min-w-0 space-y-5 xl:order-1">
         <ExecutiveHero deal={deal} />
@@ -75,6 +77,28 @@ export function DealRoomView({ deal, saving, onRefresh, onSave }: { deal: Canoni
       </aside>
     </div>
   </main>;
+}
+
+function DealGallery({ images }: { images: string[] }) {
+  const [brokenSrcs, setBrokenSrcs] = useState<Set<string>>(new Set());
+  const candidates = useMemo(() => [...new Set(images.filter((src) => typeof src === "string" && /^https?:\/\//.test(src.trim())))], [images]);
+  const visible = candidates.filter((src) => !brokenSrcs.has(src));
+  if (!visible.length) return null;
+  const markBroken = (src: string) => setBrokenSrcs((prev) => new Set(prev).add(src));
+  const bounded = visible.slice(0, 8);
+  const [hero, ...rest] = bounded;
+  const photo = (src: string, className: string) => (
+    <a className={`block overflow-hidden rounded-xl bg-black/20 ${className}`} href={src} key={src} rel="noreferrer" target="_blank">
+      <img alt="Zdjęcie oferty" className="size-full object-cover" loading="lazy" onError={() => markBroken(src)} src={src} />
+    </a>
+  );
+  return <section aria-label="Zdjęcia oferty" className="rounded-[1.5rem] border border-white/10 bg-[#13181e] p-3 sm:p-4" data-deal-gallery>
+    {bounded.length === 1
+      ? photo(hero, "h-[260px] w-full sm:h-[420px]")
+      : bounded.length <= 4
+        ? <div className="grid grid-cols-2 gap-2">{bounded.map((src) => photo(src, "h-40 sm:h-52"))}</div>
+        : <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:grid-rows-2">{photo(hero, "col-span-2 row-span-2 h-52 sm:h-full")}{rest.map((src) => photo(src, "h-24 sm:h-full"))}</div>}
+  </section>;
 }
 
 function ExecutiveHero({ deal }: { deal: CanonicalDeal }) {

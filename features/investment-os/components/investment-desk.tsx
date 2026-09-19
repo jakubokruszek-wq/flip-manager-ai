@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { FilterResult } from "@/features/flip-finder/results";
 import type { CanonicalDeal, DealFactOverrides } from "../types";
-import { InvestmentDealNotComputedError, loadInvestmentDeal } from "../investment-client";
+import { InvestmentDealNotComputedError, loadInvestmentDeal, type DealWithMedia } from "../investment-client";
 import { CeoCommandCenter } from "./ceo-command-center";
 import { DealHealth } from "./deal-health";
 import { DirectorBoard } from "./director-board";
@@ -15,6 +15,7 @@ import { DealRoomView } from "./deal-room-view";
 
 export function InvestmentDesk({ result, room = false }: { result: Pick<FilterResult, "id">; room?: boolean }) {
   const [deal, setDeal] = useState<CanonicalDeal | null>(null);
+  const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notComputed, setNotComputed] = useState(false);
@@ -28,7 +29,9 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     setError(null);
     setNotComputed(false);
     try {
-      setDeal(await loadInvestmentDeal(result.id));
+      const loaded = await loadInvestmentDeal(result.id);
+      setDeal(loaded);
+      setImages((loaded as DealWithMedia).media ?? []);
     } catch (cause) {
       setDeal(null);
       if (cause instanceof InvestmentDealNotComputedError) {
@@ -60,7 +63,9 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
       initializeSucceeded = true;
 
       // Render only the canonical read model; the POST response is not the UI's source of truth.
-      setDeal(await loadInvestmentDeal(result.id));
+      const loaded = await loadInvestmentDeal(result.id);
+      setDeal(loaded);
+      setImages((loaded as DealWithMedia).media ?? []);
       setNotComputed(false);
       setError(null);
     } catch {
@@ -147,7 +152,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     );
   }
 
-  if (room) return <DealRoomView deal={deal} onRefresh={() => { setLoading(true); void load(); }} onSave={save} saving={saving} />;
+  if (room) return <DealRoomView deal={deal} images={images} onRefresh={() => { setLoading(true); void load(); }} onSave={save} saving={saving} />;
   const ceo = deal.ceo.result;
   return (
     <div className="min-w-0 max-w-full space-y-5 px-4 py-5 sm:px-7 sm:py-7">

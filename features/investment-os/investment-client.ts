@@ -1,6 +1,6 @@
 import type { CanonicalDeal } from "./types";
 
-type ApiBody = { ok?: boolean; code?: string; message?: string; deal?: CanonicalDeal };
+type ApiBody = { ok?: boolean; code?: string; message?: string; deal?: CanonicalDeal; media?: string[] };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export class InvestmentDealNotComputedError extends Error {
@@ -10,6 +10,9 @@ export class InvestmentDealNotComputedError extends Error {
   }
 }
 
+/** A `CanonicalDeal` plus its presentation-only listing photos, never part of the deal's facts or fingerprint. */
+export type DealWithMedia = CanonicalDeal & { media?: string[] };
+
 export async function loadInvestmentDeal(listingId: string, request: Fetcher = fetch): Promise<CanonicalDeal> {
   const url = `/api/flip-finder/listings/${listingId}/investment`;
   const response = await request(url, { cache: "no-store" });
@@ -18,6 +21,7 @@ export async function loadInvestmentDeal(listingId: string, request: Fetcher = f
     throw new InvestmentDealNotComputedError();
   }
   if (!response.ok || !body.deal) throw new Error(investmentErrorMessage(body, "Analiza inwestycyjna jest obecnie niedostępna."));
+  if (Array.isArray(body.media)) (body.deal as DealWithMedia).media = body.media;
   return body.deal;
 }
 

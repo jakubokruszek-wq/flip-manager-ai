@@ -1,5 +1,5 @@
-import { getInvestmentDeal, saveDealOverrides } from "@/features/investment-os/server/deal-service";
-import type { DealFactOverrides } from "@/features/investment-os/types";
+import { getInvestmentDeal, getListingMedia, saveDealOverrides } from "@/features/investment-os/server/deal-service";
+import type { CanonicalDeal, DealFactOverrides } from "@/features/investment-os/types";
 import { authorizeInvestmentMutation } from "@/features/investment-os/server/request-auth";
 import { isInvestmentDealVersionConflict } from "@/features/investment-os/server/deal-cas";
 import { investmentDealReadResponse } from "@/features/investment-os/server/investment-read";
@@ -8,7 +8,12 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: Context): Promise<Response> {
   try {
-    return await investmentDealReadResponse((await params).id, getInvestmentDeal);
+    const { id } = await params;
+    const response = await investmentDealReadResponse((await params).id, getInvestmentDeal);
+    if (response.status !== 200) return response;
+    const body = await response.json() as { ok: boolean; deal: CanonicalDeal };
+    const media = await getListingMedia(id);
+    return Response.json({ ...body, media: media.images });
   } catch (error) {
     console.error("INVESTMENT DEAL GET ERROR", error);
     return Response.json({ message: "Nie udało się przygotować Investment Desk." }, { status: 500 });

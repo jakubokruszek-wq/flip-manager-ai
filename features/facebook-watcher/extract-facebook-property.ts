@@ -84,6 +84,46 @@ function singleValue(values: number[]): number | null {
   return values.length === 1 ? values[0] : null;
 }
 
+const STREET_UL_MATCH = /\b(?:ul\.?|ulica)\s+([\p{L}][\p{L}\s.-]{1,40}?)(?:\s+(\d+[\p{L}]?))?(?=,|\.|\n|$)/iu;
+const STREET_PREFIXED_MATCH = /\b(al\.?|aleja|pl\.?|plac)\s+([\p{L}\d][\p{L}\d\s.-]{1,40}?)(?:\s+(\d+[\p{L}]?))?(?=,|\.|\n|$)/iu;
+
+/**
+ * Recognizes an explicit Polish street name behind `ul./ulica` (prefix stripped, matching
+ * long-standing behavior) or `al./aleja/pl./plac` (prefix preserved, since a numbered street
+ * name like "1 Maja" reads as an address only with its "al." qualifier attached). Never
+ * guesses arbitrary text — city names, room counts, prices and phone numbers all lack these
+ * prefixes and so are never mistaken for a street.
+ */
+export function extractPolishStreet(text: string): string | null {
+  const stripped = text.match(STREET_UL_MATCH);
+  if (stripped) return [stripped[1]?.trim(), stripped[2]].filter(Boolean).join(" ");
+  const prefixed = text.match(STREET_PREFIXED_MATCH);
+  return prefixed ? [prefixed[1], prefixed[2]?.trim(), prefixed[3]].filter(Boolean).join(" ") : null;
+}
+
+/**
+ * Resolves the price-per-m² to persist for a Facebook listing: an explicit authoritative
+ * unit price always wins (it survives even when total price/area are absent), falling back
+ * to price/area only when both are known, and to null otherwise. Never a second, competing
+ * unit-price calculation — this is the single source of truth callers must use.
+ */
+export function resolveFacebookPricePerSqm(property: { price: number | null; pricePerM2: number | null; area: number | null }): number | null {
+  if (property.pricePerM2 !== null && property.pricePerM2 > 0) return property.pricePerM2;
+  return property.price && property.area ? property.price / property.area : null;
+}
+
+/** Deterministic condition classification from authoritative text; never the whole description. */
+export function classifyFacebookCondition(normalizedText: string): "renovation" | "ready" | null {
+  if (/po\s+remoncie|gotow\w*\s+do\s+(?:wprowadzenia|zamieszkania)|do\s+wejscia/u.test(normalizedText)) return "ready";
+  if (/do\s+(?:generalnego\s+)?remontu|po\s+babci/u.test(normalizedText)) return "renovation";
+  return null;
+}
+
+/** Same classification, taking raw (unnormalized) text — for callers outside the extraction pipeline. */
+export function classifyFacebookConditionFromText(text: string): "renovation" | "ready" | null {
+  return classifyFacebookCondition(text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l"));
+}
+
 export async function extractFacebookProperty(input: FacebookListingInput): Promise<FacebookProperty> {
   const text = input.postText ?? "";
   const lower = text.toLocaleLowerCase("pl-PL");
@@ -101,8 +141,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const explicitRoomCount = resolveActualRoomCount(text);
   const floor = boundedFloor(number(normalizedText.match(/\b(\d{1,2})\.?\s*(?:pietro|pietrze|p\.)\b/u)?.[1]));
   const fraction = normalizedText.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:pietro|p\.)\b/u);
-  const streetMatch = text.match(/\bul\.?\s+([\p{L}][\p{L}\s.-]{1,40}?)(?:\s+(\d+[\p{L}]?))?(?=,|\.|\n|$)/iu);
-  const street = streetMatch ? [streetMatch[1]?.trim(), streetMatch[2]].filter(Boolean).join(" ") : null;
+  const street = extractPolishStreet(text);
   const flags = FLAG_PHRASES.filter((phrase) => lower.includes(phrase));
   const known = [price.price !== null, effectiveArea, explicitRoomCount ?? mRooms, place || districtFound, floor].filter(Boolean).length;
   const explicitNeighborhood = place?.[1] ?? null;
@@ -119,26 +158,21 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     street: street ?? location.street,
     price: describesConcreteProperty ? price.price : null,
     priceProvenance: describesConcreteProperty ? (input.priceProvenance ?? (price.price !== null ? "AUTHORITATIVE_TEXT" : undefined)) : undefined,
+    pricePerM2: describesConcreteProperty ? price.pricePerM2 : null,
     area: describesConcreteProperty ? effectiveArea : null,
     rooms: describesConcreteProperty ? explicitRoomCount ?? (mRooms ? Math.max(1, mRooms - 1) : null) : null,
     floor: describesConcreteProperty ? fraction ? boundedFloor(Number(fraction[1])) : floor : null,
     totalFloors: describesConcreteProperty && fraction ? Number(fraction[2]) : null,
     marketType: describesConcreteProperty ? /rynek pierwotny|deweloper/i.test(text) ? "primary" : /sprzedam|po babci|do remontu/i.test(text) ? "secondary" : null : null,
     sellerType: describesConcreteProperty ? /bez pośrednik|bezpośrednio|prywatnie/i.test(text) ? "private" : /biuro|agencj|pośrednik/i.test(text) ? "agency" : null : null,
-    condition: describesConcreteProperty
-      ? /po\s+remoncie|gotow\w*\s+do\s+(?:wprowadzenia|zamieszkania)|do\s+wejscia/u.test(normalizedText)
-        ? "ready"
-        : /do\s+(?:generalnego\s+)?remontu|po\s+babci/u.test(normalizedText)
-          ? "renovation"
-          : null
-      : null,
+    condition: describesConcreteProperty ? classifyFacebookCondition(normalizedText) : null,
     description: text || null, originalUrl: input.url ?? null, images: input.images ?? [],
     confidence, flags, listingIntent: intent.intent, intentConfidence: intent.confidence, intentSource: intent.intentSource,
     imageAssessments: input.imageAssessments ?? [],
     sourceFacts: extractFacebookSourceFacts(text),
   };
   property.fieldConfidence = Object.fromEntries([
-    "title", "description", "city", "district", "neighborhood", "street", "price", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",
+    "title", "description", "city", "district", "neighborhood", "street", "price", "pricePerM2", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",
   ].map((field) => [field, property[field as keyof FacebookProperty] === null ? 0 : confidence]));
   if (explicitRoomCount !== null) property.fieldConfidence.rooms = 0.95;
   return property;

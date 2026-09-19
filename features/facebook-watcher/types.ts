@@ -12,7 +12,7 @@ export type FacebookListingInput = {
   publishedAt?: string;
   images?: string[];
   mediaCandidates?: FacebookMediaCandidate[];
-  overrides?: Partial<Pick<FacebookProperty, "title" | "city" | "district" | "neighborhood" | "street" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "marketType" | "condition" | "sellerType" | "description" | "priceProvenance">>;
+  overrides?: Partial<Pick<FacebookProperty, "title" | "city" | "district" | "neighborhood" | "street" | "price" | "pricePerM2" | "area" | "rooms" | "floor" | "totalFloors" | "marketType" | "condition" | "sellerType" | "description" | "priceProvenance">>;
   priceProvenance?: FacebookPriceProvenance;
   analysisConfidence?: number;
   analysisFieldConfidence?: FacebookFieldConfidence;
@@ -47,6 +47,8 @@ export type FacebookProperty = {
   street: string | null;
   price: number | null;
   priceProvenance?: FacebookPriceProvenance;
+  /** Explicit per-m² price stated in the post text; survives even when total price/area are absent. */
+  pricePerM2: number | null;
   /** A secondary price candidate read directly off an image by Vision, kept only for conflict detection; never authoritative. */
   visionPriceCandidate?: number | null;
   area: number | null;

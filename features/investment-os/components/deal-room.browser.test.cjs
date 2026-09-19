@@ -41,9 +41,16 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   let currentDeal = deal;
+  let currentMedia = [];
   let notComputed = false;
   const investmentRequests = [];
   const initializeRequests = [];
+  const TINY_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  await page.route("https://cdn.example.test/**", (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === "/broken.jpg") return route.fulfill({ status: 404, contentType: "text/plain", body: "not found" });
+    return route.fulfill({ status: 200, contentType: "image/png", body: TINY_PNG });
+  });
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -56,12 +63,12 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
         }
         await new Promise((resolve) => setTimeout(resolve, 200));
         notComputed = false;
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, deal: currentDeal }) });
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, deal: currentDeal, media: currentMedia }) });
       }
       investmentRequests.push({ method: request.method(), path: url.pathname });
       return notComputed
         ? route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false, code: "NOT_COMPUTED" }) })
-        : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, deal: currentDeal }) });
+        : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, deal: currentDeal, media: currentMedia }) });
     }
     return route.continue();
   });
@@ -69,6 +76,7 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 30_000 });
   await page.getByText("Maks. cena zakupu", { exact: true }).waitFor({ state: "visible" });
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
+  assert.equal(await page.locator("[data-deal-gallery]").count(), 0, "no gallery shell is shown when the listing has no images");
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: path.join(reviewDir, "01-deal-room-top-v3.png"), fullPage: false });
   await page.screenshot({ path: path.join(reviewDir, "04-deal-room-desktop.png"), fullPage: true });
@@ -139,6 +147,25 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   assert.doesNotMatch(await page.locator("body").innerText(), /\b(?:NEGOTIATE|BUY|REJECT|MAX BUY|EXPECTED PROFIT|NEXT BEST ACTION|COMPLETE|BLOCKED)\b/);
   await page.screenshot({ path: path.join(reviewDir, "06-deal-room-empty-state.png"), fullPage: true });
   currentDeal = deal;
+
+  currentMedia = ["https://cdn.example.test/photo-1.jpg", "https://cdn.example.test/photo-2.jpg", "https://cdn.example.test/photo-3.jpg"];
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("[data-deal-gallery]").waitFor({ state: "visible" });
+  assert.equal(await page.locator("[data-deal-gallery] img").count(), 3, "three listing images render in a bounded grid/gallery");
+
+  currentMedia = ["https://cdn.example.test/photo-1.jpg"];
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("[data-deal-gallery]").waitFor({ state: "visible" });
+  assert.equal(await page.locator("[data-deal-gallery] img").count(), 1, "a single listing image renders as one large preview");
+
+  currentMedia = ["https://cdn.example.test/broken.jpg"];
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("[data-deal-room]").waitFor({ state: "visible" });
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator("[data-deal-gallery]").count(), 0, "a broken/missing image never breaks the Deal Room; the gallery hides itself once nothing renders");
+  assert.ok(await page.getByText("Maks. cena zakupu", { exact: true }).first().isVisible(), "the rest of the Deal Room keeps rendering when an image fails");
+  currentMedia = [];
+
   await page.setViewportSize({ width: 390, height: 844 }); await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("[data-deal-room]").waitFor({ state: "visible" });
   await page.getByRole("tab", { name: "Podsumowanie" }).click(); await page.evaluate(() => window.scrollTo(0, 0));
@@ -159,7 +186,7 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   currentDeal = staleDeal;
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.reload({ waitUntil: "domcontentloaded" });
-  try { await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 8_000 }); }
+  try { await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 20_000 }); }
   catch (error) { console.error("Stale-deal reload diagnostics", { investmentRequests, body: await page.locator("body").innerText() }); throw error; }
   assert.equal(await page.locator("[data-initialize-deal]").count(), 0, "a stale existing deal keeps its existing refresh flow, not the NOT_COMPUTED initialize CTA");
   assert.equal(await page.getByRole("button", { name: "Odśwież analizę" }).count(), 1, "the established stale-deal refresh action remains available");

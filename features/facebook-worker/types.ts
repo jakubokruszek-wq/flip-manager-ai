@@ -270,7 +270,7 @@ export type FacebookOpenAIVisionSummary = {
 
 export const FACEBOOK_CONFIDENCE_FIELDS = [
   "title", "description", "city", "district", "neighborhood", "street",
-  "price", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",
+  "price", "pricePerM2", "area", "rooms", "floor", "totalFloors", "condition", "sellerType",
 ] as const;
 
 export type FacebookConfidenceField = (typeof FACEBOOK_CONFIDENCE_FIELDS)[number];

@@ -11,6 +11,7 @@ const base = {
   neighborhood: "Saska Kępa",
   street: "Marysińska",
   price: 300_000,
+  pricePerM2: null,
   area: 40,
   rooms: 2,
   floor: null,

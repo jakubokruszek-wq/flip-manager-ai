@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractFacebookProperty, resolveFacebookPrice } from "./extract-facebook-property.ts";
+import { classifyFacebookCondition, extractFacebookProperty, extractPolishStreet, resolveFacebookPrice, resolveFacebookPricePerSqm } from "./extract-facebook-property.ts";
 
 test("Teofilów M3", async()=>{ const value=await extractFacebookProperty({postText:"Sprzedam M3 na Teofilowie 46m2 289 tys bez pośredników"}); assert.equal(value.neighborhood,"Teofilów"); assert.equal(value.district,"Bałuty"); assert.equal(value.area,46); assert.equal(value.rooms,2); assert.equal(value.price,289000); assert.equal(value.sellerType,"private"); });
 test("Radogoszcz Zachód", async()=>{ const value=await extractFacebookProperty({postText:"Radogoszcz Zachód, 3 pokoje, 58 m2, do generalnego remontu"}); assert.equal(value.neighborhood,"Radogoszcz Zachód"); assert.equal(value.rooms,3); assert.equal(value.condition,"renovation"); });
@@ -107,4 +107,48 @@ test("current rooms win over possible rearrangement", async () => {
 test("salon plus bedrooms does not invent a room count", async () => {
   // The existing parser does not model this phrasing; keep it fail-safe.
   assert.equal((await extractFacebookProperty({ postText: "Sprzedam mieszkanie: salon + 2 sypialnie" })).rooms, null);
+});
+
+test("explicit price-per-m2 survives extraction even without a total price or area", async () => {
+  const text = "SPRZEDAM 5 500 zł/m2,\n2 pok. z możliw. 3,\nal. 1 Maja 20, blisko PŁ i UŁ, do remontu,\ninwestycyjne, tel.:737 338 309";
+  const value = await extractFacebookProperty({ postText: text });
+  assert.equal(value.price, null);
+  assert.equal(value.area, null);
+  assert.equal(value.pricePerM2, 5500);
+  assert.equal(value.street, "al. 1 Maja 20");
+  assert.equal(value.rooms, 2);
+  assert.equal(value.condition, "renovation");
+});
+
+test("explicit price-per-m2 with a known area still derives the total (existing derivation semantics unchanged)", () => {
+  const text = "Sprzedam mieszkanie, 5 500 zł/m2";
+  assert.deepEqual(resolveFacebookPrice(text, 40), { price: 220_000, pricePerM2: 5500, source: "DERIVED_FROM_PRICE_PER_M2" });
+});
+
+test("resolveFacebookPricePerSqm: explicit unit price wins even when price/area are both present", () => {
+  assert.equal(resolveFacebookPricePerSqm({ price: null, pricePerM2: 5500, area: null }), 5500);
+  assert.equal(resolveFacebookPricePerSqm({ price: 220_000, pricePerM2: 5500, area: 40 }), 5500);
+  assert.equal(resolveFacebookPricePerSqm({ price: 220_000, pricePerM2: null, area: 40 }), 5500);
+  assert.equal(resolveFacebookPricePerSqm({ price: null, pricePerM2: null, area: 40 }), null);
+  assert.equal(resolveFacebookPricePerSqm({ price: 220_000, pricePerM2: null, area: null }), null);
+});
+
+test("extractPolishStreet recognizes ul./ulica/al./aleja prefixes and never guesses city, room counts, prices or phone numbers", () => {
+  assert.equal(extractPolishStreet("al. 1 Maja 20, blisko centrum"), "al. 1 Maja 20");
+  assert.equal(extractPolishStreet("Aleja 1 Maja 20, blisko centrum"), "Aleja 1 Maja 20");
+  assert.equal(extractPolishStreet("ul. Piotrkowska 100, Łódź"), "Piotrkowska 100");
+  assert.equal(extractPolishStreet("ulica Piotrkowska 100, Łódź"), "Piotrkowska 100");
+  assert.equal(extractPolishStreet("Sprzedam mieszkanie przy ul. Sporna 72, Łódź."), "Sporna 72");
+  assert.equal(extractPolishStreet("Łódź"), null);
+  assert.equal(extractPolishStreet("2 pokoje"), null);
+  assert.equal(extractPolishStreet("5 500 zł/m2"), null);
+  assert.equal(extractPolishStreet("tel. 737 338 309"), null);
+});
+
+test("classifyFacebookCondition: renovation and ready are distinguished, never invented without evidence", () => {
+  const normalize = (value: string) => value.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l");
+  assert.equal(classifyFacebookCondition(normalize("mieszkanie do remontu")), "renovation");
+  assert.equal(classifyFacebookCondition(normalize("mieszkanie do generalnego remontu")), "renovation");
+  assert.equal(classifyFacebookCondition(normalize("mieszkanie po remoncie")), "ready");
+  assert.equal(classifyFacebookCondition(normalize("mieszkanie na sprzedaż, 2 pokoje")), null);
 });
