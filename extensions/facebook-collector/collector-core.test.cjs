@@ -37,21 +37,116 @@ test("network extraction normalizes a vanity group permalink after numeric redir
 });
 
 test("scroll contract requires three scrolls and three consecutive empty iterations", () => {
-  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 1, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 1, consecutiveNoVisibleGrowth: 1, consecutiveOldNewPosts: 0 }), null);
-  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 2, consecutiveOldNewPosts: 0 }), null);
-  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 3, consecutiveOldNewPosts: 0 }), "NO_NEW_POSTS_AND_CARDS_3_SCROLLS");
+  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 1, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 1, consecutiveNoVisibleGrowth: 1 }), null);
+  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 2 }), null);
+  assert.equal(core.shouldStopDiscovery({ durationMs: 1000, budgetMs: 110000, uniqueCount: 2, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 3 }), "NO_NEW_POSTS_AND_CARDS_3_SCROLLS");
 });
 
-test("non-chronological fresh-old-fresh-old feed never triggers an early age cutoff", () => {
-  const now = Date.parse("2026-08-30T00:00:00Z");
-  const fresh = (id) => ({ postId: id, publishedAt: "2026-08-29T12:00:00Z" });
-  const old = (id) => ({ postId: id, publishedAt: "2026-08-20T12:00:00Z" });
-  let streak = core.updateAgeCutoffStreak(0, [fresh("1"), old("2"), fresh("3"), old("4")], now);
-  assert.equal(streak, 1);
-  assert.equal(core.shouldStopDiscovery({ durationMs: 20_000, budgetMs: 110_000, uniqueCount: 4, maxPosts: 50, scrolls: 3, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, consecutiveOldNewPosts: streak }), null);
-  streak = core.updateAgeCutoffStreak(streak, [old("5"), old("6"), old("7"), old("8")], now);
-  assert.equal(streak, 5);
-  assert.equal(core.shouldStopDiscovery({ durationMs: 30_000, budgetMs: 110_000, uniqueCount: 8, maxPosts: 50, scrolls: 4, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, consecutiveOldNewPosts: streak }), "RELIABLE_AGE_CUTOFF");
+// -----------------------------------------------------------------------------
+// DATE + FRONTIER V1: Facebook group feeds are ranked/reordered, not
+// chronological, so age must never infer feed POSITION by itself. The stop
+// rule is a bounded streak of unique posts reliably older than 72h, only after
+// a minimum traversal depth, with an absolute time ceiling as a separate,
+// independent safety net.
+// -----------------------------------------------------------------------------
+const now = Date.parse("2026-09-19T00:00:00Z");
+const freshAt = (hoursAgo) => new Date(now - hoursAgo * 3_600_000).toISOString();
+function zonesFor(publishedAtList) { return publishedAtList.map((publishedAt) => core.classifyPostAgeZone(publishedAt, now)); }
+
+test("A. post 12h old is eligible for full processing", () => {
+  assert.equal(core.classifyPostAgeZone(freshAt(12), now), "FRESH");
+  assert.equal(core.isEligibleForHeavyProcessing(core.classifyPostAgeZone(freshAt(12), now)), true);
+});
+
+test("B. post 71h old is still eligible for full processing", () => {
+  assert.equal(core.classifyPostAgeZone(freshAt(71), now), "FRESH");
+});
+
+test("post 73h old is OLD and skips heavy processing", () => {
+  assert.equal(core.classifyPostAgeZone(freshAt(73), now), "OLD");
+  assert.equal(core.isEligibleForHeavyProcessing(core.classifyPostAgeZone(freshAt(73), now)), false);
+});
+
+test("an unparseable timestamp classifies as UNKNOWN, never OLD or FRESH by assumption", () => {
+  assert.equal(core.classifyPostAgeZone(null, now), "UNKNOWN");
+  assert.equal(core.classifyPostAgeZone("not-a-date", now), "UNKNOWN");
+  assert.equal(core.isEligibleForHeavyProcessing("UNKNOWN"), false);
+});
+
+test("A. 10 old posts before minimum scroll depth must NOT stop the scan prematurely", () => {
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, zonesFor(Array.from({ length: 10 }, () => freshAt(200))));
+  assert.equal(streak.consecutiveOldPosts, 10);
+  assert.equal(core.isOldAgeStopReached(streak, 2), false, "scrolls=2 is below MIN_SCROLLS_BEFORE_AGE_STOP");
+  assert.equal(core.shouldStopDiscovery({ durationMs: 5000, budgetMs: 110_000, uniqueCount: 10, maxPosts: 50, scrolls: 2, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, ageStreak: streak }), null);
+});
+
+test("B. 10 unique >72h posts after >=5 scrolls stops the scan", () => {
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, zonesFor(Array.from({ length: 10 }, () => freshAt(200))));
+  assert.equal(core.isOldAgeStopReached(streak, 5), true);
+  assert.equal(core.shouldStopDiscovery({ durationMs: 30_000, budgetMs: 110_000, uniqueCount: 10, maxPosts: 50, scrolls: 5, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, ageStreak: streak }), "TEN_CONSECUTIVE_OLDER_THAN_72H");
+});
+
+test("C. 9 old posts + 1 fresh (2h) resets the streak", () => {
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, zonesFor(Array.from({ length: 9 }, () => freshAt(200))));
+  assert.equal(streak.consecutiveOldPosts, 9);
+  streak = core.advanceAgeStreak(streak, zonesFor([freshAt(2)]));
+  assert.equal(streak.consecutiveOldPosts, 0);
+  assert.equal(streak.maxConsecutiveOldPosts, 9, "the historical maximum is still recorded");
+});
+
+test("D. 9 old posts + an UNKNOWN timestamp resets the streak (it might be fresh)", () => {
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, zonesFor(Array.from({ length: 9 }, () => freshAt(200))));
+  streak = core.advanceAgeStreak(streak, [core.classifyPostAgeZone(null, now)]);
+  assert.equal(streak.consecutiveOldPosts, 0);
+  assert.equal(streak.unknownDatePostsSeen, 1);
+});
+
+test("E. a duplicate old post shown again counts once only (streak driven by newly-encountered unique posts)", () => {
+  // Duplicate suppression happens upstream (mergeRecords / addedRecords already
+  // excludes already-known ids); advanceAgeStreak is fed only genuinely-new
+  // zones, so re-showing the same post never re-enters this function at all.
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, zonesFor([freshAt(200)]));
+  streak = core.advanceAgeStreak(streak, []); // the duplicate sighting contributes zero new zones
+  assert.equal(streak.consecutiveOldPosts, 1);
+  assert.equal(streak.oldUniquePostsSeen, 1);
+});
+
+test("F. a fresh, already-known post still resets the streak", () => {
+  // "Already known" is an identity concept outside advanceAgeStreak; a post
+  // that is merged as newly-added THIS scan (addedRecords) is fed here
+  // regardless of whether Supabase already has a listing for it — resetting
+  // on any fresh zone is unconditional, matching "prove Facebook is still
+  // surfacing fresh material at this depth" regardless of prior knowledge.
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, zonesFor(Array.from({ length: 5 }, () => freshAt(200))));
+  streak = core.advanceAgeStreak(streak, zonesFor([freshAt(1)]));
+  assert.equal(streak.consecutiveOldPosts, 0);
+});
+
+test("G. elapsed reaching 180s stops gracefully with its own distinct reason", () => {
+  const decision = core.shouldStopDiscovery({ durationMs: 180_000, budgetMs: 110_000, maxFastScanMs: core.MAX_FAST_SCAN_MS, uniqueCount: 12, maxPosts: 50, scrolls: 9, maxScrolls: 30, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, ageStreak: core.initialAgeStreakState() });
+  assert.equal(decision, "FAST_SCAN_TIME_LIMIT");
+});
+
+test("H. no SEARCH executed does not affect the age/frontier stop machinery", () => {
+  assert.equal(core.MAX_FAST_SCAN_MS, 180_000);
+  assert.equal(core.OLD_POST_STREAK_THRESHOLD, 10);
+  assert.equal(core.MIN_SCROLLS_BEFORE_AGE_STOP, 5);
+});
+
+test("DEEP_RECALL relaxes the old-post streak so it never fires on its own", () => {
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, zonesFor(Array.from({ length: 50 }, () => freshAt(300))));
+  assert.equal(core.isOldAgeStopReached(streak, 10, { streakThreshold: core.DEEP_RECALL_STREAK_THRESHOLD }), false);
+});
+
+test("the fast-scan time ceiling is independent of the generic source time budget", () => {
+  assert.equal(core.shouldStopDiscovery({ durationMs: 111_000, budgetMs: 110_000, maxFastScanMs: 180_000, uniqueCount: 1, maxPosts: 50, scrolls: 5, maxScrolls: 18, minScrolls: 3, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, ageStreak: core.initialAgeStreakState() }), "SOURCE_TIME_BUDGET", "the smaller, still-relevant generic budget fires first");
 });
 
 test("health check prevents false completed status and enables bounded search fallback", () => {

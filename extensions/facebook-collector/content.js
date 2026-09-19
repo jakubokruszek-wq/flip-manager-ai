@@ -802,6 +802,12 @@
     const maxDiscoveryMediaTiles = clamp(options.maxDiscoveryMediaTiles ?? options.maxMediaTiles, 1, 100, 100);
     const budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
     const searchMode = options.searchMode === true;
+    const scanMode = options.scanMode === "DEEP_RECALL" ? "DEEP_RECALL" : "FAST_REPEAT";
+    // DEEP_RECALL greatly relaxes the old-post streak so a deeper traversal can
+    // sample feed depth Facebook's ranking might otherwise hide from a fast
+    // repeat scan; it still stops on the existing time/scroll/post budgets.
+    const ageStopOptions = scanMode === "DEEP_RECALL" ? { streakThreshold: core.DEEP_RECALL_STREAK_THRESHOLD } : undefined;
+    const maxFastScanMs = !searchMode && scanMode === "FAST_REPEAT" ? core.MAX_FAST_SCAN_MS : undefined;
     const layerPrefix = searchMode ? "SEARCH_" : "";
     const start = performance.now();
     const iterations = [];
@@ -817,7 +823,7 @@
     let consecutiveNoTileGrowth = 0;
     let consecutiveNoVisibleGrowth = 0;
     let consecutiveBottomChecks = 0;
-    let consecutiveOldNewPosts = 0;
+    let ageStreak = core.initialAgeStreakState();
     let previousVisibleFingerprints = new Set();
     let consecutiveVisibleAdvanceWithoutCapture = 0;
     const initialHeight = document.documentElement.scrollHeight;
@@ -858,8 +864,11 @@
       records = core.mergeRecords([...records, ...searchCards.records, ...dom, ...hydration, ...network], searchMode ? maxDiscoveryPosts : maxPosts);
       const added = records.length - before;
       const addedRecords = records.filter((record) => !beforeIds.has(record.postId));
-      consecutiveOldNewPosts = core.updateAgeCutoffStreak(consecutiveOldNewPosts, addedRecords);
       consecutiveNoNew = added === 0 ? consecutiveNoNew + 1 : 0;
+      if (!searchMode) {
+        const now = Date.now();
+        ageStreak = core.advanceAgeStreak(ageStreak, addedRecords.map((record) => core.classifyPostAgeZone(record.publishedAt, now)));
+      }
       const cards = visibleCards();
       const visibleFingerprints = new Set(cards.map(cardFingerprint).filter(Boolean));
       const newVisibleCards = [...visibleFingerprints].filter((fingerprint) => !previousVisibleFingerprints.has(fingerprint)).length;
@@ -872,7 +881,7 @@
       const atBottomNow = isAtEndOfResults(container);
       consecutiveBottomChecks = atBottomNow ? consecutiveBottomChecks + 1 : 0;
       const pendingContentCount = searchMode ? pendingSearchContentCount() : 0;
-      iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: cards.length, newVisibleCardsThisIteration: newVisibleCards, uniqueTileCount: searchMode ? searchObservedMediaIds.size : 0, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, consecutiveOldNewPosts, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses, pendingContentCount, atBottom: atBottomNow });
+      iterations.push({ iteration, domPostIds: ids(dom), hydrationPostIds: ids(hydration), networkPostIds: ids(network), mergedPostIds: ids(records), visibleCardCount: cards.length, newVisibleCardsThisIteration: newVisibleCards, uniqueTileCount: searchMode ? searchObservedMediaIds.size : 0, scrollTop: Math.floor(scrollTop), scrollHeight, newIdsThisIteration: added, consecutiveOldPosts: ageStreak.consecutiveOldPosts, networkResponsesSinceLastScroll: networkResponses - previousNetworkResponses, pendingContentCount, atBottom: atBottomNow });
       previousNetworkResponses = networkResponses;
       const elapsedMs = performance.now() - start;
       const recentIterations = iterations.slice(-3);
@@ -886,7 +895,7 @@
         ? elapsedMs >= budgetMs ? "QUERY_TIME_BUDGET"
           : atEndOfResults ? "END_OF_RESULTS_CONFIRMED"
             : null
-        : core.shouldStopDiscovery({ durationMs: elapsedMs, budgetMs, uniqueCount: records.length, maxPosts: searchMode ? maxDiscoveryPosts : maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, consecutiveOldNewPosts });
+        : core.shouldStopDiscovery({ durationMs: elapsedMs, budgetMs, maxFastScanMs, uniqueCount: records.length, maxPosts: searchMode ? maxDiscoveryPosts : maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, ageStreak, ageStopOptions });
       if (decision) { stopReason = decision; break; }
       const moved = scrollContainer(container);
       scrolls += 1;
@@ -955,7 +964,7 @@
         }
       }
     }
-    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, networkResponses, hydrationSamples, iterations: iterations.slice(0, 31), ...(searchMode ? { searchResultDiagnostics: [...searchResultDiagnostics.values()].slice(0, 200) } : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
+    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, networkResponses, hydrationSamples, ageStreak: searchMode ? null : { ...ageStreak, minScrollsBeforeAgeStop: (ageStopOptions && ageStopOptions.minScrolls) ?? core.MIN_SCROLLS_BEFORE_AGE_STOP }, scanMode, fastScanElapsedMs: searchMode ? null : Math.round(durationMs), iterations: iterations.slice(0, 31), ...(searchMode ? { searchResultDiagnostics: [...searchResultDiagnostics.values()].slice(0, 200) } : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {

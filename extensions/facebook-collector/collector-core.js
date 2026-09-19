@@ -551,22 +551,76 @@
   }
 
   function shouldStopDiscovery(input) {
+    if (Number.isFinite(input.maxFastScanMs) && input.durationMs >= input.maxFastScanMs) return "FAST_SCAN_TIME_LIMIT";
     if (input.durationMs >= input.budgetMs) return "SOURCE_TIME_BUDGET";
     if (input.uniqueCount >= input.maxPosts) return "MAX_POSTS";
-    if (input.scrolls >= input.minScrolls && input.consecutiveOldNewPosts >= 5) return "RELIABLE_AGE_CUTOFF";
+    if (isOldAgeStopReached(input.ageStreak || EMPTY_AGE_STREAK, input.scrolls, input.ageStopOptions)) return "TEN_CONSECUTIVE_OLDER_THAN_72H";
     if (input.scrolls >= input.maxScrolls) return "MAX_SCROLLS";
     if (input.scrolls >= input.minScrolls && input.consecutiveNoNew >= 3 && input.consecutiveNoVisibleGrowth >= 3) return "NO_NEW_POSTS_AND_CARDS_3_SCROLLS";
     return null;
   }
 
-  function updateAgeCutoffStreak(previous, newRecords, now = Date.now(), cutoffMs = 72 * 60 * 60 * 1000) {
-    let streak = Math.max(0, Number(previous) || 0);
-    for (const record of newRecords || []) {
-      const timestamp = typeof record?.publishedAt === "string" ? Date.parse(record.publishedAt) : Number.NaN;
-      if (!Number.isFinite(timestamp)) { streak = 0; continue; }
-      streak = now - timestamp > cutoffMs ? streak + 1 : 0;
+  /**
+   * Facebook group feeds are ranked/reordered, not chronological: old and
+   * fresh posts can interleave in either direction, so age must never be used
+   * to infer feed POSITION by itself. Age still gates expensive per-post work
+   * (Vision, deep extraction): only a post reliably dated within the last
+   * `freshMs` is eligible for it. An unparseable timestamp is conservatively
+   * treated as not-fresh for processing, but must never be read as proof of
+   * "old" either — it resets the old-post streak below exactly like a fresh
+   * post would, because it might be one.
+   */
+  const AGE_WINDOW_72H_MS = 72 * 60 * 60 * 1000;
+  function classifyPostAgeZone(publishedAt, now = Date.now(), freshMs = AGE_WINDOW_72H_MS) {
+    const timestamp = typeof publishedAt === "string" ? Date.parse(publishedAt) : Number.NaN;
+    if (!Number.isFinite(timestamp)) return "UNKNOWN";
+    const age = now - timestamp;
+    if (age < 0) return "FRESH"; // clock skew / future timestamp: never penalize
+    return age <= freshMs ? "FRESH" : "OLD";
+  }
+
+  function isEligibleForHeavyProcessing(ageZone) {
+    return ageZone === "FRESH";
+  }
+
+  const OLD_POST_STREAK_THRESHOLD = 10;
+  const MIN_SCROLLS_BEFORE_AGE_STOP = 5;
+  const MAX_FAST_SCAN_MS = 180_000;
+  const EMPTY_AGE_STREAK = { consecutiveOldPosts: 0, maxConsecutiveOldPosts: 0, oldUniquePostsSeen: 0, freshPostsSeen: 0, unknownDatePostsSeen: 0 };
+
+  function initialAgeStreakState() {
+    return { ...EMPTY_AGE_STREAK };
+  }
+
+  /**
+   * Advances the old-post streak by the age zones of this iteration's newly
+   * encountered UNIQUE canonical posts only — a post already merged in an
+   * earlier iteration must never be re-counted. Any fresh (<=72h) post resets
+   * the streak, even one already known from an earlier scan, because it
+   * proves Facebook is still surfacing fresh material at this feed depth. An
+   * unknown timestamp resets it too rather than counting it as old, since it
+   * could be a fresh post whose date just could not be read reliably.
+   */
+  function advanceAgeStreak(state, newUniqueAgeZones) {
+    let next = state || initialAgeStreakState();
+    for (const zone of newUniqueAgeZones || []) {
+      if (zone === "OLD") {
+        const consecutiveOldPosts = next.consecutiveOldPosts + 1;
+        next = { ...next, consecutiveOldPosts, oldUniquePostsSeen: next.oldUniquePostsSeen + 1, maxConsecutiveOldPosts: Math.max(next.maxConsecutiveOldPosts, consecutiveOldPosts) };
+      } else if (zone === "FRESH") {
+        next = { ...next, consecutiveOldPosts: 0, freshPostsSeen: next.freshPostsSeen + 1 };
+      } else {
+        next = { ...next, consecutiveOldPosts: 0, unknownDatePostsSeen: next.unknownDatePostsSeen + 1 };
+      }
     }
-    return streak;
+    return next;
+  }
+
+  function isOldAgeStopReached(state, scrolls, options) {
+    const opts = options || {};
+    const threshold = Number.isFinite(opts.streakThreshold) ? opts.streakThreshold : OLD_POST_STREAK_THRESHOLD;
+    const minScrolls = Number.isFinite(opts.minScrolls) ? opts.minScrolls : MIN_SCROLLS_BEFORE_AGE_STOP;
+    return Number(scrolls) >= minScrolls && (state || EMPTY_AGE_STREAK).consecutiveOldPosts >= threshold;
   }
 
   function needsSearchFallback(health, sourceType) {
@@ -886,5 +940,6 @@
   function finite(value) { return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, updateAgeCutoffStreak, needsSearchFallback };
+  const DEEP_RECALL_STREAK_THRESHOLD = Number.MAX_SAFE_INTEGER;
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD };
 })(globalThis);
