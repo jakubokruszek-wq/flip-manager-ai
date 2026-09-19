@@ -165,6 +165,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   let galleryRequests = 0;
   let scanRequests = 0;
   let resultsRequests = 0;
+  let clearResultsRequests = 0;
   const pageResultsPayload = makeScanStressResults(activeCardCount);
   if (throwTraceFetch) {
     await page.addInitScript(() => {
@@ -202,6 +203,10 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
         status: 200,
       });
     }
+    if (url.pathname === `/api/flip-finder/search-filters/${filterId}/clear-results` && request.method() === "POST") {
+      clearResultsRequests += 1;
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, archivedCount: 4 }), status: 200 });
+    }
     if (url.pathname === "/api/flip-finder/search-filters") {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload), status: 200 });
     }
@@ -216,7 +221,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
   const button = page.locator(`[data-gallery-request-button="true"][data-listing-id="${listingId}"]`);
   await button.waitFor({ state: "visible", timeout: 20_000 });
-  return { page, button, traceRequests, galleryRequestCount: () => galleryRequests, scanRequestCount: () => scanRequests, resultsRequestCount: () => resultsRequests };
+  return { page, button, traceRequests, galleryRequestCount: () => galleryRequests, scanRequestCount: () => scanRequests, resultsRequestCount: () => resultsRequests, clearResultsRequestCount: () => clearResultsRequests };
 }
 
 async function sessionStages(page) {
@@ -353,6 +358,27 @@ test("real Flip Finder gallery button keeps business click independent from trac
     assert.ok(await scanButton.isEnabled(), "a failed scan start must release the button so the user can retry");
     assert.equal(testPage.scanRequestCount(), 1, "a failed scan start must not retry itself");
     assert.equal(await cards.count(), cardCount, "a blocked scan must leave the Finder results usable");
+    await testPage.page.close();
+  });
+
+  await t.test("C/J. Wyczyść wyniki asks for confirmation, sends exactly one POST, and never deletes canonical data", async () => {
+    const testPage = await preparePage(browser, baseUrl, { activeCardCount: 5 });
+    const clearButton = testPage.page.getByRole("button", { name: "Wyczyść wyniki" });
+    await clearButton.waitFor({ state: "visible", timeout: 10_000 });
+
+    assert.equal(testPage.clearResultsRequestCount(), 0, "opening the dialog must not itself send a request");
+    await clearButton.click();
+    const dialog = testPage.page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 5_000 });
+    const confirmButton = dialog.getByRole("button", { name: "Wyczyść wyniki" });
+    await confirmButton.click();
+
+    await testPage.page.waitForFunction(() => document.body.textContent?.includes("Wyczyszczono 4"), null, { timeout: 10_000 });
+    assert.equal(testPage.clearResultsRequestCount(), 1, "confirming must send exactly one clear-results request");
+
+    await confirmButton.click().catch(() => {});
+    assert.equal(testPage.clearResultsRequestCount(), 1, "the dialog closes after success and cannot be double-submitted");
+
     await testPage.page.close();
   });
 });

@@ -14,6 +14,7 @@ import {
   hasLatestScan,
   latestScanCounters,
   NO_SCANS_MESSAGE,
+  scanNoOffersMessage,
   scanStatusLabel,
 } from "@/features/flip-finder/dashboard";
 import { OTODOM_AUTOMATION_BLOCKED_MESSAGE } from "@/features/flip-finder/otodom-search-response";
@@ -108,6 +109,9 @@ export function FlipFinderPage() {
   const [validatingCollector, setValidatingCollector] = useState(false);
   const [collectorValidation, setCollectorValidation] = useState<{ requestId: string; pageBootstrap: boolean; bootstrapBackground: boolean; result: CollectorValidation | null; error: string | null } | null>(null);
   const [externalPingResult, setExternalPingResult] = useState<{ requestId: string; ok: boolean; error?: string } | null>(null);
+  const [clearResultsOpen, setClearResultsOpen] = useState(false);
+  const [clearingResults, setClearingResults] = useState(false);
+  const [clearResultsError, setClearResultsError] = useState<string | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
 
   const load = useCallback(async () => {
@@ -329,6 +333,24 @@ export function FlipFinderPage() {
     }
   };
 
+  const clearResults = async (filter: SearchFilterListItem) => {
+    setClearingResults(true);
+    setClearResultsError(null);
+    try {
+      const response = await apiFetch(`/api/flip-finder/search-filters/${filter.id}/clear-results`, { method: "POST" });
+      const payload: unknown = await readJson(response);
+      if (!response.ok) throw new Error(readMessage(payload, "Nie udało się wyczyścić wyników."));
+      const archivedCount = isRecordWithArchivedCount(payload) ? payload.archivedCount : 0;
+      setNotice(archivedCount > 0 ? `Wyczyszczono ${archivedCount} ${archivedCount === 1 ? "ofertę" : "ofert"} z bieżącego widoku. Historia pozostaje dostępna.` : "Brak ofert do wyczyszczenia.");
+      setClearResultsOpen(false);
+      setResultsRevision((current) => current + 1);
+    } catch (reason) {
+      setClearResultsError(reason instanceof Error ? reason.message : "Nie udało się wyczyścić wyników.");
+    } finally {
+      setClearingResults(false);
+    }
+  };
+
   const monitorScanRun = async (filterId: string, runId: string) => {
     let consecutiveFailures = 0;
     let firstPoll = true;
@@ -444,6 +466,7 @@ export function FlipFinderPage() {
                 {scanningFilterIds.has(activeFilter.id) ? "Skanowanie…" : "Skanuj oferty"}
               </Button>
               {scanningFilterIds.has(activeFilter.id) ? <Button className="h-11" onClick={() => void stopScan(activeFilter)} variant="destructive">Zatrzymaj skanowanie</Button> : null}
+              <Button className="h-11" onClick={() => { setClearResultsError(null); setClearResultsOpen(true); }} type="button" variant="outline">Wyczyść wyniki</Button>
               <details className="relative">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center rounded-xl border border-border px-3 text-sm font-semibold text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary">Ustawienia filtra</summary>
                 <div className="absolute right-0 z-30 mt-2 w-[min(92vw,34rem)] rounded-2xl border border-border bg-card p-4 shadow-2xl">
@@ -462,6 +485,22 @@ export function FlipFinderPage() {
           {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
           {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
+          <Dialog onOpenChange={setClearResultsOpen} open={clearResultsOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Wyczyścić bieżące wyniki?</DialogTitle>
+                <DialogDescription>
+                  Usuwa aktualne oferty z widoku roboczego tego filtra. Historia, zdjęcia, ceny i dopasowania rynkowe pozostają zapisane i dostępne w zakładce &quot;Historia ofert&quot;.
+                </DialogDescription>
+              </DialogHeader>
+              {clearResultsError ? <p className="text-sm text-destructive">{clearResultsError}</p> : null}
+              <DialogFooter>
+                <Button disabled={clearingResults} onClick={() => void clearResults(activeFilter)} variant="destructive">
+                  {clearingResults ? "Czyszczenie…" : "Wyczyść wyniki"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </Card>
       ) : (
         <section className="rounded-xl border border-dashed bg-card p-6 text-center">
@@ -680,7 +719,7 @@ function ScanResultPanel({ filter, response }: { filter: SearchFilterListItem; r
     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><p className="type-caption font-semibold uppercase tracking-[0.16em] text-gold">WYNIK OSTATNIEGO SKANU</p><h2 className="type-section-title mt-1">{filter.name}</h2></div><span className={`ui-badge ${status === "PARTIAL" ? "border-warning/30 bg-warning/10 text-warning" : status === "FAILED" ? "border-danger/20 bg-danger/10 text-danger" : status === "RUNNING" || status === "QUEUED" ? "border-gold/30 bg-gold/10 text-gold" : "border-success/20 bg-success/10 text-success"}`}>{scanRunStatusLabel(status)}</span></div>
     {status === "PARTIAL" || status === "FAILED" ? <div className="mt-4 rounded-xl border border-warning/25 bg-warning/10 p-4 text-sm"><p className="font-semibold text-warning">{status === "PARTIAL" ? "Częściowo zakończony" : "Skan zakończony błędem"}</p><p className="mt-1 text-muted-foreground">{partialReason || "Nie wszystkie źródła zakończyły pracę."}</p></div> : null}
     <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4"><DiagnosticMetric label="Zebrane posty" value={funnel.collected} /><DiagnosticMetric label="Zweryfikowana tożsamość" value={funnel.exact} /><DiagnosticMetric label="Tożsamość do weryfikacji" value={funnel.identityUnverified} /><DiagnosticMetric label="Oferty sprzedaży" value={funnel.sell} tone="gold" /><DiagnosticMetric label="Oferty najmu" value={funnel.rent} /><DiagnosticMetric label="Inne pewne posty" value={funnel.otherExact} /><DiagnosticMetric label="Dopasowane" value={funnel.matched} tone="gold" /><DiagnosticMetric label="Do oceny" value={funnel.review} /><DiagnosticMetric label="Odrzucone twardo" value={funnel.rejected} /><DiagnosticMetric label="Nowe zapisane oferty" value={response.newCount} /><DiagnosticMetric label="Zaktualizowane" value={response.updatedCount} /></div>
-    {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground"><strong className="text-foreground">Ten skan nie dodał nowych ofert.</strong> Najwięcej rekordów odpadło na: <strong className="text-foreground">{funnel.topRejection}</strong>.</p> : null}
+    {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground">{scanNoOffersMessage(funnel.saved, funnel.topRejection)}</p> : null}
     <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">ODRZUCONE TWARDYM WARUNKIEM — GŁÓWNY STRUMIEŃ</h3><p className="mt-1 text-xs text-muted-foreground">Unikalne rekordy: {formatNumber(funnel.rejected)}. Jedna oferta może mieć więcej niż jeden powód.</p><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={Math.max(1, funnel.rejected)} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
     {funnel.searchTiles > 0 || funnel.searchQueriesPlanned > 0 ? <div className="mt-6 border-t border-border/60 pt-5"><h3 className="type-card-title">Wyniki wyszukiwania</h3><p className="mt-1 text-xs text-muted-foreground">Osobny mianownik — {formatNumber(funnel.searchQueriesExecuted)}/{formatNumber(funnel.searchQueriesPlanned)} zapytań, {formatNumber(funnel.searchTiles)} kafelków.</p><div className="mt-3"><DiagnosticBar analyzed={Math.max(1, funnel.searchTiles)} count={funnel.searchParentUnverified} label="Wyniki bez potwierdzonego posta" /></div></div> : null}
     <details className="mt-6 border-t border-border/60 pt-4 text-sm"><summary className="cursor-pointer font-semibold">Szczegóły diagnostyczne</summary><div className="mt-4 space-y-4"><p className="text-xs text-muted-foreground">Statusy źródeł i techniczne kody są dostępne tutaj; nie wpływają na decyzję filtra.</p><div className="grid gap-3 lg:grid-cols-3">{(response.sourceResults ?? []).map((source) => <SourceDiagnosticCard key={source.source} source={source} />)}</div>{response.matchDiagnostics ? <div className="space-y-3">{technicalDiagnosticBars(response.matchDiagnostics, funnel.collected).map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div> : null}</div></details>
@@ -1215,6 +1254,10 @@ function isSearchFilterListResponse(value: unknown): value is SearchFilterListRe
     "summary" in value &&
     "latestScan" in value
   );
+}
+
+function isRecordWithArchivedCount(value: unknown): value is { archivedCount: number } {
+  return value !== null && typeof value === "object" && "archivedCount" in value && typeof value.archivedCount === "number";
 }
 
 function isScanResponse(value: unknown): value is ScanResponse {
