@@ -803,12 +803,12 @@
     const imageMode = options.imageMode === GALLERY_HYDRATION_MEDIA_ALLOWED ? GALLERY_HYDRATION_MEDIA_ALLOWED : SOURCE_SCAN_DATA_ONLY;
     const source = core.canonicalSource(location.href);
     if (!source) throw new Error("FACEBOOK_SOURCE_URL_REQUIRED");
-    const maxScrolls = clamp(options.maxScrolls, 0, 30, 30);
+    let maxScrolls = clamp(options.maxScrolls, 0, 30, 30);
     const minScrolls = clamp(options.minScrolls, 0, maxScrolls, 3);
     const maxPosts = clamp(options.maxPosts, 1, 50, 50);
     const maxDiscoveryPosts = clamp(options.maxDiscoveryPosts, Math.max(50, maxPosts), 100, Math.max(50, maxPosts));
     const maxDiscoveryMediaTiles = clamp(options.maxDiscoveryMediaTiles ?? options.maxMediaTiles, 1, 100, 100);
-    const budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
+    let budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
     const searchMode = options.searchMode === true;
     const scanMode = options.scanMode === "DEEP_RECALL" ? "DEEP_RECALL" : "FAST_REPEAT";
     // DEEP_RECALL greatly relaxes the old-post streak so a deeper traversal can
@@ -837,10 +837,31 @@
     const initialHeight = document.documentElement.scrollHeight;
     let previousNetworkResponses = networkResponses;
     let stopReason = "MAX_SCROLLS";
-    // Measurement only: the post-scroll sleep keeps its exact duration. We just
-    // observe, inside it, when hydration actually landed, so the fixed 1600/800
-    // ms can later be replaced by a condition with evidence instead of a guess.
     const hydrationSamples = [];
+    // Recall engine V1: a normal (FAST_REPEAT, main-feed) pass starts in
+    // CURRENT_DEPTH. If its own stop condition fires and coverage is judged
+    // insufficient (and no hard block applies — Date/Frontier reached, time
+    // limit, abort, non-eligible mode), it continues on the SAME feed as
+    // DEEPER_NETWORK_FEED instead of stopping. `records`/`ageStreak`/canonical
+    // identity state are never reset between the two — DEEPER_NETWORK_FEED is
+    // a continuation, not a second scan. This reuses collector-flow.js's
+    // FEED_DEPTH_MODES vocabulary deliberately: that module already raises
+    // `options.maxScrolls`/`budgetMs` for the whole session when a stored flag
+    // requests DEEPER_NETWORK_FEED (its own comment: "the existing natural
+    // stop conditions still terminate the loop, so the deeper ceiling is
+    // consumed only when the group genuinely has more fresh content"). This
+    // in-loop mechanism is what actually decides, from live evidence, whether
+    // that ceiling is worth consuming — it relaxes `maxScrolls`/`budgetMs`
+    // further on top of whatever resolveFeedDepth already set, so it composes
+    // safely with either stored flag value instead of conflicting with it.
+    let mode = "CURRENT_DEPTH";
+    let currentDepthSnapshot = null;
+    let deeperFeedTriggered = false;
+    let deeperFeedTriggerReasons = [];
+    let deeperFeedStartIteration = null;
+    let deeperFeedStartScrolls = null;
+    let deeperFeedStartRecordCount = null;
+    let duplicateEncounters = 0;
 
     for (let iteration = 0; ; iteration += 1) {
       if (searchMode) {
@@ -869,8 +890,10 @@
       }
       const beforeIds = new Set(records.map((record) => record.postId));
       const before = records.length;
+      const rawThisIteration = searchCards.records.length + dom.length + hydration.length + network.length;
       records = core.mergeRecords([...records, ...searchCards.records, ...dom, ...hydration, ...network], searchMode ? maxDiscoveryPosts : maxPosts);
       const added = records.length - before;
+      duplicateEncounters += Math.max(0, rawThisIteration - added);
       const addedRecords = records.filter((record) => !beforeIds.has(record.postId));
       consecutiveNoNew = added === 0 ? consecutiveNoNew + 1 : 0;
       if (!searchMode) {
@@ -904,26 +927,44 @@
           : atEndOfResults ? "END_OF_RESULTS_CONFIRMED"
             : null
         : core.shouldStopDiscovery({ durationMs: elapsedMs, budgetMs, maxFastScanMs, uniqueCount: records.length, maxPosts: searchMode ? maxDiscoveryPosts : maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, ageStreak, ageStopOptions });
-      if (decision) { stopReason = decision; break; }
-      const moved = scrollContainer(container);
-      scrolls += 1;
-      const plannedWaitMs = moved ? 1600 : 800;
-      const hydrationProbe = () => {
-        const probeContainer = findScrollContainer();
-        return { scrollHeight: probeContainer.scrollHeight, cardCount: document.querySelectorAll('[role="article"]').length, networkResponses };
-      };
-      const hydrationBaseline = hydrationProbe();
-      const hydrationStartedAt = performance.now();
-      let firstGrowthMs = null;
-      for (let waited = 0; waited < plannedWaitMs; waited += 100) {
-        await wait(Math.min(100, plannedWaitMs - waited));
-        if (firstGrowthMs !== null) continue;
-        const probed = hydrationProbe();
-        if (probed.scrollHeight > hydrationBaseline.scrollHeight || probed.cardCount > hydrationBaseline.cardCount || probed.networkResponses > hydrationBaseline.networkResponses) {
-          firstGrowthMs = Math.round(performance.now() - hydrationStartedAt);
+      if (decision) {
+        if (!searchMode && mode === "CURRENT_DEPTH") {
+          const aborted = options.signal?.aborted === true;
+          const transition = core.evaluateDeeperFeedTransition({
+            searchMode, scanMode, stopReason: decision, aborted,
+            metrics: { uniqueCanonicalPosts: records.length, capturedPosts: records.length, freshPosts: ageStreak.freshPostsSeen, oldPosts: ageStreak.oldUniquePostsSeen, unknownAgePosts: ageStreak.unknownDatePostsSeen, duplicateCount: duplicateEncounters, visibleCards: cards.length, scrollCount: scrolls, networkResponses, networkRecordCount: networkRecords.size, elapsedMs },
+          });
+          currentDepthSnapshot = { mode: "CURRENT_DEPTH", durationMs: Math.round(elapsedMs), scrollCount: scrolls, visibleCardCount: cards.length, capturedPostCount: records.length, uniqueCanonicalPosts: records.length, newCanonicalPosts: added, freshPosts: ageStreak.freshPostsSeen, oldPosts: ageStreak.oldUniquePostsSeen, unknownAgePosts: ageStreak.unknownDatePostsSeen, duplicates: duplicateEncounters, networkResponses, networkRecordCount: networkRecords.size, captureRatio: cards.length ? Math.min(1, records.length / cards.length) : records.length ? 1 : 0, stopReason: transition.reason === "CURRENT_DEPTH_SUFFICIENT" ? "CURRENT_DEPTH_SUFFICIENT" : decision };
+          deeperFeedTriggerReasons = transition.sufficiency?.reasons ?? [];
+          if (transition.triggerDeeper) {
+            mode = "DEEPER_NETWORK_FEED";
+            deeperFeedTriggered = true;
+            maxScrolls += core.DEEPER_FEED_EXTRA_SCROLLS;
+            budgetMs += core.DEEPER_FEED_EXTRA_BUDGET_MS;
+            deeperFeedStartIteration = iteration + 1;
+            deeperFeedStartScrolls = scrolls;
+            deeperFeedStartRecordCount = records.length;
+            // Do not break: continue the SAME loop/records/ageStreak as DEEPER_NETWORK_FEED.
+          } else {
+            stopReason = decision;
+            break;
+          }
+        } else {
+          stopReason = decision;
+          break;
         }
       }
-      if (hydrationSamples.length < 60) hydrationSamples.push({ iteration, moved, plannedWaitMs, waitedMs: Math.round(performance.now() - hydrationStartedAt), firstGrowthMs });
+      const moved = scrollContainer(container);
+      scrolls += 1;
+      const waitTimeoutMs = moved ? 1600 : 800;
+      const waitOutcome = await waitUntilFeedProgress({
+        sample: () => { const probeContainer = findScrollContainer(); return { postCount: records.length, networkCount: networkResponses, visibleCount: visibleCards().length, scrollHeight: probeContainer.scrollHeight, cardCount: document.querySelectorAll('[role="article"]').length }; },
+        timeoutMs: waitTimeoutMs,
+        pollMs: 100,
+        signal: options.signal,
+      });
+      if (hydrationSamples.length < 60) hydrationSamples.push({ iteration, moved, plannedWaitMs: waitTimeoutMs, waitedMs: waitOutcome.waitedMs, firstGrowthMs: waitOutcome.outcome === "PROGRESS" ? waitOutcome.waitedMs : null, outcome: waitOutcome.outcome });
+      if (waitOutcome.outcome === "ABORTED") { stopReason = "ABORTED"; break; }
     }
 
     const durationMs = Math.round(performance.now() - start);
@@ -955,6 +996,38 @@
     const capturedAdvanced = iterations.slice(1).some((item) => item.newIdsThisIteration > 0);
     const visibleFeedAdvancedWithoutCapture = consecutiveVisibleAdvanceWithoutCapture > 0;
     const health = core.evaluateHealth({ visibleCardCount: maxVisibleCardCount, capturedPostCount: records.length, scrolls, durationMs, feedGrew: (iterations.at(-1)?.scrollHeight || 0) > initialHeight, newIdsAfterScroll: capturedAdvanced, visibleFeedAdvanced: visibleFeedAdvancedWithoutCapture, capturedAdvanced: !visibleFeedAdvancedWithoutCapture, stopReason });
+    const deeperFeedActive = mode === "DEEPER_NETWORK_FEED";
+    const deeperFeedIterations = deeperFeedActive ? iterations.slice(deeperFeedStartIteration ?? iterations.length) : [];
+    const deeperFeedVisibleCardCount = deeperFeedIterations.length ? Math.max(0, ...deeperFeedIterations.map((item) => item.visibleCardCount)) : 0;
+    const deeperFeedCapturedPostCount = deeperFeedActive ? Math.max(0, records.length - (deeperFeedStartRecordCount ?? records.length)) : 0;
+    const deeperFeedTelemetry = deeperFeedActive ? {
+      mode: "DEEPER_NETWORK_FEED",
+      durationMs: Math.max(0, durationMs - (currentDepthSnapshot?.durationMs ?? 0)),
+      scrollCount: Math.max(0, scrolls - (deeperFeedStartScrolls ?? scrolls)),
+      visibleCardCount: deeperFeedVisibleCardCount,
+      capturedPostCount: deeperFeedCapturedPostCount,
+      uniqueCanonicalPosts: records.length,
+      newCanonicalPosts: deeperFeedCapturedPostCount,
+      freshPosts: ageStreak.freshPostsSeen,
+      oldPosts: ageStreak.oldUniquePostsSeen,
+      unknownAgePosts: ageStreak.unknownDatePostsSeen,
+      duplicates: Math.max(0, duplicateEncounters - (currentDepthSnapshot?.duplicates ?? 0)),
+      networkResponses,
+      networkRecordCount: networkRecords.size,
+      captureRatio: deeperFeedVisibleCardCount ? Math.min(1, deeperFeedCapturedPostCount / deeperFeedVisibleCardCount) : deeperFeedCapturedPostCount ? 1 : 0,
+      stopReason: core.deeperFeedStopReason(stopReason, stopReason === "ABORTED"),
+    } : null;
+    const recall = {
+      mode: deeperFeedActive ? "DEEPER_NETWORK_FEED" : "CURRENT_DEPTH",
+      currentDepth: currentDepthSnapshot,
+      deeperFeed: deeperFeedTelemetry,
+      deeperFeedTriggered,
+      deeperFeedTriggerReasons,
+      currentDepthDurationMs: currentDepthSnapshot?.durationMs ?? durationMs,
+      deeperFeedDurationMs: deeperFeedTelemetry?.durationMs ?? 0,
+      totalDurationMs: durationMs,
+      totalUniqueCanonicalPosts: records.length,
+    };
     const evidencedRecords = records.map((record) => ({
       ...record,
       discoverySource: searchMode ? "SEARCH" : "MAIN_FEED",
@@ -972,7 +1045,7 @@
         }
       }
     }
-    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, networkResponses, hydrationSamples, ageStreak: searchMode ? null : { ...ageStreak, minScrollsBeforeAgeStop: (ageStopOptions && ageStopOptions.minScrolls) ?? core.MIN_SCROLLS_BEFORE_AGE_STOP }, scanMode, fastScanElapsedMs: searchMode ? null : Math.round(durationMs), iterations: iterations.slice(0, 31), ...(searchMode ? { searchResultDiagnostics: [...searchResultDiagnostics.values()].slice(0, 200) } : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
+    return { source, imageMode, collectedAt: new Date().toISOString(), posts: core.mergeRecords(evidencedRecords, searchMode ? maxDiscoveryPosts : maxPosts), mediaTiles: [...searchMediaTiles.values()].slice(0, maxDiscoveryMediaTiles), rawTilesSeen: rawSearchMediaTilesSeen, uniqueTilesFound: searchObservedMediaIds.size, candidateBufferSize: searchMediaTiles.size, candidateCapReached: searchMediaTiles.size >= maxDiscoveryMediaTiles, scrollCount: scrolls, discoveryDurationMs: Math.round(durationMs), discoveryStopReason: stopReason, discoveryEvidence, health, networkResponses, hydrationSamples, ageStreak: searchMode ? null : { ...ageStreak, minScrollsBeforeAgeStop: (ageStopOptions && ageStopOptions.minScrolls) ?? core.MIN_SCROLLS_BEFORE_AGE_STOP }, scanMode, fastScanElapsedMs: searchMode ? null : Math.round(durationMs), iterations: iterations.slice(0, 31), recall: searchMode ? null : recall, ...(searchMode ? { searchResultDiagnostics: [...searchResultDiagnostics.values()].slice(0, 200) } : { mainFeedTelemetry: [...mainFeedDiagnostics.values()].slice(0, 100) }) };
   }
 
   function collectSearchMediaTiles() {
@@ -1308,10 +1381,45 @@
   function ids(records) { return [...new Set(records.map((record) => record.postId))].slice(0, 20); }
   function clamp(value, min, max, fallback) { return Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback; }
   function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+  /**
+   * Bounded, abort-aware wait for real feed progress instead of a fixed sleep.
+   * Polls `sample()` on a fixed cadence and exits the moment any tracked
+   * metric grows, once nothing has changed for `stableChecks` consecutive
+   * polls, once `signal` aborts, or once `timeoutMs` elapses — never later
+   * than a fixed sleep of `timeoutMs` would have, usually much sooner. No
+   * MutationObserver is used, so there is nothing to leak or clean up; the
+   * only resource held is the pending `setTimeout` inside `wait`, which
+   * always resolves on its own.
+   */
+  async function waitUntilFeedProgress({ sample, timeoutMs, pollMs = 100, stableChecks = 2, signal }) {
+    const start = performance.now();
+    if (signal?.aborted) return { outcome: "ABORTED", waitedMs: 0, sample: null };
+    const baseline = sample();
+    let last = baseline;
+    let stableStreak = 0;
+    for (;;) {
+      const elapsed = performance.now() - start;
+      if (elapsed >= timeoutMs) return { outcome: "TIMEOUT", waitedMs: Math.round(elapsed), sample: last };
+      await wait(Math.min(pollMs, timeoutMs - elapsed));
+      if (signal?.aborted) return { outcome: "ABORTED", waitedMs: Math.round(performance.now() - start), sample: last };
+      const current = sample();
+      const progressed = current.postCount > baseline.postCount
+        || current.networkCount > baseline.networkCount
+        || current.visibleCount > baseline.visibleCount
+        || current.scrollHeight > baseline.scrollHeight
+        || current.cardCount > baseline.cardCount;
+      if (progressed) return { outcome: "PROGRESS", waitedMs: Math.round(performance.now() - start), sample: current };
+      const unchanged = current.scrollHeight === last.scrollHeight && current.cardCount === last.cardCount && current.networkCount === last.networkCount;
+      stableStreak = unchanged ? stableStreak + 1 : 0;
+      last = current;
+      if (stableStreak >= stableChecks) return { outcome: "STABLE", waitedMs: Math.round(performance.now() - start), sample: current };
+    }
+  }
   function safeError(error) { return error instanceof Error ? error.message.slice(0, 300) : "COLLECTOR_FAILED"; }
   function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
   // Test-only export. `module` never exists in the browser extension context,
   // so this has zero effect in production — it only lets a Node test exercise
   // the exact-identity proof in isolation, with a fake DOM object.
-  if (typeof module !== "undefined" && module.exports) module.exports = { galleryRootHasExactPostBinding };
+  if (typeof module !== "undefined" && module.exports) module.exports = { galleryRootHasExactPostBinding, waitUntilFeedProgress };
 })();

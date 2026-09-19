@@ -59,8 +59,10 @@ test("feed depth is resolved from the shared flow module, never hardcoded at the
   assert.match(background, /minScrolls: feedDepth\.minScrolls, maxScrolls: feedDepth\.maxScrolls, maxPosts: feedDepth\.maxPosts, budgetMs: feedDepth\.budgetMs/);
 });
 
-test("hydration is measured without changing the existing wait duration", () => {
-  assert.match(content, /const plannedWaitMs = moved \? 1600 : 800;/, "the 1600/800 ms sleep must be preserved while it is being measured");
+test("the post-scroll hydration wait is condition-based, bounded by the historical 1600/800 ms ceiling, not an unconditional sleep", () => {
+  assert.match(content, /const waitTimeoutMs = moved \? 1600 : 800;/, "1600/800 ms remain the bounded ceiling a healthy scan should rarely need in full");
+  assert.match(content, /waitUntilFeedProgress/, "the fixed sleep must be replaced by the reusable condition waiter");
+  assert.doesNotMatch(content, /for \(let waited = 0; waited < plannedWaitMs; waited \+= 100\)/, "the old unconditional busy-wait loop must be gone");
   assert.match(content, /firstGrowthMs/);
   assert.match(content, /hydrationSamples/);
 });

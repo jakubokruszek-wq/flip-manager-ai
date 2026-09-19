@@ -627,6 +627,72 @@
     return sourceType === "GROUP" && health?.status === "DEGRADED";
   }
 
+  // Recall engine V1: after a normal (FAST_REPEAT, main-feed) CURRENT_DEPTH pass
+  // stops, decide deterministically whether continuing into a bounded
+  // DEEPER_NETWORK_FEED pass on the SAME feed is worth the extra time. This never
+  // claims "every post was found" — it only answers whether more bounded
+  // traversal time is justified. Thresholds are intentionally conservative and
+  // centralized here so a healthy scan (many unique, fresh, capturable posts)
+  // is left alone and a sparse/duplicate-heavy scan is the one that pays for a
+  // deeper pass.
+  const HARD_NO_DEEPER_STOP_REASONS = new Set(["TEN_CONSECUTIVE_OLDER_THAN_72H", "FAST_SCAN_TIME_LIMIT"]);
+  const DEEPER_FEED_EXTRA_SCROLLS = 10;
+  const DEEPER_FEED_EXTRA_BUDGET_MS = 45_000;
+  const CURRENT_DEPTH_MIN_UNIQUE_POSTS = 8;
+  const CURRENT_DEPTH_MIN_FRESH_POSTS = 5;
+  const CURRENT_DEPTH_MIN_CAPTURE_RATIO = 0.5;
+  const CURRENT_DEPTH_SPARSE_MAX_UNIQUE_POSTS = 5;
+  const CURRENT_DEPTH_HIGH_DUPLICATE_RATIO = 0.6;
+  const CURRENT_DEPTH_EARLY_STOP_SCROLL_THRESHOLD = 10;
+
+  function evaluateCurrentDepthSufficiency(metrics) {
+    const m = metrics || {};
+    const uniqueCanonicalPosts = finite(m.uniqueCanonicalPosts);
+    const freshPosts = finite(m.freshPosts);
+    const capturedPosts = finite(m.capturedPosts ?? m.uniqueCanonicalPosts);
+    const visibleCards = finite(m.visibleCards);
+    const duplicateCount = finite(m.duplicateCount);
+    const scrollCount = finite(m.scrollCount);
+    const captureRatio = Number.isFinite(m.captureRatio) ? m.captureRatio : (visibleCards ? Math.min(1, capturedPosts / visibleCards) : capturedPosts ? 1 : 0);
+    const duplicateRatio = duplicateCount + capturedPosts > 0 ? duplicateCount / (duplicateCount + capturedPosts) : 0;
+
+    if (uniqueCanonicalPosts >= CURRENT_DEPTH_MIN_UNIQUE_POSTS && freshPosts >= CURRENT_DEPTH_MIN_FRESH_POSTS && captureRatio >= CURRENT_DEPTH_MIN_CAPTURE_RATIO) {
+      return { sufficient: true, reasons: ["HEALTHY_UNIQUE_AND_FRESH_COVERAGE"] };
+    }
+    const reasons = [];
+    if (uniqueCanonicalPosts <= CURRENT_DEPTH_SPARSE_MAX_UNIQUE_POSTS) reasons.push("SPARSE_UNIQUE_POST_COUNT");
+    if (duplicateRatio >= CURRENT_DEPTH_HIGH_DUPLICATE_RATIO && capturedPosts > 0) reasons.push("HIGH_DUPLICATE_RATIO");
+    if (String(m.stopReason) === "NO_NEW_POSTS_AND_CARDS_3_SCROLLS" && scrollCount < CURRENT_DEPTH_EARLY_STOP_SCROLL_THRESHOLD) reasons.push("EARLY_NO_NEW_POSTS_STOP");
+    if (freshPosts === 0 && uniqueCanonicalPosts > 0) reasons.push("NO_FRESH_POSTS_CAPTURED");
+    return reasons.length ? { sufficient: false, reasons } : { sufficient: true, reasons: ["SUFFICIENT_COVERAGE"] };
+  }
+
+  /**
+   * Hard-blocks (Date/Frontier reached, time limit, abort, non-eligible mode)
+   * are checked before sufficiency and always win. Only a normal FAST_REPEAT
+   * main-feed pass that stopped for an ordinary reason (not a frontier/time
+   * limit) and is judged insufficient is allowed to continue deeper.
+   */
+  function evaluateDeeperFeedTransition(input) {
+    const i = input || {};
+    if (i.searchMode) return { triggerDeeper: false, reason: "SEARCH_MODE_NOT_ELIGIBLE", sufficiency: null };
+    if (i.scanMode !== "FAST_REPEAT") return { triggerDeeper: false, reason: "SCAN_MODE_NOT_ELIGIBLE", sufficiency: null };
+    if (i.aborted === true) return { triggerDeeper: false, reason: "ABORTED", sufficiency: null };
+    if (HARD_NO_DEEPER_STOP_REASONS.has(i.stopReason)) return { triggerDeeper: false, reason: i.stopReason, sufficiency: null };
+    const sufficiency = evaluateCurrentDepthSufficiency({ ...(i.metrics || {}), stopReason: i.stopReason });
+    if (sufficiency.sufficient) return { triggerDeeper: false, reason: "CURRENT_DEPTH_SUFFICIENT", sufficiency };
+    return { triggerDeeper: true, reason: "DEEPER_FEED_TRIGGERED", sufficiency };
+  }
+
+  /** A distinct, additional label for a deeper pass's own stop reason — never replaces the legacy CURRENT_DEPTH reason space. */
+  function deeperFeedStopReason(rawStopReason, aborted) {
+    if (aborted) return "DEEPER_FEED_ABORTED";
+    if (rawStopReason === "TEN_CONSECUTIVE_OLDER_THAN_72H") return "DEEPER_FEED_FRONTIER_REACHED";
+    if (rawStopReason === "FAST_SCAN_TIME_LIMIT" || rawStopReason === "SOURCE_TIME_BUDGET") return "DEEPER_FEED_TIME_LIMIT";
+    if (rawStopReason === "NO_NEW_POSTS_AND_CARDS_3_SCROLLS") return "DEEPER_FEED_NO_NEW_POSTS";
+    return "DEEPER_FEED_COMPLETED";
+  }
+
   function exactPostId(node) {
     if (!isObject(node)) return null;
     for (const key of ID_KEYS) {
@@ -941,5 +1007,5 @@
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
   const DEEP_RECALL_STREAK_THRESHOLD = Number.MAX_SAFE_INTEGER;
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS };
 })(globalThis);
