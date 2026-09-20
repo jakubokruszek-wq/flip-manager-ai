@@ -15,6 +15,7 @@ import {
   visibleMembership,
   type MembershipAuditEntry,
 } from "@/features/flip-finder/membership-reconciliation";
+import { reconcileCanonicalListingDecision } from "./canonical-reconciliation";
 
 type Row = Record<string, unknown>;
 
@@ -76,27 +77,18 @@ export async function recalculateFilterMatches(
       });
     });
     await writeMembershipAudit(supabase, auditRows);
-    const { error } = await supabase
-      .from("listing_filter_matches")
-      .update({ is_current_match: false, match_reasons: ["reconciled_out", "complete_scan_filter_mismatch"], match_origin: "filter_recalculation" })
-      .eq("search_filter_id", searchFilterId)
-      .in("listing_id", plan.removedListingIds);
-
-    if (error) {
-      throw new Error("Nie udało się wygasić nieaktualnych dopasowań.");
+    for (const listingId of plan.removedListingIds) {
+      await reconcileCanonicalListingDecision({
+        supabase,
+        listingId,
+        filterId: searchFilterId,
+        decision: { bucket: "REJECTED", reasons: ["reconciled_out", "complete_scan_filter_mismatch"], missingFields: [], hardRejectReasons: ["reconciled_out", "complete_scan_filter_mismatch"] },
+        matchOrigin: "filter_recalculation",
+      });
     }
   }
 
   if (plan.addedListingIds.length > 0) {
-    const matchRows = plan.addedListingIds.map((listingId) => ({
-      listing_id: listingId,
-      search_filter_id: searchFilterId,
-      is_current_match: true,
-      match_reasons: ["filter_recalculation"],
-      match_score: null,
-      match_origin: "filter_recalculation",
-      source_scan_id: null,
-    }));
     const auditRows = plan.addedListingIds.map((listingId) => {
       const previous = matches.find((match) => match.listingId === listingId);
       return membershipAuditEntry({
@@ -109,10 +101,15 @@ export async function recalculateFilterMatches(
       });
     });
     await writeMembershipAudit(supabase, auditRows);
-    const { error } = await supabase.from("listing_filter_matches").upsert(matchRows, { onConflict: "listing_id,search_filter_id" });
-
-    if (error) {
-      throw new Error("Nie udało się dodać przeliczonych dopasowań.");
+    for (const listingId of plan.addedListingIds) {
+      await reconcileCanonicalListingDecision({
+        supabase,
+        listingId,
+        filterId: searchFilterId,
+        decision: { bucket: "MATCHED", reasons: ["filter_recalculation"], missingFields: [], hardRejectReasons: [] },
+        lifecycleStatus: "ACTIVE",
+        matchOrigin: "filter_recalculation",
+      });
     }
   }
 

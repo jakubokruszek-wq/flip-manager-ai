@@ -6,6 +6,7 @@ const test = require("node:test");
 
 const migration = fs.readFileSync(path.join(__dirname, "../../supabase/migrations/20260906120000_add_on_demand_facebook_gallery.sql"), "utf8");
 const retryMigration = fs.readFileSync(path.join(__dirname, "../../supabase/migrations/20260907090000_atomic_gallery_retry_enqueue.sql"), "utf8");
+const safetyMigration = fs.readFileSync(path.join(__dirname, "../../supabase/migrations/20260920160000_facebook_quality_v1_3_2_safety_closure.sql"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "gallery-jobs.ts"), "utf8");
 
 test("gallery migration keeps queue consumer routing atomic and prioritizes manual hydration", () => {
@@ -64,6 +65,23 @@ test("gallery retry RPC is backend-only and application returns the atomic RPC r
   assert.match(galleryJobs, /\.rpc\("enqueue_facebook_gallery_job"/);
   assert.match(galleryJobs, /created: result\?\.job_created === true/);
   assert.doesNotMatch(galleryJobs, /\.from\("facebook_scan_jobs"\)\.insert/);
+});
+
+test("V1.3.2 gallery repair proves exact metadata identity before reset and enqueue", () => {
+  assert.match(safetyMigration, /create or replace function public\.repair_facebook_gallery_job/);
+  assert.match(safetyMigration, /metadata_count <> 1/);
+  assert.match(safetyMigration, /FACEBOOK_GALLERY_METADATA_GROUP_MISMATCH/);
+  assert.match(safetyMigration, /for update;/i);
+  assert.match(safetyMigration, /set images = '\[\]'::jsonb/);
+  assert.match(safetyMigration, /'GALLERY_HYDRATION'/);
+  assert.match(safetyMigration, /grant execute on function public\.repair_facebook_gallery_job\(uuid\) to service_role/);
+});
+
+test("V1.3.2 history clear is serialized and backend-only", () => {
+  assert.match(safetyMigration, /create or replace function public\.clear_facebook_watcher_history_atomic/);
+  assert.match(safetyMigration, /lock table public\.source_scans, public\.facebook_scan_jobs, public\.listings/);
+  assert.match(safetyMigration, /ACTIVE_FACEBOOK_WORK/);
+  assert.match(safetyMigration, /grant execute on function public\.clear_facebook_watcher_history_atomic\(\) to service_role/);
 });
 
 test("failed gallery jobs retain only bounded root diagnostics", () => {

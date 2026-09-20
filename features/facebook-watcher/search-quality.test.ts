@@ -65,6 +65,28 @@ test("reserved and inactive are distinguished from sold", () => {
   assert.equal(classifyFacebookAvailability("Aktualizacja: nieaktualne"), "INACTIVE");
   assert.equal(classifyFacebookAvailability("Sprzedam mieszkanie 45 m2"), "ACTIVE");
 });
+
+test("automated source policy classifies every non-apartment or unavailable post as a hard reject", () => {
+  for (const [text, propertyType] of [
+    ["Sprzedam dom w Łodzi", "HOUSE"],
+    ["Sprzedam działkę budowlaną", "LAND"],
+    ["Sprzedam lokal użytkowy", "COMMERCIAL"],
+    ["Sprzedam garaż", "GARAGE"],
+    ["Sprzedam pokój", "ROOM"],
+  ] as const) {
+    assert.equal(classifyFacebookPropertyType(text), propertyType, text);
+    assert.notEqual(classifyFacebookSearchDecision({
+      searchIntent: "APARTMENT_FOR_SALE", propertyType, mixedProperty: false,
+      sourceValid: true, locationState: "CONFIRMED", availability: "ACTIVE",
+    }), "NORMAL_CANDIDATE", text);
+  }
+  for (const availability of ["SOLD", "RESERVED", "INACTIVE"] as const) {
+    assert.notEqual(classifyFacebookSearchDecision({
+      searchIntent: "APARTMENT_FOR_SALE", propertyType: "APARTMENT", mixedProperty: false,
+      sourceValid: true, locationState: "CONFIRMED", availability,
+    }), "NORMAL_CANDIDATE", availability);
+  }
+});
 test("G: a messy informal private-sale post with apartment + price + area + location is not falsely rejected", () => {
   const text = "mieszkanko 45m2 sprzedam szybko okazja bałuty 320 tys dzwońcie";
   assert.equal(searchIntentFor(text), "APARTMENT_FOR_SALE");

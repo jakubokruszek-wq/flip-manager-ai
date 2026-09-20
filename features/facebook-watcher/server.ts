@@ -5,7 +5,8 @@ import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
 import { decisionBucket } from "@/features/flip-finder/decision-model";
 import { calculateContentHash } from "@/features/flip-finder/otodom-search";
-import { deactivateListingFilterMatch, persistListing } from "@/features/flip-finder/server/persist-listing";
+import { persistListing } from "@/features/flip-finder/server/persist-listing";
+import { reconcileCanonicalListingDecision } from "@/features/flip-finder/server/canonical-reconciliation";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import { classifyFacebookRestore } from "./restore-to-finder";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
@@ -101,9 +102,15 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   // A SELL-intent post can still be a house/land/commercial listing — the intent
   // classifier only sees sell-vs-rent-vs-buy, never what kind of property it is.
   const automatedPropertyType = classifyFacebookPropertyType(normalized.postText ?? "");
-  if (context && (automatedPropertyType === "HOUSE" || automatedPropertyType === "LAND" || automatedPropertyType === "COMMERCIAL")) {
+  const automatedAvailability = classifyFacebookAvailability(normalized.postText ?? "");
+  const hardPropertyReject = automatedPropertyType === "HOUSE" || automatedPropertyType === "LAND" || automatedPropertyType === "COMMERCIAL" || automatedPropertyType === "ROOM" || automatedPropertyType === "GARAGE";
+  if (context && hardPropertyReject) {
     const extracted = skippedFacebookProperty(normalized, intent.intent, intent.confidence, intent.intentSource);
     return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage: true, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent", reasonCode: "FACEBOOK_NON_APARTMENT_PROPERTY" } };
+  }
+  if (context && automatedAvailability !== "ACTIVE") {
+    const extracted = skippedFacebookProperty(normalized, intent.intent, intent.confidence, intent.intentSource);
+    return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [`FACEBOOK_AVAILABILITY_${automatedAvailability}`], notProperty: { realEstateLanguage: true, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent", reasonCode: "FACEBOOK_PROPERTY_FILTER_REJECTED" } };
   }
   const extractedBase = await extractFacebookListing(normalized);
   const extracted = { ...extractedBase, ...normalized.overrides, originalUrl: extractedBase.originalUrl, images: extractedBase.images, flags: normalized.analysisFlags ?? extractedBase.flags, confidence: typeof normalized.analysisConfidence === "number" ? Math.max(0, Math.min(1, normalized.analysisConfidence)) : extractedBase.confidence, fieldConfidence: { ...extractedBase.fieldConfidence, ...normalized.analysisFieldConfidence }, listingIntent: intent.intent, intentConfidence: intent.confidence, intentSource: intent.intentSource, imageAssessments: normalized.imageAssessments ?? extractedBase.imageAssessments };
@@ -272,14 +279,18 @@ async function importAutomatedFacebook(input: {
     listingId = existing.id;
     const imagesUpdate = await supabase.from("listings").update({ images: imageMirror.images }).eq("id", listingId);
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
-    let lifecycleUpdate = await supabase.from("listings").update({ lifecycle_status: manualRejected ? "REJECTED" : decision.bucket === "MATCHED" ? "ACTIVE" : decision.bucket, review_reason: !manualRejected && decision.bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: !manualRejected && decision.bucket === "REVIEW" ? decision.unknownFields : [], last_seen_at: now, status: "active", archived_at: manualRejected ? existingState.archivedAt ?? now : null }).eq("id", listingId);
-    if (lifecycleUpdate.error?.code === "42703") lifecycleUpdate = await supabase.from("listings").update({ last_seen_at: now, status: "active" }).eq("id", listingId);
-    if (lifecycleUpdate.error) throw new Error(`FACEBOOK_LIFECYCLE_PERSIST_FAILED: ${lifecycleUpdate.error.message}`);
-    if (decision.matches && !manualRejected) matchCreated = await upsertAutomatedMatch(supabase, listingId, context, decision.unknownFields, now);
-    else if (decision.bucket === "REVIEW" && !manualRejected) {
-      const review = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: context.filter.id, last_matched_at: now, is_current_match: false, match_reasons: ["review", ...decision.unknownFields.map((field) => `unknown_${field}`)], match_origin: "scan", source_scan_id: context.sourceScanId }, { onConflict: "listing_id,search_filter_id" });
-      if (review.error) throw new Error(`FACEBOOK_REVIEW_PERSIST_FAILED: ${review.error.message}`);
-    } else await deactivateListingFilterMatch(supabase, listingId, context.filter.id);
+    const lastSeen = await supabase.from("listings").update({ last_seen_at: now, status: "active" }).eq("id", listingId);
+    if (lastSeen.error) throw new Error(`FACEBOOK_LIFECYCLE_PERSIST_FAILED: ${lastSeen.error.message}`);
+    const canonical = await reconcileCanonicalListingDecision({
+      supabase,
+      listingId,
+      filterId: context.filter.id,
+      decision: manualRejected ? { bucket: "REJECTED", reasons: ["manual_rejected"], missingFields: [], hardRejectReasons: ["manual_rejected"] } : decision,
+      matchOrigin: "scan",
+      sourceScanId: context.sourceScanId,
+      matchedAt: now,
+    });
+    matchCreated = canonical.isCurrentMatch;
   } else {
     const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt), authoritativeTextSource: normalized.postText ? "AUTHOR_TEXT" : null, mediaBinding: facebookMediaBindingSummary(normalized, externalId), buildingEvidence, flags: effective.flags, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, locationProvenance: locationResolution.provenance, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED" };
     const contentHash = calculateContentHash({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor, locationText, images: imageMirror.images });
@@ -382,16 +393,6 @@ async function importAutomatedFacebook(input: {
   return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics };
 }
 
-async function upsertAutomatedMatch(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string, context: FacebookAutomatedImportContext, unknownFields: string[], matchedAt: string): Promise<boolean> {
-  const values = { listing_id: listingId, search_filter_id: context.filter.id, last_matched_at: matchedAt, is_current_match: true, match_reasons: ["facebook_search", ...unknownFields.map((field) => `unknown_${field}`)], match_score: null, match_origin: "scan", source_scan_id: context.sourceScanId };
-  const inserted = await supabase.from("listing_filter_matches").insert(values);
-  if (!inserted.error) return true;
-  if (inserted.error.code !== "23505") throw new Error(`FACEBOOK_MATCH_PERSIST_FAILED: ${inserted.error.message}`);
-  const updated = await supabase.from("listing_filter_matches").update(values).eq("listing_id", listingId).eq("search_filter_id", context.filter.id);
-  if (updated.error) throw new Error(`FACEBOOK_MATCH_UPDATE_FAILED: ${updated.error.message}`);
-  return false;
-}
-
 function apartmentUnknownFields(filter: SearchFilter, evidence: FacebookBuildingEvidence, city: string | null): string[] {
   const fields: string[] = [];
   if (evidence.status === "UNVERIFIED") fields.push("buildingType");
@@ -468,19 +469,12 @@ async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdm
 }
 
 async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string, item: FacebookProperty, pricePerSqm: number | null) {
-  let currentBucket: "MATCHED" | "REVIEW" | "REJECTED" = "REJECTED";
-  for (const filter of await getActiveSearchFiltersForSource("facebook")) {
-    const decision = evaluateCanonicalListingDecision({ price: item.price, area: item.area, pricePerSqm, rooms: item.rooms, floor: item.floor === null ? null : String(item.floor), city: item.city, district: item.district, title: item.title, locationText: [item.neighborhood,item.district,item.city].filter(Boolean).join(", "), buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter);
-    if (decision.bucket === "MATCHED" || currentBucket === "REJECTED" && decision.bucket === "REVIEW") currentBucket = decision.bucket;
-    const reasons = decision.bucket === "REVIEW"
-      ? ["review", ...decision.reasons, ...decision.missingFields.map((field) => `unknown_${field}`)]
-      : decision.bucket === "MATCHED" ? ["collector_import", ...item.flags] : decision.hardRejectReasons;
-    const match = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: filter.id, last_matched_at: new Date().toISOString(), is_current_match: decision.bucket === "MATCHED", match_score: null, match_reasons: reasons, match_origin: "collector_import", source_scan_id: null }, { onConflict: "listing_id,search_filter_id" });
-    if (match.error) throw new Error(`FACEBOOK_FILTER_RECONCILIATION_FAILED: ${match.error.message}`);
+  const filters = await getActiveSearchFiltersForSource("facebook");
+  const evaluated = filters.map((filter) => ({ filter, decision: evaluateCanonicalListingDecision({ price: item.price, area: item.area, pricePerSqm, rooms: item.rooms, floor: item.floor === null ? null : String(item.floor), city: item.city, district: item.district, title: item.title, locationText: [item.neighborhood,item.district,item.city].filter(Boolean).join(", "), buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter) }));
+  const currentBucket: "MATCHED" | "REVIEW" | "REJECTED" = evaluated.some(({ decision }) => decision.bucket === "MATCHED") ? "MATCHED" : evaluated.some(({ decision }) => decision.bucket === "REVIEW") ? "REVIEW" : "REJECTED";
+  for (const { filter, decision } of evaluated) {
+    await reconcileCanonicalListingDecision({ supabase, listingId, filterId: filter.id, decision: { ...decision, reasons: decision.bucket === "MATCHED" ? ["collector_import", ...item.flags, ...decision.reasons] : decision.reasons }, lifecycleStatus: currentBucket === "MATCHED" ? "ACTIVE" : currentBucket, matchOrigin: "collector_import" });
   }
-  const lifecycleStatus = currentBucket === "MATCHED" ? "ACTIVE" : currentBucket;
-  const update = await supabase.from("listings").update({ lifecycle_status: lifecycleStatus, archived_at: null, status: "active", review_reason: currentBucket === "REVIEW" ? "review" : null }).eq("id", listingId).eq("source", "facebook");
-  if (update.error) throw new Error(`FACEBOOK_FILTER_LIFECYCLE_FAILED: ${update.error.message}`);
 }
 
 export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
@@ -547,12 +541,16 @@ export async function restoreFacebookWatcherListing(listingId: string): Promise<
   if (outcome.bucket === "REJECTED" || !outcome.filter || !outcome.decision) return { restored: false, bucket: "REJECTED", lifecycleStatus: String(listing.lifecycle_status), reasons: outcome.decision?.reasons.length ? outcome.decision.reasons : ["no_active_facebook_filter_match"], unknownFields: [] };
   const now = new Date().toISOString();
   const reasons = outcome.bucket === "REVIEW" ? ["review", ...outcome.decision.unknownFields.map((field) => `unknown_${field}`)] : ["facebook_restore"];
-  const match = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: outcome.filter.id, last_matched_at: now, is_current_match: outcome.bucket === "MATCHED", match_reasons: reasons, match_origin: "filter_recalculation", source_scan_id: null }, { onConflict: "listing_id,search_filter_id" });
-  if (match.error) throw new Error(`FACEBOOK_RESTORE_MATCH_FAILED: ${match.error.message}`);
-  const lifecycleStatus = outcome.bucket === "MATCHED" ? "ACTIVE" : "REVIEW";
-  const update = await supabase.from("listings").update({ lifecycle_status: lifecycleStatus, archived_at: null, status: "active", review_reason: outcome.bucket === "REVIEW" ? reasons.join(", ") : null, missing_fields: outcome.bucket === "REVIEW" ? outcome.decision.unknownFields : [] }).eq("id", listingId).eq("source", "facebook");
-  if (update.error) throw new Error(`FACEBOOK_RESTORE_LISTING_UPDATE_FAILED: ${update.error.message}`);
-  return { restored: true, bucket: outcome.bucket, lifecycleStatus, reasons, unknownFields: outcome.decision.unknownFields };
+  const reconciled = await reconcileCanonicalListingDecision({
+    supabase,
+    listingId,
+    filterId: outcome.filter.id,
+    decision: { bucket: outcome.bucket, reasons, missingFields: outcome.decision.unknownFields, hardRejectReasons: outcome.decision.bucket === "REJECTED" ? outcome.decision.reasons : [] },
+    lifecycleStatus: outcome.bucket === "MATCHED" ? "ACTIVE" : "REVIEW",
+    matchOrigin: "filter_recalculation",
+    matchedAt: now,
+  });
+  return { restored: true, bucket: reconciled.bucket, lifecycleStatus: reconciled.lifecycleStatus, reasons: reconciled.matchReasons, unknownFields: outcome.decision.unknownFields };
 }
 function workflowStatus(value: unknown): FacebookWorkflowStatus { return FACEBOOK_WORKFLOW_STATUSES.includes(value as FacebookWorkflowStatus) ? value as FacebookWorkflowStatus : "new"; }
 function facebookSellerType(value: unknown, flags: string[]): FacebookWatcherListing["sellerType"] { if (value === "private" || value === "agency") return value; return flags.some((flag)=>/bezpośred|właściciel/i.test(flag)) ? "private" : null; }

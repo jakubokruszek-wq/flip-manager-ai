@@ -12,6 +12,7 @@ export type CanonicalVisibilityDebug = {
   visibilityInWatcher: boolean;
   finderStatus: FinderStatus;
   reason: string;
+  consistencyMismatch?: boolean;
 };
 
 export function canonicalVisibilityDebug(input: Omit<CanonicalVisibilityDebug, "finderStatus"> & { finderStatus?: FinderStatus }): CanonicalVisibilityDebug {

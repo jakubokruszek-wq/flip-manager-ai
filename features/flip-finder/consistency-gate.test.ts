@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { canonicalVisibilityDebug, summarizeCanonicalVisibility } from "./canonical-visibility.ts";
 import { evaluateCanonicalListingDecision, type FilterCandidate } from "./filter-evaluation.ts";
+import { canonicalProjection } from "./canonical-projection.ts";
 import type { SearchFilter } from "./index.ts";
 
 const filter = {
@@ -87,4 +88,23 @@ test("a cleared listing is eligible for fresh rediscovery when its current facts
   assert.equal(fresh.bucket, "MATCHED");
   assert.equal(restored.finderStatus, "MATCHED");
   assert.equal(restored.visibilityInFinder, true);
+});
+
+test("consistency matrix keeps persisted state, Finder visibility, and Watcher state aligned", () => {
+  const rows = [
+    { name: "complete valid", decision: evaluateCanonicalListingDecision(base, matchedFilter), lifecycle: "ACTIVE" as const, visible: true, watcher: "MATCHED" as const },
+    { name: "incomplete valid", decision: evaluateCanonicalListingDecision({ ...base, floor: null }, filter), lifecycle: "REVIEW" as const, visible: true, watcher: "REVIEW" as const },
+    { name: "hard reject", decision: evaluateCanonicalListingDecision({ ...base, price: 900_000, pricePerSqm: 20_000 }, filter), lifecycle: "REJECTED" as const, visible: false, watcher: "REJECTED" as const },
+    { name: "archived valid rediscovered", decision: evaluateCanonicalListingDecision(base, matchedFilter), lifecycle: "ACTIVE" as const, visible: true, watcher: "MATCHED" as const },
+    { name: "stale valid rediscovered", decision: evaluateCanonicalListingDecision(base, matchedFilter), lifecycle: "ACTIVE" as const, visible: true, watcher: "MATCHED" as const },
+    { name: "cleared valid rediscovered", decision: evaluateCanonicalListingDecision(base, matchedFilter), lifecycle: "ACTIVE" as const, visible: true, watcher: "MATCHED" as const },
+  ];
+  for (const row of rows) {
+    const projection = canonicalProjection(row.decision);
+    assert.equal(projection.lifecycleStatus, row.lifecycle, row.name);
+    assert.equal(projection.isCurrentMatch, row.decision.bucket === "MATCHED", row.name);
+    assert.deepEqual(projection.matchReasons, row.decision.bucket === "REVIEW" ? ["review", ...row.decision.reasons, ...row.decision.missingFields.map((field) => `unknown_${field}`)] : row.decision.bucket === "REJECTED" ? row.decision.hardRejectReasons : row.decision.reasons, row.name);
+    assert.equal(projection.bucket === "MATCHED" || projection.bucket === "REVIEW" ? row.visible : false, row.visible, row.name);
+    assert.equal(projection.bucket, row.watcher, row.name);
+  }
 });

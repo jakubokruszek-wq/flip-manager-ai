@@ -298,15 +298,21 @@ export async function getFilterResults(filterId: string, includeArchived = false
       : listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "REJECTED"
         ? "REJECTED"
         : filterDecision.bucket;
+    const expectedLifecycle = decisionBucket === "MATCHED" ? "ACTIVE" : decisionBucket === "REVIEW" ? "REVIEW" : "REJECTED";
+    const persistedReview = match.matchReasons.some((reason) => reason === "review" || reason.startsWith("unknown_"));
+    const consistencyMismatch = listing.lifecycleStatus !== expectedLifecycle
+      || match.isCurrentMatch !== (decisionBucket === "MATCHED")
+      || (decisionBucket === "REVIEW" && !persistedReview);
     const canonicalDebug = canonicalVisibilityDebug({
       listingId: listing.id,
       canonicalBucket: decisionBucket,
       lifecycleStatus: listing.lifecycleStatus ?? null,
-      isCurrentMatch: decisionBucket === "MATCHED",
+      isCurrentMatch: match.isCurrentMatch,
       matchReasons: [...filterDecision.reasons, ...(decisionBucket === "REVIEW" ? ["review", ...filterDecision.missingFields.map((field) => `unknown_${field}`)] : [])],
       visibilityInFinder: (decisionBucket === "MATCHED" || decisionBucket === "REVIEW") && listing.status === "active" && (listing.lifecycleStatus === "ACTIVE" || listing.lifecycleStatus === "REVIEW"),
       visibilityInWatcher: listing.source === "facebook",
       reason: sourceConflict ? "source_conflict" : decisionBucket === "REJECTED" ? filterDecision.hardRejectReasons.join(",") || "rejected_by_policy" : decisionBucket === "REVIEW" ? "review_uncertainty" : "current_filter_match",
+      consistencyMismatch,
     });
     const publishedAt = publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? []);
 
@@ -348,6 +354,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         decisionBucket,
         finderStatus: canonicalDebug.finderStatus,
         canonicalDecisionDebug: canonicalDebug,
+        canonicalConsistencyMismatch: consistencyMismatch,
         lifecycleStatus: listing.lifecycleStatus,
         reviewReason: listing.reviewReason,
         missingFields: listing.missingFields,

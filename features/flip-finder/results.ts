@@ -27,6 +27,7 @@ export type ResultStatusInput = {
 
 export type FilterResult = PropertyListingResult & {
   canonicalDecisionDebug?: CanonicalVisibilityDebug;
+  canonicalConsistencyMismatch?: boolean;
   finderStatus?: FinderStatus;
   opportunityScore?: number | null;
   opportunityPriority?: OpportunityPriority | null;

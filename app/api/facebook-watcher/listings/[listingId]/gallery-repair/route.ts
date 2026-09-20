@@ -12,7 +12,7 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
   catch (error) {
     const message = error instanceof Error ? error.message : "FACEBOOK_GALLERY_REPAIR_FAILED";
     const code = message.split(":", 1)[0];
-    const known = ["FACEBOOK_GALLERY_LISTING_NOT_FOUND", "FACEBOOK_GALLERY_LISTING_NOT_ELIGIBLE", "FACEBOOK_GALLERY_EXACT_POST_REQUIRED", "FACEBOOK_GALLERY_FILTER_CONTEXT_MISSING", "FACEBOOK_GALLERY_REPAIR_ALREADY_RUNNING"];
+    const known = ["FACEBOOK_GALLERY_LISTING_NOT_FOUND", "FACEBOOK_GALLERY_LISTING_NOT_ELIGIBLE", "FACEBOOK_GALLERY_EXACT_POST_REQUIRED", "FACEBOOK_GALLERY_FILTER_CONTEXT_MISSING", "FACEBOOK_GALLERY_REPAIR_ALREADY_RUNNING", "FACEBOOK_GALLERY_METADATA_IDENTITY_AMBIGUOUS", "FACEBOOK_GALLERY_METADATA_GROUP_MISMATCH"];
     return Response.json({ ok: false, code: known.includes(code) ? code : "FACEBOOK_GALLERY_REPAIR_FAILED" }, { status: known.includes(code) ? 409 : 503 });
   }
 }

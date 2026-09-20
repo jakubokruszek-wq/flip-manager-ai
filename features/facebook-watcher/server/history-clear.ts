@@ -38,7 +38,7 @@ async function readCandidates(): Promise<FacebookHistoryCandidate[]> {
 async function activeBlock(): Promise<string | null> {
   const supabase = createFacebookWatcherAdminClient();
   const [scans, jobs] = await Promise.all([
-    supabase.from("source_scans").select("id").eq("source", "facebook").in("status", ["running"]),
+    supabase.from("source_scans").select("id").eq("source", "facebook").in("status", ["pending", "running"]),
     supabase.from("facebook_scan_jobs").select("id,job_type,status").in("status", ACTIVE_JOB_STATUSES),
   ]);
   if (scans.error) throw new Error(`FACEBOOK_WATCHER_HISTORY_SCAN_READ_FAILED: ${scans.error.message}`);
@@ -55,19 +55,18 @@ export async function getFacebookWatcherHistorySummary(): Promise<FacebookWatche
 
 export async function clearFacebookWatcherHistory(): Promise<FacebookWatcherHistorySummary> {
   const supabase = createFacebookWatcherAdminClient();
-  const blockedReason = await activeBlock();
-  if (blockedReason) throw new Error(blockedReason);
-  const metadataResult = await supabase.from("listing_source_metadata").select("listing_id,metadata").eq("source", "facebook");
-  if (metadataResult.error) throw new Error(`FACEBOOK_WATCHER_HISTORY_READ_FAILED: ${metadataResult.error.message}`);
-  const metadataRows = rows(metadataResult.data);
-  const plan = await readCandidates().then(planFacebookWatcherHistoryClear);
-  if (plan.pureFacebookListingIds.length) {
-    const deleted = await supabase.from("listings").delete().in("id", plan.pureFacebookListingIds).eq("source", "facebook");
-    if (deleted.error) throw new Error(`FACEBOOK_WATCHER_HISTORY_DELETE_FAILED: ${deleted.error.message}`);
+  const result = await supabase.rpc("clear_facebook_watcher_history_atomic").single();
+  if (result.error || !result.data) {
+    const code = result.error?.message.includes("ACTIVE_FACEBOOK_WORK") ? "ACTIVE_FACEBOOK_JOB" : "FACEBOOK_WATCHER_HISTORY_CLEAR_FAILED";
+    throw new Error(`${code}: ${result.error?.message ?? "missing result"}`);
   }
-  if (plan.preservedListingIds.length) {
-    const association = await supabase.from("listing_source_metadata").delete().eq("source", "facebook").in("listing_id", plan.preservedListingIds);
-    if (association.error) throw new Error(`FACEBOOK_WATCHER_HISTORY_ASSOCIATION_DELETE_FAILED: ${association.error.message}`);
-  }
-  return { ...plan, total: metadataRows.length, ready: true, blockedReason: null };
+  const value = result.data as { pure_facebook_listing_ids?: unknown; preserved_listing_ids?: unknown; removed_association_listing_ids?: unknown };
+  const pureFacebookListingIds = uuidArray(value.pure_facebook_listing_ids);
+  const preservedListingIds = uuidArray(value.preserved_listing_ids);
+  const removedAssociationListingIds = uuidArray(value.removed_association_listing_ids);
+  return { pureFacebookListingIds, preservedListingIds, removedAssociationListingIds, total: pureFacebookListingIds.length + preservedListingIds.length, ready: true, blockedReason: null };
+}
+
+function uuidArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }

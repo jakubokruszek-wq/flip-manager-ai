@@ -8,6 +8,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { staleListingFilterMatchKey, staleListingFilterMatchValues } from "./match-state";
 import type { DecisionBucket } from "../decision-model";
 import { syncResaleCompFromListing } from "@/features/market-intelligence/resale-comps-store";
+import { reconcileCanonicalListingDecision } from "./canonical-reconciliation";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -64,23 +65,28 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
     });
   });
   if (changed) { const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: item.rawPayload }).abortSignal(signal); if (snapshotError) throw new Error("Nie udało się zapisać historii oferty."); }
-  if (!createMatch) {
-    if (bucket === "REVIEW" && !manualRejected) {
-      const { error: reviewMatchError } = await supabase.from("listing_filter_matches").upsert({ listing_id: saved.id, search_filter_id: filterId, last_matched_at: matchedAt, is_current_match: false, match_reasons: ["review", ...reviewReasons, ...reviewFields.map((field) => `unknown_${field}`)], match_score: null, match_origin: "scan", source_scan_id: sourceScanId }, { onConflict: "listing_id,search_filter_id" }).abortSignal(signal);
-      if (reviewMatchError) throw new Error("Nie udało się zapisać oferty do oceny.");
-    } else {
-      await deactivateListingFilterMatch(supabase, saved.id, filterId, signal);
-    }
-    return { listingId: saved.id, listingCreated: current === null, matchCreated: false, updated: current && changed ? 1 : 0, priceDrop };
-  }
-  if (manualRejected) {
-    await deactivateListingFilterMatch(supabase, saved.id, filterId, signal);
-    return { listingId: saved.id, listingCreated: false, matchCreated: false, updated: changed ? 1 : 0, priceDrop };
-  }
-  const matchReasons = [...new Set([`${item.source}_search`, ...unknownFields.map((field) => `unknown_${field}`)])];
-  const { error: insertMatchError } = await supabase.from("listing_filter_matches").insert({ listing_id: saved.id, search_filter_id: filterId, last_matched_at: matchedAt, is_current_match: true, match_reasons: matchReasons, match_score: null, match_origin: "scan", source_scan_id: sourceScanId }).abortSignal(signal);
-  let matchCreated = !insertMatchError;
-  if (insertMatchError) { if (insertMatchError.code !== "23505") throw new Error("Nie udało się zapisać dopasowania."); const { error: updateMatchError } = await supabase.from("listing_filter_matches").update({ last_matched_at: matchedAt, is_current_match: true, match_reasons: matchReasons, match_score: null, match_origin: "scan", source_scan_id: sourceScanId }).eq("listing_id", saved.id).eq("search_filter_id", filterId).abortSignal(signal); if (updateMatchError) throw new Error("Nie udało się odświeżyć dopasowania."); matchCreated = false; }
+  const persistedDecision = decision ? {
+    bucket: decision.bucket ?? bucket,
+    reasons: decision.reasons ?? reviewReasons,
+    missingFields: decision.unknownFields ?? reviewFields,
+    hardRejectReasons: (decision.bucket ?? bucket) === "REJECTED" ? (decision.reasons ?? reviewReasons) : [],
+  } : {
+    bucket,
+    reasons: manualRejected ? ["manual_rejected"] : reviewReasons,
+    missingFields: reviewFields,
+    hardRejectReasons: bucket === "REJECTED" ? reviewReasons : [],
+  };
+  const reconciliation = await reconcileCanonicalListingDecision({
+    supabase,
+    listingId: saved.id,
+    filterId,
+    decision: manualRejected ? { bucket: "REJECTED", reasons: ["manual_rejected"], missingFields: [], hardRejectReasons: ["manual_rejected"] } : persistedDecision,
+    matchOrigin: "scan",
+    sourceScanId,
+    matchedAt,
+    signal,
+  });
+  const matchCreated = reconciliation.isCurrentMatch && !current;
   return { listingId: saved.id, listingCreated: current === null, matchCreated, updated: current && changed ? 1 : 0, priceDrop };
 }
 

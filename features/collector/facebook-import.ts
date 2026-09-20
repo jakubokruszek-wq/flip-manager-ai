@@ -1,8 +1,11 @@
 import "server-only";
 
-import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-evaluation";
+import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
+import { reconcileCanonicalListingDecision } from "@/features/flip-finder/server/canonical-reconciliation";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { resolveFacebookListingIntent } from "@/features/facebook-watcher/facebook-intent";
+import { classifyFacebookAvailability, classifyFacebookPropertyType } from "@/features/facebook-watcher/search-quality";
 
 import { normalizeFacebookCollectorPayload, type FacebookCollectorPayload, type NormalizedFacebookImport } from "./facebook-normalization";
 
@@ -67,18 +70,24 @@ async function upsertMetadata(supabase: ReturnType<typeof createAdminClient>, li
 
 async function applyFilters(supabase: ReturnType<typeof createAdminClient>, listingId: string, payload: NormalizedFacebookImport): Promise<{ matchedFilters: string[]; rejectedFilters: Array<{ filterId: string; reasons: string[] }> }> {
   const matchedFilters: string[] = []; const rejectedFilters: Array<{ filterId: string; reasons: string[] }> = [];
-  for (const filter of await getActiveSearchFiltersForSource("facebook")) {
-    const decision = evaluateListingAgainstFilter({ price: payload.price, area: payload.area, pricePerSqm: payload.pricePerSqm, rooms: payload.rooms, floor: null, city: null, district: null, title: payload.title ?? payload.content, locationText: payload.location, buildingType: null }, filter);
-    if (!decision.matches && decision.bucket !== "REVIEW") { rejectedFilters.push({ filterId: filter.id, reasons: decision.reasons }); continue; }
-    const bucket = decision.bucket;
-    await supabase.from("listings").update({ lifecycle_status: bucket === "MATCHED" ? "ACTIVE" : "REVIEW", review_reason: bucket === "REVIEW" ? `Brak danych: ${decision.unknownFields.join(", ")}` : null, missing_fields: bucket === "REVIEW" ? decision.unknownFields : [] }).eq("id", listingId);
-    const { error } = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: filter.id, last_matched_at: new Date().toISOString(), is_current_match: bucket === "MATCHED", match_score: null, match_reasons: bucket === "REVIEW" ? ["review", ...decision.unknownFields.map((field) => `unknown_${field}`)] : ["collector_import", ...decision.unknownFields.map((field) => `unknown_${field}`)], match_origin: "collector_import", source_scan_id: null }, { onConflict: "listing_id,search_filter_id" });
-    if (error && error.code !== "23505") throw new Error("Nie udało się zapisać dopasowania Collectora.");
-    if (!error && bucket === "MATCHED") matchedFilters.push(filter.id);
+  const text = payload.content ?? payload.title ?? "";
+  const intent = resolveFacebookListingIntent(text, null, null);
+  const propertyType = classifyFacebookPropertyType(text);
+  const availability = classifyFacebookAvailability(text);
+  const hardSourceReject = intent.intent !== "SELL_PROPERTY" || ["HOUSE", "LAND", "COMMERCIAL", "ROOM", "GARAGE"].includes(propertyType) || availability !== "ACTIVE";
+  const filters = await getActiveSearchFiltersForSource("facebook");
+  const evaluated = filters.map((filter) => {
+    if (hardSourceReject) return { filter, decision: { bucket: "REJECTED" as const, reasons: [`facebook_source_${availability.toLowerCase()}`, `facebook_${propertyType.toLowerCase()}`], missingFields: [], hardRejectReasons: ["facebook_source_policy"] } };
+    return { filter, decision: evaluateCanonicalListingDecision({ price: payload.price, area: payload.area, pricePerSqm: payload.pricePerSqm, rooms: payload.rooms, floor: null, city: null, district: null, title: payload.title ?? payload.content, locationText: payload.location, buildingType: null }, filter) };
+  });
+  const aggregateBucket = evaluated.some(({ decision }) => decision.bucket === "MATCHED") ? "MATCHED" : evaluated.some(({ decision }) => decision.bucket === "REVIEW") ? "REVIEW" : "REJECTED";
+  for (const { filter, decision } of evaluated) {
+    await reconcileCanonicalListingDecision({ supabase, listingId, filterId: filter.id, decision: { ...decision, reasons: decision.bucket === "MATCHED" ? ["collector_import", ...decision.reasons] : decision.reasons }, lifecycleStatus: aggregateBucket === "MATCHED" ? "ACTIVE" : aggregateBucket, matchOrigin: "collector_import" });
+    if (decision.bucket === "MATCHED") matchedFilters.push(filter.id);
+    if (decision.bucket === "REJECTED") rejectedFilters.push({ filterId: filter.id, reasons: decision.hardRejectReasons });
   }
   return { matchedFilters, rejectedFilters };
 }
-
 function duplicateResult(listingId: string, payload: NormalizedFacebookImport): FacebookImportResult { return { status: "duplicate", listingId, matchedFilters: [], rejectedFilters: [], calculatedPricePerSqm: payload.pricePerSqm, missingFields: missingFields(payload) }; }
 function missingFields(payload: NormalizedFacebookImport): string[] { return [["title", payload.title], ["price", payload.price], ["area", payload.area], ["rooms", payload.rooms], ["location", payload.location]].filter((entry): entry is [string, null] => entry[1] === null).map(([field]) => field); }
 function payloadForStorage(payload: NormalizedFacebookImport): Record<string, unknown> { return { sourcePostUrl: payload.normalizedPostUrl, title: payload.title, groupName: payload.groupName, authorName: payload.authorName, publishedAt: payload.publishedAt, content: payload.content, price: payload.price, area: payload.area, rooms: payload.rooms, location: payload.location, imageUrls: payload.imageUrls, collectedAt: payload.collectedAt }; }
