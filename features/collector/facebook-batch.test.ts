@@ -121,6 +121,53 @@ test("recall telemetry tolerates a missing or malformed value and never invents 
   assert.equal(hostile.recall?.totalUniqueCanonicalPosts, 0);
 });
 
+test("R: stuck-feed recovery telemetry (V1.2.1) survives the batch contract with a realistic bypass shape", () => {
+  const batch = batchWith({
+    recall: {
+      initialFeedDepthMode: "CURRENT_DEPTH", adaptiveDeeperTriggered: true, effectiveFeedDepthMode: "DEEPER_NETWORK_FEED",
+      currentDepth: null, deeperFeed: null, deeperFeedTriggerReasons: [], currentDepthDurationMs: 0, deeperFeedDurationMs: 0,
+      totalDurationMs: 18_400, totalUniqueCanonicalPosts: 6,
+      stuckRecovery: {
+        count: 2,
+        attempted: 2,
+        successful: 1,
+        lastReason: "STUCK_MEDIA_BYPASS_ELIGIBLE",
+        events: [
+          { iteration: 4, elapsedMs: 5_200, reason: "STUCK_MEDIA_BYPASS_ELIGIBLE", mediaDetected: true, mediaKind: "VIDEO", viewportCoverageRatio: 0.78, scrollTopBefore: 2_295, scrollTopAfter: 3_420, scrollDelta: 1_125, newCanonicalPostsAfterRecovery: 1, outcome: "RECOVERY_PROGRESS" },
+          { iteration: 9, elapsedMs: 9_800, reason: "STUCK_MEDIA_BYPASS_ELIGIBLE", mediaDetected: true, mediaKind: "OVERSIZED_CARD", viewportCoverageRatio: 0.5, scrollTopBefore: 6_000, scrollTopAfter: 7_125, scrollDelta: 1_125, newCanonicalPostsAfterRecovery: 0, outcome: "RECOVERY_NO_PROGRESS" },
+        ],
+      },
+    },
+  });
+  const stuckRecovery = batch.recall?.stuckRecovery;
+  assert.equal(stuckRecovery?.count, 2);
+  assert.equal(stuckRecovery?.successful, 1);
+  assert.equal(stuckRecovery?.lastReason, "STUCK_MEDIA_BYPASS_ELIGIBLE");
+  assert.equal(stuckRecovery?.events.length, 2);
+  assert.equal(stuckRecovery?.events[0]?.mediaKind, "VIDEO");
+  assert.equal(stuckRecovery?.events[0]?.outcome, "RECOVERY_PROGRESS");
+  assert.equal(stuckRecovery?.events[0]?.scrollDelta, 1_125);
+  assert.equal(stuckRecovery?.events[1]?.mediaKind, "OVERSIZED_CARD");
+  assert.equal(stuckRecovery?.events[1]?.outcome, "RECOVERY_NO_PROGRESS");
+});
+
+test("stuck-feed recovery telemetry tolerates a missing or malformed value and never accepts a hostile outcome label", () => {
+  assert.equal(batchWith({ recall: { initialFeedDepthMode: "CURRENT_DEPTH", adaptiveDeeperTriggered: false, effectiveFeedDepthMode: "CURRENT_DEPTH", currentDepth: null, deeperFeed: null, deeperFeedTriggerReasons: [], currentDepthDurationMs: 0, deeperFeedDurationMs: 0, totalDurationMs: 0, totalUniqueCanonicalPosts: 0 } }).recall?.stuckRecovery, null);
+  const hostile = batchWith({
+    recall: {
+      initialFeedDepthMode: "CURRENT_DEPTH", adaptiveDeeperTriggered: false, effectiveFeedDepthMode: "CURRENT_DEPTH",
+      currentDepth: null, deeperFeed: null, deeperFeedTriggerReasons: [], currentDepthDurationMs: 0, deeperFeedDurationMs: 0, totalDurationMs: 0, totalUniqueCanonicalPosts: 0,
+      stuckRecovery: { count: 999, attempted: -5, successful: "nope", lastReason: "x".repeat(500), events: Array.from({ length: 50 }, (_, index) => ({ iteration: index, elapsedMs: 1, reason: "R", mediaDetected: true, mediaKind: "VIDEO", viewportCoverageRatio: 5, scrollTopBefore: -1, scrollTopAfter: -1, scrollDelta: -1, newCanonicalPostsAfterRecovery: -1, outcome: "SOMETHING_ELSE" })) },
+    },
+  });
+  assert.ok((hostile.recall?.stuckRecovery?.count ?? 0) <= 10);
+  assert.equal(hostile.recall?.stuckRecovery?.successful, 0);
+  assert.ok((hostile.recall?.stuckRecovery?.lastReason ?? "").length <= 60);
+  assert.ok((hostile.recall?.stuckRecovery?.events.length ?? 0) <= 10);
+  assert.equal(hostile.recall?.stuckRecovery?.events[0]?.outcome, "RECOVERY_NO_PROGRESS", "an unrecognized outcome label must fail closed, never default to PROGRESS");
+  assert.equal(hostile.recall?.stuckRecovery?.events[0]?.viewportCoverageRatio, 1, "ratio is clamped to a valid 0-1 range");
+});
+
 test("normalizes a healthy exact-source collector batch and deduplicates posts", () => {
   const post = { postId: "1577700267381450", permalink: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, sourceId, sourceType: "GROUP", author: "A", text: "Sprzedam mieszkanie", publishedAt: "2026-08-29T10:00:00Z", timestampText: "2 godz.", media: [{ url: "https://scontent.example/image.jpg", mediaId: "99", exactPostId: "1577700267381450", exactAssociation: true, discoveryLayers: ["DOM"] }], discoveryLayers: ["DOM", "NETWORK"], firstSeenIteration: 0 };
   const batch = normalizeFacebookCollectorBatch({ scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z", health: { status: "HEALTHY", visibleCardCount: 1, capturedPostCount: 1, scrolls: 3, durationMs: 5000, stopReason: "NO_NEW_IDS", reasons: [] }, posts: [post, post] });

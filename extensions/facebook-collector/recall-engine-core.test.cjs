@@ -230,3 +230,121 @@ test("the 60s outer envelope always wins even when every expandability signal st
   assert.equal(decision.continue, false);
   assert.equal(decision.reason, "NORMAL_EXPLORATION_ENVELOPE_COMPLETE");
 });
+
+// Recall engine V1.2.1: stuck-feed / oversized-media bypass.
+function stuckShaped(overrides = {}) {
+  return {
+    stopReason: "NO_NEW_POSTS_AND_CARDS_3_SCROLLS",
+    aborted: false,
+    atBottom: false,
+    consecutiveNoNew: 3,
+    consecutiveNoVisibleGrowth: 3,
+    mediaDominant: true,
+    elapsedMs: 18_000,
+    recoveryCount: 0,
+    iterationsSinceLastRecovery: null,
+    ...overrides,
+  };
+}
+
+test("evaluateViewportMediaDominance: a large video filling most of the viewport is detected as dominant", () => {
+  const result = core.evaluateViewportMediaDominance({ elementTop: 0, elementBottom: 850, viewportHeight: 900, kind: "VIDEO" });
+  assert.equal(result.detected, true);
+  assert.ok(result.viewportCoverageRatio >= 0.45);
+  assert.equal(result.kind, "VIDEO");
+});
+
+test("F: a normal small video card does not cross the dominance threshold", () => {
+  const result = core.evaluateViewportMediaDominance({ elementTop: 100, elementBottom: 300, viewportHeight: 900, kind: "VIDEO" });
+  assert.equal(result.detected, false);
+  assert.ok(result.viewportCoverageRatio < 0.45);
+});
+
+test("evaluateViewportMediaDominance: an element mostly scrolled past contributes little coverage despite being enormous", () => {
+  // A 3000px-tall element whose top is already at -2900: only 100px remains
+  // visible, so it must not still read as "dominating" the current screen.
+  const result = core.evaluateViewportMediaDominance({ elementTop: -2900, elementBottom: 100, viewportHeight: 900, kind: "VIDEO" });
+  assert.equal(result.detected, false);
+  assert.ok(result.viewportCoverageRatio < 0.2);
+});
+
+test("G: a large non-video oversized card produces the identical dominance signal without a literal <video>", () => {
+  const result = core.evaluateViewportMediaDominance({ elementTop: 0, elementBottom: 900, viewportHeight: 900, kind: "OVERSIZED_CARD" });
+  assert.equal(result.detected, true);
+  assert.equal(result.kind, "OVERSIZED_CARD");
+});
+
+test("A: a stuck-shaped stop with dominant media, not at the bottom, is recovery-eligible", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped());
+  assert.equal(decision.eligible, true);
+  assert.equal(decision.reason, "STUCK_MEDIA_BYPASS_ELIGIBLE");
+});
+
+test("G: eligibility does not care whether the media signal came from a video or an oversized non-video card — only the boolean matters", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ mediaDominant: true }));
+  assert.equal(decision.eligible, true);
+});
+
+test("B: the same shape but confirmed at the physical bottom is never eligible", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ atBottom: true }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "CONFIRMED_PHYSICAL_BOTTOM");
+});
+
+test("C: a Date/Frontier hard stop is never eligible, regardless of media", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ stopReason: "TEN_CONSECUTIVE_OLDER_THAN_72H" }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "NOT_STUCK_SHAPED_STOP");
+});
+
+test("C2: the absolute hard time-limit stop is never eligible, regardless of media", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ stopReason: "FAST_SCAN_TIME_LIMIT" }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "NOT_STUCK_SHAPED_STOP");
+});
+
+test("D: at or past the 60s normal exploration ceiling, never eligible", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ elapsedMs: 60_000 }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "EXPLORATION_ENVELOPE_COMPLETE");
+});
+
+test("E: an aborted run is never eligible for recovery", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ aborted: true }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "ABORTED");
+});
+
+test("F2: without a dominating media signal, the same no-new/not-bottom shape is not eligible", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ mediaDominant: false }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "NO_DOMINATING_MEDIA_DETECTED");
+});
+
+test("an insufficient no-new streak is never eligible even with dominant media", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ consecutiveNoNew: 1 }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "INSUFFICIENT_NO_NEW_STREAK");
+});
+
+test("M: MAX_STUCK_RECOVERIES prevents an endless bypass loop", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ recoveryCount: core.MAX_STUCK_RECOVERIES }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "MAX_RECOVERIES_REACHED");
+});
+
+test("N: a cooldown window prevents back-to-back recovery every iteration", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ recoveryCount: 1, iterationsSinceLastRecovery: 1 }));
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "COOLDOWN_ACTIVE");
+});
+
+test("N2: once the cooldown window has elapsed, recovery is eligible again", () => {
+  const decision = core.evaluateStuckFeedCondition(stuckShaped({ recoveryCount: 1, iterationsSinceLastRecovery: core.STUCK_RECOVERY_COOLDOWN_ITERATIONS }));
+  assert.equal(decision.eligible, true);
+});
+
+test("H: the recovery scroll constant is a stronger step than normal (0.85 viewports) but bounded at or under 1.5 viewports", () => {
+  assert.ok(core.STUCK_RECOVERY_SCROLL_VIEWPORTS > 0.85, "must be a materially stronger step than the normal scroll");
+  assert.ok(core.STUCK_RECOVERY_SCROLL_VIEWPORTS >= 1.0 && core.STUCK_RECOVERY_SCROLL_VIEWPORTS <= 1.5, "must stay within the 1.0-1.5 viewport acceptable range");
+});

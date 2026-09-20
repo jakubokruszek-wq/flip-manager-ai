@@ -388,6 +388,29 @@ export type CollectorRecallDepthPhase = {
   stopReason: string | null;
 };
 
+/** One bounded stuck-feed/oversized-media bypass attempt (V1.2.1). */
+export type CollectorStuckRecoveryEvent = {
+  iteration: number;
+  elapsedMs: number;
+  reason: string;
+  mediaDetected: boolean;
+  mediaKind: string;
+  viewportCoverageRatio: number;
+  scrollTopBefore: number;
+  scrollTopAfter: number;
+  scrollDelta: number;
+  newCanonicalPostsAfterRecovery: number;
+  outcome: "RECOVERY_PROGRESS" | "RECOVERY_NO_PROGRESS";
+};
+
+export type CollectorStuckRecoveryTelemetry = {
+  count: number;
+  attempted: number;
+  successful: number;
+  lastReason: string | null;
+  events: CollectorStuckRecoveryEvent[];
+};
+
 export type CollectorRecallTelemetry = {
   initialFeedDepthMode: CollectorFeedDepthMode;
   adaptiveDeeperTriggered: boolean;
@@ -399,10 +422,40 @@ export type CollectorRecallTelemetry = {
   deeperFeedDurationMs: number;
   totalDurationMs: number;
   totalUniqueCanonicalPosts: number;
+  stuckRecovery: CollectorStuckRecoveryTelemetry | null;
 };
 
 function feedDepthMode(value: unknown): CollectorFeedDepthMode {
   return typeof value === "string" && (COLLECTOR_FEED_DEPTH_MODES as readonly string[]).includes(value) ? (value as CollectorFeedDepthMode) : "CURRENT_DEPTH";
+}
+
+function normalizeStuckRecoveryEvent(value: unknown): CollectorStuckRecoveryEvent | null {
+  if (!isRecord(value)) return null;
+  return {
+    iteration: boundedInteger(value.iteration, 0, 500),
+    elapsedMs: boundedInteger(value.elapsedMs, 0, 600_000),
+    reason: nullableString(value.reason, 60) ?? "UNKNOWN",
+    mediaDetected: value.mediaDetected === true,
+    mediaKind: nullableString(value.mediaKind, 40) ?? "UNKNOWN",
+    viewportCoverageRatio: typeof value.viewportCoverageRatio === "number" && Number.isFinite(value.viewportCoverageRatio) ? Math.min(1, Math.max(0, value.viewportCoverageRatio)) : 0,
+    scrollTopBefore: boundedInteger(value.scrollTopBefore, 0, 10_000_000),
+    scrollTopAfter: boundedInteger(value.scrollTopAfter, 0, 10_000_000),
+    scrollDelta: boundedInteger(value.scrollDelta, 0, 10_000_000),
+    newCanonicalPostsAfterRecovery: boundedInteger(value.newCanonicalPostsAfterRecovery, 0, 1_000),
+    outcome: value.outcome === "RECOVERY_PROGRESS" ? "RECOVERY_PROGRESS" : "RECOVERY_NO_PROGRESS",
+  };
+}
+
+function normalizeStuckRecovery(value: unknown): CollectorStuckRecoveryTelemetry | null {
+  if (!isRecord(value)) return null;
+  const events = Array.isArray(value.events) ? value.events.map(normalizeStuckRecoveryEvent).filter((event): event is CollectorStuckRecoveryEvent => event !== null).slice(0, 10) : [];
+  return {
+    count: boundedInteger(value.count, 0, 10),
+    attempted: boundedInteger(value.attempted, 0, 10),
+    successful: boundedInteger(value.successful, 0, 10),
+    lastReason: nullableString(value.lastReason, 60),
+    events,
+  };
 }
 
 function normalizeRecallDepthPhase(value: unknown): CollectorRecallDepthPhase | null {
@@ -441,6 +494,7 @@ function normalizeRecall(value: unknown): CollectorRecallTelemetry | null {
     deeperFeedDurationMs: boundedInteger(value.deeperFeedDurationMs, 0, 600_000),
     totalDurationMs: boundedInteger(value.totalDurationMs, 0, 600_000),
     totalUniqueCanonicalPosts: boundedInteger(value.totalUniqueCanonicalPosts, 0, 1_000),
+    stuckRecovery: normalizeStuckRecovery(value.stuckRecovery),
   };
 }
 

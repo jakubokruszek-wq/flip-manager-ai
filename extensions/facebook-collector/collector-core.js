@@ -764,6 +764,62 @@
     return scrollHeightGrewRecently && !atBottom ? { continue: true, reason: "VALUE_BASED_CONTINUATION_EVIDENCE" } : { continue: false, reason: "NO_ADDITIONAL_RECALL_VALUE_EVIDENCE" };
   }
 
+  // Recall engine V1.2.1: stuck-feed / oversized-media bypass. A normal scroll
+  // step can land the viewport on a large video/Reel/media-heavy card whose
+  // own height dwarfs one scroll step, so several iterations pass with no new
+  // canonical post and no new visible card even though the group still has
+  // more content below it. Reported as: "the collector was moving quickly,
+  // then a video card appeared and the feed effectively got stuck on it."
+  // Scoped narrowly to that exact shape (mirrors the caller's own stop
+  // decision) so it never turns into a general "always try one more scroll"
+  // policy — Date/Frontier, the hard time ceiling, MAX_POSTS/MAX_SCROLLS, and
+  // every other stop reason are untouched, since this is only ever consulted
+  // when the caller's own decision is literally NO_NEW_POSTS_AND_CARDS_3_SCROLLS.
+  const VIEWPORT_MEDIA_DOMINANCE_RATIO = 0.45;
+  const STUCK_RECOVERY_MIN_CONSECUTIVE_NO_NEW = 2;
+  const STUCK_RECOVERY_SCROLL_VIEWPORTS = 1.25;
+  const STUCK_RECOVERY_COOLDOWN_ITERATIONS = 3;
+  const MAX_STUCK_RECOVERIES = 3;
+
+  /**
+   * Pure geometry: how much of the CURRENT viewport a candidate element's
+   * visible intersection occupies. `elementTop`/`elementBottom` are expected
+   * to already be viewport-relative (as getBoundingClientRect returns), so an
+   * element mostly scrolled past or not yet reached correctly contributes
+   * little/no coverage even if the element itself is enormous — what matters
+   * is how much of the CURRENT screen it dominates, not its raw size.
+   */
+  function evaluateViewportMediaDominance({ elementTop, elementBottom, viewportHeight, kind }) {
+    const top = Number.isFinite(elementTop) ? elementTop : 0;
+    const bottom = Number.isFinite(elementBottom) ? elementBottom : 0;
+    const viewport = Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : 0;
+    const elementHeight = Math.max(0, bottom - top);
+    const visibleHeight = viewport > 0 ? Math.max(0, Math.min(viewport, bottom) - Math.max(0, top)) : 0;
+    const viewportCoverageRatio = viewport > 0 ? Math.min(1, visibleHeight / viewport) : 0;
+    return { detected: viewportCoverageRatio >= VIEWPORT_MEDIA_DOMINANCE_RATIO, kind: kind || "UNKNOWN", viewportCoverageRatio, elementHeight, viewportHeight: viewport };
+  }
+
+  /**
+   * Whether a NO_NEW_POSTS_AND_CARDS_3_SCROLLS stop is actually a stuck-on-media
+   * shape worth one bounded recovery scroll instead of ending the scan.
+   * Every hard-stop/safety condition (frontier, abort, hard time ceiling,
+   * confirmed physical bottom) refuses eligibility outright; cooldown and the
+   * per-scan recovery cap prevent an endless bypass loop.
+   */
+  function evaluateStuckFeedCondition(input) {
+    const i = input || {};
+    if (i.stopReason !== "NO_NEW_POSTS_AND_CARDS_3_SCROLLS") return { eligible: false, reason: "NOT_STUCK_SHAPED_STOP" };
+    if (i.aborted === true) return { eligible: false, reason: "ABORTED" };
+    if (i.atBottom === true) return { eligible: false, reason: "CONFIRMED_PHYSICAL_BOTTOM" };
+    if (!(finite(i.consecutiveNoNew) >= STUCK_RECOVERY_MIN_CONSECUTIVE_NO_NEW)) return { eligible: false, reason: "INSUFFICIENT_NO_NEW_STREAK" };
+    if (!(finite(i.consecutiveNoVisibleGrowth) >= STUCK_RECOVERY_MIN_CONSECUTIVE_NO_NEW)) return { eligible: false, reason: "INSUFFICIENT_NO_VISIBLE_GROWTH_STREAK" };
+    if (!i.mediaDominant) return { eligible: false, reason: "NO_DOMINATING_MEDIA_DETECTED" };
+    if (Number.isFinite(i.elapsedMs) && i.elapsedMs >= MAX_NORMAL_GROUP_EXPLORATION_MS) return { eligible: false, reason: "EXPLORATION_ENVELOPE_COMPLETE" };
+    if (finite(i.recoveryCount) >= MAX_STUCK_RECOVERIES) return { eligible: false, reason: "MAX_RECOVERIES_REACHED" };
+    if (finite(i.recoveryCount) > 0 && Number.isFinite(i.iterationsSinceLastRecovery) && i.iterationsSinceLastRecovery < STUCK_RECOVERY_COOLDOWN_ITERATIONS) return { eligible: false, reason: "COOLDOWN_ACTIVE" };
+    return { eligible: true, reason: "STUCK_MEDIA_BYPASS_ELIGIBLE" };
+  }
+
   function exactPostId(node) {
     if (!isObject(node)) return null;
     for (const key of ID_KEYS) {
@@ -1078,5 +1134,5 @@
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
   const DEEP_RECALL_STREAK_THRESHOLD = Number.MAX_SAFE_INTEGER;
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS, DEEPER_FEED_MAX_BUDGET_MS, isDuplicateRediscoveryIteration, evaluateExplorationContinuation, MIN_MAIN_FEED_EXPLORATION_MS, PREFERRED_MAIN_FEED_EXPLORATION_MS, MAX_NORMAL_GROUP_EXPLORATION_MS };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS, DEEPER_FEED_MAX_BUDGET_MS, isDuplicateRediscoveryIteration, evaluateExplorationContinuation, MIN_MAIN_FEED_EXPLORATION_MS, PREFERRED_MAIN_FEED_EXPLORATION_MS, MAX_NORMAL_GROUP_EXPLORATION_MS, evaluateViewportMediaDominance, evaluateStuckFeedCondition, VIEWPORT_MEDIA_DOMINANCE_RATIO, STUCK_RECOVERY_MIN_CONSECUTIVE_NO_NEW, STUCK_RECOVERY_SCROLL_VIEWPORTS, STUCK_RECOVERY_COOLDOWN_ITERATIONS, MAX_STUCK_RECOVERIES };
 })(globalThis);

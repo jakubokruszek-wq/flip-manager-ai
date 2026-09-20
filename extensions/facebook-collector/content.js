@@ -880,6 +880,13 @@
     let deeperFeedStartScrolls = null;
     let deeperFeedStartRecordCount = null;
     let duplicateEncounters = 0;
+    // Stuck-feed bypass (V1.2.1): bounded, cooldown-gated recovery scrolls for
+    // when an oversized viewport-dominating card (typically video/Reels)
+    // pins the visible feed in place. See evaluateStuckFeedCondition for the
+    // full eligibility gate.
+    let stuckRecoveryCount = 0;
+    let lastStuckRecoveryIteration = null;
+    const stuckRecoveryEvents = [];
 
     for (let iteration = 0; ; iteration += 1) {
       if (searchMode) {
@@ -954,6 +961,67 @@
         : core.shouldStopDiscovery({ durationMs: elapsedMs, budgetMs, maxFastScanMs, uniqueCount: records.length, maxPosts: searchMode ? maxDiscoveryPosts : maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, ageStreak, ageStopOptions });
       if (decision) {
         const aborted = options.signal?.aborted === true;
+        // Stuck-feed / oversized-media bypass (V1.2.1): checked before ANY
+        // other interpretation of this stop decision. Scoped to the exact
+        // NO_NEW_POSTS_AND_CARDS_3_SCROLLS shape (every other stop reason —
+        // frontier, hard time limit, post/scroll ceilings — already took
+        // precedence inside shouldStopDiscovery above and can never reach
+        // here), so Date/Frontier and every hard stop remain untouched and
+        // still win immediately. Bounded by MAX_STUCK_RECOVERIES and a
+        // cooldown so it can never loop forever.
+        const stuckShaped = !searchMode && decision === "NO_NEW_POSTS_AND_CARDS_3_SCROLLS" && !aborted;
+        const mediaDetection = stuckShaped ? detectViewportDominatingMedia(container) : null;
+        const stuckEvaluation = stuckShaped
+          ? core.evaluateStuckFeedCondition({
+              stopReason: decision,
+              atBottom: atBottomNow,
+              consecutiveNoNew,
+              consecutiveNoVisibleGrowth,
+              mediaDominant: mediaDetection.detected,
+              elapsedMs,
+              recoveryCount: stuckRecoveryCount,
+              iterationsSinceLastRecovery: lastStuckRecoveryIteration === null ? null : iteration - lastStuckRecoveryIteration,
+            })
+          : { eligible: false, reason: "NOT_STUCK_SHAPED_STOP" };
+        if (stuckEvaluation.eligible) {
+          const viewportHeight = container === document.scrollingElement ? innerHeight : container.clientHeight;
+          const canonicalCountBeforeRecovery = records.length;
+          const { before: recoveryScrollBefore, after: recoveryScrollAfter } = recoveryScrollContainer(container, viewportHeight);
+          scrolls += 1;
+          stuckRecoveryCount += 1;
+          lastStuckRecoveryIteration = iteration;
+          // Reset only the local convergence counters that would otherwise
+          // immediately re-fire this same stop decision. ageStreak, records,
+          // canonical identity state, duplicate accounting, scan start time
+          // and every hard budget are untouched — this is a continuation of
+          // the SAME scan, not a reset of it.
+          consecutiveNoNew = 0;
+          consecutiveNoVisibleGrowth = 0;
+          const recoveryWaitOutcome = await waitUntilFeedProgress({
+            sample: () => { const probeContainer = findScrollContainer(); return { postCount: records.length, networkCount: networkResponses, visibleCount: visibleCards().length, scrollHeight: probeContainer.scrollHeight, cardCount: document.querySelectorAll('[role="article"]').length }; },
+            timeoutMs: 1600,
+            pollMs: 100,
+            signal: options.signal,
+          });
+          const newCanonicalPostsAfterRecovery = Math.max(0, records.length - canonicalCountBeforeRecovery);
+          if (stuckRecoveryEvents.length < core.MAX_STUCK_RECOVERIES) {
+            stuckRecoveryEvents.push({
+              iteration,
+              elapsedMs: Math.round(elapsedMs),
+              reason: stuckEvaluation.reason,
+              mediaDetected: mediaDetection.detected,
+              mediaKind: mediaDetection.kind,
+              viewportCoverageRatio: Math.round(mediaDetection.viewportCoverageRatio * 1000) / 1000,
+              scrollTopBefore: Math.floor(recoveryScrollBefore),
+              scrollTopAfter: Math.floor(recoveryScrollAfter),
+              scrollDelta: Math.round(recoveryScrollAfter - recoveryScrollBefore),
+              newCanonicalPostsAfterRecovery,
+              outcome: newCanonicalPostsAfterRecovery > 0 || recoveryWaitOutcome.outcome === "PROGRESS" ? "RECOVERY_PROGRESS" : "RECOVERY_NO_PROGRESS",
+            });
+          }
+          if (recoveryWaitOutcome.outcome === "ABORTED") { stopReason = "ABORTED"; break; }
+          continue;
+        }
         // Exploration-floor/value-based continuation (V1.2): only ever
         // consulted for the ordinary "feed went quiet" stop on a normal
         // FAST_REPEAT main-feed pass — every other stop reason (frontier,
@@ -1083,6 +1151,18 @@
     // adaptive transition put the session in it, so a reader never has to
     // guess which mechanism actually widened the session's limits.
     const initialFeedDepthMode = options.feedDepthMode === "DEEPER_NETWORK_FEED" ? "DEEPER_NETWORK_FEED" : "CURRENT_DEPTH";
+    // "attempted" and "count" are always equal in this implementation: every
+    // eligible stuck detection performs its recovery scroll immediately —
+    // there is no separate "detected but skipped" path — but both names are
+    // kept since they document distinct questions (was this ever a viable
+    // signal vs. how many bypasses actually ran) for a future reader/consumer.
+    const stuckRecovery = {
+      count: stuckRecoveryCount,
+      attempted: stuckRecoveryCount,
+      successful: stuckRecoveryEvents.filter((event) => event.outcome === "RECOVERY_PROGRESS").length,
+      lastReason: stuckRecoveryEvents.at(-1)?.reason ?? null,
+      events: stuckRecoveryEvents,
+    };
     const recall = {
       initialFeedDepthMode,
       adaptiveDeeperTriggered: deeperFeedTriggered,
@@ -1094,6 +1174,7 @@
       deeperFeedDurationMs: deeperFeedTelemetry?.durationMs ?? 0,
       totalDurationMs: durationMs,
       totalUniqueCanonicalPosts: records.length,
+      stuckRecovery,
     };
     const evidencedRecords = records.map((record) => ({
       ...record,
@@ -1441,6 +1522,43 @@
     const viewport = container === document.scrollingElement ? innerHeight : container.clientHeight;
     return position + viewport >= container.scrollHeight - 32;
   }
+  // Stuck-feed bypass (V1.2.1): a large video/Reel/media-heavy card can occupy
+  // most of the viewport and pin the visible content for several scroll steps
+  // even though the underlying feed still has more below it. Semantic
+  // selectors first (video / [role="video"] / iframe — no fragile Facebook
+  // class names); if none qualify, the single largest currently-visible card
+  // is checked too, so an oversized non-video wrapper produces the identical
+  // signal without ever requiring a literal <video> element.
+  const STUCK_MEDIA_MIN_ELEMENT_SIZE_PX = 200;
+  function viewportDominatingMediaCandidates() {
+    return [...document.querySelectorAll('video, [role="video"], iframe')];
+  }
+  function detectViewportDominatingMedia(container) {
+    const viewportHeight = container === document.scrollingElement ? innerHeight : container.clientHeight;
+    let best = null;
+    for (const node of viewportDominatingMediaCandidates()) {
+      const rect = node.getBoundingClientRect?.();
+      if (!rect || rect.width < STUCK_MEDIA_MIN_ELEMENT_SIZE_PX || rect.height < STUCK_MEDIA_MIN_ELEMENT_SIZE_PX) continue;
+      const kind = node.tagName === "VIDEO" ? "VIDEO" : node.getAttribute?.("role") === "video" ? "ROLE_VIDEO" : "IFRAME";
+      const evaluation = core.evaluateViewportMediaDominance({ elementTop: rect.top, elementBottom: rect.bottom, viewportHeight, kind });
+      if (!best || evaluation.viewportCoverageRatio > best.viewportCoverageRatio) best = evaluation;
+    }
+    if (best) return best;
+    const largestCard = visibleCards().map((card) => card.getBoundingClientRect()).sort((a, b) => (b.bottom - b.top) - (a.bottom - a.top))[0];
+    if (largestCard) return core.evaluateViewportMediaDominance({ elementTop: largestCard.top, elementBottom: largestCard.bottom, viewportHeight, kind: "OVERSIZED_CARD" });
+    return { detected: false, kind: "NONE", viewportCoverageRatio: 0, elementHeight: 0, viewportHeight };
+  }
+  // A deliberately stronger step than the normal scroll (~0.85 viewport) so a
+  // single bounded recovery attempt can move fully past an oversized element
+  // that pinned the last several normal-sized steps in place.
+  function recoveryScrollContainer(container, viewportHeight) {
+    const before = container === document.scrollingElement ? window.scrollY : container.scrollTop;
+    const amount = viewportHeight * core.STUCK_RECOVERY_SCROLL_VIEWPORTS;
+    if (container === document.scrollingElement) window.scrollBy({ top: amount, behavior: "instant" });
+    else container.scrollBy({ top: amount, behavior: "instant" });
+    const after = container === document.scrollingElement ? window.scrollY : container.scrollTop;
+    return { before, after };
+  }
   function pendingSearchContentCount() {
     return document.querySelectorAll('[aria-busy="true"], [data-visualcompletion="loading-state"]').length;
   }
@@ -1492,5 +1610,5 @@
   // Test-only export. `module` never exists in the browser extension context,
   // so this has zero effect in production — it only lets a Node test exercise
   // the exact-identity proof in isolation, with a fake DOM object.
-  if (typeof module !== "undefined" && module.exports) module.exports = { galleryRootHasExactPostBinding, waitUntilFeedProgress };
+  if (typeof module !== "undefined" && module.exports) module.exports = { galleryRootHasExactPostBinding, waitUntilFeedProgress, detectViewportDominatingMedia };
 })();
