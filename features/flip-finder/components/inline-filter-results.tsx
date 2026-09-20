@@ -809,7 +809,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           <div className="min-w-0 pr-24"><h2 className="line-clamp-2 text-base font-semibold leading-snug tracking-tight sm:text-lg">{title}</h2></div>
           <div className="mt-3">
             <p className="text-2xl font-bold leading-none tracking-tight text-foreground sm:text-3xl">{currency(result.price)}</p>
-            <p className="mt-1 text-sm font-medium text-muted-foreground">{currencyPerSqm(result.pricePerSqm)}</p>
+            <p className="mt-1 text-sm font-semibold text-gold">{currencyPerSqm(result.pricePerSqm)}</p>
             <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.09] px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300"><span className="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_0_3px] shadow-emerald-500/15" />Ocena inwestycji {flipScore.score} · {flipScore.label}</span>
           </div>
           <OpportunitySummary result={result} />
@@ -849,7 +849,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
             {result.images.length > 0 ? result.images.map((image, index) => <div className={`relative aspect-[4/3] overflow-hidden rounded-xl bg-muted ${index === 0 ? "sm:col-span-2" : ""}`} key={image}><SafeImage alt={`${title} — zdjęcie ${index + 1}`} fill sizes="(max-width: 640px) 100vw, 50vw" src={image} /></div>) : <div className="flex aspect-[16/9] items-center justify-center rounded-xl bg-muted px-4 text-center text-sm text-muted-foreground sm:col-span-2">Brak zweryfikowanego zdjęcia</div>}
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="col-span-2 rounded-2xl border border-border bg-surface-elevated px-4 py-4"><p className="text-xs font-medium text-muted-foreground">Cena ofertowa</p><p className="type-financial-hero mt-1 text-foreground">{currency(result.price)}</p><p className="mt-2 text-sm font-medium text-muted-foreground">{currencyPerSqm(result.pricePerSqm)}</p></div>
+            <div className="col-span-2 rounded-2xl border border-border bg-surface-elevated px-4 py-4"><p className="text-xs font-medium text-muted-foreground">Cena ofertowa</p><p className="type-financial-hero mt-1 text-foreground">{currency(result.price)}</p><p className="mt-2 text-sm font-semibold text-gold">{currencyPerSqm(result.pricePerSqm)}</p></div>
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4"><p className="text-xs text-muted-foreground">Powierzchnia</p><p className="mt-1 font-semibold tracking-tight">{measure(result.area, "m²")}</p></div>
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4"><p className="text-xs text-muted-foreground">Pokoje</p><p className="mt-1 font-semibold tracking-tight">{measure(result.rooms, "pok.")}</p></div>
           </div>

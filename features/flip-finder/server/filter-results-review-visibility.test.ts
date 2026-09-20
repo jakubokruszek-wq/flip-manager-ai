@@ -207,3 +207,40 @@ test("G: a manual_decision=REJECTED listing stays excluded regardless of otherwi
   assert.equal(payload?.results.length, 0);
   assert.equal(payload?.reviewResults.length, 0);
 });
+
+// Task 4: price/m² fallback safety, exercised through the real getFilterResults()
+// (which internally applies reliablePricePerSqm) rather than a hand-copied
+// reimplementation of that private function.
+async function pricePerSqmFor(overrides: Record<string, unknown>): Promise<number | null> {
+  const db = freshDb();
+  db.seed("listings", [listingRow({ id: "listing-price", missing_fields: [], review_reason: null, ...overrides })]);
+  db.seed("listing_filter_matches", [membershipRow("listing-price")]);
+  currentDb = db;
+  const payload = await getFilterResults(FILTER_ID);
+  return payload?.reviewResults[0]?.pricePerSqm ?? null;
+}
+
+test("Task 4: a valid canonical price_per_sqm is used as-is, even if it disagrees with price/area", async () => {
+  assert.equal(await pricePerSqmFor({ price: 295000, area: 47, price_per_sqm: 6300 }), 6300);
+});
+
+test("Task 4: a missing/invalid canonical price_per_sqm falls back to price / area", async () => {
+  assert.equal(await pricePerSqmFor({ price: 295000, area: 47, price_per_sqm: null }), 295000 / 47);
+  assert.equal(await pricePerSqmFor({ price: 295000, area: 47, price_per_sqm: 0 }), 295000 / 47);
+});
+
+test("Task 4: a missing price yields a safe null, never a fabricated value", async () => {
+  assert.equal(await pricePerSqmFor({ price: null, area: 47, price_per_sqm: null }), null);
+});
+
+test("Task 4: a missing area yields a safe null", async () => {
+  assert.equal(await pricePerSqmFor({ price: 295000, area: null, price_per_sqm: null }), null);
+});
+
+test("Task 4: area=0 yields a safe null (no division by zero)", async () => {
+  assert.equal(await pricePerSqmFor({ price: 295000, area: 0, price_per_sqm: null }), null);
+});
+
+test("Task 4: an implausible canonical price (e.g. below 20,000) is never trusted, even if present", async () => {
+  assert.equal(await pricePerSqmFor({ price: 500, area: 47, price_per_sqm: 6300 }), null);
+});
