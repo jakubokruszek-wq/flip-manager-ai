@@ -99,8 +99,15 @@ test("root-not-found recovery reuses only previously exact-bound metadata", () =
   assert.match(galleryJobs, /if \(existingImages\.length === 0\) return null/);
   assert.match(galleryJobs, /sourcePostId !== expectedPostId/);
   assert.match(galleryJobs, /storyRootPostId !== expectedPostId/);
-  assert.match(galleryJobs, /bindingMethod !== "EXACT_ROOT_STORY"/);
+  assert.match(galleryJobs, /!isExactGalleryRootBindingProvenance\(bindingMethod\)/);
   assert.match(galleryJobs, /classification !== "PROPERTY_IMAGE"/);
   assert.match(galleryJobs, /scontent\[\^\/\]\*\\\.fbcdn\\\.net/);
   assert.doesNotMatch(galleryJobs, /photo fbid.*postId|fbid.*expectedPostId/i);
+});
+
+test("gallery exact-identity V2: foreign/unbound media rejection counts and diagnostics are never silently discarded", () => {
+  assert.match(galleryJobs, /foreignMediaRejectedCount: number\("foreignMediaRejectedCount", 100\)/);
+  assert.match(galleryJobs, /unboundMediaRejectedCount: number\("unboundMediaRejectedCount", 100\)/);
+  assert.match(galleryJobs, /exactMediaAcceptedCount: number\("exactMediaAcceptedCount", 100\)/);
+  assert.match(galleryJobs, /mediaDiagnostics: Array\.isArray\(input\.mediaDiagnostics\)/);
 });

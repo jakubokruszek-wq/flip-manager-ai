@@ -3,7 +3,7 @@ import "server-only";
 import { createFacebookWatcherAdminClient } from "./../facebook-watcher/supabase-admin";
 import { mirrorFacebookImages } from "../facebook-watcher/server/mirror-facebook-images";
 import { validateFacebookRevalidationCandidates } from "./image-revalidation";
-import type { FacebookMediaCandidate } from "./types";
+import { isExactGalleryRootBindingProvenance, type FacebookMediaBindingProvenance, type FacebookMediaCandidate } from "./types.ts";
 import { galleryMediaIds as collectGalleryMediaIds, selectMissingGalleryCandidates } from "./gallery-policy";
 import { safeFacebookPostUrl } from "./facebook-post-url";
 import { deriveMonotonicGalleryFailure } from "./gallery-state";
@@ -44,6 +44,14 @@ type GalleryFailureDiagnostics = {
   resolvedGroup?: string | null;
   rootBindingSource?: string | null;
   rootCount?: number;
+  // Gallery exact-identity V2: how many DOM media candidates were rejected as
+  // belonging to a foreign post (explicit set=pcb.<otherId>), rejected as
+  // unbound (no pcb match and no structured cross-check), or accepted with
+  // exact provenance. Never silently discarded — see hydrateFacebookGallery().
+  foreignMediaRejectedCount?: number;
+  unboundMediaRejectedCount?: number;
+  exactMediaAcceptedCount?: number;
+  mediaDiagnostics?: Array<{ mediaId: string | null; reason: string }>;
   networkResponses?: number;
   networkRecordCount?: number;
   networkRecordPostIds?: string[];
@@ -292,9 +300,9 @@ function exactMetadataCandidates(value: unknown, expectedPostId: string): Facebo
     const bindingMethod = string(item?.bindingMethod);
     const classification = string(item?.classification);
     const confidence = typeof item?.bindingConfidence === "number" && Number.isFinite(item.bindingConfidence) ? item.bindingConfidence : 0;
-    if (!url || !/^https:\/\/scontent[^/]*\.fbcdn\.net\//i.test(url) || sourcePostId !== expectedPostId || storyRootPostId !== expectedPostId || bindingMethod !== "EXACT_ROOT_STORY" || confidence < 0.9 || classification !== "PROPERTY_IMAGE") return [];
+    if (!url || !/^https:\/\/scontent[^/]*\.fbcdn\.net\//i.test(url) || sourcePostId !== expectedPostId || storyRootPostId !== expectedPostId || !isExactGalleryRootBindingProvenance(bindingMethod) || confidence < 0.9 || classification !== "PROPERTY_IMAGE") return [];
     const mediaId = string(item?.mediaId);
-    return [{ url: url.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: Math.min(1, confidence), bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true }];
+    return [{ url: url.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: Math.min(1, confidence), bindingProvenance: bindingMethod as FacebookMediaBindingProvenance, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true }];
   });
 }
 
@@ -408,6 +416,14 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
     resolvedGroup: text("resolvedGroup", 120),
     rootBindingSource: text("rootBindingSource", 80),
     rootCount: number("rootCount", 50),
+    foreignMediaRejectedCount: number("foreignMediaRejectedCount", 100),
+    unboundMediaRejectedCount: number("unboundMediaRejectedCount", 100),
+    exactMediaAcceptedCount: number("exactMediaAcceptedCount", 100),
+    mediaDiagnostics: Array.isArray(input.mediaDiagnostics) ? input.mediaDiagnostics.slice(0, 30).flatMap((entry) => {
+      const item = row(entry);
+      if (!item || typeof item.reason !== "string") return [];
+      return [{ mediaId: typeof item.mediaId === "string" && /^\d{5,30}$/.test(item.mediaId) ? item.mediaId : null, reason: item.reason.slice(0, 60) }];
+    }) : [],
     networkResponses: number("networkResponses", 200),
     networkRecordCount: number("networkRecordCount", 200),
     networkRecordPostIds: rawIds.filter((id): id is string => typeof id === "string" && /^\d{5,30}$/.test(id)).slice(0, 50),
@@ -504,8 +520,8 @@ export function parseFacebookGalleryCandidates(value: unknown, expectedPostId: s
   if (!Array.isArray(value) || value.length > 50) return [];
   return value.flatMap((entry): FacebookMediaCandidate[] => {
     const item = row(entry);
-    if (!item || typeof item.url !== "string" || item.expectedPostId !== expectedPostId || item.storyRootPostId !== expectedPostId || item.boundPostId !== expectedPostId || item.bindingProvenance !== "EXACT_ROOT_STORY" || item.rootStoryUnique !== true || !Array.isArray(item.foreignPostIdsDetected) || item.foreignPostIdsDetected.length > 0) return [];
-    return [{ url: item.url.slice(0, 2_000), mediaId: string(item.mediaId), expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false }];
+    if (!item || typeof item.url !== "string" || item.expectedPostId !== expectedPostId || item.storyRootPostId !== expectedPostId || item.boundPostId !== expectedPostId || !isExactGalleryRootBindingProvenance(item.bindingProvenance) || item.rootStoryUnique !== true || !Array.isArray(item.foreignPostIdsDetected) || item.foreignPostIdsDetected.length > 0) return [];
+    return [{ url: item.url.slice(0, 2_000), mediaId: string(item.mediaId), expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: item.bindingProvenance, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false }];
   });
 }
 

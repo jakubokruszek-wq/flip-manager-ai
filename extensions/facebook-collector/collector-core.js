@@ -457,6 +457,35 @@
     return unique(urls).sort((left, right) => right.length - left.length)[0] || null;
   }
 
+  /**
+   * Gallery exact-identity V2: a DOM photo anchor found near an exact post
+   * root is NOT, by itself, proof that the media belongs to that post — a
+   * root/article container can include or overlap a neighboring feed post,
+   * an adjacent recommendation, or a virtualized sibling card. DOM proximity
+   * alone must never establish exact media identity; every DOM candidate
+   * needs one of two independent proofs:
+   *   - the anchor's own `set=pcb.<postId>` query parameter names the exact
+   *     expected post (a foreign `pcb.<otherId>` is hard evidence to REJECT,
+   *     never merely "unverified"), or
+   *   - the candidate's mediaId matches a mediaId already proven for this
+   *     exact post via the structured (Relay/script) attachment path, which
+   *     is independently bound to expectedPostId before this function is
+   *     ever consulted.
+   * A missing/unrecognized `set` with no structured match is unbound and
+   * must fail closed — never accepted merely because it rendered inside the
+   * root's DOM subtree.
+   */
+  function evaluateGalleryMediaCandidateEvidence({ setParam, mediaId, expectedPostId, structuredMediaIds }) {
+    const pcbMatch = typeof setParam === "string" ? setParam.match(/^pcb\.(\d{5,30})$/) : null;
+    if (pcbMatch) {
+      if (pcbMatch[1] === String(expectedPostId)) return { accepted: true, bindingProvenance: "EXACT_PCB_POST_BINDING", reason: "DOM_MEDIA_EXPECTED_PCB", foreignPostId: null };
+      return { accepted: false, bindingProvenance: null, reason: "DOM_MEDIA_FOREIGN_PCB", foreignPostId: pcbMatch[1] };
+    }
+    const provenSet = structuredMediaIds instanceof Set ? structuredMediaIds : new Set(Array.isArray(structuredMediaIds) ? structuredMediaIds : []);
+    if (mediaId && provenSet.has(mediaId)) return { accepted: true, bindingProvenance: "EXACT_STRUCTURED_ATTACHMENT", reason: "DOM_MEDIA_STRUCTURED_MATCH", foreignPostId: null };
+    return { accepted: false, bindingProvenance: null, reason: "DOM_MEDIA_UNBOUND", foreignPostId: null };
+  }
+
   // Facebook's photo viewer does not consistently retain its Relay payload in
   // document scripts. A bounded carousel traversal is still exact evidence
   // when it starts from an already exact-root media seed, every visited URL
@@ -1134,5 +1163,5 @@
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
   const DEEP_RECALL_STREAK_THRESHOLD = Number.MAX_SAFE_INTEGER;
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS, DEEPER_FEED_MAX_BUDGET_MS, isDuplicateRediscoveryIteration, evaluateExplorationContinuation, MIN_MAIN_FEED_EXPLORATION_MS, PREFERRED_MAIN_FEED_EXPLORATION_MS, MAX_NORMAL_GROUP_EXPLORATION_MS, evaluateViewportMediaDominance, evaluateStuckFeedCondition, VIEWPORT_MEDIA_DOMINANCE_RATIO, STUCK_RECOVERY_MIN_CONSECUTIVE_NO_NEW, STUCK_RECOVERY_SCROLL_VIEWPORTS, STUCK_RECOVERY_COOLDOWN_ITERATIONS, MAX_STUCK_RECOVERIES };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS, DEEPER_FEED_MAX_BUDGET_MS, isDuplicateRediscoveryIteration, evaluateExplorationContinuation, MIN_MAIN_FEED_EXPLORATION_MS, PREFERRED_MAIN_FEED_EXPLORATION_MS, MAX_NORMAL_GROUP_EXPLORATION_MS, evaluateViewportMediaDominance, evaluateStuckFeedCondition, VIEWPORT_MEDIA_DOMINANCE_RATIO, STUCK_RECOVERY_MIN_CONSECUTIVE_NO_NEW, STUCK_RECOVERY_SCROLL_VIEWPORTS, STUCK_RECOVERY_COOLDOWN_ITERATIONS, MAX_STUCK_RECOVERIES, evaluateGalleryMediaCandidateEvidence };
 })(globalThis);

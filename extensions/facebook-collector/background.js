@@ -727,11 +727,16 @@ async function collectGalleryHydration(job, requestId) {
     let result = seedMediaIds.length > 0 ? await hydrateFromViewer(seedMediaIds[0]) : await hydrate(resolvedUrl, resolvedUrl);
     if (seedMediaIds.length === 0 && result.status === "COMPLETE") {
       const rootCandidates = Array.isArray(result.gallery?.candidates) ? result.gallery.candidates : [];
+      // Either exact-binding form (a DOM anchor's own set=pcb.<postId>, or a
+      // mediaId already proven via the structured/Relay attachment path) is
+      // equally valid seed material — the viewer path re-verifies the full
+      // set independently from scratch, so this only picks which media id to
+      // start that traversal from, never the final proof.
       const exactSeed = rootCandidates.find((candidate) => /^\d{5,30}$/.test(String(candidate?.mediaId || ""))
         && candidate?.expectedPostId === postId
         && candidate?.storyRootPostId === postId
         && candidate?.boundPostId === postId
-        && candidate?.bindingProvenance === "EXACT_ROOT_STORY"
+        && (candidate?.bindingProvenance === "EXACT_PCB_POST_BINDING" || candidate?.bindingProvenance === "EXACT_STRUCTURED_ATTACHMENT")
         && candidate?.rootStoryUnique === true);
       if (!exactSeed) {
         return { status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND", gallery: { ...result.gallery, status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND" } };

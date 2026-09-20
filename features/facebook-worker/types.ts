@@ -37,8 +37,24 @@ export type FacebookPostSnapshot = {
   firstSeenPhase?: "MAIN_FEED" | "SEARCH";
 };
 
-export const FACEBOOK_MEDIA_BINDING_PROVENANCE = ["EXACT_ROOT_STORY", "EXACT_POST_METADATA", "DEDICATED_POST_VIEWER", "AMBIGUOUS"] as const;
+export const FACEBOOK_MEDIA_BINDING_PROVENANCE = ["EXACT_ROOT_STORY", "EXACT_PCB_POST_BINDING", "EXACT_STRUCTURED_ATTACHMENT", "EXACT_POST_METADATA", "DEDICATED_POST_VIEWER", "AMBIGUOUS"] as const;
 export type FacebookMediaBindingProvenance = (typeof FACEBOOK_MEDIA_BINDING_PROVENANCE)[number];
+
+/**
+ * The provenance values gallery hydration's own root-story candidate path
+ * can produce: the legacy generic label (still produced by the standalone
+ * Facebook worker's independent exact-root DOM binding) plus the two more
+ * specific labels the browser extension's evidence-gated DOM/structured
+ * candidate path now uses (an explicit `set=pcb.<postId>` anchor binding, or
+ * a mediaId cross-checked against an already-proven structured attachment).
+ * Distinct from EXACT_POST_METADATA/DEDICATED_POST_VIEWER, which come from
+ * unrelated candidate paths and are never accepted by the gallery-hydration
+ * ingest/reuse gates below.
+ */
+export const EXACT_GALLERY_ROOT_BINDING_PROVENANCE = ["EXACT_ROOT_STORY", "EXACT_PCB_POST_BINDING", "EXACT_STRUCTURED_ATTACHMENT"] as const;
+export function isExactGalleryRootBindingProvenance(value: unknown): value is (typeof EXACT_GALLERY_ROOT_BINDING_PROVENANCE)[number] {
+  return typeof value === "string" && (EXACT_GALLERY_ROOT_BINDING_PROVENANCE as readonly string[]).includes(value);
+}
 export type FacebookMediaCandidate = {
   url: string;
   /** Source media id, when the collector exposed one alongside the URL. */

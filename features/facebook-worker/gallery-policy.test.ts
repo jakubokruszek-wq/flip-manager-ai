@@ -37,6 +37,24 @@ test("gallery viewer seeds require an explicit exact-root media id", () => {
   assert.deepEqual(gallerySeedMediaFromProvenance([{ ...exact, normalizedMediaUrl: "https://example.com/image.jpg" }], "1749121366325600"), []);
 });
 
+test("gallery viewer seeds also accept the V2 gallery-hydration binding labels (pcb anchor / structured attachment), never unrelated provenance labels", () => {
+  const base = {
+    sourcePostId: "1749121366325600",
+    storyRootPostId: "1749121366325600",
+    normalizedMediaUrl: "https://scontent-waw2-2.xx.fbcdn.net/v/t39.30808-6/791849411_28459992303624928_2386612899756008195_n.jpg?x=1",
+    bindingConfidence: 1,
+    classification: "PROPERTY_IMAGE",
+    mediaId: "28459992263624932",
+  };
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...base, bindingMethod: "EXACT_PCB_POST_BINDING" }], "1749121366325600"), [{ mediaId: "28459992263624932" }]);
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...base, bindingMethod: "EXACT_STRUCTURED_ATTACHMENT" }], "1749121366325600"), [{ mediaId: "28459992263624932" }]);
+  // EXACT_POST_METADATA / DEDICATED_POST_VIEWER / AMBIGUOUS are unrelated
+  // provenance categories from a different candidate path — never accepted here.
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...base, bindingMethod: "EXACT_POST_METADATA" }], "1749121366325600"), []);
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...base, bindingMethod: "DEDICATED_POST_VIEWER" }], "1749121366325600"), []);
+  assert.deepEqual(gallerySeedMediaFromProvenance([{ ...base, bindingMethod: "AMBIGUOUS" }], "1749121366325600"), []);
+});
+
 test("legacy gallery seed is recovered only from an exact historical collector binding", () => {
   const postId = "1749121366325600";
   const sourceUrl = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1749121366325600";

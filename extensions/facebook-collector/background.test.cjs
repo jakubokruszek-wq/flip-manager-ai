@@ -600,7 +600,7 @@ test("gallery hydration upgrades an exact root-page media seed to bounded carous
   assert.match(gallery, /const trustedSeedMediaIds = new Set\(seedMediaIds\)/);
   assert.match(gallery, /seedRootProvenanceVerified: trustedSeedMediaIds\.has\(mediaId\)/);
   assert.match(gallery, /rootCandidates\.find/);
-  assert.match(gallery, /bindingProvenance === "EXACT_ROOT_STORY"/);
+  assert.match(gallery, /bindingProvenance === "EXACT_PCB_POST_BINDING" \|\| candidate\?\.bindingProvenance === "EXACT_STRUCTURED_ATTACHMENT"/);
   assert.match(gallery, /trustedSeedMediaIds\.add\(discoveredSeedMediaId\)/);
   assert.match(gallery, /result = await hydrateFromViewer\(discoveredSeedMediaId\)/);
   assert.match(gallery, /FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND/);

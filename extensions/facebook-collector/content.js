@@ -190,11 +190,19 @@
     if (!author || !rootText) return galleryFailure(!author ? "FACEBOOK_GALLERY_ROOT_AUTHOR_MISSING" : "FACEBOOK_GALLERY_ROOT_TEXT_MISSING", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: lastRootCount, page: galleryPageSnapshot(exactPath, expectedPostId) });
     const candidates = [];
     const seen = new Set();
+    const structuredMediaIds = new Set((structuredRoot?.media || []).map((media) => media.mediaId).filter(Boolean));
+    let foreignMediaRejectedCount = 0;
+    let unboundMediaRejectedCount = 0;
+    let exactMediaAcceptedCount = 0;
+    const mediaDiagnostics = [];
+    const recordMediaDiagnostic = (mediaId, reason) => { if (mediaDiagnostics.length < 30) mediaDiagnostics.push({ mediaId: mediaId || null, reason }); };
     for (const media of structuredRoot?.media || []) {
       const key = media.mediaId || media.url;
       if (seen.has(key)) continue;
       seen.add(key);
-      candidates.push({ url: media.url.slice(0, 2_000), mediaId: media.mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true });
+      exactMediaAcceptedCount += 1;
+      recordMediaDiagnostic(media.mediaId, "DOM_MEDIA_STRUCTURED_MATCH");
+      candidates.push({ url: media.url.slice(0, 2_000), mediaId: media.mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_STRUCTURED_ATTACHMENT", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true });
     }
     if (root) {
       const rootIsArticle = root.matches?.('[role="article"]') === true;
@@ -202,6 +210,12 @@
         if (rootIsArticle) return node.closest('[role="article"]') === root;
         return !isCommentDescendant(node);
       };
+      // Evidence-gated (V2): DOM proximity to the root alone never
+      // establishes exact media identity. Every DOM anchor here must carry
+      // an independent proof — see evaluateGalleryMediaCandidateEvidence —
+      // before its media can be promoted to a persistable candidate. A
+      // foreign `pcb.<otherId>` is rejected as hard evidence, never silently
+      // absorbed; an unbound candidate simply never reaches `candidates`.
       for (const anchor of root.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')) {
         if (!sameRoot(anchor)) continue;
         let url;
@@ -211,12 +225,19 @@
         const mediaUrl = image?.currentSrc || image?.src || null;
         const key = mediaId || mediaUrl;
         if (!mediaUrl || !/^https:\/\//i.test(mediaUrl) || !/^\d{5,30}$/.test(String(mediaId || "")) || seen.has(key)) continue;
+        const evidence = core.evaluateGalleryMediaCandidateEvidence({ setParam: url.searchParams.get("set"), mediaId, expectedPostId, structuredMediaIds });
         seen.add(key);
-        candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: "EXACT_ROOT_STORY", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
+        recordMediaDiagnostic(mediaId, evidence.reason);
+        if (evidence.reason === "DOM_MEDIA_FOREIGN_PCB") foreignMediaRejectedCount += 1;
+        else if (evidence.reason === "DOM_MEDIA_UNBOUND") unboundMediaRejectedCount += 1;
+        if (!evidence.accepted) continue;
+        exactMediaAcceptedCount += 1;
+        candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: evidence.bindingProvenance, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
       }
     }
-    if (candidates.length === 0) return galleryFailure("FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1 });
-    return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1, diagnostics: galleryDiagnostics(startedAt, expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: 1 }) };
+    const mediaEvidenceTelemetry = { foreignMediaRejectedCount, unboundMediaRejectedCount, exactMediaAcceptedCount, mediaDiagnostics };
+    if (candidates.length === 0) return galleryFailure("FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1, ...mediaEvidenceTelemetry });
+    return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1, diagnostics: galleryDiagnostics(startedAt, expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: 1, ...mediaEvidenceTelemetry }) };
   }
 
   async function inspectFacebookGalleryViewerMedia(options) {
@@ -1610,5 +1631,5 @@
   // Test-only export. `module` never exists in the browser extension context,
   // so this has zero effect in production — it only lets a Node test exercise
   // the exact-identity proof in isolation, with a fake DOM object.
-  if (typeof module !== "undefined" && module.exports) module.exports = { galleryRootHasExactPostBinding, waitUntilFeedProgress, detectViewportDominatingMedia };
+  if (typeof module !== "undefined" && module.exports) module.exports = { galleryRootHasExactPostBinding, waitUntilFeedProgress, detectViewportDominatingMedia, hydrateFacebookGallery };
 })();

@@ -1,4 +1,4 @@
-import type { FacebookMediaCandidate } from "./types";
+import { isExactGalleryRootBindingProvenance, type FacebookMediaCandidate } from "./types.ts";
 
 export type FacebookGallerySeedMedia = {
   mediaId: string;
@@ -23,7 +23,7 @@ export function gallerySeedMediaFromProvenance(value: unknown, expectedPostId: s
     const bindingMethod = typeof item.bindingMethod === "string" ? item.bindingMethod : "";
     const classification = typeof item.classification === "string" ? item.classification : "";
     const confidence = typeof item.bindingConfidence === "number" && Number.isFinite(item.bindingConfidence) ? item.bindingConfidence : 0;
-    if (!isFacebookCdnImage(url) || sourcePostId !== expectedPostId || storyRootPostId !== expectedPostId || bindingMethod !== "EXACT_ROOT_STORY" || confidence < 0.9 || classification !== "PROPERTY_IMAGE") continue;
+    if (!isFacebookCdnImage(url) || sourcePostId !== expectedPostId || storyRootPostId !== expectedPostId || !isExactGalleryRootBindingProvenance(bindingMethod) || confidence < 0.9 || classification !== "PROPERTY_IMAGE") continue;
     const mediaId = typeof item.mediaId === "string" && /^\d{5,30}$/.test(item.mediaId) ? item.mediaId : null;
     if (!mediaId || seen.has(mediaId)) continue;
     seen.add(mediaId);
