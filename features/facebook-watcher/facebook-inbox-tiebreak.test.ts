@@ -8,3 +8,22 @@ const item = (listingId: string) => ({ listingId, title: "x", city: null, distri
 test("equal Watcher scores use date then listing id as deterministic tie breakers", () => {
   assert.deepEqual(sortFacebookInbox([item("z"), item("a"), item("1")], "opportunity").map((value) => value.listingId), ["1", "a", "z"]);
 });
+
+test("when the primary sort key ties, the more recently published item wins BEFORE listing id is ever consulted", () => {
+  // "a" sorts before "z" lexicographically, but "z" is the newer publication —
+  // proving the date tie-break is consulted first requires a case where the
+  // two tie-breakers would disagree.
+  const older = { ...item("a"), publishedAt: "2026-08-01T10:00:00Z" };
+  const newer = { ...item("z"), publishedAt: "2026-08-09T10:00:00Z" };
+  assert.deepEqual(sortFacebookInbox([older, newer], "opportunity").map((value) => value.listingId), ["z", "a"], "the newer publication must win the tie even though its listingId sorts later alphabetically");
+});
+
+test("only when the primary key AND the publication date both tie does listing id decide the final order", () => {
+  const sameDate = "2026-08-09T10:00:00Z";
+  const items = [
+    { ...item("z"), publishedAt: sameDate },
+    { ...item("a"), publishedAt: sameDate },
+    { ...item("1"), publishedAt: sameDate },
+  ];
+  assert.deepEqual(sortFacebookInbox(items, "opportunity").map((value) => value.listingId), ["1", "a", "z"]);
+});

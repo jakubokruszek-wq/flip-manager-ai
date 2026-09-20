@@ -86,7 +86,12 @@ test("search history can be cleared explicitly without deleting filters or sourc
 test("archive is opt-in and fetched separately from the main finder", () => {
   assert.match(inlineResults, /Historia ofert/);
   assert.match(inlineResults, /view=archive/);
-  assert.match(inlineResults, /archiveOpen \? \(data\?\.archivedResults/);
+  // Semantic properties (see also results.test.ts, which exercises the real
+  // sortResults(...) call this expression makes, behaviorally): archive stays
+  // empty while collapsed, and once opened it is sorted, not just passed
+  // through raw — using the currently selected `sort` state, not a fixed one.
+  assert.match(inlineResults, /archiveOpen \? sortResults\(data\?\.archivedResults \?\? \[\], sort\) : \[\]/, "archive must be sorted with the live `sort` state, and empty while collapsed");
+  assert.match(inlineResults, /const archivedResults = useMemo\(\(\) => archiveOpen \? sortResults\([^;]+\[archiveOpen, data\?\.archivedResults, sort\]\)/, "the memo must recompute when the selected sort changes, not only when archiveOpen/data change");
   assert.doesNotMatch(inlineResults, /<h2 className="font-semibold">ARCHIWUM<\/h2>/);
 });
 
