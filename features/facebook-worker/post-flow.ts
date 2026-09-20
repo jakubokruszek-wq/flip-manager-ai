@@ -142,7 +142,7 @@ export async function processFacebookPostBatch(
     }
     try {
       const result = await importPost(post);
-      summary.outcomes.push({ ...classifyPostImportResult(result), postId: post.postId });
+      summary.outcomes.push({ ...classifyPostImportResult(result), postId: post.postId ?? post.permalink ?? null });
       summary.listingsCreated += result.listingCreated ? 1 : 0;
       summary.listingsUpdated += result.listingUpdated ? 1 : 0;
       summary.listingsSkipped += result.status === "skipped" ? 1 : 0;
@@ -171,7 +171,7 @@ export async function processFacebookPostBatch(
       summary.extractionFailed += 1;
       summary.errors += 1;
       const errorCode = safeErrorCode(error);
-      summary.outcomes.push({ ...classifyExtractionException(errorCode), postId: post.postId });
+      summary.outcomes.push({ ...classifyExtractionException(errorCode), postId: post.postId ?? post.permalink ?? null });
       summary.warnings.push(`Post nie został przetworzony: ${errorCode}.`);
     }
   }

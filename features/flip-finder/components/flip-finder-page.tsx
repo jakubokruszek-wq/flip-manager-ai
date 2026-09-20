@@ -31,6 +31,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
 import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
 import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
+import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 
 type ScanResponse = {
   runId?: string;
@@ -50,6 +51,9 @@ type ScanResponse = {
   search?: { tilesSeen: number; expectedQueries?: number; queriesExecuted?: number; parentVerified?: number; parentUnverified?: number };
   mainFeed?: { collected: number; identityExact: number; identityUnverified: number; sellProperty: number; rentProperty: number; otherExact: number; matched: number; review: number; hardRejectedUnique: number };
   hardRejectReasons?: Record<string, number>;
+  accounting?: FacebookScanAccounting | null;
+  accountingMode?: "AUTHORITATIVE" | "LEGACY";
+  accountingError?: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED" | null;
   sourceResults?: Array<{
     source: string;
     status: "pending" | "completed" | "failed";
@@ -734,6 +738,7 @@ function ScanResultPanel({ filter, response }: { filter: SearchFilterListItem; r
       <FunnelStep label="Do oceny" value={funnel.review} /><FunnelArrow />
       <FunnelStep label="Dopasowane" tone="gold" value={funnel.matched} />
     </div>
+    {response.accountingMode === "AUTHORITATIVE" && response.accounting ? <AuthoritativeAccountingPanel accounting={response.accounting} /> : <p className="mt-4 text-xs text-muted-foreground">Dane historyczne — starszy format diagnostyki</p>}
     {/* Technical losses (never a business decision) and business exclusions (a deliberate rule), kept visually separate from the funnel above and from each other. */}
     <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
       <DiagnosticMetric label="Tożsamość niezweryfikowana" value={funnel.identityUnverified} />
@@ -767,6 +772,9 @@ function scanResponseFromProgress(progress: ScanProgressResponse): ScanResponse 
     search: collector ? { tilesSeen: collector.search.queries.reduce((total, query) => total + query.tilesSeen, 0), expectedQueries: collector.search.queriesPlanned, queriesExecuted: collector.search.queriesExecuted, parentVerified: collector.search.queries.reduce((total, query) => total + query.verifiedParentPosts, 0), parentUnverified: collector.search.queries.reduce((total, query) => total + query.tilesUnverified, 0) } : undefined,
     mainFeed: collector?.mainFeed,
     hardRejectReasons: collector?.hardRejectReasons,
+    accounting: collector?.accounting ?? null,
+    accountingMode: collector?.accountingMode ?? "LEGACY",
+    accountingError: collector?.accountingError ?? null,
     partialReason: progress.partialReason,
   };
 }
@@ -774,6 +782,22 @@ function scanResponseFromProgress(progress: ScanProgressResponse): ScanResponse 
 type ScanFunnel = { collected: number; exact: number; identityUnverified: number; extractionFailed: number; sell: number; rent: number; otherExact: number; review: number; rejected: number; matched: number; saved: number; searchTiles: number; searchParentUnverified: number; searchQueriesExecuted: number; searchQueriesPlanned: number; topRejection: string; rejections: Array<{ key: string; label: string; count: number }> };
 
 function scanFunnel(response: ScanResponse): ScanFunnel {
+  if (response.accountingMode === "AUTHORITATIVE" && response.accounting && !response.accountingError) {
+    const accounting = response.accounting;
+    const totals = facebookAccountingUiTotals(accounting);
+    const rejections = accountingReasonBars(accounting);
+    const top = rejections.filter((reason) => reason.count > 0).sort((a, b) => b.count - a.count)[0];
+    return {
+      ...totals,
+      saved: response.persistedCount ?? 0,
+      searchTiles: 0,
+      searchParentUnverified: 0,
+      searchQueriesExecuted: 0,
+      searchQueriesPlanned: 0,
+      topRejection: top ? `${top.label} — ${formatNumber(top.count)}` : "Brak danych o twardych odrzuceniach",
+      rejections,
+    };
+  }
   const raw = response as ScanResponse & Record<string, unknown>;
   const breakdown = isRecord(raw.rejectionBreakdown) ? raw.rejectionBreakdown as Record<string, unknown> : {};
   const collected = Math.max(0, response.scannedCount);
@@ -820,6 +844,49 @@ function scanFunnel(response: ScanResponse): ScanFunnel {
   const extractionFailed = (response.warnings ?? []).filter((warning) => warning.startsWith("Post nie został przetworzony:")).length;
   const top = rejections.filter((reason) => reason.count > 0).sort((a, b) => b.count - a.count)[0];
   return { collected, exact, identityUnverified, extractionFailed, sell, rent, otherExact, review, rejected, matched, saved, searchTiles, searchParentUnverified, searchQueriesExecuted: numberFromAny(search, ["queriesExecuted"], 0), searchQueriesPlanned: numberFromAny(search, ["expectedQueries", "queriesPlanned"], 0), topRejection: top ? `${top.label} — ${formatNumber(top.count)}` : "Brak danych o twardych odrzuceniach", rejections };
+}
+
+function AuthoritativeAccountingPanel({ accounting }: { accounting: FacebookScanAccounting }) {
+  const primary = accounting.byOutcome;
+  const secondary = accountingReasonBars(accounting).filter((reason) => reason.count > 0);
+  return <div className="mt-4 rounded-xl border border-border/60 bg-surface-elevated/50 p-4" aria-label="Rozliczenie terminalne skanu">
+    <p className="text-sm font-semibold">Zebrane unikalne: {formatNumber(accounting.uniqueCaptured)}</p>
+    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <DiagnosticMetric label="Tożsamość niezweryfikowana" value={primary.IDENTITY_UNVERIFIED} />
+      <DiagnosticMetric label="Błąd ekstrakcji" value={primary.EXTRACTION_FAILED} />
+      <DiagnosticMetric label="Stare / poza limitem" value={primary.STALE_POST} />
+      <DiagnosticMetric label="Najem" value={primary.RENTAL} />
+      <DiagnosticMetric label="Inny zamiar" value={primary.NON_SALE} />
+      <DiagnosticMetric label="Inny typ nieruchomości" value={primary.UNSUPPORTED_PROPERTY_TYPE} />
+      <DiagnosticMetric label="Twardy filtr" value={primary.HARD_FILTER_REJECT} />
+      <DiagnosticMetric label="Do oceny" value={primary.REVIEW} />
+      <DiagnosticMetric label="Dopasowane" value={primary.MATCHED} tone="gold" />
+    </div>
+    <p className="mt-3 text-xs text-muted-foreground">Suma głównych wyników: {formatNumber(Object.values(primary).reduce((sum, count) => sum + count, 0))} = zebrane unikalne. Powody poniżej są wtórne i mogą się nakładać.</p>
+    {secondary.length > 0 ? <div className="mt-4 border-t border-border/60 pt-3"><p className="text-sm font-semibold">Dlaczego odrzucone?</p><div className="mt-2 space-y-2">{secondary.map((reason) => <DiagnosticBar analyzed={Math.max(1, primary.HARD_FILTER_REJECT)} count={reason.count} key={reason.key} label={reason.label} />)}</div></div> : null}
+  </div>;
+}
+
+function accountingReasonBars(accounting: FacebookScanAccounting): Array<{ key: string; label: string; count: number }> {
+  const reasonLabels: Array<[string, string, string[]]> = [
+    ["outsideLocation", "Poza Łodzią", ["outside_lodz", "outsideLocation"]],
+    ["districtMismatch", "Dzielnica poza filtrem", ["districtMismatch", "district"]],
+    ["areaBelowMin", "Powierzchnia poniżej minimum", ["area_min", "areaBelowMin"]],
+    ["areaAboveMax", "Powierzchnia powyżej maksimum", ["area_max", "areaAboveMax"]],
+    ["pricePerSqmAboveMax", "Cena/m² powyżej limitu", ["max_price_per_sqm", "pricePerSqmAboveMax"]],
+    ["roomsMismatch", "Liczba pokoi", ["rooms", "roomsMismatch"]],
+    ["excludedBuildingType", "Wykluczony typ budynku", ["building_type_excluded", "kamienica", "excludedBuildingType"]],
+    ["duplicate", "Duplikat", ["duplicate", "duplicates"]],
+    ["ageCutoff", "Limit wieku", ["stale_post", "age_cutoff", "ageCutoff"]],
+    ["rent", "Najem", ["rent_request", "rent_listing"]],
+    ["other", "Inne", ["non_sale_post", "buy_request", "non_apartment_property", "insufficient_text", "unclassified_skip"]],
+  ];
+  const knownCodes = new Set(reasonLabels.flatMap(([, , codes]) => codes));
+  const mapped = reasonLabels.map(([key, label, codes]) => ({ key, label, count: codes.reduce((total, code) => total + (accounting.reasonCounts[code] ?? 0), 0) }));
+  const extra = Object.entries(accounting.reasonCounts)
+    .filter(([code]) => !knownCodes.has(code))
+    .map(([code, count]) => ({ key: `accounting-${code}`, label: code.startsWith("unknown_") ? `Brak: ${code.slice("unknown_".length)}` : code, count }));
+  return [...mapped, ...extra];
 }
 
 function technicalDiagnosticBars(diagnostics: MatchDiagnostics, analyzed: number) { return [{ key: "price", label: "Cena", count: diagnostics.rejectedByPrice }, { key: "pricePerSqm", label: "Cena/m²", count: diagnostics.rejectedByPricePerSqm }, { key: "rooms", label: "Pokoje", count: diagnostics.rejectedByRooms }, { key: "area", label: "Metraż", count: diagnostics.rejectedByArea }, { key: "district", label: "Dzielnica", count: diagnostics.rejectedByDistrict }, { key: "buildingType", label: "Typ budynku", count: diagnostics.rejectedByBuildingType }].map((item) => ({ ...item, count: Math.min(analyzed, Math.max(0, item.count)) })); }

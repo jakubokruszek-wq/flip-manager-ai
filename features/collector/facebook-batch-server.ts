@@ -7,7 +7,7 @@ import { fetchFacebookActiveListingCandidates, importFacebookWatcher } from "@/f
 import type { SearchFilter } from "@/features/flip-finder";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { aggregateFacebookScanAccounting, classifyPreExtractionExclusion, type FacebookPostOutcome, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
+import { aggregateFacebookScanAccounting, classifyPreExtractionExclusion, validateFacebookScanAccounting, type FacebookPostOutcome, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 
 import type { FacebookCollectorBatch } from "./facebook-batch";
 import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts, isCollectorPostFresh } from "./facebook-batch-policy";
@@ -30,6 +30,7 @@ export type CollectorBatchResult = {
   persistenceDiagnostics?: FacebookPersistenceDiagnostics[];
   /** Deterministic scan accounting (see scan-accounting.ts) for this batch's raw captured posts. Absent on batches recorded before this feature — callers must degrade gracefully, never fabricate it. */
   accounting?: FacebookScanAccounting;
+  accountingError?: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED";
 };
 
 export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
@@ -99,17 +100,19 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     // (matching the existing `processed = Math.max(...)` pattern: with the
     // single active Facebook filter this deployment runs today, every target
     // iteration processes the identical `posts` array).
-    const eligiblePostIds = new Set(posts.map((post) => post.postId).filter((id): id is string => id !== null));
+    const eligiblePostKeys = new Set(posts.map((post) => post.postId ?? post.permalink ?? ""));
     const preExtractionOutcomes: FacebookPostOutcome[] = batch.posts
-      .filter((capturedPost) => !(capturedPost.postId && eligiblePostIds.has(capturedPost.postId)))
-      .map((capturedPost) => ({
-        ...classifyPreExtractionExclusion({
+      .filter((capturedPost) => !eligiblePostKeys.has(capturedPost.postId ?? capturedPost.permalink ?? ""))
+      .map((capturedPost) => {
+        const exclusion = classifyPreExtractionExclusion({
           identityConfidence: capturedPost.identityConfidence,
           identityConflict: historicalIdentityConflicts.has(capturedPost.postId),
           fresh: isCollectorPostFresh(capturedPost.publishedAt, eligibilityCheckedAt),
-        })!,
-        postId: capturedPost.postId,
-      }));
+        });
+        return exclusion
+          ? { ...exclusion, postId: capturedPost.postId ?? capturedPost.permalink ?? null }
+          : { postId: capturedPost.postId ?? capturedPost.permalink ?? null, primaryOutcome: "IDENTITY_UNVERIFIED", reasonCodes: ["identity_unverified"] };
+      });
     let lastProcessedOutcomes: FacebookPostOutcome[] = [];
     const authors = new Map(batch.posts.map((post) => [post.postId, post.author]));
     // Fetched once for the whole batch instead of once per post; new listings
@@ -154,6 +157,10 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       return true;
     });
     const accounting = aggregateFacebookScanAccounting(uniqueOutcomes, batch.posts.length);
+    const accountingValidation = validateFacebookScanAccounting(accounting);
+    if (!accountingValidation.ok) {
+      return finishBatch(supabase, deviceId, batchRowId, batch, { status: "degraded", batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors: errors + 1, sourceScanIds, health: batch.health, persistenceDiagnostics, accountingError: accountingValidation.errorCode ?? undefined }, accountingValidation.errorCode ?? undefined);
+    }
     return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting });
   } catch (error) {
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));

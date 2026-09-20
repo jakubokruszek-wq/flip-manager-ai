@@ -7,6 +7,7 @@ import { evaluateFacebookApartmentSafety } from "./facebook-apartment-safety.ts"
 import { classifyFacebookPostAgeZone } from "./post-age-zone.ts";
 import { evaluateCanonicalListingDecision } from "../flip-finder/filter-evaluation.ts";
 import { classifyFacebookDecision, classifyFacebookSkip } from "../facebook-worker/scan-accounting.ts";
+import { facebookPersistenceFailure } from "./facebook-persistence-contract.ts";
 import type { SearchFilter } from "../flip-finder/index.ts";
 
 /**
@@ -91,6 +92,12 @@ test("Chóralna reaches REVIEW under the mission's exact active filter, never MA
   const outcome = classifyFacebookDecision({ bucket: decision.bucket, reasons: decision.hardRejectReasons, unknownFields: decision.missingFields });
   assert.equal(outcome.primaryOutcome, "REVIEW", "the accounting layer must file this exact fixture under REVIEW, never EXTRACTION_FAILED or any other bucket — it must be impossible for it to silently disappear");
   assert.deepEqual([...outcome.reasonCodes].sort(), ["unknown_buildingType", "unknown_ownership", "unknown_topFloor"]);
+});
+
+test("Chóralna orphan state is incomplete before retry and complete after the normal REVIEW projection read-back", () => {
+  assert.equal(facebookPersistenceFailure("REVIEW", { metadataId: null, membershipExists: false, isCurrentMatch: undefined, matchReasons: [] }), "FACEBOOK_METADATA_PERSIST_FAILED");
+  assert.equal(facebookPersistenceFailure("REVIEW", { metadataId: "metadata-1", membershipExists: false, isCurrentMatch: undefined, matchReasons: [] }), "FACEBOOK_FILTER_RECONCILE_FAILED");
+  assert.equal(facebookPersistenceFailure("REVIEW", { metadataId: "metadata-1", membershipExists: true, isCurrentMatch: false, matchReasons: ["unknown_topFloor", "unknown_buildingType", "unknown_ownership"] }), null);
 });
 
 // Guard rails: a rental example must never be promoted to a sale outcome, and

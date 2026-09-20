@@ -23,6 +23,8 @@ import {
 } from "@/features/flip-finder/scan-progress";
 import type { ListingSource } from "@/features/flip-finder";
 import { summarizeHardRejects } from "@/features/flip-finder/funnel-summary";
+import { explainPartialFacebookScan } from "@/features/facebook-worker/scan-accounting";
+import { projectPersistedFacebookAccounting } from "./scan-accounting-projection";
 
 type Row = Record<string, unknown>;
 const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
@@ -220,6 +222,8 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
   const facebookScans = scanRows.filter((item) => item.source === "facebook");
   if (facebookScans.length === 0) return null;
   const payloads = batchRows.map((item) => row(item.payload)).filter((item): item is Row => item !== null);
+  const accountingProjection = projectPersistedFacebookAccounting(batchRows.map((item) => row(item.result)));
+  const accounting = accountingProjection.accounting;
   const posts = payloads.flatMap((payload) => Array.isArray(payload.posts) ? payload.posts.filter((item): item is Row => row(item) !== null) : []);
   const warnings = facebookScans.flatMap((scan) => Array.isArray(scan.warnings) ? scan.warnings.filter((warning): warning is string => typeof warning === "string") : []);
   const exactFromPayload = posts.filter((post) => post.identityConfidence === "EXACT");
@@ -322,6 +326,9 @@ function collectorFunnel(batchRows: Row[], scanRows: Row[], jobRows: Row[] = [])
     },
     hardRejectReasons,
     stages,
+    accounting,
+    accountingMode: accountingProjection.accountingMode,
+    accountingError: accountingProjection.accountingError,
   };
 }
 
@@ -515,6 +522,12 @@ function toMainFeedDiagnostic(value: Row): CollectorMainFeedDiagnostic {
 }
 
 function collectorPartialReason(scanRows: Row[], collector: CollectorScanFunnel | null): string | null {
+  if (collector?.accountingError) return collector.accountingError;
+  if (collector?.accounting) {
+    const degradedSources = scanRows.filter((scan) => scan.source === "facebook" && scan.status === "partial").length;
+    const explanation = explainPartialFacebookScan(collector.accounting, degradedSources);
+    if (explanation.length > 0) return explanation.join(" · ");
+  }
   if (collector?.search.globalTimeBudgetExhausted) {
     return `Collector zakończył pracę, ale część SEARCH została pominięta/ograniczona. Wykonano ${collector.search.queriesExecuted}/${collector.search.queriesPlanned} zapytań; wykorzystano globalny limit czasu.`;
   }

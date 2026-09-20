@@ -219,6 +219,11 @@ test("a post skipped for lacking a stable id/permalink still receives an account
   assert.equal(result.outcomes[0].primaryOutcome, "IDENTITY_UNVERIFIED");
 });
 
+test("a permalink-only captured post keeps a stable accounting identity for batch deduplication", async () => {
+  const result = await processFacebookPostBatch([{ ...post("permalink-only"), postId: null }], async () => outcome({ persistenceDiagnostics: { ...emptyDiagnostics("permalink-only"), decision: "MATCHED", decisionReasons: [] } }));
+  assert.equal(result.outcomes[0].postId, "https://www.facebook.com/groups/group-1/posts/permalink-only/");
+});
+
 function emptyDiagnostics(postId: string) {
   return { postId, creationTime: null, timestampSource: "UNKNOWN" as const, publishedAtCandidate: null, publishedAtPersistAttempted: false, publishedAtPersisted: false, exactBoundCandidates: 0, relevanceAccepted: 0, relevanceRejected: 0, mirrorAttempted: 0, mirroredCount: 0, persistedNewImageCount: 0, finalListingImageCount: 0, persistedImageCount: 0, imageReasonCode: "NONE", reasonCodes: [], imageProvenance: [] };
 }

@@ -34,6 +34,8 @@ import { assessFacebookListingQuality, assessFacebookPriceQuality, FACEBOOK_PRIC
 import { assessFacebookContentQuality, classifyFacebookAvailability, classifyFacebookFreshness, classifyFacebookLocationState, classifyFacebookPropertyType, classifyFacebookSearchIntent, FACEBOOK_AVAILABILITY_STATES, FACEBOOK_CONTENT_QUALITY_GRADES, FACEBOOK_FRESHNESS_STATES, FACEBOOK_LOCATION_STATES, FACEBOOK_PROPERTY_TYPES, FACEBOOK_SEARCH_INTENTS } from "./search-quality";
 import { classifyFacebookPostAgeZone } from "./post-age-zone";
 import { resolveFacebookPricePerSqm } from "./extract-facebook-property";
+import { isFacebookOrphan, orphanDiagnostic, type FacebookOrphanDiagnostic } from "./facebook-orphan-recovery";
+import { facebookPersistenceFailure } from "./facebook-persistence-contract";
 
 type Row = Record<string, unknown>;
 
@@ -176,7 +178,8 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   if (imagesError) throw new Error(`Nie udało się zapisać stabilnych zdjęć Facebooka: ${imagesError.message}`);
   const { error: metadataError } = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: normalized.groupName ?? null, author_name: normalized.authorName ?? null, published_at: normalized.publishedAt ?? previousSource.publishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_watcher", firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingListingState.firstSeenAt ?? now, neighborhood: extracted.neighborhood, locationProvenance: locationResolution.provenance, confidence: extracted.confidence, fieldConfidence: extracted.fieldConfidence, sourceFacts: extracted.sourceFacts, priceQuality, listingQuality: listingQuality.listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, listingIntent: extracted.listingIntent, intentConfidence: extracted.intentConfidence, intentSource: extracted.intentSource, flags: extracted.flags, sellerType: extracted.sellerType, condition: extracted.condition, opportunityScore: score, crossSourceMatch, imageMirror: imageMirror.stats, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
   if (metadataError) throw new Error(`Nie udało się zapisać metadanych Facebooka: ${metadataError.message}`);
-  await applyFilters(supabase, listingId, extracted, pricePerSqm);
+  const filterDecisions = await applyFilters(supabase, listingId, extracted, pricePerSqm);
+  for (const filterDecision of filterDecisions) await assertFacebookPersistenceComplete(supabase, listingId, filterDecision.filterId, sourceUrl, filterDecision);
   await recordFacebookGroupImport(normalized.groupName, status === "created", score >= 85 || extracted.sellerType === "private" && extracted.condition === "renovation");
   return { status, listingId, extracted, opportunityScore: score, listingCreated: status === "created", listingUpdated: status === "updated", matched: false, matchCreated: false, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops: 0, warnings: imageMirror.warnings };
 }
@@ -281,7 +284,7 @@ async function importAutomatedFacebook(input: {
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
     const lastSeen = await supabase.from("listings").update({ last_seen_at: now, status: "active" }).eq("id", listingId);
     if (lastSeen.error) throw new Error(`FACEBOOK_LIFECYCLE_PERSIST_FAILED: ${lastSeen.error.message}`);
-    const canonical = await reconcileCanonicalListingDecision({
+    const canonical = await reconcileFacebookDecision({
       supabase,
       listingId,
       filterId: context.filter.id,
@@ -295,7 +298,12 @@ async function importAutomatedFacebook(input: {
     const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt), authoritativeTextSource: normalized.postText ? "AUTHOR_TEXT" : null, mediaBinding: facebookMediaBindingSummary(normalized, externalId), buildingEvidence, flags: effective.flags, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, locationProvenance: locationResolution.provenance, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED" };
     const contentHash = calculateContentHash({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor, locationText, images: imageMirror.images });
     const listing: SourceListing = { source: "facebook", externalListingId: externalId, originalUrl: sourceUrl, normalizedUrl: sourceUrl, title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), pricePerSqm, city: effective.city, district: effective.district, locationText, images: imageMirror.images, thumbnailUrl: imageMirror.images[0] ?? null, buildingType, description: effective.description, rawPayload, contentHash };
-    const saved = await persistListing(supabase, context.filter.id, listing, decision.matches, decision.unknownFields, context.sourceScanId, now, AbortSignal.timeout(75_000), decision);
+    let saved: Awaited<ReturnType<typeof persistListing>>;
+    try {
+      saved = await persistListing(supabase, context.filter.id, listing, decision.matches, decision.unknownFields, context.sourceScanId, now, AbortSignal.timeout(75_000), decision);
+    } catch (error) {
+      throw mapFacebookPersistenceError(error);
+    }
     listingId = saved.listingId;
     listingCreated = saved.listingCreated;
     listingUpdated = saved.updated > 0;
@@ -360,6 +368,7 @@ async function importAutomatedFacebook(input: {
   }));
   const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: persistedPublishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, locationProvenance: locationResolution.provenance, buildingEvidence, confidence: effective.confidence, fieldConfidence: effective.fieldConfidence, fieldProvenance: facebookFieldProvenance(normalized, effective), sourceFacts: effective.sourceFacts, priceQuality, listingQuality: listingQuality.listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, authoritativeSourceText: normalized.postText ?? null, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED", mediaBinding: bindingSummary, mediaProvenance, imageExtractionVersion: 2, imageMirror: { ...imageMirror.stats, mode: dataFirstSearch ? "SEARCH_DATA_FIRST" : "FULL" }, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
   if (metadata.error) throw new Error(`FACEBOOK_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
+  await assertFacebookPersistenceComplete(supabase, listingId, context.filter.id, sourceUrl, decision);
   console.info("FACEBOOK_MEDIA_BINDING_SUMMARY", { postId: externalId, ...bindingSummary, mirrored: imageMirror.images.length });
   console.info("FACEBOOK_PUBLICATION_DATE", { postId: externalId, source: normalized.publishedAt ? "FACEBOOK_CREATION_TIME" : previousSource.publishedAt ? "EXISTING_DATA" : "UNKNOWN", exact: Boolean(normalized.publishedAt), persisted: persistedPublishedAt });
   await recordFacebookGroupImport(context.groupName, listingCreated, score >= 85 || effective.sellerType === "private" && effective.condition === "renovation");
@@ -392,6 +401,41 @@ async function importAutomatedFacebook(input: {
     decisionUnknownFields: decision.unknownFields,
   });
   return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics };
+}
+
+/**
+ * A successful import is only complete when both source identity and the
+ * canonical filter projection exist. This read-back deliberately reuses the
+ * canonical RPC's projection contract; it never writes or reimplements it.
+ * Missing state is a resumable failure, so the same captured post can retry.
+ */
+async function assertFacebookPersistenceComplete(
+  supabase: ReturnType<typeof createFacebookWatcherAdminClient>,
+  listingId: string,
+  filterId: string,
+  sourceUrl: string,
+  decision: { bucket: "MATCHED" | "REVIEW" | "REJECTED" },
+): Promise<void> {
+  const [metadata, membership] = await Promise.all([
+    supabase.from("listing_source_metadata").select("id").eq("source", "facebook").eq("source_post_url", sourceUrl).eq("listing_id", listingId).maybeSingle(),
+    supabase.from("listing_filter_matches").select("is_current_match,match_reasons").eq("listing_id", listingId).eq("search_filter_id", filterId).maybeSingle(),
+  ]);
+  if (metadata.error) throw new Error(`FACEBOOK_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
+  if (!metadata.data?.id) throw new Error("FACEBOOK_METADATA_PERSIST_FAILED: persisted row not found");
+  if (membership.error) throw new Error(`FACEBOOK_FILTER_RECONCILE_FAILED: ${membership.error.message}`);
+  const matchReasons = Array.isArray(membership.data?.match_reasons) ? membership.data.match_reasons.filter((value): value is string => typeof value === "string") : [];
+  const failure = facebookPersistenceFailure(decision.bucket, { metadataId: metadata.data?.id ? String(metadata.data.id) : null, membershipExists: Boolean(membership.data), isCurrentMatch: typeof membership.data?.is_current_match === "boolean" ? membership.data.is_current_match : undefined, matchReasons });
+  if (failure) throw new Error(`${failure}: canonical persistence read-back incomplete`);
+}
+
+async function reconcileFacebookDecision(input: Parameters<typeof reconcileCanonicalListingDecision>[0]): Promise<Awaited<ReturnType<typeof reconcileCanonicalListingDecision>>> {
+  try { return await reconcileCanonicalListingDecision(input); }
+  catch (error) { throw mapFacebookPersistenceError(error); }
+}
+
+function mapFacebookPersistenceError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : "canonical reconciliation failed";
+  return message.startsWith("CANONICAL_RECONCILIATION_FAILED") ? new Error(`FACEBOOK_FILTER_RECONCILE_FAILED: ${message}`) : error instanceof Error ? error : new Error(message);
 }
 
 function apartmentUnknownFields(filter: SearchFilter, evidence: FacebookBuildingEvidence, city: string | null): string[] {
@@ -469,13 +513,14 @@ async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdm
   return null;
 }
 
-async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string, item: FacebookProperty, pricePerSqm: number | null) {
+async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string, item: FacebookProperty, pricePerSqm: number | null): Promise<Array<{ filterId: string; bucket: "MATCHED" | "REVIEW" | "REJECTED" }>> {
   const filters = await getActiveSearchFiltersForSource("facebook");
   const evaluated = filters.map((filter) => ({ filter, decision: evaluateCanonicalListingDecision({ price: item.price, area: item.area, pricePerSqm, rooms: item.rooms, floor: item.floor === null ? null : String(item.floor), city: item.city, district: item.district, title: item.title, locationText: [item.neighborhood,item.district,item.city].filter(Boolean).join(", "), buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter) }));
   const currentBucket: "MATCHED" | "REVIEW" | "REJECTED" = evaluated.some(({ decision }) => decision.bucket === "MATCHED") ? "MATCHED" : evaluated.some(({ decision }) => decision.bucket === "REVIEW") ? "REVIEW" : "REJECTED";
   for (const { filter, decision } of evaluated) {
-    await reconcileCanonicalListingDecision({ supabase, listingId, filterId: filter.id, decision: { ...decision, reasons: decision.bucket === "MATCHED" ? ["collector_import", ...item.flags, ...decision.reasons] : decision.reasons }, lifecycleStatus: currentBucket === "MATCHED" ? "ACTIVE" : currentBucket, matchOrigin: "collector_import" });
+    await reconcileFacebookDecision({ supabase, listingId, filterId: filter.id, decision: { ...decision, reasons: decision.bucket === "MATCHED" ? ["collector_import", ...item.flags, ...decision.reasons] : decision.reasons }, lifecycleStatus: currentBucket === "MATCHED" ? "ACTIVE" : currentBucket, matchOrigin: "collector_import" });
   }
+  return evaluated.map(({ filter, decision }) => ({ filterId: filter.id, bucket: decision.bucket }));
 }
 
 export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
@@ -514,6 +559,74 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     const historical = lifecycleStatus === "ARCHIVED" || lifecycleStatus === "STALE";
     return [{ listingId, title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), originalUrl: facebookUrl?.startsWith("http") ? facebookUrl : null, images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: str(row.group_name), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
   });
+}
+
+/** Read-only maintenance view. It never mutates an orphan while listing it. */
+export async function listFacebookOrphans(): Promise<FacebookOrphanDiagnostic[]> {
+  const supabase = createFacebookWatcherAdminClient();
+  const filters = await getActiveSearchFiltersForSource("facebook");
+  const listings = await supabase.from("listings").select("id,external_listing_id,original_url").eq("source", "facebook").eq("status", "active").limit(500);
+  if (listings.error) throw new Error(`FACEBOOK_ORPHAN_LIST_FAILED: ${listings.error.message}`);
+  const rows = (listings.data ?? []) as Row[];
+  const ids = rows.map((row) => String(row.id)).filter(Boolean);
+  if (ids.length === 0) return [];
+  const [metadata, memberships] = await Promise.all([
+    supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").in("listing_id", ids),
+    supabase.from("listing_filter_matches").select("listing_id,search_filter_id,match_reasons,is_current_match").in("listing_id", ids),
+  ]);
+  if (metadata.error) throw new Error(`FACEBOOK_ORPHAN_METADATA_READ_FAILED: ${metadata.error.message}`);
+  if (memberships.error) throw new Error(`FACEBOOK_ORPHAN_MEMBERSHIP_READ_FAILED: ${memberships.error.message}`);
+  const metadataIds = new Set((metadata.data ?? []).map((row) => String(row.listing_id)));
+  const membershipByListing = new Map<string, Set<string>>();
+  for (const row of memberships.data ?? []) {
+    const listingId = String(row.listing_id); const filterId = String(row.search_filter_id);
+    const reasons = Array.isArray(row.match_reasons) ? row.match_reasons.filter((value): value is string => typeof value === "string") : [];
+    if (!filters.some((filter) => filter.id === filterId) || (!row.is_current_match && !reasons.some((reason) => reason === "review" || reason.startsWith("unknown_")))) continue;
+    const set = membershipByListing.get(listingId) ?? new Set<string>(); set.add(filterId); membershipByListing.set(listingId, set);
+  }
+  return rows.flatMap((row) => {
+    const listingId = String(row.id); const externalId = str(row.external_listing_id); const originalUrl = str(row.original_url);
+    if (!externalId || !originalUrl) return [];
+    const missingFilterIds = filters.map((filter) => filter.id).filter((filterId) => !membershipByListing.get(listingId)?.has(filterId));
+    const candidate = orphanDiagnostic({ listingId, externalListingId: externalId, originalUrl, hasTrustedIdentity: /^https:\/\/(?:www\.)?facebook\.com\//i.test(originalUrl), hasSourceMetadata: metadataIds.has(listingId), missingFilterIds });
+    return isFacebookOrphan(candidate) ? [candidate] : [];
+  });
+}
+
+/**
+ * Replays the normal ingestion path from immutable collector evidence. No
+ * direct table patching is performed; metadata and membership are repaired by
+ * importFacebookWatcher -> persistListing -> the existing canonical RPC.
+ */
+export async function repairFacebookOrphanFromCollectorEvidence(listingId: string): Promise<{ listingId: string; repairedFilters: string[] }> {
+  const supabase = createFacebookWatcherAdminClient();
+  const listing = await supabase.from("listings").select("id,source,external_listing_id").eq("id", listingId).eq("source", "facebook").maybeSingle();
+  if (listing.error) throw new Error(`FACEBOOK_ORPHAN_REPAIR_LISTING_READ_FAILED: ${listing.error.message}`);
+  const externalId = str(listing.data?.external_listing_id);
+  if (!externalId) throw new Error("FACEBOOK_ORPHAN_SOURCE_IDENTITY_MISSING");
+  const batches = await supabase.from("collector_scan_batches").select("scan_id,source_id,source_url,payload").eq("source_type", "GROUP").order("received_at", { ascending: false }).limit(100);
+  if (batches.error) throw new Error(`FACEBOOK_ORPHAN_EVIDENCE_READ_FAILED: ${batches.error.message}`);
+  const evidence = (batches.data ?? []).map((batch) => ({ batch, payload: record(batch.payload) })).find(({ payload }) => Array.isArray(payload?.posts) && payload.posts.some((post: unknown) => record(post)?.postId === externalId));
+  if (!evidence) throw new Error("FACEBOOK_ORPHAN_SOURCE_EVIDENCE_MISSING");
+  const batch = evidence.batch as Row; const payload = evidence.payload!;
+  const post = (payload.posts as unknown[]).map(record).find((value): value is Row => value?.postId === externalId);
+  if (!post) throw new Error("FACEBOOK_ORPHAN_SOURCE_EVIDENCE_MISSING");
+  const filters = await getActiveSearchFiltersForSource("facebook");
+  if (filters.length === 0) throw new Error("FACEBOOK_ORPHAN_NO_ACTIVE_FILTER");
+  const sourceScans = await supabase.from("source_scans").select("id,search_filter_id").eq("scan_run_id", String(batch.scan_id)).eq("source", "facebook");
+  if (sourceScans.error) throw new Error(`FACEBOOK_ORPHAN_SOURCE_SCAN_READ_FAILED: ${sourceScans.error.message}`);
+  const media = Array.isArray(post.media) ? post.media.map(record).flatMap((item) => item && typeof item.url === "string" ? [item.url] : []) : [];
+  const input: FacebookListingInput = { url: str(post.permalink) ?? undefined, postText: str(post.text) ?? undefined, authorName: str(post.author) ?? undefined, groupName: str(batch.source_id) ?? undefined, publishedAt: str(post.publishedAt) ?? undefined, images: media, discoverySource: post.discoverySource === "SEARCH" ? "SEARCH" : "MAIN_FEED", foundInMainFeed: post.foundInMainFeed === true, firstSeenPhase: post.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED" };
+  const repairedFilters: string[] = [];
+  for (const filter of filters) {
+    const sourceScanId = String((sourceScans.data ?? []).find((row) => String(row.search_filter_id) === filter.id)?.id ?? (sourceScans.data ?? [])[0]?.id ?? "");
+    if (!sourceScanId) continue;
+    const result = await importFacebookWatcher(input, { filter, sourceScanId, groupId: String(batch.source_id), groupName: String(batch.source_id), groupUrl: String(batch.source_url), postId: externalId, checkedAt: new Date().toISOString(), preserveExistingImagesOnEmptyInput: true, imageMode: "SEARCH_DATA_FIRST" });
+    if (result.listingId !== listingId) throw new Error("FACEBOOK_ORPHAN_REPAIR_IDENTITY_MISMATCH");
+    repairedFilters.push(filter.id);
+  }
+  if (repairedFilters.length === 0) throw new Error("FACEBOOK_ORPHAN_REPAIR_NO_SOURCE_SCAN");
+  return { listingId, repairedFilters };
 }
 export async function updateFacebookWatcherWorkflow(listingId: string, input: { status?: FacebookWorkflowStatus; markRead?: boolean; crmPropertyId?: string }): Promise<void> {
   const supabase = createFacebookWatcherAdminClient();
@@ -556,6 +669,7 @@ export async function restoreFacebookWatcherListing(listingId: string): Promise<
 function workflowStatus(value: unknown): FacebookWorkflowStatus { return FACEBOOK_WORKFLOW_STATUSES.includes(value as FacebookWorkflowStatus) ? value as FacebookWorkflowStatus : "new"; }
 function facebookSellerType(value: unknown, flags: string[]): FacebookWatcherListing["sellerType"] { if (value === "private" || value === "agency") return value; return flags.some((flag)=>/bezpośred|właściciel/i.test(flag)) ? "private" : null; }
 function facebookCondition(value: unknown, flags: string[]): FacebookWatcherListing["condition"] { if (value === "renovation" || value === "ready") return value; return flags.some((flag)=>/remont/i.test(flag)) ? "renovation" : null; }
+const record=(v:unknown): Row | null => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Row : null;
 const str=(v:unknown)=>typeof v==="string"?v:null; const num=(v:unknown)=>typeof v==="number"?v:typeof v==="string"&&v!==""?Number(v):null;
 function parseFacebookPriceQuality(value: unknown): FacebookPriceQuality | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;

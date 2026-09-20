@@ -1,4 +1,5 @@
 import type { ListingSource } from "@/features/flip-finder";
+import type { FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 
 export type ScanProgressStatus = "queued" | "running" | "completed" | "partial" | "failed";
 export type WorkerJobStatus = "queued" | "running" | "completed" | "failed";
@@ -269,6 +270,9 @@ export type CollectorScanFunnel = {
   };
   hardRejectReasons: Record<string, number>;
   stages: Array<{ stage: string; startedAt: string; finishedAt: string | null; elapsedMs: number | null; status: string; errorCode: string | null }>;
+  accounting: FacebookScanAccounting | null;
+  accountingMode: "AUTHORITATIVE" | "LEGACY";
+  accountingError: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED" | null;
 };
 
 export type OpenAICostWindow = {

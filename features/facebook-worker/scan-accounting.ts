@@ -50,6 +50,11 @@ export type FacebookScanAccounting = {
   reasonCounts: Record<string, number>;
 };
 
+export type FacebookScanAccountingValidation = {
+  ok: boolean;
+  errorCode: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED" | null;
+};
+
 function emptyOutcomeCounts(): Record<FacebookScanPrimaryOutcome, number> {
   return Object.fromEntries(FACEBOOK_SCAN_PRIMARY_OUTCOMES.map((outcome) => [outcome, 0])) as Record<FacebookScanPrimaryOutcome, number>;
 }
@@ -135,9 +140,86 @@ export function aggregateFacebookScanAccounting(outcomes: FacebookPostOutcome[],
   return { rawCaptured, uniqueCaptured: outcomes.length, duplicatesRemoved: Math.max(0, rawCaptured - outcomes.length), byOutcome, reasonCounts };
 }
 
+/**
+ * The one canonical invariant check used by both the writer and read-side
+ * diagnostics.  Persisted JSON is untrusted, so callers must validate before
+ * treating it as authoritative accounting.
+ */
+export function validateFacebookScanAccounting(accounting: FacebookScanAccounting): FacebookScanAccountingValidation {
+  const keysAreComplete = FACEBOOK_SCAN_PRIMARY_OUTCOMES.every((outcome) => Number.isFinite(accounting.byOutcome?.[outcome]) && accounting.byOutcome[outcome] >= 0);
+  const totalsMatch = FACEBOOK_SCAN_PRIMARY_OUTCOMES.reduce((total, outcome) => total + (accounting.byOutcome?.[outcome] ?? 0), 0) === accounting.uniqueCaptured;
+  const countsAreValid = Number.isInteger(accounting.rawCaptured) && accounting.rawCaptured >= 0
+    && Number.isInteger(accounting.uniqueCaptured) && accounting.uniqueCaptured >= 0
+    && Number.isInteger(accounting.duplicatesRemoved) && accounting.duplicatesRemoved >= 0
+    && accounting.rawCaptured >= accounting.uniqueCaptured
+    && accounting.duplicatesRemoved === accounting.rawCaptured - accounting.uniqueCaptured;
+  return keysAreComplete && totalsMatch && countsAreValid
+    ? { ok: true, errorCode: null }
+    : { ok: false, errorCode: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED" };
+}
+
 export function verifyFacebookScanAccountingInvariant(accounting: FacebookScanAccounting): boolean {
-  const sum = FACEBOOK_SCAN_PRIMARY_OUTCOMES.reduce((total, outcome) => total + accounting.byOutcome[outcome], 0);
-  return sum === accounting.uniqueCaptured;
+  return validateFacebookScanAccounting(accounting).ok;
+}
+
+/** Combines independent collector batches without mixing intermediate counters. */
+export function mergeFacebookScanAccounting(accountings: FacebookScanAccounting[]): FacebookScanAccounting {
+  const byOutcome = emptyOutcomeCounts();
+  const reasonCounts: Record<string, number> = {};
+  let rawCaptured = 0;
+  let uniqueCaptured = 0;
+  let duplicatesRemoved = 0;
+  for (const accounting of accountings) {
+    rawCaptured += accounting.rawCaptured;
+    uniqueCaptured += accounting.uniqueCaptured;
+    duplicatesRemoved += accounting.duplicatesRemoved;
+    for (const outcome of FACEBOOK_SCAN_PRIMARY_OUTCOMES) byOutcome[outcome] += accounting.byOutcome[outcome];
+    for (const [reason, count] of Object.entries(accounting.reasonCounts)) reasonCounts[reason] = (reasonCounts[reason] ?? 0) + count;
+  }
+  return { rawCaptured, uniqueCaptured, duplicatesRemoved, byOutcome, reasonCounts };
+}
+
+/** Strictly projects persisted JSON; malformed records stay on the legacy path. */
+export function parseFacebookScanAccounting(value: unknown): FacebookScanAccounting | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const byOutcomeValue = record.byOutcome;
+  const reasonsValue = record.reasonCounts;
+  if (!byOutcomeValue || typeof byOutcomeValue !== "object" || Array.isArray(byOutcomeValue) || !reasonsValue || typeof reasonsValue !== "object" || Array.isArray(reasonsValue)) return null;
+  const byOutcome = Object.fromEntries(FACEBOOK_SCAN_PRIMARY_OUTCOMES.map((outcome) => [outcome, Number((byOutcomeValue as Record<string, unknown>)[outcome])])) as Record<FacebookScanPrimaryOutcome, number>;
+  const reasonCounts = Object.fromEntries(Object.entries(reasonsValue as Record<string, unknown>).filter(([, count]) => Number.isInteger(count) && Number(count) >= 0).map(([reason, count]) => [reason.slice(0, 120), Number(count)]));
+  const accounting: FacebookScanAccounting = {
+    rawCaptured: Number(record.rawCaptured), uniqueCaptured: Number(record.uniqueCaptured), duplicatesRemoved: Number(record.duplicatesRemoved), byOutcome, reasonCounts,
+  };
+  return validateFacebookScanAccounting(accounting).ok ? accounting : null;
+}
+
+/** Primary totals projected by the production Finder funnel; intermediate counters never enter this sum. */
+export function facebookAccountingUiTotals(accounting: FacebookScanAccounting): {
+  collected: number;
+  exact: number;
+  identityUnverified: number;
+  extractionFailed: number;
+  sell: number;
+  rent: number;
+  otherExact: number;
+  review: number;
+  rejected: number;
+  matched: number;
+} {
+  const primary = accounting.byOutcome;
+  return {
+    collected: accounting.uniqueCaptured,
+    exact: Math.max(0, accounting.uniqueCaptured - primary.IDENTITY_UNVERIFIED),
+    identityUnverified: primary.IDENTITY_UNVERIFIED,
+    extractionFailed: primary.EXTRACTION_FAILED,
+    sell: primary.HARD_FILTER_REJECT + primary.REVIEW + primary.MATCHED,
+    rent: primary.RENTAL,
+    otherExact: primary.NON_SALE + primary.UNSUPPORTED_PROPERTY_TYPE,
+    review: primary.REVIEW,
+    rejected: primary.HARD_FILTER_REJECT,
+    matched: primary.MATCHED,
+  };
 }
 
 /** Returns the N reason codes with the highest counts, most first. */

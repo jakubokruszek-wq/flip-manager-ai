@@ -7,8 +7,12 @@ import {
   classifyFacebookDecision,
   classifyFacebookSkip,
   classifyPreExtractionExclusion,
+  facebookAccountingUiTotals,
   explainPartialFacebookScan,
+  mergeFacebookScanAccounting,
+  parseFacebookScanAccounting,
   topFacebookScanReasons,
+  validateFacebookScanAccounting,
   verifyFacebookScanAccountingInvariant,
   type FacebookPostOutcome,
 } from "./scan-accounting.ts";
@@ -183,4 +187,41 @@ test("no post can appear in two primary terminal buckets: aggregation is a parti
   assert.equal(sum, 50);
   assert.equal(accounting.byOutcome.MATCHED, 25);
   assert.equal(accounting.byOutcome.HARD_FILTER_REJECT, 25);
+});
+
+test("persisted accounting is parsed strictly and merged without changing the primary partition", () => {
+  const first = aggregateFacebookScanAccounting([
+    classifyFacebookDecision({ bucket: "MATCHED", reasons: [], unknownFields: [] }),
+    classifyFacebookDecision({ bucket: "REJECTED", reasons: ["area_max"], unknownFields: [] }),
+  ], 2);
+  const second = aggregateFacebookScanAccounting([
+    classifyFacebookDecision({ bucket: "REVIEW", reasons: [], unknownFields: ["topFloor"] }),
+  ], 1);
+  const merged = mergeFacebookScanAccounting([first, second]);
+  assert.equal(validateFacebookScanAccounting(merged).ok, true);
+  assert.equal(merged.uniqueCaptured, 3);
+  assert.equal(merged.byOutcome.MATCHED, 1);
+  assert.equal(merged.byOutcome.HARD_FILTER_REJECT, 1);
+  assert.equal(merged.byOutcome.REVIEW, 1);
+  assert.equal(merged.reasonCounts.area_max, 1);
+  assert.equal(merged.reasonCounts.unknown_topFloor, 1);
+  assert.deepEqual(parseFacebookScanAccounting(JSON.parse(JSON.stringify(first))), first);
+  assert.equal(parseFacebookScanAccounting({ ...first, uniqueCaptured: -1 }), null);
+  assert.equal(parseFacebookScanAccounting({ ...first, rawCaptured: 3, duplicatesRemoved: 0 }), null);
+  assert.equal(parseFacebookScanAccounting({ ...first, byOutcome: { ...first.byOutcome, MATCHED: 99 } }), null);
+});
+
+test("Finder accounting totals are a primary partition and never add processed-style counters", () => {
+  const accounting = aggregateFacebookScanAccounting([
+    classifyPreExtractionExclusion({ identityConfidence: "UNVERIFIED", identityConflict: false, fresh: true })!,
+    classifyFacebookSkip({ reasonCode: "FACEBOOK_RENT_REQUEST", warnings: [] }),
+    classifyFacebookDecision({ bucket: "REJECTED", reasons: ["area_max"], unknownFields: [] }),
+    classifyFacebookDecision({ bucket: "REVIEW", reasons: [], unknownFields: ["topFloor"] }),
+    classifyFacebookDecision({ bucket: "MATCHED", reasons: [], unknownFields: [] }),
+  ], 7);
+  const totals = facebookAccountingUiTotals(accounting);
+  assert.equal(totals.collected, 5);
+  assert.equal(totals.sell, totals.rejected + totals.review + totals.matched);
+  assert.equal(totals.exact + totals.identityUnverified, totals.collected);
+  assert.equal(totals.rent, 1);
 });
