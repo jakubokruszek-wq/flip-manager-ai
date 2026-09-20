@@ -21,6 +21,7 @@ import type { SearchFilterScan } from "@/features/flip-finder/search-filter-cont
 type ResultsResponse = {
   filter: SearchFilter;
   results: FilterResult[];
+  reviewResults: FilterResult[];
   total: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
@@ -59,6 +60,7 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
   }, [load]);
 
   const results = useMemo(() => (data ? sortResults(data.results, sort) : []), [data, sort]);
+  const reviewResults = useMemo(() => (data ? sortResults(data.reviewResults, sort) : []), [data, sort]);
 
   if (isLoading) {
     return <ResultsLoadingState />;
@@ -121,7 +123,7 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
         </div>
       ) : null}
 
-      {results.length === 0 ? (
+      {results.length === 0 && reviewResults.length === 0 ? (
         <EmptyResultsState isActive={data.filter.isActive} />
       ) : (
         <section aria-label="Oferty dopasowane do filtra" className="grid gap-4 lg:grid-cols-2">
@@ -130,6 +132,20 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
           ))}
         </section>
       )}
+
+      {reviewResults.length > 0 ? (
+        <section aria-label="Oferty do oceny" className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">DO OCENY</h2>
+            <p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {formatNumber(reviewResults.length)}</p>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {reviewResults.map((result) => (
+              <ListingResultCard key={result.id} result={result} />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -390,6 +406,8 @@ function isResultsResponse(value: unknown): value is ResultsResponse {
     "filter" in value &&
     "results" in value &&
     Array.isArray(value.results) &&
+    "reviewResults" in value &&
+    Array.isArray(value.reviewResults) &&
     "total" in value &&
     typeof value.total === "number" &&
     "newMatches" in value &&
