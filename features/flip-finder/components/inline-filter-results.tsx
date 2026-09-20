@@ -33,6 +33,7 @@ import { DEFAULT_UNDERWRITING_SETTINGS } from "@/features/flip-finder/underwriti
 import { activeSourcesSummary, latestActiveScansText, sourceLabel } from "@/features/flip-finder/source-summary";
 import type { SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
+import { shouldShowGenericStatusBadge } from "@/features/flip-finder/listing-card-variant";
 
 type ResultsResponse = {
   filter: SearchFilter;
@@ -614,7 +615,7 @@ function PreviewMetric({ label, value, emphasis = false }: { label: string; valu
   return <article className={`rounded-xl border p-4 ${emphasis ? "border-gold/35 bg-gold/[0.06]" : "border-border/70 bg-background/40"}`}><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-2 text-lg font-semibold tabular-nums ${emphasis ? "text-gold" : "text-foreground"}`}>{value}</p></article>;
 }
 
-function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported, variant = "standalone" }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher" }) {
+function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported, variant = "standalone", hideLifecycleBadge = false }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [crmImporting, setCrmImporting] = useState(false);
   const [crmToast, setCrmToast] = useState<string | null>(null);
@@ -796,13 +797,13 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           {result.images.length > 1 ? <span className="absolute right-3 top-3 rounded-full bg-black/75 px-2.5 py-1 text-xs font-semibold text-white">{result.images.length} zdjęć</span> : null}
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
           <div className="absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
-            {variant === "watcher" ? null : <StatusBadge status={result.listingStatus} />}
+            {shouldShowGenericStatusBadge(variant) ? <StatusBadge status={result.listingStatus} /> : null}
             {variant === "watcher" ? null : result.isNew ? <Badge label="Nowa" /> : result.hasPriceDrop ? <Badge label="Obniżka" /> : null}
           </div>
         </div>
         <div className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-4 sm:px-5 sm:py-3">
           <div className="absolute right-3 top-4 flex items-center gap-2 sm:right-5 sm:top-3">
-            <LifecycleBadge status={result.lifecycleStatus} />
+            {hideLifecycleBadge ? null : <LifecycleBadge status={result.lifecycleStatus} />}
             <SourceBadge source={result.source} />
           </div>
           <div className="min-w-0 pr-24"><h2 className="line-clamp-2 text-base font-semibold leading-snug tracking-tight sm:text-lg">{title}</h2></div>
@@ -827,7 +828,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
         <div className="border-b border-border/70 px-5 pb-5 pt-6 sm:px-8 sm:pb-6 sm:pt-8">
           <div className="flex min-w-0 flex-col items-start gap-4 pr-8 sm:flex-row sm:justify-between">
             <div className="min-w-0 flex-1">
-              <div className="mb-3 flex items-center gap-2"><SourceBadge source={result.source} /><StatusBadge status={result.listingStatus} /></div>
+              <div className="mb-3 flex items-center gap-2"><SourceBadge source={result.source} />{shouldShowGenericStatusBadge(variant) ? <StatusBadge status={result.listingStatus} /> : null}</div>
               <DialogTitle className="text-xl font-bold leading-tight tracking-tight sm:text-2xl">{title}</DialogTitle>
               <DialogDescription className="mt-2 flex items-center gap-2 text-sm"><MapPin aria-hidden="true" className="size-4 shrink-0" />{location}</DialogDescription>
             </div>
@@ -882,7 +883,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   );
 }
 
-export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher" }) {
+export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean }) {
   const [traceId] = useState(createGalleryTraceId);
   const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);

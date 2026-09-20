@@ -61,40 +61,84 @@ test("Finder/Watcher consistency diagnostics are demoted to a collapsed secondar
 // REJECTED". The standalone isNew "NOWA" badge duplicated the WorkflowBadge's
 // own "Nowa" label for the common case of an untouched, freshly-imported item.
 test("the card never repeats the same status word twice: the Finder/current-decision line is deduped and the redundant isNew badge is removed", () => {
-  assert.match(panel, /currentLabel=item\.currentFilterDecision&&item\.currentFilterDecision!==finderLabel\?` · teraz \$\{item\.currentFilterDecision\}`:""/, "the ' · teraz X' suffix must only render when it differs from the Finder label already shown, otherwise 'Finder: REJECTED · teraz REJECTED' repeats the same word");
+  assert.match(panel, /currentLabel=item\.currentFilterDecision&&item\.currentFilterDecision!==finderStatus\?` · teraz \$\{item\.currentFilterDecision\}`:""/, "the ' · teraz X' suffix must only render when it differs from the Finder status already shown, otherwise 'Finder: REJECTED · teraz REJECTED' repeats the same word");
   assert.doesNotMatch(panel, /text="NOWA"/, "the standalone isNew badge duplicated WorkflowBadge's own 'Nowa' label for the default untouched-listing case and must be removed");
 });
 
 // The Watcher embeds the Finder-shared ExpandableListingCard for its rich
 // detail dialog. That shared card independently rendered StatusBadge
-// ("Aktywna") and LifecycleBadge ("AKTYWNA" — its own fallback label) at once
-// for any normal active listing, plus its own isNew "Nowa" ribbon and a
-// second, divergent "Dodaj do CRM" import path, and an always-eligible
-// GalleryRequestButton hitting a different endpoint than "Napraw galerię".
-// variant="watcher" suppresses exactly those duplicates without changing any
-// default (Finder) behavior.
-test("the Watcher embeds the shared listing card with variant=\"watcher\", which suppresses its duplicate status badge, CRM button, and gallery-request button", () => {
+// ("Aktywna") in TWO places — the collapsed preview AND the expanded dialog
+// header — and only the collapsed one was ever gated on variant="watcher"
+// (V1.1 blocker 1). Both call sites now route through one exported predicate
+// (shouldShowGenericStatusBadge, in listing-card-variant.ts), so they can
+// never drift apart again; that predicate is executed and verified directly,
+// not by re-checking each site's own independent regex, in
+// features/flip-finder/listing-card-variant.test.ts.
+test("the Watcher embeds the shared listing card with variant=\"watcher\" and hideLifecycleBadge, and both are wired for every card", () => {
   assert.match(panel, /result=\{result\} variant="watcher"/, "InboxItem must pass variant=\"watcher\" into ExpandableListingCard");
+  assert.match(panel, /hideLifecycleBadge=\{presentation\.mode==="unified"\}/, "hideLifecycleBadge must be driven by the real semantic-dedup decision, not a constant");
   assert.match(finderCard, /variant\?: "standalone" \| "watcher"/, "the variant prop must be optional and default-preserving for existing Finder call sites");
-  assert.match(finderCard, /variant === "watcher" \? null : <StatusBadge/, "StatusBadge (\"Aktywna\") must be suppressed for the watcher variant, leaving LifecycleBadge as the single lifecycle indicator");
-  assert.match(finderCard, /variant === "watcher" \? null : <Button className="h-11 rounded-xl font-semibold" disabled=\{crmImporting\}/, "the dialog's second, divergent 'Dodaj do CRM' import path must be hidden for the watcher variant, since InboxItem's own action row already has one");
   assert.match(finderCard, /props\.variant === "watcher" \? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton/, "GalleryRequestButton must be hidden for the watcher variant so it never competes with the Facebook-specific 'Napraw galerię' repair action");
+  assert.match(finderCard, /variant === "watcher" \? null : <Button className="h-11 rounded-xl font-semibold" disabled=\{crmImporting\}/, "the dialog's second, divergent 'Dodaj do CRM' import path must be hidden for the watcher variant, since InboxItem's own action row already has one");
 });
 
-// clearWatcherHistory previously threw one identical message for both a failed
-// preview fetch (network/server error) and an active-job block, and had no
-// loading/disabled state, letting a user fire multiple concurrent DELETEs.
-test("Wyczyść historię Watchera has a loading/disabled state and distinguishes a failed status check from an active-job block", () => {
+// V1.1 blocker 2: the Finder canonical decision and the Watcher lifecycle
+// status are two independent signals that can say the same thing (MATCHED +
+// ACTIVE) or genuinely disagree (REVIEW + ARCHIVED). resolveListingStatusPresentation
+// (tested directly and exhaustively in listing-status-presentation.test.ts)
+// decides which; this test only proves the PANEL actually wires that decision
+// into both the text line and the embedded card's LifecycleBadge, rather than
+// computing its own separate, possibly-inconsistent interpretation.
+test("the card's status line and the embedded LifecycleBadge are driven by one resolveListingStatusPresentation call, not two independent guesses", () => {
+  assert.match(panel, /const presentation=resolveListingStatusPresentation\(\{finderStatus,lifecycleStatus:facebookLifecycleStatus\(item\.lifecycleStatus\)\}\)/, "the presentation must be computed once, from the same finderStatus used for the ' · teraz X' dedup");
+  assert.match(panel, /presentation\.mode==="distinct"\?<>Finder: <strong className="text-foreground">\{presentation\.finderLabel\}<\/strong>\{currentLabel\} · cykl życia: <strong className="text-foreground">\{presentation\.lifecycleLabel\}<\/strong><\/>/, "when they materially differ, both labels must remain visible — disagreement must never be hidden");
+  assert.match(panel, /:<>Status: <strong className="text-foreground">\{presentation\.label\}<\/strong>\{currentLabel\}<\/>/, "when they agree, exactly one unified label must be shown");
+  assert.match(finderCard, /\{hideLifecycleBadge \? null : <LifecycleBadge status=\{result\.lifecycleStatus\} \/>\}/, "the embedded card's own LifecycleBadge must be suppressible so a 'unified' case doesn't re-introduce the same state a second time");
+});
+
+// V1.1 blocker 3: clearWatcherHistory previously checked `historyClearing`
+// and only set it AFTER the preview/confirm sequence, so two rapid clicks
+// could both start a preview request before either lock existed. The actual
+// lock-acquisition-before-first-await and double-click-immunity behavior is
+// proven directly, with real overlapping calls, in
+// watcher-action-flows.test.ts; this test only proves the panel wires the
+// button to that runner instead of reintroducing its own separate guard.
+test("Wyczyść historię Watchera delegates its entire lock/preview/confirm/delete sequence to one runner created once", () => {
   assert.match(panel, /const \[historyClearing,setHistoryClearing\]=useState\(false\)/, "clearing must be tracked in its own state, not reused from the per-item busyId");
   assert.match(panel, /disabled=\{historyClearing\}[\s\S]{0,80}onClick=\{\(\)=>void clearWatcherHistory\(\)\}[\s\S]{0,10}>\{historyClearing\?"Czyszczenie…":"Wyczyść historię Watchera"\}/, "the button must disable itself and show a loading label while a clear is in flight");
-  assert.match(panel, /if\(historyClearing\)return;/, "a second click while already clearing must be a no-op");
-  assert.match(panel, /if\(!preview\.ok\)throw new Error\("Nie udało się sprawdzić stanu historii Watchera\."\)/, "a failed status check must surface its own message");
-  assert.match(panel, /if\(summary\.ready===false\)\{showToast\("error",HISTORY_CLEAR_ERROR_MESSAGES\[summary\.blockedReason\?\?""\]/, "an active-job block must surface a distinct message from a failed status check, using the server's own blockedReason");
-  assert.match(panel, /setListings\(\[\]\);showToast\("success","Historia Watchera została wyczyszczona\."\)/, "a successful clear must refresh the list and show a success toast");
+  assert.match(panel, /const \[runHistoryClear\]=useState\(\(\)=>createHistoryClearRunner\(/, "the runner (and its lock) must be created exactly once per component instance, not recreated on every render");
+  assert.match(panel, /\{onBusyChange:setHistoryClearing\}/, "the runner must drive historyClearing itself, so busy state can never desync from whether a clear is actually in flight");
+  assert.match(panel, /const clearWatcherHistory=async\(\)=>\{\s*const outcome=await runHistoryClear\(\);/, "clearWatcherHistory must be a thin delegation to the runner");
+  assert.doesNotMatch(panel, /if\(historyClearing\)return;/, "the old manual, post-preview guard must be gone — the lock now lives inside the runner, acquired before any await");
+  assert.match(panel, /if\(outcome\.kind==="cleared"\)\{setListings\(\[\]\);showToast\("success","Historia Watchera została wyczyszczona\."\);\}/, "a genuinely cleared outcome must refresh the list and show a success toast");
 });
 
-test("Napraw galerię surfaces known server error codes as friendly toasts and stays disabled while in flight", () => {
-  assert.match(panel, /GALLERY_REPAIR_ERROR_MESSAGES\[body\.code\?\?""\]\?\?"Nie udało się naprawić galerii\."/, "known gallery-repair error codes must map to a friendly message, falling back to a generic one for unknown codes");
-  assert.match(panel, /showToast\("success","Galeria została wyzerowana i dodano jedno zadanie hydracji\."\)/, "a successful repair must show a success toast");
-  assert.match(panel, /Action disabled=\{busy\} label="Napraw galerię" onClick=\{\(\)=>void onRepairGallery\(item\)\}/, "the repair action must reuse the same per-item busy flag as every other row action, disabling it while a request for that listing is in flight");
+// V1.1 blocker 4: the old code patched `images: []` into local state as a
+// guess about what the server did, instead of reading back the server's own
+// response. runGalleryRepair (tested directly in watcher-action-flows.test.ts)
+// now reports exactly the server's own status/jobId; this test proves the
+// panel acts on that by refetching authoritative listing data, and that the
+// fabricated local patch is gone.
+test("Napraw galerię refreshes authoritative server state and never fabricates local gallery state", () => {
+  assert.match(panel, /const outcome=await runGalleryRepair\(\{/, "the repair flow's own request/error-mapping logic must live in the tested pure module, not be re-implemented inline");
+  assert.doesNotMatch(panel, /images:\[\]/, "the old fabricated local images:[] patch must be gone");
+  assert.match(panel, /if\(outcome\.kind==="repaired"\)\{\s*try\{setListings\(await loadListings\(\)\)/, "a successful repair must trigger a real refetch of the Watcher listing dataset (there is no single-listing read endpoint)");
+  assert.match(panel, /`Galeria zgłoszona do ponownego pobrania \(status: \$\{outcome\.status\}\)\.`/, "the success message must reflect the server's own reported status (e.g. PENDING), not an invented one");
+  assert.match(panel, /Action disabled=\{busy\} label="Napraw galerię" onClick=\{\(\)=>void onRepairGallery\(item\)\}/, "the repair action must still reuse the same per-item busy flag as every other row action");
+});
+
+// V1.1 blocker 5: addToCrm used to `await updateWorkflow(...)` — a function
+// that caught its own PATCH failure internally and never rethrew — so a
+// failed workflow update was followed unconditionally by a success toast.
+// The actual impossibility of that false-success sequence is proven directly,
+// with a failing workflow update, in watcher-action-flows.test.ts; this test
+// proves the panel actually routes addToCrm through that guarded pipeline.
+test("addToCrm can never show success after a swallowed workflow-update failure", () => {
+  assert.match(panel, /const outcome=await runAddToCrm\(\{/, "addToCrm's own success/failure decision must come from the tested pure runAddToCrm, not a local unconditional continuation");
+  assert.match(panel, /updateWorkflow:propertyId=>updateWorkflow\(item,\{status:"crm",crmPropertyId:propertyId\}\)/, "runAddToCrm must be given the SAME updateWorkflow whose result addToCrm ultimately reports — not a call it ignores");
+  assert.match(panel, /showToast\(outcome\.kind==="success"\?"success":"error",outcome\.message\)/, "exactly one toast must be shown, chosen by the actual outcome kind, never a toast fired independently of it");
+  assert.match(panel, /const result=await runUpdateWorkflow\(\{fetchPatch:/, "updateWorkflow's own PATCH must go through the tested pure runUpdateWorkflow");
+  assert.match(panel, /if\(result\.ok\)setListings/, "updateWorkflow must apply its local patch only when the PATCH actually succeeded, never unconditionally");
+  assert.match(panel, /return result;\s*\};\s*const guardedUpdateWorkflow=/, "updateWorkflow must return its explicit result so callers (addToCrm, guardedUpdateWorkflow) are forced to check it");
+  assert.match(panel, /updateWorkflow=\{guardedUpdateWorkflow\}/, "InboxItem's other fire-and-forget actions (Interesująca/Odrzuć/Przywróć/markRead) must go through the guarded wrapper, which toasts on failure instead of silently swallowing it");
 });
