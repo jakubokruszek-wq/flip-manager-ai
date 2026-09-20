@@ -1,12 +1,21 @@
 import { authorizeFacebookWatcherAction } from "@/features/facebook-watcher/server/history-clear-auth";
+import { authorizeFacebookOrphanOperator } from "@/features/facebook-watcher/server/facebook-orphan-auth";
 import { listFacebookOrphans, repairFacebookOrphanFromCollectorEvidence } from "@/features/facebook-watcher/server";
 
-export async function GET(): Promise<Response> {
+export async function GET(request: Request): Promise<Response> {
+  const auth = authorizeFacebookOrphanOperator(request);
+  if (!auth.authorized) return Response.json({ ok: false, code: "FACEBOOK_ORPHAN_ACTION_FORBIDDEN" }, { status: auth.status });
   try { return Response.json({ ok: true, orphans: await listFacebookOrphans() }); }
   catch { return Response.json({ ok: false, code: "FACEBOOK_ORPHAN_LIST_FAILED" }, { status: 503 }); }
 }
 
 export async function POST(request: Request): Promise<Response> {
+  // The auth check is the sole authorization boundary. The Origin/Fetch-
+  // Metadata/action-header check below remains only as defense-in-depth
+  // against same-origin browser CSRF-style requests; it must never be able
+  // to grant access on its own, so it is checked strictly after auth.
+  const auth = authorizeFacebookOrphanOperator(request);
+  if (!auth.authorized) return Response.json({ ok: false, code: "FACEBOOK_ORPHAN_ACTION_FORBIDDEN" }, { status: auth.status });
   const denied = authorizeFacebookWatcherAction(request, "repair-facebook-orphan");
   if (denied) return denied;
   let listingId: unknown;
