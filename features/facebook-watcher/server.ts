@@ -525,6 +525,8 @@ export async function restoreFacebookWatcherListing(listingId: string): Promise<
   const listingResult = await supabase.from("listings").select("id,source,price,area,price_per_sqm,rooms,floor,city,district,address,title,building_type,ownership,description,lifecycle_status,manual_decision").eq("id", listingId).maybeSingle();
   const listing = listingResult.data as Row | null;
   if (listingResult.error || !listing || listing.source !== "facebook") throw new Error("FACEBOOK_RESTORE_LISTING_NOT_FOUND");
+  const sourceMetadata = await supabase.from("listing_source_metadata").select("id").eq("listing_id", listingId).eq("source", "facebook").limit(1);
+  if (sourceMetadata.error || !sourceMetadata.data?.length) throw new Error("FACEBOOK_RESTORE_SOURCE_METADATA_MISSING");
   if (listing.lifecycle_status !== "ARCHIVED" && listing.lifecycle_status !== "STALE") throw new Error("FACEBOOK_RESTORE_NOT_ARCHIVED");
   if (listing.manual_decision === "REJECTED") return { restored: false, bucket: "REJECTED", lifecycleStatus: String(listing.lifecycle_status), reasons: ["manual_rejected"], unknownFields: [] };
   const filters = await getActiveSearchFiltersForSource("facebook");
