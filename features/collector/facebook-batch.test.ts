@@ -56,6 +56,71 @@ test("main feed telemetry is bounded and tolerates a missing or malformed summar
   assert.ok((hostile.mainFeedSummary?.hydrationSamples.length ?? 0) <= 60);
 });
 
+test("recall telemetry (adaptive deeper-feed engine) survives the batch contract with the exact production canary shape", () => {
+  const batch = batchWith({
+    recall: {
+      initialFeedDepthMode: "CURRENT_DEPTH",
+      adaptiveDeeperTriggered: true,
+      effectiveFeedDepthMode: "DEEPER_NETWORK_FEED",
+      currentDepth: {
+        mode: "CURRENT_DEPTH", durationMs: 7091, scrollCount: 17, visibleCardCount: 14, capturedPostCount: 14,
+        uniqueCanonicalPosts: 14, newCanonicalPosts: 0, freshPosts: 9, oldPosts: 2, unknownAgePosts: 3,
+        duplicates: 3, networkResponses: 22, networkRecordCount: 14, captureRatio: 1, stopReason: "NO_NEW_POSTS_AND_CARDS_3_SCROLLS",
+      },
+      deeperFeed: {
+        mode: "DEEPER_NETWORK_FEED", durationMs: 18_909, scrollCount: 12, visibleCardCount: 5, capturedPostCount: 5,
+        newCanonicalPosts: 5, freshPosts: 4, oldPosts: 0, unknownAgePosts: 1, duplicates: 2,
+        networkResponses: 9, networkRecordCount: 5, captureRatio: 1, stopReason: "DEEPER_FEED_NO_NEW_POSTS",
+      },
+      deeperFeedTriggerReasons: ["BELOW_MIN_EXPLORATION_FLOOR"],
+      currentDepthDurationMs: 7091,
+      deeperFeedDurationMs: 18_909,
+      totalDurationMs: 26_000,
+      totalUniqueCanonicalPosts: 19,
+    },
+  });
+  assert.equal(batch.recall?.initialFeedDepthMode, "CURRENT_DEPTH");
+  assert.equal(batch.recall?.adaptiveDeeperTriggered, true);
+  assert.equal(batch.recall?.effectiveFeedDepthMode, "DEEPER_NETWORK_FEED");
+  assert.deepEqual(batch.recall?.deeperFeedTriggerReasons, ["BELOW_MIN_EXPLORATION_FLOOR"]);
+  assert.equal(batch.recall?.currentDepth?.durationMs, 7091);
+  assert.equal(batch.recall?.currentDepth?.scrollCount, 17);
+  assert.equal(batch.recall?.currentDepth?.capturedPostCount, 14);
+  assert.equal(batch.recall?.currentDepth?.uniqueCanonicalPosts, 14);
+  assert.equal(batch.recall?.currentDepth?.freshPosts, 9);
+  assert.equal(batch.recall?.currentDepth?.duplicates, 3);
+  assert.equal(batch.recall?.currentDepth?.stopReason, "NO_NEW_POSTS_AND_CARDS_3_SCROLLS");
+  assert.equal(batch.recall?.deeperFeed?.durationMs, 18_909);
+  assert.equal(batch.recall?.deeperFeed?.scrollCount, 12);
+  assert.equal(batch.recall?.deeperFeed?.capturedPostCount, 5);
+  assert.equal(batch.recall?.deeperFeed?.newCanonicalPosts, 5);
+  assert.equal(batch.recall?.deeperFeed?.duplicates, 2);
+  assert.equal(batch.recall?.deeperFeed?.stopReason, "DEEPER_FEED_NO_NEW_POSTS");
+  assert.equal((batch.recall?.deeperFeed as Record<string, unknown>)?.uniqueCanonicalPosts, undefined, "a phase delta never carries the running total");
+  assert.equal(batch.recall?.totalDurationMs, 26_000);
+  assert.equal(batch.recall?.totalUniqueCanonicalPosts, 19);
+});
+
+test("recall telemetry tolerates a missing or malformed value and never invents a triggered deeper pass", () => {
+  assert.equal(batchWith({}).recall, null);
+  assert.equal(batchWith({ recall: "nonsense" }).recall, null);
+  const hostile = batchWith({
+    recall: {
+      initialFeedDepthMode: "SOMETHING_ELSE", adaptiveDeeperTriggered: "yes", effectiveFeedDepthMode: "SOMETHING_ELSE",
+      currentDepth: "not-an-object", deeperFeed: null, deeperFeedTriggerReasons: "not-an-array",
+      currentDepthDurationMs: -5, deeperFeedDurationMs: 10 ** 9, totalDurationMs: "nope", totalUniqueCanonicalPosts: -1,
+    },
+  });
+  assert.equal(hostile.recall?.initialFeedDepthMode, "CURRENT_DEPTH", "unknown modes fall back to the safe default");
+  assert.equal(hostile.recall?.adaptiveDeeperTriggered, false, "only a literal boolean true is accepted");
+  assert.equal(hostile.recall?.currentDepth, null);
+  assert.deepEqual(hostile.recall?.deeperFeedTriggerReasons, []);
+  assert.equal(hostile.recall?.currentDepthDurationMs, 0);
+  assert.ok((hostile.recall?.deeperFeedDurationMs ?? 0) <= 600_000);
+  assert.equal(hostile.recall?.totalDurationMs, 0);
+  assert.equal(hostile.recall?.totalUniqueCanonicalPosts, 0);
+});
+
 test("normalizes a healthy exact-source collector batch and deduplicates posts", () => {
   const post = { postId: "1577700267381450", permalink: `https://www.facebook.com/groups/${sourceId}/posts/1577700267381450/`, sourceId, sourceType: "GROUP", author: "A", text: "Sprzedam mieszkanie", publishedAt: "2026-08-29T10:00:00Z", timestampText: "2 godz.", media: [{ url: "https://scontent.example/image.jpg", mediaId: "99", exactPostId: "1577700267381450", exactAssociation: true, discoveryLayers: ["DOM"] }], discoveryLayers: ["DOM", "NETWORK"], firstSeenIteration: 0 };
   const batch = normalizeFacebookCollectorBatch({ scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222", sourceId, sourceType: "GROUP", sourceUrl: `https://www.facebook.com/groups/${sourceId}/`, collectedAt: "2026-08-29T12:00:00Z", health: { status: "HEALTHY", visibleCardCount: 1, capturedPostCount: 1, scrolls: 3, durationMs: 5000, stopReason: "NO_NEW_IDS", reasons: [] }, posts: [post, post] });

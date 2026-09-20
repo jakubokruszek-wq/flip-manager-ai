@@ -47,7 +47,7 @@ test("a network-first scan plans zero queries so it is not reported DEGRADED", (
 
 test("main feed telemetry reaches the uploaded batch and carries no message text", () => {
   assert.match(background, /function mainFeedTelemetrySummary/);
-  assert.match(background, /mainFeedSummary, acquisitionMode,/, "summary and mode must be part of the uploaded batch");
+  assert.match(background, /mainFeedSummary, recall: primary\.recall \|\| null, acquisitionMode,/, "summary, recall telemetry and mode must be part of the uploaded batch");
   assert.match(background, /stopReason: primary\?\.health\?\.stopReason/);
   assert.match(background, /networkSourcedPosts:/);
   const summarySource = background.slice(background.indexOf("function mainFeedTelemetrySummary"), background.indexOf("function searchTelemetry"));

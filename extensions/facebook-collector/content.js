@@ -953,17 +953,38 @@
             : null
         : core.shouldStopDiscovery({ durationMs: elapsedMs, budgetMs, maxFastScanMs, uniqueCount: records.length, maxPosts: searchMode ? maxDiscoveryPosts : maxPosts, scrolls, maxScrolls, minScrolls, consecutiveNoNew, consecutiveNoVisibleGrowth, ageStreak, ageStopOptions });
       if (decision) {
+        const aborted = options.signal?.aborted === true;
+        // Exploration-floor/value-based continuation (V1.2): only ever
+        // consulted for the ordinary "feed went quiet" stop on a normal
+        // FAST_REPEAT main-feed pass — every other stop reason (frontier,
+        // time limit, post/scroll ceilings, abort) already took precedence
+        // inside shouldStopDiscovery's fixed check order above and never
+        // reaches here as NO_NEW_POSTS_AND_CARDS_3_SCROLLS, so those hard
+        // stops are untouched and still win immediately. Uses only signals
+        // already measured this iteration (physical-bottom check, recent
+        // scrollHeight growth, recent network activity) — never Search, a
+        // reload, or opening post pages.
+        const explorationEligible = !searchMode && scanMode === "FAST_REPEAT" && decision === "NO_NEW_POSTS_AND_CARDS_3_SCROLLS" && !aborted;
+        const scrollHeightGrewRecently = recentIterations.length >= 2 && recentIterations.at(-1).scrollHeight > recentIterations[0].scrollHeight;
+        const networkStillActive = networkQuietChecks < recentIterations.length;
+        const explorationContinuation = explorationEligible
+          ? core.evaluateExplorationContinuation({ elapsedMs, atBottom: atBottomNow, scrollHeightGrewRecently, networkStillActive })
+          : null;
         if (!searchMode && mode === "CURRENT_DEPTH") {
-          const aborted = options.signal?.aborted === true;
           const transition = core.evaluateDeeperFeedTransition({
             searchMode, scanMode, stopReason: decision, aborted,
             metrics: { uniqueCanonicalPosts: records.length, capturedPosts: records.length, freshPosts: ageStreak.freshPostsSeen, oldPosts: ageStreak.oldUniquePostsSeen, unknownAgePosts: ageStreak.unknownDatePostsSeen, duplicateCount: duplicateEncounters, visibleCards: cards.length, scrollCount: scrolls, networkResponses, networkRecordCount: networkRecords.size, elapsedMs },
           });
           currentDepthSnapshot = { mode: "CURRENT_DEPTH", durationMs: Math.round(elapsedMs), scrollCount: scrolls, visibleCardCount: cards.length, capturedPostCount: records.length, uniqueCanonicalPosts: records.length, newCanonicalPosts: added, freshPosts: ageStreak.freshPostsSeen, oldPosts: ageStreak.oldUniquePostsSeen, unknownAgePosts: ageStreak.unknownDatePostsSeen, duplicates: duplicateEncounters, networkResponses, networkRecordCount: networkRecords.size, captureRatio: cards.length ? Math.min(1, records.length / cards.length) : records.length ? 1 : 0, stopReason: transition.reason === "CURRENT_DEPTH_SUFFICIENT" ? "CURRENT_DEPTH_SUFFICIENT" : decision };
           deeperFeedTriggerReasons = transition.sufficiency?.reasons ?? [];
-          if (transition.triggerDeeper) {
+          // A technically-sufficient baseline no longer stops the pass by
+          // itself: while the normal exploration envelope still supports it
+          // and the feed shows real expansion evidence, cheap extra depth is
+          // worth buying even though coverage already clears the bar.
+          if (transition.triggerDeeper || explorationContinuation?.continue) {
             mode = "DEEPER_NETWORK_FEED";
             deeperFeedTriggered = true;
+            if (!transition.triggerDeeper) deeperFeedTriggerReasons = [...deeperFeedTriggerReasons, explorationContinuation.reason];
             maxScrolls += core.DEEPER_FEED_EXTRA_SCROLLS;
             budgetMs = Math.min(budgetMs + core.DEEPER_FEED_EXTRA_BUDGET_MS, core.DEEPER_FEED_MAX_BUDGET_MS);
             deeperFeedStartIteration = iteration + 1;
@@ -974,6 +995,15 @@
             stopReason = decision;
             break;
           }
+        } else if (explorationContinuation?.continue) {
+          // Already in DEEPER_NETWORK_FEED and the feed went quiet again: the
+          // time-tiered envelope may still justify buying more bounded depth
+          // on the SAME pass, repeating for as long as evidence and the
+          // envelope both support it (bounded by DEEPER_FEED_MAX_BUDGET_MS
+          // and, ultimately, MAX_FAST_SCAN_MS).
+          deeperFeedTriggerReasons = [...deeperFeedTriggerReasons, explorationContinuation.reason];
+          maxScrolls += core.DEEPER_FEED_EXTRA_SCROLLS;
+          budgetMs = Math.min(budgetMs + core.DEEPER_FEED_EXTRA_BUDGET_MS, core.DEEPER_FEED_MAX_BUDGET_MS);
         } else {
           stopReason = decision;
           break;

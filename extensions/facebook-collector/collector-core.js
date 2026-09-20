@@ -736,6 +736,34 @@
     return "DEEPER_FEED_COMPLETED";
   }
 
+  // Recall engine V1.2: a normal (FAST_REPEAT, main-feed) pass that hits
+  // NO_NEW_POSTS_AND_CARDS_3_SCROLLS is no longer allowed to stop purely on
+  // that signal alone before a minimum exploration floor, nor is it forced to
+  // stop once baseline coverage looks technically "sufficient" — Facebook
+  // group feeds are cheap enough to traverse now that trading a little more
+  // time for materially more recall is worthwhile. This is an explicit,
+  // deterministic time-tiered envelope, never AI: below the floor an
+  // expandable feed always keeps going; between the floor and the preferred
+  // target it keeps going on ordinary expansion evidence; between the
+  // preferred target and the outer envelope it requires stronger structural
+  // evidence (the feed container itself is still growing and not confirmed at
+  // its physical end); beyond the outer envelope normal exploration always
+  // terminates gracefully here (the absolute MAX_FAST_SCAN_MS safety ceiling,
+  // and every other hard stop, are evaluated earlier in shouldStopDiscovery
+  // and always win before this function is ever consulted).
+  const MIN_MAIN_FEED_EXPLORATION_MS = 15_000;
+  const PREFERRED_MAIN_FEED_EXPLORATION_MS = 30_000;
+  const MAX_NORMAL_GROUP_EXPLORATION_MS = 60_000;
+
+  function evaluateExplorationContinuation({ elapsedMs, atBottom, scrollHeightGrewRecently, networkStillActive }) {
+    const elapsed = Number.isFinite(elapsedMs) ? elapsedMs : 0;
+    const expandable = !atBottom || Boolean(scrollHeightGrewRecently) || Boolean(networkStillActive);
+    if (elapsed >= MAX_NORMAL_GROUP_EXPLORATION_MS) return { continue: false, reason: "NORMAL_EXPLORATION_ENVELOPE_COMPLETE" };
+    if (elapsed < MIN_MAIN_FEED_EXPLORATION_MS) return expandable ? { continue: true, reason: "BELOW_MIN_EXPLORATION_FLOOR" } : { continue: false, reason: "FEED_NOT_EXPANDABLE" };
+    if (elapsed < PREFERRED_MAIN_FEED_EXPLORATION_MS) return expandable ? { continue: true, reason: "WITHIN_PREFERRED_EXPLORATION_WINDOW" } : { continue: false, reason: "FEED_NOT_EXPANDABLE" };
+    return scrollHeightGrewRecently && !atBottom ? { continue: true, reason: "VALUE_BASED_CONTINUATION_EVIDENCE" } : { continue: false, reason: "NO_ADDITIONAL_RECALL_VALUE_EVIDENCE" };
+  }
+
   function exactPostId(node) {
     if (!isObject(node)) return null;
     for (const key of ID_KEYS) {
@@ -1050,5 +1078,5 @@
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
   const DEEP_RECALL_STREAK_THRESHOLD = Number.MAX_SAFE_INTEGER;
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS, DEEPER_FEED_MAX_BUDGET_MS, isDuplicateRediscoveryIteration };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS, DEEPER_FEED_MAX_BUDGET_MS, isDuplicateRediscoveryIteration, evaluateExplorationContinuation, MIN_MAIN_FEED_EXPLORATION_MS, PREFERRED_MAIN_FEED_EXPLORATION_MS, MAX_NORMAL_GROUP_EXPLORATION_MS };
 })(globalThis);

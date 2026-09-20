@@ -171,3 +171,62 @@ test("I: a post rediscovered in the deeper pass is merged, never duplicated", ()
   const post1 = records.find((item) => item.postId === "1");
   assert.deepEqual(post1.discoveryLayers.sort(), ["DOM", "NETWORK"], "the rediscovery still contributes its evidence, without a second row");
 });
+
+// Recall engine V1.2: evaluateExplorationContinuation — the minimum
+// exploration floor / value-based continuation envelope that decides whether
+// NO_NEW_POSTS_AND_CARDS_3_SCROLLS alone is allowed to stop a normal
+// FAST_REPEAT main-feed pass, using only existing scroll/network signals.
+function explorable(overrides = {}) {
+  return { elapsedMs: 7_091, atBottom: false, scrollHeightGrewRecently: false, networkStillActive: false, ...overrides };
+}
+
+// A. the exact real production canary shape (17 scrolls / 14 posts / ~7s / NO_NEW_3) is still expandable -> continue deeper
+test("A: the real production canary shape (~7s, well under the floor, not at the physical bottom) must continue exploring", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 7_091, atBottom: false }));
+  assert.equal(decision.continue, true);
+  assert.equal(decision.reason, "BELOW_MIN_EXPLORATION_FLOOR");
+});
+
+// B. the same ~7s shape but the feed is confirmed non-expandable (physical bottom, no growth, no network) -> stopping is allowed
+test("B: the same ~7s shape but confirmed non-expandable (at the bottom, nothing else moving) may still stop", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 7_091, atBottom: true, scrollHeightGrewRecently: false, networkStillActive: false }));
+  assert.equal(decision.continue, false);
+  assert.equal(decision.reason, "FEED_NOT_EXPANDABLE");
+});
+
+// C. 25+ scrolls / adequate exploration / genuinely exhausted by the outer envelope -> stop normally, even if still technically "not at the bottom"
+test("C: past the outer 60s exploration envelope, normal traversal always terminates gracefully", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 60_000, atBottom: false, scrollHeightGrewRecently: true, networkStillActive: true }));
+  assert.equal(decision.continue, false);
+  assert.equal(decision.reason, "NORMAL_EXPLORATION_ENVELOPE_COMPLETE");
+});
+
+test("within the 15-30s preferred window, ordinary expansion evidence (network still active) is enough to continue", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 20_000, atBottom: true, scrollHeightGrewRecently: false, networkStillActive: true }));
+  assert.equal(decision.continue, true);
+  assert.equal(decision.reason, "WITHIN_PREFERRED_EXPLORATION_WINDOW");
+});
+
+test("within the 15-30s preferred window, a confirmed non-expandable feed may still stop", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 20_000, atBottom: true, scrollHeightGrewRecently: false, networkStillActive: false }));
+  assert.equal(decision.continue, false);
+  assert.equal(decision.reason, "FEED_NOT_EXPANDABLE");
+});
+
+test("between 30-60s the bar is stricter: merely 'not confirmed at the bottom' is no longer enough on its own", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 45_000, atBottom: false, scrollHeightGrewRecently: false, networkStillActive: true }));
+  assert.equal(decision.continue, false, "network activity alone does not clear the 30-60s bar the way it does before 30s");
+  assert.equal(decision.reason, "NO_ADDITIONAL_RECALL_VALUE_EVIDENCE");
+});
+
+test("between 30-60s, concrete structural growth (scrollHeight still expanding, not at the bottom) does clear the stricter bar", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 45_000, atBottom: false, scrollHeightGrewRecently: true }));
+  assert.equal(decision.continue, true);
+  assert.equal(decision.reason, "VALUE_BASED_CONTINUATION_EVIDENCE");
+});
+
+test("the 60s outer envelope always wins even when every expandability signal still looks favorable", () => {
+  const decision = core.evaluateExplorationContinuation(explorable({ elapsedMs: 90_000, atBottom: false, scrollHeightGrewRecently: true, networkStillActive: true }));
+  assert.equal(decision.continue, false);
+  assert.equal(decision.reason, "NORMAL_EXPLORATION_ENVELOPE_COMPLETE");
+});

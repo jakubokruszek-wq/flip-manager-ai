@@ -14,9 +14,12 @@ function loadContentModule() {
   global.globalThis.FlipFacebookCollectorCore = undefined;
   global.globalThis.__flipCollectorContent = undefined;
   delete require.cache[require.resolve("./collector-core.js")];
-  global.window = { addEventListener: () => {}, scrollY: 0, scrollBy: () => {} };
+  global.window = { addEventListener: () => {}, scrollY: 0, scrollBy(options) { global.window.scrollY += options?.top || 0; } };
   global.innerHeight = 900;
   global.location = { origin: "https://www.facebook.com", href: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/" };
+  // A static, never-growing feed: scrollY genuinely advances (like a real
+  // browser) so an empty feed reaches its confirmed physical end quickly
+  // instead of perpetually reporting itself as still expandable.
   const scrollingElement = { scrollHeight: 1000, scrollTop: 0 };
   global.document = {
     addEventListener: () => {},

@@ -264,6 +264,7 @@ export type FacebookCollectorBatch = {
   stageTelemetry?: CollectorStageTelemetry[];
   mainFeedTelemetry?: CollectorMainFeedDiagnostic[];
   mainFeedSummary?: CollectorMainFeedSummary | null;
+  recall?: CollectorRecallTelemetry | null;
   posts: CollectorPostRecord[];
 };
 
@@ -291,6 +292,7 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
     stageTelemetry: normalizeStageTelemetry(value.stageTelemetry),
     mainFeedTelemetry: normalizeMainFeedTelemetry(value.mainFeedTelemetry),
     mainFeedSummary: normalizeMainFeedSummary(value.mainFeedSummary),
+    recall: normalizeRecall(value.recall),
     posts: deduped,
   };
 }
@@ -364,6 +366,81 @@ function normalizeMainFeedSummary(value: unknown): CollectorMainFeedSummary | nu
       waitedMs: boundedInteger(sample.waitedMs, 0, 60_000),
       firstGrowthMs: typeof sample.firstGrowthMs === "number" && Number.isFinite(sample.firstGrowthMs) ? boundedInteger(sample.firstGrowthMs, 0, 60_000) : null,
     })),
+  };
+}
+
+/** One phase (CURRENT_DEPTH, or DEEPER_NETWORK_FEED as a delta against it) of the adaptive recall engine's telemetry. */
+export type CollectorRecallDepthPhase = {
+  mode: CollectorFeedDepthMode;
+  durationMs: number;
+  scrollCount: number;
+  visibleCardCount: number;
+  capturedPostCount: number;
+  uniqueCanonicalPosts?: number;
+  newCanonicalPosts: number;
+  freshPosts: number;
+  oldPosts: number;
+  unknownAgePosts: number;
+  duplicates: number;
+  networkResponses: number;
+  networkRecordCount: number;
+  captureRatio: number;
+  stopReason: string | null;
+};
+
+export type CollectorRecallTelemetry = {
+  initialFeedDepthMode: CollectorFeedDepthMode;
+  adaptiveDeeperTriggered: boolean;
+  effectiveFeedDepthMode: CollectorFeedDepthMode;
+  currentDepth: CollectorRecallDepthPhase | null;
+  deeperFeed: CollectorRecallDepthPhase | null;
+  deeperFeedTriggerReasons: string[];
+  currentDepthDurationMs: number;
+  deeperFeedDurationMs: number;
+  totalDurationMs: number;
+  totalUniqueCanonicalPosts: number;
+};
+
+function feedDepthMode(value: unknown): CollectorFeedDepthMode {
+  return typeof value === "string" && (COLLECTOR_FEED_DEPTH_MODES as readonly string[]).includes(value) ? (value as CollectorFeedDepthMode) : "CURRENT_DEPTH";
+}
+
+function normalizeRecallDepthPhase(value: unknown): CollectorRecallDepthPhase | null {
+  if (!isRecord(value)) return null;
+  const captureRatio = typeof value.captureRatio === "number" && Number.isFinite(value.captureRatio) ? Math.min(1, Math.max(0, value.captureRatio)) : 0;
+  return {
+    mode: feedDepthMode(value.mode),
+    durationMs: boundedInteger(value.durationMs, 0, 600_000),
+    scrollCount: boundedInteger(value.scrollCount, 0, 500),
+    visibleCardCount: boundedInteger(value.visibleCardCount, 0, 5_000),
+    capturedPostCount: boundedInteger(value.capturedPostCount, 0, 1_000),
+    ...(typeof value.uniqueCanonicalPosts === "number" ? { uniqueCanonicalPosts: boundedInteger(value.uniqueCanonicalPosts, 0, 1_000) } : {}),
+    newCanonicalPosts: boundedInteger(value.newCanonicalPosts, 0, 1_000),
+    freshPosts: boundedInteger(value.freshPosts, 0, 1_000),
+    oldPosts: boundedInteger(value.oldPosts, 0, 1_000),
+    unknownAgePosts: boundedInteger(value.unknownAgePosts, 0, 1_000),
+    duplicates: boundedInteger(value.duplicates, 0, 1_000),
+    networkResponses: boundedInteger(value.networkResponses, 0, 100_000),
+    networkRecordCount: boundedInteger(value.networkRecordCount, 0, 100_000),
+    captureRatio,
+    stopReason: nullableString(value.stopReason, 80),
+  };
+}
+
+function normalizeRecall(value: unknown): CollectorRecallTelemetry | null {
+  if (!isRecord(value)) return null;
+  const reasons = Array.isArray(value.deeperFeedTriggerReasons) ? value.deeperFeedTriggerReasons.filter((reason): reason is string => typeof reason === "string").slice(0, 20) : [];
+  return {
+    initialFeedDepthMode: feedDepthMode(value.initialFeedDepthMode),
+    adaptiveDeeperTriggered: value.adaptiveDeeperTriggered === true,
+    effectiveFeedDepthMode: feedDepthMode(value.effectiveFeedDepthMode),
+    currentDepth: normalizeRecallDepthPhase(value.currentDepth),
+    deeperFeed: normalizeRecallDepthPhase(value.deeperFeed),
+    deeperFeedTriggerReasons: reasons,
+    currentDepthDurationMs: boundedInteger(value.currentDepthDurationMs, 0, 600_000),
+    deeperFeedDurationMs: boundedInteger(value.deeperFeedDurationMs, 0, 600_000),
+    totalDurationMs: boundedInteger(value.totalDurationMs, 0, 600_000),
+    totalUniqueCanonicalPosts: boundedInteger(value.totalUniqueCanonicalPosts, 0, 1_000),
   };
 }
 
