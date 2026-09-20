@@ -52,6 +52,11 @@ type GalleryFailureDiagnostics = {
   foreignMediaRejectedCount?: number;
   unboundMediaRejectedCount?: number;
   exactMediaAcceptedCount?: number;
+  exactGridAnchorsSeen?: number;
+  exactGridAccepted?: number;
+  exactGridForeignRejected?: number;
+  exactGridUnboundRejected?: number;
+  exactGridMediaIds?: string[];
   mediaDiagnostics?: Array<{ mediaId: string | null; reason: string }>;
   networkResponses?: number;
   networkRecordCount?: number;
@@ -333,7 +338,8 @@ function exactMetadataCandidates(value: unknown, expectedPostId: string): Facebo
     const confidence = typeof item?.bindingConfidence === "number" && Number.isFinite(item.bindingConfidence) ? item.bindingConfidence : 0;
     if (!url || !/^https:\/\/scontent[^/]*\.fbcdn\.net\//i.test(url) || sourcePostId !== expectedPostId || storyRootPostId !== expectedPostId || !isExactGalleryRootBindingProvenance(bindingMethod) || confidence < 0.9 || classification !== "PROPERTY_IMAGE") return [];
     const mediaId = string(item?.mediaId);
-    return [{ url: url.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: Math.min(1, confidence), bindingProvenance: bindingMethod as FacebookMediaBindingProvenance, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true }];
+    const discoverySource = item?.discoverySource === "EXACT_POST_GRID" || item?.discoverySource === "EXACT_STRUCTURED_ATTACHMENT" || item?.discoverySource === "DEDICATED_POST_VIEWER" ? item.discoverySource : undefined;
+    return [{ url: url.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: Math.min(1, confidence), bindingProvenance: bindingMethod as FacebookMediaBindingProvenance, discoverySource, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: true }];
   });
 }
 
@@ -435,6 +441,7 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
   const number = (key: string, max: number) => typeof input[key] === "number" && Number.isFinite(input[key]) ? Math.max(0, Math.min(max, Math.floor(input[key] as number))) : undefined;
   const text = (key: string, max: number) => typeof input[key] === "string" && (input[key] as string).trim() ? (input[key] as string).slice(0, max) : null;
   const rawIds = Array.isArray(input.networkRecordPostIds) ? input.networkRecordPostIds : [];
+  const rawGridIds = Array.isArray(input.exactGridMediaIds) ? input.exactGridMediaIds : [];
   const expected = row(input.expectedRecord);
   const page = row(input.page);
   const viewer = sanitizeGalleryViewerDiagnostics(input.viewer);
@@ -450,6 +457,11 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
     foreignMediaRejectedCount: number("foreignMediaRejectedCount", 100),
     unboundMediaRejectedCount: number("unboundMediaRejectedCount", 100),
     exactMediaAcceptedCount: number("exactMediaAcceptedCount", 100),
+    exactGridAnchorsSeen: number("exactGridAnchorsSeen", 100),
+    exactGridAccepted: number("exactGridAccepted", 100),
+    exactGridForeignRejected: number("exactGridForeignRejected", 100),
+    exactGridUnboundRejected: number("exactGridUnboundRejected", 100),
+    exactGridMediaIds: rawGridIds.filter((id): id is string => typeof id === "string" && /^\d{5,30}$/.test(id)).slice(0, 50),
     mediaDiagnostics: Array.isArray(input.mediaDiagnostics) ? input.mediaDiagnostics.slice(0, 30).flatMap((entry) => {
       const item = row(entry);
       if (!item || typeof item.reason !== "string") return [];
@@ -552,7 +564,8 @@ export function parseFacebookGalleryCandidates(value: unknown, expectedPostId: s
   return value.flatMap((entry): FacebookMediaCandidate[] => {
     const item = row(entry);
     if (!item || typeof item.url !== "string" || item.expectedPostId !== expectedPostId || item.storyRootPostId !== expectedPostId || item.boundPostId !== expectedPostId || !isExactGalleryRootBindingProvenance(item.bindingProvenance) || item.rootStoryUnique !== true || !Array.isArray(item.foreignPostIdsDetected) || item.foreignPostIdsDetected.length > 0) return [];
-    return [{ url: item.url.slice(0, 2_000), mediaId: string(item.mediaId), expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: item.bindingProvenance, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false }];
+    const discoverySource = item.discoverySource === "EXACT_POST_GRID" || item.discoverySource === "EXACT_STRUCTURED_ATTACHMENT" || item.discoverySource === "DEDICATED_POST_VIEWER" ? item.discoverySource : undefined;
+    return [{ url: item.url.slice(0, 2_000), mediaId: string(item.mediaId), expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: item.bindingProvenance, discoverySource, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false }];
   });
 }
 

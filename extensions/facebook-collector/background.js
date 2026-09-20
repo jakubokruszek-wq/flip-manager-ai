@@ -720,31 +720,11 @@ async function collectGalleryHydration(job, requestId) {
       }
       return { status: "COMPLETE", gallery: { status: "COMPLETE", expectedPostId: postId, sourceMediaCount: mediaIds.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource: "EXACT_VIEWER_TRACKING", groupBindingSource: "EXACT_VIEWER_PARENT", rootCount: 1, diagnostics: { viewerSeedMediaId: seedMediaId, attachmentCount: mediaIds.length, verifiedCount: candidates.length }, imageNetworkDiagnostics: imagePolicy.snapshot(sessionId) } };
     };
-    // An exact persisted media seed is already provenance-bound to this post.
-    // Prefer the dedicated viewer's structured/network proof first so a slow
-    // root-page shell cannot consume the response window before the proof is
-    // attempted. The bounded root-page path remains the safe fallback.
-    let result = seedMediaIds.length > 0 ? await hydrateFromViewer(seedMediaIds[0]) : await hydrate(resolvedUrl, resolvedUrl);
-    if (seedMediaIds.length === 0 && result.status === "COMPLETE") {
-      const rootCandidates = Array.isArray(result.gallery?.candidates) ? result.gallery.candidates : [];
-      // Either exact-binding form (a DOM anchor's own set=pcb.<postId>, or a
-      // mediaId already proven via the structured/Relay attachment path) is
-      // equally valid seed material — the viewer path re-verifies the full
-      // set independently from scratch, so this only picks which media id to
-      // start that traversal from, never the final proof.
-      const exactSeed = rootCandidates.find((candidate) => /^\d{5,30}$/.test(String(candidate?.mediaId || ""))
-        && candidate?.expectedPostId === postId
-        && candidate?.storyRootPostId === postId
-        && candidate?.boundPostId === postId
-        && (candidate?.bindingProvenance === "EXACT_PCB_POST_BINDING" || candidate?.bindingProvenance === "EXACT_STRUCTURED_ATTACHMENT")
-        && candidate?.rootStoryUnique === true);
-      if (!exactSeed) {
-        return { status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND", gallery: { ...result.gallery, status: "FAILED", error: "FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND" } };
-      }
-      const discoveredSeedMediaId = String(exactSeed.mediaId);
-      trustedSeedMediaIds.add(discoveredSeedMediaId);
-      result = await hydrateFromViewer(discoveredSeedMediaId);
-    }
+    // The exact post root/grid is the primary proof. A viewer is only a
+    // fallback for media that the root cannot expose; viewer failure must not
+    // invalidate exact-grid or structured candidates already proven here.
+    let result = await hydrate(resolvedUrl, resolvedUrl);
+    if (result.status === "FAILED" && seedMediaIds.length > 0) result = await hydrateFromViewer(seedMediaIds[0]);
     if (result.status === "FAILED" && seedMediaIds.length > 0) {
       const rootResult = await hydrateRootPage();
       if (rootResult.status === "COMPLETE" || result.error === "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT") result = rootResult;

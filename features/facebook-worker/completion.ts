@@ -78,12 +78,14 @@ function parseMediaCandidates(value: unknown): FacebookMediaCandidate[] {
     const row = requireRow(item);
     const provenance = FACEBOOK_MEDIA_BINDING_PROVENANCE.includes(row.bindingProvenance as never) ? row.bindingProvenance as FacebookMediaCandidate["bindingProvenance"] : "AMBIGUOUS";
     const classification = FACEBOOK_IMAGE_RELEVANCE.includes(row.classification as never) ? row.classification as FacebookMediaCandidate["classification"] : "UNKNOWN";
+    const discoverySource = row.discoverySource === "EXACT_POST_GRID" || row.discoverySource === "EXACT_STRUCTURED_ATTACHMENT" || row.discoverySource === "DEDICATED_POST_VIEWER" ? row.discoverySource : undefined;
     return {
       url: assertHttpsUrl(requiredString(row.url, "MEDIA_URL", 2_000)),
       expectedPostId: requiredString(row.expectedPostId, "EXPECTED_POST_ID", 300),
       boundPostId: nullableString(row.boundPostId, 300),
       bindingConfidence: boundedConfidence(row.bindingConfidence),
       bindingProvenance: provenance,
+      discoverySource,
       rootStoryUnique: row.rootStoryUnique === true,
       foreignPostIdsDetected: stringArray(row.foreignPostIdsDetected, 20, 300),
       classification,

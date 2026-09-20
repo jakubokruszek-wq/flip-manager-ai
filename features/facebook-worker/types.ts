@@ -65,6 +65,8 @@ export type FacebookMediaCandidate = {
   boundPostId: string | null;
   bindingConfidence: number;
   bindingProvenance: FacebookMediaBindingProvenance;
+  /** Discovery path that produced this exact media candidate. */
+  discoverySource?: "EXACT_POST_GRID" | "EXACT_STRUCTURED_ATTACHMENT" | "DEDICATED_POST_VIEWER";
   rootStoryUnique: boolean;
   foreignPostIdsDetected: string[];
   classification: FacebookImageRelevance;
@@ -85,7 +87,7 @@ export type FacebookImageRevalidationTarget = {
 
 export type FacebookImageRevalidationCandidate = Pick<FacebookMediaCandidate,
   "url" | "expectedPostId" | "storyRootPostId" | "boundPostId" | "bindingConfidence" |
-  "bindingProvenance" | "rootStoryUnique" | "foreignPostIdsDetected" |
+  "bindingProvenance" | "discoverySource" | "rootStoryUnique" | "foreignPostIdsDetected" |
   "classification" | "classificationConfidence" | "structuredPostMediaProvenance">
   & { contentHash?: string | null; storageUrl?: string | null };
 

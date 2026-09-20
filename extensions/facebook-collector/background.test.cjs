@@ -587,23 +587,30 @@ test("gallery background binds a Facebook vanity redirect to the same exact post
   assert.match(gallery, /result\.error === "FACEBOOK_GALLERY_ROOT_NOT_FOUND"/);
 });
 
-test("gallery hydration attempts exact seeded viewer proof before the slower root-page fallback", () => {
+test("gallery hydration prioritizes exact post root/grid proof before viewer fallback", () => {
   const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
-  assert.match(gallery, /let result = seedMediaIds\.length > 0 \? await hydrateFromViewer\(seedMediaIds\[0\]\) : await hydrate\(resolvedUrl, resolvedUrl\)/);
+  assert.match(gallery, /let result = await hydrate\(resolvedUrl, resolvedUrl\)/);
+  assert.match(gallery, /result\.status === "FAILED" && seedMediaIds\.length > 0\) result = await hydrateFromViewer\(seedMediaIds\[0\]\)/);
   assert.match(gallery, /const hydrateRootPage = async \(\) =>/);
   assert.match(gallery, /chrome\.tabs\.update\(tab\.id, \{ url: resolvedUrl, active: true \}\)/);
   assert.match(gallery, /const rootResult = await hydrateRootPage\(\)/);
 });
 
-test("gallery hydration upgrades an exact root-page media seed to bounded carousel proof", () => {
+test("gallery hydration keeps viewer traversal as a bounded fallback", () => {
   const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
   assert.match(gallery, /const trustedSeedMediaIds = new Set\(seedMediaIds\)/);
   assert.match(gallery, /seedRootProvenanceVerified: trustedSeedMediaIds\.has\(mediaId\)/);
-  assert.match(gallery, /rootCandidates\.find/);
-  assert.match(gallery, /bindingProvenance === "EXACT_PCB_POST_BINDING" \|\| candidate\?\.bindingProvenance === "EXACT_STRUCTURED_ATTACHMENT"/);
-  assert.match(gallery, /trustedSeedMediaIds\.add\(discoveredSeedMediaId\)/);
-  assert.match(gallery, /result = await hydrateFromViewer\(discoveredSeedMediaId\)/);
-  assert.match(gallery, /FACEBOOK_GALLERY_EXACT_SEED_NOT_FOUND/);
+  assert.match(gallery, /result = await hydrateFromViewer\(seedMediaIds\[0\]\)/);
+  assert.match(gallery, /result\.error === "FACEBOOK_GALLERY_VIEWER_RESPONSE_TIMEOUT"/);
+  assert.doesNotMatch(gallery, /rootCandidates\.find/);
+});
+
+test("viewer failure cannot invalidate exact-grid candidates already proven by the root", () => {
+  const gallery = background.slice(background.indexOf("async function collectGalleryHydration"), background.indexOf("// A search result that"));
+  const primary = gallery.indexOf("let result = await hydrate(resolvedUrl, resolvedUrl)");
+  const viewerFallback = gallery.indexOf("result = await hydrateFromViewer(seedMediaIds[0])");
+  assert.ok(primary >= 0 && viewerFallback > primary);
+  assert.match(gallery, /if \(result\.status === "FAILED" && seedMediaIds\.length > 0\)/);
 });
 
 test("gallery hydration requires bounded carousel coverage instead of treating the structured preview set as complete", () => {

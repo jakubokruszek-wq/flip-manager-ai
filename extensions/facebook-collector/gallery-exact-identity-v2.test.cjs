@@ -126,6 +126,49 @@ test("MIXED CASE: own pcb-bound media accepted, foreign pcb rejected, unbound re
   assert.equal(result.diagnostics.unboundMediaRejectedCount, 1);
 });
 
+test("EXACT_POST_GRID collects every exact-bound photo anchor, not only the first", async () => {
+  const { hydrateFacebookGallery } = loadContentModule();
+  const { selfLink } = fakeExpectedPostRoot({
+    photoAnchors: [1, 2, 3, 4, 5].map((value) => photoAnchor({ fbid: `2807464155800${value}`, set: `pcb.${EXPECTED_POST_ID}`, imageUrl: `https://scontent.example.com/GRID_${value}.jpg` })),
+  });
+  const result = await hydrateFacebookGallery(hydrateOptions(selfLink));
+  assert.equal(result.status, "COMPLETE");
+  assert.equal(result.candidates.length, 5);
+  assert.equal(result.diagnostics.exactGridAccepted, 5);
+  assert.equal(result.diagnostics.exactGridMediaIds.length, 5);
+  assert.ok(result.candidates.every((candidate) => candidate.discoverySource === "EXACT_POST_GRID"));
+});
+
+test("EXACT_POST_GRID keeps five exact media while rejecting foreign and unbound anchors", async () => {
+  const { hydrateFacebookGallery } = loadContentModule();
+  const { selfLink } = fakeExpectedPostRoot({
+    photoAnchors: [
+      ...[1, 2, 3, 4, 5].map((value) => photoAnchor({ fbid: `2807464155801${value}`, set: `pcb.${EXPECTED_POST_ID}`, imageUrl: `https://scontent.example.com/GRID_OK_${value}.jpg` })),
+      photoAnchor({ fbid: "28074641558111", set: `pcb.${FOREIGN_POST_ID}`, imageUrl: "https://scontent.example.com/GRID_FOREIGN_1.jpg" }),
+      photoAnchor({ fbid: "28074641558112", set: `pcb.${FOREIGN_POST_ID}`, imageUrl: "https://scontent.example.com/GRID_FOREIGN_2.jpg" }),
+      photoAnchor({ fbid: "28074641558113", set: null, imageUrl: "https://scontent.example.com/GRID_UNBOUND.jpg" }),
+    ],
+  });
+  const result = await hydrateFacebookGallery(hydrateOptions(selfLink));
+  assert.equal(result.status, "COMPLETE");
+  assert.equal(result.candidates.length, 5);
+  assert.equal(result.diagnostics.exactGridAccepted, 5);
+  assert.equal(result.diagnostics.exactGridForeignRejected, 2);
+  assert.equal(result.diagnostics.exactGridUnboundRejected, 1);
+});
+
+test("EXACT_POST_GRID deduplicates a media id already proven by structured attachments", async () => {
+  const { hydrateFacebookGallery } = loadContentModule();
+  const sharedMediaId = "28074641558121";
+  const { selfLink } = fakeExpectedPostRoot({
+    photoAnchors: [photoAnchor({ fbid: sharedMediaId, set: `pcb.${EXPECTED_POST_ID}`, imageUrl: "https://scontent.example.com/GRID_SHARED.jpg" })],
+  });
+  global.document.scripts = [{ textContent: JSON.stringify({ __typename: "Story", post_id: EXPECTED_POST_ID, permalink_url: `https://www.facebook.com/groups/${EXPECTED_GROUP}/posts/${EXPECTED_POST_ID}/`, message: { text: "Sprzedam mieszkanie" }, actor: { name: "Anna Kowalska" }, attachments: [{ __typename: "Photo", media_id: sharedMediaId, image: { uri: "https://scontent.example.com/STRUCTURED_SHARED.jpg" } }] }) }];
+  const result = await hydrateFacebookGallery(hydrateOptions(selfLink));
+  assert.equal(result.status, "COMPLETE");
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].mediaId, sharedMediaId);
+});
 // 1/9. Zero-legitimate-media regression: no foreign fallback, gallery never COMPLETE with foreign-only media.
 test("1/9: a root with only foreign and unbound media never reports COMPLETE and never falls back to foreign media", async () => {
   const { hydrateFacebookGallery } = loadContentModule();

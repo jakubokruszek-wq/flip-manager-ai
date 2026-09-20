@@ -194,6 +194,11 @@
     let foreignMediaRejectedCount = 0;
     let unboundMediaRejectedCount = 0;
     let exactMediaAcceptedCount = 0;
+    let exactGridAnchorsSeen = 0;
+    let exactGridAccepted = 0;
+    let exactGridForeignRejected = 0;
+    let exactGridUnboundRejected = 0;
+    const exactGridMediaIds = [];
     const mediaDiagnostics = [];
     const recordMediaDiagnostic = (mediaId, reason) => { if (mediaDiagnostics.length < 30) mediaDiagnostics.push({ mediaId: mediaId || null, reason }); };
     for (const media of structuredRoot?.media || []) {
@@ -218,24 +223,29 @@
       // absorbed; an unbound candidate simply never reaches `candidates`.
       for (const anchor of root.querySelectorAll('a[href*="/photo/"], a[href*="/photo.php"]')) {
         if (!sameRoot(anchor)) continue;
+        exactGridAnchorsSeen += 1;
         let url;
         try { url = new URL(anchor.href); } catch { continue; }
         const mediaId = url.searchParams.get("fbid") || mediaIdFromUrl(url.toString());
+        const setParam = url.searchParams.get("set");
         const image = anchor.querySelector("img") || anchor.closest("div")?.querySelector("img");
         const mediaUrl = image?.currentSrc || image?.src || null;
         const key = mediaId || mediaUrl;
-        if (!mediaUrl || !/^https:\/\//i.test(mediaUrl) || !/^\d{5,30}$/.test(String(mediaId || "")) || seen.has(key)) continue;
-        const evidence = core.evaluateGalleryMediaCandidateEvidence({ setParam: url.searchParams.get("set"), mediaId, expectedPostId, structuredMediaIds });
+        if (!mediaUrl || !/^https:\/\//i.test(mediaUrl) || !/^\d{5,30}$/.test(String(mediaId || ""))) { exactGridUnboundRejected += 1; continue; }
+        if (seen.has(key)) continue;
+        const evidence = core.evaluateGalleryMediaCandidateEvidence({ setParam, mediaId, expectedPostId, structuredMediaIds });
         seen.add(key);
         recordMediaDiagnostic(mediaId, evidence.reason);
-        if (evidence.reason === "DOM_MEDIA_FOREIGN_PCB") foreignMediaRejectedCount += 1;
-        else if (evidence.reason === "DOM_MEDIA_UNBOUND") unboundMediaRejectedCount += 1;
+        if (evidence.reason === "DOM_MEDIA_FOREIGN_PCB") { foreignMediaRejectedCount += 1; exactGridForeignRejected += 1; }
+        else if (evidence.reason === "DOM_MEDIA_UNBOUND") { unboundMediaRejectedCount += 1; exactGridUnboundRejected += 1; }
         if (!evidence.accepted) continue;
         exactMediaAcceptedCount += 1;
-        candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: evidence.bindingProvenance, rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
+        exactGridAccepted += 1;
+        if (exactGridMediaIds.length < 50 && !exactGridMediaIds.includes(String(mediaId))) exactGridMediaIds.push(String(mediaId));
+        candidates.push({ url: mediaUrl.slice(0, 2_000), mediaId, expectedPostId, storyRootPostId: expectedPostId, boundPostId: expectedPostId, bindingConfidence: 1, bindingProvenance: evidence.bindingProvenance, discoverySource: "EXACT_POST_GRID", rootStoryUnique: true, foreignPostIdsDetected: [], classification: "PROPERTY_IMAGE", classificationConfidence: 0.95, structuredPostMediaProvenance: false });
       }
     }
-    const mediaEvidenceTelemetry = { foreignMediaRejectedCount, unboundMediaRejectedCount, exactMediaAcceptedCount, mediaDiagnostics };
+    const mediaEvidenceTelemetry = { foreignMediaRejectedCount, unboundMediaRejectedCount, exactMediaAcceptedCount, exactGridAnchorsSeen, exactGridAccepted, exactGridForeignRejected, exactGridUnboundRejected, exactGridMediaIds, mediaDiagnostics };
     if (candidates.length === 0) return galleryFailure("FACEBOOK_GALLERY_EXACT_MEDIA_NOT_FOUND", expectedPostId, { expectedGroup, resolvedGroup, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1, ...mediaEvidenceTelemetry });
     return { status: "COMPLETE", expectedPostId, sourceMediaCount: candidates.length, candidates, authorFound: true, rootTextFound: true, rootBindingSource, groupBindingSource, rootCount: 1, diagnostics: galleryDiagnostics(startedAt, expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: 1, ...mediaEvidenceTelemetry }) };
   }
