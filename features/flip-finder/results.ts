@@ -2,6 +2,7 @@ import type { PropertyListingResult } from "@/features/properties/types/property
 import { dedupeLocationText } from "./display-format.ts";
 import type { OpportunityPriority, OpportunityConfidence } from "./opportunity-score";
 import type { UnderwritingResult } from "./underwriting";
+import type { CanonicalVisibilityDebug, FinderStatus } from "./canonical-visibility";
 
 export type ResultSort =
   | "newest"
@@ -25,6 +26,8 @@ export type ResultStatusInput = {
 };
 
 export type FilterResult = PropertyListingResult & {
+  canonicalDecisionDebug?: CanonicalVisibilityDebug;
+  finderStatus?: FinderStatus;
   opportunityScore?: number | null;
   opportunityPriority?: OpportunityPriority | null;
   economicsConfidence?: OpportunityConfidence | null;

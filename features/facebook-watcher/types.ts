@@ -98,6 +98,11 @@ export type FacebookWatcherListing = FacebookProperty & {
   contentQuality?: FacebookContentQualityGrade;
   lifecycleStatus?: string | null;
   archivedAt?: string | null;
+  currentFilterDecision?: "MATCHED" | "REVIEW" | "REJECTED";
+  currentFilterReasons?: string[];
+  currentFilterMissingFields?: string[];
+  finderStatus?: "MATCHED" | "REVIEW" | "REJECTED" | "HISTORICAL";
+  finderVisible?: boolean;
 };
 
 export const FACEBOOK_WORKFLOW_STATUSES = ["new", "review", "interesting", "crm", "rejected"] as const;

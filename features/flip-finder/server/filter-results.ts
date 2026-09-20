@@ -11,7 +11,7 @@ import {
   type CompletedScanWindow,
   type FilterResult,
 } from "@/features/flip-finder/results";
-import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-evaluation";
+import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import type { PropertyListing } from "@/features/properties/types/property";
@@ -21,6 +21,7 @@ import { calculateOpportunityAssessment } from "@/features/flip-finder/opportuni
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
 import { visibleMembership } from "@/features/flip-finder/membership-reconciliation";
 import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadataFailure, type FacebookPriceStatus } from "@/features/facebook-watcher/price-quality";
+import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
 
 type Row = Record<string, unknown>;
 
@@ -274,7 +275,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     );
     const safeLocation = safeFacebookDisplayLocation(listing);
     const locationText = resultLocation(safeLocation.address, safeLocation.district, safeLocation.city);
-    const filterDecision = evaluateListingAgainstFilter(
+    const filterDecision = evaluateCanonicalListingDecision(
       {
         price: listing.price,
         area: listing.area,
@@ -291,14 +292,22 @@ export async function getFilterResults(filterId: string, includeArchived = false
       filter,
     );
     const sourceConflict = !sourceDomainMatchesSource(listing.source, listing.originalUrl);
-    const hardFilterReject = filterDecision.bucket === "REJECTED";
+    const hardFilterReject = filterDecision.hardRejectReasons.length > 0;
     const decisionBucket: FilterResult["decisionBucket"] = sourceConflict || hardFilterReject
       ? "REJECTED"
-      : listing.lifecycleStatus === "REJECTED"
+      : listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "REJECTED"
         ? "REJECTED"
-        : listing.lifecycleStatus === "REVIEW" || match.matchReasons.includes("review")
-          ? "REVIEW"
-          : "MATCHED";
+        : filterDecision.bucket;
+    const canonicalDebug = canonicalVisibilityDebug({
+      listingId: listing.id,
+      canonicalBucket: decisionBucket,
+      lifecycleStatus: listing.lifecycleStatus ?? null,
+      isCurrentMatch: decisionBucket === "MATCHED",
+      matchReasons: [...filterDecision.reasons, ...(decisionBucket === "REVIEW" ? ["review", ...filterDecision.missingFields.map((field) => `unknown_${field}`)] : [])],
+      visibilityInFinder: (decisionBucket === "MATCHED" || decisionBucket === "REVIEW") && listing.status === "active" && (listing.lifecycleStatus === "ACTIVE" || listing.lifecycleStatus === "REVIEW"),
+      visibilityInWatcher: listing.source === "facebook",
+      reason: sourceConflict ? "source_conflict" : decisionBucket === "REJECTED" ? filterDecision.hardRejectReasons.join(",") || "rejected_by_policy" : decisionBucket === "REVIEW" ? "review_uncertainty" : "current_filter_match",
+    });
     const publishedAt = publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? []);
 
     return [
@@ -334,11 +343,11 @@ export async function getFilterResults(filterId: string, includeArchived = false
         currentPrice: listing.price,
         ...status,
         isNew: match.matchOrigin === "scan" && status.isNew,
-        matchReasons: match.matchReasons.filter((reason) => !reason.startsWith("unknown_")),
-        unknownFields: match.matchReasons
-          .filter((reason) => reason.startsWith("unknown_"))
-          .map((reason) => reason.slice("unknown_".length)),
+        matchReasons: [...filterDecision.reasons, ...(filterDecision.bucket === "REVIEW" ? ["review"] : [])],
+        unknownFields: filterDecision.missingFields,
         decisionBucket,
+        finderStatus: canonicalDebug.finderStatus,
+        canonicalDecisionDebug: canonicalDebug,
         lifecycleStatus: listing.lifecycleStatus,
         reviewReason: listing.reviewReason,
         missingFields: listing.missingFields,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateListingAgainstFilter } from "./filter-evaluation.ts";
+import { evaluateCanonicalListingDecision, evaluateListingAgainstFilter } from "./filter-evaluation.ts";
 import type { SearchFilter } from "./index.ts";
 
 const filter = {
@@ -38,4 +38,18 @@ test("known price per square metre above the limit is a hard rejection", () => {
   );
   assert.equal(result.bucket, "REJECTED");
   assert.deepEqual(result.reasons, ["max_price_per_sqm"]);
+});
+
+test("canonical decision keeps incomplete eligible listings in REVIEW", () => {
+  const result = evaluateCanonicalListingDecision({ ...candidate, price: 305_000, area: 44.93, pricePerSqm: 6_788.3374, rooms: 2, district: "Widzew" }, { ...filter, areaMin: 32, areaMax: 58, maxPricePerSqm: 7_000, rooms: [1, 2, 3, 4], excludeTopFloor: true });
+  assert.equal(result.bucket, "REVIEW");
+  assert.deepEqual(result.missingFields, ["topFloor"]);
+  assert.deepEqual(result.hardRejectReasons, []);
+});
+
+test("canonical decision rejects a known hard constraint even when other fields are missing", () => {
+  const result = evaluateCanonicalListingDecision({ ...candidate, price: 405_000, area: 45, pricePerSqm: 9_000, rooms: 2 }, { ...filter, maxPricePerSqm: 7_000, excludeTopFloor: true });
+  assert.equal(result.bucket, "REJECTED");
+  assert.deepEqual(result.hardRejectReasons, ["max_price_per_sqm"]);
+  assert.notEqual(result.bucket, "REVIEW");
 });

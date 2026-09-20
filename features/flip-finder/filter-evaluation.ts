@@ -28,6 +28,31 @@ export type FilterDecision = {
   missingFields: string[];
 };
 
+export type CanonicalListingDecision = {
+  bucket: "MATCHED" | "REVIEW" | "REJECTED";
+  reasons: string[];
+  missingFields: string[];
+  hardRejectReasons: string[];
+};
+
+/**
+ * Single decision boundary shared by Finder reads and source reconciliation.
+ * The underlying field checks remain in evaluateListingAgainstFilter; this
+ * wrapper only exposes the canonical persisted-state contract.
+ */
+export function evaluateCanonicalListingDecision(
+  candidate: FilterCandidate,
+  filter: SearchFilter,
+): CanonicalListingDecision {
+  const decision = evaluateListingAgainstFilter(candidate, filter);
+  return {
+    bucket: decision.bucket,
+    reasons: decision.reasons,
+    missingFields: decision.missingFields,
+    hardRejectReasons: decision.bucket === "REJECTED" ? decision.reasons : [],
+  };
+}
+
 export function evaluateListingAgainstFilter(
   candidate: FilterCandidate,
   filter: SearchFilter,

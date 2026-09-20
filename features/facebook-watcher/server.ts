@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
-import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-evaluation";
+import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
 import { decisionBucket } from "@/features/flip-finder/decision-model";
 import { calculateContentHash } from "@/features/flip-finder/otodom-search";
 import { deactivateListingFilterMatch, persistListing } from "@/features/flip-finder/server/persist-listing";
@@ -257,9 +257,9 @@ async function importAutomatedFacebook(input: {
   const rawScore = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
   const score = isFacebookPriceSuspect(priceQuality.status) ? Math.min(rawScore, PRICE_SUSPECT_SCORE_CAP) : rawScore;
   const locationText = composeFacebookLocation({ street: effective.street, neighborhood: effective.neighborhood, district: effective.district, city: effective.city });
-  const baseDecision = evaluateListingAgainstFilter({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
+  const baseDecision = evaluateCanonicalListingDecision({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
   const safetyUnknown = apartmentUnknownFields(context.filter, buildingEvidence, effective.city);
-  const decisionUnknownFields = [...new Set([...baseDecision.unknownFields, ...safetyUnknown])];
+  const decisionUnknownFields = [...new Set([...baseDecision.missingFields, ...safetyUnknown])];
   const decision = { ...baseDecision, unknownFields: decisionUnknownFields, missingFields: decisionUnknownFields, bucket: decisionBucket({ reasons: baseDecision.reasons, unknownFields: decisionUnknownFields }), matches: baseDecision.reasons.length === 0 && decisionUnknownFields.length === 0 };
   let listingId: string;
   let listingCreated = false;
@@ -468,17 +468,26 @@ async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdm
 }
 
 async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string, item: FacebookProperty, pricePerSqm: number | null) {
+  let currentBucket: "MATCHED" | "REVIEW" | "REJECTED" = "REJECTED";
   for (const filter of await getActiveSearchFiltersForSource("facebook")) {
-    const decision = evaluateListingAgainstFilter({ price: item.price, area: item.area, pricePerSqm, rooms: item.rooms, floor: item.floor === null ? null : String(item.floor), city: item.city, district: item.district, title: item.title, locationText: [item.neighborhood,item.district,item.city].filter(Boolean).join(", "), buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter);
-    if (!decision.matches) continue;
-    await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: filter.id, last_matched_at: new Date().toISOString(), is_current_match: true, match_score: null, match_reasons: ["collector_import", ...item.flags], match_origin: "collector_import", source_scan_id: null }, { onConflict: "listing_id,search_filter_id" });
+    const decision = evaluateCanonicalListingDecision({ price: item.price, area: item.area, pricePerSqm, rooms: item.rooms, floor: item.floor === null ? null : String(item.floor), city: item.city, district: item.district, title: item.title, locationText: [item.neighborhood,item.district,item.city].filter(Boolean).join(", "), buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter);
+    if (decision.bucket === "MATCHED" || currentBucket === "REJECTED" && decision.bucket === "REVIEW") currentBucket = decision.bucket;
+    const reasons = decision.bucket === "REVIEW"
+      ? ["review", ...decision.reasons, ...decision.missingFields.map((field) => `unknown_${field}`)]
+      : decision.bucket === "MATCHED" ? ["collector_import", ...item.flags] : decision.hardRejectReasons;
+    const match = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: filter.id, last_matched_at: new Date().toISOString(), is_current_match: decision.bucket === "MATCHED", match_score: null, match_reasons: reasons, match_origin: "collector_import", source_scan_id: null }, { onConflict: "listing_id,search_filter_id" });
+    if (match.error) throw new Error(`FACEBOOK_FILTER_RECONCILIATION_FAILED: ${match.error.message}`);
   }
+  const lifecycleStatus = currentBucket === "MATCHED" ? "ACTIVE" : currentBucket;
+  const update = await supabase.from("listings").update({ lifecycle_status: lifecycleStatus, archived_at: null, status: "active", review_reason: currentBucket === "REVIEW" ? "review" : null }).eq("id", listingId).eq("source", "facebook");
+  if (update.error) throw new Error(`FACEBOOK_FILTER_LIFECYCLE_FAILED: ${update.error.message}`);
 }
 
 export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
   const supabase = createFacebookWatcherAdminClient();
   const { data, error } = await supabase.from("listing_source_metadata").select("source_post_url,group_name,published_at,collected_at,metadata,listings(id,title,price,price_per_sqm,area,rooms,floor,district,city,address,description,original_url,images,status,source,flip_score,estimated_profit,first_seen_at,last_seen_at,created_at,building_type,ownership,lifecycle_status,archived_at)").eq("source", "facebook").order("collected_at", { ascending: false }).limit(500);
   if (error) throw new Error(`Nie udało się pobrać ofert Facebooka: ${error.message}`);
+  const activeFilters = await getActiveSearchFiltersForSource("facebook");
   const seenListingIds = new Set<string>();
   return ((data ?? []) as unknown as Row[]).flatMap((row) => {
     const listing = (Array.isArray(row.listings) ? row.listings[0] : row.listings) as Row | undefined; if (!listing) return [];
@@ -504,7 +513,11 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     const freshness = parseEnum(meta.freshness, FACEBOOK_FRESHNESS_STATES);
     const locationState = parseEnum(meta.locationState, FACEBOOK_LOCATION_STATES);
     const contentQuality = parseEnum(meta.contentQuality, FACEBOOK_CONTENT_QUALITY_GRADES);
-    return [{ listingId, title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), originalUrl: facebookUrl?.startsWith("http") ? facebookUrl : null, images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: str(row.group_name), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus: str(listing.lifecycle_status), archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality }];
+    const lifecycleStatus = str(listing.lifecycle_status);
+    const current = classifyFacebookRestore({ price: num(listing.price), area: num(listing.area), pricePerSqm: num(listing.price_per_sqm), rooms: num(listing.rooms), floor: typeof listing.floor === "string" ? listing.floor : listing.floor === null || listing.floor === undefined ? null : String(listing.floor), city: str(listing.city), district: str(listing.district), title: str(listing.title), locationText: [str(listing.address), str(listing.district), str(listing.city)].filter(Boolean).join(", ") || null, buildingType: str(listing.building_type), sellerType, ownership: str(listing.ownership), marketType: null }, activeFilters);
+    const currentReasons = current.decision ? [...current.decision.reasons, ...(current.bucket === "REVIEW" ? ["review", ...current.decision.unknownFields.map((field) => `unknown_${field}`)] : [])] : ["no_active_facebook_filter_match"];
+    const historical = lifecycleStatus === "ARCHIVED" || lifecycleStatus === "STALE";
+    return [{ listingId, title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), originalUrl: facebookUrl?.startsWith("http") ? facebookUrl : null, images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: str(row.group_name), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
   });
 }
 export async function updateFacebookWatcherWorkflow(listingId: string, input: { status?: FacebookWorkflowStatus; markRead?: boolean; crmPropertyId?: string }): Promise<void> {
@@ -531,7 +544,7 @@ export async function restoreFacebookWatcherListing(listingId: string): Promise<
   if (listing.manual_decision === "REJECTED") return { restored: false, bucket: "REJECTED", lifecycleStatus: String(listing.lifecycle_status), reasons: ["manual_rejected"], unknownFields: [] };
   const filters = await getActiveSearchFiltersForSource("facebook");
   const outcome = classifyFacebookRestore({ price: num(listing.price), area: num(listing.area), pricePerSqm: num(listing.price_per_sqm), rooms: num(listing.rooms), floor: typeof listing.floor === "string" ? listing.floor : listing.floor === null || listing.floor === undefined ? null : String(listing.floor), city: str(listing.city), district: str(listing.district), title: str(listing.title), locationText: [str(listing.address), str(listing.district), str(listing.city)].filter(Boolean).join(", ") || null, buildingType: str(listing.building_type), sellerType: null, ownership: str(listing.ownership), marketType: null }, filters);
-  if (outcome.bucket === "REJECTED" || !outcome.filter || !outcome.decision) return { restored: false, bucket: "REJECTED", lifecycleStatus: String(listing.lifecycle_status), reasons: ["no_active_facebook_filter_match"], unknownFields: [] };
+  if (outcome.bucket === "REJECTED" || !outcome.filter || !outcome.decision) return { restored: false, bucket: "REJECTED", lifecycleStatus: String(listing.lifecycle_status), reasons: outcome.decision?.reasons.length ? outcome.decision.reasons : ["no_active_facebook_filter_match"], unknownFields: [] };
   const now = new Date().toISOString();
   const reasons = outcome.bucket === "REVIEW" ? ["review", ...outcome.decision.unknownFields.map((field) => `unknown_${field}`)] : ["facebook_restore"];
   const match = await supabase.from("listing_filter_matches").upsert({ listing_id: listingId, search_filter_id: outcome.filter.id, last_matched_at: now, is_current_match: outcome.bucket === "MATCHED", match_reasons: reasons, match_origin: "filter_recalculation", source_scan_id: null }, { onConflict: "listing_id,search_filter_id" });
