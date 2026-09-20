@@ -638,12 +638,34 @@
   const HARD_NO_DEEPER_STOP_REASONS = new Set(["TEN_CONSECUTIVE_OLDER_THAN_72H", "FAST_SCAN_TIME_LIMIT"]);
   const DEEPER_FEED_EXTRA_SCROLLS = 10;
   const DEEPER_FEED_EXTRA_BUDGET_MS = 45_000;
+  // The adaptive extension must never silently exceed a centralized soft
+  // ceiling of its own — it is an internal widening, not a re-validation of
+  // caller input, so it gets its own explicit ceiling rather than reusing the
+  // input-sanitization clamp. Kept with a clear margin under the absolute
+  // MAX_FAST_SCAN_MS hard wall, which always wins regardless.
+  const DEEPER_FEED_MAX_BUDGET_MS = MAX_FAST_SCAN_MS - 20_000;
   const CURRENT_DEPTH_MIN_UNIQUE_POSTS = 8;
   const CURRENT_DEPTH_MIN_FRESH_POSTS = 5;
   const CURRENT_DEPTH_MIN_CAPTURE_RATIO = 0.5;
+  // A small group can be genuinely, completely covered. Crediting it requires
+  // HIGH quality (almost everything found was fresh, almost everything
+  // visible was captured) — never "small" alone — so a quiet-but-complete
+  // group of even a handful of posts is not forced through deeper traversal
+  // on every single run merely for having a low absolute count.
+  const CURRENT_DEPTH_HIGH_QUALITY_MIN_UNIQUE_POSTS = 3;
+  const CURRENT_DEPTH_HIGH_QUALITY_MIN_FRESH_RATIO = 0.8;
+  const CURRENT_DEPTH_HIGH_QUALITY_MIN_CAPTURE_RATIO = 0.9;
   const CURRENT_DEPTH_SPARSE_MAX_UNIQUE_POSTS = 5;
+  // duplicateCount/duplicateRatio: a count of ITERATIONS with genuine new
+  // evidence (new DOM card or new network response, both already diffed
+  // against the previous iteration by the caller) that still produced zero
+  // new canonical posts — never a raw record/re-snapshot volume, which would
+  // grow just from scan length or feed size. See content.js's
+  // duplicateEncounters for the exact accounting.
   const CURRENT_DEPTH_HIGH_DUPLICATE_RATIO = 0.6;
   const CURRENT_DEPTH_EARLY_STOP_SCROLL_THRESHOLD = 10;
+  const CURRENT_DEPTH_LOW_CAPTURE_RATIO = 0.4;
+  const CURRENT_DEPTH_LOW_CAPTURE_RATIO_MIN_VISIBLE = 4;
 
   function evaluateCurrentDepthSufficiency(metrics) {
     const m = metrics || {};
@@ -654,17 +676,38 @@
     const duplicateCount = finite(m.duplicateCount);
     const scrollCount = finite(m.scrollCount);
     const captureRatio = Number.isFinite(m.captureRatio) ? m.captureRatio : (visibleCards ? Math.min(1, capturedPosts / visibleCards) : capturedPosts ? 1 : 0);
-    const duplicateRatio = duplicateCount + capturedPosts > 0 ? duplicateCount / (duplicateCount + capturedPosts) : 0;
+    const freshRatio = uniqueCanonicalPosts > 0 ? freshPosts / uniqueCanonicalPosts : 0;
+    const duplicateRatio = scrollCount > 0 ? duplicateCount / scrollCount : 0;
 
     if (uniqueCanonicalPosts >= CURRENT_DEPTH_MIN_UNIQUE_POSTS && freshPosts >= CURRENT_DEPTH_MIN_FRESH_POSTS && captureRatio >= CURRENT_DEPTH_MIN_CAPTURE_RATIO) {
       return { sufficient: true, reasons: ["HEALTHY_UNIQUE_AND_FRESH_COVERAGE"] };
     }
+    if (uniqueCanonicalPosts >= CURRENT_DEPTH_HIGH_QUALITY_MIN_UNIQUE_POSTS && freshRatio >= CURRENT_DEPTH_HIGH_QUALITY_MIN_FRESH_RATIO && captureRatio >= CURRENT_DEPTH_HIGH_QUALITY_MIN_CAPTURE_RATIO) {
+      return { sufficient: true, reasons: ["SMALL_HIGH_QUALITY_COVERAGE"] };
+    }
     const reasons = [];
     if (uniqueCanonicalPosts <= CURRENT_DEPTH_SPARSE_MAX_UNIQUE_POSTS) reasons.push("SPARSE_UNIQUE_POST_COUNT");
-    if (duplicateRatio >= CURRENT_DEPTH_HIGH_DUPLICATE_RATIO && capturedPosts > 0) reasons.push("HIGH_DUPLICATE_RATIO");
+    if (duplicateRatio >= CURRENT_DEPTH_HIGH_DUPLICATE_RATIO && scrollCount > 0) reasons.push("HIGH_DUPLICATE_RATIO");
     if (String(m.stopReason) === "NO_NEW_POSTS_AND_CARDS_3_SCROLLS" && scrollCount < CURRENT_DEPTH_EARLY_STOP_SCROLL_THRESHOLD) reasons.push("EARLY_NO_NEW_POSTS_STOP");
     if (freshPosts === 0 && uniqueCanonicalPosts > 0) reasons.push("NO_FRESH_POSTS_CAPTURED");
+    if (visibleCards >= CURRENT_DEPTH_LOW_CAPTURE_RATIO_MIN_VISIBLE && captureRatio < CURRENT_DEPTH_LOW_CAPTURE_RATIO) reasons.push("LOW_CAPTURE_RATIO");
     return reasons.length ? { sufficient: false, reasons } : { sufficient: true, reasons: ["SUFFICIENT_COVERAGE"] };
+  }
+
+  /**
+   * A genuine duplicate-rediscovery signal for one scroll iteration: real new
+   * evidence arrived (a DOM card rendered that was not visible last iteration,
+   * or a new network response landed since the last scroll — both already
+   * diffed against the PREVIOUS iteration by the caller), yet it produced
+   * zero net-new canonical posts. Deliberately takes only these pre-diffed
+   * counts, never a raw record/array length, so a persistent, ever-growing
+   * Map or a large already-known DOM/hydration snapshot can never inflate
+   * this by itself — only genuinely new-this-iteration evidence can. A quiet
+   * tail iteration with no new evidence at all (the normal, expected way a
+   * scan converges) returns false, not true.
+   */
+  function isDuplicateRediscoveryIteration({ iteration, newVisibleCards, networkResponsesThisIteration, added }) {
+    return finite(iteration) > 0 && (finite(newVisibleCards) > 0 || finite(networkResponsesThisIteration) > 0) && finite(added) === 0;
   }
 
   /**
@@ -1007,5 +1050,5 @@
   function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
   const DEEP_RECALL_STREAK_THRESHOLD = Number.MAX_SAFE_INTEGER;
-  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS };
+  scope.FlipFacebookCollectorCore = { canonicalSource, parsePostLink, mergeRecords, resolveRootStoryIdentity, extractStructuredRecordsFromText, inspectSearchMediaParentFromText, resolveSearchMediaParentFromText, verifySearchMediaParent, resolveGalleryMediaSetFromText, inspectGalleryMediaPayload, resolveGalleryViewerTraversal, evaluateHealth, shouldStopDiscovery, needsSearchFallback, classifyPostAgeZone, isEligibleForHeavyProcessing, initialAgeStreakState, advanceAgeStreak, isOldAgeStopReached, AGE_WINDOW_72H_MS, OLD_POST_STREAK_THRESHOLD, MIN_SCROLLS_BEFORE_AGE_STOP, MAX_FAST_SCAN_MS, DEEP_RECALL_STREAK_THRESHOLD, evaluateCurrentDepthSufficiency, evaluateDeeperFeedTransition, deeperFeedStopReason, HARD_NO_DEEPER_STOP_REASONS, DEEPER_FEED_EXTRA_SCROLLS, DEEPER_FEED_EXTRA_BUDGET_MS, DEEPER_FEED_MAX_BUDGET_MS, isDuplicateRediscoveryIteration };
 })(globalThis);

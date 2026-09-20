@@ -22,8 +22,7 @@ function healthyMetrics(overrides = {}) {
   };
 }
 
-// A. healthy current-depth -> sufficient -> deeper not triggered
-test("A: a healthy scan (18 scrolls, 17 captured, mostly fresh) is sufficient and never pays a deeper-feed penalty", () => {
+test("a healthy scan (18 scrolls, 17 captured, mostly fresh) is sufficient and never pays a deeper-feed penalty", () => {
   const sufficiency = core.evaluateCurrentDepthSufficiency(healthyMetrics());
   assert.equal(sufficiency.sufficient, true);
   const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: "NO_NEW_POSTS_AND_CARDS_3_SCROLLS", aborted: false, metrics: healthyMetrics() });
@@ -31,8 +30,7 @@ test("A: a healthy scan (18 scrolls, 17 captured, mostly fresh) is sufficient an
   assert.equal(transition.reason, "CURRENT_DEPTH_SUFFICIENT");
 });
 
-// B. sparse current-depth -> deeper triggered
-test("B: a sparse scan (3 unique posts, early stop) triggers deeper feed", () => {
+test("a sparse scan (3 unique posts, early stop) triggers deeper feed", () => {
   const metrics = healthyMetrics({ uniqueCanonicalPosts: 3, capturedPosts: 3, freshPosts: 2, duplicateCount: 1, visibleCards: 4, scrollCount: 4 });
   const sufficiency = core.evaluateCurrentDepthSufficiency({ ...metrics, stopReason: "NO_NEW_POSTS_AND_CARDS_3_SCROLLS" });
   assert.equal(sufficiency.sufficient, false);
@@ -41,44 +39,108 @@ test("B: a sparse scan (3 unique posts, early stop) triggers deeper feed", () =>
   assert.equal(transition.triggerDeeper, true);
 });
 
-// C. mostly duplicates -> deeper may trigger
-test("C: a duplicate-heavy scan may trigger deeper feed even with a non-trivial raw capture count", () => {
-  const metrics = healthyMetrics({ uniqueCanonicalPosts: 6, capturedPosts: 6, duplicateCount: 20, freshPosts: 4, visibleCards: 10, scrollCount: 12 });
-  const sufficiency = core.evaluateCurrentDepthSufficiency({ ...metrics, stopReason: "MAX_SCROLLS" });
-  assert.equal(sufficiency.sufficient, false);
-  assert.ok(sufficiency.reasons.includes("HIGH_DUPLICATE_RATIO"));
+// E. 5 unique / 5 fresh / 100% capture -> sufficient (a small but complete group must not be
+// forced through deeper traversal on every run merely for having a low absolute count).
+test("E: a small but perfectly complete group (5 unique, 5 fresh, 100% capture) is sufficient", () => {
+  const metrics = { uniqueCanonicalPosts: 5, capturedPosts: 5, freshPosts: 5, oldPosts: 0, unknownAgePosts: 0, duplicateCount: 0, visibleCards: 5, scrollCount: 6, stopReason: "NO_NEW_POSTS_AND_CARDS_3_SCROLLS" };
+  const sufficiency = core.evaluateCurrentDepthSufficiency(metrics);
+  assert.equal(sufficiency.sufficient, true, JSON.stringify(sufficiency));
+  assert.deepEqual(sufficiency.reasons, ["SMALL_HIGH_QUALITY_COVERAGE"]);
+  const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: metrics.stopReason, aborted: false, metrics });
+  assert.equal(transition.triggerDeeper, false);
 });
 
-// D. TEN_CONSECUTIVE_OLDER_THAN_72H -> deeper never triggers
-test("D: the 72h frontier is a hard block — deeper never triggers even for a sparse scan", () => {
+test("a small group that is NOT high quality (low fresh ratio or low capture ratio) still triggers deeper", () => {
+  const lowFreshRatio = { uniqueCanonicalPosts: 5, capturedPosts: 5, freshPosts: 2, visibleCards: 5, scrollCount: 6, stopReason: "MAX_SCROLLS" };
+  assert.equal(core.evaluateCurrentDepthSufficiency(lowFreshRatio).sufficient, false);
+  const lowCaptureRatio = { uniqueCanonicalPosts: 5, capturedPosts: 5, freshPosts: 5, visibleCards: 12, scrollCount: 6, stopReason: "MAX_SCROLLS" };
+  assert.equal(core.evaluateCurrentDepthSufficiency(lowCaptureRatio).sufficient, false);
+});
+
+// F. 2 unique / 0 fresh -> deeper
+test("F: 2 unique posts with zero fresh posts triggers deeper feed", () => {
+  const sparse = healthyMetrics({ uniqueCanonicalPosts: 2, capturedPosts: 2, freshPosts: 0 });
+  const sufficiency = core.evaluateCurrentDepthSufficiency({ ...sparse, stopReason: "MAX_SCROLLS" });
+  assert.equal(sufficiency.sufficient, false);
+  const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: "MAX_SCROLLS", aborted: false, metrics: sparse });
+  assert.equal(transition.triggerDeeper, true);
+});
+
+test("many posts but zero fresh still triggers deeper", () => {
+  const metrics = healthyMetrics({ uniqueCanonicalPosts: 20, capturedPosts: 20, freshPosts: 0, visibleCards: 20 });
+  assert.equal(core.evaluateCurrentDepthSufficiency(metrics).sufficient, false);
+});
+
+test("a very low capture ratio with enough visible cards is judged insufficient (feed evidence suggests incompleteness)", () => {
+  const metrics = { uniqueCanonicalPosts: 10, capturedPosts: 10, freshPosts: 8, visibleCards: 40, scrollCount: 10, stopReason: "MAX_SCROLLS" };
+  const sufficiency = core.evaluateCurrentDepthSufficiency(metrics);
+  assert.equal(sufficiency.sufficient, false);
+  assert.ok(sufficiency.reasons.includes("LOW_CAPTURE_RATIO"), JSON.stringify(sufficiency));
+});
+
+// G. duplicate signal does NOT grow merely because the persistent network Map / DOM / hydration
+// set is re-snapshotted across iterations.
+test("G: isDuplicateRediscoveryIteration never fires from re-snapshot volume alone — only from genuinely new-this-iteration evidence", () => {
+  // A large, ever-growing "already known" set contributes nothing here: this
+  // predicate only ever looks at pre-diffed per-iteration deltas, never a raw
+  // array/Map length.
+  assert.equal(core.isDuplicateRediscoveryIteration({ iteration: 5, newVisibleCards: 0, networkResponsesThisIteration: 0, added: 0 }), false, "no new evidence at all is normal convergence, not a duplicate");
+  assert.equal(core.isDuplicateRediscoveryIteration({ iteration: 0, newVisibleCards: 5, networkResponsesThisIteration: 5, added: 0 }), false, "the very first iteration is never counted (nothing to diff against yet)");
+});
+
+// H. real repeated canonical sightings can still be measured if the duplicate signal remains enabled.
+test("H: genuinely new evidence that yields no new canonical post IS counted as a duplicate-rediscovery iteration", () => {
+  assert.equal(core.isDuplicateRediscoveryIteration({ iteration: 3, newVisibleCards: 2, networkResponsesThisIteration: 0, added: 0 }), true, "new DOM cards rendered but nothing new was merged");
+  assert.equal(core.isDuplicateRediscoveryIteration({ iteration: 3, newVisibleCards: 0, networkResponsesThisIteration: 1, added: 0 }), true, "a new network response landed but nothing new was merged");
+  assert.equal(core.isDuplicateRediscoveryIteration({ iteration: 3, newVisibleCards: 2, networkResponsesThisIteration: 1, added: 2 }), false, "new evidence that DID yield new posts is not a duplicate iteration");
+});
+
+test("a duplicate-heavy run (many wasted iterations relative to scroll count) is judged insufficient", () => {
+  const metrics = { uniqueCanonicalPosts: 6, capturedPosts: 6, freshPosts: 4, duplicateCount: 8, visibleCards: 10, scrollCount: 12, stopReason: "MAX_SCROLLS" };
+  const sufficiency = core.evaluateCurrentDepthSufficiency(metrics);
+  assert.equal(sufficiency.sufficient, false);
+  assert.ok(sufficiency.reasons.includes("HIGH_DUPLICATE_RATIO"), JSON.stringify(sufficiency));
+});
+
+test("the duplicate ratio never grows just because scrollCount is small and duplicateCount stays proportionally low", () => {
+  // 1 wasted iteration out of 18 scrolls is not "duplicate-heavy" — proves the
+  // ratio is scrollCount-relative, not merely present/absent.
+  const metrics = healthyMetrics({ duplicateCount: 1, scrollCount: 18 });
+  const sufficiency = core.evaluateCurrentDepthSufficiency(metrics);
+  assert.ok(!sufficiency.reasons.includes("HIGH_DUPLICATE_RATIO"));
+});
+
+// N. TEN_CONSECUTIVE_OLDER_THAN_72H -> deeper never triggers
+test("N: the 72h frontier is a hard block — deeper never triggers even for a sparse scan", () => {
   const sparse = healthyMetrics({ uniqueCanonicalPosts: 2, capturedPosts: 2, freshPosts: 0 });
   const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: "TEN_CONSECUTIVE_OLDER_THAN_72H", aborted: false, metrics: sparse });
   assert.equal(transition.triggerDeeper, false);
   assert.equal(transition.reason, "TEN_CONSECUTIVE_OLDER_THAN_72H", "the frontier's own detailed reason must not be renamed to something generic");
 });
 
-// E. FAST_SCAN_TIME_LIMIT -> deeper never triggers
-test("E: the fast-scan time limit is a hard block — deeper never triggers", () => {
+// O. FAST_SCAN_TIME_LIMIT -> deeper never triggers
+test("O: the fast-scan time limit is a hard block — deeper never triggers", () => {
   const sparse = healthyMetrics({ uniqueCanonicalPosts: 1, capturedPosts: 1, freshPosts: 0 });
   const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: "FAST_SCAN_TIME_LIMIT", aborted: false, metrics: sparse });
   assert.equal(transition.triggerDeeper, false);
   assert.equal(transition.reason, "FAST_SCAN_TIME_LIMIT");
 });
 
-// F. abort -> deeper never triggers
-test("F: an aborted collection never triggers deeper feed, regardless of sufficiency", () => {
+test("an aborted collection never triggers deeper feed, regardless of sufficiency", () => {
   const sparse = healthyMetrics({ uniqueCanonicalPosts: 1, capturedPosts: 1, freshPosts: 0 });
   const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: "MAX_SCROLLS", aborted: true, metrics: sparse });
   assert.equal(transition.triggerDeeper, false);
   assert.equal(transition.reason, "ABORTED");
 });
 
-// G. lease failure -> deeper never triggers (represented via the same cooperative-abort signal a lease loss would raise)
-test("G: a lease-loss abort never triggers deeper feed, regardless of sufficiency", () => {
-  const sparse = healthyMetrics({ uniqueCanonicalPosts: 2, capturedPosts: 2, freshPosts: 0 });
-  const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: "MAX_SCROLLS", aborted: true, metrics: sparse });
+// M. hard block precedence: abort + otherwise healthy metrics -> abort wins
+test("M: abort wins even when the metrics would otherwise have been judged healthy/sufficient", () => {
+  const healthy = healthyMetrics();
+  // Prove, independently, that these exact metrics WOULD be sufficient without the abort.
+  assert.equal(core.evaluateCurrentDepthSufficiency(healthy).sufficient, true);
+  const transition = core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: false, stopReason: "NO_NEW_POSTS_AND_CARDS_3_SCROLLS", aborted: true, metrics: healthy });
   assert.equal(transition.triggerDeeper, false);
-  assert.equal(transition.reason, "ABORTED");
+  assert.equal(transition.reason, "ABORTED", "abort must be checked and win before sufficiency is even consulted");
 });
 
 test("non-FAST_REPEAT scan modes and SEARCH are never eligible for deeper feed", () => {
@@ -87,9 +149,8 @@ test("non-FAST_REPEAT scan modes and SEARCH are never eligible for deeper feed",
   assert.equal(core.evaluateDeeperFeedTransition({ scanMode: "FAST_REPEAT", searchMode: true, stopReason: "MAX_SCROLLS", aborted: false, metrics: sparse }).triggerDeeper, false);
 });
 
-// H. deeper discovers new posts -> canonical set grows
-test("H: continuing to merge into the same records array grows the canonical set when deeper feed finds new posts", () => {
-  const source = { sourceType: "GROUP", sourceId: "g", sourceUrl: "https://www.facebook.com/groups/g/" };
+// deeper discovers new posts -> canonical set grows
+test("continuing to merge into the same records array grows the canonical set when deeper feed finds new posts", () => {
   const record = (postId) => ({ postId, permalink: `https://www.facebook.com/groups/g/posts/${postId}/`, sourceId: "g", sourceType: "GROUP", author: null, text: null, publishedAt: null, timestampText: null, media: [], discoveryLayers: ["DOM"], firstSeenIteration: 0 });
   let records = core.mergeRecords([record("1"), record("2")]);
   assert.equal(records.length, 2);
@@ -97,10 +158,9 @@ test("H: continuing to merge into the same records array grows the canonical set
   records = core.mergeRecords([...records, record("3"), record("4")]);
   assert.equal(records.length, 4);
   assert.deepEqual(records.map((item) => item.postId).sort(), ["1", "2", "3", "4"]);
-  void source;
 });
 
-// I. same post in both passes -> processed once
+// I. dedup identity across current/deeper remains intact -> same post in both passes -> processed once
 test("I: a post rediscovered in the deeper pass is merged, never duplicated", () => {
   const record = (postId, layer) => ({ postId, permalink: `https://www.facebook.com/groups/g/posts/${postId}/`, sourceId: "g", sourceType: "GROUP", author: null, text: null, publishedAt: null, timestampText: null, media: [], discoveryLayers: [layer], firstSeenIteration: 0 });
   let records = core.mergeRecords([record("1", "DOM"), record("2", "DOM")]);

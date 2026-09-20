@@ -9,6 +9,11 @@
   const galleryNetworkProofs = new Map();
   const galleryNetworkAudits = new Map();
   let networkResponses = 0;
+  // One AbortController per active COLLECT_SOURCE run, keyed by the caller's
+  // own runId. Never a single global "abort everything" switch: a stale
+  // cancel for a run that already finished (removed from this map) or that
+  // belongs to a different runId simply finds nothing to abort.
+  const activeCollectionRuns = new Map();
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin || event.data?.channel !== "FLIP_COLLECTOR_NETWORK") return;
@@ -61,8 +66,21 @@
       void resolveSearchMediaTile(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
       return true;
     }
+    if (message?.type === "CANCEL_SOURCE_COLLECTION") {
+      const runId = typeof message.runId === "string" ? message.runId : "";
+      const controller = runId ? activeCollectionRuns.get(runId) : undefined;
+      if (controller) controller.abort(typeof message.reason === "string" ? message.reason : "CANCELLED");
+      respond({ ok: true, aborted: Boolean(controller) });
+      return false;
+    }
     if (message?.type !== "COLLECT_SOURCE") return false;
-    void collectSource(message.options || {}).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+    const runId = typeof message.runId === "string" && message.runId ? message.runId : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const controller = new AbortController();
+    activeCollectionRuns.set(runId, controller);
+    void collectSource({ ...(message.options || {}), signal: controller.signal })
+      .then((result) => respond({ ok: true, result }))
+      .catch((error) => respond({ ok: false, error: safeError(error) }))
+      .finally(() => { if (activeCollectionRuns.get(runId) === controller) activeCollectionRuns.delete(runId); });
     return true;
   });
 
@@ -890,10 +908,8 @@
       }
       const beforeIds = new Set(records.map((record) => record.postId));
       const before = records.length;
-      const rawThisIteration = searchCards.records.length + dom.length + hydration.length + network.length;
       records = core.mergeRecords([...records, ...searchCards.records, ...dom, ...hydration, ...network], searchMode ? maxDiscoveryPosts : maxPosts);
       const added = records.length - before;
-      duplicateEncounters += Math.max(0, rawThisIteration - added);
       const addedRecords = records.filter((record) => !beforeIds.has(record.postId));
       consecutiveNoNew = added === 0 ? consecutiveNoNew + 1 : 0;
       if (!searchMode) {
@@ -905,6 +921,15 @@
       const newVisibleCards = [...visibleFingerprints].filter((fingerprint) => !previousVisibleFingerprints.has(fingerprint)).length;
       if (iteration > 0) consecutiveNoVisibleGrowth = newVisibleCards === 0 ? consecutiveNoVisibleGrowth + 1 : 0;
       if (iteration > 0) consecutiveVisibleAdvanceWithoutCapture = newVisibleCards > 0 && added === 0 ? consecutiveVisibleAdvanceWithoutCapture + 1 : added > 0 ? 0 : consecutiveVisibleAdvanceWithoutCapture;
+      // A genuine duplicate-rediscovery signal: real new evidence arrived this
+      // iteration (a new DOM card rendered, or a new network response landed —
+      // both already diffed against the PREVIOUS iteration, never a raw
+      // re-snapshot of the persistent networkRecords Map/current DOM state),
+      // yet it produced zero new canonical posts. A quiet tail iteration with
+      // no new evidence at all does NOT count — that is normal, expected
+      // convergence, not wasted duplicate work.
+      const networkResponsesThisIteration = networkResponses - previousNetworkResponses;
+      if (core.isDuplicateRediscoveryIteration({ iteration, newVisibleCards, networkResponsesThisIteration, added })) duplicateEncounters += 1;
       previousVisibleFingerprints = visibleFingerprints;
       const container = findScrollContainer();
       const scrollTop = container === document.scrollingElement ? window.scrollY : container.scrollTop;
@@ -940,7 +965,7 @@
             mode = "DEEPER_NETWORK_FEED";
             deeperFeedTriggered = true;
             maxScrolls += core.DEEPER_FEED_EXTRA_SCROLLS;
-            budgetMs += core.DEEPER_FEED_EXTRA_BUDGET_MS;
+            budgetMs = Math.min(budgetMs + core.DEEPER_FEED_EXTRA_BUDGET_MS, core.DEEPER_FEED_MAX_BUDGET_MS);
             deeperFeedStartIteration = iteration + 1;
             deeperFeedStartScrolls = scrolls;
             deeperFeedStartRecordCount = records.length;
@@ -1000,28 +1025,40 @@
     const deeperFeedIterations = deeperFeedActive ? iterations.slice(deeperFeedStartIteration ?? iterations.length) : [];
     const deeperFeedVisibleCardCount = deeperFeedIterations.length ? Math.max(0, ...deeperFeedIterations.map((item) => item.visibleCardCount)) : 0;
     const deeperFeedCapturedPostCount = deeperFeedActive ? Math.max(0, records.length - (deeperFeedStartRecordCount ?? records.length)) : 0;
+    // Every field below this phase's own contribution (a delta against the
+    // CURRENT_DEPTH snapshot taken at the transition), never a mixture of
+    // deltas and running totals. The running totals live once, at the top
+    // level of `recall`, as totalUniqueCanonicalPosts.
     const deeperFeedTelemetry = deeperFeedActive ? {
       mode: "DEEPER_NETWORK_FEED",
       durationMs: Math.max(0, durationMs - (currentDepthSnapshot?.durationMs ?? 0)),
       scrollCount: Math.max(0, scrolls - (deeperFeedStartScrolls ?? scrolls)),
       visibleCardCount: deeperFeedVisibleCardCount,
       capturedPostCount: deeperFeedCapturedPostCount,
-      uniqueCanonicalPosts: records.length,
       newCanonicalPosts: deeperFeedCapturedPostCount,
-      freshPosts: ageStreak.freshPostsSeen,
-      oldPosts: ageStreak.oldUniquePostsSeen,
-      unknownAgePosts: ageStreak.unknownDatePostsSeen,
+      freshPosts: Math.max(0, ageStreak.freshPostsSeen - (currentDepthSnapshot?.freshPosts ?? 0)),
+      oldPosts: Math.max(0, ageStreak.oldUniquePostsSeen - (currentDepthSnapshot?.oldPosts ?? 0)),
+      unknownAgePosts: Math.max(0, ageStreak.unknownDatePostsSeen - (currentDepthSnapshot?.unknownAgePosts ?? 0)),
       duplicates: Math.max(0, duplicateEncounters - (currentDepthSnapshot?.duplicates ?? 0)),
-      networkResponses,
-      networkRecordCount: networkRecords.size,
+      networkResponses: Math.max(0, networkResponses - (currentDepthSnapshot?.networkResponses ?? 0)),
+      networkRecordCount: Math.max(0, networkRecords.size - (currentDepthSnapshot?.networkRecordCount ?? 0)),
       captureRatio: deeperFeedVisibleCardCount ? Math.min(1, deeperFeedCapturedPostCount / deeperFeedVisibleCardCount) : deeperFeedCapturedPostCount ? 1 : 0,
       stopReason: core.deeperFeedStopReason(stopReason, stopReason === "ABORTED"),
     } : null;
+    // initialFeedDepthMode: the STATIC, pre-scan mode collector-flow.js's
+    // resolveFeedDepth already chose (echoed straight through from options,
+    // since content.js has no way to know it otherwise). adaptiveDeeperTriggered:
+    // whether THIS in-loop mechanism itself fired. effectiveFeedDepthMode:
+    // the two combined — DEEPER_NETWORK_FEED if EITHER the static flag or the
+    // adaptive transition put the session in it, so a reader never has to
+    // guess which mechanism actually widened the session's limits.
+    const initialFeedDepthMode = options.feedDepthMode === "DEEPER_NETWORK_FEED" ? "DEEPER_NETWORK_FEED" : "CURRENT_DEPTH";
     const recall = {
-      mode: deeperFeedActive ? "DEEPER_NETWORK_FEED" : "CURRENT_DEPTH",
+      initialFeedDepthMode,
+      adaptiveDeeperTriggered: deeperFeedTriggered,
+      effectiveFeedDepthMode: initialFeedDepthMode === "DEEPER_NETWORK_FEED" || deeperFeedActive ? "DEEPER_NETWORK_FEED" : "CURRENT_DEPTH",
       currentDepth: currentDepthSnapshot,
       deeperFeed: deeperFeedTelemetry,
-      deeperFeedTriggered,
       deeperFeedTriggerReasons,
       currentDepthDurationMs: currentDepthSnapshot?.durationMs ?? durationMs,
       deeperFeedDurationMs: deeperFeedTelemetry?.durationMs ?? 0,
@@ -1386,13 +1423,17 @@
    * Bounded, abort-aware wait for real feed progress instead of a fixed sleep.
    * Polls `sample()` on a fixed cadence and exits the moment any tracked
    * metric grows, once nothing has changed for `stableChecks` consecutive
-   * polls, once `signal` aborts, or once `timeoutMs` elapses — never later
-   * than a fixed sleep of `timeoutMs` would have, usually much sooner. No
-   * MutationObserver is used, so there is nothing to leak or clean up; the
-   * only resource held is the pending `setTimeout` inside `wait`, which
-   * always resolves on its own.
+   * polls (~400ms by default — deliberately more conservative than a single
+   * pair of polls, since Facebook can still deliver genuinely delayed network
+   * data in that window and a too-eager STABLE would move on before it
+   * arrives), once `signal` aborts, or once `timeoutMs` elapses — never later
+   * than a fixed sleep of `timeoutMs` would have, usually much sooner.
+   * Progress itself is unaffected and can still exit after a single poll
+   * (~100ms). No MutationObserver is used, so there is nothing to leak or
+   * clean up; the only resource held is the pending `setTimeout` inside
+   * `wait`, which always resolves on its own.
    */
-  async function waitUntilFeedProgress({ sample, timeoutMs, pollMs = 100, stableChecks = 2, signal }) {
+  async function waitUntilFeedProgress({ sample, timeoutMs, pollMs = 100, stableChecks = 4, signal }) {
     const start = performance.now();
     if (signal?.aborted) return { outcome: "ABORTED", waitedMs: 0, sample: null };
     const baseline = sample();

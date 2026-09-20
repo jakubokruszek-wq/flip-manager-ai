@@ -362,7 +362,7 @@ async function collectTabSource(tabId, sourceUrl, scanId, requestId = "unknown",
   updateCollectionContext(collectionContext, "MAIN_FEED", null);
   collectionContext?.timeline.start("MAIN_FEED_START");
   const mainFeedStartedAtMs = Date.now();
-  const primary = await collectFromTab(tabId, { minScrolls: feedDepth.minScrolls, maxScrolls: feedDepth.maxScrolls, maxPosts: feedDepth.maxPosts, budgetMs: feedDepth.budgetMs, discoverySource: "MAIN_FEED", imageMode }, { requestId, source: source.sourceId, collectionContext });
+  const primary = await collectFromTab(tabId, { minScrolls: feedDepth.minScrolls, maxScrolls: feedDepth.maxScrolls, maxPosts: feedDepth.maxPosts, budgetMs: feedDepth.budgetMs, feedDepthMode: feedDepth.mode, discoverySource: "MAIN_FEED", imageMode }, { requestId, source: source.sourceId, collectionContext });
   const mainFeedDurationMs = Date.now() - mainFeedStartedAtMs;
   collectionContext?.timeline.finish("MAIN_FEED_START");
   collectionContext?.timeline.start("MAIN_FEED_DONE");
@@ -496,23 +496,36 @@ async function collectFromTab(tabId, options, traceContext = {}) {
   const query = options.searchQuery || "MAIN_FEED";
   const diagnostics = { query, tabId, source: traceContext.source || "facebook", stage: options.searchMode ? "SEARCH_COLLECT_SOURCE" : "MAIN_FEED_COLLECT_SOURCE" };
   collectionContext?.deadline.assertActive(diagnostics);
+  // The main-feed collector can extend its own soft budget internally
+  // (adaptive DEEPER_NETWORK_FEED, up to core.DEEPER_FEED_EXTRA_BUDGET_MS
+  // beyond the options.budgetMs actually sent), so this side's patience must
+  // be sized off the collector's true absolute ceiling (MAX_FAST_SCAN_MS),
+  // never off the pre-extension budget alone — otherwise a scan that is
+  // legitimately still working within its own bounds gets killed here as a
+  // false timeout.
   const desiredTimeoutMs = options.searchMode
     ? COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS
-    : Math.max(COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS, Number(options.budgetMs || 0) + COLLECT_SOURCE_RESPONSE_GRACE_MS);
+    : Math.max(COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS, (globalThis.FlipFacebookCollectorCore?.MAX_FAST_SCAN_MS || 0) + COLLECT_SOURCE_RESPONSE_GRACE_MS);
   const remainingMs = collectionContext?.deadline.remainingMs() ?? desiredTimeoutMs;
   const timeoutMs = Math.max(1, Math.min(desiredTimeoutMs, remainingMs));
   const timeoutCode = remainingMs <= desiredTimeoutMs ? "SOURCE_COLLECTION_DEADLINE_EXCEEDED" : "COLLECT_SOURCE_RESPONSE_TIMEOUT";
   const sentAt = Date.now();
+  const runId = crypto.randomUUID();
   await recordStartTrace({ requestId: traceContext.requestId, stage: "COLLECT_SOURCE_SENT", status: "PASS", ...diagnostics });
   let responseResult;
   try {
     responseResult = await runtime.sendMessageWithTimeout(
-      () => chrome.tabs.sendMessage(tabId, { type: "COLLECT_SOURCE", options: { ...options, imageMode: options.imageMode || SOURCE_SCAN_IMAGE_MODE } }),
+      () => chrome.tabs.sendMessage(tabId, { type: "COLLECT_SOURCE", runId, options: { ...options, imageMode: options.imageMode || SOURCE_SCAN_IMAGE_MODE } }),
       { timeoutMs, timeoutCode, diagnostics },
     );
   } catch (error) {
     const errorCode = collectorErrorCode(error);
     await recordStartTrace({ requestId: traceContext.requestId, stage: "COLLECT_SOURCE_TIMEOUT", status: "TIMEOUT", errorCode, ...diagnostics, elapsedMs: Date.now() - sentAt });
+    // The orchestrator has genuinely abandoned this run (job-level or
+    // request-level timeout) — tell the still-running content script to stop
+    // rather than let adaptive deeper feed keep consuming its extra budget
+    // for a result nobody will read.
+    void chrome.tabs.sendMessage(tabId, { type: "CANCEL_SOURCE_COLLECTION", runId, reason: errorCode }).catch(() => {});
     throw error;
   }
   const response = responseResult.response;

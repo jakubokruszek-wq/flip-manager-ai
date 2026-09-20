@@ -46,19 +46,67 @@ test("K: DOM growth (more cards / taller scroll height) exits well before the ti
   assert.ok(outcome.waitedMs < 5_000, `expected an early exit, waited ${outcome.waitedMs}ms`);
 });
 
-// L. nothing changes -> timeout/stable outcome, no hang
-test("L: an unchanging feed resolves to STABLE (or TIMEOUT) — it never hangs past the bound", async () => {
+test("an unchanging feed resolves to STABLE well before the timeout bound", async () => {
   const { waitUntilFeedProgress } = loadContentModule();
   const started = Date.now();
   const outcome = await waitUntilFeedProgress({
     sample: () => baseSample(),
-    timeoutMs: 300,
+    timeoutMs: 5_000,
     pollMs: 10,
     stableChecks: 3,
   });
   const elapsed = Date.now() - started;
-  assert.ok(outcome.outcome === "STABLE" || outcome.outcome === "TIMEOUT", `expected a terminal outcome, got ${outcome.outcome}`);
-  assert.ok(elapsed <= 400, `must never run meaningfully past the bound, took ${elapsed}ms`);
+  assert.equal(outcome.outcome, "STABLE");
+  assert.ok(elapsed < 5_000, `must never run meaningfully past the bound, took ${elapsed}ms`);
+});
+
+// L. dedicated TIMEOUT outcome test (no "STABLE or TIMEOUT" assertion): a sample that keeps
+// changing every poll (so it is never twice-in-a-row identical) without ever exceeding the
+// baseline (so it never counts as progress either) must resolve to TIMEOUT, never hang.
+test("L: a feed that keeps fluctuating without ever exceeding baseline or repeating twice in a row times out, not hangs", async () => {
+  const { waitUntilFeedProgress } = loadContentModule();
+  let toggle = false;
+  const started = Date.now();
+  const outcome = await waitUntilFeedProgress({
+    sample: () => { toggle = !toggle; return { ...baseSample(), cardCount: toggle ? 4 : 3 }; },
+    timeoutMs: 150,
+    pollMs: 10,
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(outcome.outcome, "TIMEOUT");
+  assert.ok(outcome.waitedMs >= 150, `TIMEOUT must only fire once the bound is reached, waited ${outcome.waitedMs}ms`);
+  assert.ok(elapsed < 400, `must not run meaningfully past the bound, took ${elapsed}ms`);
+});
+
+// Stability hardening: STABLE must require ~400ms of unchanged evidence (the new, more
+// conservative default), not the old ~200ms — Facebook can still deliver genuinely delayed
+// network data in that window.
+test("STABLE cannot happen before the new conservative stability window (~400ms with default settings)", async () => {
+  const { waitUntilFeedProgress } = loadContentModule();
+  const started = Date.now();
+  const outcome = await waitUntilFeedProgress({
+    sample: () => baseSample(),
+    timeoutMs: 5_000,
+    pollMs: 100,
+    // stableChecks intentionally omitted: exercise the real production default.
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(outcome.outcome, "STABLE");
+  assert.ok(elapsed >= 400, `STABLE fired too early (after only ${elapsed}ms) — must wait for at least 4 unchanged polls at the default 100ms cadence`);
+});
+
+test("PROGRESS may still return early (~one poll) even under the new conservative stability defaults", async () => {
+  const { waitUntilFeedProgress } = loadContentModule();
+  let calls = 0;
+  const started = Date.now();
+  const outcome = await waitUntilFeedProgress({
+    sample: () => { calls += 1; return calls >= 2 ? { ...baseSample(), networkCount: 9 } : baseSample(); },
+    timeoutMs: 5_000,
+    pollMs: 100,
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(outcome.outcome, "PROGRESS");
+  assert.ok(elapsed < 400, `progress must not be held back by the stability window, took ${elapsed}ms`);
 });
 
 // M. aborted wait -> immediate safe abort
