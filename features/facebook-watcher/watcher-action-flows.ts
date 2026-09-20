@@ -100,6 +100,42 @@ export async function runGalleryRepair(deps: GalleryRepairDeps): Promise<Gallery
   }
 }
 
+const GALLERY_REFRESH_FAILED_MESSAGE = "Naprawa została zlecona, ale nie udało się odświeżyć danych.";
+
+export type GalleryRepairAndRefreshOutcome<Listing> =
+  | { kind: "repaired"; status: string; jobId: string | null; listings: Listing[] }
+  | { kind: "repaired-refresh-failed"; message: string }
+  | { kind: "failed"; message: string };
+
+export type GalleryRepairAndRefreshDeps<Listing> = {
+  fetchRepair: () => Promise<JsonResponse<GalleryRepairBody>>;
+  /** The same authoritative dataset load used on initial mount; there is no single-listing read endpoint. */
+  fetchListings: () => Promise<Listing[]>;
+  errorMessages: Record<string, string>;
+};
+
+/**
+ * A repair request succeeding is not enough to call the action a success: the
+ * UI's picture of the listing is only as good as the refresh that follows it.
+ * If that refresh fails, the repair may well have queued a real server-side
+ * job, but the caller has no authoritative data to show for it — so this
+ * never returns "repaired" (and therefore never lets the caller show a
+ * success toast) unless the refresh itself also succeeded. A refresh failure
+ * is reported as its own distinct outcome, never silently treated as either
+ * full success or a plain repair failure, and never triggers a second repair
+ * or hydration attempt.
+ */
+export async function runGalleryRepairAndRefresh<Listing>(deps: GalleryRepairAndRefreshDeps<Listing>): Promise<GalleryRepairAndRefreshOutcome<Listing>> {
+  const repaired = await runGalleryRepair({ fetchRepair: deps.fetchRepair, errorMessages: deps.errorMessages });
+  if (repaired.kind === "failed") return repaired;
+  try {
+    const listings = await deps.fetchListings();
+    return { kind: "repaired", status: repaired.status, jobId: repaired.jobId, listings };
+  } catch {
+    return { kind: "repaired-refresh-failed", message: GALLERY_REFRESH_FAILED_MESSAGE };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Workflow update + CRM import
 // ---------------------------------------------------------------------------

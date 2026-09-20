@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createHistoryClearRunner, runAddToCrm, runGalleryRepair, runUpdateWorkflow, type HistoryClearDeps, type JsonResponse } from "./watcher-action-flows.ts";
+import { createHistoryClearRunner, runAddToCrm, runGalleryRepair, runGalleryRepairAndRefresh, runUpdateWorkflow, type HistoryClearDeps, type JsonResponse } from "./watcher-action-flows.ts";
 
 const ERROR_MESSAGES = { ACTIVE_FACEBOOK_JOB: "Poczekaj na zakończenie aktywnego skanu lub hydracji Facebooka." };
 
@@ -113,6 +113,53 @@ test("a failed repair never returns a 'repaired' outcome, so the caller can neve
 test("a network-level repair failure is also reported as failed, never fabricated as success", async () => {
   const outcome = await runGalleryRepair({ fetchRepair: async () => { throw new Error("boom"); }, errorMessages: {} });
   assert.equal(outcome.kind, "failed");
+});
+
+// V1.2 blocker 2: a repair request succeeding is not enough to call the
+// action a success — the picture the UI shows the user is only as good as
+// the authoritative refresh that follows it.
+
+test("A. repair success + refresh success yields exactly one 'repaired' outcome with the refreshed listings", async () => {
+  let refreshCalls = 0;
+  const refreshedListings = [{ listingId: "1" }, { listingId: "2" }];
+  const outcome = await runGalleryRepairAndRefresh({
+    fetchRepair: async () => ({ ok: true, body: { status: "PENDING", jobId: "job-1" } }),
+    fetchListings: async () => { refreshCalls += 1; return refreshedListings; },
+    errorMessages: {},
+  });
+  assert.equal(refreshCalls, 1);
+  assert.deepEqual(outcome, { kind: "repaired", status: "PENDING", jobId: "job-1", listings: refreshedListings });
+});
+
+test("B. repair success + refresh failure yields zero success — a distinct 'repaired-refresh-failed' outcome, never 'repaired' and never a plain 'failed'", async () => {
+  const outcome = await runGalleryRepairAndRefresh({
+    fetchRepair: async () => ({ ok: true, body: { status: "PENDING", jobId: "job-1" } }),
+    fetchListings: async () => { throw new Error("network down"); },
+    errorMessages: {},
+  });
+  assert.deepEqual(outcome, { kind: "repaired-refresh-failed", message: "Naprawa została zlecona, ale nie udało się odświeżyć danych." });
+});
+
+test("C. repair failure never triggers a refresh, and reports zero success", async () => {
+  let refreshCalls = 0;
+  const outcome = await runGalleryRepairAndRefresh({
+    fetchRepair: async () => ({ ok: false, body: { code: "FACEBOOK_GALLERY_LISTING_NOT_ELIGIBLE" } }),
+    fetchListings: async () => { refreshCalls += 1; return []; },
+    errorMessages: { FACEBOOK_GALLERY_LISTING_NOT_ELIGIBLE: "Ta oferta nie kwalifikuje się do naprawy galerii." },
+  });
+  assert.equal(refreshCalls, 0, "a failed repair must never even attempt a refresh");
+  assert.deepEqual(outcome, { kind: "failed", message: "Ta oferta nie kwalifikuje się do naprawy galerii." });
+});
+
+test("a refresh failure never enqueues a second repair or retries hydration — fetchRepair is called exactly once", async () => {
+  let repairCalls = 0;
+  const outcome = await runGalleryRepairAndRefresh({
+    fetchRepair: async () => { repairCalls += 1; return { ok: true, body: { status: "PENDING", jobId: "job-1" } }; },
+    fetchListings: async () => { throw new Error("network down"); },
+    errorMessages: {},
+  });
+  assert.equal(repairCalls, 1);
+  assert.equal(outcome.kind, "repaired-refresh-failed");
 });
 
 // ---------------------------------------------------------------------------
