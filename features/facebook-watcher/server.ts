@@ -435,7 +435,10 @@ async function reconcileFacebookDecision(input: Parameters<typeof reconcileCanon
 
 function mapFacebookPersistenceError(error: unknown): Error {
   const message = error instanceof Error ? error.message : "canonical reconciliation failed";
-  return message.startsWith("CANONICAL_RECONCILIATION_FAILED") ? new Error(`FACEBOOK_FILTER_RECONCILE_FAILED: ${message}`) : error instanceof Error ? error : new Error(message);
+  if (!message.startsWith("CANONICAL_RECONCILIATION_FAILED")) return error instanceof Error ? error : new Error(message);
+  // Preserves the CanonicalReconciliationFailureDiagnostic canonical-reconciliation.ts
+  // attached as .cause, so it survives this relabel to the public accounting code.
+  return new Error(`FACEBOOK_FILTER_RECONCILE_FAILED: ${message}`, { cause: error instanceof Error ? error.cause : undefined });
 }
 
 function apartmentUnknownFields(filter: SearchFilter, evidence: FacebookBuildingEvidence, city: string | null): string[] {

@@ -118,7 +118,48 @@ export type FacebookPostFlowSummary = {
   >;
   /** One deterministic accounting outcome per post this call actually attempted (see scan-accounting.ts). Excludes posts the caller filtered out before this call (e.g. unverified identity/stale) — the caller merges those in separately. */
   outcomes: FacebookPostOutcome[];
+  /** Sanitized, per-post detail for FACEBOOK_FILTER_RECONCILE_FAILED only — see extractReconciliationDiagnostic. Never changes the FACEBOOK_FILTER_RECONCILE_FAILED accounting reason itself; a separate, bounded diagnostic path. */
+  reconciliationDiagnostics: FacebookReconciliationFailureDiagnostic[];
 };
+
+/** Bounded per-post diagnostic recovered from a reconciliation failure's Error.cause. Deliberately excludes any stack trace and any raw request payload. */
+export type FacebookReconciliationFailureDiagnostic = {
+  stage: "canonical_reconciliation";
+  postId: string | null;
+  listingId: string | null;
+  filterId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorDetails: string | null;
+  errorHint: string | null;
+};
+
+const RECONCILIATION_DIAGNOSTICS_LIMIT = 50;
+
+/**
+ * Recovers the CanonicalReconciliationFailureDiagnostic canonical-reconciliation.ts
+ * attaches as Error.cause, sanitizing and length-bounding every string field
+ * with the same redaction used for post text previews. Never reads
+ * error.stack. Returns null for anything that isn't shaped like this
+ * specific diagnostic — including an unrelated error that happens to share
+ * the FACEBOOK_FILTER_RECONCILE_FAILED message prefix without a real cause.
+ */
+function extractReconciliationDiagnostic(error: unknown, postId: string | null): FacebookReconciliationFailureDiagnostic | null {
+  if (!(error instanceof Error) || !error.cause || typeof error.cause !== "object") return null;
+  const cause = error.cause as Record<string, unknown>;
+  if (typeof cause.listingId !== "string" || typeof cause.filterId !== "string") return null;
+  const bounded = (value: unknown): string | null => (typeof value === "string" && value ? redactFacebookPostPreview(value) : null);
+  return {
+    stage: "canonical_reconciliation",
+    postId,
+    listingId: cause.listingId,
+    filterId: cause.filterId,
+    errorCode: bounded(cause.errorCode),
+    errorMessage: bounded(cause.errorMessage),
+    errorDetails: bounded(cause.errorDetails),
+    errorHint: bounded(cause.errorHint),
+  };
+}
 
 export async function processFacebookPostBatch(
   posts: FacebookPostSnapshot[],
@@ -128,7 +169,7 @@ export async function processFacebookPostBatch(
   const summary: FacebookPostFlowSummary = {
     postsReceived: posts.length, postsProcessed: 0, listingsCreated: 0, listingsUpdated: 0,
     listingsSkipped: 0, matched: 0, newMatches: 0, extractionFailed: 0,
-    imagesMirrored: 0, priceDrops: 0, errors: 0, oldPostsSkippedHeavyProcessing: 0, listingIds: [], warnings: [], skippedDiagnostics: [], persistenceDiagnostics: [], postTimings: [], reusablePosts: [], outcomes: [],
+    imagesMirrored: 0, priceDrops: 0, errors: 0, oldPostsSkippedHeavyProcessing: 0, listingIds: [], warnings: [], skippedDiagnostics: [], persistenceDiagnostics: [], postTimings: [], reusablePosts: [], outcomes: [], reconciliationDiagnostics: [],
   };
 
   for (const post of posts) {
@@ -171,8 +212,13 @@ export async function processFacebookPostBatch(
       summary.extractionFailed += 1;
       summary.errors += 1;
       const errorCode = safeErrorCode(error);
-      summary.outcomes.push({ ...classifyExtractionException(errorCode), postId: post.postId ?? post.permalink ?? null });
+      const postId = post.postId ?? post.permalink ?? null;
+      summary.outcomes.push({ ...classifyExtractionException(errorCode), postId });
       summary.warnings.push(`Post nie został przetworzony: ${errorCode}.`);
+      if (errorCode === "FACEBOOK_FILTER_RECONCILE_FAILED" && summary.reconciliationDiagnostics.length < RECONCILIATION_DIAGNOSTICS_LIMIT) {
+        const diagnostic = extractReconciliationDiagnostic(error, postId);
+        if (diagnostic) summary.reconciliationDiagnostics.push(diagnostic);
+      }
     }
   }
   return summary;

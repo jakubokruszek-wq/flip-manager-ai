@@ -83,6 +83,99 @@ test("a failure with no identifiable code still falls back to the generic extrac
   assert.match(result.warnings[0], /FACEBOOK_POST_EXTRACTION_FAILED/);
 });
 
+// FACEBOOK_FILTER_RECONCILE_FAILED reconciliation diagnostics: the accounting
+// code/outcome/warning text must stay exactly as before (safeErrorCode is
+// untouched); the new reconciliationDiagnostics array is purely additive.
+function reconcileFailure(cause: Record<string, unknown>): Error {
+  return new Error("FACEBOOK_FILTER_RECONCILE_FAILED: CANONICAL_RECONCILIATION_FAILED: duplicate key value violates unique constraint", { cause });
+}
+
+test("a reconciliation failure with a Postgres error cause preserves postId/listingId/filterId and the raw DB fields, without changing accounting", async () => {
+  const cause = { listingId: "listing-42", filterId: "filter-7", errorCode: "23505", errorMessage: "duplicate key value violates unique constraint \"listing_filter_matches_pkey\"", errorDetails: "Key (listing_id, search_filter_id)=(listing-42, filter-7) already exists.", errorHint: null };
+  const result = await processFacebookPostBatch([post("reconcile-fail")], async () => { throw reconcileFailure(cause); });
+
+  assert.equal(result.extractionFailed, 1);
+  assert.equal(result.outcomes[0].primaryOutcome, "EXTRACTION_FAILED");
+  assert.deepEqual(result.outcomes[0].reasonCodes, ["FACEBOOK_FILTER_RECONCILE_FAILED"], "accounting reason must stay the stable public code, never the raw DB text");
+  assert.equal(result.warnings[0], "Post nie został przetworzony: FACEBOOK_FILTER_RECONCILE_FAILED.");
+
+  assert.equal(result.reconciliationDiagnostics.length, 1);
+  assert.deepEqual(result.reconciliationDiagnostics[0], {
+    stage: "canonical_reconciliation",
+    postId: "reconcile-fail",
+    listingId: "listing-42",
+    filterId: "filter-7",
+    errorCode: "23505",
+    errorMessage: "duplicate key value violates unique constraint \"listing_filter_matches_pkey\"",
+    errorDetails: "Key (listing_id, search_filter_id)=(listing-42, filter-7) already exists.",
+    errorHint: null,
+  });
+});
+
+test("a PostgREST-style error code (result-shape failure) is preserved through the same path", async () => {
+  const cause = { listingId: "listing-1", filterId: "filter-1", errorCode: "PGRST116", errorMessage: "JSON object requested, multiple (or no) rows returned", errorDetails: "Results contain 0 rows", errorHint: null };
+  const result = await processFacebookPostBatch([post("pgrst-fail")], async () => { throw reconcileFailure(cause); });
+  assert.equal(result.reconciliationDiagnostics[0].errorCode, "PGRST116");
+  assert.equal(result.reconciliationDiagnostics[0].errorDetails, "Results contain 0 rows");
+});
+
+test("tokens/cookies/emails/phones embedded in the DB message or details are redacted before persistence", async () => {
+  const cause = {
+    listingId: "listing-1", filterId: "filter-1", errorCode: "42501",
+    errorMessage: "permission denied; authorization:sk_live_should_not_survive for user jan.kowalski@example.com",
+    errorDetails: "cookie=must-not-survive; phone +48 500 100 200 in payload",
+    errorHint: "session: abc123",
+  };
+  const result = await processFacebookPostBatch([post("secret-fail")], async () => { throw reconcileFailure(cause); });
+  const diagnostic = result.reconciliationDiagnostics[0];
+  assert.doesNotMatch(diagnostic.errorMessage ?? "", /sk_live_should_not_survive/);
+  assert.match(diagnostic.errorMessage ?? "", /authorization=\[REDACTED\]/);
+  assert.doesNotMatch(diagnostic.errorMessage ?? "", /jan\.kowalski@example\.com/);
+  assert.doesNotMatch(diagnostic.errorDetails ?? "", /must-not-survive/);
+  assert.doesNotMatch(diagnostic.errorDetails ?? "", /500[\s.-]?100[\s.-]?200/);
+  assert.doesNotMatch(diagnostic.errorHint ?? "", /abc123/);
+  assert.match(diagnostic.errorHint ?? "", /session=\[REDACTED\]/);
+});
+
+test("every diagnostic string field is length-bounded even when the DB message/details is huge", async () => {
+  const cause = { listingId: "listing-1", filterId: "filter-1", errorCode: "XX000", errorMessage: "x".repeat(5000), errorDetails: "y".repeat(5000), errorHint: "z".repeat(5000) };
+  const result = await processFacebookPostBatch([post("huge-fail")], async () => { throw reconcileFailure(cause); });
+  const diagnostic = result.reconciliationDiagnostics[0];
+  assert.ok((diagnostic.errorMessage?.length ?? 0) <= 300);
+  assert.ok((diagnostic.errorDetails?.length ?? 0) <= 300);
+  assert.ok((diagnostic.errorHint?.length ?? 0) <= 300);
+});
+
+test("no stack trace is ever included in the persisted diagnostic", async () => {
+  const cause = { listingId: "listing-1", filterId: "filter-1", errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null };
+  const result = await processFacebookPostBatch([post("stack-fail")], async () => { throw reconcileFailure(cause); });
+  const diagnostic = result.reconciliationDiagnostics[0];
+  assert.ok(!("stack" in diagnostic));
+  assert.deepEqual(Object.keys(diagnostic).sort(), ["errorCode", "errorDetails", "errorHint", "errorMessage", "filterId", "listingId", "postId", "stage"]);
+});
+
+test("an unrelated error (different code, or a reconciliation-failure message with no cause attached) leaves reconciliationDiagnostics empty and behaves exactly as before", async () => {
+  const withoutCause = await processFacebookPostBatch([post("no-cause")], async () => {
+    throw new Error("FACEBOOK_FILTER_RECONCILE_FAILED: CANONICAL_RECONCILIATION_FAILED: some detail");
+  });
+  assert.deepEqual(withoutCause.reconciliationDiagnostics, []);
+  assert.equal(withoutCause.outcomes[0].reasonCodes[0], "FACEBOOK_FILTER_RECONCILE_FAILED");
+
+  const differentFailure = await processFacebookPostBatch([post("meta-fail-2")], async () => {
+    throw new Error("FACEBOOK_METADATA_PERSIST_FAILED: duplicate key value violates unique constraint", { cause: { listingId: "listing-1", filterId: "filter-1", errorCode: "23505", errorMessage: "unrelated", errorDetails: null, errorHint: null } });
+  });
+  assert.deepEqual(differentFailure.reconciliationDiagnostics, [], "diagnostics are scoped to FACEBOOK_FILTER_RECONCILE_FAILED only, even if another failure also carries a cause");
+});
+
+test("the reconciliation diagnostics array stays bounded even if every post in a batch fails", async () => {
+  const posts = Array.from({ length: 60 }, (_, index) => post(`bulk-${index}`));
+  const result = await processFacebookPostBatch(posts, async () => {
+    throw reconcileFailure({ listingId: "listing-x", filterId: "filter-x", errorCode: "40001", errorMessage: "serialization failure", errorDetails: null, errorHint: null });
+  });
+  assert.equal(result.extractionFailed, 60);
+  assert.ok(result.reconciliationDiagnostics.length <= 50, `expected a bounded diagnostics array, got ${result.reconciliationDiagnostics.length}`);
+});
+
 test("image failure warning does not prevent listing persistence", async () => {
   const result = await processFacebookPostBatch([post("3")], async () => outcome({ imagesMirrored: 0, warnings: ["image fetch failed"] }));
   assert.equal(result.listingsCreated, 1);

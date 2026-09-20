@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
-import { processFacebookPostBatch, type FacebookPersistenceDiagnostics } from "@/features/facebook-worker/post-flow";
+import { processFacebookPostBatch, type FacebookPersistenceDiagnostics, type FacebookReconciliationFailureDiagnostic } from "@/features/facebook-worker/post-flow";
 import { fetchFacebookActiveListingCandidates, importFacebookWatcher } from "@/features/facebook-watcher/server";
 import type { SearchFilter } from "@/features/flip-finder";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
@@ -31,6 +31,8 @@ export type CollectorBatchResult = {
   /** Deterministic scan accounting (see scan-accounting.ts) for this batch's raw captured posts. Absent on batches recorded before this feature — callers must degrade gracefully, never fabricate it. */
   accounting?: FacebookScanAccounting;
   accountingError?: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED";
+  /** Sanitized per-post detail for FACEBOOK_FILTER_RECONCILE_FAILED outcomes only (see post-flow.ts). Never changes accounting; purely diagnostic. */
+  reconciliationDiagnostics?: FacebookReconciliationFailureDiagnostic[];
 };
 
 export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
@@ -114,6 +116,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
           : { postId: capturedPost.postId ?? capturedPost.permalink ?? null, primaryOutcome: "IDENTITY_UNVERIFIED", reasonCodes: ["identity_unverified"] };
       });
     let lastProcessedOutcomes: FacebookPostOutcome[] = [];
+    let lastReconciliationDiagnostics: FacebookReconciliationFailureDiagnostic[] = [];
     const authors = new Map(batch.posts.map((post) => [post.postId, post.author]));
     // Fetched once for the whole batch instead of once per post; new listings
     // created during processing are appended in-place (see server.ts) so
@@ -139,6 +142,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       errors += summary.errors;
       persistenceDiagnostics.push(...summary.persistenceDiagnostics);
       lastProcessedOutcomes = summary.outcomes;
+      lastReconciliationDiagnostics = summary.reconciliationDiagnostics;
       const sourceStatus = batch.health.status === "DEGRADED" || summary.errors > 0 || unverifiedIdentityCount > 0 ? "partial" : "completed";
       const identityWarnings = unverifiedIdentityCount > 0 ? [`FACEBOOK_IDENTITY_UNVERIFIED:${unverifiedIdentityCount}`, ...[...historicalIdentityConflicts].slice(0, 20).map((postId) => `FACEBOOK_IDENTITY_HISTORY_CONFLICT:${postId}`)] : [];
       const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...target.existingWarnings, ...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100), error_message: null }).eq("id", sourceScanId);
@@ -158,10 +162,11 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     });
     const accounting = aggregateFacebookScanAccounting(uniqueOutcomes, batch.posts.length);
     const accountingValidation = validateFacebookScanAccounting(accounting);
+    const reconciliationDiagnostics = lastReconciliationDiagnostics.length ? lastReconciliationDiagnostics : undefined;
     if (!accountingValidation.ok) {
-      return finishBatch(supabase, deviceId, batchRowId, batch, { status: "degraded", batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors: errors + 1, sourceScanIds, health: batch.health, persistenceDiagnostics, accountingError: accountingValidation.errorCode ?? undefined }, accountingValidation.errorCode ?? undefined);
+      return finishBatch(supabase, deviceId, batchRowId, batch, { status: "degraded", batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors: errors + 1, sourceScanIds, health: batch.health, persistenceDiagnostics, accountingError: accountingValidation.errorCode ?? undefined, reconciliationDiagnostics }, accountingValidation.errorCode ?? undefined);
     }
-    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting });
+    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting, reconciliationDiagnostics });
   } catch (error) {
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));
   }

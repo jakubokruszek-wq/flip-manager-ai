@@ -33,6 +33,22 @@ export type CanonicalReconciliationResult = {
 };
 
 /**
+ * Attached as Error.cause (never as part of the message) when the RPC call
+ * fails, so a caller can recover the underlying PostgREST/Postgres fields
+ * without changing what error-code parsers that key off `.message` (like
+ * facebook-worker's safeErrorCode) ever see. Source-agnostic on purpose:
+ * this file serves every canonical decision writer, not just Facebook.
+ */
+export type CanonicalReconciliationFailureDiagnostic = {
+  listingId: string;
+  filterId: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorDetails: string | null;
+  errorHint: string | null;
+};
+
+/**
  * The only application entrypoint for projecting a deterministic decision into
  * listing lifecycle and filter membership. The database function locks the
  * listing and commits both writes together; GET paths never call this service.
@@ -54,9 +70,22 @@ export async function reconcileCanonicalListingDecision(input: CanonicalReconcil
   });
   if (input.signal) query = query.abortSignal(input.signal);
   const result = await query;
-  if (result.error) throw new Error(`CANONICAL_RECONCILIATION_FAILED: ${result.error.message}`);
+  if (result.error) {
+    const diagnostic: CanonicalReconciliationFailureDiagnostic = {
+      listingId: input.listingId,
+      filterId: input.filterId,
+      errorCode: stringOrNull(result.error.code),
+      errorMessage: stringOrNull(result.error.message),
+      errorDetails: stringOrNull(result.error.details),
+      errorHint: stringOrNull(result.error.hint),
+    };
+    throw new Error(`CANONICAL_RECONCILIATION_FAILED: ${result.error.message}`, { cause: diagnostic });
+  }
   const row = Array.isArray(result.data) ? result.data[0] : result.data;
-  if (!row || typeof row !== "object") throw new Error("CANONICAL_RECONCILIATION_FAILED: missing result");
+  if (!row || typeof row !== "object") {
+    const diagnostic: CanonicalReconciliationFailureDiagnostic = { listingId: input.listingId, filterId: input.filterId, errorCode: null, errorMessage: "missing result", errorDetails: null, errorHint: null };
+    throw new Error("CANONICAL_RECONCILIATION_FAILED: missing result", { cause: diagnostic });
+  }
   const value = row as Record<string, unknown>;
   return {
     listingId: String(value.listing_id ?? input.listingId),
@@ -70,4 +99,8 @@ export async function reconcileCanonicalListingDecision(input: CanonicalReconcil
 
 function lifecycleValue(value: unknown): LifecycleStatus | null {
   return value === "ACTIVE" || value === "REVIEW" || value === "REJECTED" || value === "STALE" || value === "ARCHIVED" ? value : null;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
 }
