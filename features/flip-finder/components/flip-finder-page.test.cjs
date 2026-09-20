@@ -221,3 +221,18 @@ test("native gallery diagnostics are bounded, backend-only, and failure-isolated
   assert.match(galleryTraceNativeMigration, /grant select, insert on table public\.gallery_request_traces to service_role/);
   assert.doesNotMatch(galleryTraceNativeMigration, /grant .* to anon|grant .* to authenticated/);
 });
+
+// Scan accounting V1, Part H: the scan-results diagnostics were an 11-tile
+// KPI grid using two conflicting reason-code vocabularies (hardRejectReasons'
+// canonical camelCase keys vs rejectionBreakdown's older keys), so "Dlaczego
+// odrzucone?" could show its "no data" placeholder even when real reason data
+// existed under the other shape, and there was no visible funnel structure
+// or extraction-failure count at all.
+test("the scan-results panel renders one compact funnel plus separated technical/business tiles, and never loses reason data to a key-shape mismatch", () => {
+  assert.match(page, /aria-label="Lejek skanu"/, "the funnel must be a single, labeled, readable-at-a-glance row");
+  assert.equal((page.match(/<FunnelStep /g) ?? []).length, 6, "Zebrane -> Tożsamość OK -> Sprzedaż mieszkań -> Odrzucone twardo -> Do oceny -> Dopasowane, exactly 6 steps");
+  assert.doesNotMatch(page, /Zweryfikowana tożsamość/, "the old 11-tile flat grid duplicating the funnel's own steps must be gone");
+  assert.match(page, /const extractionFailed = \(response\.warnings \?\? \[\]\)\.filter\(\(warning\) => warning\.startsWith\("Post nie został przetworzony:"\)\)\.length;/, "extraction-failure count must come from the response's own warnings, never a fabricated number");
+  assert.match(page, /Dlaczego odrzucone\?/);
+  assert.match(page, /numberFromAny\(hardReasons, \[key as string, \.\.\.\(aliases as string\[\]\)\], numberFromAny\(breakdown, \[key as string, \.\.\.\(aliases as string\[\]\)\], 0\)\)/, "every canonical reason must be looked up under BOTH known key shapes before falling back to zero, so a real count under either shape is never silently dropped");
+});

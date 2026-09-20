@@ -76,6 +76,23 @@ test("rooms, floor and condition require exact semantic evidence", async () => {
   assert.deepEqual({ rooms: exact.rooms, floor: exact.floor }, { rooms: 2, floor: 3 });
 });
 
+// Polish phrasing states the floor both ways — "3. piętro" (number first, already
+// covered above) and "piętro 3" (word first). Both orders must resolve to the
+// same floor; only the word-first order was previously left unmatched.
+test("floor is extracted regardless of word order: 'piętro N' resolves the same as 'N. piętro'", async () => {
+  const wordFirst = await extractFacebookProperty({ postText: "Mieszkanie na sprzedaż, piętro 11, 47 m2" });
+  assert.equal(wordFirst.floor, 11);
+  const numberFirst = await extractFacebookProperty({ postText: "Mieszkanie na sprzedaż, 11 piętro, 47 m2" });
+  assert.equal(numberFirst.floor, 11);
+});
+
+test("a floor/total-floors fraction is extracted in either word order", async () => {
+  const wordFirst = await extractFacebookProperty({ postText: "Mieszkanie, piętro 4/10, 50 m2" });
+  assert.deepEqual({ floor: wordFirst.floor, totalFloors: wordFirst.totalFloors }, { floor: 4, totalFloors: 10 });
+  const numberFirst = await extractFacebookProperty({ postText: "Mieszkanie, 4/10 piętro, 50 m2" });
+  assert.deepEqual({ floor: numberFirst.floor, totalFloors: numberFirst.totalFloors }, { floor: 4, totalFloors: 10 });
+});
+
 test("area token M2 is never converted into one room", async () => {
   const value = await extractFacebookProperty({ postText: "Sprzedam mieszkanie 30 M2 w Łodzi" });
   assert.equal(value.area, 30);

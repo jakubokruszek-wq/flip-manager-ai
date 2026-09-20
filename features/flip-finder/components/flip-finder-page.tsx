@@ -725,9 +725,24 @@ function ScanResultPanel({ filter, response }: { filter: SearchFilterListItem; r
   return <Card aria-label="Wynik ostatniego skanu" className="overflow-hidden border-gold/20 bg-card/95 p-5 sm:p-6">
     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><p className="type-caption font-semibold uppercase tracking-[0.16em] text-gold">WYNIK OSTATNIEGO SKANU</p><h2 className="type-section-title mt-1">{filter.name}</h2></div><span className={`ui-badge ${status === "PARTIAL" ? "border-warning/30 bg-warning/10 text-warning" : status === "FAILED" ? "border-danger/20 bg-danger/10 text-danger" : status === "RUNNING" || status === "QUEUED" ? "border-gold/30 bg-gold/10 text-gold" : "border-success/20 bg-success/10 text-success"}`}>{scanRunStatusLabel(status)}</span></div>
     {status === "PARTIAL" || status === "FAILED" ? <div className="mt-4 rounded-xl border border-warning/25 bg-warning/10 p-4 text-sm"><p className="font-semibold text-warning">{status === "PARTIAL" ? "Częściowo zakończony" : "Skan zakończony błędem"}</p><p className="mt-1 text-muted-foreground">{partialReason || "Nie wszystkie źródła zakończyły pracę."}</p></div> : null}
-    <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4"><DiagnosticMetric label="Zebrane posty" value={funnel.collected} /><DiagnosticMetric label="Zweryfikowana tożsamość" value={funnel.exact} /><DiagnosticMetric label="Tożsamość do weryfikacji" value={funnel.identityUnverified} /><DiagnosticMetric label="Oferty sprzedaży" value={funnel.sell} tone="gold" /><DiagnosticMetric label="Oferty najmu" value={funnel.rent} /><DiagnosticMetric label="Inne pewne posty" value={funnel.otherExact} /><DiagnosticMetric label="Dopasowane" value={funnel.matched} tone="gold" /><DiagnosticMetric label="Do oceny" value={funnel.review} /><DiagnosticMetric label="Odrzucone twardo" value={funnel.rejected} /><DiagnosticMetric label="Nowe zapisane oferty" value={response.newCount} /><DiagnosticMetric label="Zaktualizowane" value={response.updatedCount} /></div>
+    {/* Compact funnel: readable at a glance, each step a strict subset of the one before it — Zebrane -> Tożsamość OK -> Sprzedaż mieszkań -> Odrzucone twardo -> Do oceny -> Dopasowane. */}
+    <div className="mt-5 flex flex-wrap items-center gap-x-1.5 gap-y-2 text-sm" aria-label="Lejek skanu">
+      <FunnelStep label="Zebrane" value={funnel.collected} /><FunnelArrow />
+      <FunnelStep label="Tożsamość OK" value={funnel.exact} /><FunnelArrow />
+      <FunnelStep label="Sprzedaż mieszkań" value={funnel.sell} /><FunnelArrow />
+      <FunnelStep label="Odrzucone twardo" value={funnel.rejected} /><FunnelArrow />
+      <FunnelStep label="Do oceny" value={funnel.review} /><FunnelArrow />
+      <FunnelStep label="Dopasowane" tone="gold" value={funnel.matched} />
+    </div>
+    {/* Technical losses (never a business decision) and business exclusions (a deliberate rule), kept visually separate from the funnel above and from each other. */}
+    <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <DiagnosticMetric label="Tożsamość niezweryfikowana" value={funnel.identityUnverified} />
+      <DiagnosticMetric label="Błędy ekstrakcji" value={funnel.extractionFailed} />
+      <DiagnosticMetric label="Oferty najmu" value={funnel.rent} />
+      <DiagnosticMetric label="Inny typ / bez sprzedaży" value={funnel.otherExact} />
+    </div>
     {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground">{scanNoOffersMessage(funnel.saved, funnel.topRejection)}</p> : null}
-    <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">ODRZUCONE TWARDYM WARUNKIEM — GŁÓWNY STRUMIEŃ</h3><p className="mt-1 text-xs text-muted-foreground">Unikalne rekordy: {formatNumber(funnel.rejected)}. Jedna oferta może mieć więcej niż jeden powód.</p><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={Math.max(1, funnel.rejected)} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
+    <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">Dlaczego odrzucone?</h3><p className="mt-1 text-xs text-muted-foreground">Unikalne rekordy: {formatNumber(funnel.rejected)}. Jedna oferta może mieć więcej niż jeden powód, więc suma poniższych liczb może przekraczać liczbę odrzuconych ofert.</p><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={Math.max(1, funnel.rejected)} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
     {funnel.searchTiles > 0 || funnel.searchQueriesPlanned > 0 ? <div className="mt-6 border-t border-border/60 pt-5"><h3 className="type-card-title">Wyniki wyszukiwania</h3><p className="mt-1 text-xs text-muted-foreground">Osobny mianownik — {formatNumber(funnel.searchQueriesExecuted)}/{formatNumber(funnel.searchQueriesPlanned)} zapytań, {formatNumber(funnel.searchTiles)} kafelków.</p><div className="mt-3"><DiagnosticBar analyzed={Math.max(1, funnel.searchTiles)} count={funnel.searchParentUnverified} label="Wyniki bez potwierdzonego posta" /></div></div> : null}
     <details className="mt-6 border-t border-border/60 pt-4 text-sm"><summary className="cursor-pointer font-semibold">Szczegóły diagnostyczne</summary><div className="mt-4 space-y-4"><p className="text-xs text-muted-foreground">Statusy źródeł i techniczne kody są dostępne tutaj; nie wpływają na decyzję filtra.</p><div className="grid gap-3 lg:grid-cols-3">{(response.sourceResults ?? []).map((source) => <SourceDiagnosticCard key={source.source} source={source} />)}</div>{response.matchDiagnostics ? <div className="space-y-3">{technicalDiagnosticBars(response.matchDiagnostics, funnel.collected).map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div> : null}</div></details>
   </Card>;
@@ -756,7 +771,7 @@ function scanResponseFromProgress(progress: ScanProgressResponse): ScanResponse 
   };
 }
 
-type ScanFunnel = { collected: number; exact: number; identityUnverified: number; sell: number; rent: number; otherExact: number; review: number; rejected: number; matched: number; saved: number; searchTiles: number; searchParentUnverified: number; searchQueriesExecuted: number; searchQueriesPlanned: number; topRejection: string; rejections: Array<{ key: string; label: string; count: number }> };
+type ScanFunnel = { collected: number; exact: number; identityUnverified: number; extractionFailed: number; sell: number; rent: number; otherExact: number; review: number; rejected: number; matched: number; saved: number; searchTiles: number; searchParentUnverified: number; searchQueriesExecuted: number; searchQueriesPlanned: number; topRejection: string; rejections: Array<{ key: string; label: string; count: number }> };
 
 function scanFunnel(response: ScanResponse): ScanFunnel {
   const raw = response as ScanResponse & Record<string, unknown>;
@@ -767,10 +782,29 @@ function scanFunnel(response: ScanResponse): ScanFunnel {
   const rejected = numberFromAny(canonical, ["hardRejectedUnique"], numberFrom(raw.rejected, 0));
   const searchTiles = numberFromAny(breakdown, ["searchTiles", "tilesSeen", "tiles_seen"], numberFrom((response as ScanResponse).search?.tilesSeen, 0));
   const searchParentUnverified = numberFromAny((isRecord(raw.search) ? raw.search : {}) as Record<string, unknown>, ["parentUnverified"], numberFromAny(breakdown, ["searchParentUnverified", "search_parent_unverified"]));
-  const rejections = [["identity", "Identity unverified", numberFromAny(breakdown, ["identityUnverified", "identity_unverified"])], ["building", "Building type unverified", numberFromAny(breakdown, ["buildingTypeUnverified", "building_type_unverified"])], ["rent", "Rent", numberFromAny(breakdown, ["rent", "rent_listing"])], ["age", "Age cutoff", numberFromAny(breakdown, ["ageCutoff", "age_cutoff"])], ["location", "Outside Łódź", numberFromAny(breakdown, ["outsideLodz", "outside_lodz"])], ["tenement", "Kamienica", numberFromAny(breakdown, ["tenement", "kamienica"])], ["duplicate", "Duplicate", numberFromAny(breakdown, ["duplicate", "duplicates"])], ["other", "Other", numberFromAny(breakdown, ["other"], rejected)]].map(([key, label, count]) => ({ key: String(key), label: String(label), count: Number(count) || 0 }));
-  const hardReasons = isRecord(raw.hardRejectReasons) ? raw.hardRejectReasons as Record<string, unknown> : breakdown;
-  const canonicalRejections = [["outsideLocation", "Poza Łodzią"], ["districtMismatch", "Dzielnica poza filtrem"], ["areaBelowMin", "Powierzchnia poniżej minimum"], ["areaAboveMax", "Powierzchnia powyżej maksimum"], ["pricePerSqmAboveMax", "Cena/m² powyżej limitu"], ["roomsMismatch", "Liczba pokoi"], ["excludedBuildingType", "Wykluczony typ budynku"], ["duplicate", "Duplikat"], ["ageCutoff", "Limit wieku"], ["other", "Inne"]].map(([key, label]) => ({ key, label, count: numberFromAny(hardReasons, [key], 0) }));
-  rejections.splice(0, rejections.length, ...canonicalRejections);
+  // hardRejectReasons (the canonical, per-post-decision-derived breakdown) and
+  // rejectionBreakdown (an older, differently-keyed shape some response
+  // sources still populate) can each be the only one present depending on
+  // where this ScanResponse came from. Checking both naming conventions for
+  // every canonical reason — rather than picking exactly one source and
+  // silently getting zero counts from the other — is what keeps "Dlaczego
+  // odrzucone?" from ever showing a meaningless "no data" placeholder while
+  // real reason data exists under the other shape.
+  const hardReasons = isRecord(raw.hardRejectReasons) ? raw.hardRejectReasons as Record<string, unknown> : {};
+  const canonicalRejections = [
+    ["outsideLocation", "Poza Łodzią", ["outsideLodz", "outside_lodz"]],
+    ["districtMismatch", "Dzielnica poza filtrem", ["district"]],
+    ["areaBelowMin", "Powierzchnia poniżej minimum", ["area_min"]],
+    ["areaAboveMax", "Powierzchnia powyżej maksimum", ["area_max"]],
+    ["pricePerSqmAboveMax", "Cena/m² powyżej limitu", ["max_price_per_sqm"]],
+    ["roomsMismatch", "Liczba pokoi", ["rooms"]],
+    ["excludedBuildingType", "Wykluczony typ budynku", ["buildingTypeUnverified", "building_type_unverified", "tenement", "kamienica"]],
+    ["duplicate", "Duplikat", ["duplicates"]],
+    ["ageCutoff", "Limit wieku", ["age_cutoff"]],
+    ["rent", "Najem", ["rent_listing"]],
+    ["other", "Inne", []],
+  ].map(([key, label, aliases]) => ({ key: String(key), label: String(label), count: numberFromAny(hardReasons, [key as string, ...(aliases as string[])], numberFromAny(breakdown, [key as string, ...(aliases as string[])], 0)) }));
+  const rejections = canonicalRejections;
   const exact = numberFromAny(canonical, ["identityExact"], numberFromAny(raw, ["exactCount", "verifiedExact", "identityExact"]));
   const sell = numberFromAny(canonical, ["sellProperty"], numberFromAny(raw, ["sellPropertyCount", "sellProperty", "sell"]));
   const identityUnverified = numberFromAny(canonical, ["identityUnverified"], numberFromAny(breakdown, ["identityUnverified", "identity_unverified"], Math.max(0, collected - exact)));
@@ -779,8 +813,13 @@ function scanFunnel(response: ScanResponse): ScanFunnel {
   const review = numberFromAny(canonical, ["review"], 0);
   const saved = numberFrom(raw.persistedCount, Math.max(0, response.newCount + response.updatedCount));
   const search = isRecord(raw.search) ? raw.search as Record<string, unknown> : {};
+  // Each thrown-and-caught post failure adds exactly one "Post nie został
+  // przetworzony: <code>." warning (see processFacebookPostBatch) — counting
+  // them here needs no new API field, only the warnings this response
+  // already carries.
+  const extractionFailed = (response.warnings ?? []).filter((warning) => warning.startsWith("Post nie został przetworzony:")).length;
   const top = rejections.filter((reason) => reason.count > 0).sort((a, b) => b.count - a.count)[0];
-  return { collected, exact, identityUnverified, sell, rent, otherExact, review, rejected, matched, saved, searchTiles, searchParentUnverified, searchQueriesExecuted: numberFromAny(search, ["queriesExecuted"], 0), searchQueriesPlanned: numberFromAny(search, ["expectedQueries", "queriesPlanned"], 0), topRejection: top ? `${top.label} — ${formatNumber(top.count)}` : "Brak danych o twardych odrzuceniach", rejections };
+  return { collected, exact, identityUnverified, extractionFailed, sell, rent, otherExact, review, rejected, matched, saved, searchTiles, searchParentUnverified, searchQueriesExecuted: numberFromAny(search, ["queriesExecuted"], 0), searchQueriesPlanned: numberFromAny(search, ["expectedQueries", "queriesPlanned"], 0), topRejection: top ? `${top.label} — ${formatNumber(top.count)}` : "Brak danych o twardych odrzuceniach", rejections };
 }
 
 function technicalDiagnosticBars(diagnostics: MatchDiagnostics, analyzed: number) { return [{ key: "price", label: "Cena", count: diagnostics.rejectedByPrice }, { key: "pricePerSqm", label: "Cena/m²", count: diagnostics.rejectedByPricePerSqm }, { key: "rooms", label: "Pokoje", count: diagnostics.rejectedByRooms }, { key: "area", label: "Metraż", count: diagnostics.rejectedByArea }, { key: "district", label: "Dzielnica", count: diagnostics.rejectedByDistrict }, { key: "buildingType", label: "Typ budynku", count: diagnostics.rejectedByBuildingType }].map((item) => ({ ...item, count: Math.min(analyzed, Math.max(0, item.count)) })); }
@@ -790,6 +829,14 @@ function isRecord(value: unknown): value is Record<string, unknown> { return val
 
 function DiagnosticMetric({ label, value, tone }: { label: string; value: number; tone?: "gold" }) {
   return <div className="rounded-xl border border-border/60 bg-surface-elevated/70 p-3"><p className="text-xs text-muted-foreground">{label}</p><p className={`mt-1 tabular-nums text-2xl font-semibold ${tone === "gold" ? "text-gold" : ""}`}>{formatNumber(value)}</p></div>;
+}
+
+function FunnelStep({ label, value, tone }: { label: string; value: number; tone?: "gold" }) {
+  return <div className="flex flex-col items-center rounded-xl border border-border/60 bg-surface-elevated/70 px-3 py-2 text-center"><span className="text-[11px] text-muted-foreground">{label}</span><span className={`tabular-nums text-lg font-semibold ${tone === "gold" ? "text-gold" : ""}`}>{formatNumber(value)}</span></div>;
+}
+
+function FunnelArrow() {
+  return <span aria-hidden="true" className="text-muted-foreground">→</span>;
 }
 
 function DiagnosticBar({ analyzed, count, label }: { analyzed: number; count: number; label: string }) {

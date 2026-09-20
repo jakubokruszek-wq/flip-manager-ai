@@ -139,8 +139,13 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
     .map((match) => Number(match[1]));
   const mRooms = new Set(mRoomValues).size === 1 ? mRoomValues[0] : null;
   const explicitRoomCount = resolveActualRoomCount(text);
-  const floor = boundedFloor(number(normalizedText.match(/\b(\d{1,2})\.?\s*(?:pietro|pietrze|p\.)\b/u)?.[1]));
-  const fraction = normalizedText.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:pietro|p\.)\b/u);
+  // Polish phrasing states the floor both ways ("piętro 11" and "11 piętro" /
+  // "11. piętro"); both must resolve to the same floor, never just one order.
+  const floorBeforeWord = normalizedText.match(/\b(\d{1,2})\.?\s*(?:pietro|pietrze|p\.)\b/u)?.[1];
+  const floorAfterWord = normalizedText.match(/\bpietr(?:o|ze)\s+(\d{1,2})\b/u)?.[1];
+  const floor = boundedFloor(number(floorBeforeWord ?? floorAfterWord));
+  const fraction = normalizedText.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:pietro|p\.)\b/u)
+    ?? normalizedText.match(/\bpietr(?:o|ze)\s+(\d{1,2})\s*\/\s*(\d{1,2})\b/u);
   const street = extractPolishStreet(text);
   const flags = FLAG_PHRASES.filter((phrase) => lower.includes(phrase));
   const known = [price.price !== null, effectiveArea, explicitRoomCount ?? mRooms, place || districtFound, floor].filter(Boolean).length;

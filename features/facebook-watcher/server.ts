@@ -388,7 +388,8 @@ async function importAutomatedFacebook(input: {
     existingImages: existingState.images,
     finalListingImages: imageMirror.images,
     imageProvenance: facebookImageProvenanceDiagnostics(normalized.mediaCandidates ?? [], externalId, new Set(boundImages)),
-    decisionReasons: decision.reasons,
+    decisionReasons: manualRejected ? ["manual_rejected", ...decision.reasons] : decision.reasons,
+    decisionUnknownFields: decision.unknownFields,
   });
   return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics };
 }

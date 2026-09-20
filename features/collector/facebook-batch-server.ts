@@ -7,9 +7,10 @@ import { fetchFacebookActiveListingCandidates, importFacebookWatcher } from "@/f
 import type { SearchFilter } from "@/features/flip-finder";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { aggregateFacebookScanAccounting, classifyPreExtractionExclusion, type FacebookPostOutcome, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 
 import type { FacebookCollectorBatch } from "./facebook-batch";
-import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts } from "./facebook-batch-policy";
+import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts, isCollectorPostFresh } from "./facebook-batch-policy";
 import { isFacebookProductionSource } from "./facebook-production";
 
 export { FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL } from "./facebook-production";
@@ -27,6 +28,8 @@ export type CollectorBatchResult = {
   health: FacebookCollectorBatch["health"];
   /** Optional per-post image trace; safe projection is applied by progress API. */
   persistenceDiagnostics?: FacebookPersistenceDiagnostics[];
+  /** Deterministic scan accounting (see scan-accounting.ts) for this batch's raw captured posts. Absent on batches recorded before this feature — callers must degrade gracefully, never fabricate it. */
+  accounting?: FacebookScanAccounting;
 };
 
 export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
@@ -86,8 +89,28 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     const sourceScanIds: string[] = [];
     let processed = 0; let listingsCreated = 0; let listingsUpdated = 0; let skipped = 0; let errors = 0;
     const persistenceDiagnostics: FacebookPersistenceDiagnostics[] = [];
-    const posts = collectorPostsForProcessing(batch, Date.now(), historicalIdentityConflicts);
+    const eligibilityCheckedAt = Date.now();
+    const posts = collectorPostsForProcessing(batch, eligibilityCheckedAt, historicalIdentityConflicts);
     const unverifiedIdentityCount = batch.posts.filter((post) => post.identityConfidence !== "EXACT" || historicalIdentityConflicts.has(post.postId)).length;
+    // Every post the collector captured must be accounted for, including the
+    // ones excluded here, before extraction is ever attempted (unverified
+    // identity or older than the freshness cutoff) — see scan-accounting.ts.
+    // Only ONE processFacebookPostBatch call's outcomes are used below
+    // (matching the existing `processed = Math.max(...)` pattern: with the
+    // single active Facebook filter this deployment runs today, every target
+    // iteration processes the identical `posts` array).
+    const eligiblePostIds = new Set(posts.map((post) => post.postId).filter((id): id is string => id !== null));
+    const preExtractionOutcomes: FacebookPostOutcome[] = batch.posts
+      .filter((capturedPost) => !(capturedPost.postId && eligiblePostIds.has(capturedPost.postId)))
+      .map((capturedPost) => ({
+        ...classifyPreExtractionExclusion({
+          identityConfidence: capturedPost.identityConfidence,
+          identityConflict: historicalIdentityConflicts.has(capturedPost.postId),
+          fresh: isCollectorPostFresh(capturedPost.publishedAt, eligibilityCheckedAt),
+        })!,
+        postId: capturedPost.postId,
+      }));
+    let lastProcessedOutcomes: FacebookPostOutcome[] = [];
     const authors = new Map(batch.posts.map((post) => [post.postId, post.author]));
     // Fetched once for the whole batch instead of once per post; new listings
     // created during processing are appended in-place (see server.ts) so
@@ -112,13 +135,26 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       skipped += summary.listingsSkipped;
       errors += summary.errors;
       persistenceDiagnostics.push(...summary.persistenceDiagnostics);
+      lastProcessedOutcomes = summary.outcomes;
       const sourceStatus = batch.health.status === "DEGRADED" || summary.errors > 0 || unverifiedIdentityCount > 0 ? "partial" : "completed";
       const identityWarnings = unverifiedIdentityCount > 0 ? [`FACEBOOK_IDENTITY_UNVERIFIED:${unverifiedIdentityCount}`, ...[...historicalIdentityConflicts].slice(0, 20).map((postId) => `FACEBOOK_IDENTITY_HISTORY_CONFLICT:${postId}`)] : [];
       const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...target.existingWarnings, ...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100), error_message: null }).eq("id", sourceScanId);
       if (sourceUpdate.error) throw new Error(`COLLECTOR_SOURCE_SCAN_FINISH_FAILED: ${sourceUpdate.error.message}`);
     }
     const status = batch.health.status === "DEGRADED" || errors > 0 || unverifiedIdentityCount > 0 ? "degraded" : "completed";
-    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics });
+    // rawCaptured (batch.posts.length) can exceed unique captured when the
+    // same real-world post was captured twice in one batch (e.g. two scroll
+    // passes); dedupe by postId, keeping the first outcome, so the funnel
+    // never double-counts one post as two.
+    const seenOutcomePostIds = new Set<string>();
+    const uniqueOutcomes = [...preExtractionOutcomes, ...lastProcessedOutcomes].filter((outcome) => {
+      if (!outcome.postId) return true;
+      if (seenOutcomePostIds.has(outcome.postId)) return false;
+      seenOutcomePostIds.add(outcome.postId);
+      return true;
+    });
+    const accounting = aggregateFacebookScanAccounting(uniqueOutcomes, batch.posts.length);
+    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting });
   } catch (error) {
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));
   }

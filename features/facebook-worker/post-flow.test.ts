@@ -3,6 +3,7 @@ import test from "node:test";
 import { processFacebookPostBatch, redactFacebookPostPreview, type FacebookPostImportResult } from "./post-flow.ts";
 import { staleFacebookPostResult } from "./vision-adapter.ts";
 import type { FacebookPostSnapshot } from "./types.ts";
+import { aggregateFacebookScanAccounting, verifyFacebookScanAccountingInvariant } from "./scan-accounting.ts";
 
 function post(postId: string, text = "Sprzedam mieszkanie 45 m2, 2 pokoje, 350000 zl"): FacebookPostSnapshot {
   return { postId, groupId: "group-1", permalink: `https://www.facebook.com/groups/group-1/posts/${postId}/`, text, imageUrls: [], publishedAt: "2026-08-16T10:00:00.000Z" };
@@ -58,6 +59,28 @@ test("one extraction failure does not stop the batch", async () => {
   assert.equal(result.extractionFailed, 1);
   assert.equal(result.errors, 1);
   assert.equal(result.listingsCreated, 1);
+});
+
+// The pipeline's own throw sites name themselves as "CODE: detail" (e.g.
+// "FACEBOOK_METADATA_PERSIST_FAILED: duplicate key..."). A failure warning
+// must keep that specific name instead of collapsing every detailed error
+// into the same generic FACEBOOK_POST_EXTRACTION_FAILED bucket — otherwise
+// the accounting/diagnostics built on top of these warnings cannot tell two
+// genuinely different failures apart.
+test("a failure warning keeps the thrown error's own named code, not the generic fallback, whenever one exists", async () => {
+  const result = await processFacebookPostBatch([post("meta-fail")], async () => {
+    throw new Error("FACEBOOK_METADATA_PERSIST_FAILED: duplicate key value violates unique constraint");
+  });
+  assert.equal(result.extractionFailed, 1);
+  assert.match(result.warnings[0], /FACEBOOK_METADATA_PERSIST_FAILED/, "the specific code must survive, not be discarded for the generic fallback");
+  assert.doesNotMatch(result.warnings[0], /^Post nie został przetworzony: FACEBOOK_POST_EXTRACTION_FAILED\.$/);
+});
+
+test("a failure with no identifiable code still falls back to the generic extraction-failed code", async () => {
+  const result = await processFacebookPostBatch([post("generic-fail")], async () => {
+    throw new Error("Cannot read properties of null (reading 'foo')");
+  });
+  assert.match(result.warnings[0], /FACEBOOK_POST_EXTRACTION_FAILED/);
 });
 
 test("image failure warning does not prevent listing persistence", async () => {
@@ -158,3 +181,44 @@ test("stores diagnostics for at most three skipped posts", async () => {
 test("redacts token-like values from preview", () => {
   assert.equal(redactFacebookPostPreview("token=secret-value mieszkanie"), "token=[REDACTED] mieszkanie");
 });
+
+// Scan accounting: every post this call actually attempts must end up with
+// exactly one classified outcome, whether it was skipped, persisted with a
+// canonical decision, or threw — and the invariant (sum of buckets ==
+// unique captured) must hold for the resulting funnel.
+test("every attempted post receives exactly one accounting outcome, and the funnel invariant holds for a realistic mixed batch", async () => {
+  const items = [
+    post("rental", "Do wynajęcia mieszkanie 2 pokoje"),
+    post("matched"),
+    post("review"),
+    post("rejected"),
+    post("throws"),
+  ];
+  const result = await processFacebookPostBatch(items, async (item) => {
+    if (item.postId === "rental") return outcome({ status: "skipped", listingId: null, listingCreated: false, matched: false, matchCreated: false, imagesMirrored: 0, notProperty: { realEstateLanguage: true, structuredFieldCount: 1, detectedFields: [], classification: "non_sale_intent", reasonCode: "FACEBOOK_RENT_REQUEST" } });
+    if (item.postId === "matched") return outcome({ persistenceDiagnostics: { ...emptyDiagnostics("matched"), decision: "MATCHED", decisionReasons: [] } });
+    if (item.postId === "review") return outcome({ persistenceDiagnostics: { ...emptyDiagnostics("review"), decision: "REVIEW", decisionReasons: [], decisionUnknownFields: ["topFloor", "buildingType"] } });
+    if (item.postId === "rejected") return outcome({ matched: false, matchCreated: false, persistenceDiagnostics: { ...emptyDiagnostics("rejected"), decision: "REJECTED", decisionReasons: ["max_price_per_sqm"] } });
+    throw new Error("FACEBOOK_METADATA_PERSIST_FAILED: boom");
+  });
+  assert.equal(result.outcomes.length, items.length, "every attempted post must produce exactly one outcome");
+  assert.deepEqual(result.outcomes.map((item) => item.primaryOutcome), ["RENTAL", "MATCHED", "REVIEW", "HARD_FILTER_REJECT", "EXTRACTION_FAILED"]);
+  assert.deepEqual(result.outcomes.find((item) => item.postId === "review")?.reasonCodes.sort(), ["unknown_buildingType", "unknown_topFloor"]);
+  assert.deepEqual(result.outcomes.find((item) => item.postId === "rejected")?.reasonCodes, ["max_price_per_sqm"]);
+
+  const accounting = aggregateFacebookScanAccounting(result.outcomes, items.length);
+  assert.equal(verifyFacebookScanAccountingInvariant(accounting), true);
+  assert.equal(accounting.uniqueCaptured, items.length);
+  assert.equal(accounting.byOutcome.EXTRACTION_FAILED, 1);
+  assert.equal(accounting.byOutcome.RENTAL, 1);
+});
+
+test("a post skipped for lacking a stable id/permalink still receives an accounting outcome, never silently disappearing", async () => {
+  const result = await processFacebookPostBatch([{ ...post("no-id"), postId: null, permalink: null }], async () => outcome());
+  assert.equal(result.outcomes.length, 1);
+  assert.equal(result.outcomes[0].primaryOutcome, "IDENTITY_UNVERIFIED");
+});
+
+function emptyDiagnostics(postId: string) {
+  return { postId, creationTime: null, timestampSource: "UNKNOWN" as const, publishedAtCandidate: null, publishedAtPersistAttempted: false, publishedAtPersisted: false, exactBoundCandidates: 0, relevanceAccepted: 0, relevanceRejected: 0, mirrorAttempted: 0, mirroredCount: 0, persistedNewImageCount: 0, finalListingImageCount: 0, persistedImageCount: 0, imageReasonCode: "NONE", reasonCodes: [], imageProvenance: [] };
+}
