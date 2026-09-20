@@ -1,6 +1,6 @@
 import "server-only";
 import { createFacebookWatcherAdminClient } from "../supabase-admin";
-import { planFacebookWatcherHistoryClear, type FacebookHistoryCandidate, type FacebookHistoryPlan } from "../history-clear";
+import type { FacebookHistoryPlan } from "../history-clear";
 
 const ACTIVE_JOB_STATUSES = ["queued", "claimed", "running"];
 
@@ -9,30 +9,22 @@ export type FacebookWatcherHistorySummary = FacebookHistoryPlan & { total: numbe
 type Row = Record<string, unknown>;
 const rows = (value: unknown): Row[] => Array.isArray(value) ? value.filter((item): item is Row => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
 
-async function readCandidates(): Promise<FacebookHistoryCandidate[]> {
+type HistoryPlanRow = { pure_facebook_listing_ids?: unknown; preserved_listing_ids?: unknown; removed_association_listing_ids?: unknown };
+
+function planFromRpcRow(value: unknown): FacebookHistoryPlan {
+  const row = (value ?? {}) as HistoryPlanRow;
+  return {
+    pureFacebookListingIds: uuidArray(row.pure_facebook_listing_ids),
+    preservedListingIds: uuidArray(row.preserved_listing_ids),
+    removedAssociationListingIds: uuidArray(row.removed_association_listing_ids),
+  };
+}
+
+async function readSummaryPlan(): Promise<FacebookHistoryPlan> {
   const supabase = createFacebookWatcherAdminClient();
-  const result = await supabase.from("listing_source_metadata").select("listing_id,metadata,listings(id,source)").eq("source", "facebook");
-  if (result.error) throw new Error(`FACEBOOK_WATCHER_HISTORY_READ_FAILED: ${result.error.message}`);
-  const metadataRows = rows(result.data);
-  const listingIds = [...new Set(metadataRows.map((item) => typeof item.listing_id === "string" ? item.listing_id : "").filter(Boolean))];
-  if (!listingIds.length) return [];
-  const [properties, deals] = await Promise.all([
-    supabase.from("properties").select("listing_id").in("listing_id", listingIds),
-    supabase.from("deals").select("listing_id").in("listing_id", listingIds),
-  ]);
-  if (properties.error) throw new Error(`FACEBOOK_WATCHER_HISTORY_PROPERTY_READ_FAILED: ${properties.error.message}`);
-  if (deals.error) throw new Error(`FACEBOOK_WATCHER_HISTORY_DEAL_READ_FAILED: ${deals.error.message}`);
-  const propertyIds = new Set(rows(properties.data).map((item) => item.listing_id).filter((value): value is string => typeof value === "string"));
-  const dealIds = new Set(rows(deals.data).map((item) => item.listing_id).filter((value): value is string => typeof value === "string"));
-  const byListing = new Map<string, FacebookHistoryCandidate>();
-  for (const item of metadataRows) {
-    const listingId = typeof item.listing_id === "string" ? item.listing_id : null;
-    if (!listingId) continue;
-    const metadata = item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata) ? item.metadata as Row : {};
-    const current = byListing.get(listingId) ?? { listingId };
-    byListing.set(listingId, { ...current, crossSourceMatch: current.crossSourceMatch === true || metadata.crossSourceMatch === true, linkedProperty: propertyIds.has(listingId), linkedDeal: dealIds.has(listingId) });
-  }
-  return [...byListing.values()];
+  const result = await supabase.rpc("get_facebook_watcher_history_summary").single();
+  if (result.error || !result.data) throw new Error(`FACEBOOK_WATCHER_HISTORY_READ_FAILED: ${result.error?.message ?? "missing result"}`);
+  return planFromRpcRow(result.data);
 }
 
 async function activeBlock(): Promise<string | null> {
@@ -49,7 +41,7 @@ async function activeBlock(): Promise<string | null> {
 }
 
 export async function getFacebookWatcherHistorySummary(): Promise<FacebookWatcherHistorySummary> {
-  const [plan, blockedReason] = await Promise.all([readCandidates().then(planFacebookWatcherHistoryClear), activeBlock()]);
+  const [plan, blockedReason] = await Promise.all([readSummaryPlan(), activeBlock()]);
   return { ...plan, total: plan.pureFacebookListingIds.length + plan.preservedListingIds.length, ready: !blockedReason, blockedReason };
 }
 
@@ -60,11 +52,8 @@ export async function clearFacebookWatcherHistory(): Promise<FacebookWatcherHist
     const code = result.error?.message.includes("ACTIVE_FACEBOOK_WORK") ? "ACTIVE_FACEBOOK_JOB" : "FACEBOOK_WATCHER_HISTORY_CLEAR_FAILED";
     throw new Error(`${code}: ${result.error?.message ?? "missing result"}`);
   }
-  const value = result.data as { pure_facebook_listing_ids?: unknown; preserved_listing_ids?: unknown; removed_association_listing_ids?: unknown };
-  const pureFacebookListingIds = uuidArray(value.pure_facebook_listing_ids);
-  const preservedListingIds = uuidArray(value.preserved_listing_ids);
-  const removedAssociationListingIds = uuidArray(value.removed_association_listing_ids);
-  return { pureFacebookListingIds, preservedListingIds, removedAssociationListingIds, total: pureFacebookListingIds.length + preservedListingIds.length, ready: true, blockedReason: null };
+  const plan = planFromRpcRow(result.data);
+  return { ...plan, total: plan.pureFacebookListingIds.length + plan.preservedListingIds.length, ready: true, blockedReason: null };
 }
 
 function uuidArray(value: unknown): string[] {

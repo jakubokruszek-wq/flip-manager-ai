@@ -309,7 +309,13 @@ class FakeRpcCall implements PromiseLike<RpcResult> {
   }
 
   async single(): Promise<RpcResult> {
-    return this.execute();
+    const result = this.execute();
+    if (result.error) return result;
+    // Mirrors real supabase-js: PostgREST's "single object" Accept header
+    // unwraps a `returns table (...)` RPC's one-row result from an array to
+    // a plain object, which is what every real .rpc(...).single() call site
+    // in this codebase already assumes.
+    return { data: Array.isArray(result.data) ? (result.data[0] ?? null) : result.data, error: null };
   }
 
   then<TResult1 = RpcResult, TResult2 = never>(
@@ -353,5 +359,55 @@ export function installCanonicalReconciliationRpc(db: FakeFacebookSupabase): voi
     }
 
     return { data: [{ listing_id: listingId, search_filter_id: filterId, bucket, lifecycle_status: params.p_lifecycle_status, is_current_match: isCurrentMatch, match_reasons: reasons }], error: null };
+  });
+}
+
+/**
+ * Shared by installFacebookHistorySummaryRpc and installFacebookHistoryClearRpc
+ * so the two fake RPCs classify from one place, the same way the real
+ * get_facebook_watcher_history_summary() and clear_facebook_watcher_history_atomic()
+ * SQL functions share one CTE: a fake preview and a fake clear built on two
+ * separately-written classifiers would only prove that two reimplementations
+ * agree with each other, not that the preview can't drift from the mutation.
+ */
+function classifyFacebookHistoryCandidates(db: FakeFacebookSupabase): { pure: string[]; preserved: string[] } {
+  const listingsById = new Map(db.rows("listings").map((row) => [String(row.id), row]));
+  const propertyListingIds = new Set(db.rows("properties").map((row) => String(row.listing_id)));
+  const dealListingIds = new Set(db.rows("deals").map((row) => String(row.listing_id)));
+  const seen = new Set<string>();
+  const pure: string[] = [];
+  const preserved: string[] = [];
+  for (const row of db.rows("listing_source_metadata")) {
+    if (row.source !== "facebook") continue;
+    const listingId = String(row.listing_id);
+    if (seen.has(listingId)) continue;
+    seen.add(listingId);
+    const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata as Row : {};
+    const listingSource = listingsById.get(listingId)?.source;
+    const isPreserved = listingSource !== "facebook" || metadata.crossSourceMatch === true || propertyListingIds.has(listingId) || dealListingIds.has(listingId);
+    (isPreserved ? preserved : pure).push(listingId);
+  }
+  return { pure, preserved };
+}
+
+/** Installs the read-only preview RPC handler: classifies but never mutates. */
+export function installFacebookHistorySummaryRpc(db: FakeFacebookSupabase): void {
+  db.setRpc("get_facebook_watcher_history_summary", () => {
+    const { pure, preserved } = classifyFacebookHistoryCandidates(db);
+    return { data: [{ pure_facebook_listing_ids: pure, preserved_listing_ids: preserved, removed_association_listing_ids: preserved }], error: null };
+  });
+}
+
+/** Installs the destructive clear RPC handler: same classification, then actually mutates this fake DB's tables (never Production). */
+export function installFacebookHistoryClearRpc(db: FakeFacebookSupabase): void {
+  db.setRpc("clear_facebook_watcher_history_atomic", () => {
+    const activeScan = db.rows("source_scans").some((row) => row.source === "facebook" && ["pending", "running"].includes(String(row.status)));
+    const activeJob = db.rows("facebook_scan_jobs").some((row) => ["SOURCE_SCAN", "GALLERY_HYDRATION"].includes(String(row.job_type)) && ["queued", "claimed", "running"].includes(String(row.status)));
+    if (activeScan || activeJob) return { data: null, error: { message: "ACTIVE_FACEBOOK_WORK" } };
+
+    const { pure, preserved } = classifyFacebookHistoryCandidates(db);
+    db._setTable("listings", db.rows("listings").filter((row) => !(row.source === "facebook" && pure.includes(String(row.id)))));
+    db._setTable("listing_source_metadata", db.rows("listing_source_metadata").filter((row) => !(row.source === "facebook" && preserved.includes(String(row.listing_id)))));
+    return { data: [{ pure_facebook_listing_ids: pure, preserved_listing_ids: preserved, removed_association_listing_ids: preserved }], error: null };
   });
 }
