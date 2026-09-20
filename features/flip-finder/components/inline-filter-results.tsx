@@ -53,7 +53,7 @@ type PriceHistoryResponse = {
   history: Array<{ price: number | null; capturedAt: string }>;
 };
 
-export const InlineFilterResults = memo(function InlineFilterResults({ filterId }: { filterId: string }) {
+export const InlineFilterResults = memo(function InlineFilterResults({ filterId, deepLinkListingId = null }: { filterId: string; deepLinkListingId?: string | null }) {
   const [data, setData] = useState<ResultsResponse | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ResultSort>("opportunity");
@@ -196,7 +196,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId 
       {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / DOPASOWANE <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
       {data && reviewCount > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewCount}</p><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div></div><div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard key={result.id} result={result} onChanged={() => void load()} />)}</div></section> : null}
       <div className="grid gap-4 lg:grid-cols-2" data-finder-offers>
-        {renderedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
+        {renderedResults.map((result) => <ExpandableListingCard autoOpen={result.id === deepLinkListingId} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
       </div>
       {data ? <div className="flex justify-end border-t border-border/60 pt-4"><Button aria-label="Otwórz historię ofert" onClick={() => setArchiveOpen((current) => !current)} type="button" variant="outline">{archiveOpen ? "Wróć do bieżących ofert" : "Historia ofert"}</Button></div> : null}
       {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} key={result.id} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
@@ -615,8 +615,19 @@ function PreviewMetric({ label, value, emphasis = false }: { label: string; valu
   return <article className={`rounded-xl border p-4 ${emphasis ? "border-gold/35 bg-gold/[0.06]" : "border-border/70 bg-background/40"}`}><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-2 text-lg font-semibold tabular-nums ${emphasis ? "text-gold" : "text-foreground"}`}>{value}</p></article>;
 }
 
-function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported, variant = "standalone", hideLifecycleBadge = false }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean }) {
+function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported, variant = "standalone", hideLifecycleBadge = false, autoOpen = false }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  // A push notification's deep link identifies the exact listing to open —
+  // never any other card, and never re-triggered by an unrelated rerender
+  // once the visitor has closed it.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpen && !autoOpenedRef.current) {
+      autoOpenedRef.current = true;
+      setExpanded(true);
+      onOpen?.();
+    }
+  }, [autoOpen, onOpen]);
   const [crmImporting, setCrmImporting] = useState(false);
   const [crmToast, setCrmToast] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"details" | "underwriting" | "calculator" | "analysis" | "price-history" | "market" | "renovation-visualizer">("details");
@@ -883,7 +894,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   );
 }
 
-export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean }) {
+export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
   const [traceId] = useState(createGalleryTraceId);
   const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);

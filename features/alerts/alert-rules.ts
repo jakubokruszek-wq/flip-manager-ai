@@ -1,12 +1,29 @@
 import { createHash } from "node:crypto";
 import type { AlertType, InvestmentAlert } from "./types.ts";
 
-export type AlertListing = { id:string;title:string;description:string|null;source:string;price:number|null;area:number|null;pricePerSqm:number|null;city:string|null;district:string|null;originalUrl:string|null;flipScore:number|null;createdAt:string;firstSeenAt:string;sellerType:string|null;condition:string|null;opportunityScore:number|null;neighborhood:string|null;facebookUrl:string|null;groupName:string|null;groupPriority:string|null;flags:string[] };
+export type AlertListing = { id:string;title:string;description:string|null;source:string;price:number|null;area:number|null;pricePerSqm:number|null;city:string|null;district:string|null;originalUrl:string|null;flipScore:number|null;createdAt:string;firstSeenAt:string;sellerType:string|null;condition:string|null;opportunityScore:number|null;neighborhood:string|null;facebookUrl:string|null;groupName:string|null;groupPriority:string|null;flags:string[];lifecycleStatus:string|null;manualDecision:string|null };
 export type PricePoint = { price:number|null; capturedAt:string };
 
+/**
+ * lifecycle_status is the canonical reconciliation RPC's own persisted marker
+ * for a listing's bucket (ACTIVE means MATCHED, by construction — see
+ * reconcile_canonical_listing_decision's `next_lifecycle`). Alerts must never
+ * fire for a listing the canonical decision has already excluded (REJECTED)
+ * or aged out (STALE/ARCHIVED) — mirrors the exact same ACTIVE/REVIEW
+ * allowlist getFilterResults() already uses for Finder visibility, so an
+ * alert can never exist for a listing the user wouldn't even see as
+ * actionable in the Finder.
+ */
+function isCanonicallyActionable(listing:AlertListing):boolean{
+  if(listing.manualDecision==="REJECTED")return false;
+  return listing.lifecycleStatus==="ACTIVE"||listing.lifecycleStatus==="REVIEW"||listing.lifecycleStatus===null;
+}
+
 export function createAlertsForListing(listing:AlertListing,snapshots:PricePoint[],now=Date.now()):InvestmentAlert[]{
+  if(!isCanonicallyActionable(listing))return[];
   const alerts:InvestmentAlert[]=[]; const searchable=[listing.title,listing.description,...listing.flags].filter(Boolean).join(" ").toLocaleLowerCase("pl-PL");
   const keyword=/bezpośrednio|bez pośredników|po babci|pilnie|do remontu/.test(searchable);
+  if(listing.lifecycleStatus==="ACTIVE") alerts.push(make("canonical_match",listing,listing.createdAt,"v1"));
   if((listing.opportunityScore??0)>=85||(listing.source==="facebook"&&keyword)) alerts.push(make("facebook_opportunity",listing,listing.createdAt,"v1"));
   if((listing.flipScore??0)>=85) alerts.push(make("high_flip_score",listing,listing.createdAt,"v1"));
   if(listing.sellerType==="private"&&listing.condition==="renovation") alerts.push(make("private_seller",listing,listing.createdAt,"v1"));

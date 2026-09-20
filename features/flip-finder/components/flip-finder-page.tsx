@@ -100,6 +100,7 @@ type CollectorValidation = {
 
 export function FlipFinderPage() {
   const [requestedFilterId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("activeFilter"));
+  const [deepLinkListingId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("listing"));
   const [data, setData] = useState<SearchFilterListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -491,7 +492,7 @@ export function FlipFinderPage() {
             </div>
           </div>
           {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
-          <InlineFilterResults key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
+          <InlineFilterResults deepLinkListingId={deepLinkListingId} key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
           {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
           <Dialog onOpenChange={(open) => { if (!clearingResults) setClearResultsOpen(open); }} open={clearResultsOpen}>
             <DialogContent className="max-w-md">

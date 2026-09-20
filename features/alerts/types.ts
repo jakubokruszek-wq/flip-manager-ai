@@ -1,4 +1,4 @@
-export const ALERT_TYPES = ["facebook_opportunity", "high_flip_score", "price_drop", "private_seller", "new_listing"] as const;
+export const ALERT_TYPES = ["facebook_opportunity", "high_flip_score", "price_drop", "private_seller", "new_listing", "canonical_match"] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 
 export type InvestmentAlert = {
