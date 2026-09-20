@@ -133,11 +133,11 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId 
     [filteredResults, sort],
   );
   const reviewResults = useMemo(() => (data?.reviewResults ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.reviewResults, underwritingSettings]);
-  const sortedReviewResults = useMemo(() => sortResults(reviewResults, "opportunity"), [reviewResults]);
+  const sortedReviewResults = useMemo(() => sortResults(reviewResults, sort), [reviewResults, sort]);
   const reviewBuckets = useMemo(() => reviewCounts(sortedReviewResults), [sortedReviewResults]);
   const visibleReviewResults = sortedReviewResults;
   const reviewCount = data?.counts?.review ?? sortedReviewResults.length;
-  const archivedResults = archiveOpen ? (data?.archivedResults ?? []) : [];
+  const archivedResults = useMemo(() => archiveOpen ? sortResults(data?.archivedResults ?? [], sort) : [], [archiveOpen, data?.archivedResults, sort]);
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
   const activeSources = data?.filter.sources ?? [];
   const historicalSources = (["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));

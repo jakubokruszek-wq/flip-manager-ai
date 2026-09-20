@@ -6,6 +6,7 @@ import { validateFacebookRevalidationCandidates } from "./image-revalidation";
 import { isExactGalleryRootBindingProvenance, type FacebookMediaBindingProvenance, type FacebookMediaCandidate } from "./types.ts";
 import { galleryMediaIds as collectGalleryMediaIds, selectMissingGalleryCandidates } from "./gallery-policy";
 import { safeFacebookPostUrl } from "./facebook-post-url";
+import { resetFacebookGalleryMetadata } from "../facebook-watcher/gallery-repair";
 import { deriveMonotonicGalleryFailure } from "./gallery-state";
 
 export type FacebookGalleryStatus = "NOT_REQUESTED" | "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "FAILED";
@@ -151,6 +152,36 @@ export async function enqueueFacebookGalleryJob(listingId: string): Promise<{ jo
   const status = galleryStatus(result?.gallery_status);
   if ((status === "PENDING" || status === "RUNNING") && !jobId) throw new Error("FACEBOOK_GALLERY_JOB_CREATE_FAILED: missing job id");
   return { jobId, status, listingId, created: result?.job_created === true };
+}
+
+/** Reset one Facebook gallery and enqueue exactly one ordinary hydration job.
+ * The post id and permalink always come from the server-side listing row. */
+export async function repairFacebookGalleryJob(listingId: string): Promise<{ jobId: string | null; status: FacebookGalleryStatus; listingId: string; created?: boolean }> {
+  const supabase = createFacebookWatcherAdminClient();
+  const listingResult = await supabase.from("listings").select("id,source,external_listing_id,original_url,gallery_status,gallery_job_id,lifecycle_status,manual_decision,images").eq("id", listingId).maybeSingle();
+  const listing = row(listingResult.data);
+  if (listingResult.error || !listing || listing.source !== "facebook") throw new Error("FACEBOOK_GALLERY_LISTING_NOT_FOUND");
+  if (listing.lifecycle_status === "REJECTED" || listing.lifecycle_status === "ARCHIVED" || listing.lifecycle_status === "STALE" || listing.manual_decision === "REJECTED") throw new Error("FACEBOOK_GALLERY_LISTING_NOT_ELIGIBLE");
+  const postId = string(listing.external_listing_id);
+  const sourceUrl = safeFacebookPostUrl(listing.original_url);
+  if (!postId || !sourceUrl) throw new Error("FACEBOOK_GALLERY_EXACT_POST_REQUIRED");
+  const active = await supabase.from("facebook_scan_jobs").select("id").eq("job_type", "GALLERY_HYDRATION").eq("gallery_listing_id", listingId).in("status", ["queued", "claimed", "running"]).limit(1).maybeSingle();
+  if (active.error) throw new Error(`FACEBOOK_GALLERY_ACTIVE_JOB_READ_FAILED: ${active.error.message}`);
+  if (active.data) throw new Error("FACEBOOK_GALLERY_REPAIR_ALREADY_RUNNING");
+  const match = await supabase.from("listing_filter_matches").select("search_filter_id").eq("listing_id", listingId).order("last_matched_at", { ascending: false }).limit(1).maybeSingle();
+  if (match.error || !match.data?.search_filter_id) throw new Error("FACEBOOK_GALLERY_FILTER_CONTEXT_MISSING");
+  const metadataResult = await supabase.from("listing_source_metadata").select("id,metadata,source_post_url").eq("source", "facebook").eq("listing_id", listingId).order("collected_at", { ascending: false }).limit(1).maybeSingle();
+  if (metadataResult.error) throw new Error(`FACEBOOK_GALLERY_METADATA_READ_FAILED: ${metadataResult.error.message}`);
+  const metadata = metadataResult.data?.metadata && typeof metadataResult.data.metadata === "object" && !Array.isArray(metadataResult.data.metadata) ? metadataResult.data.metadata as Record<string, unknown> : {};
+  const preservedMetadata = resetFacebookGalleryMetadata(metadata);
+  const reset = await supabase.from("listings").update({ images: [], gallery_status: "NOT_REQUESTED", gallery_job_id: null, gallery_requested_at: null, gallery_completed_at: null, gallery_error: null, gallery_total: 0, gallery_persisted_count: 0 }).eq("id", listingId).eq("source", "facebook").eq("external_listing_id", postId);
+  if (reset.error) throw new Error(`FACEBOOK_GALLERY_RESET_FAILED: ${reset.error.message}`);
+  if (metadataResult.data?.id) {
+    const metadataUpdate = await supabase.from("listing_source_metadata").update({ metadata: preservedMetadata }).eq("id", metadataResult.data.id).eq("source", "facebook");
+    if (metadataUpdate.error) throw new Error(`FACEBOOK_GALLERY_METADATA_RESET_FAILED: ${metadataUpdate.error.message}`);
+  }
+  const result = await enqueueFacebookGalleryJob(listingId);
+  return { ...result, created: result.created === true };
 }
 
 export async function getFacebookGalleryStatus(listingId: string): Promise<FacebookGalleryStatusResult> {

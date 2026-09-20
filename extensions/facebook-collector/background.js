@@ -17,7 +17,7 @@ const PRODUCTION_SOURCES = [
   { sourceId: "1689328011096404", sourceType: "GROUP", sourceUrl: "https://www.facebook.com/groups/1689328011096404/" },
   { sourceId: "61563667387467", sourceType: "PROFILE", sourceUrl: "https://www.facebook.com/profile.php?id=61563667387467" },
 ];
-const PRODUCTION_LIMITS = { maxPosts: 50, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
+const PRODUCTION_LIMITS = { maxPosts: 100, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
 const SEARCH_BUDGET_RESERVE_MS = 40_000;
 const MAX_DISCOVERY_MEDIA_TILES = 100;
 const MAX_RESOLUTION_MEDIA_TILES = 10;

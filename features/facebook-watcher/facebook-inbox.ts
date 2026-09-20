@@ -36,12 +36,16 @@ export function filterFacebookInbox(items: FacebookWatcherListing[], status: Fac
 
 export function sortFacebookInbox(items: FacebookWatcherListing[], sort: FacebookInboxSort): FacebookWatcherListing[] {
   return [...items].sort((left, right) => {
-    if (sort === "opportunity") return right.opportunityScore - left.opportunityScore;
-    if (sort === "flip") return right.flipScore - left.flipScore;
-    if (sort === "price_per_sqm") return ascendingNullable(left.pricePerSqm, right.pricePerSqm);
-    if (sort === "price") return ascendingNullable(left.price, right.price);
-    if (sort === "profit") return descendingNullable(left.potentialProfit, right.potentialProfit);
-    return timestamp(right.publishedAt ?? right.importedAt) - timestamp(left.publishedAt ?? left.importedAt);
+    let primary = 0;
+    if (sort === "opportunity") primary = right.opportunityScore - left.opportunityScore;
+    else if (sort === "flip") primary = right.flipScore - left.flipScore;
+    else if (sort === "price_per_sqm") primary = ascendingNullable(left.pricePerSqm, right.pricePerSqm);
+    else if (sort === "price") primary = ascendingNullable(left.price, right.price);
+    else if (sort === "profit") primary = descendingNullable(left.potentialProfit, right.potentialProfit);
+    else primary = timestamp(right.publishedAt ?? right.importedAt) - timestamp(left.publishedAt ?? left.importedAt);
+    if (primary !== 0) return primary;
+    const dateTie = timestamp(right.publishedAt ?? right.importedAt) - timestamp(left.publishedAt ?? left.importedAt);
+    return dateTie !== 0 ? dateTie : left.listingId.localeCompare(right.listingId);
   });
 }
 

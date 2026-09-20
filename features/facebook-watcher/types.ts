@@ -96,6 +96,8 @@ export type FacebookWatcherListing = FacebookProperty & {
   freshness?: FacebookFreshnessState;
   locationState?: FacebookLocationState;
   contentQuality?: FacebookContentQualityGrade;
+  lifecycleStatus?: string | null;
+  archivedAt?: string | null;
 };
 
 export const FACEBOOK_WORKFLOW_STATUSES = ["new", "review", "interesting", "crm", "rejected"] as const;
