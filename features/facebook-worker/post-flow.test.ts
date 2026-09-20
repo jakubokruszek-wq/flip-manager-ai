@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { processFacebookPostBatch, redactFacebookPostPreview, type FacebookPostImportResult } from "./post-flow.ts";
+import { processFacebookPostBatch, redactFacebookPostPreview, mergeReconciliationDiagnostics, type FacebookPostImportResult, type FacebookReconciliationFailureDiagnostic } from "./post-flow.ts";
 import { staleFacebookPostResult } from "./vision-adapter.ts";
 import type { FacebookPostSnapshot } from "./types.ts";
 import { aggregateFacebookScanAccounting, verifyFacebookScanAccountingInvariant } from "./scan-accounting.ts";
@@ -315,6 +315,116 @@ test("a post skipped for lacking a stable id/permalink still receives an account
 test("a permalink-only captured post keeps a stable accounting identity for batch deduplication", async () => {
   const result = await processFacebookPostBatch([{ ...post("permalink-only"), postId: null }], async () => outcome({ persistenceDiagnostics: { ...emptyDiagnostics("permalink-only"), decision: "MATCHED", decisionReasons: [] } }));
   assert.equal(result.outcomes[0].postId, "https://www.facebook.com/groups/group-1/posts/permalink-only/");
+});
+
+// V1.1 release blocker: postId/listingId/filterId were persisted raw, unlike
+// errorMessage/errorDetails/errorHint. Every identifier must now go through
+// the same sanitize+bound path as the DB error text.
+
+test("A: a 5000-char postId is bounded to at most 300 chars in the diagnostic", async () => {
+  const hugePostId = "p".repeat(5000);
+  const result = await processFacebookPostBatch([post(hugePostId)], async () => {
+    throw reconcileFailure({ listingId: "listing-1", filterId: "filter-1", errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null });
+  });
+  assert.ok((result.reconciliationDiagnostics[0].postId?.length ?? 0) <= 300);
+});
+
+test("B: a 5000-char listingId (from the DB cause) is bounded to at most 300 chars", async () => {
+  const result = await processFacebookPostBatch([post("b-case")], async () => {
+    throw reconcileFailure({ listingId: "l".repeat(5000), filterId: "filter-1", errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null });
+  });
+  assert.ok((result.reconciliationDiagnostics[0].listingId?.length ?? 0) <= 300);
+});
+
+test("C: a 5000-char filterId (from the DB cause) is bounded to at most 300 chars", async () => {
+  const result = await processFacebookPostBatch([post("c-case")], async () => {
+    throw reconcileFailure({ listingId: "listing-1", filterId: "f".repeat(5000), errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null });
+  });
+  assert.ok((result.reconciliationDiagnostics[0].filterId?.length ?? 0) <= 300);
+});
+
+test("D: a postId carrying a bearer token, cookie, session, email, and phone does not let any of them survive", async () => {
+  const dirtyPostId = "authorization:Bearer sk_live_should_not_survive cookie=must-not-survive session:abc123-should-not-survive contact jan.kowalski@example.com or +48 500 100 200";
+  const result = await processFacebookPostBatch([post(dirtyPostId)], async () => {
+    throw reconcileFailure({ listingId: "listing-1", filterId: "filter-1", errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null });
+  });
+  const sanitizedPostId = result.reconciliationDiagnostics[0].postId ?? "";
+  assert.doesNotMatch(sanitizedPostId, /sk_live_should_not_survive/);
+  assert.doesNotMatch(sanitizedPostId, /must-not-survive/);
+  assert.doesNotMatch(sanitizedPostId, /abc123-should-not-survive/);
+  assert.doesNotMatch(sanitizedPostId, /jan\.kowalski@example\.com/);
+  assert.doesNotMatch(sanitizedPostId, /500[\s.-]?100[\s.-]?200/);
+});
+
+test("D: a permalink used as the postId fallback with a token query parameter is sanitized, never persisted raw", async () => {
+  const dirtyPermalink = "https://www.facebook.com/groups/group-1/posts/1/?token=leak-me-should-not-survive&other=1";
+  const result = await processFacebookPostBatch([{ ...post("permalink-token"), postId: null, permalink: dirtyPermalink }], async () => {
+    throw reconcileFailure({ listingId: "listing-1", filterId: "filter-1", errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null });
+  });
+  const sanitizedPostId = result.reconciliationDiagnostics[0].postId ?? "";
+  assert.doesNotMatch(sanitizedPostId, /leak-me-should-not-survive/);
+  assert.notEqual(sanitizedPostId, dirtyPermalink, "the raw permalink must never be persisted verbatim when it carries a token");
+});
+
+test("E: error fields remain sanitized/bounded as before, and now also strip a bare Bearer token immediately after 'authorization:'", async () => {
+  const cause = { listingId: "listing-1", filterId: "filter-1", errorCode: "42501", errorMessage: "authorization: Bearer sk_live_should_not_survive_either", errorDetails: "y".repeat(5000), errorHint: null };
+  const result = await processFacebookPostBatch([post("e-case")], async () => { throw reconcileFailure(cause); });
+  const diagnostic = result.reconciliationDiagnostics[0];
+  assert.doesNotMatch(diagnostic.errorMessage ?? "", /sk_live_should_not_survive_either/);
+  assert.ok((diagnostic.errorDetails?.length ?? 0) <= 300);
+});
+
+test("I: a successful reconciliation still produces no diagnostic entry at all", async () => {
+  const result = await processFacebookPostBatch([post("i-case")], async () => outcome());
+  assert.deepEqual(result.reconciliationDiagnostics, []);
+});
+
+test("J: the public accounting outcome for a reconciliation failure remains exactly FACEBOOK_FILTER_RECONCILE_FAILED, unaffected by the identifier sanitization", async () => {
+  const result = await processFacebookPostBatch([post("j-case")], async () => {
+    throw reconcileFailure({ listingId: "listing-1", filterId: "filter-1", errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null });
+  });
+  assert.deepEqual(result.outcomes[0].reasonCodes, ["FACEBOOK_FILTER_RECONCILE_FAILED"]);
+  assert.equal(result.outcomes[0].primaryOutcome, "EXTRACTION_FAILED");
+  assert.equal(result.warnings[0], "Post nie został przetworzony: FACEBOOK_FILTER_RECONCILE_FAILED.");
+});
+
+// V1.1 release blocker: facebook-batch-server.ts calls processFacebookPostBatch
+// once per active Facebook filter but only kept the LAST filter's
+// reconciliationDiagnostics. mergeReconciliationDiagnostics is what
+// facebook-batch-server.ts now calls after accumulating every filter's
+// diagnostics, so its contract is tested directly here.
+
+function diagnostic(patch: Partial<FacebookReconciliationFailureDiagnostic> = {}): FacebookReconciliationFailureDiagnostic {
+  return { stage: "canonical_reconciliation", postId: "post-1", listingId: "listing-1", filterId: "filter-1", errorCode: "23505", errorMessage: "boom", errorDetails: null, errorHint: null, ...patch };
+}
+
+test("F: diagnostics collected from two different filters both survive the merge", () => {
+  const fromFilterA = [diagnostic({ postId: "post-a", filterId: "filter-A" })];
+  const fromFilterB = [diagnostic({ postId: "post-b", filterId: "filter-B" })];
+  const merged = mergeReconciliationDiagnostics([...fromFilterA, ...fromFilterB]);
+  assert.equal(merged.length, 2);
+  assert.deepEqual(merged, [...fromFilterA, ...fromFilterB]);
+});
+
+test("G: more than 50 diagnostics across filters are capped at exactly 50, keeping collection order", () => {
+  const fromFilterA = Array.from({ length: 30 }, (_, index) => diagnostic({ postId: `a-${index}`, filterId: "filter-A" }));
+  const fromFilterB = Array.from({ length: 30 }, (_, index) => diagnostic({ postId: `b-${index}`, filterId: "filter-B" }));
+  const merged = mergeReconciliationDiagnostics([...fromFilterA, ...fromFilterB]);
+  assert.equal(merged.length, 50);
+  assert.deepEqual(merged, [...fromFilterA, ...fromFilterB].slice(0, 50));
+});
+
+test("H: two entries for the same post under different filters both keep their own correct filterId — the same post failing under two filters is not a duplicate", () => {
+  const sameSourcePost = [diagnostic({ postId: "post-1", listingId: "listing-1", filterId: "filter-A" }), diagnostic({ postId: "post-1", listingId: "listing-1", filterId: "filter-B" })];
+  const merged = mergeReconciliationDiagnostics(sameSourcePost);
+  assert.equal(merged.length, 2);
+  assert.deepEqual(merged.map((entry) => entry.filterId).sort(), ["filter-A", "filter-B"]);
+});
+
+test("an exact duplicate diagnostic (same post/listing/filter/error, e.g. from a retried batch merge) is deduplicated", () => {
+  const exactDuplicate = [diagnostic(), diagnostic()];
+  const merged = mergeReconciliationDiagnostics(exactDuplicate);
+  assert.equal(merged.length, 1);
 });
 
 function emptyDiagnostics(postId: string) {

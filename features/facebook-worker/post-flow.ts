@@ -137,28 +137,67 @@ export type FacebookReconciliationFailureDiagnostic = {
 const RECONCILIATION_DIAGNOSTICS_LIMIT = 50;
 
 /**
+ * Redacts every string field persisted in a reconciliation diagnostic —
+ * identifiers (postId/listingId/filterId) exactly as strictly as the DB
+ * error text (errorMessage/errorDetails/errorHint), since a permalink
+ * fallback for postId or a corrupted identifier can carry the same kinds of
+ * sensitive substrings as free-form DB text. Layers a dedicated "Bearer
+ * <token>" redaction on top of redactFacebookPostPreview: that function's
+ * own cookie/token/authorization/session pattern only consumes the single
+ * word immediately after the `:`/`=`, which redacts "authorization: Bearer"
+ * but leaves a token that follows "Bearer " as its own word exposed.
+ */
+function boundedDiagnosticField(value: unknown): string | null {
+  if (typeof value !== "string" || !value) return null;
+  const withoutBearerToken = value.replace(/\bbearer\s+[^\s,;]+/giu, "bearer=[REDACTED]");
+  return redactFacebookPostPreview(withoutBearerToken);
+}
+
+/**
  * Recovers the CanonicalReconciliationFailureDiagnostic canonical-reconciliation.ts
- * attaches as Error.cause, sanitizing and length-bounding every string field
- * with the same redaction used for post text previews. Never reads
- * error.stack. Returns null for anything that isn't shaped like this
- * specific diagnostic — including an unrelated error that happens to share
- * the FACEBOOK_FILTER_RECONCILE_FAILED message prefix without a real cause.
+ * attaches as Error.cause, sanitizing and length-bounding every string field.
+ * Never reads error.stack. Returns null for anything that isn't shaped like
+ * this specific diagnostic — including an unrelated error that happens to
+ * share the FACEBOOK_FILTER_RECONCILE_FAILED message prefix without a real
+ * cause.
  */
 function extractReconciliationDiagnostic(error: unknown, postId: string | null): FacebookReconciliationFailureDiagnostic | null {
   if (!(error instanceof Error) || !error.cause || typeof error.cause !== "object") return null;
   const cause = error.cause as Record<string, unknown>;
   if (typeof cause.listingId !== "string" || typeof cause.filterId !== "string") return null;
-  const bounded = (value: unknown): string | null => (typeof value === "string" && value ? redactFacebookPostPreview(value) : null);
   return {
     stage: "canonical_reconciliation",
-    postId,
-    listingId: cause.listingId,
-    filterId: cause.filterId,
-    errorCode: bounded(cause.errorCode),
-    errorMessage: bounded(cause.errorMessage),
-    errorDetails: bounded(cause.errorDetails),
-    errorHint: bounded(cause.errorHint),
+    postId: boundedDiagnosticField(postId),
+    listingId: boundedDiagnosticField(cause.listingId),
+    filterId: boundedDiagnosticField(cause.filterId),
+    errorCode: boundedDiagnosticField(cause.errorCode),
+    errorMessage: boundedDiagnosticField(cause.errorMessage),
+    errorDetails: boundedDiagnosticField(cause.errorDetails),
+    errorHint: boundedDiagnosticField(cause.errorHint),
   };
+}
+
+/**
+ * Merges reconciliation diagnostics collected across one or more active
+ * Facebook filters processing the same captured batch (facebook-batch-server.ts
+ * calls processFacebookPostBatch once per active filter, and the same post
+ * can independently fail reconciliation under more than one filter).
+ * Removes only EXACT duplicates — same post, listing, filter, and error —
+ * so two entries that differ solely by filterId are both kept, each with
+ * its own correct filterId. Preserves collection order and enforces the
+ * same global cap a single call already enforces internally.
+ */
+export function mergeReconciliationDiagnostics(diagnostics: FacebookReconciliationFailureDiagnostic[]): FacebookReconciliationFailureDiagnostic[] {
+  const seen = new Set<string>();
+  const merged: FacebookReconciliationFailureDiagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    const key = JSON.stringify(diagnostic);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(diagnostic);
+    if (merged.length >= RECONCILIATION_DIAGNOSTICS_LIMIT) break;
+  }
+  return merged;
 }
 
 export async function processFacebookPostBatch(
