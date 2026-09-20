@@ -9,7 +9,7 @@ const context = vm.createContext({ globalThis: {}, Date, Map });
 vm.runInContext(fs.readFileSync(path.join(__dirname, "collector-flow.js"), "utf8"), context);
 const flow = context.globalThis.FlipCollectorFlow;
 
-const PRODUCTION_LIMITS = { maxPosts: 100, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
+const PRODUCTION_LIMITS = { maxPosts: 150, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 };
 const SEARCH_RESERVE_MS = 40_000;
 
 test("NETWORK-FIRST is the default: search stays off unless explicitly enabled", () => {
@@ -35,7 +35,7 @@ test("CURRENT_DEPTH reproduces today's feed budget exactly", () => {
   assert.equal(depth.mode, "CURRENT_DEPTH");
   assert.equal(depth.budgetMs, 70_000, "110s hard budget minus the 40s search reserve, as in production today");
   assert.equal(depth.maxScrolls, 30);
-  assert.equal(depth.maxPosts, 100);
+  assert.equal(depth.maxPosts, 150);
 });
 
 test("DEEPER_NETWORK_FEED returns the search reserve to the feed once search is off", () => {

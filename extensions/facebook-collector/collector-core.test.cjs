@@ -133,6 +133,20 @@ test("G. elapsed reaching 180s stops gracefully with its own distinct reason", (
   assert.equal(decision, "FAST_SCAN_TIME_LIMIT");
 });
 
+test("MAX_POSTS at the raised production ceiling is explicit and potentially incomplete", () => {
+  assert.equal(core.shouldStopDiscovery({ durationMs: 20_000, budgetMs: 110_000, maxFastScanMs: core.MAX_FAST_SCAN_MS, uniqueCount: 150, maxPosts: 150, scrolls: 12, maxScrolls: 30, minScrolls: 5, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, ageStreak: core.initialAgeStreakState() }), "MAX_POSTS");
+  const health = core.evaluateHealth({ visibleCardCount: 3, capturedPostCount: 150, scrolls: 12, durationMs: 20_000, feedGrew: true, newIdsAfterScroll: true, stopReason: "MAX_POSTS" });
+  assert.equal(health.status, "DEGRADED");
+  assert.ok(health.reasons.includes("Limit postów osiągnięty — dalsze posty mogą istnieć."));
+});
+
+test("natural no-new and Date/Frontier stops still beat the raised cap", () => {
+  assert.equal(core.shouldStopDiscovery({ durationMs: 20_000, budgetMs: 110_000, maxFastScanMs: core.MAX_FAST_SCAN_MS, uniqueCount: 149, maxPosts: 150, scrolls: 12, maxScrolls: 30, minScrolls: 5, consecutiveNoNew: 3, consecutiveNoVisibleGrowth: 3, ageStreak: core.initialAgeStreakState() }), "NO_NEW_POSTS_AND_CARDS_3_SCROLLS");
+  let streak = core.initialAgeStreakState();
+  streak = core.advanceAgeStreak(streak, Array.from({ length: 10 }, () => "OLD"));
+  assert.equal(core.shouldStopDiscovery({ durationMs: 20_000, budgetMs: 110_000, maxFastScanMs: core.MAX_FAST_SCAN_MS, uniqueCount: 20, maxPosts: 150, scrolls: 5, maxScrolls: 30, minScrolls: 5, consecutiveNoNew: 0, consecutiveNoVisibleGrowth: 0, ageStreak: streak }), "TEN_CONSECUTIVE_OLDER_THAN_72H");
+});
+
 test("H. no SEARCH executed does not affect the age/frontier stop machinery", () => {
   assert.equal(core.MAX_FAST_SCAN_MS, 180_000);
   assert.equal(core.OLD_POST_STREAK_THRESHOLD, 10);

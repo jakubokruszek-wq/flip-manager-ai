@@ -570,6 +570,7 @@
     const captured = finite(input.capturedPostCount);
     const ratio = visible ? Math.min(1, captured / visible) : captured ? 1 : 0;
     const reasons = [];
+    if (input.stopReason === "MAX_POSTS") reasons.push("Limit postów osiągnięty — dalsze posty mogą istnieć.");
     if (input.failed) reasons.push("COLLECTOR_SOURCE_FAILED");
     if (!input.failed && visible === 0 && captured === 0) reasons.push("COLLECTOR_NO_VISIBLE_OR_CAPTURED_POSTS");
     if (visible >= 3 && captured < 3) reasons.push("COLLECTOR_LOW_CAPTURE_COUNT");

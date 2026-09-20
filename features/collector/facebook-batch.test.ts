@@ -175,6 +175,25 @@ test("normalizes a healthy exact-source collector batch and deduplicates posts",
   assert.equal(batch.posts[0]?.media[0]?.exactAssociation, true);
 });
 
+test("preserves the raised production ceiling through batch normalization", () => {
+  const posts = Array.from({ length: 151 }, (_, index) => ({
+    postId: String(1577700267381450 + index),
+    permalink: `https://www.facebook.com/groups/${sourceId}/posts/${1577700267381450 + index}/`,
+    sourceId,
+    sourceType: "GROUP",
+    author: "A",
+    text: "Sprzedam mieszkanie",
+    publishedAt: "2026-08-29T10:00:00Z",
+    timestampText: "2 godz.",
+    media: [],
+    discoveryLayers: ["NETWORK"],
+    firstSeenIteration: 0,
+  }));
+  const batch = batchWith({ posts, health: { status: "DEGRADED", visibleCardCount: 3, capturedPostCount: 150, scrolls: 12, durationMs: 20_000, stopReason: "MAX_POSTS", reasons: ["Limit postów osiągnięty — dalsze posty mogą istnieć."] } });
+  assert.equal(batch.posts.length, 150);
+  assert.equal(batch.posts.at(-1)?.postId, "1577700267381599");
+});
+
 test("keeps only bounded safe collector stage telemetry", () => {
   const batch = normalizeFacebookCollectorBatch({
     scanId: "11111111-1111-4111-8111-111111111111", batchId: "22222222-2222-4222-8222-222222222222",
@@ -327,9 +346,10 @@ test("health check marks low coverage and growing feeds without IDs as degraded"
   assert.deepEqual(health.reasons, ["COLLECTOR_LOW_CAPTURE_COUNT", "COLLECTOR_LOW_CAPTURE_RATIO", "COLLECTOR_GROWING_FEED_WITHOUT_NEW_IDS"]);
 });
 
-test("one failed discovery layer does not degrade a healthy union", () => {
+test("MAX_POSTS marks the union as potentially incomplete", () => {
   const health = evaluateCollectorHealth({ visibleCardCount: 8, capturedPostCount: 8, scrolls: 3, durationMs: 8000, feedGrew: true, newIdsAfterScroll: true, stopReason: "MAX_POSTS" });
-  assert.equal(health.status, "HEALTHY");
+  assert.equal(health.status, "DEGRADED");
+  assert.deepEqual(health.reasons, ["Limit postów osiągnięty — dalsze posty mogą istnieć."]);
 });
 
 test("zero visible and zero captured posts never reports a false healthy completion", () => {

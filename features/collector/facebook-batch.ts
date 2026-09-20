@@ -274,7 +274,7 @@ export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollect
   const sourceUrl = facebookSourceUrl(requiredString(value.sourceUrl, "COLLECTOR_SOURCE_URL_REQUIRED"), sourceType);
   const sourceId = requiredString(value.sourceId, "COLLECTOR_SOURCE_ID_REQUIRED");
   if (facebookSourceId(sourceUrl, sourceType) !== sourceId) throw new Error("COLLECTOR_SOURCE_URL_ID_MISMATCH");
-  const posts = Array.isArray(value.posts) ? value.posts.slice(0, 100).map((post) => normalizePost(post, sourceId, sourceType)) : [];
+  const posts = Array.isArray(value.posts) ? value.posts.slice(0, 150).map((post) => normalizePost(post, sourceId, sourceType)) : [];
   const deduped = [...new Map(posts.map((post) => [post.postId || post.permalink, post])).values()];
   const health = normalizeHealth(value.health, deduped.length);
   return {
@@ -528,6 +528,7 @@ export function evaluateCollectorHealth(input: {
   const captured = nonnegativeInteger(input.capturedPostCount);
   const ratio = visible === 0 ? (captured > 0 ? 1 : 0) : Math.min(1, captured / visible);
   const reasons: string[] = [];
+  if (input.stopReason === "MAX_POSTS") reasons.push("Limit postów osiągnięty — dalsze posty mogą istnieć.");
   if (input.failed) reasons.push("COLLECTOR_SOURCE_FAILED");
   if (!input.failed && visible === 0 && captured === 0) reasons.push("COLLECTOR_NO_VISIBLE_OR_CAPTURED_POSTS");
   if (visible >= 3 && captured < 3) reasons.push("COLLECTOR_LOW_CAPTURE_COUNT");

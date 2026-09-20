@@ -75,6 +75,7 @@ test("declares scripting permission for bounded fallback injection", () => {
 
 test("production active-source flow is allowlisted, deep, single-click and bounded", () => {
   assert.match(background, /lodzsprzedazzakupwynajem/);
+  assert.match(background, /PRODUCTION_LIMITS = \{ maxPosts: 150, minScrolls: 5, maxScrolls: 30, hardTimeBudgetMs: 110_000 \}/);
   assert.match(background, /minScrolls: 5/);
   assert.match(background, /maxScrolls: 30/);
   assert.match(background, /hardTimeBudgetMs: 110_000/);
@@ -82,6 +83,13 @@ test("production active-source flow is allowlisted, deep, single-click and bound
   assert.match(background, /PRODUCTION_SOURCE_NOT_ALLOWED/);
   assert.match(background, /importScripts\("collector-core\.js"\)/);
   assert.match(background, /do remontu/);
+});
+
+test("the raised production post ceiling reaches the content collector without changing timing", () => {
+  assert.match(content, /const maxPosts = clamp\(options\.maxPosts, 1, 150, 150\);/);
+  assert.match(content, /const maxDiscoveryPosts = clamp\(options\.maxDiscoveryPosts, 100, 100, 100\);/);
+  assert.match(content, /const waitTimeoutMs = moved \? 1600 : 800;/);
+  assert.match(content, /pollMs: 100/);
 });
 
 test("search fallback has bounded media-tile resolution budgets", () => {

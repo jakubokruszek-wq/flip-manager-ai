@@ -854,8 +854,11 @@
     if (!source) throw new Error("FACEBOOK_SOURCE_URL_REQUIRED");
     let maxScrolls = clamp(options.maxScrolls, 0, 30, 30);
     const minScrolls = clamp(options.minScrolls, 0, maxScrolls, 3);
-    const maxPosts = clamp(options.maxPosts, 1, 100, 100);
-    const maxDiscoveryPosts = clamp(options.maxDiscoveryPosts, Math.max(100, maxPosts), 100, Math.max(100, maxPosts));
+    const maxPosts = clamp(options.maxPosts, 1, 150, 150);
+    // Search is a separate, currently disabled fallback path. Keep its
+    // discovery ceiling unchanged while the Network-First production feed
+    // ceiling rises to 150.
+    const maxDiscoveryPosts = clamp(options.maxDiscoveryPosts, 100, 100, 100);
     const maxDiscoveryMediaTiles = clamp(options.maxDiscoveryMediaTiles ?? options.maxMediaTiles, 1, 100, 100);
     let budgetMs = clamp(options.budgetMs, 5_000, 120_000, 110_000);
     const searchMode = options.searchMode === true;
