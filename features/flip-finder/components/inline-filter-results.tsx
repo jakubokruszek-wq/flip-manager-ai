@@ -614,7 +614,7 @@ function PreviewMetric({ label, value, emphasis = false }: { label: string; valu
   return <article className={`rounded-xl border p-4 ${emphasis ? "border-gold/35 bg-gold/[0.06]" : "border-border/70 bg-background/40"}`}><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-2 text-lg font-semibold tabular-nums ${emphasis ? "text-gold" : "text-foreground"}`}>{value}</p></article>;
 }
 
-function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void }) {
+function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported, variant = "standalone" }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher" }) {
   const [expanded, setExpanded] = useState(false);
   const [crmImporting, setCrmImporting] = useState(false);
   const [crmToast, setCrmToast] = useState<string | null>(null);
@@ -796,8 +796,8 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           {result.images.length > 1 ? <span className="absolute right-3 top-3 rounded-full bg-black/75 px-2.5 py-1 text-xs font-semibold text-white">{result.images.length} zdjęć</span> : null}
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
           <div className="absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
-            <StatusBadge status={result.listingStatus} />
-            {result.isNew ? <Badge label="Nowa" /> : result.hasPriceDrop ? <Badge label="Obniżka" /> : null}
+            {variant === "watcher" ? null : <StatusBadge status={result.listingStatus} />}
+            {variant === "watcher" ? null : result.isNew ? <Badge label="Nowa" /> : result.hasPriceDrop ? <Badge label="Obniżka" /> : null}
           </div>
         </div>
         <div className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-4 sm:px-5 sm:py-3">
@@ -858,8 +858,8 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           <DetailList label="Do weryfikacji" values={friendlyMissingFields(result.unknownFields.filter((field) => !(field === "buildingType" && result.buildingType)))} empty="Brak." />
           <DetailList label="Atuty oceny inwestycji" values={flipScore.reasons} empty="Brak punktów dodatnich." />
           <DetailList label="Ryzyka oceny inwestycji" values={flipScore.risks} empty="Nie wykryto ryzyk." />
-          <div className="grid gap-3 border-t border-border/70 pt-6 sm:grid-cols-3">
-            <Button className="h-11 rounded-xl font-semibold" disabled={crmImporting} onClick={importToCrm} type="button" variant="outline"><Plus aria-hidden="true" className="size-4" />{crmImporting ? "Dodawanie..." : "Dodaj do CRM"}</Button>
+          <div className={variant === "watcher" ? "grid gap-3 border-t border-border/70 pt-6 sm:grid-cols-2" : "grid gap-3 border-t border-border/70 pt-6 sm:grid-cols-3"}>
+            {variant === "watcher" ? null : <Button className="h-11 rounded-xl font-semibold" disabled={crmImporting} onClick={importToCrm} type="button" variant="outline"><Plus aria-hidden="true" className="size-4" />{crmImporting ? "Dodawanie..." : "Dodaj do CRM"}</Button>}
             <Button className="h-11 rounded-xl font-semibold" onClick={() => setActiveTab("analysis")} type="button" variant="outline"><BrainCircuit aria-hidden="true" className="size-4" />Ocena potencjału</Button>
             <Button nativeButton={false} className="h-11 rounded-xl font-semibold shadow-sm" render={<a href={result.originalUrl} rel="noopener noreferrer" target="_blank" />} variant="default"><ExternalLink aria-hidden="true" className="size-4" />Otwórz ogłoszenie</Button>
           </div>
@@ -882,7 +882,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   );
 }
 
-export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void }) {
+export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher" }) {
   const [traceId] = useState(createGalleryTraceId);
   const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
@@ -890,7 +890,11 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
   const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
   };
-  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} /><div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div></div>;
+  // The Facebook Watcher embeds this card with its own "Napraw galerię" action already
+  // wired to the Facebook-specific repair pipeline; rendering this second, generic
+  // gallery request button there would enqueue a competing job against the same
+  // listing instead of a genuinely separate feature.
+  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {
