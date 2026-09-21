@@ -67,7 +67,12 @@ test("pushTitleFor: falls back to city, then a generic label, when neighborhood 
 // the next one.
 function reset(alerts: InvestmentAlert[], sends: Array<{ sent: number; failed: number }>): void {
   currentDb = new FakeFacebookSupabase();
-  currentDb.seed("alerts", alerts.map((item) => ({ event_key: item.eventKey, push_delivered_at: null })));
+  // Every seeded row needs its own distinct id: the fake DB's update() applies
+  // a matched row's payload to every row sharing its id, and every real
+  // alerts row has a real id, so a batch of more than one alert here must not
+  // all share the same undefined id (which every test before this file's
+  // multi-alert hotfix batch happened to never exercise).
+  currentDb.seed("alerts", alerts.map((item, index) => ({ id: `seed-${index}`, event_key: item.eventKey, push_delivered_at: null })));
   currentAlerts = alerts;
   sendCount = 0;
   sendResults = sends;
@@ -108,4 +113,39 @@ test("an already-read alert is skipped without ever calling the push transport",
   assert.equal(result.sent, 0);
   assert.equal(result.skipped, 1);
   assert.equal(sendCount, 0);
+});
+
+// Hotfix scope A: new_listing is purely informational (no attractiveness/
+// urgency signal of its own — see isPushEligibleAlertType's own comment) and
+// must never reach the push transport, no matter how long it sits unread and
+// undelivered. getAlerts() here is mocked directly (it already has its own
+// dedicated current-listing-state coverage in features/alerts/server.test.ts),
+// so this isolates exactly the type gate sendPendingAlertPush adds.
+test("an ordinary new_listing alert is never sent, even when unread and undelivered", async () => {
+  reset([alert({ type: "new_listing", listingId: "listing-ordinary", eventKey: "listing-ordinary:new_listing:v1" })], [{ sent: 1, failed: 0 }]);
+
+  const result = await sendPendingAlertPush();
+  assert.equal(result.sent, 0, "new_listing must never be attempted");
+  assert.equal(sendCount, 0, "the push transport must never even be called for it");
+  assert.equal(currentDb.rows("alerts").find((row) => row.event_key === "listing-ordinary:new_listing:v1")?.push_delivered_at, null);
+});
+
+test("canonical_match, facebook_opportunity and price_drop are push-eligible and reach the transport; new_listing in the same batch does not", async () => {
+  reset(
+    [
+      alert({ type: "canonical_match", listingId: "listing-matched", eventKey: "listing-matched:canonical_match:v1" }),
+      alert({ type: "facebook_opportunity", listingId: "listing-attractive-review", eventKey: "listing-attractive-review:facebook_opportunity:v1" }),
+      alert({ type: "price_drop", listingId: "listing-price-drop", eventKey: "listing-price-drop:price_drop:v2" }),
+      alert({ type: "new_listing", listingId: "listing-ordinary-2", eventKey: "listing-ordinary-2:new_listing:v1" }),
+    ],
+    [{ sent: 1, failed: 0 }],
+  );
+
+  const result = await sendPendingAlertPush();
+  assert.equal(result.sent, 3, "the three push-eligible types must all be attempted");
+  assert.equal(sendCount, 3, "the push transport is called exactly once per eligible alert, never for new_listing");
+  assert.ok(currentDb.rows("alerts").find((row) => row.event_key === "listing-matched:canonical_match:v1")?.push_delivered_at);
+  assert.ok(currentDb.rows("alerts").find((row) => row.event_key === "listing-attractive-review:facebook_opportunity:v1")?.push_delivered_at);
+  assert.ok(currentDb.rows("alerts").find((row) => row.event_key === "listing-price-drop:price_drop:v2")?.push_delivered_at);
+  assert.equal(currentDb.rows("alerts").find((row) => row.event_key === "listing-ordinary-2:new_listing:v1")?.push_delivered_at, null);
 });
