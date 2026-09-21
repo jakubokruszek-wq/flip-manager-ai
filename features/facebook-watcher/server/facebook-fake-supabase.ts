@@ -136,6 +136,7 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
   private payload: Row | null = null;
   private upsertPayload: Row[] | null = null;
   private onConflictColumns: string[] | null = null;
+  private ignoreDuplicates = false;
   private limitCount: number | null = null;
   private wantsSelectBack = false;
 
@@ -197,7 +198,7 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     this.payload = null;
     return this;
   }
-  upsert(payload: Row | Row[], options?: { onConflict?: string }): this {
+  upsert(payload: Row | Row[], options?: { onConflict?: string; ignoreDuplicates?: boolean }): this {
     this.op = "upsert";
     // Real Supabase-js's upsert() accepts a single row OR an array for a bulk
     // upsert, and this codebase's real callers (e.g. persistOrOverlay in
@@ -207,6 +208,7 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     // spread bug ({...[row]} produces {"0": row}, not row's own fields).
     this.upsertPayload = Array.isArray(payload) ? payload : [payload];
     this.onConflictColumns = options?.onConflict ? options.onConflict.split(",").map((value) => value.trim()) : null;
+    this.ignoreDuplicates = options?.ignoreDuplicates === true;
     return this;
   }
 
@@ -263,6 +265,15 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
       const existingIndex = nextTable.findIndex((row) => conflictColumns.every((column) => row[column] === item[column]));
       let row: Row;
       if (existingIndex >= 0) {
+        if (this.ignoreDuplicates) {
+          // `ignoreDuplicates: true` is PostgreSQL's ON CONFLICT DO NOTHING:
+          // preserve the stored row exactly and continue processing the rest
+          // of the batch. In particular, do not merge the incoming id/title
+          // or any other field into the existing record.
+          row = nextTable[existingIndex];
+          rows.push(row);
+          continue;
+        }
         row = { ...nextTable[existingIndex], ...item };
         nextTable = [...nextTable.slice(0, existingIndex), row, ...nextTable.slice(existingIndex + 1)];
       } else {

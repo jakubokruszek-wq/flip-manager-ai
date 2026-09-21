@@ -161,3 +161,25 @@ test("the current-state recheck is exactly one bounded query regardless of how m
   // per alert, regardless of the 6 distinct listings involved here.
   assert.equal(listingsQueryCount, 2, "the recheck must not be N+1");
 });
+
+test("persistOrOverlay keeps an existing alert unchanged when the same event_key is regenerated", async () => {
+  reset();
+  const listing = anchorListing();
+  const eventKey = `${listing.id}:canonical_match:v1`;
+  const original = historicalAlert({
+    id: "original-alert",
+    event_key: eventKey,
+    listing_id: listing.id,
+    type: "canonical_match",
+    title: "Original persisted title",
+    read_at: "2026-09-20T12:00:00Z",
+    push_delivered_at: "2026-09-20T12:01:00Z",
+  });
+  currentDb.seed("listings", [listing]);
+  currentDb.seed("alerts", [original]);
+  const before = JSON.stringify(currentDb.rows("alerts"));
+
+  await getAlerts();
+
+  assert.equal(JSON.stringify(currentDb.rows("alerts")), before, "a regenerated duplicate must not overwrite the historical alert row");
+});
