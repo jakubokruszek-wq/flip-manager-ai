@@ -174,3 +174,12 @@ test("addToCrm can never show success after a swallowed workflow-update failure"
   assert.match(panel, /return result;\s*\};\s*const guardedUpdateWorkflow=/, "updateWorkflow must return its explicit result so callers (addToCrm, guardedUpdateWorkflow) are forced to check it");
   assert.match(panel, /updateWorkflow=\{guardedUpdateWorkflow\}/, "InboxItem's other fire-and-forget actions (Interesująca/Odrzuć/Przywróć/markRead) must go through the guarded wrapper, which toasts on failure instead of silently swallowing it");
 });
+
+// Hotfix D regression guard: the Facebook Watcher's own ?listing= deep link
+// (used for both MATCHED and REVIEW Facebook alerts — this handler never
+// distinguishes bucket, it just clicks whichever inbox item has the matching
+// id) is untouched by this hotfix. It must remain wired exactly as before.
+test("the ?listing= deep link still clicks the exact matching inbox item, for any bucket, and is not re-triggered by later rerenders", () => {
+  assert.match(panel, /const listingId=new URLSearchParams\(window\.location\.search\)\.get\("listing"\);if\(!listingId\)return;handledDeepLink\.current=true;const timeout=window\.setTimeout\(\(\)=>document\.querySelector<HTMLElement>\(`#facebook-inbox-\$\{CSS\.escape\(listingId\)\} \[role=button\]`\)\?\.click\(\),0\);/);
+  assert.match(panel, /id=\{`facebook-inbox-\$\{item\.listingId\}/, "every inbox item, regardless of MATCHED/REVIEW bucket, must render the id the deep-link handler queries for");
+});
