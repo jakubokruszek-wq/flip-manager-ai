@@ -1,6 +1,20 @@
 export const ALERT_TYPES = ["facebook_opportunity", "high_flip_score", "price_drop", "private_seller", "new_listing", "canonical_match"] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 
+/**
+ * new_listing is purely informational ("something new appeared, worth a
+ * look") and is the only alert type without its own attractiveness/urgency
+ * signal (score threshold, price drop, canonical match). Every other type
+ * already gates on a real, existing signal before it is ever created (see
+ * createAlertsForListing in alert-rules.ts), so it is safe to push
+ * immediately. This is the single source of truth for that split — never
+ * re-list the alert types elsewhere.
+ */
+const PUSH_ELIGIBLE_ALERT_TYPES = new Set<AlertType>(["canonical_match", "facebook_opportunity", "high_flip_score", "private_seller", "price_drop"]);
+export function isPushEligibleAlertType(type: AlertType): boolean {
+  return PUSH_ELIGIBLE_ALERT_TYPES.has(type);
+}
+
 export type InvestmentAlert = {
   id: string;
   eventKey: string;
