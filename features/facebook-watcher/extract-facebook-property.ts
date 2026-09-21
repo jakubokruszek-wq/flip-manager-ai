@@ -40,20 +40,45 @@ export type FacebookPriceResolution = {
 };
 
 const AUXILIARY_PRICE_CONTEXT = /(?:czynsz|opłat|kaucj|wyposażeni|mebl|remont|prowizj|telefon|tel\.?|\brat[ay]\b|zaliczk|przedpłat|\bmedi[ae]\b|administracj|wspólnot|fundusz\s*remontow\w*|abonament|ubezpieczeni|\bpodatek\b|\bpr[ąa]d\b|\bgaz\b|\bwod[ęya]\b|internet)[^\n]{0,24}$/i;
+const SALE_PRICE_RESET_KEYWORD = /cena|kwota/gi;
+
+/**
+ * A fee mentioned earlier in the same lookback window (e.g. "Niski czynsz
+ * 615zł. Metraż 53m Cena 489tyś") must never suppress a later, clearly
+ * distinct sale price — but a fee keyword immediately next to its OWN number
+ * ("Czynsz 1500zł") must still exclude that number. The distinguishing
+ * signal is an explicit "cena"/"kwota" mention sitting between the fee
+ * keyword and the number under test: that re-anchors the number to the sale
+ * price, closer than the fee keyword is.
+ */
+function isAuxiliaryPriceContext(window: string): boolean {
+  const auxiliaryMatch = window.match(AUXILIARY_PRICE_CONTEXT);
+  if (!auxiliaryMatch) return false;
+  const resetMatches = [...window.matchAll(SALE_PRICE_RESET_KEYWORD)];
+  const lastReset = resetMatches[resetMatches.length - 1];
+  return !lastReset || (lastReset.index ?? 0) < (auxiliaryMatch.index ?? 0);
+}
 
 export function resolveFacebookPrice(text: string, area: number | null): FacebookPriceResolution {
   const normalized = text.replace(/[\u00a0\u202f]/g, " ");
   const perM2 = uniqueNumbers(Array.from(normalized.matchAll(/(\d{1,3}(?:\s\d{3})+|\d{3,6})(?:[.,](\d{1,2}))?\s*(?:zł|pln)\s*\/\s*m(?:2|²)(?![\p{L}\d])/giu)), (match) => decimalNumber(match[1], match[2]));
-  const explicitTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{1,3}(?:\s\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?\s*(?:zł|pln)(?!\p{L})/giu))
-    .filter((match) => !/^\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => decimalNumber(match[1], match[2]));
-  const thousandsTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*(?:tys\.?|tysi(?:ąc(?:e|y)?)?)/giu))
-    .filter((match) => !/^\s*(?:zł|pln)?\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
+  // Thousands groups are colloquially separated by a space OR a dot
+  // ("489 000 zł" / "489.000 zł") — contextualTotals already accepted both;
+  // this must too, for the same reason decimalNumber() already strips either
+  // separator: a dot between two groups of exactly 3 digits is structurally
+  // always a group separator here, never a decimal point.
+  const explicitTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{1,3}(?:[\s.]\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?\s*(?:zł|pln)(?!\p{L})/giu))
+    .filter((match) => !/^\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => decimalNumber(match[1], match[2]));
+  // "tyś" (colloquial misspelling with an accented ś) is at least as common in
+  // real listing text as the correct "tys" — both must resolve identically.
+  const thousandsTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*(?:ty[sś]\.?|tysi(?:ąc(?:e|y)?)?)/giu))
+    .filter((match) => !/^\s*(?:zł|pln)?\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
   // Colloquial "399k" / "300 K" shorthand. `(?!\w)` keeps it from matching inside another
   // word (e.g. "300km"), so only a bare k/K right after the digits counts.
   const kNotationTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*[kK](?!\w)/g))
-    .filter((match) => !AUXILIARY_PRICE_CONTEXT.test(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
+    .filter((match) => !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
 
-  const contextualTotals = Array.from(normalized.matchAll(/(?:^|[^\p{L}])(?:cena(?:\s+ofertowa)?|kwota(?:\s+do\s+negocjacji)?)\s*[:=-]?\s*(\d{1,3}(?:[\s.]\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?(?![\d])/giu));
+  const contextualTotals = Array.from(normalized.matchAll(/(?:^|[^\p{L}])(?:cena(?:\s+(?:ofertowa|sprzeda[żz]y?))?|kwota(?:\s+do\s+negocjacji)?)\s*[:=-]?\s*(\d{1,3}(?:[\s.]\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?(?![\d])/giu));
   const contextual = singleValue(uniqueNumbers(contextualTotals, (match) => decimalNumber(match[1], match[2])));
   if (contextual !== null) return { price: contextual, pricePerM2: singleValue(perM2), source: "EXPLICIT_TOTAL" };
   const explicit = singleValue(explicitTotals);
@@ -132,7 +157,14 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const districtFound = DISTRICTS.find((item) => lower.includes(item.toLocaleLowerCase("pl-PL"))) ?? null;
   const area = number(text.match(/(\d{1,3}(?:[.,]\d+)?)\s*m(?:²|2)\b/i)?.[1]);
   const unicodeArea = number(text.match(/(\d{1,3}(?:[.,]\d+)?)\s*m\u00b2(?![\p{L}\d])/iu)?.[1]);
-  const effectiveArea = unicodeArea ?? area;
+  // Colloquial "Metraż 53m" / "Powierzchnia 53m" drops the "2"/area-sign
+  // suffix entirely — only recognized right after that explicit area
+  // keyword (never a bare "Xm" anywhere in the text, which would just as
+  // easily be a distance or an unrelated measurement), and never when a
+  // proper m2 suffix is present (the negative lookahead), so it can never
+  // double-count or override a well-formed match above.
+  const bareMArea = number(text.match(/(?:metra[żz]\w*|powierzchni\w*)[^\n\d]{0,15}(\d{1,3}(?:[.,]\d+)?)\s*m\b(?!2|²|\w)/iu)?.[1]);
+  const effectiveArea = unicodeArea ?? area ?? bareMArea;
   const price = resolveFacebookPrice(text, effectiveArea);
   const mRoomValues = [...normalizedText.matchAll(/\bm([2-6])\b/gu)]
     .filter((match) => !/[#\d]\s*$/u.test(normalizedText.slice(Math.max(0, (match.index ?? 0) - 4), match.index)))

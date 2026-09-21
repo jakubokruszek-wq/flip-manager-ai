@@ -169,3 +169,54 @@ test("classifyFacebookCondition: renovation and ready are distinguished, never i
   assert.equal(classifyFacebookCondition(normalize("mieszkanie po remoncie")), "ready");
   assert.equal(classifyFacebookCondition(normalize("mieszkanie na sprzedaż, 2 pokoje")), null);
 });
+
+// Watcher data quality mission: real screenshot variants that previously
+// failed to parse at all (price/area both null), proven one at a time
+// against the unmodified parser before any regex change.
+test("Watcher data quality: 'Metraż 53m Cena 489tyś' resolves both the bare-m area and the tyś-spelled price", async () => {
+  const text = "Metraż 53m Cena 489tyś";
+  const value = await extractFacebookProperty({ postText: text });
+  assert.equal(value.area, 53);
+  assert.equal(value.price, 489000);
+  assert.equal(Math.round(resolveFacebookPricePerSqm({ price: value.price, pricePerM2: value.pricePerM2, area: value.area }) ?? 0), 9226);
+});
+
+test("Watcher data quality: 'Cena 489 tys' and 'Cena 489 tys.' both resolve to 489000 (already-working baseline, locked in)", () => {
+  assert.equal(resolveFacebookPrice("Cena 489 tys", null).price, 489000);
+  assert.equal(resolveFacebookPrice("Cena 489 tys.", null).price, 489000);
+});
+
+test("Watcher data quality: '489 000 zł' (space-grouped, already-working baseline) and '489.000 zł' (dot-grouped) both resolve to 489000", () => {
+  assert.equal(resolveFacebookPrice("489 000 zł", null).price, 489000);
+  assert.equal(resolveFacebookPrice("489.000 zł", null).price, 489000);
+});
+
+test("Watcher data quality: 'Cena sprzedaż 430.000zł' resolves to 430000, matching the mission's exact price/m² expectation", async () => {
+  const text = "Cena sprzedaż 430.000zł, 52,97m2";
+  const value = await extractFacebookProperty({ postText: text });
+  assert.equal(value.price, 430000);
+  assert.equal(value.area, 52.97);
+  assert.equal(Math.round(resolveFacebookPricePerSqm({ price: value.price, pricePerM2: value.pricePerM2, area: value.area }) ?? 0), 8118);
+});
+
+test("Watcher data quality: '52,97m2' (comma-decimal area, already-working baseline) resolves to 52.97", async () => {
+  const value = await extractFacebookProperty({ postText: "Mieszkanie na sprzedaż, 52,97m2" });
+  assert.equal(value.area, 52.97);
+});
+
+test("Watcher data quality: a rent amount mentioned before the sale price is never mistaken for it, even across a sentence break", () => {
+  const text = "Niski czynsz 615zł. Metraż 53m Cena 489tyś";
+  const result = resolveFacebookPrice(text, 53);
+  assert.equal(result.price, 489000);
+  assert.notEqual(result.price, 615);
+});
+
+test("Watcher data quality: an auxiliary fee immediately next to its own number is still excluded — the sentence-break fix must not weaken this", () => {
+  assert.equal(resolveFacebookPrice("Czynsz 1500zł. Cena 399000zł", null).price, 399000, "the real sale price after czynsz must still resolve");
+  assert.equal(resolveFacebookPrice("Czynsz 1500zł, mieszkanie 48m2", null).price, null, "with no sale price anywhere in the text, 1500 (the fee) must never be guessed as one");
+});
+
+test("Watcher data quality: bare 'Xm' is only recognized as area right after an explicit metraż/powierzchnia keyword, never as a stray distance", async () => {
+  assert.equal((await extractFacebookProperty({ postText: "5m od szkoły, mieszkanie na sprzedaż" })).area, null, "a bare distance mention must never be read as area");
+  assert.equal((await extractFacebookProperty({ postText: "Powierzchnia 61m, blisko centrum" })).area, 61, "'Powierzchnia' is an equally valid area keyword to 'Metraż'");
+});
