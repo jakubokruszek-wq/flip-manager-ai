@@ -176,7 +176,25 @@
         rootBindingSource = roots.length > 0 ? "EXACT_PAGE_TITLE_STORY" : null;
       }
       lastRootCount = roots.length;
-      if (roots.length > 1) return galleryFailure("FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: roots.length, selfLinkRootCount: collapsedSelfLinkRoots.length, titleBoundRootCount: titleBoundSelfLinkRoots.length, page: galleryPageSnapshot(exactPath, expectedPostId) });
+      if (roots.length > 1) {
+        // Without this, a human reviewing a stored FACEBOOK_GALLERY_ROOT_AMBIGUOUS
+        // failure only sees a count — never why the candidates could not be
+        // collapsed into one. A short, truncated preview of each candidate's
+        // own (author-present, message, photo-anchor-count) signature is
+        // enough to tell "two real DOM copies of the same story" apart from
+        // "a genuinely different post that also happens to link here", without
+        // storing more of the post text than the pipeline already persists
+        // elsewhere as authoritativePostText.
+        const competingRootSignatures = roots.slice(0, 10).map((candidateRoot) => {
+          const evidence = galleryRootEvidence(candidateRoot);
+          return {
+            authorPresent: Boolean(evidence.author),
+            rootTextPreview: evidence.rootText ? evidence.rootText.slice(0, 60) : null,
+            photoAnchorCount: candidateRoot.querySelectorAll?.('a[href*="/photo/"], a[href*="/photo.php"]')?.length || 0,
+          };
+        });
+        return galleryFailure("FACEBOOK_GALLERY_ROOT_AMBIGUOUS", expectedPostId, { expectedGroup, resolvedGroup, rootBindingSource, rootCount: roots.length, selfLinkRootCount: collapsedSelfLinkRoots.length, titleBoundRootCount: titleBoundSelfLinkRoots.length, competingRootSignatures, page: galleryPageSnapshot(exactPath, expectedPostId) });
+      }
       root = roots[0] || null;
       if (root) {
         const evidence = galleryRootEvidence(root);

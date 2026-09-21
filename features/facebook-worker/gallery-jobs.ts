@@ -44,6 +44,11 @@ type GalleryFailureDiagnostics = {
   resolvedGroup?: string | null;
   rootBindingSource?: string | null;
   rootCount?: number;
+  // FACEBOOK_GALLERY_ROOT_AMBIGUOUS-specific: a short, truncated signature per
+  // competing DOM candidate, so a stored failure can be diagnosed without a
+  // live Facebook session — never more of the post text than the pipeline
+  // already persists elsewhere as authoritativePostText.
+  competingRootSignatures?: Array<{ authorPresent: boolean; rootTextPreview: string | null; photoAnchorCount: number }>;
   // Gallery exact-identity V2: how many DOM media candidates were rejected as
   // belonging to a foreign post (explicit set=pcb.<otherId>), rejected as
   // unbound (no pcb match and no structured cross-check), or accepted with
@@ -440,6 +445,15 @@ function sanitizeGalleryDiagnostics(value: unknown): GalleryFailureDiagnostics |
     resolvedGroup: text("resolvedGroup", 120),
     rootBindingSource: text("rootBindingSource", 80),
     rootCount: number("rootCount", 50),
+    competingRootSignatures: Array.isArray(input.competingRootSignatures) ? input.competingRootSignatures.slice(0, 10).flatMap((entry) => {
+      const item = row(entry);
+      if (!item) return [];
+      return [{
+        authorPresent: boolFrom(item.authorPresent) ?? false,
+        rootTextPreview: typeof item.rootTextPreview === "string" ? item.rootTextPreview.slice(0, 60) : null,
+        photoAnchorCount: finiteFrom(item.photoAnchorCount, 100) ?? 0,
+      }];
+    }) : [],
     foreignMediaRejectedCount: number("foreignMediaRejectedCount", 100),
     unboundMediaRejectedCount: number("unboundMediaRejectedCount", 100),
     exactMediaAcceptedCount: number("exactMediaAcceptedCount", 100),
