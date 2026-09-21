@@ -6,7 +6,7 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
   const active = progress.status === "queued" || progress.status === "running";
   const currentLabel = progress.current
     ? progress.current.source === "facebook" && progress.current.groupName
-      ? `Facebook · ${progress.current.groupName}`
+      ? `Facebook Watcher · ${progress.current.groupName}`
       : sourceLabel(progress.current.source)
     : null;
   const tone = budgetTone(progress.openai.budgetUsedPercent);
@@ -27,13 +27,13 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
         <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
           <ProgressDetail label="Bieżący etap" value={currentLabel ?? (active ? "Oczekiwanie na Collector" : terminalStage)} />
           <ProgressDetail label="Pozostało" value={`${progress.overall.remainingUnits} etapów`} />
-          {progress.facebook.totalGroups > 0 ? <ProgressDetail label="Facebook" value={`${progress.facebook.completedGroups}/${progress.facebook.totalGroups} grup · ${progress.facebook.processed}/${progress.facebook.discovered} postów`} /> : null}
+          {progress.facebook.totalGroups > 0 ? <ProgressDetail label="Facebook Watcher" value={`${progress.facebook.completedGroups}/${progress.facebook.totalGroups} grup · ${progress.facebook.processed}/${progress.facebook.discovered} postów`} /> : null}
           {progress.olx.status ? <ProgressDetail label="OLX" value={`${jobStatusLabel(progress.olx.status)} · raw ${progress.olx.raw} · normalized ${progress.olx.normalized}`} /> : null}
         </div>
         {progress.status === "partial" ? <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-800 dark:text-amber-300">Częściowo zakończony</p><p className="mt-1 text-muted-foreground">{progress.partialReason ?? "Collector zakończył pracę, ale część SEARCH została pominięta lub ograniczona."}</p></div> : null}
         {progress.facebook.groups.length > 0 ? (
-          <div className="mt-4 space-y-2" aria-label="Facebook group statuses">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Facebook — grupy</p>
+          <div className="mt-4 space-y-2" aria-label="Facebook Watcher group statuses">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Facebook Watcher — grupy</p>
             {progress.facebook.groups.map((group) => (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-card/50 px-3 py-2 text-sm" key={group.jobId}>
                 <span className="min-w-0 truncate font-medium" title={group.groupName}>{group.groupName}</span>
@@ -86,7 +86,7 @@ export function VisionCostPanel({ progress }: { progress: ScanProgressResponse }
 
 function ProgressDetail({ label, value }: { label: string; value: string }) { return <div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 truncate font-medium" title={value}>{value}</p></div>; }
 function CostMetric({ label, value }: { label: string; value: string }) { return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-0.5 tabular-nums font-semibold">{value}</dd></div>; }
-function sourceLabel(source: string): string { return source === "olx" ? "OLX" : source === "otodom" ? "Otodom" : source === "morizon" ? "Morizon" : "Facebook"; }
+function sourceLabel(source: string): string { return source === "olx" ? "OLX" : source === "otodom" ? "Otodom" : source === "morizon" ? "Morizon" : "Facebook Watcher"; }
 function jobStatusLabel(status: string): string { return status === "queued" ? "oczekuje" : status === "running" ? "w toku" : status === "failed" ? "błąd" : "zakończony"; }
 function statusLabel(status: ScanProgressResponse["status"]): string { return status === "queued" ? "W kolejce" : status === "running" ? "W toku" : status === "completed" ? "Zakończony" : status === "partial" ? "Częściowo zakończony" : "Błąd"; }
 function statusClass(status: ScanProgressResponse["status"]): string { const tone = status === "failed" ? "bg-destructive/10 text-destructive" : status === "partial" ? "bg-amber-500/10 text-amber-800 dark:text-amber-300" : status === "completed" ? "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300" : "bg-blue-500/10 text-blue-800 dark:text-blue-300"; return `rounded-full px-2.5 py-1 text-xs font-medium ${tone}`; }

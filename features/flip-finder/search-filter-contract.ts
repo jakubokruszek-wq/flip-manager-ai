@@ -50,7 +50,7 @@ export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: 
   { value: "otodom", label: "Otodom" },
   { value: "olx", label: "OLX" },
   { value: "morizon", label: "Morizon" },
-  { value: "facebook", label: "Facebook" },
+  { value: "facebook", label: "Facebook Watcher" },
 ];
 
 export function createEmptySearchFilter(): SearchFilterInput {
