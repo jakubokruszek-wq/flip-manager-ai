@@ -1,7 +1,7 @@
 import "server-only";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { listWatchedFacebookGroups } from "@/features/facebook-groups/server";
-import { createAlertsForListing, type AlertListing, type PricePoint } from "./alert-rules";
+import { createAlertsForListing, isCanonicallyActionable, type AlertListing, type PricePoint } from "./alert-rules";
 import type { InvestmentAlert } from "./types";
 
 type Row=Record<string,unknown>;
@@ -19,7 +19,33 @@ export async function getAlerts():Promise<InvestmentAlert[]>{
   const metadata=new Map<string,Row>(); for(const row of metadataResult.data??[]){if(typeof row.listing_id==="string"&&!metadata.has(row.listing_id))metadata.set(row.listing_id,{...asRecord(row.metadata),source_post_url:row.source_post_url,group_name:row.group_name,collected_at:row.collected_at});}
   const snapshots=new Map<string,PricePoint[]>(); for(const row of snapshotsResult.data??[]){if(typeof row.listing_id!=="string"||typeof row.captured_at!=="string")continue;const values=snapshots.get(row.listing_id)??[];values.push({price:num(row.price),capturedAt:row.captured_at});snapshots.set(row.listing_id,values);}
   const generated=(listingsResult.data??[]).flatMap(row=>{const meta=metadata.get(String(row.id))??{};const flags=Array.isArray(meta.flags)?meta.flags.filter((value):value is string=>typeof value==="string"):[];const groupName=str(meta.group_name);const listing:AlertListing={id:String(row.id),title:str(row.title)??"Oferta bez tytułu",description:str(row.description),source:String(row.source),price:num(row.price),area:num(row.area),pricePerSqm:num(row.price_per_sqm),city:str(row.city),district:str(row.district),originalUrl:str(row.original_url),flipScore:num(row.flip_score),createdAt:str(row.created_at)??new Date(0).toISOString(),firstSeenAt:str(meta.firstImportedAt)??str(row.first_seen_at)??str(row.created_at)??new Date(0).toISOString(),sellerType:str(meta.sellerType)??(flags.some(flag=>/bezpośred|właściciel/i.test(flag))?"private":null),condition:str(meta.condition)??(flags.some(flag=>/remont/i.test(flag))?"renovation":null),opportunityScore:num(meta.opportunityScore),neighborhood:str(meta.neighborhood),facebookUrl:str(meta.source_post_url),groupName,groupPriority:groupName?priorities.get(normalize(groupName))??null:null,flags,lifecycleStatus:str(row.lifecycle_status),manualDecision:str(row.manual_decision)};return createAlertsForListing(listing,snapshots.get(listing.id)??[]);});
-  const unique=[...new Map(generated.map(alert=>[alert.eventKey,alert])).values()]; return persistOrOverlay(supabase,unique);
+  const unique=[...new Map(generated.map(alert=>[alert.eventKey,alert])).values()]; const persisted=await persistOrOverlay(supabase,unique); return filterAlertsByCurrentListingState(supabase,persisted);
+}
+
+/**
+ * A stored alert row is never deleted or edited once its listing's canonical
+ * state later changes (persistOrOverlay only ever inserts/upserts), so an
+ * alert generated while a listing was ACTIVE/REVIEW would otherwise remain
+ * visible — and pushable — forever, even after the listing is later
+ * REJECTED/STALE/ARCHIVED. This is the single, shared re-check both the
+ * in-app alert list (/api/alerts) and push delivery (sendPendingAlertPush,
+ * which calls getAlerts() itself) rely on — one bounded query regardless of
+ * how many alerts are being checked, never one query per alert. A listing
+ * that no longer exists, or that this query fails to read at all, is
+ * treated as not actionable: never guess a status, hide rather than risk
+ * showing or pushing a stale REJECTED/STALE/ARCHIVED alert.
+ */
+async function filterAlertsByCurrentListingState(supabase:ReturnType<typeof createFacebookWatcherAdminClient>,alerts:InvestmentAlert[]):Promise<InvestmentAlert[]>{
+  if(!alerts.length)return alerts;
+  const listingIds=[...new Set(alerts.map(alert=>alert.listingId))];
+  const result=await supabase.from("listings").select("id,lifecycle_status,manual_decision").in("id",listingIds);
+  if(result.error){console.error("ALERT_LISTING_STATE_CHECK_FAILED",{message:result.error.message});return[];}
+  const byId=new Map((result.data??[]).map(row=>[String(row.id),{lifecycleStatus:str(row.lifecycle_status),manualDecision:str(row.manual_decision)}]));
+  return alerts.filter(alert=>{
+    const state=byId.get(alert.listingId);
+    if(!state){console.warn("ALERT_LISTING_NOT_FOUND",{listingId:alert.listingId,eventKey:alert.eventKey});return false;}
+    return isCanonicallyActionable(state);
+  });
 }
 
 export async function markAlertRead(id:string):Promise<void>{const now=new Date().toISOString();const supabase=createFacebookWatcherAdminClient();if(id==="all"){const result=await supabase.from("alerts").update({read_at:now}).is("read_at",null);if(!result.error)return;for(const alert of await getAlerts())memoryReadState.set(alert.id,now);return;}const result=await supabase.from("alerts").update({read_at:now}).eq("id",id);if(result.error)memoryReadState.set(id,now);}

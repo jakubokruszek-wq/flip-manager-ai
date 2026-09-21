@@ -134,6 +134,7 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
   private orExpression: string | null = null;
   private op: "select" | "insert" | "update" | "upsert" = "select";
   private payload: Row | null = null;
+  private upsertPayload: Row[] | null = null;
   private onConflictColumns: string[] | null = null;
   private limitCount: number | null = null;
   private wantsSelectBack = false;
@@ -196,9 +197,15 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     this.payload = null;
     return this;
   }
-  upsert(payload: Row, options?: { onConflict?: string }): this {
+  upsert(payload: Row | Row[], options?: { onConflict?: string }): this {
     this.op = "upsert";
-    this.payload = payload;
+    // Real Supabase-js's upsert() accepts a single row OR an array for a bulk
+    // upsert, and this codebase's real callers (e.g. persistOrOverlay in
+    // features/alerts/server.ts) always pass an array, even for one row.
+    // Storing it under a normalized, always-array field — rather than
+    // spreading it as this.payload in execute() — avoids the array-as-object
+    // spread bug ({...[row]} produces {"0": row}, not row's own fields).
+    this.upsertPayload = Array.isArray(payload) ? payload : [payload];
     this.onConflictColumns = options?.onConflict ? options.onConflict.split(",").map((value) => value.trim()) : null;
     return this;
   }
@@ -246,20 +253,26 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
       return { data: this.wantsSelectBack ? next.filter((row) => matchedIds.has(row.id)) : null, error: null };
     }
 
-    // upsert
+    // upsert — apply every row in the (always-array) payload in order, each
+    // against the table state left by the previous one, so a batch upsert
+    // behaves the same as N sequential single-row upserts.
     const conflictColumns = this.onConflictColumns ?? ["id"];
-    const existingIndex = table.findIndex((row) => conflictColumns.every((column) => row[column] === this.payload![column]));
-    let row: Row;
-    if (existingIndex >= 0) {
-      row = { ...table[existingIndex], ...this.payload };
-      const next = [...table];
-      next[existingIndex] = row;
-      this.db._setTable(this.table, next);
-    } else {
-      row = { id: this.payload!.id ?? this.db._nextId(), ...this.payload };
-      this.db._setTable(this.table, [...table, row]);
+    let nextTable = table;
+    const rows: Row[] = [];
+    for (const item of this.upsertPayload ?? []) {
+      const existingIndex = nextTable.findIndex((row) => conflictColumns.every((column) => row[column] === item[column]));
+      let row: Row;
+      if (existingIndex >= 0) {
+        row = { ...nextTable[existingIndex], ...item };
+        nextTable = [...nextTable.slice(0, existingIndex), row, ...nextTable.slice(existingIndex + 1)];
+      } else {
+        row = { id: item.id ?? this.db._nextId(), ...item };
+        nextTable = [...nextTable, row];
+      }
+      rows.push(row);
     }
-    return { data: this.wantsSelectBack ? [row] : null, error: null };
+    this.db._setTable(this.table, nextTable);
+    return { data: this.wantsSelectBack ? rows : null, error: null };
   }
 
   async maybeSingle(): Promise<{ data: Row | null; error: { message: string } | null }> {

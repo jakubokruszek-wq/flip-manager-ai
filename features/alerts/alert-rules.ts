@@ -14,7 +14,7 @@ export type PricePoint = { price:number|null; capturedAt:string };
  * alert can never exist for a listing the user wouldn't even see as
  * actionable in the Finder.
  */
-function isCanonicallyActionable(listing:AlertListing):boolean{
+export function isCanonicallyActionable(listing:Pick<AlertListing,"lifecycleStatus"|"manualDecision">):boolean{
   if(listing.manualDecision==="REJECTED")return false;
   return listing.lifecycleStatus==="ACTIVE"||listing.lifecycleStatus==="REVIEW"||listing.lifecycleStatus===null;
 }
