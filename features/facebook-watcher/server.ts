@@ -17,6 +17,7 @@ import { manualFacebookAdapter } from "./facebook-source-adapter";
 import { createFacebookWatcherAdminClient } from "./supabase-admin";
 import { isLikelySameFacebookProperty } from "./deduplicate-facebook-listing";
 import { mirrorFacebookImages } from "./server/mirror-facebook-images";
+import { runAfterResponse } from "./run-after-response";
 import { dataFirstFacebookImageResult, type FacebookImageMode } from "./facebook-image-mode";
 import { FACEBOOK_WORKFLOW_STATUSES, type FacebookListingInput, type FacebookWatcherListing, type FacebookWorkflowStatus } from "./types";
 import { recordFacebookGroupImport } from "@/features/facebook-groups/server";
@@ -321,9 +322,9 @@ async function importAutomatedFacebook(input: {
   }
 
   if (shouldAutoEnrichFacebookImages({ bucket: manualRejected ? "REJECTED" : decision.bucket, manualRejected, mirroredImageCount: imageMirror.images.length })) {
-    void enqueueFacebookGalleryJob(listingId).catch((reason) => {
+    runAfterResponse(() => enqueueFacebookGalleryJob(listingId).catch((reason) => {
       console.warn("FACEBOOK_AUTO_GALLERY_ENQUEUE_DEFERRED", { listingId, bucket: decision.bucket, error: reason instanceof Error ? reason.message : "unknown" });
-    });
+    }));
   }
 
   if (crossSourceMatch) {

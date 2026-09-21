@@ -23,15 +23,28 @@ export async function resolve(specifier, context, nextResolve) {
   if (specifier === "server-only" || specifier === "client-only") {
     return { url: SERVER_ONLY_STUB, shortCircuit: true };
   }
+  // "next/server" has no package.json "exports" entry Node's own resolver can
+  // see — Next.js's bundler resolves the bare specifier via its own
+  // resolution layer. Plain Node needs the real, installed file explicitly.
+  if (specifier === "next/server") {
+    return nextResolve("next/server.js", context);
+  }
+  const isProjectSource = specifier.startsWith("@/") || specifier.startsWith(".");
   const target = specifier.startsWith("@/") ? new URL(specifier.slice(2), repoRoot).href : specifier;
   // Next.js's bundler auto-appends an extension for any extensionless
   // relative/aliased import; Node's own resolver does not. This codebase's
   // existing tests work around it by writing ".ts" everywhere, but
   // application source files (reached transitively from server.ts) rely on
-  // the bundler's own extension resolution, so mirror that here too.
+  // the bundler's own extension resolution, so mirror that here too. This
+  // ".ts" fallback only applies to project source (relative or "@/"-aliased)
+  // — a bare package specifier like "next/server" is never a TypeScript file
+  // in node_modules, and Next.js resolves it via its own bundler magic that
+  // plain Node cannot reproduce; if it fails to resolve normally here, that
+  // is a real error, not a missing ".ts" suffix.
   try {
     return await nextResolve(target, context);
   } catch (error) {
+    if (!isProjectSource) throw error;
     if (error?.code === "ERR_UNSUPPORTED_DIR_IMPORT") {
       try {
         return await nextResolve(`${target.replace(/\/$/, "")}/index.ts`, context);
