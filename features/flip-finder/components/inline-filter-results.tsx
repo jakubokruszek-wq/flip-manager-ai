@@ -808,7 +808,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
 
   return (
     <Dialog onOpenChange={setExpanded} open={expanded}>
-      <article className="ui-card ui-card-hover group overflow-hidden">
+      <article className="ui-card ui-card-hover group overflow-hidden !border-transparent hover:!border-transparent">
        <div className="flex justify-end border-b border-border/70 px-3 py-2 sm:px-5">
          <Link className="inline-flex min-h-10 items-center rounded-xl bg-gold px-4 text-sm font-semibold text-black outline-none transition hover:bg-gold/90 focus-visible:ring-2 focus-visible:ring-ring" href={`/deals/${encodeURIComponent(result.id)}`}>Otwórz Deal Room</Link>
        </div>
@@ -856,7 +856,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
               <DialogTitle className="text-xl font-bold leading-tight tracking-tight sm:text-2xl">{title}</DialogTitle>
               <DialogDescription className="mt-2 flex items-center gap-2 text-sm"><MapPin aria-hidden="true" className="size-4 shrink-0" />{location}</DialogDescription>
             </div>
-            <div className="flex w-full min-w-0 flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap"><div className="min-w-[140px] flex-1 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.09] px-4 py-3 text-center text-emerald-700 dark:text-emerald-300 sm:flex-none"><span className="block text-[11px] font-semibold uppercase tracking-[0.14em]">Ocena inwestycji</span><span className="mt-0.5 block text-3xl font-bold leading-none tracking-tight">{flipScore.score}</span><span className="mt-1 block text-[11px] font-semibold">{flipScore.label}</span></div><Link className="inline-flex min-h-11 min-w-0 items-center justify-center whitespace-nowrap rounded-xl bg-gold px-3 text-sm font-semibold text-black shadow-sm outline-none transition hover:bg-gold/90 focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-card sm:px-4" href={`/deals/${encodeURIComponent(result.id)}`}>Otwórz Deal Room</Link></div>
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-3 sm:w-auto"><div className="min-w-[140px] flex-1 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.09] px-4 py-3 text-center text-emerald-700 dark:text-emerald-300 sm:flex-none"><span className="block text-[11px] font-semibold uppercase tracking-[0.14em]">Ocena inwestycji</span><span className="mt-0.5 block text-3xl font-bold leading-none tracking-tight">{flipScore.score}</span><span className="mt-1 block text-[11px] font-semibold">{flipScore.label}</span></div><Link className="inline-flex min-h-11 min-w-0 items-center justify-center whitespace-nowrap rounded-xl bg-gold px-3 text-sm font-semibold text-black shadow-sm outline-none transition hover:bg-gold/90 focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-card sm:px-4" href={`/deals/${encodeURIComponent(result.id)}`}>Otwórz Deal Room</Link></div>
           </div>
         </div>
         <div className="flex snap-x gap-1 overflow-x-auto border-b border-border/70 px-5 py-3 sm:px-8" role="tablist">
@@ -919,7 +919,12 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
   // wired to the Facebook-specific repair pipeline; rendering this second, generic
   // gallery request button there would enqueue a competing job against the same
   // listing instead of a genuinely separate feature.
-  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
+  // A single hairline border around this whole wrapper — never the "contents"
+  // display it replaces — is what makes the top card and the bottom
+  // status/action panel below it read as one offer, not two stacked,
+  // unrelated blocks. ExpandableListingCardContent's own article border is
+  // suppressed (see its className) so exactly one border is ever visible.
+  return <div className="overflow-hidden rounded-[1.125rem] border !border-gold/20 transition-colors duration-300 focus-within:!border-gold/45 hover:!border-gold/45" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {

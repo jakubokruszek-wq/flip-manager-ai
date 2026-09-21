@@ -42,3 +42,34 @@ test("non-Facebook MATCHED deep link has no regression: autoOpen is still wired 
   assert.match(page, /<ExpandableListingCard autoOpen=\{result\.id === deepLinkListingId\} averagePricePerSqm=\{data\?\.filter\.maxPricePerSqm \?\? null\} key=\{result\.id\} marketType=\{data\?\.filter\.marketType \?\? null\} onChanged=\{\(\) => void load\(\)\} result=\{result\} \/>/);
   assert.match(page, /const autoOpenedRef = useRef\(false\);/);
 });
+
+// Watcher data quality mission: the top card (ExpandableListingCardContent's
+// own <article>) and the bottom status/action panel (GalleryRequestButton)
+// were two visually separate blocks — the wrapper between them was
+// display:contents, which cannot paint a border at all. Verified in a real
+// browser (Playwright, computed styles): the wrapper's border-color resolves
+// to the --gold token at 20% alpha and the article's own border resolves to
+// fully transparent, so exactly one hairline border is ever visible around
+// the whole offer, never two.
+test("ExpandableListingCard draws exactly one thin gold border around the whole offer, never two", () => {
+  const start = page.indexOf("export function ExpandableListingCard(");
+  assert.ok(start >= 0, "ExpandableListingCard must exist");
+  const source = page.slice(start, page.indexOf("\n}\n", start));
+  assert.match(source, /return <div className="overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 focus-within:!border-gold\/45 hover:!border-gold\/45" onClickCapture=\{handleCardClickCapture\} onPointerDownCapture=\{handleCardPointerCapture\}/, "the wrapper (top card + bottom panel) must carry the one visible border, not display:contents");
+  // ReviewListingCard (a separate, untouched component) legitimately keeps
+  // its own identically-named display:contents wrapper — this check is
+  // scoped to ExpandableListingCard's own source only, not the whole file.
+  assert.doesNotMatch(source, /<div className="contents" onClickCapture=\{handleCardClickCapture\}/, "the old display:contents wrapper (which cannot paint a border) must be gone from ExpandableListingCard specifically");
+  assert.match(page, /<article className="ui-card ui-card-hover group overflow-hidden !border-transparent hover:!border-transparent">/, "the inner article's own border must be suppressed so it never doubles the outer one");
+});
+
+// The dialog header's score-badge + "Otwórz Deal Room" action row forced
+// sm:flex-nowrap, which could overflow horizontally at ordinary (not
+// ultra-wide) desktop widths instead of wrapping. flex-wrap only activates
+// when content does not fit, so removing the forced nowrap is safe at every
+// width — verified in a real browser (Playwright): the opened dialog has
+// zero horizontal overflow (scrollWidth === clientWidth) at a 1280px viewport.
+test("the dialog header's action row can wrap instead of forcing a horizontal scrollbar at desktop width", () => {
+  assert.match(page, /<div className="flex w-full min-w-0 flex-wrap items-center gap-3 sm:w-auto">/, "the action row must allow wrapping at every breakpoint, not force sm:flex-nowrap");
+  assert.doesNotMatch(page, /flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap/, "the forced no-wrap that caused the overflow must be gone");
+});

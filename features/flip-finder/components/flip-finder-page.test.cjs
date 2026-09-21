@@ -58,7 +58,7 @@ test("Finder keeps offer results primary and hides filter configuration until re
 test("Finder exposes a keyboard-accessible one-click Deal Room route outside the expandable card control", () => {
   assert.match(inlineResults, /import Link from "next\/link"/);
   assert.match(inlineResults, /href=\{`\/deals\/\$\{encodeURIComponent\(result\.id\)\}`\}>Otwórz Deal Room/);
-  const listingArticle = inlineResults.indexOf('<article className="ui-card ui-card-hover group overflow-hidden">');
+  const listingArticle = inlineResults.indexOf('<article className="ui-card ui-card-hover group overflow-hidden !border-transparent hover:!border-transparent">');
   const dealRoomCta = inlineResults.indexOf("Otwórz Deal Room", listingArticle);
   const expandableButton = inlineResults.indexOf('<button aria-expanded={expanded}', listingArticle);
   assert.ok(listingArticle >= 0 && dealRoomCta > listingArticle && expandableButton > dealRoomCta, "the gold Deal Room CTA must precede, and remain outside, the expandable button");

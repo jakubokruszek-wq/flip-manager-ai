@@ -305,7 +305,7 @@ test("real Flip Finder gallery button keeps business click independent from trac
   for (const cardCount of [50, 250]) {
     await t.test(`Skanuj keeps pending responsive and preserves ${cardCount} result cards`, async () => {
     const testPage = await preparePage(browser, baseUrl, { scanResponseDelayMs: 500, activeCardCount: cardCount });
-    const cards = testPage.page.locator('[data-finder-offers] > div.contents');
+    const cards = testPage.page.locator('[data-finder-offers] > div');
     const initialFirstCard = await cards.nth(0).innerText();
     const initialLastCard = await cards.nth(cardCount - 1).innerText();
     assert.equal(await cards.count(), cardCount);
@@ -341,7 +341,7 @@ test("real Flip Finder gallery button keeps business click independent from trac
       scanResponseDelayMs: 300,
       scanFailure: { status: 503, code: "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED", message: "Skan nie wystartował: żadna obsługiwana grupa Facebooka nie jest włączona. Włącz grupę na liście grup Facebooka i spróbuj ponownie." },
     });
-    const cards = testPage.page.locator('[data-finder-offers] > div.contents');
+    const cards = testPage.page.locator('[data-finder-offers] > div');
     assert.equal(await cards.count(), cardCount);
     const scanButton = testPage.page.getByRole("button", { name: "Skanuj oferty" });
 
