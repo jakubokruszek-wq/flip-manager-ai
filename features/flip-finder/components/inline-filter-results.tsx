@@ -924,7 +924,12 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
   // status/action panel below it read as one offer, not two stacked,
   // unrelated blocks. ExpandableListingCardContent's own article border is
   // suppressed (see its className) so exactly one border is ever visible.
-  return <div className="overflow-hidden rounded-[1.125rem] border !border-gold/20 transition-colors duration-300 focus-within:!border-gold/45 hover:!border-gold/45" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
+  // The Facebook Watcher's own InboxItem <article> already owns that single
+  // outer gold border for the whole listing (status/action panel + this
+  // card together) — this wrapper must render borderless there, or the
+  // listing would show two nested gold rectangles instead of one.
+  const wrapperBorderClassName = props.variant === "watcher" ? "" : "overflow-hidden rounded-[1.125rem] border !border-gold/20 transition-colors duration-300 focus-within:!border-gold/45 hover:!border-gold/45";
+  return <div className={wrapperBorderClassName} onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {
