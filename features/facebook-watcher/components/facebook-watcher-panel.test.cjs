@@ -183,3 +183,70 @@ test("the ?listing= deep link still clicks the exact matching inbox item, for an
   assert.match(panel, /const listingId=new URLSearchParams\(window\.location\.search\)\.get\("listing"\);if\(!listingId\)return;handledDeepLink\.current=true;const timeout=window\.setTimeout\(\(\)=>document\.querySelector<HTMLElement>\(`#facebook-inbox-\$\{CSS\.escape\(listingId\)\} \[role=button\]`\)\?\.click\(\),0\);/);
   assert.match(panel, /id=\{`facebook-inbox-\$\{item\.listingId\}/, "every inbox item, regardless of MATCHED/REVIEW bucket, must render the id the deep-link handler queries for");
 });
+
+// FIX ACTUAL FACEBOOK WATCHER CARD UI mission. Confirmed review finding: a
+// Watcher listing previously rendered as two visually separate boxes — the
+// status/action <div> (its own border-border/70 rounded box) stacked above
+// ExpandableListingCard (its own, differently-colored gold-bordered box) —
+// because the outer <article> that is supposed to represent "one listing"
+// carried no border of its own (space-y-2 only). Task 2: exactly one gold
+// border now lives on that outer <article>; both the inner status/action
+// panel's own border and ExpandableListingCard's own border (in its
+// "watcher" variant) are suppressed so nesting never produces two outlines.
+test("one Watcher listing (the outer <article>) carries exactly one gold border; the two panels inside it never draw their own competing outline", () => {
+  assert.match(panel, /return <article className="space-y-2 overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 hover:!border-gold\/45 focus-within:!border-gold\/45" id=\{`facebook-inbox-\$\{item\.listingId\}`\}>/, "the outer <article> — the actual one-listing wrapper — must carry the single gold border");
+  assert.doesNotMatch(panel, /<div className="rounded-2xl border border-border\/70 bg-card px-3 py-3">/, "the inner status/action panel's own competing border must be gone");
+  assert.match(panel, /<div className="bg-card px-3 py-3">/, "the status/action panel keeps its background and padding as an internal section, without its own full border/radius that would read as a second card");
+  assert.match(finderCard, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : "overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 focus-within:!border-gold\/45 hover:!border-gold\/45";/, "ExpandableListingCard must render borderless specifically for variant=\"watcher\", since the Watcher's own <article> now owns the single outer border");
+  assert.match(finderCard, /return <div className=\{wrapperBorderClassName\} onClickCapture=\{handleCardClickCapture\}/, "the conditional class must actually be applied to the wrapper, not just computed and discarded");
+});
+
+test("multiple Watcher listings each get their own gold-bordered <article> — the border is per listing, never around the whole grid", () => {
+  assert.match(panel, /<div className="grid gap-5 xl:grid-cols-2">\{visible\.map\(item=><InboxItem /, "the grid container itself carries no border — only each mapped InboxItem's own <article> does");
+  const gridStart = panel.indexOf('<div className="grid gap-5 xl:grid-cols-2">');
+  assert.ok(gridStart >= 0, "the results grid must exist");
+  const gridLine = panel.slice(gridStart, panel.indexOf(")}</div>", gridStart) + 8);
+  assert.doesNotMatch(gridLine, /border-gold/, "the grid wrapper line itself must not carry a gold border class — each InboxItem supplies its own");
+});
+
+// Task 3: the confirmed action row (mt-3 flex gap-2 overflow-x-auto pb-1)
+// forced a fixed-height, horizontally-scrolling strip. Replaced with wrapping
+// so all six actions stay visible with no horizontal scrollbar at any width.
+// Scoped to the per-listing <article> only: the panel's unrelated status-filter
+// tab bar (`<nav aria-label="Status ofert Facebook">`, predating this mission —
+// see commit 79a8cc0) intentionally scrolls horizontally and is out of scope.
+test("the Watcher action row wraps instead of scrolling horizontally, and all actions remain reachable", () => {
+  const articleStart = panel.indexOf("return <article className=\"space-y-2");
+  assert.ok(articleStart >= 0);
+  const articleBody = panel.slice(articleStart, panel.indexOf("</article>", articleStart));
+  assert.doesNotMatch(articleBody, /overflow-x-auto/, "no element inside the per-listing article may rely on horizontal scroll");
+  assert.match(panel, /<div className="mt-3 flex flex-wrap gap-2">/, "the action row must use flex-wrap so buttons wrap instead of overflowing");
+  // All six actions (Analizuj, Napraw galerię, Interesująca, Dodaj do CRM,
+  // Odrzuć/Przywróć, and the external Facebook link) must still be present —
+  // this mission never removes or hides an existing action.
+  const rowStart = panel.indexOf('<div className="mt-3 flex flex-wrap gap-2">');
+  assert.ok(rowStart >= 0);
+  const row = panel.slice(rowStart, panel.indexOf("</div></div><ExpandableListingCard", rowStart));
+  assert.match(row, /label="Analizuj"/);
+  assert.match(row, /label="Napraw galerię"/);
+  assert.match(row, /label="Interesująca"/);
+  assert.match(row, /label="Dodaj do CRM"/);
+  assert.match(row, /label="Przywróć"|label="Odrzuć"/);
+  assert.match(row, /ExternalLink className="size-3\.5"\/>Facebook/);
+});
+
+test("ExpandableListingCard and the status/action panel are both direct descendants of the same per-listing <article> wrapper", () => {
+  const articleStart = panel.indexOf("return <article className=\"space-y-2");
+  assert.ok(articleStart >= 0);
+  const articleBody = panel.slice(articleStart, panel.indexOf("</article>", articleStart));
+  assert.match(articleBody, /<div className="bg-card px-3 py-3">/, "the status/action panel must be inside the bordered article");
+  assert.match(articleBody, /<ExpandableListingCard /, "ExpandableListingCard must be inside the same bordered article, as a sibling of the status/action panel, not a separate top-level element");
+  const statusPanelIndex = articleBody.indexOf('<div className="bg-card px-3 py-3">');
+  const cardIndex = articleBody.indexOf("<ExpandableListingCard ");
+  assert.ok(statusPanelIndex >= 0 && cardIndex > statusPanelIndex, "the status/action panel must precede the card, both inside the one wrapper");
+});
+
+test("price and price-per-m2 are still rendered by the shared card when data exists (Watcher variant unaffected by the border change)", () => {
+  assert.match(finderCard, /text-2xl font-bold[^"]*"[^>]*>\{currency\(result\.price\)\}/);
+  assert.match(finderCard, /text-gold">\{currencyPerSqm\(result\.pricePerSqm\)\}/);
+});
