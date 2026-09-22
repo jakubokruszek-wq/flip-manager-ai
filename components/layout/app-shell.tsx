@@ -22,9 +22,9 @@ export function AppShell({ children }: AppShellProps) {
         <Sidebar />
       </div>
 
-      <div className="flex min-h-screen flex-1 flex-col lg:pl-48">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-48">
         <TopNav title={pageTitle} />
-        <main className="flex-1 overflow-y-auto pb-[calc(5.5rem+env(safe-area-inset-bottom))] lg:pb-0">
+        <main className="min-w-0 flex-1 overflow-y-auto pb-[calc(5.5rem+env(safe-area-inset-bottom))] lg:pb-0">
           <div className="mx-auto w-full max-w-7xl px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-8 sm:px-6 sm:py-8">
             {children}
           </div>
