@@ -51,11 +51,19 @@ test("non-Facebook MATCHED deep link has no regression: autoOpen is still wired 
 // to the --gold token at 20% alpha and the article's own border resolves to
 // fully transparent, so exactly one hairline border is ever visible around
 // the whole offer, never two.
-test("ExpandableListingCard draws exactly one thin gold border around the whole offer, never two", () => {
+//
+// Fix Actual Facebook Watcher Card UI mission: the /facebook-watcher page's
+// own InboxItem <article> now owns the single outer border for the whole
+// listing (status/action panel + this card together — see
+// facebook-watcher-panel.test.cjs). This wrapper's border must therefore be
+// suppressed for variant="watcher", or the Watcher would show two nested
+// gold rectangles again; the default/"standalone" Finder usage is unchanged.
+test("ExpandableListingCard draws exactly one thin gold border around the whole offer, never two — suppressed only when the Watcher's own <article> already owns it", () => {
   const start = page.indexOf("export function ExpandableListingCard(");
   assert.ok(start >= 0, "ExpandableListingCard must exist");
   const source = page.slice(start, page.indexOf("\n}\n", start));
-  assert.match(source, /return <div className="overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 focus-within:!border-gold\/45 hover:!border-gold\/45" onClickCapture=\{handleCardClickCapture\} onPointerDownCapture=\{handleCardPointerCapture\}/, "the wrapper (top card + bottom panel) must carry the one visible border, not display:contents");
+  assert.match(source, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : "overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 focus-within:!border-gold\/45 hover:!border-gold\/45";/, "the border must be computed from variant, empty only for \"watcher\", so the standalone Finder usage keeps its own single border");
+  assert.match(source, /return <div className=\{wrapperBorderClassName\} onClickCapture=\{handleCardClickCapture\} onPointerDownCapture=\{handleCardPointerCapture\}/, "the wrapper (top card + bottom panel) must carry the computed border class, not display:contents");
   // ReviewListingCard (a separate, untouched component) legitimately keeps
   // its own identically-named display:contents wrapper — this check is
   // scoped to ExpandableListingCard's own source only, not the whole file.
