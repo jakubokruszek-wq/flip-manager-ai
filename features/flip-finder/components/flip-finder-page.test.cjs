@@ -20,17 +20,35 @@ const historyAuth = fs.readFileSync(path.join(__dirname, "../server/history-clea
 
 test("normal Flip Finder UI uses the queue scan result funnel", () => {
   assert.match(page, /WYNIK OSTATNIEGO SKANU/);
-  assert.match(page, /Zebrane posty/);
-  assert.match(page, /Zweryfikowana tożsamość/);
-  assert.match(page, /Oferty sprzedaży/);
+  // Stale assertion, traced via `git log -S` to commit ab285b3 ("deterministic
+  // scan accounting and extraction recovery V1"): that commit intentionally
+  // condensed the funnel to compact single/two-word labels (documented in the
+  // component's own comment, "Zebrane -> Tożsamość OK -> Sprzedaż mieszkań ->
+  // Odrzucone twardo -> Do oceny -> Dopasowane") but this test was never
+  // updated to match, leaving three assertions checking pre-condensation copy
+  // that has not existed in the implementation since. Restoring the old copy
+  // would revert an intentional UI change; these three lines are corrected to
+  // the implementation's own current, documented labels instead.
+  assert.match(page, /Zebrane/);
+  assert.match(page, /Tożsamość OK/);
+  assert.match(page, /Sprzedaż mieszkań/);
   assert.match(page, /Odrzucone twardo/);
   assert.match(page, /Do oceny/);
   assert.match(page, /hardRejectedUnique/);
   assert.doesNotMatch(page, /Math\.max\(0, collected - matched\)/);
-  assert.match(page, /ODRZUCONE/);
-  assert.match(page, /Nowe zapisane oferty/);
-  assert.match(page, /Zaktualizowane/);
-  assert.match(page, /Ten skan nie dodał nowych ofert\.|Nie zapisano ofert\./);
+  // Same ab285b3 redesign: the old all-caps "ODRZUCONE" section heading and
+  // the "Nowe zapisane oferty"/"Zaktualizowane" metric labels were replaced by
+  // "Dlaczego odrzucone?" and "Globalnie nowe oferty"/"Aktualizacje"
+  // respectively. The old empty-scan footnote text is now generated
+  // dynamically by scanNoOffersMessage() (features/flip-finder/dashboard.ts,
+  // wording and pluralization already covered by that function's own tests),
+  // so the static-source check here verifies the call is actually wired into
+  // this panel instead of matching literal message text that no longer
+  // exists as inline JSX.
+  assert.match(page, /Dlaczego odrzucone\?/);
+  assert.match(page, /Globalnie nowe oferty/);
+  assert.match(page, /Aktualizacje/);
+  assert.match(page, /scanNoOffersMessage\(funnel\.saved, funnel\.topRejection\)/);
   assert.match(page, /Szczegóły diagnostyczne/);
   assert.doesNotMatch(page, /onClick=\{\(\) => void validateCollector\(activeFilter\)\}/);
   assert.doesNotMatch(page, /onClick=\{\(\) => void testDirectExternalChannel\(\)\}/);
