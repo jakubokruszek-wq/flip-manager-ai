@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { planFacebookGroupJobs } from "../facebook-worker/multi-group.ts";
-import { findDuplicateFacebookGroup, normalizeFacebookGroupUrl, normalizeFacebookSourceUrl, parseFacebookGroupCreatePayload } from "./group-url.ts";
+import { FacebookGroupValidationError, findDuplicateFacebookGroup, normalizeFacebookGroupUrl, normalizeFacebookSourceUrl, parseFacebookGroupCreatePayload } from "./group-url.ts";
 
 test("valid slug URL is canonicalized", () => {
   assert.deepEqual(normalizeFacebookGroupUrl("https://facebook.com/groups/lodzsprzedazzakupwynajem"), { url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/", identifier: "lodzsprzedazzakupwynajem" });
@@ -26,19 +26,45 @@ test("invalid domain and arbitrary Facebook paths are rejected", () => {
 
 test("exact and alternate URL variants are controlled duplicates", () => {
   const groups = [{ url: "https://www.facebook.com/groups/example/" }];
-  assert.equal(findDuplicateFacebookGroup(groups, "https://www.facebook.com/groups/example/", "example"), groups[0]);
-  assert.equal(findDuplicateFacebookGroup(groups, "https://www.facebook.com/groups/example/", "EXAMPLE"), groups[0]);
+  assert.deepEqual(findDuplicateFacebookGroup(groups, "https://www.facebook.com/groups/example/", "example"), { kind: "watched-group", group: groups[0] });
+  assert.deepEqual(findDuplicateFacebookGroup(groups, "https://www.facebook.com/groups/example/", "EXAMPLE"), { kind: "watched-group", group: groups[0] });
 });
 
-test("empty name gets a safe identifier-based fallback", () => {
-  const parsed = parseFacebookGroupCreatePayload({ url: "https://facebook.com/groups/402796264871862", name: "  " });
-  assert.equal(parsed.input.name, "Facebook group 402796264871862");
+// HOLD-blocker requirement: a group identifier already approved in
+// FACEBOOK_PRODUCTION_SOURCES (features/collector/facebook-production.ts)
+// must be detected as a duplicate even when it has no matching
+// watched_facebook_groups row at all — these are two genuinely separate
+// registries (see findDuplicateFacebookGroup's own doc comment).
+test("a URL matching an approved production source (with no watched-group row at all) is a production-source duplicate", () => {
+  const productionSources = [{ sourceId: "402796264871862", sourceUrl: "https://www.facebook.com/groups/402796264871862/", sourceType: "GROUP" as const }];
+  const result = findDuplicateFacebookGroup([], "https://www.facebook.com/groups/402796264871862/", "402796264871862", productionSources);
+  assert.deepEqual(result, { kind: "production-source", source: productionSources[0] });
+});
+
+test("a watched-group match takes priority over a production-source match when both exist", () => {
+  const groups = [{ url: "https://www.facebook.com/groups/402796264871862/", canonicalGroupId: "402796264871862" }];
+  const productionSources = [{ sourceId: "402796264871862", sourceUrl: "https://www.facebook.com/groups/402796264871862/", sourceType: "GROUP" as const }];
+  const result = findDuplicateFacebookGroup(groups, "https://www.facebook.com/groups/402796264871862/", "402796264871862", productionSources);
+  assert.deepEqual(result, { kind: "watched-group", group: groups[0] });
+});
+
+// HOLD-blocker requirement: no bare numeric-ID synthetic name. A group name
+// is now required at creation time, exactly like it already was at edit
+// time (management.ts's requiredText) — never silently defaulted.
+test("an empty or missing name is rejected — a real group name is required, never a numeric-ID synthetic fallback", () => {
+  assert.throws(() => parseFacebookGroupCreatePayload({ url: "https://facebook.com/groups/402796264871862", name: "  " }), FacebookGroupValidationError);
+  assert.throws(() => parseFacebookGroupCreatePayload({ url: "https://facebook.com/groups/402796264871862" }), /Nazwa grupy jest wymagana/);
+});
+
+test("a supplied name is preserved verbatim, never replaced by the identifier", () => {
+  const parsed = parseFacebookGroupCreatePayload({ url: "https://facebook.com/groups/402796264871862", name: "Łódzkie Nieruchomości Flip" });
+  assert.equal(parsed.input.name, "Łódzkie Nieruchomości Flip");
   assert.equal(parsed.input.city, "Łódź");
   assert.equal(parsed.input.enabled, true);
 });
 
 test("enabled added group is included by the existing multi-group planner", () => {
-  const parsed = parseFacebookGroupCreatePayload({ url: "https://facebook.com/groups/new-group", enabled: true, priority: "high" });
+  const parsed = parseFacebookGroupCreatePayload({ url: "https://facebook.com/groups/new-group", name: "Nowa Grupa Testowa", enabled: true, priority: "high" });
   const plans = planFacebookGroupJobs("filter", "run", [{ id: "new-id", name: parsed.input.name, url: parsed.input.url, priority: parsed.input.priority, createdAt: "2026-08-22T00:00:00.000Z" }]);
   assert.equal(parsed.input.enabled, true);
   assert.equal(plans.length, 1);

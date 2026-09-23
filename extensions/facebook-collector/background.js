@@ -139,6 +139,10 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     void recordStartTrace(message).then(() => respond({ ok: true })).catch(() => respond({ ok: false }));
     return true;
   }
+  if (message?.type === "REPORT_DISCOVERED_GROUPS") {
+    void reportDiscoveredGroups(Array.isArray(message.candidates) ? message.candidates : []).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+    return true;
+  }
   if (message?.type === "COLLECT_ACTIVE_SOURCE") {
     void collectActiveSource().then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
@@ -938,6 +942,20 @@ async function failCollectorScan(scanId, error, diagnostics = {}) {
     const imageRule = safeImageRuleDiagnostics(diagnostics.imageRule || error?.diagnostics);
     await signedPost(`${String(config.apiUrl).replace(/\/+$/, "")}/api/collector/facebook/scans/${scanId}/fail`, JSON.stringify({ error: collectorErrorCode(error), ...globalThis.FlipCollectorRuntime.safeDiagnostics(diagnostics), ...(imageRule ? { imageRule } : {}) }), FAIL_REPORT_TIMEOUT_MS);
   } catch { /* preserve the original collector failure */ }
+}
+
+/**
+ * "Wykryj grupy nieruchomościowe": reports what group-discovery.js found on
+ * Facebook's own "Twoje grupy" page to the server's read-only preview
+ * classifier. Never imports/activates anything itself -- the server only
+ * classifies (NOWA/JUZ_W_MANAGERZE/MOZLIWY_DUPLIKAT/WYMAGA_WERYFIKACJI), and
+ * the Manager page is the only place a human explicitly selects what to add.
+ */
+async function reportDiscoveredGroups(candidates) {
+  const config = await configValue();
+  if (!config.apiUrl || !config.deviceId || !config.deviceToken) throw new Error("COLLECTOR_NOT_PAIRED");
+  const url = `${String(config.apiUrl).replace(/\/+$/, "")}/api/facebook-watcher/groups/discover`;
+  return signedPost(url, JSON.stringify({ candidates: candidates.slice(0, 200) }), FAIL_REPORT_TIMEOUT_MS);
 }
 
 async function signedPost(urlValue, body, timeoutMs = null) {

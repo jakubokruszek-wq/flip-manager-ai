@@ -29,6 +29,11 @@
       "run_at": "document_start"
     },
     {
+      "matches": ["https://www.facebook.com/groups/joins/*"],
+      "js": ["group-discovery.js"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["https://flip-manager-ai.vercel.app/flip-finder/collector/setup*"],
       "js": ["pairing.js"],
       "run_at": "document_start"

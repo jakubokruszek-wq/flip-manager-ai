@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ExternalLink, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ExternalLink, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api-fetch";
@@ -18,7 +18,10 @@ import {
   partitionWatchedFacebookGroups,
   type FacebookGroupManagementPatch,
 } from "../management";
+import type { FacebookGroupImportPreviewItem, HistoricalFacebookSourceMapping } from "../discovery";
 import type { AddWatchedFacebookGroupResult, WatchedFacebookGroup } from "../types";
+
+const IMPORTABLE_STATUSES = new Set<FacebookGroupImportPreviewItem["status"]>(["NOWA", "MOZLIWY_DUPLIKAT"]);
 
 const initial: FacebookGroupCreatePayload = {
   type: "GROUP",
@@ -37,12 +40,34 @@ export function WatchedGroupsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<FacebookGroupImportPreviewItem[]>([]);
+  const [previewGeneratedAt, setPreviewGeneratedAt] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [previewNames, setPreviewNames] = useState<Record<string, string>>({});
+  const [historicalMapping, setHistoricalMapping] = useState<HistoricalFacebookSourceMapping[]>([]);
 
   const load = async () => {
     const response = await facebookGroupsFetch("/api/facebook-watcher/groups", { cache: "no-store" });
     const body = (await response.json()) as { groups?: WatchedFacebookGroup[]; error?: string };
     if (!response.ok) throw new Error(body.error ?? "Nie udało się pobrać grup.");
     setGroups(body.groups ?? []);
+  };
+
+  const loadDiscoveryPreview = async () => {
+    const response = await facebookGroupsFetch("/api/facebook-watcher/groups/discover", { cache: "no-store" });
+    const body = (await response.json()) as { preview?: FacebookGroupImportPreviewItem[]; generatedAt?: string | null; error?: string };
+    if (!response.ok) throw new Error(body.error ?? "Nie udało się pobrać wyników wykrywania grup.");
+    const items = body.preview ?? [];
+    setPreview(items);
+    setPreviewGeneratedAt(body.generatedAt ?? null);
+    setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
+  };
+
+  const loadHistoricalMapping = async () => {
+    const response = await facebookGroupsFetch("/api/facebook-watcher/groups/historical-mapping", { cache: "no-store" });
+    const body = (await response.json()) as { mapping?: HistoricalFacebookSourceMapping[]; error?: string };
+    if (!response.ok) throw new Error(body.error ?? "Nie udało się pobrać mapowania historycznych źródeł.");
+    setHistoricalMapping(body.mapping ?? []);
   };
 
   useEffect(() => {
@@ -59,10 +84,73 @@ export function WatchedGroupsPage() {
       .catch((value: unknown) => {
         if (active) setError(errorMessage(value, "Nie udało się pobrać grup."));
       });
+    void facebookGroupsFetch("/api/facebook-watcher/groups/discover", { cache: "no-store" })
+      .then(async (response) => ({ response, body: (await response.json()) as { preview?: FacebookGroupImportPreviewItem[]; generatedAt?: string | null; error?: string } }))
+      .then(({ response, body }) => {
+        if (!response.ok || !active) return;
+        const items = body.preview ?? [];
+        setPreview(items);
+        setPreviewGeneratedAt(body.generatedAt ?? null);
+        setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
+      })
+      .catch(() => undefined);
+    void facebookGroupsFetch("/api/facebook-watcher/groups/historical-mapping", { cache: "no-store" })
+      .then(async (response) => ({ response, body: (await response.json()) as { mapping?: HistoricalFacebookSourceMapping[]; error?: string } }))
+      .then(({ response, body }) => {
+        if (response.ok && active) setHistoricalMapping(body.mapping ?? []);
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
     };
   }, []);
+
+  const toggleSelected = (url: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(url)) next.delete(url); else next.add(url);
+      return next;
+    });
+  };
+
+  const importSelected = async () => {
+    const selections = preview
+      .filter((item) => selected.has(item.url) && IMPORTABLE_STATUSES.has(item.status))
+      .map((item) => ({ url: item.url, name: (previewNames[item.url] ?? item.discoveredName ?? "").trim() }));
+    if (!selections.length) {
+      setError("Wybierz co najmniej jedną grupę do zaimportowania.");
+      return;
+    }
+    if (selections.some((selection) => !selection.name)) {
+      setError("Nazwa grupy jest wymagana dla każdego wyboru — uzupełnij ją przed importem.");
+      return;
+    }
+    setBusy(true);
+    clearFeedback();
+    try {
+      const response = await facebookGroupsFetch("/api/facebook-watcher/groups/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ selections }),
+      });
+      const body = (await response.json()) as { outcomes?: Array<{ url: string; result: AddWatchedFacebookGroupResult }>; error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Nie udało się zaimportować wybranych grup.");
+      const outcomes = body.outcomes ?? [];
+      for (const outcome of outcomes) if (outcome.result.success) replaceGroup(outcome.result.group);
+      const failed = outcomes.filter((outcome) => !outcome.result.success);
+      setSelected(new Set());
+      await load();
+      if (failed.length) {
+        setError(`${outcomes.length - failed.length} z ${outcomes.length} grup zaimportowano. Błędy: ${failed.map((item) => item.result.success ? "" : item.result.error).join("; ")}`);
+      } else {
+        setSuccess(`Zaimportowano ${outcomes.length} ${outcomes.length === 1 ? "grupę" : "grup"}.`);
+      }
+    } catch (value) {
+      setError(errorMessage(value, "Nie udało się zaimportować wybranych grup."));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const create = async () => {
     setBusy(true);
@@ -160,20 +248,34 @@ export function WatchedGroupsPage() {
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="grid gap-1 text-sm">Typ źródła<select className="h-11 rounded-xl border bg-background px-3" value={form.type ?? "GROUP"} onChange={(event) => setForm((value) => ({ ...value, type: event.target.value === "PROFILE" ? "PROFILE" : "GROUP" }))}><option value="GROUP">Grupa</option><option value="PROFILE">Profil</option></select></label>
           <Field className="sm:col-span-2" label={form.type === "PROFILE" ? "Facebook profile URL" : "Facebook group URL"} placeholder={form.type === "PROFILE" ? "https://www.facebook.com/profile.php?id=..." : "https://www.facebook.com/groups/..."} value={form.url} onChange={(url) => setForm((value) => ({ ...value, url }))} />
-          <Field label="Nazwa — opcjonalnie" placeholder="Facebook group …" value={form.name ?? ""} onChange={(name) => setForm((value) => ({ ...value, name }))} />
+          <Field label="Nazwa grupy" placeholder="np. Łódź Sprzedaż Zakup Wynajem" value={form.name ?? ""} onChange={(name) => setForm((value) => ({ ...value, name }))} />
           <Field label="Miasto" value={form.city ?? "Łódź"} onChange={(city) => setForm((value) => ({ ...value, city }))} />
           <label className="grid gap-1 text-sm">Priorytet<SelectPriority value={form.priority ?? "normal"} onChange={(priority) => setForm((value) => ({ ...value, priority: priority === "low" ? "normal" : priority }))} create /></label>
           <label className="flex min-h-11 items-center gap-3 self-end rounded-xl border px-3 text-sm"><input checked={form.enabled !== false} onChange={(event) => setForm((value) => ({ ...value, enabled: event.target.checked }))} type="checkbox" />Aktywna</label>
         </div>
         {success ? <p className="mt-3 text-sm text-emerald-400" role="status">{success}</p> : null}
         {error ? <p className="mt-3 text-sm text-danger" role="alert">{error}</p> : null}
-        <Button className="mt-4 min-h-11" disabled={busy || !form.url.trim()} onClick={() => void create()}><Plus className="size-4" />{busy ? "Dodawanie…" : "Dodaj grupę"}</Button>
+        <Button className="mt-4 min-h-11" disabled={busy || !form.url.trim() || !form.name?.trim()} onClick={() => void create()}><Plus className="size-4" />{busy ? "Dodawanie…" : "Dodaj grupę"}</Button>
       </section>
+
+      <DiscoverySection
+        preview={preview}
+        previewGeneratedAt={previewGeneratedAt}
+        previewNames={previewNames}
+        onNameChange={(url, name) => setPreviewNames((current) => ({ ...current, [url]: name }))}
+        selected={selected}
+        onToggleSelected={toggleSelected}
+        busy={busy}
+        onRefresh={() => void loadDiscoveryPreview().catch((value: unknown) => setError(errorMessage(value, "Nie udało się pobrać wyników wykrywania grup.")))}
+        onImport={() => void importSelected()}
+      />
 
       <GroupSection title={`Aktywne grupy (${partitioned.active.length})`} empty="Brak aktywnych grup." groups={partitioned.active} onEdit={setEditing} onRemove={setRemoving} onToggle={(group) => void update(group, groupPatch(group, { enabled: false }), "Grupa została wstrzymana.")} />
       <GroupSection title={`Nieaktywne grupy (${partitioned.inactive.length})`} empty="Brak nieaktywnych grup." groups={partitioned.inactive} onEdit={setEditing} onRemove={setRemoving} onToggle={(group) => void update(group, groupPatch(group, { enabled: true }), "Grupa została aktywowana.")} />
 
       <Button variant="outline" onClick={() => void load()}><RefreshCw className="size-4" />Odśwież</Button>
+
+      <HistoricalMappingSection mapping={historicalMapping} onRefresh={() => void loadHistoricalMapping().catch((value: unknown) => setError(errorMessage(value, "Nie udało się pobrać mapowania historycznych źródeł.")))} />
 
       {editing ? <EditDialog busy={busy} group={editing} key={editing.id} onClose={() => setEditing(null)} onSave={(group, patch) => void update(group, patch, "Zmiany grupy zostały zapisane.")} /> : null}
       <Dialog open={Boolean(removing)} onOpenChange={(open) => { if (!open && !busy) setRemoving(null); }}>
@@ -191,6 +293,132 @@ export function WatchedGroupsPage() {
         </DialogContent>
       </Dialog>
     </main>
+  );
+}
+
+function DiscoverySection({ preview, previewGeneratedAt, previewNames, onNameChange, selected, onToggleSelected, busy, onRefresh, onImport }: {
+  preview: FacebookGroupImportPreviewItem[];
+  previewGeneratedAt: string | null;
+  previewNames: Record<string, string>;
+  onNameChange: (url: string, name: string) => void;
+  selected: Set<string>;
+  onToggleSelected: (url: string) => void;
+  busy: boolean;
+  onRefresh: () => void;
+  onImport: () => void;
+}) {
+  const selectableCount = preview.filter((item) => IMPORTABLE_STATUSES.has(item.status)).length;
+  const selectedCount = preview.filter((item) => selected.has(item.url) && IMPORTABLE_STATUSES.has(item.status)).length;
+  return (
+    <section className="ui-section space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold">Wykryj grupy nieruchomościowe</h2>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Otwórz stronę Twoich grup na Facebooku — rozszerzenie Facebook Collector, jeśli jest zainstalowane i zalogowane, samo zgłosi wykryte grupy tutaj. Nazwa każdej grupy pochodzi z tego, co rozszerzenie faktycznie odczytało na Facebooku, nigdy z domysłu ani ze zrzutu ekranu.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            className="min-h-11"
+            nativeButton={false}
+            render={<a href="https://www.facebook.com/groups/joins/" target="_blank" rel="noopener noreferrer" />}
+          >
+            <Search className="size-4" />Otwórz Twoje grupy na Facebooku
+          </Button>
+          <Button variant="outline" className="min-h-11" onClick={onRefresh}><RefreshCw className="size-4" />Odśwież podgląd</Button>
+        </div>
+      </div>
+      {previewGeneratedAt ? <p className="text-xs text-muted-foreground">Ostatnie wykrywanie: {new Date(previewGeneratedAt).toLocaleString("pl-PL")}</p> : <p className="text-xs text-muted-foreground">Brak jeszcze żadnego wykrywania.</p>}
+      {preview.length ? (
+        <div className="space-y-2">
+          {preview.map((item) => (
+            <ImportPreviewRow
+              key={item.url}
+              item={item}
+              name={previewNames[item.url] ?? ""}
+              onNameChange={(name) => onNameChange(item.url, name)}
+              checked={selected.has(item.url)}
+              onToggle={() => onToggleSelected(item.url)}
+            />
+          ))}
+          <Button className="mt-2 min-h-11" disabled={busy || selectedCount === 0} onClick={onImport}>
+            {busy ? "Importowanie…" : `Importuj wybrane (${selectedCount}/${selectableCount})`}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">Brak wykrytych grup do przejrzenia.</p>
+      )}
+    </section>
+  );
+}
+
+const IMPORT_STATUS_LABEL: Record<FacebookGroupImportPreviewItem["status"], string> = {
+  NOWA: "Nowa",
+  JUZ_W_MANAGERZE: "Już w Managerze",
+  MOZLIWY_DUPLIKAT: "Możliwy duplikat",
+  WYMAGA_WERYFIKACJI: "Wymaga weryfikacji",
+  POMINIETA: "Pominięta",
+};
+
+function ImportPreviewRow({ item, name, onNameChange, checked, onToggle }: { item: FacebookGroupImportPreviewItem; name: string; onNameChange: (name: string) => void; checked: boolean; onToggle: () => void }) {
+  const selectable = IMPORTABLE_STATUSES.has(item.status);
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <input aria-label={`Wybierz ${item.discoveredName ?? item.url}`} checked={checked} disabled={!selectable} onChange={onToggle} type="checkbox" />
+          <span className="rounded-full bg-gold/10 px-2 py-1 text-[10px] font-bold uppercase text-gold">{IMPORT_STATUS_LABEL[item.status]}</span>
+          <span className="truncate text-sm font-semibold">{item.discoveredName ?? "(brak nazwy)"}</span>
+        </div>
+        <p className="mt-1 break-all text-xs text-muted-foreground">{item.url}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p>
+      </div>
+      {selectable ? (
+        <input
+          aria-label={`Nazwa grupy do importu: ${item.url}`}
+          className="h-11 w-full rounded-xl border bg-background px-3 text-sm sm:w-64"
+          placeholder="Nazwa grupy przed importem"
+          value={name}
+          onChange={(event) => onNameChange(event.target.value)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function HistoricalMappingSection({ mapping, onRefresh }: { mapping: HistoricalFacebookSourceMapping[]; onRefresh: () => void }) {
+  if (!mapping.length) return null;
+  return (
+    <section className="ui-section space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold">Historyczne źródła Watchera (tylko do odczytu)</h2>
+          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+            Zatwierdzone źródła kolektora produkcyjnego. Nazwa jest pokazywana tylko wtedy, gdy została już naprawdę przechwycona — dla pozostałych widnieje &quot;{"Nieznana grupa"}&quot;, nigdy zgadywana.
+          </p>
+        </div>
+        <Button variant="outline" className="min-h-11" onClick={onRefresh}><RefreshCw className="size-4" />Odśwież</Button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs uppercase text-muted-foreground">
+            <tr><th className="py-2 pr-4">Nazwa</th><th className="py-2 pr-4">Identyfikator</th><th className="py-2 pr-4">Typ</th><th className="py-2">Adres</th></tr>
+          </thead>
+          <tbody>
+            {mapping.map((entry) => (
+              <tr className="border-t" key={entry.sourceId}>
+                <td className="py-2 pr-4 font-semibold">{entry.isNamed ? entry.name : <span className="text-muted-foreground">{entry.name}</span>}</td>
+                <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{entry.sourceId}</td>
+                <td className="py-2 pr-4 text-xs uppercase text-muted-foreground">{entry.sourceType}</td>
+                <td className="py-2 max-w-xs truncate text-xs text-muted-foreground"><a className="hover:underline" href={entry.sourceUrl} target="_blank" rel="noopener noreferrer">{entry.sourceUrl}</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

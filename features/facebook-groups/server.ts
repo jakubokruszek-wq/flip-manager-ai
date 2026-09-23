@@ -1,8 +1,10 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
+import { FACEBOOK_PRODUCTION_SOURCES } from "@/features/collector/facebook-production";
 import { FacebookGroupValidationError, findDuplicateFacebookGroup, normalizeFacebookSourceUrl, parseFacebookGroupCreatePayload } from "./group-url";
 import { parseFacebookGroupManagementPatch, safeRemovePatch } from "./management";
+import { buildGroupImportPreview, buildHistoricalFacebookSourceMapping, type DiscoveredFacebookGroupCandidate, type FacebookGroupImportPreviewItem, type HistoricalFacebookSourceMapping } from "./discovery";
 import type { AddWatchedFacebookGroupResult, FacebookGroupAccessStatus, FacebookGroupInput, WatchedFacebookGroup } from "./types";
 
 type Row = Record<string, unknown>;
@@ -30,14 +32,14 @@ export async function addWatchedFacebookGroup(value: unknown): Promise<AddWatche
   try {
     const normalized = parseFacebookGroupCreatePayload(value);
     const existingGroups = await listWatchedFacebookGroups();
-    const duplicate = findDuplicateFacebookGroup(existingGroups, normalized.input.url, normalized.identifier);
-    if (duplicate) return { success: false, duplicate: true, error: "Ta grupa jest już obserwowana.", group: duplicate };
+    const duplicate = findDuplicateFacebookGroup(existingGroups, normalized.input.url, normalized.identifier, FACEBOOK_PRODUCTION_SOURCES);
+    if (duplicate) return duplicateResult(duplicate);
     try {
       return { success: true, duplicate: false, group: await createWatchedFacebookGroup(normalized.input) };
     } catch (error) {
       if (error instanceof Error && /23505|duplicate key|unique constraint/i.test(error.message)) {
-        const racedDuplicate = findDuplicateFacebookGroup(await listWatchedFacebookGroups(), normalized.input.url, normalized.identifier);
-        if (racedDuplicate) return { success: false, duplicate: true, error: "Ta grupa jest już obserwowana.", group: racedDuplicate };
+        const racedDuplicate = findDuplicateFacebookGroup(await listWatchedFacebookGroups(), normalized.input.url, normalized.identifier, FACEBOOK_PRODUCTION_SOURCES);
+        if (racedDuplicate) return duplicateResult(racedDuplicate);
       }
       throw error;
     }
@@ -45,6 +47,12 @@ export async function addWatchedFacebookGroup(value: unknown): Promise<AddWatche
     if (error instanceof FacebookGroupValidationError) return { success: false, duplicate: false, validationError: true, error: error.message };
     throw error;
   }
+}
+
+function duplicateResult(duplicate: ReturnType<typeof findDuplicateFacebookGroup<WatchedFacebookGroup>>): AddWatchedFacebookGroupResult {
+  if (!duplicate) throw new Error("INVARIANT: duplicateResult called without a duplicate");
+  if (duplicate.kind === "watched-group") return { success: false, duplicate: true, error: "Ta grupa jest już obserwowana.", group: duplicate.group };
+  return { success: false, duplicate: true, error: "Ta grupa jest już zatwierdzonym źródłem produkcyjnym Watchera (jeszcze nie dodaną ręcznie do listy obserwowanych).", group: null, productionSource: duplicate.source };
 }
 
 export async function updateWatchedFacebookGroup(id: string, patch: Partial<FacebookGroupInput> & { accessStatus?: FacebookGroupAccessStatus; lastCheckedAt?: string | null; lastError?: string | null }): Promise<WatchedFacebookGroup> {
@@ -71,6 +79,59 @@ export async function updateWatchedFacebookGroupDetails(id: string, value: unkno
 export async function removeWatchedFacebookGroup(id: string): Promise<WatchedFacebookGroup> {
   validateGroupId(id);
   return updateWatchedFacebookGroup(id, safeRemovePatch());
+}
+
+// The extension runs "Wykryj grupy nieruchomościowe" on an authenticated
+// facebook.com tab, entirely separate from the Manager page the user reviews
+// the preview on. This in-memory store bridges the two tabs' requests,
+// mirroring the same globalThis-backed fallback pattern memoryGroups already
+// uses above for watched_facebook_groups — no new table/migration required.
+// It only ever holds the most recent preview; nothing here is ever imported
+// automatically, so losing it (e.g. a server restart) is a display-only
+// inconvenience, never a state-integrity concern.
+let lastDiscoveryPreview: { preview: FacebookGroupImportPreviewItem[]; generatedAt: string } | null =
+  (globalThis as typeof globalThis & { __facebookGroupDiscoveryPreview?: typeof lastDiscoveryPreview }).__facebookGroupDiscoveryPreview ?? null;
+
+/**
+ * Read-only: classifies each extension-discovered candidate against the
+ * current watched groups and the approved production sources, but never
+ * writes a watched-group row. The user must explicitly select which NOWA/
+ * MOZLIWY_DUPLIKAT rows to actually add via importSelectedFacebookGroups.
+ */
+export async function previewDiscoveredFacebookGroups(candidates: DiscoveredFacebookGroupCandidate[]): Promise<FacebookGroupImportPreviewItem[]> {
+  const existingGroups = await listWatchedFacebookGroups();
+  const preview = buildGroupImportPreview(candidates, existingGroups, FACEBOOK_PRODUCTION_SOURCES);
+  lastDiscoveryPreview = { preview, generatedAt: new Date().toISOString() };
+  (globalThis as typeof globalThis & { __facebookGroupDiscoveryPreview?: typeof lastDiscoveryPreview }).__facebookGroupDiscoveryPreview = lastDiscoveryPreview;
+  return preview;
+}
+
+export function getLastFacebookGroupDiscoveryPreview(): { preview: FacebookGroupImportPreviewItem[]; generatedAt: string } | null {
+  return lastDiscoveryPreview;
+}
+
+export type FacebookGroupImportSelection = { url: string; name: string; city?: string; priority?: "normal" | "high" };
+export type FacebookGroupImportOutcome = { url: string; result: AddWatchedFacebookGroupResult };
+
+/**
+ * The only write path a discovered candidate can ever reach — one explicit
+ * selection at a time, reusing addWatchedFacebookGroup's own validation and
+ * duplicate-detection exactly as the manual "add group" form does, so a
+ * discovered group can never skip the required-name check or the duplicate
+ * check just because it arrived through the discovery flow instead.
+ */
+export async function importSelectedFacebookGroups(selections: FacebookGroupImportSelection[]): Promise<FacebookGroupImportOutcome[]> {
+  const outcomes: FacebookGroupImportOutcome[] = [];
+  for (const selection of selections) {
+    const result = await addWatchedFacebookGroup({ url: selection.url, name: selection.name, city: selection.city, priority: selection.priority });
+    outcomes.push({ url: selection.url, result });
+  }
+  return outcomes;
+}
+
+export async function getHistoricalFacebookSourceMapping(): Promise<HistoricalFacebookSourceMapping[]> {
+  const existingGroups = await listWatchedFacebookGroups();
+  return buildHistoricalFacebookSourceMapping(existingGroups, FACEBOOK_PRODUCTION_SOURCES);
 }
 
 export async function recordFacebookGroupImport(groupName: string | undefined, created: boolean, opportunity: boolean) {

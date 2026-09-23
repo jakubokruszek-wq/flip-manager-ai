@@ -1,3 +1,4 @@
+import type { FacebookProductionSource } from "@/features/collector/facebook-production";
 import type { FacebookGroupInput, FacebookGroupPriority, WatchedFacebookGroup, FacebookSourceType } from "./types.ts";
 
 export const FACEBOOK_GROUP_URL_MAX_LENGTH = 500;
@@ -57,6 +58,14 @@ export function parseFacebookGroupCreatePayload(value: unknown): NormalizedFaceb
   const type = row.type === "PROFILE" ? "PROFILE" : "GROUP";
   const normalized = normalizeFacebookSourceUrl(row.url, type);
   const suppliedName = typeof row.name === "string" ? row.name.trim() : "";
+  // A human-readable name is required at creation time, the same as it
+  // already was when editing an existing group (management.ts's
+  // requiredText). Silently defaulting to a numeric-ID-based synthetic name
+  // ("Facebook group 1424921570856189") is exactly the "bare numeric ID as
+  // the primary label" defect an independent review of da7a787 found — the
+  // identifier remains available as secondary technical text, but it must
+  // never stand in for a real name.
+  if (!suppliedName) throw new FacebookGroupValidationError("Nazwa grupy jest wymagana.");
   if (suppliedName.length > 200) throw new FacebookGroupValidationError("Nazwa grupy jest za długa.");
   const city = typeof row.city === "string" && row.city.trim() ? row.city.trim() : "Łódź";
   if (city.length > 100) throw new FacebookGroupValidationError("Nazwa miasta jest za długa.");
@@ -68,7 +77,7 @@ export function parseFacebookGroupCreatePayload(value: unknown): NormalizedFaceb
       url: normalized.url,
       type,
       sourceId: normalized.identifier,
-      name: suppliedName || `Facebook group ${normalized.identifier}`,
+      name: suppliedName,
       city,
       district: null,
       neighborhood: null,
@@ -79,13 +88,37 @@ export function parseFacebookGroupCreatePayload(value: unknown): NormalizedFaceb
   };
 }
 
-export function findDuplicateFacebookGroup<T extends Pick<WatchedFacebookGroup, "url"> & { canonicalGroupId?: string | null }>(groups: T[], normalizedUrl: string, identifier: string): T | null {
+export type FacebookGroupDuplicateMatch<T> =
+  | { kind: "watched-group"; group: T }
+  | { kind: "production-source"; source: FacebookProductionSource };
+
+/**
+ * Duplicate detection against BOTH real registries a group identifier can
+ * already belong to: the DB-backed watched_facebook_groups table (what the
+ * "add group" UI writes to) and the hardcoded FACEBOOK_PRODUCTION_SOURCES
+ * allowlist (what the scheduler actually requires before it will ever scan a
+ * source — see features/collector/facebook-production.ts). These are two
+ * genuinely separate systems: a source can be an approved production source
+ * without ever having a matching watched_facebook_groups row, so checking
+ * only one would let a user believe they are adding a brand new group that
+ * is, in fact, already live in production.
+ */
+export function findDuplicateFacebookGroup<T extends Pick<WatchedFacebookGroup, "url"> & { canonicalGroupId?: string | null }>(
+  groups: readonly T[],
+  normalizedUrl: string,
+  identifier: string,
+  productionSources: readonly FacebookProductionSource[] = [],
+): FacebookGroupDuplicateMatch<T> | null {
   const normalizedIdentifier = identifier.toLocaleLowerCase("en-US");
-  return groups.find((group) => {
+  const watchedMatch = groups.find((group) => {
     if (group.canonicalGroupId?.trim().toLocaleLowerCase("en-US") === normalizedIdentifier) return true;
     try { return normalizeFacebookGroupUrl(group.url).identifier === normalizedIdentifier || normalizeFacebookGroupUrl(group.url).url === normalizedUrl; }
     catch { return group.url.trim().replace(/\/$/, "").toLocaleLowerCase("en-US") === normalizedUrl.replace(/\/$/, "").toLocaleLowerCase("en-US"); }
-  }) ?? null;
+  });
+  if (watchedMatch) return { kind: "watched-group", group: watchedMatch };
+  const sourceMatch = productionSources.find((source) => source.sourceId.toLocaleLowerCase("en-US") === normalizedIdentifier);
+  if (sourceMatch) return { kind: "production-source", source: sourceMatch };
+  return null;
 }
 
 function invalidPriority(): never {

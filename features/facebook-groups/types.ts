@@ -1,4 +1,5 @@
 import type { FacebookListingInput } from "@/features/facebook-watcher/types";
+import type { FacebookProductionSource } from "@/features/collector/facebook-production";
 
 export const FACEBOOK_GROUP_PRIORITIES = ["high", "normal", "low"] as const;
 export const FACEBOOK_GROUP_ACCESS = ["CONNECTED", "MANUAL_IMPORT", "AUTH_REQUIRED", "UNAVAILABLE"] as const;
@@ -31,6 +32,7 @@ export type FacebookGroupInput = Pick<WatchedFacebookGroup, "name" | "url" | "ci
 export type AddWatchedFacebookGroupResult =
   | { success: true; duplicate: false; group: WatchedFacebookGroup }
   | { success: false; duplicate: true; error: "Ta grupa jest już obserwowana."; group: WatchedFacebookGroup }
+  | { success: false; duplicate: true; error: string; group: null; productionSource: FacebookProductionSource }
   | { success: false; duplicate: false; error: string; validationError: true };
 export type GroupCheckResult = { status: FacebookGroupAccessStatus; posts: FacebookListingInput[]; checkedAt: string; error?: string };
 export interface FacebookGroupSourceAdapter { checkGroup(group: WatchedFacebookGroup): Promise<GroupCheckResult> }
