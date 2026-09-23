@@ -191,6 +191,17 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
 
   const page = await browser.newPage();
   let workflowPatchBody = null;
+  // Gallery-trace-volume mission: GalleryRequestButton (the component that
+  // fires two automatic diagnostic POSTs per card on every render — see
+  // gallery-request-trace.test.ts) is explicitly hidden for variant="watcher"
+  // (facebook-watcher-panel.test.cjs already proves this at the source
+  // level). Proven live in a real browser here: opening /facebook-watcher
+  // must send zero requests to gallery/trace, regardless of listing count.
+  let galleryTraceRequestCount = 0;
+  await page.route("**/api/flip-finder/**/gallery/trace", (route) => {
+    galleryTraceRequestCount += 1;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
+  });
   await page.route("**/api/facebook-watcher/**", (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") return route.fulfill({ contentType: "application/json", body: JSON.stringify(listingsPayload), status: 200 });
@@ -212,6 +223,13 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
     console.log(`Body text at timeout: ${await page.evaluate(() => document.body.innerText.slice(0, 1000)).catch(() => "<eval failed>")}`);
     throw waitError;
   }
+  // Checked immediately, before any interaction below: opening the page
+  // itself (rendering N listings, none clicked yet) must send zero
+  // gallery/trace requests. A later click on a card's own pointer/click
+  // capture wrapper (shared with Finder, used to debug the expand-to-dialog
+  // mechanism) does independently write its own trace pair — a separate,
+  // smaller, interaction-driven source this assertion is not about.
+  assert.equal(galleryTraceRequestCount, 0, "opening /facebook-watcher must send zero requests to gallery/trace before any interaction — GalleryRequestButton (the only source of automatic render-time trace writes) is hidden for variant=\"watcher\"");
 
   const summary = {};
 

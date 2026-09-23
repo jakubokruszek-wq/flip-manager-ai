@@ -204,22 +204,55 @@ export async function writeGalleryTrace(trace: Omit<GalleryRequestTrace, "create
   if (error && isRenderProbeSchemaMissing(error) && PRE_NATIVE_TRACE_EVENTS.has(trace.event)) {
     const { error: legacyError } = await admin.from("gallery_request_traces").insert(basePayload);
     if (legacyError) throw new Error("GALLERY_TRACE_STORE_FAILED");
+    await trimGalleryTraces(admin, trace.listingId);
     return;
   }
   if (error) throw new Error("GALLERY_TRACE_STORE_FAILED");
+  await trimGalleryTraces(admin, trace.listingId);
+}
+
+/**
+ * Rendering a Finder card fires two automatic diagnostic writes
+ * (GALLERY_BUTTON_MOUNT, GALLERY_BUTTON_RENDERED) on every view, with no
+ * upstream cap — a repeatedly-viewed listing accumulates trace rows
+ * forever. Bounds the table the same way readGalleryTraces already bounds
+ * what it returns (MAX_TRACE_ROWS): after every write, delete this
+ * listing's own rows beyond the newest MAX_TRACE_ROWS, keeping storage
+ * proportional to one listing's own recent activity, never to how many
+ * times it has ever been viewed. Failure-isolated on purpose — a trim
+ * failure must never turn a successful trace write into a request error.
+ */
+export async function trimGalleryTraces(admin: ReturnType<typeof createAdminClient>, listingId: string): Promise<void> {
+  try {
+    const { data, error } = await admin
+      .from("gallery_request_traces")
+      .select("id")
+      .eq("listing_id", listingId)
+      .order("created_at", { ascending: false })
+      .range(MAX_TRACE_ROWS, MAX_TRACE_ROWS + 500);
+    if (error || !data || data.length === 0) return;
+    const staleIds = data.map((row: { id: unknown }) => row.id).filter((id): id is string | number => typeof id === "string" || typeof id === "number");
+    if (staleIds.length === 0) return;
+    await admin.from("gallery_request_traces").delete().in("id", staleIds);
+  } catch {
+    // Best-effort retention only — never let a trim failure surface as a trace-write error.
+  }
 }
 
 export async function readGalleryTraces(listingId: string, traceId?: string): Promise<GalleryRequestTrace[]> {
   const admin = createAdminClient();
   const select = "trace_id,listing_id,post_id,event,gallery_status,client_timestamp,target_tag,current_target_tag,disabled,pointer_events,guard_reason,http_status,response_ok,error_code,source,client_build,component,button_rendered,instance_id,action_stage,error_name,error_message,closest_button_found,created_at";
-  let query = admin.from("gallery_request_traces").select(select).eq("listing_id", listingId).order("created_at", { ascending: true }).limit(MAX_TRACE_ROWS);
+  // Descending + limit, then reverse: a listing viewed more than MAX_TRACE_ROWS
+  // times must still return its MOST RECENT activity, never get permanently
+  // stuck showing only the very first handful of traces it ever recorded.
+  let query = admin.from("gallery_request_traces").select(select).eq("listing_id", listingId).order("created_at", { ascending: false }).limit(MAX_TRACE_ROWS);
   if (traceId) query = query.eq("trace_id", traceId);
   const { data, error } = await query;
-  if (!error) return (data as TraceRow[] | null ?? []).map(fromRow);
+  if (!error) return (data as TraceRow[] | null ?? []).map(fromRow).reverse();
   if (!isRenderProbeSchemaMissing(error)) throw new Error("GALLERY_TRACE_READ_FAILED");
-  let legacyQuery = admin.from("gallery_request_traces").select("trace_id,listing_id,post_id,event,gallery_status,client_timestamp,target_tag,current_target_tag,disabled,pointer_events,guard_reason,http_status,response_ok,error_code,created_at").eq("listing_id", listingId).order("created_at", { ascending: true }).limit(MAX_TRACE_ROWS);
+  let legacyQuery = admin.from("gallery_request_traces").select("trace_id,listing_id,post_id,event,gallery_status,client_timestamp,target_tag,current_target_tag,disabled,pointer_events,guard_reason,http_status,response_ok,error_code,created_at").eq("listing_id", listingId).order("created_at", { ascending: false }).limit(MAX_TRACE_ROWS);
   if (traceId) legacyQuery = legacyQuery.eq("trace_id", traceId);
   const { data: legacyData, error: legacyError } = await legacyQuery;
   if (legacyError) throw new Error("GALLERY_TRACE_READ_FAILED");
-  return (legacyData as TraceRow[] | null ?? []).map((row) => fromRow({ ...row, source: null, client_build: null, component: null, button_rendered: null, instance_id: null, action_stage: null, error_name: null, error_message: null, closest_button_found: null }));
+  return (legacyData as TraceRow[] | null ?? []).map((row) => fromRow({ ...row, source: null, client_build: null, component: null, button_rendered: null, instance_id: null, action_stage: null, error_name: null, error_message: null, closest_button_found: null })).reverse();
 }
