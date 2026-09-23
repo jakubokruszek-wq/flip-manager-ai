@@ -1,6 +1,46 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sortResults } from "./results.ts";
+import { reliablePricePerSqm, sortResults } from "./results.ts";
+
+// Price-per-m² mission: this is the one canonical calculation every Finder
+// card (MATCHED, REVIEW, REJECTED) reads via filter-results.ts — never
+// recomputed per component. These four cases are exactly what a card must
+// never get wrong.
+test("reliablePricePerSqm: known price and area derive the correct value when no stored value exists", () => {
+  assert.equal(reliablePricePerSqm(null, 450_000, 46.6), 450_000 / 46.6);
+});
+
+test("reliablePricePerSqm: an explicit, sane stored value is preferred over deriving from price/area", () => {
+  assert.equal(reliablePricePerSqm(9_657, 450_000, 46.6), 9_657);
+});
+
+test("reliablePricePerSqm: a missing price with a known area never fabricates a value", () => {
+  assert.equal(reliablePricePerSqm(null, null, 46.6), null);
+});
+
+test("reliablePricePerSqm: a missing area with a known price never fabricates a value", () => {
+  assert.equal(reliablePricePerSqm(null, 450_000, null), null);
+});
+
+test("reliablePricePerSqm: zero or negative area never causes a division artifact", () => {
+  assert.equal(reliablePricePerSqm(null, 450_000, 0), null);
+  assert.equal(reliablePricePerSqm(null, 450_000, -10), null);
+});
+
+test("reliablePricePerSqm: a non-finite area is rejected the same as a missing one", () => {
+  assert.equal(reliablePricePerSqm(null, 450_000, Number.NaN), null);
+  assert.equal(reliablePricePerSqm(null, 450_000, Number.POSITIVE_INFINITY), null);
+});
+
+test("reliablePricePerSqm: an implausible (corrupted/placeholder) price is never used for a per-m² figure, even with a valid area", () => {
+  assert.equal(reliablePricePerSqm(null, 1, 46.6), null, "a price far below any real listing must be rejected");
+  assert.equal(reliablePricePerSqm(null, 500_000_000, 46.6), null, "a price far above any real listing must be rejected");
+});
+
+test("reliablePricePerSqm: a zero or negative stored value is never trusted blindly — it falls back to price/area", () => {
+  assert.equal(reliablePricePerSqm(0, 450_000, 46.6), 450_000 / 46.6);
+  assert.equal(reliablePricePerSqm(-100, 450_000, 46.6), 450_000 / 46.6);
+});
 
 type Fixture = {
   id: string;

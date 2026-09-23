@@ -245,6 +245,28 @@ export function displayMetric(value: number | null, unit: string): string | null
     : null;
 }
 
+/**
+ * The single canonical price-per-m² value every Finder card (MATCHED, REVIEW,
+ * REJECTED) reads — never recomputed independently per component. Prefers an
+ * explicit, sane stored value; otherwise derives it from price/area, and only
+ * when both are valid positive numbers (never divides by a missing, zero, or
+ * negative area). A price outside a plausible range for a residential
+ * listing (this rules out corrupted/placeholder values, not real outliers)
+ * is treated as unusable for a per-m² figure entirely.
+ */
+export function reliablePricePerSqm(
+  storedValue: number | null,
+  price: number | null,
+  area: number | null,
+): number | null {
+  if (price !== null && (!Number.isFinite(price) || price < 20_000 || price > 100_000_000)) return null;
+  if (storedValue !== null && Number.isFinite(storedValue) && storedValue > 0) {
+    return storedValue;
+  }
+
+  return price !== null && area !== null && Number.isFinite(area) && price > 0 && area > 0 ? price / area : null;
+}
+
 function positiveNumericSort(left: number | null, right: number | null): number {
   if (!isPositiveFiniteNumber(left)) {
     return isPositiveFiniteNumber(right) ? 1 : 0;

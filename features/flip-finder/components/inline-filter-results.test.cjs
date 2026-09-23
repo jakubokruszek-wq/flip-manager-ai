@@ -13,6 +13,21 @@ test("price per m² is styled with the existing Premium V3 gold accent, directly
   assert.match(page, /text-gold">\{currencyPerSqm\(result\.pricePerSqm\)\}/, "price per m² must use the gold accent color");
 });
 
+// Price-per-m² mission: the REVIEW bucket has its own separate component
+// (ReviewListingCardContent, distinct from ExpandableListingCardContent) that
+// previously showed price with no per-m² figure at all, using an
+// independent, ad-hoc number formatter instead of the shared currency()
+// helper. Both are fixed together: one canonical price/pricePerSqm
+// presentation for every Finder card variant.
+test("the REVIEW bucket card also renders price per m² in gold, directly below the price, using the same canonical helpers", () => {
+  const start = page.indexOf("function ReviewListingCardContent(");
+  assert.ok(start >= 0, "ReviewListingCardContent must exist");
+  const source = page.slice(start, page.indexOf("\nfunction ReviewListingCard(", start));
+  assert.match(source, /<p className="mt-3 text-sm font-semibold">\{currency\(result\.price\)\}<\/p>/, "REVIEW cards must use the shared currency() helper, not an independent Intl.NumberFormat call");
+  assert.match(source, /<p className="text-sm font-semibold text-gold">\{currencyPerSqm\(result\.pricePerSqm\)\}<\/p>/, "REVIEW cards must render price per m² in gold, directly after price");
+  assert.doesNotMatch(source, /new Intl\.NumberFormat\("pl-PL", \{ maximumFractionDigits: 0 \}\)\.format\(result\.price\)/, "the old ad-hoc price formatter must be gone");
+});
+
 test("currency/currencyPerSqm formatting is unchanged: Polish locale, PLN currency, no decimals", () => {
   assert.match(page, /new Intl\.NumberFormat\("pl-PL", \{ style: "currency", currency: "PLN", maximumFractionDigits: 0 \}\)/);
   assert.match(page, /function currencyPerSqm\(value: number \| null\): string \{ const formatted = currency\(value\); return formatted === "—" \? formatted : `\$\{formatted\}\/m²`; \}/);
