@@ -34,49 +34,75 @@ export function createFacebookGroupsApi(deps: Dependencies) {
 }
 
 /**
- * "Wykryj grupy nieruchomościowe" preview endpoint. Strictly read-only: it
- * only classifies what the extension reported, never writes a row — the
- * explicit, separate import endpoint below is the only write path, and only
- * for whatever the user has actually selected.
+ * "Wykryj grupy nieruchomościowe" handoff endpoint. The caller is the
+ * browser extension, not a logged-in app session (this app runs without a
+ * login boundary at all) -- so, exactly like every other extension-to-
+ * server write (see app/api/collector/facebook/*), it must be authenticated
+ * with the same signed-device scheme, never left open. Never returns any
+ * discovered data itself: only an opaque, short-lived session token the
+ * extension hands off to the Manager tab (as a URL fragment, never a query
+ * parameter or server log). No unauthenticated "last global preview" GET
+ * exists anymore -- every read of a preview requires that exact token.
  */
 export function createFacebookGroupDiscoveryApi(deps: {
-  preview: (candidates: DiscoveredFacebookGroupCandidate[]) => Promise<FacebookGroupImportPreviewItem[]>;
-  lastPreview?: () => { preview: FacebookGroupImportPreviewItem[]; generatedAt: string } | null;
-  /**
-   * The caller of this endpoint is the browser extension, not a logged-in
-   * app session (unlike the group CRUD routes above, which this app runs
-   * without a login boundary at all) -- so, exactly like every other
-   * extension-to-server write (see app/api/collector/facebook/*), it must be
-   * authenticated with the same signed-device scheme, never left open.
-   */
-  authenticate?: (request: Request, body: string) => Promise<void>;
+  discover: (candidates: DiscoveredFacebookGroupCandidate[], deviceId: string | null) => Promise<{ token: string; expiresAt: string }>;
+  authenticate: (request: Request, body: string) => Promise<{ deviceId: string | null }>;
 }) {
   return {
     async post(request: Request) {
       try {
         const rawBody = await request.text();
-        if (deps.authenticate) await deps.authenticate(request, rawBody);
+        const { deviceId } = await deps.authenticate(request, rawBody);
         const candidates = parseCandidates(JSON.parse(rawBody));
-        return Response.json({ preview: await deps.preview(candidates) });
+        const session = await deps.discover(candidates, deviceId);
+        return Response.json(session, { headers: { "Cache-Control": "no-store" } });
       } catch (error) { return failure(error, 400); }
-    },
-    async get() {
-      try { return Response.json(deps.lastPreview?.() ?? { preview: [], generatedAt: null }); }
-      catch (error) { return failure(error); }
     },
   };
 }
 
-export function createFacebookGroupImportApi(deps: { importSelected: (selections: FacebookGroupImportSelection[]) => Promise<FacebookGroupImportOutcome[]> }) {
+/**
+ * Retrieves a discovery preview by its opaque token, sent in the request
+ * body (never a query string) so it is never captured in server access
+ * logs or a Referer header the way a query parameter would be. A wrong,
+ * expired, or nonexistent token returns 404 with no distinguishing detail
+ * -- never a 401 that would confirm a token's existence -- and the response
+ * is always Cache-Control: no-store so no shared cache can ever serve one
+ * session's preview to a different request.
+ */
+export function createFacebookGroupDiscoveryPreviewApi(deps: { preview: (token: string) => Promise<{ preview: FacebookGroupImportPreviewItem[]; expiresAt: string; consumedAt: string | null } | null> }) {
   return {
     async post(request: Request) {
       try {
         const body = await request.json();
-        const selections = parseSelections(body);
-        return Response.json({ outcomes: await deps.importSelected(selections) });
+        const token = parseToken(body);
+        const result = await deps.preview(token);
+        if (!result) return Response.json({ error: "Nieprawidłowy lub wygasły token wykrywania grup." }, { status: 404, headers: { "Cache-Control": "no-store" } });
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
       } catch (error) { return failure(error, 400); }
     },
   };
+}
+
+export function createFacebookGroupImportApi(deps: { importSelected: (token: string, selections: FacebookGroupImportSelection[]) => Promise<FacebookGroupImportOutcome[] | null> }) {
+  return {
+    async post(request: Request) {
+      try {
+        const body = await request.json();
+        const token = parseToken(body);
+        const selections = parseSelections(body);
+        const outcomes = await deps.importSelected(token, selections);
+        if (!outcomes) return Response.json({ error: "Nieprawidłowy lub wygasły token wykrywania grup." }, { status: 404, headers: { "Cache-Control": "no-store" } });
+        return Response.json({ outcomes }, { headers: { "Cache-Control": "no-store" } });
+      } catch (error) { return failure(error, 400); }
+    },
+  };
+}
+
+function parseToken(value: unknown): string {
+  const token = value && typeof value === "object" ? (value as Record<string, unknown>).token : null;
+  if (typeof token !== "string" || !token.trim() || token.length > 200) throw new Error("Podaj token wykrywania grup.");
+  return token;
 }
 
 export function createFacebookGroupHistoricalMappingApi(deps: { mapping: () => Promise<HistoricalFacebookSourceMapping[]> }) {

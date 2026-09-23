@@ -27,6 +27,7 @@ const collectorClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/
 const legacyClaimRoute = fs.readFileSync(path.join(__dirname, "../../app/api/facebook-worker/claim/route.ts"), "utf8");
 const workerJobs = fs.readFileSync(path.join(__dirname, "../../features/facebook-worker/jobs.ts"), "utf8");
 const leaseHeartbeatRoute = fs.readFileSync(path.join(__dirname, "../../app/api/collector/jobs/heartbeat/route.ts"), "utf8");
+const scheduler = fs.readFileSync(path.join(__dirname, "../../features/facebook-worker/scheduler.ts"), "utf8");
 
 test("NETWORK-FIRST: the zero-yield search phase is gated behind an explicit flag", () => {
   assert.match(background, /if \(searchPhaseEnabled && primary\.source\.sourceType === "GROUP"\)/, "the search loop must be gated, not deleted");
@@ -233,15 +234,54 @@ test("Flip Finder bootstrap starts the production collector after readiness veri
   assert.match(background, /collectorStartTraces/);
 });
 
-test("production scan start uses only the backend Facebook queue", () => {
+// Replaces the stale "production scan start uses only the backend Facebook
+// queue" test, whose two assertions had both gone obsolete: the UI copy
+// string it checked for ("oczekiwanie na odebranie zlecenia przez
+// Collector") was intentionally removed from flip-finder-page.tsx when
+// Finder stopped acquiring Facebook itself, and manualScan.ts calling
+// enqueueFacebookJobs is exactly the OLD architecture that change replaced
+// -- asserting its presence was asserting the wrong contract entirely.
+// These assertions prove the CURRENT architecture instead: Finder's manual
+// scan never touches Facebook acquisition at all (zero jobs, zero
+// messages), the Watcher scheduler is the sole remaining owner of
+// enqueueFacebookJobs, and the new REPORT_DISCOVERED_GROUPS message is
+// isolated to its own exact message.type branch.
+test("Finder's manual scan creates zero Facebook acquisition jobs; the Watcher scheduler is the sole remaining caller of enqueueFacebookJobs", () => {
+  assert.doesNotMatch(manualScan, /enqueueFacebookJobs/, "Finder's manual scan must never acquire Facebook itself");
+  assert.match(manualScan, /reconcileFacebookFromCanonicalListings/, "Facebook must be reconciled from already-stored canonical listings only");
+  assert.match(scheduler, /enqueueFacebookJobs/, "the Watcher scheduler must remain the one place that actually enqueues Facebook collection");
+});
+
+test("Finder's scan-start handler never sends any Facebook collector/scan/discovery message to the extension", () => {
   const scanHandler = finderPage.slice(finderPage.indexOf("const scanFilter = async"), finderPage.indexOf("const validateCollector = async"));
-  assert.match(scanHandler, /POST_SCAN_SENT/);
-  assert.match(scanHandler, /oczekiwanie na odebranie zlecenia przez Collector/);
-  assert.doesNotMatch(scanHandler, /requestCollectorBridgePing|requestCollectorReady|requestCollectorHealthRefresh|requestCollectorScan|SCAN_COMMAND_SENT/);
-  assert.match(manualScan, /enqueueFacebookJobs\(filter, runId(?:, facebookSourceId)?\)/);
-  assert.doesNotMatch(manualScan, /enqueueFacebookCollectorScan/);
-  assert.match(scanProgressServer, /FACEBOOK_PENDING_TIMEOUT_MS = 90_000/);
-  assert.match(scanProgressServer, /COLLECTOR_NOT_AVAILABLE/);
+  assert.match(scanHandler, /POST_SCAN_SENT/, "Finder's own scan trigger must still POST to the Finder scan API");
+  assert.doesNotMatch(scanHandler, /requestCollectorBridgePing|requestCollectorReady|requestCollectorHealthRefresh|requestCollectorScan|SCAN_COMMAND_SENT|COLLECT_ACTIVE_SOURCE|COLLECT_CONFIGURED_SOURCES|REPORT_DISCOVERED_GROUPS/, "Finder's own scan trigger must never message the extension to collect or discover anything");
+});
+
+test("every background onMessage branch matches its own exact message.type, with no duplicate or overlapping registration", () => {
+  const branches = [...background.matchAll(/if \(message\?\.type === "([A-Z_]+)"/g)].map((match) => match[1]);
+  assert.ok(branches.length >= 14, "every existing message branch must still be present");
+  assert.ok(branches.includes("REPORT_DISCOVERED_GROUPS"));
+  assert.ok(branches.includes("COLLECT_ACTIVE_SOURCE") && branches.includes("COLLECT_CONFIGURED_SOURCES"), "the pre-existing scan messages must remain their own untouched branches");
+  assert.equal(new Set(branches).size, branches.length, "every branch must match a distinct message.type -- no two branches can ever both claim the same message");
+});
+
+test("REPORT_DISCOVERED_GROUPS's own branch never calls into any scan/collection function, and vice versa", () => {
+  const discoveredGroupsStart = background.indexOf('if (message?.type === "REPORT_DISCOVERED_GROUPS")');
+  const discoveredGroupsBranch = background.slice(discoveredGroupsStart, discoveredGroupsStart + 250);
+  assert.match(discoveredGroupsBranch, /reportDiscoveredGroups/);
+  assert.doesNotMatch(discoveredGroupsBranch, /collectActiveSource|collectConfiguredSources|OLX|olx/, "the discovery branch must never call into any scan-collection function");
+  const activeSourceStart = background.indexOf('if (message?.type === "COLLECT_ACTIVE_SOURCE")');
+  const activeSourceBranch = background.slice(activeSourceStart, activeSourceStart + 250);
+  assert.doesNotMatch(activeSourceBranch, /reportDiscoveredGroups/, "the pre-existing scan branch must never call the new discovery function either");
+});
+
+test("reportDiscoveredGroups hands off the Manager page via a URL fragment, never a query parameter, using the existing signed-device request helper", () => {
+  const fn = background.slice(background.indexOf("async function reportDiscoveredGroups"), background.indexOf("async function signedPost"));
+  assert.match(fn, /#group-discovery=/);
+  assert.doesNotMatch(fn, /\?group-discovery=/, "the token must never be sent as a query parameter (server logs, Referer)");
+  assert.match(fn, /chrome\.tabs\.create/);
+  assert.match(fn, /signedPost\(/, "the discovery report itself must still go through the existing signed-device request scheme");
 });
 
 test("health preflight always refreshes stale or healthy pairing and fails closed", async () => {

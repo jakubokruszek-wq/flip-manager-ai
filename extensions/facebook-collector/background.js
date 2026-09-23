@@ -946,16 +946,26 @@ async function failCollectorScan(scanId, error, diagnostics = {}) {
 
 /**
  * "Wykryj grupy nieruchomościowe": reports what group-discovery.js found on
- * Facebook's own "Twoje grupy" page to the server's read-only preview
- * classifier. Never imports/activates anything itself -- the server only
- * classifies (NOWA/JUZ_W_MANAGERZE/MOZLIWY_DUPLIKAT/WYMAGA_WERYFIKACJI), and
- * the Manager page is the only place a human explicitly selects what to add.
+ * Facebook's own "Twoje grupy" page and gets back an opaque, short-lived
+ * session token -- never the classified preview itself, which only the
+ * Manager page (holding that exact token) can retrieve. Opens the Manager
+ * page with the token in a URL FRAGMENT, not a query parameter, so it is
+ * never sent in the initial HTTP request, a Referer header, or normal
+ * server access logs -- only the Manager page's own client-side script ever
+ * reads window.location.hash. Never imports/activates anything itself: the
+ * server only classifies (NOWA/JUZ_W_MANAGERZE/MOZLIWY_DUPLIKAT/WYMAGA_
+ * WERYFIKACJI), and the Manager page is the only place a human explicitly
+ * selects what to add.
  */
 async function reportDiscoveredGroups(candidates) {
   const config = await configValue();
   if (!config.apiUrl || !config.deviceId || !config.deviceToken) throw new Error("COLLECTOR_NOT_PAIRED");
-  const url = `${String(config.apiUrl).replace(/\/+$/, "")}/api/facebook-watcher/groups/discover`;
-  return signedPost(url, JSON.stringify({ candidates: candidates.slice(0, 200) }), FAIL_REPORT_TIMEOUT_MS);
+  const base = String(config.apiUrl).replace(/\/+$/, "");
+  const result = await signedPost(`${base}/api/facebook-watcher/groups/discover`, JSON.stringify({ candidates: candidates.slice(0, 200) }), FAIL_REPORT_TIMEOUT_MS);
+  if (result && typeof result.token === "string" && result.token) {
+    await chrome.tabs.create({ url: `${base}/facebook-watcher#group-discovery=${encodeURIComponent(result.token)}` }).catch(() => {});
+  }
+  return result;
 }
 
 async function signedPost(urlValue, body, timeoutMs = null) {

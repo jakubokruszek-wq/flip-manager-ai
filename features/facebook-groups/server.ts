@@ -5,6 +5,7 @@ import { FACEBOOK_PRODUCTION_SOURCES } from "@/features/collector/facebook-produ
 import { FacebookGroupValidationError, findDuplicateFacebookGroup, normalizeFacebookSourceUrl, parseFacebookGroupCreatePayload } from "./group-url";
 import { parseFacebookGroupManagementPatch, safeRemovePatch } from "./management";
 import { buildGroupImportPreview, buildHistoricalFacebookSourceMapping, type DiscoveredFacebookGroupCandidate, type FacebookGroupImportPreviewItem, type HistoricalFacebookSourceMapping } from "./discovery";
+import { createDiscoverySession, markDiscoverySessionConsumed, resolveDiscoverySessionToken } from "./discovery-session";
 import type { AddWatchedFacebookGroupResult, FacebookGroupAccessStatus, FacebookGroupInput, WatchedFacebookGroup } from "./types";
 
 type Row = Record<string, unknown>;
@@ -81,51 +82,72 @@ export async function removeWatchedFacebookGroup(id: string): Promise<WatchedFac
   return updateWatchedFacebookGroup(id, safeRemovePatch());
 }
 
-// The extension runs "Wykryj grupy nieruchomościowe" on an authenticated
-// facebook.com tab, entirely separate from the Manager page the user reviews
-// the preview on. This in-memory store bridges the two tabs' requests,
-// mirroring the same globalThis-backed fallback pattern memoryGroups already
-// uses above for watched_facebook_groups — no new table/migration required.
-// It only ever holds the most recent preview; nothing here is ever imported
-// automatically, so losing it (e.g. a server restart) is a display-only
-// inconvenience, never a state-integrity concern.
-let lastDiscoveryPreview: { preview: FacebookGroupImportPreviewItem[]; generatedAt: string } | null =
-  (globalThis as typeof globalThis & { __facebookGroupDiscoveryPreview?: typeof lastDiscoveryPreview }).__facebookGroupDiscoveryPreview ?? null;
-
 /**
- * Read-only: classifies each extension-discovered candidate against the
- * current watched groups and the approved production sources, but never
- * writes a watched-group row. The user must explicitly select which NOWA/
- * MOZLIWY_DUPLIKAT rows to actually add via importSelectedFacebookGroups.
+ * The extension runs "Wykryj grupy nieruchomościowe" on an authenticated
+ * facebook.com tab, entirely separate from the Manager page the user reviews
+ * the preview on. Candidates are handed off through a private, expiring,
+ * database-backed session (facebook_group_discovery_sessions) identified by
+ * an opaque one-time token -- never through module/global memory, which does
+ * not survive a Vercel cold start or work across concurrent serverless
+ * instances (a confirmed, real defect this replaces). Never classifies or
+ * writes a watched-group row here: previewDiscoveryToken classifies fresh at
+ * read time (so duplicate detection reflects the current registry, not a
+ * stale snapshot), and importSelectedFacebookGroups is the only write path.
  */
-export async function previewDiscoveredFacebookGroups(candidates: DiscoveredFacebookGroupCandidate[]): Promise<FacebookGroupImportPreviewItem[]> {
-  const existingGroups = await listWatchedFacebookGroups();
-  const preview = buildGroupImportPreview(candidates, existingGroups, FACEBOOK_PRODUCTION_SOURCES);
-  lastDiscoveryPreview = { preview, generatedAt: new Date().toISOString() };
-  (globalThis as typeof globalThis & { __facebookGroupDiscoveryPreview?: typeof lastDiscoveryPreview }).__facebookGroupDiscoveryPreview = lastDiscoveryPreview;
-  return preview;
+export async function discoverFacebookGroups(candidates: DiscoveredFacebookGroupCandidate[], deviceId: string | null): Promise<{ token: string; expiresAt: string }> {
+  return createDiscoverySession(candidates, deviceId);
 }
 
-export function getLastFacebookGroupDiscoveryPreview(): { preview: FacebookGroupImportPreviewItem[]; generatedAt: string } | null {
-  return lastDiscoveryPreview;
+export type FacebookGroupDiscoveryPreview = { preview: FacebookGroupImportPreviewItem[]; expiresAt: string; consumedAt: string | null };
+
+/**
+ * Requires a valid, unexpired session token -- returns null for any wrong,
+ * expired, or nonexistent token, never falling back to some other session's
+ * or a globally-shared result. Classifies fresh against the CURRENT
+ * watched-group registry and production sources every time it is called,
+ * so an import made from a second tab in between two preview reads is
+ * correctly reflected.
+ */
+export async function previewDiscoveryToken(token: string): Promise<FacebookGroupDiscoveryPreview | null> {
+  const session = await resolveDiscoverySessionToken(token);
+  if (!session) return null;
+  const existingGroups = await listWatchedFacebookGroups();
+  const preview = buildGroupImportPreview(session.candidates, existingGroups, FACEBOOK_PRODUCTION_SOURCES);
+  return { preview, expiresAt: session.expiresAt, consumedAt: session.consumedAt };
 }
 
 export type FacebookGroupImportSelection = { url: string; name: string; city?: string; priority?: "normal" | "high" };
 export type FacebookGroupImportOutcome = { url: string; result: AddWatchedFacebookGroupResult };
 
 /**
- * The only write path a discovered candidate can ever reach — one explicit
- * selection at a time, reusing addWatchedFacebookGroup's own validation and
- * duplicate-detection exactly as the manual "add group" form does, so a
- * discovered group can never skip the required-name check or the duplicate
- * check just because it arrived through the discovery flow instead.
+ * The only write path a discovered candidate can ever reach. Requires a
+ * valid session token and revalidates every selection's URL against that
+ * SAME session's own stored candidates -- an arbitrary client-supplied URL/
+ * name pair that was never actually discovered in this session is rejected
+ * outright, and a URL from a different session's token can never be
+ * referenced ("no cross-session candidate access"). Each import still goes
+ * through addWatchedFacebookGroup's own required-name and duplicate
+ * validation exactly as the manual "add group" form does, so a discovered
+ * group can never skip either check just because it arrived through
+ * discovery instead. Every selection is processed and reported
+ * independently, so one failure never silently drops the rest.
  */
-export async function importSelectedFacebookGroups(selections: FacebookGroupImportSelection[]): Promise<FacebookGroupImportOutcome[]> {
+export async function importSelectedFacebookGroups(token: string, selections: FacebookGroupImportSelection[]): Promise<FacebookGroupImportOutcome[] | null> {
+  const session = await resolveDiscoverySessionToken(token);
+  if (!session) return null;
+  const sessionUrls = new Set(session.candidates.flatMap((candidate) => { try { return [normalizeFacebookSourceUrl(candidate.url, "GROUP").url]; } catch { return []; } }));
   const outcomes: FacebookGroupImportOutcome[] = [];
   for (const selection of selections) {
+    let normalizedUrl: string | null = null;
+    try { normalizedUrl = normalizeFacebookSourceUrl(selection.url, "GROUP").url; } catch { normalizedUrl = null; }
+    if (!normalizedUrl || !sessionUrls.has(normalizedUrl)) {
+      outcomes.push({ url: selection.url, result: { success: false, duplicate: false, validationError: true, error: "Ta grupa nie pochodzi z autoryzowanej sesji wykrywania." } });
+      continue;
+    }
     const result = await addWatchedFacebookGroup({ url: selection.url, name: selection.name, city: selection.city, priority: selection.priority });
     outcomes.push({ url: selection.url, result });
   }
+  await markDiscoverySessionConsumed(session.id);
   return outcomes;
 }
 

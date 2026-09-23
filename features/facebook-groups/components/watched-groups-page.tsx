@@ -41,7 +41,9 @@ export function WatchedGroupsPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<FacebookGroupImportPreviewItem[]>([]);
-  const [previewGeneratedAt, setPreviewGeneratedAt] = useState<string | null>(null);
+  const [previewExpiresAt, setPreviewExpiresAt] = useState<string | null>(null);
+  const [discoveryToken, setDiscoveryToken] = useState<string | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [previewNames, setPreviewNames] = useState<Record<string, string>>({});
   const [historicalMapping, setHistoricalMapping] = useState<HistoricalFacebookSourceMapping[]>([]);
@@ -53,13 +55,30 @@ export function WatchedGroupsPage() {
     setGroups(body.groups ?? []);
   };
 
-  const loadDiscoveryPreview = async () => {
-    const response = await facebookGroupsFetch("/api/facebook-watcher/groups/discover", { cache: "no-store" });
-    const body = (await response.json()) as { preview?: FacebookGroupImportPreviewItem[]; generatedAt?: string | null; error?: string };
-    if (!response.ok) throw new Error(body.error ?? "Nie udało się pobrać wyników wykrywania grup.");
+  // The extension hands off a discovery session as an opaque token in the
+  // URL FRAGMENT (never a query parameter, so it is never sent in the
+  // initial request, a Referer header, or normal server access logs) --
+  // read only client-side, then sent in a POST body to actually retrieve
+  // the preview. The fragment is cleared immediately after reading it so a
+  // page refresh never re-sends an already-used or expired token.
+  const loadDiscoveryPreviewForToken = async (token: string) => {
+    const response = await facebookGroupsFetch("/api/facebook-watcher/groups/discover/preview", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+    });
+    const body = (await response.json()) as { preview?: FacebookGroupImportPreviewItem[]; expiresAt?: string; error?: string };
+    if (!response.ok) {
+      setDiscoveryToken(null);
+      setDiscoveryError(body.error ?? "Token wykrywania grup jest nieprawidłowy lub wygasł. Uruchom wykrywanie ponownie z rozszerzenia.");
+      return;
+    }
     const items = body.preview ?? [];
+    setDiscoveryToken(token);
+    setDiscoveryError(null);
     setPreview(items);
-    setPreviewGeneratedAt(body.generatedAt ?? null);
+    setPreviewExpiresAt(body.expiresAt ?? null);
     setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
   };
 
@@ -84,16 +103,29 @@ export function WatchedGroupsPage() {
       .catch((value: unknown) => {
         if (active) setError(errorMessage(value, "Nie udało się pobrać grup."));
       });
-    void facebookGroupsFetch("/api/facebook-watcher/groups/discover", { cache: "no-store" })
-      .then(async (response) => ({ response, body: (await response.json()) as { preview?: FacebookGroupImportPreviewItem[]; generatedAt?: string | null; error?: string } }))
-      .then(({ response, body }) => {
-        if (!response.ok || !active) return;
-        const items = body.preview ?? [];
-        setPreview(items);
-        setPreviewGeneratedAt(body.generatedAt ?? null);
-        setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
+    const hashToken = readDiscoveryTokenFromHash();
+    if (hashToken) {
+      clearDiscoveryHash();
+      void facebookGroupsFetch("/api/facebook-watcher/groups/discover/preview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: hashToken }),
+        cache: "no-store",
       })
-      .catch(() => undefined);
+        .then(async (response) => ({ response, body: (await response.json()) as { preview?: FacebookGroupImportPreviewItem[]; expiresAt?: string; error?: string } }))
+        .then(({ response, body }) => {
+          if (!active) return;
+          if (!response.ok) { setDiscoveryError(body.error ?? "Token wykrywania grup jest nieprawidłowy lub wygasł. Uruchom wykrywanie ponownie z rozszerzenia."); return; }
+          const items = body.preview ?? [];
+          setDiscoveryToken(hashToken);
+          setPreview(items);
+          setPreviewExpiresAt(body.expiresAt ?? null);
+          setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
+        })
+        .catch((value: unknown) => {
+          if (active) setDiscoveryError(errorMessage(value, "Nie udało się pobrać wyników wykrywania grup."));
+        });
+    }
     void facebookGroupsFetch("/api/facebook-watcher/groups/historical-mapping", { cache: "no-store" })
       .then(async (response) => ({ response, body: (await response.json()) as { mapping?: HistoricalFacebookSourceMapping[]; error?: string } }))
       .then(({ response, body }) => {
@@ -114,6 +146,10 @@ export function WatchedGroupsPage() {
   };
 
   const importSelected = async () => {
+    if (!discoveryToken) {
+      setError("Brak aktywnej sesji wykrywania — uruchom wykrywanie ponownie z rozszerzenia.");
+      return;
+    }
     const selections = preview
       .filter((item) => selected.has(item.url) && IMPORTABLE_STATUSES.has(item.status))
       .map((item) => ({ url: item.url, name: (previewNames[item.url] ?? item.discoveredName ?? "").trim() }));
@@ -131,7 +167,7 @@ export function WatchedGroupsPage() {
       const response = await facebookGroupsFetch("/api/facebook-watcher/groups/import", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ selections }),
+        body: JSON.stringify({ token: discoveryToken, selections }),
       });
       const body = (await response.json()) as { outcomes?: Array<{ url: string; result: AddWatchedFacebookGroupResult }>; error?: string };
       if (!response.ok) throw new Error(body.error ?? "Nie udało się zaimportować wybranych grup.");
@@ -260,13 +296,15 @@ export function WatchedGroupsPage() {
 
       <DiscoverySection
         preview={preview}
-        previewGeneratedAt={previewGeneratedAt}
+        previewExpiresAt={previewExpiresAt}
+        discoveryToken={discoveryToken}
+        discoveryError={discoveryError}
         previewNames={previewNames}
         onNameChange={(url, name) => setPreviewNames((current) => ({ ...current, [url]: name }))}
         selected={selected}
         onToggleSelected={toggleSelected}
         busy={busy}
-        onRefresh={() => void loadDiscoveryPreview().catch((value: unknown) => setError(errorMessage(value, "Nie udało się pobrać wyników wykrywania grup.")))}
+        onRefresh={discoveryToken ? () => void loadDiscoveryPreviewForToken(discoveryToken).catch((value: unknown) => setDiscoveryError(errorMessage(value, "Nie udało się pobrać wyników wykrywania grup."))) : undefined}
         onImport={() => void importSelected()}
       />
 
@@ -296,15 +334,17 @@ export function WatchedGroupsPage() {
   );
 }
 
-function DiscoverySection({ preview, previewGeneratedAt, previewNames, onNameChange, selected, onToggleSelected, busy, onRefresh, onImport }: {
+function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discoveryError, previewNames, onNameChange, selected, onToggleSelected, busy, onRefresh, onImport }: {
   preview: FacebookGroupImportPreviewItem[];
-  previewGeneratedAt: string | null;
+  previewExpiresAt: string | null;
+  discoveryToken: string | null;
+  discoveryError: string | null;
   previewNames: Record<string, string>;
   onNameChange: (url: string, name: string) => void;
   selected: Set<string>;
   onToggleSelected: (url: string) => void;
   busy: boolean;
-  onRefresh: () => void;
+  onRefresh?: () => void;
   onImport: () => void;
 }) {
   const selectableCount = preview.filter((item) => IMPORTABLE_STATUSES.has(item.status)).length;
@@ -315,7 +355,7 @@ function DiscoverySection({ preview, previewGeneratedAt, previewNames, onNameCha
         <div>
           <h2 className="text-lg font-bold">Wykryj grupy nieruchomościowe</h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Otwórz stronę Twoich grup na Facebooku — rozszerzenie Facebook Collector, jeśli jest zainstalowane i zalogowane, samo zgłosi wykryte grupy tutaj. Nazwa każdej grupy pochodzi z tego, co rozszerzenie faktycznie odczytało na Facebooku, nigdy z domysłu ani ze zrzutu ekranu.
+            Kliknij &quot;Wykryj grupy nieruchomościowe&quot; w rozszerzeniu Facebook Collector (na stronie Twoich grup na Facebooku) — rozszerzenie otworzy tę stronę z wynikami automatycznie. Nazwa każdej grupy pochodzi z tego, co rozszerzenie faktycznie odczytało na Facebooku, nigdy z domysłu ani ze zrzutu ekranu.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -327,10 +367,12 @@ function DiscoverySection({ preview, previewGeneratedAt, previewNames, onNameCha
           >
             <Search className="size-4" />Otwórz Twoje grupy na Facebooku
           </Button>
-          <Button variant="outline" className="min-h-11" onClick={onRefresh}><RefreshCw className="size-4" />Odśwież podgląd</Button>
+          {onRefresh ? <Button variant="outline" className="min-h-11" onClick={onRefresh}><RefreshCw className="size-4" />Odśwież podgląd</Button> : null}
         </div>
       </div>
-      {previewGeneratedAt ? <p className="text-xs text-muted-foreground">Ostatnie wykrywanie: {new Date(previewGeneratedAt).toLocaleString("pl-PL")}</p> : <p className="text-xs text-muted-foreground">Brak jeszcze żadnego wykrywania.</p>}
+      {discoveryError ? <p className="text-sm text-danger" role="alert">{discoveryError}</p> : null}
+      {!discoveryToken && !discoveryError ? <p className="text-xs text-muted-foreground">Brak aktywnej sesji wykrywania. Uruchom &quot;Wykryj grupy nieruchomościowe&quot; z rozszerzenia na Facebooku.</p> : null}
+      {discoveryToken && previewExpiresAt ? <p className="text-xs text-muted-foreground">Sesja wykrywania wygasa: {new Date(previewExpiresAt).toLocaleString("pl-PL")}</p> : null}
       {preview.length ? (
         <div className="space-y-2">
           {preview.map((item) => (
@@ -441,6 +483,16 @@ async function facebookGroupsFetch(input: RequestInfo | URL, init: RequestInit =
   return apiFetch(input, init);
 }
 function errorMessage(value: unknown, fallback: string) { return value instanceof Error ? value.message : fallback; }
+function readDiscoveryTokenFromHash(): string | null {
+  if (typeof window === "undefined") return null;
+  const match = window.location.hash.match(/^#group-discovery=(.+)$/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return null; }
+}
+function clearDiscoveryHash(): void {
+  if (typeof window === "undefined") return;
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+}
 function Field({ label, value, onChange, placeholder, className = "", disabled = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; className?: string; disabled?: boolean }) { return <label className={`grid gap-1 text-sm ${className}`}>{label}<input className="h-11 rounded-xl border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-70" disabled={disabled} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} /></label>; }
 function SelectPriority({ value, onChange, create = false }: { value: "high" | "normal" | "low"; onChange: (value: "high" | "normal" | "low") => void; create?: boolean }) { return <select className="h-11 rounded-xl border bg-background px-3" value={value} onChange={(event) => onChange(event.target.value as "high" | "normal" | "low")}><option value="normal">Normal</option><option value="high">High</option>{create ? null : <option value="low">Low</option>}</select>; }
 function Metric({ label, value }: { label: string; value: string | number }) { return <div className="rounded-xl bg-muted/40 p-3"><p className="text-[10px] uppercase text-muted-foreground">{label}</p><p className="mt-1 font-bold">{value}</p></div>; }

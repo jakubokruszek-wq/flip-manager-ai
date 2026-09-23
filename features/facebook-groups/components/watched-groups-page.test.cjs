@@ -48,3 +48,22 @@ test("the group card's identifier line remains secondary text, never the primary
   assert.ok(cardMatch, "GroupCard must still render the identifier somewhere");
   assert.match(source, /<h3 className="font-bold">\{group\.name\}<\/h3>/, "the primary label must be the group's real name, never the bare identifier");
 });
+
+// HOLD-blocker: module/global "last discovery preview" storage removed;
+// the discovery handoff must go through a URL fragment (never a query
+// parameter) and a token-authorized POST, never an unauthenticated GET.
+test("the discovery token is read from the URL fragment, never a query parameter, and cleared immediately after reading", () => {
+  assert.match(source, /window\.location\.hash\.match\(\/\^#group-discovery=/);
+  assert.match(source, /clearDiscoveryHash/);
+  assert.doesNotMatch(source, /searchParams.*group-discovery|group-discovery.*searchParams/i, "the token must never be read from a query parameter");
+});
+
+test("the preview and import requests send the token in a POST body, never a GET or a query string", () => {
+  assert.match(source, /\/api\/facebook-watcher\/groups\/discover\/preview.*method:\s*"POST"/s);
+  assert.match(source, /body:\s*JSON\.stringify\(\{\s*token\s*\}\)/);
+  assert.match(source, /body:\s*JSON\.stringify\(\{\s*token:\s*discoveryToken,\s*selections\s*\}\)/);
+});
+
+test("no unauthenticated GET-based 'last preview' fetch remains", () => {
+  assert.doesNotMatch(source, /facebookGroupsFetch\("\/api\/facebook-watcher\/groups\/discover",\s*\{\s*cache:\s*"no-store"\s*\}\)/, "the old unauthenticated GET /discover call must be gone");
+});
