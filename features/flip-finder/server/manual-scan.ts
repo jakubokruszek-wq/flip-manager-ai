@@ -8,7 +8,7 @@ import { enqueueOlxJob } from "@/features/flip-finder/server/olx-jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { RECOVERABLE_SCAN_STATUSES, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
 export { scanStatus } from "./scan-start-errors";
@@ -39,7 +39,17 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
   const facebookEnabled = filter.sources.includes("facebook");
   const sourceIds = [...sources.map((source) => source.id), ...(facebookEnabled ? ["facebook"] : [])];
   if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
-  const supabase = await createClient();
+  // The scan/persist/reconciliation pipeline below writes through
+  // reconcile_canonical_listing_decision (a service_role-only RPC, by
+  // design — see the grant migration), plus source_scans/listings rows.
+  // This whole function is trusted, already-authorized server code (the
+  // API route above it is the actual authorization boundary), so it must
+  // use the admin client, not the anon/publishable one: the anon key has
+  // been explicitly revoked from that RPC and fails every call with
+  // "permission denied", which previously surfaced as
+  // CANONICAL_RECONCILIATION_FAILED and silently failed every listing a
+  // live scan tried to persist.
+  const supabase = createAdminClient();
   await failStaleScans(supabase, filterId, sourceIds);
   const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", sourceIds).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");

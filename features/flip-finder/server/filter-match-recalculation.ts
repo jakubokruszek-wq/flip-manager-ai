@@ -7,7 +7,7 @@ import {
   type RecalculationMatch,
 } from "@/features/flip-finder/filter-match-recalculation-plan";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import {
   canReconcileNegativeResults,
   membershipAuditEntry,
@@ -58,7 +58,13 @@ export async function recalculateFilterMatches(
     return null;
   }
 
-  const supabase = await createClient();
+  // reconcileCanonicalListingDecision (called below) writes through a
+  // service_role-only RPC by design — see the grant migration. This whole
+  // function is trusted server code, so it must use the admin client, not
+  // the anon/publishable one, which has been explicitly revoked from that
+  // RPC and fails every call with "permission denied for function
+  // reconcile_canonical_listing_decision" (CANONICAL_RECONCILIATION_FAILED).
+  const supabase = createAdminClient();
   const matches = await fetchMatches(supabase, searchFilterId);
   const reconciliation = await readReconciliationDecision(supabase, searchFilterId, options);
   if (!reconciliation.allowed) {
@@ -144,7 +150,7 @@ export async function recalculateFilterMatches(
 }
 
 async function readReconciliationDecision(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: Awaited<ReturnType<typeof createAdminClient>>,
   searchFilterId: string,
   options: FilterRecalculationOptions,
 ) {
@@ -182,7 +188,7 @@ function blockedResult(matchesBefore: number, reason: string): FilterRecalculati
 }
 
 async function writeMembershipAudit(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: Awaited<ReturnType<typeof createAdminClient>>,
   entries: MembershipAuditEntry[],
 ): Promise<void> {
   if (!entries.length) return;
@@ -207,7 +213,7 @@ async function writeMembershipAudit(
 }
 
 async function fetchListingsForSources(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: Awaited<ReturnType<typeof createAdminClient>>,
   sources: SearchFilter["sources"],
 ): Promise<RecalculationListing[]> {
   const rows: Row[] = [];
@@ -236,7 +242,7 @@ async function fetchListingsForSources(
 }
 
 async function fetchMatches(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: Awaited<ReturnType<typeof createAdminClient>>,
   filterId: string,
 ): Promise<RecalculationMatch[]> {
   const { data, error } = await supabase
@@ -257,7 +263,7 @@ async function fetchMatches(
 }
 
 async function fetchListingsByIds(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: Awaited<ReturnType<typeof createAdminClient>>,
   ids: string[],
 ): Promise<RecalculationListing[]> {
   if (ids.length === 0) {
