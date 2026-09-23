@@ -50,8 +50,11 @@ export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: 
   { value: "otodom", label: "Otodom" },
   { value: "olx", label: "OLX" },
   { value: "morizon", label: "Morizon" },
-  { value: "facebook", label: "Facebook Watcher" },
+  { value: "facebook", label: "Facebook Watcher — zebrane oferty" },
 ];
+
+/** Shown next to the source picker whenever "facebook" is selected — this filter's Facebook results only ever come from Watcher's own, independently-collected canonical listings; enabling it never starts a new Facebook scan. */
+export const FACEBOOK_SOURCE_HELPER_TEXT = "Finder korzysta z ofert zebranych przez Watcher i nie uruchamia nowego skanowania Facebooka.";
 
 export function createEmptySearchFilter(): SearchFilterInput {
   return {

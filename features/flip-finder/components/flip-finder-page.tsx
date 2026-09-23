@@ -177,7 +177,7 @@ export function FlipFinderPage() {
     scanningFilterIdsRef.current.add(filter.id);
     setScanningFilterIds((current) => new Set(current).add(filter.id));
     setError(null);
-    setNotice(filter.sources.includes("facebook") ? "Tworzenie zlecenia dla Flip Collectora..." : null);
+    setNotice(null);
     setRetryFilterId(null);
     setActiveScanRunId(null);
     setScanProgress(null);
@@ -186,7 +186,6 @@ export function FlipFinderPage() {
 
     let waitingForWorker = false;
     try {
-      const usesFacebookCollector = filter.sources.includes("facebook");
       traceStage(requestId, "POST_SCAN_SENT", "PASS");
       const response = await fetch(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
@@ -219,10 +218,8 @@ export function FlipFinderPage() {
           return;
         }
         waitingForWorker = true;
-        if (usesFacebookCollector) {
-          setNotice("Facebook: oczekiwanie na odebranie zlecenia przez Collector.");
-        } else if (initialProgress && hasQueuedOrRunningFacebookWork(initialProgress)) {
-          setNotice("Facebook: oczekuje na lokalny worker. Pozostałe źródła zakończyły swój bieżący przebieg.");
+        if (initialProgress && hasQueuedOrRunningFacebookWork(initialProgress)) {
+          setNotice("Facebook Watcher zbiera jeszcze nowe oferty w tle. Pozostałe źródła zakończyły swój bieżący przebieg.");
         }
         void monitorScanRun(filter.id, payload.runId);
         await load();
@@ -929,7 +926,7 @@ function mainDiagnosticReason(diagnostics: MatchDiagnostics | undefined): string
 
 function percentage(value: number, total: number): number { return total > 0 ? Math.min(100, Math.max(0, value / total * 100)) : 0; }
 function formatPercent(value: number, total: number): string { return `${percentage(value, total).toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%`; }
-function sourceDisplayLabel(value: string): string { return value === "otodom" ? "Otodom" : value === "olx" ? "OLX" : value === "morizon" ? "Morizon" : value === "facebook" ? "Facebook" : value; }
+function sourceDisplayLabel(value: string): string { return value === "otodom" ? "Otodom" : value === "olx" ? "OLX" : value === "morizon" ? "Morizon" : value === "facebook" ? "Facebook Watcher — zebrane oferty" : value; }
 
 function FilterActions({ filter, onAction }: { filter: SearchFilterListItem; onAction: (filter: SearchFilterListItem, action: "toggle" | "duplicate" | "delete") => Promise<void> }) {
   const [confirmationOpen, setConfirmationOpen] = useState(false);

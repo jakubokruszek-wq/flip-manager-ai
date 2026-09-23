@@ -38,6 +38,14 @@ export type FilterRecalculationOptions = {
   /** Explicit filter edits/admin recalculations may run without a scan. */
   allowWithoutScan?: boolean;
   scanRunId?: string | null;
+  /**
+   * Restricts which of the filter's own sources this pass re-evaluates —
+   * used by Finder's Facebook path, which must reconcile only the
+   * already-collected Facebook listings and never touch sources a live scan
+   * just finished handling in the same request. Defaults to every source
+   * the filter itself declares.
+   */
+  sourcesOverride?: SearchFilter["sources"];
 };
 
 export async function recalculateFilterMatches(
@@ -57,7 +65,13 @@ export async function recalculateFilterMatches(
     return blockedResult(matches.filter((match) => visibleMembership({ isCurrentMatch: match.isCurrentMatch !== false, matchReasons: match.matchReasons ?? [] })).length, reconciliation.reason);
   }
 
-  const listings = await fetchListingsForSources(supabase, filter);
+  const listings = await fetchListingsForSources(supabase, options.sourcesOverride ?? filter.sources);
+  // Deliberately unscoped by sourcesOverride: an existing match for a source
+  // outside the override (e.g. an already-matched Otodom listing, when this
+  // call is scoped to ["facebook"]) must still be fetched by id here so the
+  // plan can see it and correctly leave it "unchanged" — never fall through
+  // to the plan's removed-if-missing fallback just because this pass wasn't
+  // asked to re-scan that source.
   const missingMatchedIds = matches
     .map((match) => match.listingId)
     .filter((listingId) => !listings.some((listing) => listing.id === listingId));
@@ -194,7 +208,7 @@ async function writeMembershipAudit(
 
 async function fetchListingsForSources(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  filter: SearchFilter,
+  sources: SearchFilter["sources"],
 ): Promise<RecalculationListing[]> {
   const rows: Row[] = [];
   const pageSize = 500;
@@ -203,7 +217,7 @@ async function fetchListingsForSources(
     const { data, error } = await supabase
       .from("listings")
       .select("id,source,original_url,title,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
-      .in("source", filter.sources)
+      .in("source", sources)
       .range(start, start + pageSize - 1);
 
     if (error) {

@@ -5,12 +5,11 @@ import { addMatchDiagnostic, createMatchDiagnostic, emptyMatchDiagnosticSummary,
 import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/scan-counters";
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
 import { enqueueOlxJob } from "@/features/flip-finder/server/olx-jobs";
-import { enqueueFacebookJobs } from "@/features/facebook-worker/jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
+import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
-import { facebookScanStartFailure } from "./scan-start-errors";
 import { RECOVERABLE_SCAN_STATUSES, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
 export { scanStatus } from "./scan-start-errors";
 
@@ -28,7 +27,7 @@ export function sourceScanMetrics(result: SourceFetchResult, matchedCount: numbe
   return { scannedCount: result.fetched, listingsFound: result.fetched, matchedCount };
 }
 
-export async function runManualOtodomScan(filterId: string, facebookSourceId?: string): Promise<ScanSummary> {
+export async function runManualOtodomScan(filterId: string): Promise<ScanSummary> {
   const runId = crypto.randomUUID();
   const scanStarted = Date.now();
   const ownedScans = new Map<string, ScanClock>();
@@ -60,26 +59,12 @@ export async function runManualOtodomScan(filterId: string, facebookSourceId?: s
       }
     }
     if (facebookEnabled) {
-      try {
-        const queued = await enqueueFacebookJobs(filter, runId, facebookSourceId);
-        if (queued.jobs.length !== 1 || queued.failedGroups.length > 0) {
-          throw new Error(queued.failedGroups.map((item) => item.error).join("; ") || queued.reasonCode || "FACEBOOK_QUEUE_JOB_NOT_CREATED");
-        }
-        sourceResults.push(pendingResult("facebook", "Facebook: oczekiwanie na Collector"));
-      } catch (error) {
-        sourceResults.push(failedResult("facebook", 0, "FACEBOOK_QUEUE_ENQUEUE_FAILED", error instanceof Error ? error.message : "Facebook queue enqueue failed."));
-      }
+      sourceResults.push(await reconcileFacebookFromCanonicalListings(filterId, runId));
     }
     const completed = sourceResults.filter((result) => result.status === "completed");
     const pending = sourceResults.filter((result) => result.status === "pending");
     const failed = sourceResults.filter((result) => result.status === "failed").length;
     if (!completed.length && !pending.length) {
-      const facebookFailure = sourceResults.find((result) => result.source === "facebook" && result.status === "failed");
-      const classified = facebookFailure ? facebookScanStartFailure(facebookFailure.errorMessage) : null;
-      if (classified) {
-        console.error("FLIP FINDER SCAN START BLOCKED:", { scanId: runId, filterId, code: classified.code });
-        throw statusError(classified.status, classified.code);
-      }
       throw statusError(500, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
     }
     const sum = (key: keyof Pick<SourceScanResult, "fetched" | "normalized" | "matched" | "listingsCreated" | "newMatches" | "updated" | "priceDrops" | "rejected">) => sourceResults.reduce((total, result) => total + result[key], 0);
@@ -177,6 +162,40 @@ async function failOwnedRunningScans(supabase: SupabaseClient, scans: Map<string
 
 function scanTimestamp({ startedAt, startedMs }: ScanClock): string {
   return new Date(Date.parse(startedAt) + Math.max(1, Date.now() - startedMs)).toISOString();
+}
+
+/**
+ * Facebook contract: Flip Finder never acquires Facebook posts itself — the
+ * Facebook Watcher/Collector pipeline collects them independently, on its own
+ * schedule. Scanning a filter that includes source="facebook" must therefore
+ * create zero facebook_scan_jobs rows and send zero commands to the browser
+ * extension; it only re-evaluates the canonical listings Watcher already
+ * stored against this filter's current criteria, entirely in the database.
+ */
+async function reconcileFacebookFromCanonicalListings(filterId: string, runId: string): Promise<SourceScanResult> {
+  const started = Date.now();
+  try {
+    const result = await recalculateFilterMatches(filterId, { allowWithoutScan: true, scanRunId: runId, sourcesOverride: ["facebook"] });
+    if (!result) return failedResult("facebook", Date.now() - started, "FACEBOOK_RECONCILIATION_FILTER_NOT_FOUND", "Nie znaleziono filtra do przeliczenia ofert z Facebooka.");
+    return {
+      source: "facebook",
+      status: "completed",
+      fetched: result.evaluated,
+      normalized: result.evaluated,
+      matched: result.matchesAfter,
+      listingsCreated: 0,
+      newMatches: result.addedMatches,
+      updated: 0,
+      priceDrops: 0,
+      rejected: result.rejectedByPricePerSqm + result.rejectedByOtherCriteria,
+      durationMs: Date.now() - started,
+      errorCode: null,
+      errorMessage: null,
+      matchDiagnostics: emptyMatchDiagnosticSummary(),
+    };
+  } catch (error) {
+    return failedResult("facebook", Date.now() - started, "FACEBOOK_RECONCILIATION_FAILED", error instanceof Error ? error.message : "Nie udało się przeliczyć ofert z Facebooka.");
+  }
 }
 
 function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
