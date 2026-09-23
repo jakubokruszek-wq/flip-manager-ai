@@ -66,6 +66,44 @@ test("a sale listing mentioning a monthly administrative fee (miesięcznie) is s
   assert.equal(result.intent, "SELL_PROPERTY");
 });
 
+// HOLD-blocker regression: "zł/mies." is a generic monthly-price-unit marker,
+// not rental-specific vocabulary — real sale listings routinely state their
+// administrative/HOA fee this exact way. An independent read-only review of
+// da7a787 proved this text was misclassified RENT_OFFER before the fix
+// (rentOfferSignal's "zl/mies" branch fired unconditionally, ahead of the
+// explicit "sprzedam" sell signal). An explicit sale signal must always win
+// over this weak running-cost phrasing, while genuine, unambiguous rental
+// vocabulary (do wynajęcia, na wynajem, czynsz najmu, odstępne) must keep
+// working exactly as before.
+test("an explicit sale signal overrides the weak 'zł/mies.' running-cost signal — 'Sprzedam mieszkanie 50m2, czynsz administracyjny 500 zł/mies.'", () => {
+  const result = resolveFacebookListingIntent("Sprzedam mieszkanie 50m2, czynsz administracyjny 500 zł/mies.", null, null);
+  assert.equal(result.intent, "SELL_PROPERTY");
+  assert.equal(result.reasonCode, null, "a genuine sale must never carry a skip reason");
+});
+
+test("other explicit sale signals (na sprzedaż, cena sprzedaży) also override the weak 'zł/mies.' signal", () => {
+  assert.equal(resolveFacebookListingIntent("Mieszkanie na sprzedaż, opłaty czynszowe 450 zł/mies.", null, null).intent, "SELL_PROPERTY");
+  assert.equal(resolveFacebookListingIntent("Sprzedam mieszkanie, cena sprzedaży 450000 zł, czynsz 500 zł/mies.", null, null).intent, "SELL_PROPERTY");
+});
+
+test("a genuine minimalist rental ad using only 'zł/mies.' (no explicit sale signal) is still RENT_OFFER", () => {
+  const result = resolveFacebookListingIntent("Kawalerka 30m2, 1500 zł/mies.", null, null);
+  assert.equal(result.intent, "RENT_OFFER");
+  assert.equal(result.reasonCode, "FACEBOOK_RENT_REQUEST");
+});
+
+test("strong rental phrases (do wynajęcia, na wynajem, czynsz najmu, odstępne) still win even though they are unaffected by the weak-signal change", () => {
+  for (const text of [
+    "Mieszkanie do wynajęcia, Łódź",
+    "Mieszkanie na wynajem, Łódź, 2 pokoje",
+    "Mieszkanie 45m2, czynsz najmu 2000 zł",
+    "Mieszkanie z odstępnym, 2 pokoje",
+  ]) {
+    const result = resolveFacebookListingIntent(text, null, null);
+    assert.equal(result.intent, "RENT_OFFER", `expected RENT_OFFER for: ${text}`);
+  }
+});
+
 test("additional sale signals (cena sprzedaży, sprzedaż mieszkania) are recognized as SELL_PROPERTY", () => {
   assert.equal(resolveFacebookListingIntent("Sprzedam mieszkanie, cena sprzedaży 450000 zł", null, null).intent, "SELL_PROPERTY");
   assert.equal(resolveFacebookListingIntent("Sprzedaż mieszkania Łódź Widzew, 3 pokoje", null, null).intent, "SELL_PROPERTY");

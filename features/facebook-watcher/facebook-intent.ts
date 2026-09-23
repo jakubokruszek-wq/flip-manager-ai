@@ -68,14 +68,25 @@ export function resolveFacebookListingIntent(
   // A leading "nie" ("nie do wynajęcia" = "not for rent") negates the phrase; without
   // this guard a sale post mentioning that it is *not* for rent would be misread as
   // a rental offer before the sell signal below ever gets a chance to be checked.
-  // Every phrase here is rental-specific and unambiguous on its own — "czynsz
+  // Every strong phrase here is rental-specific and unambiguous on its own — "czynsz
   // najmu" (rent itself, not the administrative "czynsz" fee a sale listing
-  // routinely mentions) and "zł/mies." (a price-per-month marker) are
-  // deliberately NOT just "czynsz" or "miesięcznie" alone, since either bare
+  // routinely mentions) is deliberately NOT just "czynsz" alone, since that bare
   // word appears constantly in ordinary sale listings (administrative fees,
   // a mortgage estimate) and must never by itself flip a sale to a rental —
   // see "Na sprzedaż mieszkanie. Czynsz 615 zł." in facebook-intent.test.ts.
-  const rentOfferSignal = /(?<!\bnie\s)\b(do wynajecia|wynajme|oferuje najem|na wynajem|czynsz najmu|zl\s*\/\s*mies|odstepn[\p{L}]*)\b/u.test(normalized) && !rentWantedSignal;
+  const strongRentOfferSignal = /(?<!\bnie\s)\b(do wynajecia|wynajme|oferuje najem|na wynajem|czynsz najmu|odstepn[\p{L}]*)\b/u.test(normalized) && !rentWantedSignal;
+  // "zł/mies." is only a WEAK rental signal: it is a generic monthly-price-unit
+  // marker, not rental-specific vocabulary — real sale listings routinely state
+  // their administrative/HOA fee the same way ("czynsz administracyjny 500
+  // zł/mies."). It may only tip a post toward RENT_OFFER when no EXPLICIT sale
+  // keyword (sprzedam, na sprzedaż, cena sprzedaży, ...) is present. Deliberately
+  // excludes SELL_STRUCTURED_OFFER (a bare area+price heuristic with no sale
+  // keyword at all) from that override power: an ordinary rental ad routinely
+  // states both an area and a monthly price too ("Kawalerka 30m2, 1500 zł/mies."),
+  // so that weak, keyword-free heuristic must never itself suppress a rental read.
+  const weakRentOfferSignal = /(?<!\bnie\s)\bzl\s*\/\s*mies\b/u.test(normalized) && !rentWantedSignal;
+  const explicitSellSignal = signals.sellSignals.some((name) => name !== "SELL_STRUCTURED_OFFER");
+  const rentOfferSignal = strongRentOfferSignal || (weakRentOfferSignal && !explicitSellSignal);
   const serviceSignal = /\b(uslugi remontowe|wykonczenia wnetrz|posrednictwo|agent nieruchomosci|fotografia nieruchomosci)\b/u.test(normalized);
 
   const normalizedVisionIntent = visionIntent ?? "UNKNOWN";
