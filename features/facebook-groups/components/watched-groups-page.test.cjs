@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -46,7 +47,7 @@ test("the historical mapping section is read-only (no edit/toggle/remove actions
 test("the group card's identifier line remains secondary text, never the primary <h3> label", () => {
   const cardMatch = source.match(/function GroupCard[\s\S]*?groupIdentifier\(group\.url\)/);
   assert.ok(cardMatch, "GroupCard must still render the identifier somewhere");
-  assert.match(source, /<h3 className="font-bold">\{group\.name\}<\/h3>/, "the primary label must be the group's real name, never the bare identifier");
+  assert.match(source, /<h3 className="font-bold">\{resolveFacebookGroupDisplayName\(group\)\}<\/h3>/, "the primary label must use the shared verified-name resolver, never the bare identifier");
 });
 
 // HOLD-blocker: module/global "last discovery preview" storage removed;
