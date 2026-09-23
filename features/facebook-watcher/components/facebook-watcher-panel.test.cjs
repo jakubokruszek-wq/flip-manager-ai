@@ -194,10 +194,10 @@ test("the ?listing= deep link still clicks the exact matching inbox item, for an
 // panel's own border and ExpandableListingCard's own border (in its
 // "watcher" variant) are suppressed so nesting never produces two outlines.
 test("one Watcher listing (the outer <article>) carries exactly one gold border; the two panels inside it never draw their own competing outline", () => {
-  assert.match(panel, /return <article className="space-y-2 overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 hover:!border-gold\/45 focus-within:!border-gold\/45" id=\{`facebook-inbox-\$\{item\.listingId\}`\}>/, "the outer <article> — the actual one-listing wrapper — must carry the single gold border");
+  assert.match(panel, /return <article className="space-y-2 overflow-hidden rounded-\[1\.125rem\] !border-2 !border-gold\/55 transition-colors duration-300 hover:!border-gold\/80 focus-within:!border-gold\/80" id=\{`facebook-inbox-\$\{item\.listingId\}`\}>/, "the outer <article> — the actual one-listing wrapper — must carry the single, stronger (2px, 55%->80%) gold border");
   assert.doesNotMatch(panel, /<div className="rounded-2xl border border-border\/70 bg-card px-3 py-3">/, "the inner status/action panel's own competing border must be gone");
   assert.match(panel, /<div className="bg-card px-3 py-3">/, "the status/action panel keeps its background and padding as an internal section, without its own full border/radius that would read as a second card");
-  assert.match(finderCard, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : "overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 focus-within:!border-gold\/45 hover:!border-gold\/45";/, "ExpandableListingCard must render borderless specifically for variant=\"watcher\", since the Watcher's own <article> now owns the single outer border");
+  assert.match(finderCard, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : "overflow-hidden rounded-\[1\.125rem\] !border-2 !border-gold\/55 transition-colors duration-300 focus-within:!border-gold\/80 hover:!border-gold\/80";/, "ExpandableListingCard must render borderless specifically for variant=\"watcher\", since the Watcher's own <article> now owns the single outer border");
   assert.match(finderCard, /return <div className=\{wrapperBorderClassName\} onClickCapture=\{handleCardClickCapture\}/, "the conditional class must actually be applied to the wrapper, not just computed and discarded");
 });
 

@@ -62,7 +62,7 @@ test("ExpandableListingCard draws exactly one thin gold border around the whole 
   const start = page.indexOf("export function ExpandableListingCard(");
   assert.ok(start >= 0, "ExpandableListingCard must exist");
   const source = page.slice(start, page.indexOf("\n}\n", start));
-  assert.match(source, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : "overflow-hidden rounded-\[1\.125rem\] border !border-gold\/20 transition-colors duration-300 focus-within:!border-gold\/45 hover:!border-gold\/45";/, "the border must be computed from variant, empty only for \"watcher\", so the standalone Finder usage keeps its own single border");
+  assert.match(source, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : "overflow-hidden rounded-\[1\.125rem\] !border-2 !border-gold\/55 transition-colors duration-300 focus-within:!border-gold\/80 hover:!border-gold\/80";/, "the border must be computed from variant, empty only for \"watcher\", so the standalone Finder usage keeps its own single, stronger (2px, 55%->80%) border");
   assert.match(source, /return <div className=\{wrapperBorderClassName\} onClickCapture=\{handleCardClickCapture\} onPointerDownCapture=\{handleCardPointerCapture\}/, "the wrapper (top card + bottom panel) must carry the computed border class, not display:contents");
   // ReviewListingCard (a separate, untouched component) legitimately keeps
   // its own identically-named display:contents wrapper — this check is

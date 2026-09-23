@@ -124,6 +124,13 @@ function assertContains(parentLabel, parent, childLabel, child) {
   assert.ok(child.right <= parent.right + TOLERANCE, `${childLabel}.right (${child.right.toFixed(2)}) must be <= ${parentLabel}.right (${parent.right.toFixed(2)}) — a child must never extend past its parent's content boundary`);
 }
 
+// Extracts the alpha channel from a computed border-color, whatever color
+// function the browser reports it in (oklab(... / A), rgba(r, g, b, A), ...).
+function borderAlpha(value) {
+  const match = value.match(/\/\s*([\d.]+)\s*\)/) ?? value.match(/,\s*([\d.]+)\s*\)\s*$/);
+  return match ? Number.parseFloat(match[1]) : null;
+}
+
 async function collectGeometry(page) {
   return page.evaluate(() => {
     const rect = (el) => {
@@ -273,8 +280,8 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
     assert.ok(byId[FACEBOOK_LINK_ID].includes("Facebook"), `${viewport.name}: listing with originalUrl must offer the external Facebook link`);
     assert.deepEqual(byId[MAX_ACTIONS_ID].sort(), ["Analizuj", "Dodaj do CRM", "Facebook", "Interesująca", "Napraw galerię", "Przywróć", "Przywróć do Flip Finder"].sort(), `${viewport.name}: maximum-action listing must render every conditional action at once`);
 
-    // Gold border must remain exactly as before (Task 3): 1px, one per
-    // listing, 20% base -> 45% hover/focus, no second competing outline.
+    // Stronger gold border mission (Task 2): 2px, one per listing, ~55% base
+    // -> ~80% hover/focus, no second competing outline.
     const first = page.locator('article[id^="facebook-inbox-"]').first();
     const outerStyle = await first.evaluate((element) => {
       const computed = getComputedStyle(element);
@@ -285,9 +292,13 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
     const hoverBorderColor = await first.evaluate((element) => getComputedStyle(element).borderColor);
     await page.mouse.move(0, 0);
     const innerPanelBorderWidth = await first.locator("> div").first().evaluate((element) => getComputedStyle(element).borderWidth);
-    assert.equal(outerStyle.borderWidth, "1px", `${viewport.name}: outer gold border must remain 1px`);
+    assert.equal(outerStyle.borderWidth, "2px", `${viewport.name}: outer gold border must be 2px`);
     assert.equal(innerPanelBorderWidth, "0px", `${viewport.name}: inner status panel must still carry no border of its own`);
-    assert.notEqual(hoverBorderColor, outerStyle.borderColor, `${viewport.name}: hover must still step the border from 20% to 45% gold opacity`);
+    assert.notEqual(hoverBorderColor, outerStyle.borderColor, `${viewport.name}: hover must still step the border color`);
+    const restAlpha = borderAlpha(outerStyle.borderColor);
+    const hoverAlpha = borderAlpha(hoverBorderColor);
+    assert.ok(restAlpha !== null && restAlpha >= 0.5 && restAlpha <= 0.6, `${viewport.name}: rest border opacity ${restAlpha} must be ~55% (${outerStyle.borderColor})`);
+    assert.ok(hoverAlpha !== null && hoverAlpha >= 0.75 && hoverAlpha <= 0.85, `${viewport.name}: hover border opacity ${hoverAlpha} must be ~80% (${hoverBorderColor})`);
 
     summary[viewport.name] = {
       appMainWidth: geometry.appMain.width,

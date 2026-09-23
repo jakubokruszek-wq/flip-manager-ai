@@ -928,7 +928,7 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
   // outer gold border for the whole listing (status/action panel + this
   // card together) — this wrapper must render borderless there, or the
   // listing would show two nested gold rectangles instead of one.
-  const wrapperBorderClassName = props.variant === "watcher" ? "" : "overflow-hidden rounded-[1.125rem] border !border-gold/20 transition-colors duration-300 focus-within:!border-gold/45 hover:!border-gold/45";
+  const wrapperBorderClassName = props.variant === "watcher" ? "" : "overflow-hidden rounded-[1.125rem] !border-2 !border-gold/55 transition-colors duration-300 focus-within:!border-gold/80 hover:!border-gold/80";
   return <div className={wrapperBorderClassName} onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
 }
 
