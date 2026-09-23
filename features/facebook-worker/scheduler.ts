@@ -5,7 +5,9 @@ import { createClient } from "@supabase/supabase-js";
 import type { SearchFilter } from "@/features/flip-finder";
 import { resolveFacebookListingIntent } from "@/features/facebook-watcher/facebook-intent";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
-import { FACEBOOK_PRODUCTION_SOURCES, normalizeFacebookSourceUrl } from "@/features/collector/facebook-production";
+import { normalizeFacebookSourceUrl as normalizeCollectorSourceUrl } from "@/features/collector/facebook-production";
+import { normalizeFacebookSourceUrl } from "@/features/facebook-groups/group-url";
+import { resolveFacebookGroupDisplayName } from "@/features/facebook-groups/display-name";
 import { enqueueFacebookJobs } from "./jobs";
 import { activeJobDecision, orderSchedulerSources, schedulerCooldownMinutes, schedulerCycleDecision, withExclusiveSchedulerLock, type SchedulerSource } from "./scheduler-core";
 
@@ -153,24 +155,40 @@ async function stampAndVerifyAutomaticSource(supabase: ReturnType<typeof createF
   if (markerFromJob(verifiedJob)?.cycleId !== marker.cycleId || markerFromScan(verifiedScan)?.cycleId !== marker.cycleId) throw new Error("SCHEDULER_MARKER_VERIFY_FAILED");
 }
 
-async function schedulerContext(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, now: Date): Promise<{ filter: SearchFilter; sources: SchedulerSource[] } | null> {
-  const readClient = createSchedulerReadClient();
+/**
+ * Exported (only) so an integration test can exercise the real scheduler
+ * selection logic directly against a controllable fake database, proving a
+ * newly imported, active, eligible group is selected for enqueue without
+ * mocking the selected-source list itself. `readClient` defaults to the
+ * real anon-key client production always uses; a test supplies its own
+ * fake in its place.
+ */
+export async function schedulerContext(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, now: Date, readClient: ReturnType<typeof createSchedulerReadClient> = createSchedulerReadClient()): Promise<{ filter: SearchFilter; sources: SchedulerSource[] } | null> {
   const [filtersResult, sourcesResult] = await Promise.all([
     readClient.from("search_filters").select("*").eq("is_active", true).order("updated_at", { ascending: false }),
-    supabase.from("watched_facebook_groups").select("id,name,url,priority,created_at,enabled").eq("enabled", true),
+    supabase.from("watched_facebook_groups").select("id,name,name_verified,url,priority,created_at,enabled").eq("enabled", true),
   ]);
   if (filtersResult.error) throw new Error(`SCHEDULER_FILTER_QUERY_FAILED: ${filtersResult.error.message}`);
   if (sourcesResult.error) throw new Error(`SCHEDULER_SOURCE_QUERY_FAILED: ${sourcesResult.error.message}`);
   const filter = records(filtersResult.data).map(filterFromRow).find((candidate) => candidate.sources.includes("facebook"));
   if (!filter) return null;
-  const approved = new Set(FACEBOOK_PRODUCTION_SOURCES.map((source) => `${source.sourceType}:${source.sourceId}`));
+  // The database-backed watched_facebook_groups registry is the ONLY
+  // runtime eligibility gate: enabled=true (already filtered above) plus a
+  // URL that normalizes to a real canonical group/profile identity. The
+  // historical FACEBOOK_PRODUCTION_SOURCES allowlist no longer filters this
+  // list at all -- a newly imported, active, eligible group is picked up by
+  // the very next scheduler tick with no source-code change or redeploy.
   const sources = orderSchedulerSources(records(sourcesResult.data).flatMap((source): SchedulerSource[] => {
     const url = text(source.url); const watchedSourceId = text(source.id);
     if (!url || !watchedSourceId) return [];
-    const type = /^\/groups\//i.test(new URL(url).pathname) ? "GROUP" as const : "PROFILE" as const;
-    const normalized = normalizeFacebookSourceUrl(url, type);
-    if (!normalized || !approved.has(`${normalized.type}:${normalized.sourceId}`)) return [];
-    return [{ watchedSourceId, sourceId: normalized.sourceId, name: text(source.name) ?? normalized.sourceId, url: normalized.url, type: normalized.type, priority: priority(source.priority), createdAt: text(source.created_at) ?? now.toISOString() }];
+    let type: "GROUP" | "PROFILE";
+    try { type = /^\/groups\//i.test(new URL(url).pathname) ? "GROUP" : "PROFILE"; }
+    catch { return []; }
+    let normalized: { url: string; identifier: string };
+    try { normalized = normalizeFacebookSourceUrl(url, type); }
+    catch { return []; }
+    const name = resolveFacebookGroupDisplayName({ name: text(source.name), nameVerified: source.name_verified !== false });
+    return [{ watchedSourceId, sourceId: normalized.identifier, name, url: normalized.url, type, priority: priority(source.priority), createdAt: text(source.created_at) ?? now.toISOString() }];
   }));
   return sources.length ? { filter, sources } : null;
 }
@@ -313,7 +331,7 @@ function jsonRecord(value: unknown): Row | null {
 }
 
 function sourceDiagnostics(source: Row, scans: Row[], batches: Row[], jobs: Row[]) {
-  const url = text(source.url); const normalized = url ? normalizeFacebookSourceUrl(url) : null; const sourceId = normalized?.sourceId ?? null;
+  const url = text(source.url); const normalized = url ? normalizeCollectorSourceUrl(url) : null; const sourceId = normalized?.sourceId ?? null;
   const latestBatch = sourceId ? batches.find((batch) => batch.source_id === sourceId) : null; const payload = record(latestBatch?.payload);
   const posts = Array.isArray(payload?.posts) ? payload.posts.map(record).filter((post): post is Row => Boolean(post)) : [];
   const exact = posts.filter((post) => post.identityConfidence === "EXACT");

@@ -11,7 +11,7 @@ import { aggregateFacebookScanAccounting, classifyPreExtractionExclusion, valida
 
 import type { FacebookCollectorBatch } from "./facebook-batch";
 import { COLLECTOR_IMAGE_IMPORT_OPTIONS, collectorPostsForProcessing, findHistoricalCollectorIdentityConflicts, isCollectorPostFresh } from "./facebook-batch-policy";
-import { isFacebookProductionSource } from "./facebook-production";
+import { isEnabledWatchedFacebookSource } from "@/features/facebook-groups/server";
 
 export { FACEBOOK_PRODUCTION_SOURCE_ID, FACEBOOK_PRODUCTION_SOURCE_URL } from "./facebook-production";
 
@@ -36,7 +36,13 @@ export type CollectorBatchResult = {
 };
 
 export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
-  if (!isFacebookProductionSource({ sourceId: batch.sourceId, type: batch.sourceType, url: batch.sourceUrl })) throw new Error("COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST");
+  // The database-backed watched_facebook_groups registry is the single
+  // canonical eligibility source, matching the scheduler that enqueued this
+  // batch's job in the first place -- an imported group's collected results
+  // must never be rejected here just because it postdates the historical
+  // FACEBOOK_PRODUCTION_SOURCES allowlist. Requires the same explicit
+  // opt-in (enabled=true) the scheduler itself already requires.
+  if (!(await isEnabledWatchedFacebookSource({ sourceId: batch.sourceId, type: batch.sourceType, url: batch.sourceUrl }))) throw new Error("COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST");
   const supabase = createAdminClient();
   const existing = await supabase.from("collector_scan_batches").select("status,result").eq("device_id", deviceId).eq("batch_id", batch.batchId).maybeSingle();
   if (existing.error) throw new Error(`COLLECTOR_BATCH_LOOKUP_FAILED: ${existing.error.message}`);

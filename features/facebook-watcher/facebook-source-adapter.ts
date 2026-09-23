@@ -7,7 +7,11 @@ export interface FacebookSourceAdapter {
 }
 
 export class FacebookSourceError extends Error {
-  constructor(public readonly code: "MANUAL_IMPORT_REQUIRED" | "INVALID_INPUT", message: string) { super(message); }
+  readonly code: "MANUAL_IMPORT_REQUIRED" | "INVALID_INPUT";
+  constructor(code: "MANUAL_IMPORT_REQUIRED" | "INVALID_INPUT", message: string) {
+    super(message);
+    this.code = code;
+  }
 }
 
 export const manualFacebookAdapter: FacebookSourceAdapter = {

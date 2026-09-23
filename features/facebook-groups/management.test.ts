@@ -57,7 +57,7 @@ test("safe remove archives operationally by disabling only and preserves histori
 });
 
 function group(id: string, enabled: boolean, url = `https://www.facebook.com/groups/${id}/`): WatchedFacebookGroup {
-  return { id, name: `Group ${id}`, url, city: "Łódź", district: null, neighborhood: null, priority: "normal", keywords: [], enabled, accessStatus: "CONNECTED", lastCheckedAt: null, importedPosts: 0, newToday: 0, opportunities: 0, lastError: null };
+  return { id, name: `Group ${id}`, nameVerified: true, url, city: "Łódź", district: null, neighborhood: null, priority: "normal", keywords: [], enabled, accessStatus: "CONNECTED", lastCheckedAt: null, importedPosts: 0, newToday: 0, opportunities: 0, lastError: null };
 }
 
 function toPlannerGroup(value: WatchedFacebookGroup) { return { id: value.id, name: value.name, url: value.url, priority: value.priority, createdAt: "2026-08-23T00:00:00.000Z" }; }

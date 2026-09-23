@@ -13,6 +13,16 @@ export type WatchedFacebookGroup = {
   type?: FacebookSourceType;
   sourceId?: string;
   name: string;
+  /**
+   * false only for rows backfilled from the historical
+   * FACEBOOK_PRODUCTION_SOURCES allowlist whose real Facebook-displayed
+   * name was never captured (see the paired database migration). Every
+   * screen must resolve a display name through
+   * features/facebook-groups/display-name.ts's resolveFacebookGroupDisplayName
+   * rather than reading `name` directly, so this row's own `name` value is
+   * never shown as-is when this is false.
+   */
+  nameVerified: boolean;
   url: string;
   city: string;
   district: string | null;

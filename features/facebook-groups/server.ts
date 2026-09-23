@@ -20,8 +20,29 @@ export async function listWatchedFacebookGroups(): Promise<WatchedFacebookGroup[
   return [...memoryGroups.values()];
 }
 
+/**
+ * The canonical runtime eligibility check: is this source currently an
+ * enabled row in the database-backed group registry? Used by the collector
+ * batch-ingest boundary (features/collector/facebook-batch-server.ts) so a
+ * newly imported, active group's collected results are never silently
+ * rejected there even though the scheduler has already started enqueueing
+ * jobs for it -- both sides of the pipeline must agree on the same single
+ * registry, or "imported groups are actually scanned" would be false in a
+ * more insidious way (the job runs, but its results are discarded).
+ */
+export async function isEnabledWatchedFacebookSource(candidate: { sourceId: string; type: "GROUP" | "PROFILE"; url: string }): Promise<boolean> {
+  let normalized: { url: string; identifier: string } | null;
+  try { normalized = normalizeFacebookSourceUrl(candidate.url, candidate.type); } catch { normalized = null; }
+  // The collector sends both fields.  Require them to describe the same
+  // canonical identity; accepting a matching sourceId with a different URL
+  // would let a malformed or stale batch cross the registry boundary.
+  if (!normalized || normalized.identifier !== candidate.sourceId.toLocaleLowerCase("en-US")) return false;
+  const groups = await listWatchedFacebookGroups();
+  return groups.some((group) => group.enabled && group.type === candidate.type && group.sourceId?.toLocaleLowerCase("en-US") === normalized.identifier);
+}
+
 export async function createWatchedFacebookGroup(input: FacebookGroupInput): Promise<WatchedFacebookGroup> {
-  const group = normalize({ ...input, id: randomUUID(), accessStatus: "MANUAL_IMPORT", lastCheckedAt: null, importedPosts: 0, newToday: 0, opportunities: 0, lastError: null });
+  const group = normalize({ ...input, id: randomUUID(), nameVerified: true, accessStatus: "MANUAL_IMPORT", lastCheckedAt: null, importedPosts: 0, newToday: 0, opportunities: 0, lastError: null });
   const supabase = createFacebookWatcherAdminClient();
   const result = await supabase.from("watched_facebook_groups").insert(toRow(group)).select("*").single();
   if (!result.error && result.data) return fromRow(result.data);
@@ -168,7 +189,7 @@ function validateUrl(value: string, type: "GROUP" | "PROFILE") { return normaliz
 function nullable(value: string | null | undefined) { const result = value?.trim(); return result || null; }
 function missingTable(message: string) { return /does not exist|schema cache/i.test(message); }
 function validateGroupId(value: string) { if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new Error("Nieprawidłowy identyfikator grupy."); }
-function toRow(group: WatchedFacebookGroup) { return { id: group.id, name: group.name, url: group.url, city: group.city, district: group.district, neighborhood: group.neighborhood, priority: group.priority, keywords: group.keywords, enabled: group.enabled, access_status: group.accessStatus, last_checked_at: group.lastCheckedAt, imported_posts_count: group.importedPosts, new_today_count: group.newToday, opportunities_count: group.opportunities, last_error: group.lastError }; }
-function fromRow(row: Row): WatchedFacebookGroup { const url = String(row.url); const type = /^\/groups\//i.test(new URL(url).pathname) ? "GROUP" : "PROFILE"; let sourceId: string | undefined; try { sourceId = normalizeFacebookSourceUrl(url, type).identifier; } catch { /* preserve legacy URL */ } return { id: String(row.id), type, sourceId, name: String(row.name), url, city: String(row.city), district: text(row.district), neighborhood: text(row.neighborhood), priority: row.priority as WatchedFacebookGroup["priority"], keywords: Array.isArray(row.keywords) ? row.keywords.filter((item): item is string => typeof item === "string") : [], enabled: row.enabled === true, accessStatus: row.access_status as FacebookGroupAccessStatus, lastCheckedAt: text(row.last_checked_at), importedPosts: number(row.imported_posts_count), newToday: number(row.new_today_count), opportunities: number(row.opportunities_count), lastError: text(row.last_error) }; }
+function toRow(group: WatchedFacebookGroup) { return { id: group.id, name: group.name, name_verified: group.nameVerified, url: group.url, city: group.city, district: group.district, neighborhood: group.neighborhood, priority: group.priority, keywords: group.keywords, enabled: group.enabled, access_status: group.accessStatus, last_checked_at: group.lastCheckedAt, imported_posts_count: group.importedPosts, new_today_count: group.newToday, opportunities_count: group.opportunities, last_error: group.lastError }; }
+function fromRow(row: Row): WatchedFacebookGroup { const url = String(row.url); const type = /^\/groups\//i.test(new URL(url).pathname) ? "GROUP" : "PROFILE"; let sourceId: string | undefined; try { sourceId = normalizeFacebookSourceUrl(url, type).identifier; } catch { /* preserve legacy URL */ } return { id: String(row.id), type, sourceId, name: String(row.name), nameVerified: row.name_verified !== false, url, city: String(row.city), district: text(row.district), neighborhood: text(row.neighborhood), priority: row.priority as WatchedFacebookGroup["priority"], keywords: Array.isArray(row.keywords) ? row.keywords.filter((item): item is string => typeof item === "string") : [], enabled: row.enabled === true, accessStatus: row.access_status as FacebookGroupAccessStatus, lastCheckedAt: text(row.last_checked_at), importedPosts: number(row.imported_posts_count), newToday: number(row.new_today_count), opportunities: number(row.opportunities_count), lastError: text(row.last_error) }; }
 const text = (value: unknown) => typeof value === "string" ? value : null;
 const number = (value: unknown) => typeof value === "number" ? value : 0;

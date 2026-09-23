@@ -4,7 +4,7 @@ import type { SearchFilter } from "@/features/flip-finder";
 import { getAlerts } from "@/features/alerts/server";
 import { fetchFacebookActiveListingCandidates, importFacebookWatcher } from "@/features/facebook-watcher/server";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
-import { assertFacebookSourceUrl, assertFacebookPostsBelongToGroup, parseFacebookGroupSnapshot } from "./completion";
+import { assertFacebookPostsBelongToGroup, parseFacebookGroupSnapshot } from "./completion";
 import { planFacebookGroupJobs, type WatchedFacebookGroup } from "./multi-group";
 import { processFacebookPostBatch } from "./post-flow";
 import { facebookVisionToListingInput, persistEligibleFacebookPost, staleFacebookPostResult } from "./vision-adapter";
@@ -12,7 +12,9 @@ import { classifyFacebookPostAgeZone } from "../facebook-watcher/post-age-zone";
 import { aggregateFacebookPerformance, FACEBOOK_TOO_OLD_AGE_CACHE_TTL_MS, mergeFacebookGroupAssociationMetadata, readFacebookCachedMatch, resolveFacebookAgeCacheHits, resolveFacebookPostCacheHits } from "./performance";
 import { aggregateFacebookVisionRun, summarizeFacebookVisionUsage } from "./openai-pricing";
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
-import { FACEBOOK_PRODUCTION_SOURCE_ID, isFacebookProductionSource, normalizeFacebookSourceUrl } from "@/features/collector/facebook-production";
+import { FACEBOOK_PRODUCTION_SOURCE_ID } from "@/features/collector/facebook-production";
+import { normalizeFacebookSourceUrl } from "@/features/facebook-groups/group-url";
+import { resolveFacebookGroupDisplayName } from "@/features/facebook-groups/display-name";
 import { gallerySeedMediaFromCollectorBatches, gallerySeedMediaFromProvenance } from "./gallery-policy";
 
 type Row = Record<string, unknown>;
@@ -37,26 +39,39 @@ export type FacebookLeaseRenewalDiagnostics = {
 };
 
 export class FacebookLeaseRenewalError extends Error {
-  constructor(public readonly code: string, public readonly diagnostics: FacebookLeaseRenewalDiagnostics | null = null) {
+  readonly code: string;
+  readonly diagnostics: FacebookLeaseRenewalDiagnostics | null;
+  constructor(code: string, diagnostics: FacebookLeaseRenewalDiagnostics | null = null) {
     super(code);
     this.name = "FacebookLeaseRenewalError";
+    this.code = code;
+    this.diagnostics = diagnostics;
   }
 }
 
 export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, requestedSourceId = FACEBOOK_PRODUCTION_SOURCE_ID): Promise<FacebookEnqueueResult> {
   const supabase = createFacebookWatcherAdminClient();
-  const groups = await supabase.from("watched_facebook_groups").select("id,name,url,priority,created_at").eq("enabled", true);
+  // The database-backed watched_facebook_groups registry (enabled=true +
+  // a normalizable canonical URL) is the ONLY runtime eligibility gate --
+  // the historical FACEBOOK_PRODUCTION_SOURCES allowlist no longer filters
+  // this list at all, so a newly imported, active group is enqueued by its
+  // next scheduler tick without any source-code change or redeploy.
+  const groups = await supabase.from("watched_facebook_groups").select("id,name,name_verified,url,priority,created_at").eq("enabled", true);
   if (groups.error) throw new Error(`FACEBOOK_GROUP_QUERY_FAILED: ${groups.error.message}`);
-  const watchedGroups: WatchedFacebookGroup[] = (groups.data ?? []).map((group) => {
-    const rawUrl = String(group.url);
-    const type = /^\/groups\//i.test(new URL(rawUrl).pathname) ? "GROUP" : "PROFILE";
-    const normalized = normalizeFacebookSourceUrl(rawUrl, type);
-    return {
-      id: String(group.id), name: String(group.name), url: (normalized ? normalized.url : assertFacebookSourceUrl(rawUrl, type).toString()), type: type as "GROUP" | "PROFILE", sourceId: normalized?.sourceId,
-    priority: group.priority === "high" || group.priority === "low" ? group.priority : "normal",
-    createdAt: String(group.created_at),
-    };
-  }).filter((group) => isFacebookProductionSource(group) && group.sourceId === requestedSourceId);
+  const watchedGroups: WatchedFacebookGroup[] = (groups.data ?? []).flatMap((group): WatchedFacebookGroup[] => {
+    const rawUrl = typeof group.url === "string" ? group.url : "";
+    let type: "GROUP" | "PROFILE";
+    try { type = /^\/groups\//i.test(new URL(rawUrl).pathname) ? "GROUP" : "PROFILE"; }
+    catch { return []; }
+    let normalized: { url: string; identifier: string };
+    try { normalized = normalizeFacebookSourceUrl(rawUrl, type); }
+    catch { return []; }
+    return [{
+      id: String(group.id), name: resolveFacebookGroupDisplayName({ name: typeof group.name === "string" ? group.name : null, nameVerified: group.name_verified !== false }), url: normalized.url, type, sourceId: normalized.identifier,
+      priority: group.priority === "high" || group.priority === "low" ? group.priority : "normal",
+      createdAt: String(group.created_at),
+    }];
+  }).filter((group) => group.sourceId?.toLocaleLowerCase("en-US") === requestedSourceId.toLocaleLowerCase("en-US"));
   const plans = planFacebookGroupJobs(filter.id, runId, watchedGroups);
   if (plans.length === 0) {
     // A caller may request one allowlisted source for a controlled sequential

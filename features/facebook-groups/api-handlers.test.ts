@@ -3,7 +3,7 @@ import test from "node:test";
 import { createFacebookGroupDiscoveryApi, createFacebookGroupDiscoveryPreviewApi, createFacebookGroupHistoricalMappingApi, createFacebookGroupImportApi, createFacebookGroupsApi } from "./api-handlers.ts";
 import type { WatchedFacebookGroup } from "./types.ts";
 
-const group = { id: "11111111-1111-4111-8111-111111111111", name: "Grupa", url: "https://www.facebook.com/groups/grupa/", city: "Łódź", district: null, neighborhood: null, priority: "normal", keywords: [], enabled: true, accessStatus: "CONNECTED", lastCheckedAt: null, importedPosts: 0, newToday: 0, opportunities: 0, lastError: null } satisfies WatchedFacebookGroup;
+const group = { id: "11111111-1111-4111-8111-111111111111", name: "Grupa", nameVerified: true, url: "https://www.facebook.com/groups/grupa/", city: "Łódź", district: null, neighborhood: null, priority: "normal", keywords: [], enabled: true, accessStatus: "CONNECTED", lastCheckedAt: null, importedPosts: 0, newToday: 0, opportunities: 0, lastError: null } satisfies WatchedFacebookGroup;
 
 function api() {
   return createFacebookGroupsApi({
