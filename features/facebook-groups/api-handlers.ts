@@ -9,6 +9,8 @@ type Dependencies = {
   remove: (id: string) => Promise<WatchedFacebookGroup>;
 };
 
+const MAX_DISCOVERY_BODY_BYTES = 256_000;
+
 export function createFacebookGroupsApi(deps: Dependencies) {
   return {
     async get() {
@@ -52,6 +54,7 @@ export function createFacebookGroupDiscoveryApi(deps: {
     async post(request: Request) {
       try {
         const rawBody = await request.text();
+        if (new TextEncoder().encode(rawBody).byteLength > MAX_DISCOVERY_BODY_BYTES) throw new Error("Zbyt duży payload wykrywania grup.");
         const { deviceId } = await deps.authenticate(request, rawBody);
         const candidates = parseCandidates(JSON.parse(rawBody));
         const session = await deps.discover(candidates, deviceId);
@@ -121,9 +124,9 @@ function parseCandidates(value: unknown): DiscoveredFacebookGroupCandidate[] {
   return rawCandidates.map((item) => {
     if (!item || typeof item !== "object") throw new Error("Nieprawidłowy wpis wykrytej grupy.");
     const row = item as Record<string, unknown>;
-    if (typeof row.url !== "string" || !row.url.trim()) throw new Error("Każda wykryta grupa musi mieć adres URL.");
+    if (typeof row.url !== "string" || !row.url.trim() || row.url.trim().length > 2_048) throw new Error("Każda wykryta grupa musi mieć poprawnie ograniczony adres URL.");
     return {
-      url: row.url,
+      url: row.url.trim(),
       name: typeof row.name === "string" && row.name.trim() ? row.name.trim().slice(0, 200) : null,
       discoveredAt: typeof row.discoveredAt === "string" ? row.discoveredAt : new Date().toISOString(),
       skipReason: typeof row.skipReason === "string" && row.skipReason.trim() ? row.skipReason.trim().slice(0, 200) : null,
