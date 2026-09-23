@@ -195,6 +195,54 @@ test("F: STALE/ARCHIVED lifecycle listings keep their existing visibility semant
 
   const archivePayload = await getFilterResults(FILTER_ID, true);
   assert.equal(archivePayload?.archivedResults.some((item) => item.id === "listing-stale"), true);
+  // Duplicate-listing mission: this fixture's own missing buildingType/
+  // ownership makes the live filter decision REVIEW, not just STALE. Proven
+  // live in production before this fix: an includeArchived=true call let a
+  // listing this same shape into BOTH reviewResults and archivedResults at
+  // once (44 real listings, one filter). archivedResults having it is not
+  // enough — reviewResults (and results) must never also claim it, or the
+  // exact same canonical listing renders twice on screen.
+  assert.equal(archivePayload?.reviewResults.some((item) => item.id === "listing-stale"), false, "a STALE-lifecycle listing must never also appear in reviewResults, even when its live filter decision would otherwise be REVIEW");
+  assert.equal(archivePayload?.results.some((item) => item.id === "listing-stale"), false, "a STALE-lifecycle listing must never also appear in results (MATCHED)");
+});
+
+test("H (duplicate-listing regression): an ARCHIVED-lifecycle listing whose live filter decision is REVIEW appears in exactly one bucket, never both", async () => {
+  const db = freshDb();
+  // building_type/ownership present and matching, so the live filterDecision
+  // is REVIEW purely from missing-field-free evidence being otherwise
+  // sufficient to be a real (not review-by-missing-fields) match — using the
+  // base fixture's own missing buildingType/ownership, which is exactly the
+  // production shape that produced the live overlap.
+  db.seed("listings", [listingRow({ id: "listing-archived-review", lifecycle_status: "ARCHIVED" })]);
+  db.seed("listing_filter_matches", [membershipRow("listing-archived-review")]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID, true);
+  assert.ok(payload);
+  const inResults = payload.results.some((item) => item.id === "listing-archived-review");
+  const inReview = payload.reviewResults.some((item) => item.id === "listing-archived-review");
+  const inArchived = payload.archivedResults.some((item) => item.id === "listing-archived-review");
+  assert.equal(inArchived, true, "an ARCHIVED-lifecycle listing must appear in archivedResults");
+  assert.equal(inResults, false, "and never simultaneously in results");
+  assert.equal(inReview, false, "and never simultaneously in reviewResults — one canonical listing, exactly one bucket");
+});
+
+test("I (duplicate-listing regression): a duplicated listing_filter_matches row for the same listing under the same filter never produces two results", async () => {
+  const db = freshDb();
+  db.seed("listings", [listingRow({ id: "listing-dup-row" })]);
+  // Simulates a genuine listing_filter_matches primary-key violation (should
+  // be impossible in production — see the pkey on (listing_id,
+  // search_filter_id) — but the read path must not blindly trust that and
+  // mint two FilterResult objects sharing one id if it ever happened).
+  db.seed("listing_filter_matches", [
+    membershipRow("listing-dup-row"),
+    membershipRow("listing-dup-row", { first_matched_at: "2026-09-19T00:00:00.000Z" }),
+  ]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  assert.ok(payload);
+  assert.equal(payload.reviewResults.filter((item) => item.id === "listing-dup-row").length, 1, "a duplicated match row must never produce two entries for the same canonical listing");
 });
 
 test("G: a manual_decision=REJECTED listing stays excluded regardless of otherwise-matching canonical evidence — existing manual-decision behavior unchanged", async () => {

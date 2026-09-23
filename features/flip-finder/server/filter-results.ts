@@ -142,7 +142,20 @@ export async function getFilterResults(filterId: string, includeArchived = false
   // Current MATCHED memberships and explicit REVIEW memberships are visible in
   // the Finder. Reconciled-out rows remain in the database for audit/history,
   // but must not reappear as active results.
-  const matches = includeArchived ? allMatches : allMatches.filter(visibleMembership);
+  const visibleMatches = includeArchived ? allMatches : allMatches.filter(visibleMembership);
+  // Required invariant: one canonical listing appears at most once in one
+  // Finder response. listing_filter_matches has a real primary key on
+  // (listing_id, search_filter_id), so a genuine duplicate row for the same
+  // listing under this same filter should be structurally impossible — this
+  // is a defensive, no-cost floor against a duplicate ever reaching
+  // allResults.flatMap (which would otherwise mint two FilterResult objects
+  // sharing one id, landing in the same bucket) if a future migration,
+  // client-library quirk, or caching layer ever violated that guarantee.
+  // Deduplication priority here is by canonical listing ID only — the
+  // highest tier — because every row in this array is already keyed on that
+  // exact canonical id by construction, never a raw pre-canonical source
+  // record.
+  const matches = dedupeByListingId(visibleMatches);
   const scans = asRows(scansResult.data)
     .map(toSearchFilterScan)
     .filter((scan): scan is SearchFilterScan => scan !== null);
@@ -371,10 +384,23 @@ export async function getFilterResults(filterId: string, includeArchived = false
       },
     ];
   });
+  // Duplicate-listing mission: a listing whose stored lifecycle is
+  // STALE/ARCHIVED (set by some other process — aging out, a manual archive
+  // action, restoration bookkeeping) can still independently satisfy the
+  // CURRENT filter's live criteria (decisionBucket "MATCHED" or "REVIEW").
+  // Filtering each bucket only by its own positive condition let the very
+  // same canonical listing qualify for two buckets at once — proven live in
+  // production: 44 real listings for one active filter appeared in both
+  // reviewResults and archivedResults simultaneously. Once something is
+  // archived, it must render only in the archive section, never also in the
+  // active grids — so MATCHED/REVIEW membership explicitly excludes
+  // archived-lifecycle listings, making the three buckets mutually
+  // exclusive by construction: every listing lands in exactly one.
   const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
-  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED"), "newest");
-  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW"), "newest");
-  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => archivedLifecycle.has(result.lifecycleStatus ?? "") || result.decisionBucket === "REJECTED" || result.sourceConflict === true), "newest") : [];
+  const isArchivedLifecycle = (result: FilterResult) => archivedLifecycle.has(result.lifecycleStatus ?? "");
+  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result)), "newest");
+  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result)), "newest");
+  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true), "newest") : [];
 
   return {
     filter,
@@ -391,6 +417,15 @@ export async function getFilterResults(filterId: string, includeArchived = false
     lastScan,
     sourceScans: scans,
   };
+}
+
+function dedupeByListingId(matches: MatchRow[]): MatchRow[] {
+  const seen = new Set<string>();
+  return matches.filter((match) => {
+    if (seen.has(match.listingId)) return false;
+    seen.add(match.listingId);
+    return true;
+  });
 }
 
 function toMatchRow(row: Row): MatchRow | null {
