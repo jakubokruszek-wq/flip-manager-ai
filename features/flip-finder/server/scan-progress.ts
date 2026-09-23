@@ -28,11 +28,13 @@ import { projectPersistedFacebookAccounting } from "./scan-accounting-projection
 
 type Row = Record<string, unknown>;
 const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
+const OLX_UNCLAIMED_TIMEOUT_MS = 90_000;
 
 export async function getScanProgress(runId: string): Promise<ScanProgressResponse> {
   if (!isUuid(runId)) throw new Error("INVALID_SCAN_RUN_ID");
   const supabase = createFacebookWatcherAdminClient();
   await expireUnclaimedFacebookJobs(supabase, runId);
+  await expireUnclaimedOlxJobs(supabase, runId);
   const monthStart = zonedPeriodStart("month");
   const todayStart = zonedPeriodStart("day");
   const [scansResult, facebookResult, olxResult, monthJobsResult, collectorBatchesResult] = await Promise.all([
@@ -186,6 +188,49 @@ async function finalizeWatchdogSourceScans(
   if (sourceScanIds.length === 0) return;
   const scans = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: errorMessage }).in("id", sourceScanIds).in("status", ["pending", "running"]);
   if (scans.error) throw new Error(`FACEBOOK_PENDING_SOURCE_FINALIZE_FAILED: ${scans.error.message}`);
+}
+
+/**
+ * Mirrors expireUnclaimedFacebookJobs for OLX. claim_olx_scan_job's own
+ * lease-recovery SQL (20260810190000_create_olx_local_worker_queue.sql) only
+ * runs as a side effect of being CALLED by a live worker -- if the local OLX
+ * worker process is not running at all, that RPC is never invoked, so a
+ * "queued" job that was never claimed, or a "running" job whose worker went
+ * silent, would otherwise sit "w toku" forever with nothing to ever report it
+ * as failed. This runs on every scan-progress poll, independent of any
+ * worker being alive, so a stage can never remain permanently pending.
+ *
+ * Idempotent under repeated polling: once a row's status has moved to
+ * "failed" it no longer matches either WHERE clause below, so a second poll
+ * is a no-op. A late worker cannot revive an expired job either -- claim_olx_
+ * scan_job only selects status='queued' rows, and heartbeatOlxJob/failOlxJob/
+ * completeOlxJob all require status='running' with a matching lease_token, so
+ * once this watchdog has moved a row to "failed" every one of those guards
+ * fails closed on their own, unchanged.
+ */
+export async function expireUnclaimedOlxJobs(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, runId: string): Promise<void> {
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - OLX_UNCLAIMED_TIMEOUT_MS).toISOString();
+  const neverClaimed = await supabase.from("olx_scan_jobs").update({
+    status: "failed",
+    finished_at: now,
+    error_code: "OLX_WORKER_CLAIM_TIMEOUT",
+    error_message: "OLX worker did not claim the queued job within 90 seconds",
+  }).eq("scan_run_id", runId).eq("status", "queued").eq("attempts", 0).lt("created_at", cutoff).select("source_scan_id");
+  if (neverClaimed.error) throw new Error(`OLX_UNCLAIMED_WATCHDOG_FAILED: ${neverClaimed.error.message}`);
+  await finalizeWatchdogSourceScans(supabase, neverClaimed.data, "OLX_WORKER_CLAIM_TIMEOUT: OLX worker did not claim the queued job within 90 seconds");
+
+  // A job that WAS claimed at least once but whose lease has since expired,
+  // with no worker left alive to trigger claim_olx_scan_job's own internal
+  // recovery-or-exhaustion logic, would otherwise remain "running" forever.
+  const staleRunning = await supabase.from("olx_scan_jobs").update({
+    status: "failed",
+    finished_at: now,
+    error_code: "OLX_WORKER_CLAIM_TIMEOUT",
+    error_message: "OLX worker lease expired and was never renewed or recovered",
+  }).eq("scan_run_id", runId).eq("status", "running").lt("leased_until", cutoff).select("source_scan_id");
+  if (staleRunning.error) throw new Error(`OLX_STALE_LEASE_WATCHDOG_FAILED: ${staleRunning.error.message}`);
+  await finalizeWatchdogSourceScans(supabase, staleRunning.data, "OLX_WORKER_CLAIM_TIMEOUT: OLX worker lease expired and was never renewed or recovered");
 }
 
 function toWorkUnit(value: Row): ScanWorkUnit | null {
