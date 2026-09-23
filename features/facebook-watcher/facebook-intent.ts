@@ -88,8 +88,20 @@ export function resolveFacebookListingIntent(
   const explicitSellSignal = signals.sellSignals.some((name) => name !== "SELL_STRUCTURED_OFFER");
   const rentOfferSignal = strongRentOfferSignal || (weakRentOfferSignal && !explicitSellSignal);
   const serviceSignal = /\b(uslugi remontowe|wykonczenia wnetrz|posrednictwo|agent nieruchomosci|fotografia nieruchomosci)\b/u.test(normalized);
+  // A post with an explicit sale keyword AND a strong, unambiguous rental
+  // keyword together ("Sprzedam mieszkanie, ale możliwe też do wynajęcia.")
+  // must never be silently classified RENT_OFFER (which would exclude it from
+  // sale sourcing entirely — importFacebookWatcher only persists SELL_PROPERTY
+  // as an actionable listing) nor silently treated as a clean, unconflicted
+  // sale. It stays SELL_PROPERTY (so it is never excluded), but is flagged the
+  // same way the existing BUY/SELL conflict already is — via `conflict: true`
+  // and intentSource "CONFLICT" — carrying the same explainability the buy/
+  // sell case already has, at a lower confidence than a clean deterministic
+  // sale.
+  const sellRentConflict = propertyContext && explicitSellSignal && (rentWantedSignal || strongRentOfferSignal);
 
   const normalizedVisionIntent = visionIntent ?? "UNKNOWN";
+  if (sellRentConflict) return decision("SELL_PROPERTY", 0.6, "SELL_PROPERTY", normalizedVisionIntent, "CONFLICT", true);
   if (propertyContext && rentWantedSignal) return decision("RENT_WANTED", 0.96, "RENT_WANTED", normalizedVisionIntent, "UNKNOWN");
   if (propertyContext && rentOfferSignal) return decision("RENT_OFFER", 0.94, "RENT_OFFER", normalizedVisionIntent, "UNKNOWN");
   if (serviceSignal) return decision("SERVICE", 0.95, "SERVICE", normalizedVisionIntent, "UNKNOWN");

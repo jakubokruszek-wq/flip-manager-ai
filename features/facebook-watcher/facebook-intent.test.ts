@@ -155,3 +155,54 @@ test("known authoritative SELL variants remain deterministic", () => {
     assert.deepEqual({ intent: result.intent, source: result.intentSource }, { intent: "SELL_PROPERTY", source: "DETERMINISTIC_SELL" });
   }
 });
+
+// HOLD-blocker: a text with BOTH an explicit sale keyword AND a strong,
+// unambiguous rental keyword must never silently become RENT_OFFER
+// (excluding it from sale sourcing) nor a clean, unflagged sale — it must
+// stay SELL_PROPERTY (so importFacebookWatcher's SELL_PROPERTY-only gate
+// still persists it) while being explainably flagged, the same way the
+// existing BUY/SELL conflict already is.
+test("a strong SELL + strong RENT conflict stays SELL_PROPERTY (never excluded), flagged with conflict=true", () => {
+  const result = resolveFacebookListingIntent("Sprzedam mieszkanie, ale możliwe też do wynajęcia.", null, null);
+  assert.equal(result.intent, "SELL_PROPERTY", "must never be excluded from sale sourcing");
+  assert.equal(result.conflict, true, "the ambiguity must be explainable, not silently resolved");
+  assert.equal(result.intentSource, "CONFLICT");
+  assert.equal(result.reasonCode, null, "SELL_PROPERTY must never carry a skip reason");
+});
+
+test("other strong SELL + strong RENT phrasings are also flagged, never silently RENT_OFFER", () => {
+  for (const text of [
+    "Mieszkanie na sprzedaż lub do wynajęcia, do uzgodnienia.",
+    "Sprzedam mieszkanie, czynsz najmu też możliwy do ustalenia.",
+  ]) {
+    const result = resolveFacebookListingIntent(text, null, null);
+    assert.equal(result.intent, "SELL_PROPERTY", `expected SELL_PROPERTY for: ${text}`);
+    assert.equal(result.conflict, true, `expected conflict=true for: ${text}`);
+  }
+});
+
+// Preserve every already-fixed adjacent case: none of these have BOTH a
+// strong sell AND a strong rent signal, so none should ever trip the new
+// conflict path.
+test("previously-fixed adjacent cases are unaffected by the new SELL/RENT conflict path", () => {
+  const cases: Array<[string, "SELL_PROPERTY" | "RENT_OFFER"]> = [
+    ["Na sprzedaż mieszkanie. Czynsz 615 zł.", "SELL_PROPERTY"],
+    ["Sprzedam mieszkanie obecnie wynajęte za 2200 zł/mies.", "SELL_PROPERTY"],
+    ["Mieszkanie inwestycyjne z najemcą płacącym 2000 zł/mies., cena sprzedaży 400 000 zł.", "SELL_PROPERTY"],
+    ["Kawalerka 30m2, 1500 zł/mies.", "RENT_OFFER"],
+    ["Mieszkanie do wynajęcia, Łódź", "RENT_OFFER"],
+  ];
+  for (const [text, expected] of cases) {
+    const result = resolveFacebookListingIntent(text, null, null);
+    assert.equal(result.intent, expected, `expected ${expected} for: ${text}`);
+    assert.equal(result.conflict, false, `expected no conflict for: ${text}`);
+  }
+});
+
+// A genuine BUY/SELL conflict must keep its own, pre-existing behavior
+// (UNKNOWN, excluded) -- this mission only changes SELL/RENT conflicts.
+test("a genuine BUY/SELL conflict is unaffected by the new SELL/RENT conflict path", () => {
+  const result = resolveFacebookListingIntent("Kupię lub sprzedam mieszkanie w Łodzi.", null, null);
+  assert.equal(result.intent, "UNKNOWN");
+  assert.equal(result.conflict, true);
+});
