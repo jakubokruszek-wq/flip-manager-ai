@@ -23,7 +23,9 @@ export type FacebookIntentSignalName =
   | "SELL_OFERUJE_NA_SPRZEDAZ"
   | "SELL_OFF_MARKET"
   | "SELL_MAM_DO_ZAOFEROWANIA"
-  | "SELL_STRUCTURED_OFFER";
+  | "SELL_STRUCTURED_OFFER"
+  | "SELL_CENA_SPRZEDAZY"
+  | "SELL_SPRZEDAZ_MIESZKANIA";
 
 export type FacebookIntentSignals = {
   normalizedLength: number;
@@ -48,6 +50,8 @@ const SELL_PATTERNS: ReadonlyArray<{ name: FacebookIntentSignalName; pattern: Re
   { name: "SELL_OFERUJE_NA_SPRZEDAZ", pattern: /\boferuje\s+na\s+sprzedaz\b/u },
   { name: "SELL_OFF_MARKET", pattern: /\boff\s*market\b/u },
   { name: "SELL_MAM_DO_ZAOFEROWANIA", pattern: /\bmam\s+do\s+zaoferowania\b/u },
+  { name: "SELL_CENA_SPRZEDAZY", pattern: /\bcena\s+sprzedazy\b/u },
+  { name: "SELL_SPRZEDAZ_MIESZKANIA", pattern: /\bsprzedaz\s+(?:mieszkania|domu|nieruchomosci|kawalerki|apartamentu)\b/u },
 ];
 
 export function resolveFacebookListingIntent(
@@ -64,7 +68,14 @@ export function resolveFacebookListingIntent(
   // A leading "nie" ("nie do wynajęcia" = "not for rent") negates the phrase; without
   // this guard a sale post mentioning that it is *not* for rent would be misread as
   // a rental offer before the sell signal below ever gets a chance to be checked.
-  const rentOfferSignal = /(?<!\bnie\s)\b(do wynajecia|wynajme|oferuje najem)\b/u.test(normalized) && !rentWantedSignal;
+  // Every phrase here is rental-specific and unambiguous on its own — "czynsz
+  // najmu" (rent itself, not the administrative "czynsz" fee a sale listing
+  // routinely mentions) and "zł/mies." (a price-per-month marker) are
+  // deliberately NOT just "czynsz" or "miesięcznie" alone, since either bare
+  // word appears constantly in ordinary sale listings (administrative fees,
+  // a mortgage estimate) and must never by itself flip a sale to a rental —
+  // see "Na sprzedaż mieszkanie. Czynsz 615 zł." in facebook-intent.test.ts.
+  const rentOfferSignal = /(?<!\bnie\s)\b(do wynajecia|wynajme|oferuje najem|na wynajem|czynsz najmu|zl\s*\/\s*mies|odstepn[\p{L}]*)\b/u.test(normalized) && !rentWantedSignal;
   const serviceSignal = /\b(uslugi remontowe|wykonczenia wnetrz|posrednictwo|agent nieruchomosci|fotografia nieruchomosci)\b/u.test(normalized);
 
   const normalizedVisionIntent = visionIntent ?? "UNKNOWN";
