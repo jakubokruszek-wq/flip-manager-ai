@@ -27,4 +27,6 @@ test("a real, non-empty name with nameVerified omitted (e.g. a listing's own cap
 test("this resolver never returns a bare numeric string or the literal brand name 'Facebook' as a fallback", () => {
   assert.notEqual(resolveFacebookGroupDisplayName({ name: null }), "Facebook");
   assert.notEqual(resolveFacebookGroupDisplayName({ name: "" }), "1424921570856189");
+  assert.equal(resolveFacebookGroupDisplayName({ name: "1424921570856189" }), UNKNOWN_GROUP_DISPLAY_NAME);
+  assert.equal(resolveFacebookGroupDisplayName({ name: "Facebook group 1424921570856189" }), UNKNOWN_GROUP_DISPLAY_NAME);
 });

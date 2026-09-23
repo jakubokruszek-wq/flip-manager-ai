@@ -22,5 +22,7 @@ export const UNKNOWN_GROUP_DISPLAY_NAME = "Nieznana grupa";
 export function resolveFacebookGroupDisplayName(input: { name: string | null | undefined; nameVerified?: boolean }): string {
   if (input.nameVerified === false) return UNKNOWN_GROUP_DISPLAY_NAME;
   const trimmed = input.name?.trim();
-  return trimmed || UNKNOWN_GROUP_DISPLAY_NAME;
+  if (!trimmed) return UNKNOWN_GROUP_DISPLAY_NAME;
+  if (/^\d{5,30}$/.test(trimmed) || /^facebook(?: group(?: \d+)?)?$/i.test(trimmed)) return UNKNOWN_GROUP_DISPLAY_NAME;
+  return trimmed;
 }

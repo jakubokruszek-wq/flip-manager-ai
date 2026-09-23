@@ -31,6 +31,23 @@ alter table public.watched_facebook_groups
 comment on column public.watched_facebook_groups.name_verified is
   'false only for rows backfilled from the historical FACEBOOK_PRODUCTION_SOURCES allowlist whose real Facebook-displayed name was never captured. The display layer must render "Nieznana grupa" instead of this row''s name whenever this is false. Every row created through the app''s own add/import flow requires a real name and is therefore true.';
 
+-- If an operator already created one of these historical rows before this
+-- migration, preserve any genuinely supplied human name. Only mark the
+-- legacy synthetic/numeric labels as unverified so an old row cannot leak an
+-- identifier into a primary UI label after the registry becomes canonical.
+update public.watched_facebook_groups
+set name_verified = false
+where url in (
+  'https://www.facebook.com/groups/lodzsprzedazzakupwynajem/',
+  'https://www.facebook.com/groups/402796264871862/',
+  'https://www.facebook.com/groups/2928219830782023/',
+  'https://www.facebook.com/groups/1253809205540869/',
+  'https://www.facebook.com/groups/1424921570856189/',
+  'https://www.facebook.com/groups/1689328011096404/',
+  'https://www.facebook.com/profile.php?id=61563667387467'
+)
+and (trim(name) ~ '^[0-9]{5,30}$' or lower(trim(name)) like 'facebook%' or trim(name) = '');
+
 -- Idempotent: ON CONFLICT (url) DO NOTHING makes this safe to run more than
 -- once, and safe to run whether or not an operator has already manually
 -- added any of these same URLs through the app before this migration ran.

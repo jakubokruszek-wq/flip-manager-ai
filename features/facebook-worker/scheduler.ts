@@ -281,7 +281,7 @@ function latestCycle(scans: Row[]): { cycleId: string; startedAt: string; cooldo
   const latest = scans.find((scan) => markerFromScan(scan)); const marker = latest ? markerFromScan(latest) : null;
   if (!marker) return null;
   const cycleScans = scans.filter((scan) => markerFromScan(scan)?.cycleId === marker.cycleId);
-  const plan = marker.plannedSourceIds.map((sourceId): SchedulerSource => ({ watchedSourceId: "", sourceId, name: sourceId, url: "", type: "GROUP", priority: "normal", createdAt: "" }));
+  const plan = marker.plannedSourceIds.map((sourceId): SchedulerSource => ({ watchedSourceId: "", sourceId, name: resolveFacebookGroupDisplayName({ name: sourceId, nameVerified: false }), url: "", type: "GROUP", priority: "normal", createdAt: "" }));
   return { cycleId: marker.cycleId, startedAt: marker.cycleStartedAt, cooldownMinutes: schedulerCooldownMinutes(marker.cooldownMinutes), plan, scans: cycleScans };
 }
 

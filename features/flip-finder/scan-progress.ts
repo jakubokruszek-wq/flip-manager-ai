@@ -1,5 +1,6 @@
 import type { ListingSource } from "@/features/flip-finder";
 import type { FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
+import { resolveFacebookGroupDisplayName } from "@/features/facebook-groups/display-name";
 
 export type ScanProgressStatus = "queued" | "running" | "completed" | "partial" | "failed";
 export type WorkerJobStatus = "queued" | "running" | "completed" | "failed";
@@ -530,7 +531,7 @@ export function collectorProgressGroupFromJobAndSourceScan(input: {
   const errorMessage = (terminalJobFailed ? input.job.errorMessage ?? input.sourceScan?.errorMessage : terminalSourceFailed ? input.sourceScan?.errorMessage ?? input.job.errorMessage : null) ?? null;
   return {
     groupId: input.job.groupId,
-    groupName: input.job.groupName ?? "Grupa Facebook",
+    groupName: resolveFacebookGroupDisplayName({ name: input.job.groupName }),
     jobId: input.job.id,
     sourceScanId: input.job.sourceScanId ?? "",
     status,

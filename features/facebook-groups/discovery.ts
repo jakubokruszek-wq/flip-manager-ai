@@ -1,5 +1,6 @@
 import { FACEBOOK_PRODUCTION_SOURCES, type FacebookProductionSource } from "@/features/collector/facebook-production";
 import { findDuplicateFacebookGroup, normalizeFacebookGroupUrl } from "./group-url";
+import { resolveFacebookGroupDisplayName } from "./display-name";
 import type { WatchedFacebookGroup } from "./types";
 
 export const FACEBOOK_GROUP_IMPORT_STATUSES = ["NOWA", "JUZ_W_MANAGERZE", "MOZLIWY_DUPLIKAT", "WYMAGA_WERYFIKACJI", "POMINIETA"] as const;
@@ -31,7 +32,7 @@ export type FacebookGroupImportPreviewItem = {
   reason: string;
 };
 
-type WatchedGroupLike = Pick<WatchedFacebookGroup, "url" | "name"> & { canonicalGroupId?: string | null };
+type WatchedGroupLike = Pick<WatchedFacebookGroup, "url" | "name"> & { nameVerified?: boolean; canonicalGroupId?: string | null };
 
 /**
  * Classifies one discovered candidate against both real registries a group
@@ -61,7 +62,7 @@ export function classifyDiscoveredFacebookGroupCandidate(
   const duplicate = findDuplicateFacebookGroup(watchedGroups, normalized.url, normalized.identifier, productionSources);
   if (duplicate) {
     const reason = duplicate.kind === "watched-group"
-      ? `Grupa jest już obserwowana w Managerze jako "${duplicate.group.name}".`
+      ? `Grupa jest już obserwowana w Managerze jako "${resolveFacebookGroupDisplayName(duplicate.group)}".`
       : "Grupa jest już zatwierdzonym źródłem produkcyjnym Watchera.";
     return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "JUZ_W_MANAGERZE", reason };
   }
@@ -71,9 +72,9 @@ export function classifyDiscoveredFacebookGroupCandidate(
   if (!discoveredName) {
     return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName: null, status: "WYMAGA_WERYFIKACJI", reason: "Rozszerzenie nie odczytało nazwy grupy z Facebooka — wymagana ręczna weryfikacja przed importem." };
   }
-  const nameCollision = watchedGroups.find((group) => group.name.trim().toLocaleLowerCase("pl-PL") === discoveredName.toLocaleLowerCase("pl-PL"));
+  const nameCollision = watchedGroups.find((group) => resolveFacebookGroupDisplayName(group).toLocaleLowerCase("pl-PL") === discoveredName.toLocaleLowerCase("pl-PL"));
   if (nameCollision) {
-    return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "MOZLIWY_DUPLIKAT", reason: `Nazwa pokrywa się z już obserwowaną grupą "${nameCollision.name}", ale adres jest inny — sprawdź ręcznie przed importem.` };
+    return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "MOZLIWY_DUPLIKAT", reason: `Nazwa pokrywa się z już obserwowaną grupą "${resolveFacebookGroupDisplayName(nameCollision)}", ale adres jest inny — sprawdź ręcznie przed importem.` };
   }
   return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "NOWA", reason: "Nowa grupa, nieznana w Managerze ani wśród zatwierdzonych źródeł." };
 }
@@ -116,12 +117,12 @@ export type HistoricalFacebookSourceMapping = {
  * name has ever been captured for it.
  */
 export function buildHistoricalFacebookSourceMapping(
-  watchedGroups: readonly Pick<WatchedFacebookGroup, "name" | "sourceId">[],
+  watchedGroups: readonly (Pick<WatchedFacebookGroup, "name" | "sourceId"> & { nameVerified?: boolean })[],
   productionSources: readonly FacebookProductionSource[] = FACEBOOK_PRODUCTION_SOURCES,
 ): HistoricalFacebookSourceMapping[] {
   return productionSources.map((source) => {
     const match = watchedGroups.find((group) => (group.sourceId ?? "").toLocaleLowerCase("en-US") === source.sourceId.toLocaleLowerCase("en-US"));
-    const name = match?.name?.trim();
-    return { sourceId: source.sourceId, sourceUrl: source.sourceUrl, sourceType: source.sourceType, name: name || UNKNOWN_GROUP_NAME, isNamed: Boolean(name) };
+    const name = match ? resolveFacebookGroupDisplayName(match) : UNKNOWN_GROUP_NAME;
+    return { sourceId: source.sourceId, sourceUrl: source.sourceUrl, sourceType: source.sourceType, name, isNamed: name !== UNKNOWN_GROUP_NAME };
   });
 }

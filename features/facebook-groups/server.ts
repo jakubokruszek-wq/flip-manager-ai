@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { FACEBOOK_PRODUCTION_SOURCES } from "@/features/collector/facebook-production";
 import { FacebookGroupValidationError, findDuplicateFacebookGroup, normalizeFacebookSourceUrl, parseFacebookGroupCreatePayload } from "./group-url";
+import { resolveFacebookGroupDisplayName } from "./display-name";
 import { parseFacebookGroupManagementPatch, safeRemovePatch } from "./management";
 import { buildGroupImportPreview, buildHistoricalFacebookSourceMapping, type DiscoveredFacebookGroupCandidate, type FacebookGroupImportPreviewItem, type HistoricalFacebookSourceMapping } from "./discovery";
 import { createDiscoverySession, markDiscoverySessionConsumed, resolveDiscoverySessionToken } from "./discovery-session";
@@ -178,7 +179,7 @@ export async function getHistoricalFacebookSourceMapping(): Promise<HistoricalFa
 }
 
 export async function recordFacebookGroupImport(groupName: string | undefined, created: boolean, opportunity: boolean) {
-  if (!groupName) return; const groups = await listWatchedFacebookGroups(); const group = groups.find(item => item.name.trim().toLocaleLowerCase("pl-PL") === groupName.trim().toLocaleLowerCase("pl-PL")); if (!group) return;
+  if (!groupName) return; const groups = await listWatchedFacebookGroups(); const normalizedGroupName = groupName.trim().toLocaleLowerCase("pl-PL"); const group = groups.find(item => resolveFacebookGroupDisplayName(item).toLocaleLowerCase("pl-PL") === normalizedGroupName); if (!group) return;
   const next = { imported_posts_count: group.importedPosts + (created ? 1 : 0), new_today_count: group.newToday + (created ? 1 : 0), opportunities_count: group.opportunities + (created && opportunity ? 1 : 0) };
   const supabase = createFacebookWatcherAdminClient(); const result = await supabase.from("watched_facebook_groups").update(next).eq("id", group.id); if (!result.error) return; if (!missingTable(result.error.message)) throw new Error(`Nie udało się zaktualizować statystyk grupy: ${result.error.message}`);
   memoryGroups.set(group.id, { ...group, importedPosts: next.imported_posts_count, newToday: next.new_today_count, opportunities: next.opportunities_count });
