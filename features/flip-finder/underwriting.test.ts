@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateMaxPurchaseForThresholds, calculateUnderwriting, DEFAULT_UNDERWRITING_SETTINGS, validateMaxPurchaseBoundary, type MaxPurchaseThresholds, type UnderwritingInput } from "./underwriting.ts";
+import { calculateMaxPurchaseForThresholds, calculateUnderwriting, DEFAULT_UNDERWRITING_SETTINGS, RENOVATED_PRICE_PER_SQM_BASE, RENOVATED_PRICE_PER_SQM_HIGH, RENOVATED_PRICE_PER_SQM_LOW, validateMaxPurchaseBoundary, type MaxPurchaseThresholds, type UnderwritingInput } from "./underwriting.ts";
 
 const base: UnderwritingInput = {
   listingId: "real", source: "facebook", sourceUrl: "https://facebook.com/groups/1/posts/2", lifecycleStatus: "ACTIVE", decisionBucket: "MATCHED", manualDecision: null,
@@ -34,6 +34,37 @@ test("price drop below max recalculates too expensive into good", () => {
   const settings = { ...DEFAULT_UNDERWRITING_SETTINGS, renovationPerM2: { ...DEFAULT_UNDERWRITING_SETTINGS.renovationPerM2, FULL: 1_000 }, minimumProfitPLN: 30_000, minimumMarginPercent: 8, minimumROI: 8 };
   assert.equal(calculateUnderwriting({ ...base, askingPrice: 350_000 }, settings).decision, "TOO_EXPENSIVE");
   assert.match(calculateUnderwriting({ ...base, askingPrice: 250_000 }, settings).decision, /GOOD|HOT/);
+});
+
+// Renovated sale value mission: the LOW/BASE/HIGH default assumption
+// (previously scattered/inconsistent, now the single named
+// RENOVATED_PRICE_PER_SQM_* constants) must produce exactly these values
+// for a 46.6m² flat when no more reliable, localized comparable-sales model
+// overrides it — this is the only path a listing with no usable comps and
+// no manual resalePerM2Override ever reaches.
+test("46.6m² regression: the default renovated-sale-value assumption produces exactly 428720 / 447360 / 466000", () => {
+  assert.equal(RENOVATED_PRICE_PER_SQM_LOW, 9_200);
+  assert.equal(RENOVATED_PRICE_PER_SQM_BASE, 9_600);
+  assert.equal(RENOVATED_PRICE_PER_SQM_HIGH, 10_000);
+  assert.equal(DEFAULT_UNDERWRITING_SETTINGS.marketResalePerM2.low, RENOVATED_PRICE_PER_SQM_LOW);
+  assert.equal(DEFAULT_UNDERWRITING_SETTINGS.marketResalePerM2.base, RENOVATED_PRICE_PER_SQM_BASE);
+  assert.equal(DEFAULT_UNDERWRITING_SETTINGS.marketResalePerM2.high, RENOVATED_PRICE_PER_SQM_HIGH);
+
+  // No resalePerM2 supplied at all (mirrors a listing with zero eligible
+  // comps) and no resalePerM2Override — effectiveResale must fall all the
+  // way through to settings.marketResalePerM2, never to the old,
+  // undocumented 383 000 zł-class value.
+  const input: UnderwritingInput = {
+    listingId: "regression-46-6", source: "otodom", sourceUrl: "https://example.com/1", lifecycleStatus: "ACTIVE", decisionBucket: "REVIEW", manualDecision: null,
+    city: "Łódź", district: null, street: null, areaM2: 46.6, rooms: 2, floor: "1", floorsTotal: "4", buildingType: null, yearBuilt: null, ownership: null, condition: "do remontu", monthlyFee: null,
+    askingPrice: 300_000, askingPricePerM2: null, missingFields: [], galleryAvailable: false,
+  };
+  const result = calculateUnderwriting(input);
+
+  assert.equal(result.scenarios.conservative.resaleValue, 428_720, "LOW scenario (conservative, flip-safety scoring) must be exactly 9200 * 46.6");
+  assert.equal(result.scenarios.base.resaleValue, 447_360, "BASE scenario (the main expected sale value shown to the user) must be exactly 9600 * 46.6");
+  assert.equal(result.scenarios.optimistic.resaleValue, 466_000, "HIGH scenario (optimistic) must be exactly 10000 * 46.6");
+  assert.equal(result.provenance.resalePricePerM2, "MARKET_ASSUMPTION", "the assumption's provenance must be visible, not silently indistinguishable from a real comps-derived value");
 });
 
 test("strong economics with missing building and ownership remains review with lower confidence", () => {

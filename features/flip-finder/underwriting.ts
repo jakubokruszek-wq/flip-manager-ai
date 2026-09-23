@@ -25,6 +25,24 @@ export type UnderwritingSettings = {
   marketResaleProvenance: "MARKET_ASSUMPTION" | "USER_ASSUMPTION";
 };
 
+/**
+ * The single default assumption for a flat's after-general-renovation sale
+ * value per m², used only when no more reliable, localized comparable-sales
+ * model overrides it (see effectiveResale below — an explicit per-listing
+ * resalePerM2 or a real market.resale-arv comps result always wins). Every
+ * consumer of a renovated sale value (Finder's opportunity score, the Deal
+ * Room calculator, Flip Score) reads this same object via
+ * DEFAULT_UNDERWRITING_SETTINGS — there is no second, independent copy of
+ * this assumption anywhere else in the codebase.
+ *
+ * LOW is the conservative scenario flip-safety scoring should use; BASE is
+ * the main expected sale value shown to the user; HIGH is the optimistic
+ * scenario.
+ */
+export const RENOVATED_PRICE_PER_SQM_LOW = 9_200;
+export const RENOVATED_PRICE_PER_SQM_BASE = 9_600;
+export const RENOVATED_PRICE_PER_SQM_HIGH = 10_000;
+
 export const DEFAULT_UNDERWRITING_SETTINGS: UnderwritingSettings = {
   renovationPerM2: { LIGHT: 1_000, STANDARD: 1_800, FULL: 2_700 },
   contingencyPercent: 10,
@@ -41,7 +59,7 @@ export const DEFAULT_UNDERWRITING_SETTINGS: UnderwritingSettings = {
   minimumMarginPercent: 12,
   minimumROI: 12,
   targetNegotiationBufferPercent: 5,
-  marketResalePerM2: { low: 8_500, base: 9_500, high: 10_500 },
+  marketResalePerM2: { low: RENOVATED_PRICE_PER_SQM_LOW, base: RENOVATED_PRICE_PER_SQM_BASE, high: RENOVATED_PRICE_PER_SQM_HIGH },
   marketResaleProvenance: "MARKET_ASSUMPTION",
 };
 
