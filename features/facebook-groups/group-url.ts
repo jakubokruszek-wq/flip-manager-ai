@@ -29,7 +29,7 @@ export function normalizeFacebookGroupUrl(value: string): { url: string; identif
   try { parsed = new URL(trimmed); }
   catch { throw new FacebookGroupValidationError("Podaj prawidłowy adres grupy Facebook."); }
   const hostname = parsed.hostname.toLocaleLowerCase("en-US");
-  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !["facebook.com", "www.facebook.com"].includes(hostname)) {
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(hostname)) {
     throw new FacebookGroupValidationError("Adres musi prowadzić do grupy na facebook.com.");
   }
   const match = parsed.pathname.match(/^\/groups\/([^/]+)\/?$/i);

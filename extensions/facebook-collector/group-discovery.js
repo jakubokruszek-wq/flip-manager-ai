@@ -21,31 +21,50 @@
  */
 (function () {
   const GROUP_LINK_PATTERN = /^\/groups\/([^/?#]+)\/?$/i;
+  const MAX_DISCOVERED_GROUPS = 200;
 
   function extractGroupCandidatesFromDom(root) {
+    return inspectGroupCandidatesFromDom(root).candidates;
+  }
+
+  function inspectGroupCandidatesFromDom(root) {
     const anchors = root.querySelectorAll("a[href]");
     const seen = new Set();
     const candidates = [];
+    let rejected = 0;
+    let duplicates = 0;
     for (const anchor of anchors) {
       const href = anchor.href || anchor.getAttribute?.("href");
-      if (!href) continue;
+      if (!href) { rejected += 1; continue; }
       let url;
       try {
         url = new URL(href, "https://www.facebook.com");
       } catch {
+        rejected += 1;
         continue;
       }
-      if (url.hostname !== "www.facebook.com" && url.hostname !== "facebook.com") continue;
+      if (!["www.facebook.com", "facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase())) { rejected += 1; continue; }
       const match = url.pathname.match(GROUP_LINK_PATTERN);
-      if (!match) continue;
+      if (!match || !/^[a-z0-9._-]+$/i.test(match[1])) { rejected += 1; continue; }
       const identifier = match[1];
-      if (seen.has(identifier)) continue;
-      seen.add(identifier);
-      const rawText = typeof anchor.textContent === "string" ? anchor.textContent : "";
+      const dedupeKey = identifier.toLocaleLowerCase("en-US");
+      if (seen.has(dedupeKey)) { duplicates += 1; continue; }
+      seen.add(dedupeKey);
+      if (candidates.length >= MAX_DISCOVERED_GROUPS) { rejected += 1; continue; }
+      const rawText = accessibleName(anchor);
       const name = normalizeName(rawText, identifier);
       candidates.push({ url: `https://www.facebook.com/groups/${identifier}/`, name });
     }
-    return candidates;
+    return { candidates, diagnostics: { examined: anchors.length, accepted: candidates.length, rejected, duplicates, loadedOnly: true } };
+  }
+
+  function accessibleName(anchor) {
+    const get = (name) => typeof anchor.getAttribute === "function" ? anchor.getAttribute(name) : anchor[name] || null;
+    const aria = get("aria-label");
+    if (typeof aria === "string" && aria.trim()) return aria;
+    const title = get("title");
+    if (typeof title === "string" && title.trim()) return title;
+    return typeof anchor.textContent === "string" ? anchor.textContent : "";
   }
 
   function normalizeName(rawText, identifier) {
@@ -64,11 +83,12 @@
   }
 
   async function runGroupDiscovery(root = document) {
-    const candidates = extractGroupCandidatesFromDom(root);
+    const inspected = inspectGroupCandidatesFromDom(root);
+    const candidates = inspected.candidates;
     const payload = buildDiscoveryPayload(candidates);
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
       return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "REPORT_DISCOVERED_GROUPS", candidates: payload }, (response) => resolve(response));
+        chrome.runtime.sendMessage({ type: "REPORT_DISCOVERED_GROUPS", candidates: payload, diagnostics: inspected.diagnostics }, (response) => resolve(response));
       });
     }
     return { ok: false, error: "NO_RUNTIME" };
@@ -81,6 +101,6 @@
   // Test-only export, exactly like content.js's own pattern -- `module`
   // never exists in the browser extension context.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { extractGroupCandidatesFromDom, buildDiscoveryPayload, normalizeName };
+    module.exports = { extractGroupCandidatesFromDom, inspectGroupCandidatesFromDom, buildDiscoveryPayload, normalizeName, accessibleName };
   }
 })();

@@ -39,7 +39,7 @@ export function resolveFacebookProductionSource(input: { id?: string | null; sou
 export function normalizeFacebookSourceUrl(value: string, type?: "GROUP" | "PROFILE"): { url: string; type: "GROUP" | "PROFILE"; sourceId: string } | null {
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:" || url.hostname !== "www.facebook.com") return null;
+    if (url.protocol !== "https:" || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase("en-US"))) return null;
     const group = url.pathname.match(/^\/groups\/([^/?#]+)\/?$/i);
     if (group) {
       if (type && type !== "GROUP") return null;

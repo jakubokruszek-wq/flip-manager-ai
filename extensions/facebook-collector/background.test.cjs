@@ -252,6 +252,12 @@ test("Finder's manual scan creates zero Facebook acquisition jobs; the Watcher s
   assert.match(scheduler, /enqueueFacebookJobs/, "the Watcher scheduler must remain the one place that actually enqueues Facebook collection");
 });
 
+test("a claimed Watcher job may use a newly imported canonical group without the historical production allowlist", () => {
+  assert.match(background, /const selectedSource = sourceInput \? runtimeSource\(sourceInput\) : productionSource\(PRODUCTION_SOURCE_URL\)/);
+  assert.match(background, /function runtimeSource\(value\)/);
+  assert.match(background, /sourceId === normalized\.sourceId \? normalized : null/);
+});
+
 test("Finder's scan-start handler never sends any Facebook collector/scan/discovery message to the extension", () => {
   const scanHandler = finderPage.slice(finderPage.indexOf("const scanFilter = async"), finderPage.indexOf("const validateCollector = async"));
   assert.match(scanHandler, /POST_SCAN_SENT/, "Finder's own scan trigger must still POST to the Finder scan API");

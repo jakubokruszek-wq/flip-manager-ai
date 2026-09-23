@@ -15,12 +15,17 @@ test("trailing slash and missing www normalize to the same URL", () => {
   assert.equal(normalizeFacebookGroupUrl("http://facebook.com/groups/example/").url, normalizeFacebookGroupUrl("https://www.facebook.com/groups/example").url);
 });
 
+test("mobile Facebook group URLs with query strings and fragments normalize to the desktop root", () => {
+  assert.deepEqual(normalizeFacebookGroupUrl("https://m.facebook.com/groups/MobileGroup/?ref=bookmarks#recent"), { url: "https://www.facebook.com/groups/MobileGroup/", identifier: "mobilegroup" });
+});
+
 test("post URL is rejected", () => {
   assert.throws(() => normalizeFacebookGroupUrl("https://www.facebook.com/groups/example/posts/123/"), /bezpośrednio na \/groups/);
 });
 
 test("invalid domain and arbitrary Facebook paths are rejected", () => {
   assert.throws(() => normalizeFacebookGroupUrl("https://example.com/groups/test"), /facebook\.com/);
+  assert.throws(() => normalizeFacebookGroupUrl("https://m.facebook.com.example.org/groups/test"), /facebook\.com/);
   assert.throws(() => normalizeFacebookGroupUrl("https://www.facebook.com/marketplace/item/123"), /bezpośrednio na \/groups/);
 });
 

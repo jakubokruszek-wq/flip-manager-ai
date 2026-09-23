@@ -6,6 +6,7 @@
   "permissions": ["activeTab", "storage", "tabs", "scripting", "alarms", "declarativeNetRequest", "webRequest"],
   "host_permissions": [
     "https://www.facebook.com/*",
+    "https://m.facebook.com/*",
     "https://*.fbcdn.net/*",
     "https://flip-manager-ai.vercel.app/*",
     "http://localhost:3000/*"
@@ -18,18 +19,18 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": ["https://www.facebook.com/groups/*", "https://www.facebook.com/*"],
+      "matches": ["https://www.facebook.com/groups/*", "https://www.facebook.com/*", "https://m.facebook.com/groups/*", "https://m.facebook.com/*"],
       "js": ["collector-core.js", "network-hook.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://www.facebook.com/groups/*", "https://www.facebook.com/*"],
+      "matches": ["https://www.facebook.com/groups/*", "https://www.facebook.com/*", "https://m.facebook.com/groups/*", "https://m.facebook.com/*"],
       "js": ["collector-core.js", "content.js"],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://www.facebook.com/groups/joins/*"],
+      "matches": ["https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/joins/*"],
       "js": ["group-discovery.js"],
       "run_at": "document_idle"
     },

@@ -798,7 +798,7 @@
   function resolveSearchMediaTileFromDom(mediaId, source, query, diagnostics) {
     const anchors = [...document.querySelectorAll('a[href*="/photo/"][href*="fbid="], a[href*="/photo.php"][href*="fbid="]')].filter((anchor) => {
       if (isCommentDescendant(anchor)) return false;
-      try { const url = new URL(anchor.href); return url.hostname === "www.facebook.com" && url.searchParams.get("fbid") === mediaId; } catch { return false; }
+      try { const url = new URL(anchor.href); return ["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase()) && url.searchParams.get("fbid") === mediaId; } catch { return false; }
     });
     const records = [];
     const seenRoots = new Set();
@@ -1256,7 +1256,7 @@
       let url;
       try { url = new URL(anchor.href); } catch { continue; }
       const mediaId = url.searchParams.get("fbid");
-      if (url.hostname !== "www.facebook.com" || !/^\d{5,30}$/.test(mediaId || "")) continue;
+      if (!["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase()) || !/^\d{5,30}$/.test(mediaId || "")) continue;
       const photoUrl = new URL("/photo/", "https://www.facebook.com");
       photoUrl.searchParams.set("fbid", mediaId);
       const mediaSet = url.searchParams.get("set");

@@ -18,7 +18,7 @@
 
   function canonicalSource(urlValue) {
     const url = safeUrl(urlValue);
-    if (!url || url.hostname !== "www.facebook.com") return null;
+    if (!url || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase())) return null;
     const group = url.pathname.match(/^\/groups\/([^/?#]+)/i);
     if (group) return { sourceType: "GROUP", sourceId: group[1], sourceUrl: `https://www.facebook.com/groups/${group[1]}/` };
     const profileId = url.searchParams.get("id") || url.pathname.match(/^\/([^/?#]+)/i)?.[1];
@@ -28,7 +28,7 @@
 
   function parsePostLink(value, source) {
     const url = safeUrl(value);
-    if (!url || url.hostname !== "www.facebook.com") return null;
+    if (!url || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase())) return null;
     // A photo URL's `fbid` identifies media, not the enclosing post. Treating
     // it as a post id creates an invented canonical identity. Only accept
     // `fbid` on non-photo routes; photo results require an exact post permalink

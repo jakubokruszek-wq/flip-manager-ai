@@ -140,7 +140,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return true;
   }
   if (message?.type === "REPORT_DISCOVERED_GROUPS") {
-    void reportDiscoveredGroups(Array.isArray(message.candidates) ? message.candidates : []).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+    void reportDiscoveredGroups(Array.isArray(message.candidates) ? message.candidates : [], message.diagnostics).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
   }
   if (message?.type === "COLLECT_ACTIVE_SOURCE") {
@@ -221,7 +221,11 @@ async function collectActiveSource() {
 }
 
 async function collectConfiguredSources(scanId = crypto.randomUUID(), requestId = "unknown", sourceInput = null, imageMode = SOURCE_SCAN_IMAGE_MODE) {
-  const selectedSource = productionSource(sourceInput) || (sourceInput ? null : productionSource(PRODUCTION_SOURCE_URL));
+  // A claimed job is already selected by the database-backed watched-group
+  // registry and authenticated through the signed device API. Validate its
+  // canonical Facebook identity, but do not require the historical static
+  // production list; that list remains only for manual/default collection.
+  const selectedSource = sourceInput ? runtimeSource(sourceInput) : productionSource(PRODUCTION_SOURCE_URL);
   if (!selectedSource) throw new Error("PRODUCTION_SOURCE_NOT_ALLOWED");
   if (imageMode !== SOURCE_SCAN_IMAGE_MODE && imageMode !== GALLERY_HYDRATION_MEDIA_MODE) throw new Error("COLLECTOR_IMAGE_MODE_INVALID");
   let tab;
@@ -957,15 +961,21 @@ async function failCollectorScan(scanId, error, diagnostics = {}) {
  * WERYFIKACJI), and the Manager page is the only place a human explicitly
  * selects what to add.
  */
-async function reportDiscoveredGroups(candidates) {
+async function reportDiscoveredGroups(candidates, rawDiagnostics = null) {
   const config = await configValue();
   if (!config.apiUrl || !config.deviceId || !config.deviceToken) throw new Error("COLLECTOR_NOT_PAIRED");
   const base = String(config.apiUrl).replace(/\/+$/, "");
-  const result = await signedPost(`${base}/api/facebook-watcher/groups/discover`, JSON.stringify({ candidates: candidates.slice(0, 200) }), FAIL_REPORT_TIMEOUT_MS);
+  const diagnostics = safeDiscoveryDiagnostics(rawDiagnostics);
+  const result = await signedPost(`${base}/api/facebook-watcher/groups/discover`, JSON.stringify({ candidates: candidates.slice(0, 200), diagnostics }), FAIL_REPORT_TIMEOUT_MS);
   if (result && typeof result.token === "string" && result.token) {
     await chrome.tabs.create({ url: `${base}/facebook-watcher#group-discovery=${encodeURIComponent(result.token)}` }).catch(() => {});
   }
   return result;
+}
+
+function safeDiscoveryDiagnostics(value) {
+  const number = (candidate) => Number.isFinite(candidate) ? Math.max(0, Math.min(2000, Math.floor(candidate))) : 0;
+  return { examined: number(value?.examined), accepted: number(value?.accepted), rejected: number(value?.rejected), duplicates: number(value?.duplicates), loadedOnly: value?.loadedOnly === true };
 }
 
 async function signedPost(urlValue, body, timeoutMs = null) {
@@ -1246,9 +1256,20 @@ function productionSource(value) {
     return normalized ? PRODUCTION_SOURCES.find((source) => source.sourceId === normalized.sourceId && source.sourceType === normalized.sourceType && source.sourceUrl === normalized.sourceUrl) || null : null;
   } catch { return null; }
 }
+function runtimeSource(value) {
+  try {
+    if (!value || typeof value !== "object") return null;
+    const sourceUrl = typeof value.url === "string" ? value.url : typeof value.sourceUrl === "string" ? value.sourceUrl : null;
+    if (!sourceUrl) return null;
+    const normalized = normalizeProductionSourceUrl(sourceUrl, value.type === "PROFILE" || value.sourceType === "PROFILE" ? "PROFILE" : "GROUP");
+    if (!normalized) return null;
+    const sourceId = typeof value.sourceId === "string" ? value.sourceId : normalized.sourceId;
+    return sourceId === normalized.sourceId ? normalized : null;
+  } catch { return null; }
+}
 function normalizeProductionSourceUrl(value, typeHint = null) {
   const url = new URL(value);
-  if (url.protocol !== "https:" || url.hostname !== "www.facebook.com") return null;
+  if (url.protocol !== "https:" || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase())) return null;
   const group = url.pathname.match(/^\/groups\/([^/?#]+)\/?$/i);
   if (group) {
     if (typeHint && typeHint !== "GROUP") return null;
