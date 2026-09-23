@@ -42,10 +42,17 @@ test("price drop below max recalculates too expensive into good", () => {
 // for a 46.6m² flat when no more reliable, localized comparable-sales model
 // overrides it — this is the only path a listing with no usable comps and
 // no manual resalePerM2Override ever reaches.
-test("46.6m² regression: the default renovated-sale-value assumption produces exactly 428720 / 447360 / 466000", () => {
-  assert.equal(RENOVATED_PRICE_PER_SQM_LOW, 9_200);
-  assert.equal(RENOVATED_PRICE_PER_SQM_BASE, 9_600);
-  assert.equal(RENOVATED_PRICE_PER_SQM_HIGH, 10_000);
+//
+// The 8500/9500/10500 values are the owner-approved production defaults,
+// restored in a dedicated commit after an independent review of a prior
+// release held an unreviewed 9200/9600/10000 proposal out of scope — a
+// market-number change is a business decision that ships separately, on
+// its own explicit approval, never bundled with unrelated fixes. The named-
+// constant/shared-calculation refactor itself is unaffected and kept.
+test("46.6m² regression: the default renovated-sale-value assumption produces exactly 396100 / 442700 / 489300", () => {
+  assert.equal(RENOVATED_PRICE_PER_SQM_LOW, 8_500);
+  assert.equal(RENOVATED_PRICE_PER_SQM_BASE, 9_500);
+  assert.equal(RENOVATED_PRICE_PER_SQM_HIGH, 10_500);
   assert.equal(DEFAULT_UNDERWRITING_SETTINGS.marketResalePerM2.low, RENOVATED_PRICE_PER_SQM_LOW);
   assert.equal(DEFAULT_UNDERWRITING_SETTINGS.marketResalePerM2.base, RENOVATED_PRICE_PER_SQM_BASE);
   assert.equal(DEFAULT_UNDERWRITING_SETTINGS.marketResalePerM2.high, RENOVATED_PRICE_PER_SQM_HIGH);
@@ -61,9 +68,9 @@ test("46.6m² regression: the default renovated-sale-value assumption produces e
   };
   const result = calculateUnderwriting(input);
 
-  assert.equal(result.scenarios.conservative.resaleValue, 428_720, "LOW scenario (conservative, flip-safety scoring) must be exactly 9200 * 46.6");
-  assert.equal(result.scenarios.base.resaleValue, 447_360, "BASE scenario (the main expected sale value shown to the user) must be exactly 9600 * 46.6");
-  assert.equal(result.scenarios.optimistic.resaleValue, 466_000, "HIGH scenario (optimistic) must be exactly 10000 * 46.6");
+  assert.equal(result.scenarios.conservative.resaleValue, 396_100, "LOW scenario (conservative, flip-safety scoring) must be exactly 8500 * 46.6");
+  assert.equal(result.scenarios.base.resaleValue, 442_700, "BASE scenario (the main expected sale value shown to the user) must be exactly 9500 * 46.6");
+  assert.equal(result.scenarios.optimistic.resaleValue, 489_300, "HIGH scenario (optimistic) must be exactly 10500 * 46.6");
   assert.equal(result.provenance.resalePricePerM2, "MARKET_ASSUMPTION", "the assumption's provenance must be visible, not silently indistinguishable from a real comps-derived value");
 });
 

@@ -38,10 +38,17 @@ export type UnderwritingSettings = {
  * LOW is the conservative scenario flip-safety scoring should use; BASE is
  * the main expected sale value shown to the user; HIGH is the optimistic
  * scenario.
+ *
+ * These are the owner-approved production defaults (restored in a dedicated
+ * commit after an independent review held a separate, unreviewed 9200/9600/
+ * 10000 proposal out of this release). A market-number change is a business
+ * decision, not a bugfix, and must ship as its own explicitly-approved
+ * change -- never bundled silently with unrelated fixes. The named-constant
+ * refactor itself (one shared value instead of scattered literals) is kept.
  */
-export const RENOVATED_PRICE_PER_SQM_LOW = 9_200;
-export const RENOVATED_PRICE_PER_SQM_BASE = 9_600;
-export const RENOVATED_PRICE_PER_SQM_HIGH = 10_000;
+export const RENOVATED_PRICE_PER_SQM_LOW = 8_500;
+export const RENOVATED_PRICE_PER_SQM_BASE = 9_500;
+export const RENOVATED_PRICE_PER_SQM_HIGH = 10_500;
 
 export const DEFAULT_UNDERWRITING_SETTINGS: UnderwritingSettings = {
   renovationPerM2: { LIGHT: 1_000, STANDARD: 1_800, FULL: 2_700 },
