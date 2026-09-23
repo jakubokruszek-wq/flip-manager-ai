@@ -292,3 +292,57 @@ test("Task 4: area=0 yields a safe null (no division by zero)", async () => {
 test("Task 4: an implausible canonical price (e.g. below 20,000) is never trusted, even if present", async () => {
   assert.equal(await pricePerSqmFor({ price: 500, area: 47, price_per_sqm: 6300 }), null);
 });
+
+// Section 7 (gallery pipeline) regression: proven live in production that no
+// reaper anywhere ever moves a gallery job out of PENDING/RUNNING if no
+// extension instance ever claims it — it would otherwise show "Oczekuje na
+// pobranie galerii" forever. This exercises effectiveGalleryDisplayState
+// through the real getFilterResults() read path, not just the isolated
+// pure function.
+test("Section 7: a gallery stuck PENDING for far longer than the timeout displays as FAILED with the timeout code, through the real read path", async () => {
+  const db = freshDb();
+  const longAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour ago, well over the 10-minute timeout
+  db.seed("listings", [
+    listingRow({ id: "listing-gallery-stuck", missing_fields: [], review_reason: null, gallery_status: "PENDING", gallery_requested_at: longAgo, gallery_error: null }),
+  ]);
+  db.seed("listing_filter_matches", [membershipRow("listing-gallery-stuck")]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  const result = payload?.reviewResults.find((item) => item.id === "listing-gallery-stuck");
+  assert.ok(result);
+  assert.equal(result.galleryStatus, "FAILED");
+  assert.equal(result.galleryError, "FACEBOOK_GALLERY_TIMEOUT");
+});
+
+test("Section 7: a gallery recently requested and still PENDING is left unchanged, never mistaken for timed out", async () => {
+  const db = freshDb();
+  const justNow = new Date(Date.now() - 30_000).toISOString();
+  db.seed("listings", [
+    listingRow({ id: "listing-gallery-fresh", missing_fields: [], review_reason: null, gallery_status: "PENDING", gallery_requested_at: justNow, gallery_error: null }),
+  ]);
+  db.seed("listing_filter_matches", [membershipRow("listing-gallery-fresh")]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  const result = payload?.reviewResults.find((item) => item.id === "listing-gallery-fresh");
+  assert.ok(result);
+  assert.equal(result.galleryStatus, "PENDING");
+  assert.equal(result.galleryError, undefined);
+});
+
+test("Section 7: an already-terminal gallery failure keeps its real diagnostic code, never overwritten by the timeout code", async () => {
+  const db = freshDb();
+  const longAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  db.seed("listings", [
+    listingRow({ id: "listing-gallery-real-failure", missing_fields: [], review_reason: null, gallery_status: "FAILED", gallery_requested_at: longAgo, gallery_error: "FACEBOOK_GALLERY_ROOT_AMBIGUOUS" }),
+  ]);
+  db.seed("listing_filter_matches", [membershipRow("listing-gallery-real-failure")]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  const result = payload?.reviewResults.find((item) => item.id === "listing-gallery-real-failure");
+  assert.ok(result);
+  assert.equal(result.galleryStatus, "FAILED");
+  assert.equal(result.galleryError, "FACEBOOK_GALLERY_ROOT_AMBIGUOUS");
+});

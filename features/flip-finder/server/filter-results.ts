@@ -23,6 +23,7 @@ import type { ResaleCompRecord } from "@/features/market-intelligence/resale-com
 import { visibleMembership } from "@/features/flip-finder/membership-reconciliation";
 import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadataFailure, type FacebookPriceStatus } from "@/features/facebook-watcher/price-quality";
 import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
+import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
 
 type Row = Record<string, unknown>;
 
@@ -307,6 +308,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     );
     const sourceConflict = !sourceDomainMatchesSource(listing.source, listing.originalUrl);
     const hardFilterReject = filterDecision.hardRejectReasons.length > 0;
+    const effectiveGalleryDisplay = effectiveGalleryDisplayState(listing.galleryStatus ?? null, listing.galleryRequestedAt ?? null, listing.galleryError ?? null);
     const decisionBucket: FilterResult["decisionBucket"] = sourceConflict || hardFilterReject
       ? "REJECTED"
       : listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "REJECTED"
@@ -375,11 +377,16 @@ export async function getFilterResults(filterId: string, includeArchived = false
         manualDecision: listing.manualDecision,
         manualDecisionReason: listing.manualDecisionReason,
         archivedAt: listing.archivedAt,
-        galleryStatus: listing.galleryStatus,
+        // Gallery timeout mission: a PENDING/RUNNING gallery no extension
+        // ever claimed has no proactive reaper anywhere in this codebase
+        // (unlike Finder's own source_scans) — this display-time check is
+        // what stops the UI from showing "Oczekuje na pobranie galerii"
+        // forever. See effectiveGalleryDisplayState's own doc comment.
+        galleryStatus: effectiveGalleryDisplay.status ?? undefined,
         galleryJobId: listing.galleryJobId,
         galleryTotal: listing.galleryTotal,
         galleryPersistedCount: listing.galleryPersistedCount,
-        galleryError: listing.galleryError,
+        galleryError: effectiveGalleryDisplay.error ?? undefined,
         ...opportunityFields(listing, filter, decisionBucket, resaleComps),
       },
     ];
