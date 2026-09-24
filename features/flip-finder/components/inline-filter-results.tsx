@@ -656,7 +656,12 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   const location = dedupeLocationText(result.locationText ?? resultLocation(result.address, result.district, result.city)) ?? "—";
   const titleBase = cleanDisplayText(result.title) || "Oferta bez tytułu";
   const title = result.opportunityScore == null ? titleBase : `${titleBase} · Score ${result.opportunityScore}/100${result.opportunityPriority ? ` · ${priorityLabel(result.opportunityPriority)}` : ""}`;
-  const toggle = () => setExpanded((current) => { if (!current) onOpen?.(); return !current; });
+  // Keep the parent notification outside the state updater. Calling it inside
+  // the updater makes React report a cross-component update during render.
+  const toggle = () => {
+    if (!expanded) onOpen?.();
+    setExpanded((current) => !current);
+  };
   const purchaseTax = calculator.purchasePrice * 0.02;
   const purchaseCost = calculator.purchasePrice + purchaseTax + calculator.notary + calculator.purchaseCommission;
   const totalCost = purchaseCost + calculator.renovation + calculator.furnishing + calculator.reserve;

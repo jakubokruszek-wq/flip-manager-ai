@@ -86,6 +86,12 @@ test("ExpandableListingCard draws exactly one thin gold border around the whole 
   assert.match(page, /<article className="ui-card ui-card-hover group overflow-hidden !border-transparent hover:!border-transparent">/, "the inner article's own border must be suppressed so it never doubles the outer one");
 });
 
+test("opening a card notifies the parent outside React's state updater", () => {
+  const source = fs.readFileSync(path.join(__dirname, "inline-filter-results.tsx"), "utf8");
+  assert.match(source, /const toggle = \(\) => \{\s*if \(!expanded\) onOpen\?\.\(\);\s*setExpanded\(\(current\) => !current\);\s*\};/);
+  assert.doesNotMatch(source, /setExpanded\(\(current\) => \{\s*if \(!current\) onOpen\?\.\(\);/);
+});
+
 // The dialog header's score-badge + "Otwórz Deal Room" action row forced
 // sm:flex-nowrap, which could overflow horizontally at ordinary (not
 // ultra-wide) desktop widths instead of wrapping. flex-wrap only activates

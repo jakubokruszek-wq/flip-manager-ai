@@ -177,9 +177,18 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
+  let serverExited = false;
+  const serverExit = new Promise((resolve) => server.once("exit", () => { serverExited = true; resolve(); }));
   server.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8_000); });
   server.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8_000); });
-  t.after(() => { if (!server.killed) server.kill(); });
+  t.after(async () => {
+    if (!server.killed && !serverExited) server.kill();
+    await Promise.race([serverExit, new Promise((resolve) => setTimeout(resolve, 5_000))]);
+    assert.equal(serverExited, true, `Next dev server must exit during test cleanup; output: ${output}`);
+  });
+  // The page route itself is the readiness endpoint for this isolated test:
+  // it proves Next has accepted requests before the browser is created. The
+  // mocked API responses below are installed before navigation.
   // 90s (not the 60s default): this page mounts a heavier tree up front
   // (KPI section, diagnostics, filter controls, five full listing cards)
   // than the simpler fixtures other .browser.test.cjs files boot against,
@@ -191,6 +200,15 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
 
   const page = await browser.newPage();
   let workflowPatchBody = null;
+  let resolveWorkflowPatch;
+  const workflowPatch = new Promise((resolve) => { resolveWorkflowPatch = resolve; });
+  let resolveListingsRequest;
+  const listingsRequest = new Promise((resolve) => { resolveListingsRequest = resolve; });
+  const unexpectedConsoleErrors = [];
+  const failedRequests = [];
+  page.on("console", (message) => { if (message.type() === "error") unexpectedConsoleErrors.push(message.text()); });
+  page.on("pageerror", (error) => unexpectedConsoleErrors.push(error.message));
+  page.on("requestfailed", (request) => failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? "unknown"}`));
   // Gallery-trace-volume mission: GalleryRequestButton (the component that
   // fires two automatic diagnostic POSTs per card on every render — see
   // gallery-request-trace.test.ts) is explicitly hidden for variant="watcher"
@@ -204,14 +222,19 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
   });
   await page.route("**/api/facebook-watcher/**", (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") return route.fulfill({ contentType: "application/json", body: JSON.stringify(listingsPayload), status: 200 });
+    if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") {
+      resolveListingsRequest();
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify(listingsPayload), status: 200 });
+    }
     if (url.pathname.startsWith("/api/facebook-watcher/listings/") && route.request().method() === "PATCH") {
       workflowPatchBody = JSON.parse(route.request().postData() || "{}");
+      resolveWorkflowPatch(workflowPatchBody);
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
   await page.goto(`${baseUrl}/facebook-watcher`, { waitUntil: "domcontentloaded" });
+  await listingsRequest;
   try {
     await page.locator('article[id^="facebook-inbox-"]').first().waitFor({ state: "visible", timeout: 45_000 });
   } catch (waitError) {
@@ -342,11 +365,10 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
   const maxActionsArticleLocator = page.locator(`#facebook-inbox-${MAX_ACTIONS_ID}`);
   const interestingButton = maxActionsArticleLocator.getByRole("button", { name: "Interesująca" });
   assert.ok(await interestingButton.isVisible(), "the Interesująca button on the maximum-action listing must be visible at 390px");
+  assert.equal(await interestingButton.isEnabled(), true, "the Interesująca button must be enabled before the click");
   workflowPatchBody = null;
   await interestingButton.click();
-  await page.waitForFunction(() => true); // yield a tick
-  await page.waitForTimeout(200);
-  assert.deepEqual(workflowPatchBody, { status: "interesting" }, `clicking Interesująca at 390px must actually fire the workflow update; server output: ${output}`);
+  assert.deepEqual(await workflowPatch, { status: "interesting" }, `clicking Interesująca at 390px must actually fire the workflow update; server output: ${output}`);
 
   const facebookLink = maxActionsArticleLocator.getByRole("link", { name: "Facebook", exact: true });
   assert.ok(await facebookLink.isVisible(), "the external Facebook link on the maximum-action listing must be visible at 390px");
@@ -368,6 +390,9 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
     return { outlineStyle: computed.outlineStyle, outlineWidth: computed.outlineWidth, tag: element.tagName };
   });
   assert.notEqual(nextFocusOutline.outlineStyle, "none", `tabbing to the next control after Interesująca must show a visible focus outline, got ${JSON.stringify(nextFocusOutline)}`);
+
+  assert.deepEqual(unexpectedConsoleErrors, [], `browser page must not emit unexpected console errors: ${unexpectedConsoleErrors.join(" | ")}`);
+  assert.deepEqual(failedRequests, [], `browser page must not have failed requests: ${failedRequests.join(" | ")}`);
 
   await page.close();
 });
