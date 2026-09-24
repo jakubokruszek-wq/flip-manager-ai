@@ -5,6 +5,12 @@ import path from "node:path";
 import { FakeFacebookSupabase, installCanonicalReconciliationRpc } from "./server/facebook-fake-supabase.ts";
 import type { SearchFilter } from "../flip-finder/index.ts";
 
+// Derive collector evidence from one explicit evaluation instant so the real
+// freshness gate remains unchanged while this recovery fixture stays stable.
+const FIXTURE_EVALUATION_NOW = Date.now();
+const FIXTURE_PUBLISHED_AT = new Date(FIXTURE_EVALUATION_NOW - 60 * 60 * 1000).toISOString();
+const FIXTURE_RECEIVED_AT = new Date(FIXTURE_EVALUATION_NOW - 59 * 60 * 1000).toISOString();
+
 const POST_ID = "1597595792058564";
 const LISTING_ID = "00000000-0000-0000-0000-000000000001";
 const FILTER_ID = "00000000-0000-0000-0000-000000000002";
@@ -86,14 +92,14 @@ function freshDatabase(): FakeFacebookSupabase {
     source_type: "GROUP",
     source_id: "lodzsprzedazzakupwynajem",
     source_url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
-    received_at: "2026-09-20T14:30:00.000Z",
+    received_at: FIXTURE_RECEIVED_AT,
     payload: {
       posts: [{
         postId: POST_ID,
         permalink: SOURCE_URL,
         text: CHORALNA_TEXT,
         author: "Maja Piotrowska",
-        publishedAt: "2026-09-20T14:29:39.000Z",
+        publishedAt: FIXTURE_PUBLISHED_AT,
         media: [],
         discoverySource: "MAIN_FEED",
         foundInMainFeed: true,
@@ -169,7 +175,7 @@ test("arbitrary listing ids and unrelated collector posts cannot drive a repair"
     source_type: "GROUP",
     source_id: "lodzsprzedazzakupwynajem",
     source_url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/",
-    received_at: "2026-09-20T14:30:00.000Z",
+    received_at: FIXTURE_RECEIVED_AT,
     payload: { posts: [{ postId: "999999999999999", permalink: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/999999999999999/", text: CHORALNA_TEXT }] },
   }]);
   await assert.rejects(recover(db), /FACEBOOK_ORPHAN_SOURCE_EVIDENCE_MISSING/);

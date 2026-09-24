@@ -10,6 +10,11 @@ import { classifyFacebookDecision, classifyFacebookSkip } from "../facebook-work
 import { facebookPersistenceFailure } from "./facebook-persistence-contract.ts";
 import type { SearchFilter } from "../flip-finder/index.ts";
 
+// Derive the fixture from one explicit evaluation instant so the real
+// freshness rule is exercised without depending on the calendar date.
+const FIXTURE_EVALUATION_NOW = Date.now();
+const FIXTURE_PUBLISHED_AT = new Date(FIXTURE_EVALUATION_NOW - 60 * 60 * 1000).toISOString();
+
 /**
  * MANDATORY REGRESSION FIXTURE (V1 scan-accounting mission, Part E).
  *
@@ -40,8 +45,7 @@ const CHORALNA_FILTER: SearchFilter = {
 };
 
 async function runChoralnaPipeline() {
-  const publishedAt = "2026-09-20T14:29:39.000Z";
-  assert.notEqual(classifyFacebookPostAgeZone(publishedAt), "OLD", "the fixture's own timestamp must not be stale relative to the 72h rule, or this test would exercise the wrong code path");
+  assert.notEqual(classifyFacebookPostAgeZone(FIXTURE_PUBLISHED_AT, FIXTURE_EVALUATION_NOW), "OLD", "the fixture's own timestamp must not be stale relative to the 72h rule, or this test would exercise the wrong code path");
 
   const extracted = await extractFacebookProperty({ postText: CHORALNA_TEXT, groupName: "lodzsprzedazzakupwynajem", url: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1597595792058564/" });
   const locationResolution = reconcileFacebookLocation(extracted, { authoritativeText: CHORALNA_TEXT, groupName: "lodzsprzedazzakupwynajem", groupUrl: "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/" });
