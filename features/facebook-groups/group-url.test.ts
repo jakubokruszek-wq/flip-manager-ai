@@ -29,6 +29,7 @@ test("Facebook group URLs containing URL userinfo are rejected", () => {
 
 test("at-signs in a group query do not create URL userinfo", () => {
   assert.deepEqual(normalizeFacebookGroupUrl("https://m.facebook.com/groups/example?mention=user@example.com"), { url: "https://www.facebook.com/groups/example/", identifier: "example" });
+  assert.throws(() => normalizeFacebookGroupUrl("https://m.facebook.com/groups/example@posts"), FacebookGroupValidationError);
 });
 
 test("post URL is rejected", () => {
