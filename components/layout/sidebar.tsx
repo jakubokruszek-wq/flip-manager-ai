@@ -2,6 +2,7 @@ import { navigationSections } from "@/config/navigation";
 
 import { Logo } from "@/components/ui/logo";
 import { SidebarNavItem } from "@/components/layout/sidebar-nav-item";
+import { logoutOperator } from "@/features/auth/actions";
 
 type SidebarProps = {
   onNavigate?: () => void;
@@ -39,6 +40,11 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         <p className="text-xs font-medium tracking-wide text-muted-foreground">
           Flip Manager AI
         </p>
+        <form action={logoutOperator} className="mt-3">
+          <button type="submit" className="text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Wyloguj się
+          </button>
+        </form>
       </div>
     </aside>
   );
