@@ -1,13 +1,13 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const http = require("node:http");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
 const { chromium } = require("playwright");
+const { waitForServer } = require("./browser-readiness.cjs");
 
 const now = "2026-09-06T12:00:00.000Z";
 
@@ -91,23 +91,6 @@ async function freePort() {
   });
 }
 
-async function waitForServer(url, timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ready = await new Promise((resolve) => {
-      const request = http.get(url, (response) => {
-        response.resume();
-        resolve((response.statusCode ?? 500) < 500);
-      });
-      request.setTimeout(1_500, () => request.destroy());
-      request.once("error", () => resolve(false));
-    });
-    if (ready) return;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error("Local Next server did not become ready within 60 seconds");
-}
-
 const VIEWPORTS = [
   { name: "1440x900", width: 1440, height: 900, mobile: false },
   { name: "1280x800", width: 1280, height: 800, mobile: false },
@@ -186,22 +169,41 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
     await Promise.race([serverExit, new Promise((resolve) => setTimeout(resolve, 5_000))]);
     assert.equal(serverExited, true, `Next dev server must exit during test cleanup; output: ${output}`);
   });
-  // The page route itself is the readiness endpoint for this isolated test:
-  // it proves Next has accepted requests before the browser is created. The
-  // mocked API responses below are installed before navigation.
-  // 90s (not the 60s default): this page mounts a heavier tree up front
-  // (KPI section, diagnostics, filter controls, five full listing cards)
-  // than the simpler fixtures other .browser.test.cjs files boot against,
-  // and the first request also pays for the route's cold webpack compile.
-  await waitForServer(`http://127.0.0.1:${port}/facebook-watcher`, 90_000);
+  // Probe the real build-info route on this exact child-server port. A 404,
+  // 500, HTML error page, or malformed body is not server readiness.
+  await waitForServer(`http://127.0.0.1:${port}/api/build-info`, 90_000);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const baseUrl = `http://127.0.0.1:${port}`;
 
   const page = await browser.newPage();
-  let workflowPatchBody = null;
-  let resolveWorkflowPatch;
-  const workflowPatch = new Promise((resolve) => { resolveWorkflowPatch = resolve; });
+  let patchMode = "success";
+  const patchRequests = [];
+  const pendingPatchReleases = [];
+  const patchWaiters = [];
+  let expectedPatchFailures = 0;
+  const waitForPatchCount = (count, timeoutMs = 10_000) => {
+    if (patchRequests.length >= count) return Promise.resolve(patchRequests[count - 1]);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Timed out waiting for PATCH ${count}; received ${patchRequests.length}`)), timeoutMs);
+      patchWaiters.push({ count, resolve: (request) => { clearTimeout(timer); resolve(request); } });
+    });
+  };
+  const notifyPatchWaiters = () => {
+    for (let index = patchWaiters.length - 1; index >= 0; index -= 1) {
+      const waiter = patchWaiters[index];
+      if (patchRequests.length >= waiter.count) {
+        patchWaiters.splice(index, 1);
+        waiter.resolve(patchRequests[waiter.count - 1]);
+      }
+    }
+  };
+  const resetPatchScenario = (mode) => {
+    patchMode = mode;
+    patchRequests.length = 0;
+    pendingPatchReleases.splice(0).forEach((release) => release());
+  };
+  const releasePendingPatches = () => pendingPatchReleases.splice(0).forEach((release) => release());
   let resolveListingsRequest;
   const listingsRequest = new Promise((resolve) => { resolveListingsRequest = resolve; });
   const unexpectedConsoleErrors = [];
@@ -209,6 +211,10 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
   page.on("console", (message) => { if (message.type() === "error") unexpectedConsoleErrors.push(message.text()); });
   page.on("pageerror", (error) => unexpectedConsoleErrors.push(error.message));
   page.on("requestfailed", (request) => failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? "unknown"}`));
+  const responseErrors = [];
+  page.on("response", (response) => {
+    if (response.status() >= 400) responseErrors.push({ method: response.request().method(), url: response.url(), status: response.status() });
+  });
   // Gallery-trace-volume mission: GalleryRequestButton (the component that
   // fires two automatic diagnostic POSTs per card on every render — see
   // gallery-request-trace.test.ts) is explicitly hidden for variant="watcher"
@@ -220,16 +226,24 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
     galleryTraceRequestCount += 1;
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
-  await page.route("**/api/facebook-watcher/**", (route) => {
+  await page.route("**/api/facebook-watcher/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") {
       resolveListingsRequest();
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listingsPayload), status: 200 });
     }
     if (url.pathname.startsWith("/api/facebook-watcher/listings/") && route.request().method() === "PATCH") {
-      workflowPatchBody = JSON.parse(route.request().postData() || "{}");
-      resolveWorkflowPatch(workflowPatchBody);
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
+      const request = { body: JSON.parse(route.request().postData() || "{}"), status: null };
+      request.response = new Promise((resolve) => { request.resolveResponse = resolve; });
+      patchRequests.push(request);
+      notifyPatchWaiters();
+      if (patchMode === "delayed") await new Promise((resolve) => pendingPatchReleases.push(resolve));
+      const status = patchMode === "failure" ? 500 : 200;
+      if (status === 500) expectedPatchFailures += 1;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(status === 500 ? { error: "Mock PATCH failed" } : { ok: true }), status });
+      request.status = status;
+      request.resolveResponse({ status });
+      return;
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
@@ -359,16 +373,23 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
   console.log(`Screenshots saved to: ${ARTIFACT_DIR}`);
 
   // Task 6: real interaction at the mobile viewport that exposed the bug.
-  // fixture-safe (mocked PATCH), never a production write.
+  // Every assertion below uses the mocked local route, never Production.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(150);
   const maxActionsArticleLocator = page.locator(`#facebook-inbox-${MAX_ACTIONS_ID}`);
   const interestingButton = maxActionsArticleLocator.getByRole("button", { name: "Interesująca" });
   assert.ok(await interestingButton.isVisible(), "the Interesująca button on the maximum-action listing must be visible at 390px");
   assert.equal(await interestingButton.isEnabled(), true, "the Interesująca button must be enabled before the click");
-  workflowPatchBody = null;
+  resetPatchScenario("success");
+  const successfulPatch = waitForPatchCount(1);
   await interestingButton.click();
-  assert.deepEqual(await workflowPatch, { status: "interesting" }, `clicking Interesująca at 390px must actually fire the workflow update; server output: ${output}`);
+  const successfulRequest = await successfulPatch;
+  assert.deepEqual(successfulRequest.body, { status: "interesting" }, `clicking Interesująca at 390px must fire the exact workflow update; server output: ${output}`);
+  assert.deepEqual(await successfulRequest.response, { status: 200 }, "the workflow PATCH must complete successfully");
+  const maxStatusBadge = maxActionsArticleLocator.locator("span").filter({ hasText: "Interesująca" }).first();
+  await maxStatusBadge.waitFor({ state: "visible", timeout: 5_000 });
+  assert.ok(await maxActionsArticleLocator.getByRole("button", { name: "Odrzuć" }).isVisible(), "successful PATCH must render the new workflow action state");
+  assert.equal(await maxActionsArticleLocator.getByRole("button", { name: "Przywróć", exact: true }).count(), 0, "successful PATCH must remove the stale rejected action");
 
   const facebookLink = maxActionsArticleLocator.getByRole("link", { name: "Facebook", exact: true });
   assert.ok(await facebookLink.isVisible(), "the external Facebook link on the maximum-action listing must be visible at 390px");
@@ -379,6 +400,60 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
   await page.getByRole("dialog").waitFor({ state: "visible", timeout: 5_000 });
   await page.keyboard.press("Escape");
   await page.getByRole("dialog").waitFor({ state: "hidden", timeout: 5_000 });
+
+  // A delayed real double-click must still create one mutation. The second
+  // activation is attempted while the first PATCH is unresolved.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(`#facebook-inbox-${NORMAL_ID}`).waitFor({ state: "visible", timeout: 10_000 });
+  resetPatchScenario("delayed");
+  const normalArticle = page.locator(`#facebook-inbox-${NORMAL_ID}`);
+  const normalInteresting = normalArticle.getByRole("button", { name: "Interesująca" });
+  const doublePatch = waitForPatchCount(1);
+  await normalInteresting.dblclick({ delay: 0 });
+  await doublePatch;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(patchRequests.length, 1, "rapid double-click must issue exactly one in-flight PATCH");
+  releasePendingPatches();
+  assert.deepEqual(await patchRequests[0].response, { status: 200 }, "the single double-click PATCH must succeed");
+  await normalArticle.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 5_000 });
+
+  // Keyboard activation is guarded by the same in-flight boundary.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(`#facebook-inbox-${FACEBOOK_LINK_ID}`).waitFor({ state: "visible", timeout: 10_000 });
+  resetPatchScenario("delayed");
+  const keyboardArticle = page.locator(`#facebook-inbox-${FACEBOOK_LINK_ID}`);
+  const keyboardInteresting = keyboardArticle.getByRole("button", { name: "Interesująca" });
+  const keyboardPatch = waitForPatchCount(1);
+  await keyboardInteresting.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await keyboardPatch;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(patchRequests.length, 1, "rapid keyboard activation must issue exactly one in-flight PATCH");
+  releasePendingPatches();
+  assert.deepEqual(await patchRequests[0].response, { status: 200 }, "the single keyboard PATCH must succeed");
+  await keyboardArticle.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 5_000 });
+
+  // A real 500 must leave the rendered workflow unchanged, show retryable
+  // feedback, and permit a later successful retry.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(`#facebook-inbox-${NORMAL_ID}`).waitFor({ state: "visible", timeout: 10_000 });
+  resetPatchScenario("failure");
+  const retryArticle = page.locator(`#facebook-inbox-${NORMAL_ID}`);
+  const retryButton = retryArticle.getByRole("button", { name: "Interesująca" });
+  const failedPatch = waitForPatchCount(1);
+  await retryButton.click();
+  const failedRequest = await failedPatch;
+  assert.deepEqual(failedRequest.body, { status: "interesting" });
+  assert.deepEqual(await failedRequest.response, { status: 500 }, "the failure scenario must receive an actual 500 response");
+  await page.getByText("Mock PATCH failed", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
+  assert.equal(await retryArticle.locator("span").filter({ hasText: "Interesująca" }).count(), 0, "failed PATCH must not render a false success state");
+  patchMode = "success";
+  const retryPatch = waitForPatchCount(2);
+  await retryButton.click();
+  await retryPatch;
+  assert.deepEqual(await patchRequests[1].response, { status: 200 }, "retry PATCH must succeed");
+  await retryArticle.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 5_000 });
 
   // Keyboard accessibility: a real Tab keypress (not a programmatic .focus(),
   // which Chromium does not treat as keyboard modality) must land visibly.
@@ -391,8 +466,24 @@ test("real Facebook Watcher card UI is geometrically responsive: every ancestor 
   });
   assert.notEqual(nextFocusOutline.outlineStyle, "none", `tabbing to the next control after Interesująca must show a visible focus outline, got ${JSON.stringify(nextFocusOutline)}`);
 
-  assert.deepEqual(unexpectedConsoleErrors, [], `browser page must not emit unexpected console errors: ${unexpectedConsoleErrors.join(" | ")}`);
-  assert.deepEqual(failedRequests, [], `browser page must not have failed requests: ${failedRequests.join(" | ")}`);
+  const unexpectedNonPatchConsoleErrors = unexpectedConsoleErrors.filter((message) => !message.includes("status of 500"));
+  assert.deepEqual(unexpectedNonPatchConsoleErrors, [], `browser page must not emit unexpected console errors: ${unexpectedNonPatchConsoleErrors.join(" | ")}`);
+  assert.equal(unexpectedConsoleErrors.length, expectedPatchFailures, "the only browser console error may be the intentionally mocked failed PATCH");
+  // Reloading between the isolated mutation scenarios intentionally aborts
+  // background alert polling and in-flight font requests. Those are expected
+  // navigation cancellations; any other failed request remains a failure.
+  const unexpectedFailedRequests = failedRequests.filter((entry) => !(
+    entry.includes("/api/alerts: net::ERR_ABORTED") ||
+    entry.includes(".woff2: net::ERR_ABORTED") ||
+    entry.includes("/__nextjs_font/") ||
+    entry.includes("hot-update.json: net::ERR_ABORTED") ||
+    entry.includes("?_rsc=") ||
+    entry.includes("/_next/static/webpack/") ||
+    entry.includes("/_next/static/css/")
+  ));
+  assert.deepEqual(unexpectedFailedRequests, [], `browser page must not have unexpected failed requests: ${unexpectedFailedRequests.join(" | ")}`);
+  assert.equal(responseErrors.filter((entry) => entry.status >= 400).length, expectedPatchFailures, "the only HTTP error must be the intentionally mocked failed PATCH");
+  assert.equal(expectedPatchFailures, 1, "the failed-PATCH scenario must exercise exactly one 500 response");
 
   await page.close();
 });
