@@ -46,7 +46,17 @@ where url in (
   'https://www.facebook.com/groups/1689328011096404/',
   'https://www.facebook.com/profile.php?id=61563667387467'
 )
-and (trim(name) ~ '^[0-9]{5,30}$' or lower(trim(name)) like 'facebook%' or trim(name) = '');
+and (
+  trim(coalesce(name, '')) = ''
+  or trim(name) ~ '^[0-9]{5,30}$'
+  or lower(trim(name)) = lower(
+    'Facebook group ' || case
+      when position('/groups/' in url) > 0 then split_part(split_part(url, '/groups/', 2), '/', 1)
+      when position('id=' in url) > 0 then split_part(split_part(url, 'id=', 2), '&', 1)
+      else null
+    end
+  )
+);
 
 -- Idempotent: ON CONFLICT (url) DO NOTHING makes this safe to run more than
 -- once, and safe to run whether or not an operator has already manually

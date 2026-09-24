@@ -19,6 +19,18 @@ test("mobile Facebook group URLs with query strings and fragments normalize to t
   assert.deepEqual(normalizeFacebookGroupUrl("https://m.facebook.com/groups/MobileGroup/?ref=bookmarks#recent"), { url: "https://www.facebook.com/groups/MobileGroup/", identifier: "mobilegroup" });
 });
 
+test("Facebook group URLs containing URL userinfo are rejected", () => {
+  for (const value of [
+    "https://user@facebook.com/groups/example",
+    "https://user:pass@facebook.com/groups/example",
+    "https://user%40name:pass%40word@facebook.com/groups/example",
+  ]) assert.throws(() => normalizeFacebookGroupUrl(value), /credentials/);
+});
+
+test("at-signs in a group query do not create URL userinfo", () => {
+  assert.deepEqual(normalizeFacebookGroupUrl("https://m.facebook.com/groups/example?mention=user@example.com"), { url: "https://www.facebook.com/groups/example/", identifier: "example" });
+});
+
 test("post URL is rejected", () => {
   assert.throws(() => normalizeFacebookGroupUrl("https://www.facebook.com/groups/example/posts/123/"), /bezpośrednio na \/groups/);
 });
@@ -81,6 +93,10 @@ test("profile share target canonicalizes to its numeric profile URL", () => {
   const parsed = parseFacebookGroupCreatePayload({ type: "PROFILE", url: "https://www.facebook.com/profile.php?id=61563667387467", name: "VERDE PRIME Nieruchomości" });
   assert.equal(parsed.input.type, "PROFILE");
   assert.equal(parsed.input.sourceId, "61563667387467");
+});
+
+test("profile URLs containing URL userinfo are rejected", () => {
+  assert.throws(() => normalizeFacebookSourceUrl("https://user:pass@www.facebook.com/profile.php?id=61563667387467", "PROFILE"), /credentials/);
 });
 
 test("profile sources are planned without changing group sources", () => {

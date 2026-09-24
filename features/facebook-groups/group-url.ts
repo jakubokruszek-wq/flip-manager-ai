@@ -28,6 +28,7 @@ export function normalizeFacebookGroupUrl(value: string): { url: string; identif
   let parsed: URL;
   try { parsed = new URL(trimmed); }
   catch { throw new FacebookGroupValidationError("Podaj prawidłowy adres grupy Facebook."); }
+  if (parsed.username || parsed.password) throw new FacebookGroupValidationError("Facebook URL cannot contain credentials.");
   const hostname = parsed.hostname.toLocaleLowerCase("en-US");
   if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(hostname)) {
     throw new FacebookGroupValidationError("Adres musi prowadzić do grupy na facebook.com.");
@@ -46,6 +47,7 @@ export function normalizeFacebookSourceUrl(value: string, type: FacebookSourceTy
   let parsed: URL;
   try { parsed = new URL(trimmed); } catch { throw new FacebookGroupValidationError("Podaj prawidłowy adres profilu Facebook."); }
   if (parsed.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(parsed.hostname)) throw new FacebookGroupValidationError("Adres musi prowadzić do profilu na facebook.com.");
+  if (parsed.username || parsed.password) throw new FacebookGroupValidationError("Facebook URL cannot contain credentials.");
   const id = parsed.searchParams.get("id") ?? parsed.pathname.match(/\/([0-9]{5,})\/?$/)?.[1] ?? parsed.pathname.match(/^\/([^/]+)\/?$/)?.[1];
   if (!id || /^(share|groups|profile\.php)$/i.test(id)) throw new FacebookGroupValidationError("URL musi wskazywać bezpośrednio na profil Facebook.");
   return { url: `https://www.facebook.com/profile.php?id=${encodeURIComponent(id)}`, identifier: id.toLowerCase() };
