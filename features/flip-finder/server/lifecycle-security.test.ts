@@ -35,6 +35,7 @@ test("lifecycle RPC remains invoker-only and server callers are the trusted boun
   assert.match(clearService, /createAdminClient/);
   assert.match(finderPage, /x-flip-finder-action": "clear-results"/);
   assert.match(inlineResults, /x-flip-finder-action": "review-listing"/);
+  assert.doesNotMatch(finderPage + inlineResults, /SUPABASE_(?:SERVICE_ROLE|SECRET)_KEY/);
   assert.doesNotMatch(clearRoute + reviewRoute + clearService, /createClient\(\)/);
 });
 
