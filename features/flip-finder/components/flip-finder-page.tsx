@@ -342,7 +342,7 @@ export function FlipFinderPage() {
     setClearingResults(true);
     setClearResultsError(null);
     try {
-      const response = await apiFetch(`/api/flip-finder/search-filters/${filter.id}/clear-results`, { method: "POST" });
+      const response = await apiFetch(`/api/flip-finder/search-filters/${filter.id}/clear-results`, { method: "POST", headers: { "x-flip-finder-action": "clear-results" }, credentials: "same-origin" });
       const payload: unknown = await readJson(response);
       if (!response.ok) throw new Error(readMessage(payload, "Nie udało się wyczyścić wyników."));
       const archivedCount = isRecordWithArchivedCount(payload) ? payload.archivedCount : 0;

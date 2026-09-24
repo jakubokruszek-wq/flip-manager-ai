@@ -1,15 +1,18 @@
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { authorizeListingLifecycleMutation } from "@/features/flip-finder/server/lifecycle-request-auth";
 
 type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {
+  const denied = authorizeListingLifecycleMutation(request, "review-listing");
+  if (denied) return denied;
   const listingId = (await params).id;
   if (!/^[0-9a-f-]{20,}$/i.test(listingId)) return Response.json({ message: "Nieprawidłowa oferta." }, { status: 400 });
   const body = await request.json().catch(() => null) as { decision?: unknown; reason?: unknown } | null;
   const decision = body?.decision === "ACCEPTED" || body?.decision === "REJECTED" ? body.decision : null;
   if (!decision) return Response.json({ message: "Nieprawidłowa decyzja." }, { status: 400 });
   const reason = typeof body?.reason === "string" ? body.reason.trim().slice(0, 500) : null;
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const values = decision === "ACCEPTED"
     ? { lifecycle_status: "ACTIVE", manual_decision: "ACCEPTED", manual_decision_reason: reason, archived_at: null, status: "active" }
     : { lifecycle_status: "REJECTED", manual_decision: "REJECTED", manual_decision_reason: reason, archived_at: new Date().toISOString() };

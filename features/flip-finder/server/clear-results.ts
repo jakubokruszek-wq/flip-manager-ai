@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { selectClearResultsTargets, selectVisibleListingIds, type ClearResultsScope } from "@/features/flip-finder/clear-results-targeting";
 import type { ListingSource } from "@/features/flip-finder";
 
@@ -18,7 +18,7 @@ export type ClearResultsSummary = { archivedCount: number };
  * `archived_at` directly; nothing about the clear is destructive.
  */
 export async function clearFilterResults(filterId: string, scope: ClearResultsScope = {}): Promise<ClearResultsSummary> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const matches = await supabase
     .from("listing_filter_matches")
     .select("listing_id,is_current_match,match_reasons")

@@ -585,7 +585,7 @@ function ReviewListingCardContent({ result, onChanged, highlight = false }: { re
   const decide = async (decision: "ACCEPTED" | "REJECTED") => {
     setBusy(true);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/review`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision }) });
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/review`, { method: "POST", headers: { "content-type": "application/json", "x-flip-finder-action": "review-listing" }, credentials: "same-origin", body: JSON.stringify({ decision }) });
       if (!response.ok) throw new Error("Nie udało się zapisać decyzji.");
       onChanged();
     } finally { setBusy(false); }
