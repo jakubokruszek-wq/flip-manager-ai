@@ -1,13 +1,17 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { initializeInvestmentDeal } from "@/features/investment-os/server/deal-service";
 import { isInvestmentDealVersionConflict } from "@/features/investment-os/server/deal-cas";
 import { investmentInitializeResponse } from "@/features/investment-os/server/investment-initialize";
-import { authorizeInvestmentMutation } from "@/features/investment-os/server/request-auth";
 
 type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {
-  const denied = authorizeInvestmentMutation(request);
-  if (denied) return denied;
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     return await investmentInitializeResponse((await params).id, initializeInvestmentDeal);
   } catch (error) {

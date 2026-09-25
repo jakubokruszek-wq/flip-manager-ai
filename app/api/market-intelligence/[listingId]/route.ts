@@ -1,8 +1,15 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { analyzeMarket } from "@/features/market-intelligence/analyze-market";
 
 type Context = { params: Promise<{ listingId: string }> };
 
 export async function GET(_request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const marketIntelligence = await analyzeMarket((await params).listingId);
     if (!marketIntelligence) {

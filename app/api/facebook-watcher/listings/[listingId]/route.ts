@@ -1,9 +1,16 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { updateFacebookWatcherWorkflow } from "@/features/facebook-watcher/server";
 import { FACEBOOK_WORKFLOW_STATUSES, type FacebookWorkflowStatus } from "@/features/facebook-watcher/types";
 
 type Context = { params: Promise<{ listingId: string }> };
 
 export async function PATCH(request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const body: unknown = await request.json();
     if (!isRecord(body)) return Response.json({ error: "Nieprawidłowe dane workflow." }, { status: 400 });

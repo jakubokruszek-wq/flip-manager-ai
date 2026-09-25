@@ -1,8 +1,14 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { loadInvestmentSettings, saveInvestmentSettings } from "@/features/investment-os/server/deal-service";
 import { isInvestmentDealVersionConflict } from "@/features/investment-os/server/deal-cas";
-import { authorizeInvestmentMutation } from "@/features/investment-os/server/request-auth";
 
 export async function GET(): Promise<Response> {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     return Response.json({ ok: true, settings: await loadInvestmentSettings() });
   } catch (error) {
@@ -12,8 +18,11 @@ export async function GET(): Promise<Response> {
 }
 
 export async function PUT(request: Request): Promise<Response> {
-  const denied = authorizeInvestmentMutation(request);
-  if (denied) return denied;
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     return Response.json({ ok: true, settings: await saveInvestmentSettings(await request.json().catch(() => null)) });
   } catch (error) {

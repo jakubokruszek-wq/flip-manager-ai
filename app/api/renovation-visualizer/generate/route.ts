@@ -1,3 +1,5 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { renovationImageGenerationAdapter, RenovationGenerationError } from "@/features/renovation-visualizer/server";
 import { parseRenovationVisualizationInput } from "@/features/renovation-visualizer/utils";
 import type { RenovationVisualizerApiResponse } from "@/features/renovation-visualizer/types";
@@ -5,6 +7,11 @@ import type { RenovationVisualizerApiResponse } from "@/features/renovation-visu
 export const maxDuration = 180;
 
 export async function POST(request: Request): Promise<Response> {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   let body: unknown;
   try { body = await request.json(); } catch { body = null; }
   const input = parseRenovationVisualizationInput(body);

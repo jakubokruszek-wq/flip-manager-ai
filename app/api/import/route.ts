@@ -1,8 +1,15 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { importProperty } from "@/features/importer/server";
 import { extractFacebookListing } from "@/features/facebook-watcher/extract-facebook-listing";
 import { normalizeFacebookUrl } from "@/features/facebook-watcher/normalize-facebook-listing";
 
 export async function POST(request: Request) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const body = await request.json();
     const { url } = body;

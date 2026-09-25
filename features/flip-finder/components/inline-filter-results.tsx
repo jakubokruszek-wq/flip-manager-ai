@@ -102,7 +102,6 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
     try {
       const response = await fetch("/api/flip-finder/history", {
         method: "DELETE",
-        headers: { "x-flip-finder-action": "clear-search-history" },
         credentials: "same-origin",
       });
       const payload: unknown = await readJson(response);
@@ -307,7 +306,7 @@ function dispatchGalleryTrace(entry: GalleryTraceEntry): void {
       const request = fetch(`/api/flip-finder/listings/${entry.listingId}/gallery/trace`, {
         body: JSON.stringify(entry),
         credentials: "same-origin",
-        headers: { "content-type": "application/json", "x-flip-finder-action": "gallery-trace" },
+        headers: { "content-type": "application/json" },
         keepalive: true,
         method: "POST",
       });
@@ -528,7 +527,7 @@ function GalleryRequestButton({ result, traceId: providedTraceId, onChanged }: {
     setBusy(true);
     recordGalleryTrace("GALLERY_FETCH_START", result, status, traceId);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { credentials: "same-origin", method: "POST", headers: { "x-flip-finder-action": "gallery" } });
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/gallery`, { credentials: "same-origin", method: "POST" });
       const payload: unknown = await readJson(response);
       recordGalleryTrace("GALLERY_FETCH_RESPONSE", result, status, traceId, { httpStatus: response.status, responseOk: response.ok });
       if (!response.ok || !payload || typeof payload !== "object") throw new Error("Nie udało się zlecić pobrania galerii.");
@@ -585,7 +584,7 @@ function ReviewListingCardContent({ result, onChanged, highlight = false }: { re
   const decide = async (decision: "ACCEPTED" | "REJECTED") => {
     setBusy(true);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/review`, { method: "POST", headers: { "content-type": "application/json", "x-flip-finder-action": "review-listing" }, credentials: "same-origin", body: JSON.stringify({ decision }) });
+      const response = await fetch(`/api/flip-finder/listings/${result.id}/review`, { method: "POST", headers: { "content-type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ decision }) });
       if (!response.ok) throw new Error("Nie udało się zapisać decyzji.");
       onChanged();
     } finally { setBusy(false); }

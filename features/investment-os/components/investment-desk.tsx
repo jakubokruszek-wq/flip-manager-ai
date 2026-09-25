@@ -54,7 +54,6 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     try {
       const response = await fetch(`/api/flip-finder/listings/${result.id}/investment/initialize`, {
         method: "POST",
-        headers: { "x-flip-finder-action": "investment-os" },
       });
       const body = await response.json().catch(() => null) as { deal?: CanonicalDeal; message?: string } | null;
       if (!response.ok || !body?.deal) {
@@ -89,7 +88,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     try {
       const response = await fetch(`/api/flip-finder/listings/${result.id}/investment`, {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-flip-finder-action": "investment-os" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ overrides }),
       });
       const body = await response.json();

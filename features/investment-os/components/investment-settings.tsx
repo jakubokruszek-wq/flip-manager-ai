@@ -38,7 +38,7 @@ export function InvestmentOsSettings() {
   </div>;
 }
 
-function mutation(method: "POST" | "PUT", body: unknown): RequestInit { return { method, headers: { "content-type": "application/json", "x-flip-finder-action": "investment-os" }, body: JSON.stringify(body) }; }
+function mutation(method: "POST" | "PUT", body: unknown): RequestInit { return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }; }
 function Setting({ label, value, onChange }: { label: string; value: number; onChange: (value: string) => void }) { return <Text numeric label={label} value={String(value)} onChange={onChange} />; }
 function Text({ label, value, numeric, onChange }: { label: string; value: string; numeric?: boolean; onChange: (value: string) => void }) { return <label><span className="mb-1 block text-xs text-muted-foreground">{label}</span><Input min={numeric ? "0" : undefined} onChange={(event) => onChange(event.target.value)} type={numeric ? "number" : "text"} value={value} /></label>; }
 function optionalNumber(value: string): number | null { const parsed = Number(value); return value.trim() && Number.isFinite(parsed) ? parsed : null; }

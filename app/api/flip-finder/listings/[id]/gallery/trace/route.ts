@@ -1,11 +1,15 @@
-import { authorizeGalleryTrace, authorizeGalleryTraceRead } from "@/features/flip-finder/server/gallery-request-auth";
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { projectGalleryTrace, readGalleryTraces, writeGalleryTrace } from "@/features/flip-finder/server/gallery-request-trace";
 
 type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {
-  const authorizationError = authorizeGalleryTrace(request);
-  if (authorizationError) return authorizationError;
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   const listingId = (await params).id;
   if (!/^[0-9a-f-]{20,}$/i.test(listingId)) return Response.json({ ok: false, code: "INVALID_LISTING_ID" }, { status: 400 });
   try {
@@ -27,8 +31,11 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
 }
 
 export async function GET(request: Request, { params }: Context): Promise<Response> {
-  const authorizationError = authorizeGalleryTraceRead(request);
-  if (authorizationError) return authorizationError;
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   const listingId = (await params).id;
   if (!/^[0-9a-f-]{20,}$/i.test(listingId)) return Response.json({ ok: false, code: "INVALID_LISTING_ID" }, { status: 400 });
   const traceId = new URL(request.url).searchParams.get("traceId") || undefined;

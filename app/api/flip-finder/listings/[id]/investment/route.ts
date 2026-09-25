@@ -1,12 +1,18 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { getInvestmentDeal, getListingMedia, saveDealOverrides } from "@/features/investment-os/server/deal-service";
 import type { CanonicalDeal, DealFactOverrides } from "@/features/investment-os/types";
-import { authorizeInvestmentMutation } from "@/features/investment-os/server/request-auth";
 import { isInvestmentDealVersionConflict } from "@/features/investment-os/server/deal-cas";
 import { investmentDealReadResponse } from "@/features/investment-os/server/investment-read";
 
 type Context = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: Context): Promise<Response> {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const { id } = await params;
     const response = await investmentDealReadResponse((await params).id, getInvestmentDeal);
@@ -21,7 +27,11 @@ export async function GET(_request: Request, { params }: Context): Promise<Respo
 }
 
 export async function PUT(request: Request, { params }: Context): Promise<Response> {
-  const denied = authorizeInvestmentMutation(request); if (denied) return denied;
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const body = await request.json().catch(() => null) as { overrides?: DealFactOverrides } | null;
     if (!body?.overrides || typeof body.overrides !== "object" || Array.isArray(body.overrides)) return Response.json({ message: "Nieprawidłowe nadpisania." }, { status: 400 });

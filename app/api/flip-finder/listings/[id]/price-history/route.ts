@@ -1,3 +1,5 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { getListingPriceHistory } from "@/features/flip-finder/server/price-history";
 
 type Context = {
@@ -5,6 +7,11 @@ type Context = {
 };
 
 export async function GET(_request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const history = await getListingPriceHistory((await params).id);
 

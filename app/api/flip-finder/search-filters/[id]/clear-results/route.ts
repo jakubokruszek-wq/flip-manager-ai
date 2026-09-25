@@ -1,12 +1,16 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { clearFilterResults } from "@/features/flip-finder/server/clear-results";
-import { authorizeListingLifecycleMutation } from "@/features/flip-finder/server/lifecycle-request-auth";
 import { LISTING_SOURCES } from "@/features/flip-finder";
 
 type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {
-  const denied = authorizeListingLifecycleMutation(request, "clear-results");
-  if (denied) return denied;
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   const filterId = (await params).id;
   const body = await request.json().catch(() => null) as { source?: unknown; olderThanDays?: unknown } | null;
   const source = typeof body?.source === "string" && (LISTING_SOURCES as readonly string[]).includes(body.source) ? body.source as (typeof LISTING_SOURCES)[number] : undefined;

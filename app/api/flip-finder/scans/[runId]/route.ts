@@ -1,8 +1,15 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { getScanProgress } from "@/features/flip-finder/server/scan-progress";
 
 type Context = { params: Promise<{ runId: string }> };
 
 export async function GET(request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   void request;
   try {
     return Response.json(await getScanProgress((await params).runId));

@@ -8,7 +8,7 @@ import {
   type SearchFilterListResponse,
   type SearchFilterScan,
 } from "@/features/flip-finder/search-filter-contract";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT } from "./scan-lifecycle";
 
 type Row = Record<string, unknown>;
@@ -17,7 +17,7 @@ const SOURCE_SCAN_COLUMNS =
   "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message";
 
 export async function listSearchFilters(): Promise<SearchFilterListResponse> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const [filtersResult, matchesResult, listingsResult, scansResult, completedScansResult] = await Promise.all([
     supabase.from("search_filters").select("*").order("updated_at", { ascending: false }),
     supabase.from("listing_filter_matches").select("search_filter_id").eq("is_current_match", true),
@@ -76,7 +76,7 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
 }
 
 export async function getSearchFilter(id: string): Promise<SearchFilter | null> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("search_filters")
     .select("*")
@@ -94,7 +94,7 @@ export async function getSearchFilter(id: string): Promise<SearchFilter | null> 
 export async function getActiveSearchFiltersForSource(
   source: ListingSource,
 ): Promise<SearchFilter[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("search_filters")
     .select("*")
@@ -128,7 +128,7 @@ export async function updateSearchFilter(
 }
 
 export async function deleteSearchFilter(id: string): Promise<boolean> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { error, count } = await supabase
     .from("search_filters")
     .delete({ count: "exact" })
@@ -243,7 +243,7 @@ async function writeSearchFilter(
   id: string | null,
 ): Promise<SearchFilter | null> {
   const payload = toDatabasePayload(input);
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const query = id
     ? supabase.from("search_filters").update(payload).eq("id", id).select("*").maybeSingle()
     : supabase.from("search_filters").insert(payload).select("*").single();

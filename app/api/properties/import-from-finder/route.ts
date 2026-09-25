@@ -1,4 +1,6 @@
-import { createClient } from "@/lib/supabase/server";
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { PropertyInvestmentAnalysis } from "@/features/properties/types";
 
 type FinderImport = {
@@ -27,8 +29,13 @@ type ImportResponse = { status: "created" | "updated"; propertyId: string };
 
 export async function POST(request: Request) {
   try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
+  try {
     const listing = await readFinderImport(request);
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     developmentLog("PROPERTY FINDER IMPORT RECEIVED:", listing);
     const resolved = await resolveListingReference(supabase, listing);
     const existing = await findExistingProperty(supabase, resolved);
@@ -86,7 +93,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function resolveListingReference(supabase: Awaited<ReturnType<typeof createClient>>, listing: FinderImport): Promise<FinderImport> {
+async function resolveListingReference(supabase: ReturnType<typeof createAdminClient>, listing: FinderImport): Promise<FinderImport> {
   if (!listing.listingId) return listing;
   const { data, error } = await supabase.from("listings").select("external_listing_id,normalized_url,images").eq("id", listing.listingId).maybeSingle();
   if (error) throw supabaseError("Nie udało się odczytać identyfikatora oferty.", error);
@@ -94,7 +101,7 @@ async function resolveListingReference(supabase: Awaited<ReturnType<typeof creat
   return { ...listing, externalListingId: nullableString(data?.external_listing_id) ?? listing.externalListingId, normalizedUrl: nullableString(data?.normalized_url) ?? listing.normalizedUrl, images: listing.source === "facebook" && storedImages.length > 0 ? storedImages : listing.images };
 }
 
-async function findExistingProperty(supabase: Awaited<ReturnType<typeof createClient>>, listing: FinderImport): Promise<{ id: string } | null> {
+async function findExistingProperty(supabase: ReturnType<typeof createAdminClient>, listing: FinderImport): Promise<{ id: string } | null> {
   for (const query of [
     supabase.from("properties").select("id").eq("original_url", listing.originalUrl).maybeSingle(),
     supabase.from("properties").select("id").eq("normalized_url", listing.normalizedUrl).maybeSingle(),

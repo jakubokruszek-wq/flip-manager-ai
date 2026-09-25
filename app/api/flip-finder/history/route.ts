@@ -1,13 +1,16 @@
-import { authorizeHistoryClear } from "@/features/flip-finder/server/history-clear-auth";
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 
 const ACTIVE_SOURCE_STATUSES = ["pending", "running"];
 const ACTIVE_JOB_STATUSES = ["queued", "claimed", "running"];
 
-export async function DELETE(request: Request): Promise<Response> {
-  const authorizationError = authorizeHistoryClear(request);
-  if (authorizationError) return authorizationError;
+export async function DELETE(_request: Request): Promise<Response> {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
 
   try {
     const admin = createAdminClient();
@@ -28,8 +31,7 @@ export async function DELETE(request: Request): Promise<Response> {
       return Response.json({ ok: false, code: "HISTORY_CLEAR_SCAN_ACTIVE" }, { status: 409 });
     }
 
-    const supabase = await createClient();
-    const { data, error } = await supabase
+    const { data, error } = await admin
       .from("listings")
       .delete()
       .not("id", "is", null)

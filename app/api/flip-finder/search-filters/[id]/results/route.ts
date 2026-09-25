@@ -1,3 +1,5 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { getFilterResults } from "@/features/flip-finder/server/filter-results";
 
 type Context = {
@@ -5,6 +7,11 @@ type Context = {
 };
 
 export async function GET(request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const includeArchived = new URL(request.url).searchParams.get("view") === "archive";
     const results = await getFilterResults((await params).id, includeArchived);

@@ -1,14 +1,21 @@
-import { createClient } from "@/lib/supabase/server";
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
+import { createAdminClient } from "@/lib/supabase/admin";
 import { parsePropertyUpdate, propertyUpdateColumns } from "@/features/properties/property-update";
 
 type Context = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   const { id } = await params;
 
   try {
     const values = parsePropertyUpdate(await request.json());
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     const { data: existing, error: lookupError } = await supabase
       .from("properties")
       .select("id")
@@ -42,8 +49,13 @@ export async function PATCH(request: Request, { params }: Context) {
 }
 
 export async function DELETE(_request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   const { id } = await params;
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data: property, error: lookupError } = await supabase
     .from("properties")
     .select("id")

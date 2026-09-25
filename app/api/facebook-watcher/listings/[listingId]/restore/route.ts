@@ -1,10 +1,14 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { restoreFacebookWatcherListing } from "@/features/facebook-watcher/server";
-import { authorizeFacebookWatcherAction } from "@/features/facebook-watcher/server/history-clear-auth";
 
 type Context = { params: Promise<{ listingId: string }> };
 export async function POST(request: Request, { params }: Context): Promise<Response> {
-  const denied = authorizeFacebookWatcherAction(request, "restore-to-finder");
-  if (denied) return denied;
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   const listingId = (await params).listingId;
   if (!/^[0-9a-f-]{20,}$/i.test(listingId)) return Response.json({ ok: false, code: "INVALID_LISTING_ID" }, { status: 400 });
   try { return Response.json({ ok: true, ...(await restoreFacebookWatcherListing(listingId)) }); }

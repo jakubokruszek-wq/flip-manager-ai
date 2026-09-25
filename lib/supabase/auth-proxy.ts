@@ -8,7 +8,7 @@ const PUBLIC_PATHS = new Set(["/login", "/auth/callback", "/api/build-info"]);
 const MACHINE_API_PREFIXES = ["/api/collector/", "/api/facebook-worker/", "/api/olx-worker/", "/api/jobs/"];
 
 function isMachinePath(pathname: string): boolean {
-  return MACHINE_API_PREFIXES.some((prefix) => pathname.startsWith(prefix)) || pathname === "/api/facebook-watcher/orphans";
+  return MACHINE_API_PREFIXES.some((prefix) => pathname.startsWith(prefix)) || pathname === "/api/facebook-watcher/orphans" || pathname === "/api/facebook-watcher/groups/discover";
 }
 
 export async function refreshOperatorSession(request: NextRequest): Promise<NextResponse> {

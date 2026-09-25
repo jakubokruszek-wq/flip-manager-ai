@@ -74,7 +74,7 @@ export function FacebookWatcherPanel() {
   const [runHistoryClear]=useState(()=>createHistoryClearRunner(
     {
       fetchPreview:()=>fetch("/api/facebook-watcher/history",{cache:"no-store"}).then(async response=>({ok:response.ok,body:await response.json()})),
-      fetchDelete:()=>fetch("/api/facebook-watcher/history",{method:"DELETE",headers:{"x-facebook-watcher-action":"clear-watcher-history"},credentials:"same-origin"}).then(async response=>({ok:response.ok,body:await response.json()})),
+      fetchDelete:()=>fetch("/api/facebook-watcher/history",{method:"DELETE",credentials:"same-origin"}).then(async response=>({ok:response.ok,body:await response.json()})),
       confirm:message=>window.confirm(message),
       errorMessages:HISTORY_CLEAR_ERROR_MESSAGES,
     },
@@ -88,7 +88,7 @@ export function FacebookWatcherPanel() {
   const repairGallery=async(item:FacebookWatcherListing)=>{
     setBusyId(item.listingId);
     const outcome=await runGalleryRepairAndRefresh({
-      fetchRepair:()=>fetch(`/api/facebook-watcher/listings/${item.listingId}/gallery-repair`,{method:"POST",headers:{"x-facebook-watcher-action":"repair-gallery"},credentials:"same-origin"}).then(async response=>({ok:response.ok,body:await response.json()})),
+      fetchRepair:()=>fetch(`/api/facebook-watcher/listings/${item.listingId}/gallery-repair`,{method:"POST",credentials:"same-origin"}).then(async response=>({ok:response.ok,body:await response.json()})),
       fetchListings:loadListings,
       errorMessages:GALLERY_REPAIR_ERROR_MESSAGES,
     });
@@ -100,7 +100,7 @@ export function FacebookWatcherPanel() {
     }
     setBusyId(null);
   };
-  const restoreToFinder=async(item:FacebookWatcherListing)=>{setBusyId(item.listingId);try{const response=await fetch(`/api/facebook-watcher/listings/${item.listingId}/restore`,{method:"POST",headers:{"x-facebook-watcher-action":"restore-to-finder"},credentials:"same-origin"});const body=await response.json();if(!response.ok)throw new Error(body.code??"Nie udało się przywrócić oferty do Flip Finder.");if(body.restored===false)throw new Error("Oferta nie spełnia aktualnych filtrów Facebooka i nie została przywrócona.");setListings(current=>current.map(value=>value.listingId===item.listingId?{...value,lifecycleStatus:body.lifecycleStatus??value.lifecycleStatus,archivedAt:null}:value));showToast("success",body.bucket==="REVIEW"?"Oferta przywrócona do Flip Finder jako Do oceny.":"Oferta przywrócona do Flip Finder.");}catch(reason){showToast("error",reason instanceof Error?reason.message:"Nie udało się przywrócić oferty do Flip Finder.");}finally{setBusyId(null);}};
+  const restoreToFinder=async(item:FacebookWatcherListing)=>{setBusyId(item.listingId);try{const response=await fetch(`/api/facebook-watcher/listings/${item.listingId}/restore`,{method:"POST",credentials:"same-origin"});const body=await response.json();if(!response.ok)throw new Error(body.code??"Nie udało się przywrócić oferty do Flip Finder.");if(body.restored===false)throw new Error("Oferta nie spełnia aktualnych filtrów Facebooka i nie została przywrócona.");setListings(current=>current.map(value=>value.listingId===item.listingId?{...value,lifecycleStatus:body.lifecycleStatus??value.lifecycleStatus,archivedAt:null}:value));showToast("success",body.bucket==="REVIEW"?"Oferta przywrócona do Flip Finder jako Do oceny.":"Oferta przywrócona do Flip Finder.");}catch(reason){showToast("error",reason instanceof Error?reason.message:"Nie udało się przywrócić oferty do Flip Finder.");}finally{setBusyId(null);}};
   const openAnalysis=(id:string)=>document.querySelector<HTMLElement>(`#facebook-inbox-${CSS.escape(id)} [role=button]`)?.click();
   return <main className="mx-auto w-full max-w-[1500px] space-y-7 px-4 py-5 sm:px-6 lg:px-8">
     <section aria-label="Cykl życia ofert Facebook" className="grid grid-cols-2 gap-3 sm:grid-cols-5"><Counter label="W bazie" value={lifecycle.database}/><Counter label="Bieżące" value={lifecycle.current}/><Counter label="Do oceny" value={lifecycle.review}/><Counter label="Archiwum / stare / odrzucone" value={lifecycle.archived+lifecycle.stale+lifecycle.rejected}/><Counter label="Nowe dziś" value={today}/></section>

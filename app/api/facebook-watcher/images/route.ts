@@ -1,3 +1,5 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 import { ensureFacebookImageBucket, FACEBOOK_IMAGE_BUCKET } from "@/features/facebook-watcher/server/facebook-image-storage";
 
@@ -5,6 +7,11 @@ const MAX_SIZE = 8 * 1024 * 1024;
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export async function POST(request: Request) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     const form = await request.formData();
     const files = form.getAll("images").filter((value): value is File => value instanceof File);

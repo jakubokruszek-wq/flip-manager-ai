@@ -1,3 +1,5 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { timingSafeEqual } from "node:crypto";
 
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
@@ -5,6 +7,11 @@ import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-m
 type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   if (!isAuthorized(request)) {
     return Response.json({ message: "Brak uprawnień do przeliczenia filtra." }, { status: 401 });
   }

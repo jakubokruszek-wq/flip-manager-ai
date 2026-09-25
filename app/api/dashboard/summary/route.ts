@@ -1,6 +1,13 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
 import { getDashboardSummary } from "@/features/dashboard/server/get-dashboard-summary";
 
 export async function GET() {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
   try {
     return Response.json(await getDashboardSummary());
   } catch (error) {

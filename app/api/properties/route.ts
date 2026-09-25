@@ -1,4 +1,6 @@
-import { createClient } from "@/lib/supabase/server";
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+
+import { createAdminClient } from "@/lib/supabase/admin";
 import {
   SUPPORTED_PROPERTY_SOURCES,
   type ImportedPropertyFormField,
@@ -28,9 +30,14 @@ const FORM_FIELDS: ImportedPropertyFormField[] = [
 
 export async function POST(request: Request) {
   try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
+  try {
     const values = await readSaveRequest(request);
     const payload = createPropertiesInsert(values);
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     const { data, error } = await supabase
       .from("properties")
       .insert(payload)
