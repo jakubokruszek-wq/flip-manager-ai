@@ -7,9 +7,14 @@ import { createAuthServerClient } from "@/lib/supabase/auth-server";
 export type OperatorIdentity = Readonly<{ id: string; email: string | null }>;
 
 export class OperatorAuthorizationError extends Error {
-  constructor(readonly status: 401 | 403, readonly code: "OPERATOR_SESSION_REQUIRED" | "OPERATOR_ROLE_REQUIRED") {
+  readonly status: 401 | 403;
+  readonly code: "OPERATOR_SESSION_REQUIRED" | "OPERATOR_ROLE_REQUIRED";
+
+  constructor(status: 401 | 403, code: "OPERATOR_SESSION_REQUIRED" | "OPERATOR_ROLE_REQUIRED") {
     super(code);
     this.name = "OperatorAuthorizationError";
+    this.status = status;
+    this.code = code;
   }
 }
 

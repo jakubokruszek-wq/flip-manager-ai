@@ -38,7 +38,7 @@ test("Investment Command Center keeps the API contract and presents the CEO deci
   assert.match(desk, /method: "POST"/);
   assert.match(desk, /data-initialize-deal/);
   assert.match(desk, /initializationInFlight\.current/);
-  assert.match(desk, /"x-flip-finder-action": "investment-os"/);
+  assert.doesNotMatch(desk, /x-flip-finder-action/);
   assert.match(desk, /JSON\.stringify\(\{ overrides \}\)/);
   assert.match(command, /Maks\. cena zakupu/);
   assert.match(command, /Oferta otwierająca/);

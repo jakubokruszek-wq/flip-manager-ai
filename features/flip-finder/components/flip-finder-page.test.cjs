@@ -14,9 +14,7 @@ const galleryTraceProbeMigration = fs.readFileSync(path.join(__dirname, "../../.
 const galleryTraceNativeMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260906150000_extend_gallery_request_traces_native_events.sql"), "utf8");
 const galleryJobs = fs.readFileSync(path.join(__dirname, "../../facebook-worker/gallery-jobs.ts"), "utf8");
 const galleryRetryMigration = fs.readFileSync(path.join(__dirname, "../../../supabase/migrations/20260907090000_atomic_gallery_retry_enqueue.sql"), "utf8");
-const galleryAuth = fs.readFileSync(path.join(__dirname, "../server/gallery-request-auth.ts"), "utf8");
 const historyRoute = fs.readFileSync(path.join(__dirname, "../../../app/api/flip-finder/history/route.ts"), "utf8");
-const historyAuth = fs.readFileSync(path.join(__dirname, "../server/history-clear-auth.ts"), "utf8");
 
 test("normal Flip Finder UI uses the queue scan result funnel", () => {
   assert.match(page, /WYNIK OSTATNIEGO SKANU/);
@@ -90,15 +88,14 @@ test("search history can be cleared explicitly without deleting filters or sourc
   assert.match(inlineResults, /window\.confirm\(/);
   assert.match(inlineResults, /fetch\("\/api\/flip-finder\/history"/);
   assert.match(inlineResults, /method: "DELETE"/);
-  assert.match(inlineResults, /x-flip-finder-action": "clear-search-history"/);
-  assert.match(historyRoute, /authorizeHistoryClear/);
+  assert.doesNotMatch(inlineResults, /x-flip-finder-action/);
+  assert.match(historyRoute, /await requireOperator\(\)/);
   assert.match(historyRoute, /HISTORY_CLEAR_SCAN_ACTIVE/);
   assert.match(historyRoute, /from\("listings"\)/);
   assert.match(historyRoute, /\.delete\(\)/);
   assert.doesNotMatch(historyRoute, /from\("search_filters"\).*delete/);
   assert.doesNotMatch(historyRoute, /from\("watched_facebook_sources"\).*delete/);
-  assert.match(historyAuth, /same-origin/);
-  assert.match(historyAuth, /clear-search-history/);
+  assert.match(historyRoute, /createAdminClient/);
 });
 
 test("archive is opt-in and fetched separately from the main finder", () => {
@@ -180,12 +177,10 @@ test("Facebook cards expose an explicit, non-blocking on-demand gallery request"
   assert.match(galleryJobs, /EXACT_ROOT_STORY/);
 });
 
-test("gallery mutation is protected by same-origin request authorization", () => {
-  assert.match(galleryRoute, /authorizeGalleryMutation/);
-  assert.match(inlineResults, /x-flip-finder-action.*gallery/);
-  assert.match(galleryAuth, /GALLERY_REQUEST_FORBIDDEN/);
-  assert.match(galleryAuth, /https:\/\/flip-manager-ai\.vercel\.app/);
-  assert.match(galleryTraceRoute, /authorizeGalleryTrace/);
+test("gallery mutation is protected by the shared operator session", () => {
+  assert.match(galleryRoute, /await requireOperator\(\)/);
+  assert.doesNotMatch(inlineResults, /x-flip-finder-action/);
+  assert.match(galleryTraceRoute, /await requireOperator\(\)/);
   assert.match(galleryTraceRoute, /FLIP_GALLERY_SERVER_TRACE/);
   assert.match(galleryTraceRoute, /GALLERY_TRACE_TOO_LARGE/);
   assert.match(galleryTraceStore, /GALLERY_BUTTON_POINTER_CAPTURE/);
@@ -194,7 +189,7 @@ test("gallery mutation is protected by same-origin request authorization", () =>
   assert.match(galleryTraceStore, /GALLERY_CARD_CLICK_CAPTURE/);
   assert.match(galleryTraceRoute, /readGalleryTraces/);
   assert.match(galleryTraceRoute, /writeGalleryTrace/);
-  assert.match(galleryTraceRoute, /authorizeGalleryTraceRead/);
+  assert.doesNotMatch(galleryTraceRoute, /authorizeGalleryTrace|authorizeGalleryTraceRead/);
 });
 
 test("render-time gallery probe is durable, bounded, and non-business-mutating", () => {

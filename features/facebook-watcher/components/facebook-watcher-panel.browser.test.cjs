@@ -10,6 +10,21 @@ const { chromium } = require("playwright");
 const { waitForServer } = require("./browser-readiness.cjs");
 
 const now = "2026-09-06T12:00:00.000Z";
+const operatorSession = {
+  access_token: "watcher-browser-test-access-token",
+  refresh_token: "watcher-browser-test-refresh-token",
+  token_type: "bearer",
+  expires_in: 3_600,
+  expires_at: 4_102_444_800,
+  user: {
+    id: "44444444-4444-4444-8444-444444444444",
+    email: "operator@example.test",
+    app_metadata: { role: "operator" },
+    user_metadata: {},
+    aud: "authenticated",
+    created_at: now,
+  },
+};
 
 function makeListing(overrides) {
   return {
@@ -194,6 +209,7 @@ async function collectGeometry(page) {
 async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success" } = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
+  await context.addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
 
   let patchMode = initialPatchMode;
   const patchRequests = [];
@@ -319,8 +335,28 @@ function assertNoUnexpectedNoise(handle, { expectedPatchFailures = 0 } = {}) {
 test("Facebook Watcher browser suite: real card UI, workflow mutations and lifecycle isolation", { timeout: 420_000 }, async (t) => {
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
   const port = await freePort();
+  const authPort = await freePort();
   const root = path.resolve(__dirname, "../../..");
   const nextBin = require.resolve("next/dist/bin/next");
+  const authServer = require("node:http").createServer((request, response) => {
+    if (request.url === "/auth/v1/user") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(operatorSession.user));
+      return;
+    }
+    if (request.url?.startsWith("/rest/v1/")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("[]");
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise((resolve, reject) => {
+    authServer.once("error", reject);
+    authServer.listen(authPort, "127.0.0.1", resolve);
+  });
+  t.after(() => authServer.close());
   // Proven root cause (not "probably a reload race"): `next dev --webpack`'s
   // on-demand compilation and chunk-serving is measurably unreliable under
   // this suite's repeated-navigation load. A real serial run reproduced a
@@ -340,7 +376,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
   await new Promise((resolve, reject) => {
     const build = spawn(process.execPath, [nextBin, "build"], {
       cwd: root,
-      env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+      env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --use-system-ca`.trim(), NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "watcher-browser-test-publishable-key" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let buildOutput = "";
@@ -354,7 +390,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
   });
   const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: root,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+    env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --use-system-ca`.trim(), NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "watcher-browser-test-publishable-key" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";

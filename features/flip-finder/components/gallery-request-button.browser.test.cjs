@@ -11,6 +11,21 @@ const listingId = "db82d135-62ea-468f-a264-acdc0d138129";
 const postId = "1749121366325600";
 const filterId = "11111111-1111-4111-8111-111111111111";
 const now = "2026-09-06T12:00:00.000Z";
+const operatorSession = {
+  access_token: "browser-test-access-token",
+  refresh_token: "browser-test-refresh-token",
+  token_type: "bearer",
+  expires_in: 3_600,
+  expires_at: 4_102_444_800,
+  user: {
+    id: "44444444-4444-4444-8444-444444444444",
+    email: "operator@example.test",
+    app_metadata: { role: "operator" },
+    user_metadata: {},
+    aud: "authenticated",
+    created_at: now,
+  },
+};
 
 const filter = {
   id: filterId,
@@ -161,6 +176,7 @@ function makeScanStressResults(cardCount) {
 
 async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0, scanFailure = null, clearResultsFailure = null, clearResultsArchivedCount = 4 } = {}) {
   const page = await browser.newPage();
+  await page.context().addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
   const traceRequests = [];
   let galleryRequests = 0;
   let scanRequests = 0;
@@ -223,7 +239,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   });
   await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
   const button = page.locator(`[data-gallery-request-button="true"][data-listing-id="${listingId}"]`);
-  await button.waitFor({ state: "visible", timeout: 20_000 });
+  await button.waitFor({ state: "visible", timeout: 60_000 });
   return { page, button, traceRequests, galleryRequestCount: () => galleryRequests, scanRequestCount: () => scanRequests, resultsRequestCount: () => resultsRequests, clearResultsRequestCount: () => clearResultsRequests };
 }
 
@@ -231,13 +247,42 @@ async function sessionStages(page) {
   return page.evaluate(() => JSON.parse(sessionStorage.getItem("flipFinderGalleryRequestTraces") || "[]").map((entry) => entry.stage));
 }
 
-test("real Flip Finder gallery button keeps business click independent from trace and rerenders", { timeout: 240_000 }, async (t) => {
+test("real Flip Finder gallery button keeps business click independent from trace and rerenders", { timeout: 600_000 }, async (t) => {
   const port = await freePort();
+  const authPort = await freePort();
   const root = path.resolve(__dirname, "../../..");
   const nextBin = require.resolve("next/dist/bin/next");
-  const server = spawn(process.execPath, [nextBin, "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(port)], {
+  const authServer = http.createServer((request, response) => {
+    if (request.url === "/auth/v1/user") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(operatorSession.user));
+      return;
+    }
+    if (request.url?.startsWith("/rest/v1/")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("[]");
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise((resolve, reject) => {
+    authServer.once("error", reject);
+    authServer.listen(authPort, "127.0.0.1", resolve);
+  });
+  t.after(() => authServer.close());
+  const childEnv = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --use-system-ca`.trim(), NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "browser-test-publishable-key" };
+  await new Promise((resolve, reject) => {
+    const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+    let buildOutput = "";
+    build.stdout.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });
+    build.stderr.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });
+    build.once("error", reject);
+    build.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`next build failed with exit code ${code}; output: ${buildOutput}`)));
+  });
+  const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: root,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+    env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -327,6 +372,7 @@ test("real Flip Finder gallery button keeps business click independent from trac
     await refreshedResults;
     assert.equal(testPage.scanRequestCount(), 1, "one user click must not create duplicate scan requests");
     assert.ok(testPage.resultsRequestCount() >= 2, "completed scan must still refresh the Finder results");
+    await testPage.page.waitForFunction((expected) => document.querySelectorAll('[data-finder-offers] > div').length === expected, cardCount, { timeout: 10_000 });
     assert.equal(await cards.count(), cardCount, "completed scan must preserve the fixture result count");
     assert.equal(await cards.nth(0).innerText(), initialFirstCard);
     assert.equal(await cards.nth(cardCount - 1).innerText(), initialLastCard);

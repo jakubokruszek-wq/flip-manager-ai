@@ -4,6 +4,14 @@ import test, { mock } from "node:test";
 let summaryImpl: () => Promise<unknown> = async () => ({ pureFacebookListingIds: [], preservedListingIds: [], removedAssociationListingIds: [], total: 0, ready: true, blockedReason: null });
 let clearImpl: () => Promise<unknown> = async () => ({ pureFacebookListingIds: [], preservedListingIds: [], removedAssociationListingIds: [], total: 0, ready: true, blockedReason: null });
 let clearCalls = 0;
+let operatorAllowed = true;
+
+mock.module("@/features/auth/operator", {
+  namedExports: {
+    requireOperator: async () => { if (!operatorAllowed) throw new Error("OPERATOR_SESSION_REQUIRED"); },
+    operatorAuthorizationResponse: () => Response.json({ ok: false, code: "OPERATOR_SESSION_REQUIRED" }, { status: 401 }),
+  },
+});
 
 mock.module("@/features/facebook-watcher/server/history-clear", {
   namedExports: {
@@ -50,22 +58,25 @@ test("GET still returns 503 FACEBOOK_WATCHER_HISTORY_READ_FAILED when the summar
   assert.deepEqual(await response.json(), { ok: false, code: "FACEBOOK_WATCHER_HISTORY_READ_FAILED" });
 });
 
-test("K: DELETE without the required action header is still forbidden before clear runs", async () => {
+test("K: DELETE without an operator session is forbidden before clear runs", async () => {
   clearCalls = 0;
-  assert.equal(await status(await route.DELETE(deleteRequest())), 403);
+  operatorAllowed = false;
+  assert.equal(await status(await route.DELETE(deleteRequest())), 401);
   assert.equal(clearCalls, 0);
 });
 
-test("K: DELETE from a foreign Origin is still forbidden even with the action header set", async () => {
+test("K: forged Origin and action headers cannot replace an operator session", async () => {
   clearCalls = 0;
-  assert.equal(await status(await route.DELETE(deleteRequest({ origin: "https://attacker.example", action: "clear-watcher-history" }))), 403);
+  operatorAllowed = false;
+  assert.equal(await status(await route.DELETE(deleteRequest({ origin: "https://flip-manager-ai.vercel.app", action: "clear-watcher-history" }))), 401);
   assert.equal(clearCalls, 0);
 });
 
-test("K: DELETE with the correct origin and action header still invokes the unchanged clear mutation", async () => {
+test("K: a valid operator can invoke clear without a custom action header", async () => {
   clearCalls = 0;
+  operatorAllowed = true;
   clearImpl = async () => ({ pureFacebookListingIds: ["a"], preservedListingIds: [], removedAssociationListingIds: [], total: 1, ready: true, blockedReason: null });
-  const response = await route.DELETE(deleteRequest({ action: "clear-watcher-history" }));
+  const response = await route.DELETE(deleteRequest());
   assert.equal(response.status, 200);
   assert.equal(clearCalls, 1);
 });

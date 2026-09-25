@@ -1,69 +1,9 @@
-// TEST-ONLY Node ESM loader hook, for two gaps between "run under plain node
-// --test" and "run inside Next.js's own bundler":
-//
-// 1. Resolves the "@/*" -> "./*" path alias (defined in tsconfig.json) that
-//    Node's own resolver has no knowledge of.
-// 2. Stubs the "server-only" package (a dev-time guard Next.js's bundler
-//    resolves specially, and which is not even an installed dependency in
-//    this project's node_modules) as an empty module, matching how it
-//    behaves for a plain server-side import in the real app.
-//
-// Never used by the application itself — Next.js resolves both independently
-// in production.
+// Bootstrap for the test-only ESM hooks. Next.js resolves project aliases,
+// extensionless TypeScript imports, and framework entry points in production;
+// plain `node --test` needs the equivalent resolver registered explicitly.
 //
 // Usage: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test <files>
 
-import { pathToFileURL } from "node:url";
-import path from "node:path";
+import { register } from "node:module";
 
-const repoRoot = pathToFileURL(path.resolve(import.meta.dirname, "..") + path.sep).href;
-const SERVER_ONLY_STUB = "test-alias-loader:server-only-stub";
-
-export async function resolve(specifier, context, nextResolve) {
-  if (specifier === "server-only" || specifier === "client-only") {
-    return { url: SERVER_ONLY_STUB, shortCircuit: true };
-  }
-  // "next/server" has no package.json "exports" entry Node's own resolver can
-  // see — Next.js's bundler resolves the bare specifier via its own
-  // resolution layer. Plain Node needs the real, installed file explicitly.
-  if (specifier === "next/server") {
-    return nextResolve("next/server.js", context);
-  }
-  const isProjectSource = specifier.startsWith("@/") || specifier.startsWith(".");
-  const target = specifier.startsWith("@/") ? new URL(specifier.slice(2), repoRoot).href : specifier;
-  // Next.js's bundler auto-appends an extension for any extensionless
-  // relative/aliased import; Node's own resolver does not. This codebase's
-  // existing tests work around it by writing ".ts" everywhere, but
-  // application source files (reached transitively from server.ts) rely on
-  // the bundler's own extension resolution, so mirror that here too. This
-  // ".ts" fallback only applies to project source (relative or "@/"-aliased)
-  // — a bare package specifier like "next/server" is never a TypeScript file
-  // in node_modules, and Next.js resolves it via its own bundler magic that
-  // plain Node cannot reproduce; if it fails to resolve normally here, that
-  // is a real error, not a missing ".ts" suffix.
-  try {
-    return await nextResolve(target, context);
-  } catch (error) {
-    if (!isProjectSource) throw error;
-    if (error?.code === "ERR_UNSUPPORTED_DIR_IMPORT") {
-      try {
-        return await nextResolve(`${target.replace(/\/$/, "")}/index.ts`, context);
-      } catch (indexError) {
-        // The application has a few Next.js route imports such as
-        // "@/features/facebook-watcher/server" where `server` is a sibling
-        // `.ts` module rather than a directory with an index file.
-        if (indexError?.code !== "ERR_MODULE_NOT_FOUND") throw indexError;
-        return nextResolve(`${target.replace(/\/$/, "")}.ts`, context);
-      }
-    }
-    if (error?.code !== "ERR_MODULE_NOT_FOUND" || /\.[a-z0-9]+$/i.test(target)) throw error;
-    return nextResolve(`${target}.ts`, context);
-  }
-}
-
-export async function load(url, context, nextLoad) {
-  if (url === SERVER_ONLY_STUB) {
-    return { format: "module", source: "export {};", shortCircuit: true };
-  }
-  return nextLoad(url, context);
-}
+register("./test-alias-hooks.mjs", import.meta.url);
