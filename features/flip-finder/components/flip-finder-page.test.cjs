@@ -295,3 +295,22 @@ test("rejection diagnostics collapse into one panel, closed by default, with cor
   assert.match(scanResultPanelBody, /<RejectionDiagnostics funnel=\{funnel\} response=\{response\} \/>/, "the collapsible panel must actually be rendered inside the scan result card");
   assert.doesNotMatch(scanResultPanelBody, /<details/, "the old separate native <details> disclosure must be gone, folded into the one new panel");
 });
+
+// Finder/Watcher separation mission: Finder's own scan-result card for
+// source="facebook" is always reconcileFacebookFromCanonicalListings's
+// output (a re-evaluation of canonical listings Watcher already saved) --
+// it never scans Facebook itself. A label implying live Watcher activity
+// ("Facebook Watcher — zebrane oferty") misled operators into believing a
+// scan/scroll/collect step had just run on Facebook after clicking Finder's
+// own "Skanuj" button.
+test("the Finder scan-result card never labels a facebook source result as Facebook Watcher activity", () => {
+  const sourceDisplayLabelBody = page.match(/function sourceDisplayLabel\(value: string\): string \{[\s\S]*?\}/)?.[0];
+  assert.ok(sourceDisplayLabelBody, "sourceDisplayLabel must exist");
+  assert.doesNotMatch(sourceDisplayLabelBody, /Facebook Watcher/, "the scan-result card's own source label may never claim Watcher activity ran from a Finder scan");
+  assert.match(sourceDisplayLabelBody, /value === "facebook" \? "Facebook — przeliczono z zapisanych ofert" : value/, "the facebook label must describe a recalculation from already-saved offers, not a live scan");
+  // The one legitimate "Facebook Watcher" mention left in this file must be
+  // about a genuinely separate, concurrently-running background job (the
+  // Watcher's own scheduled scan), never implied by anything a Finder-
+  // triggered scan itself did.
+  assert.match(page, /setNotice\("Facebook Watcher zbiera jeszcze nowe oferty w tle\. Pozostałe źródła zakończyły swój bieżący przebieg\.".*\);/, "the remaining Facebook Watcher mention must describe real, separate background work, not something this scan did");
+});

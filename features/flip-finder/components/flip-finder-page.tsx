@@ -958,7 +958,14 @@ function mainDiagnosticReason(diagnostics: MatchDiagnostics | undefined): string
 
 function percentage(value: number, total: number): number { return total > 0 ? Math.min(100, Math.max(0, value / total * 100)) : 0; }
 function formatPercent(value: number, total: number): string { return `${percentage(value, total).toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%`; }
-function sourceDisplayLabel(value: string): string { return value === "otodom" ? "Otodom" : value === "olx" ? "OLX" : value === "morizon" ? "Morizon" : value === "facebook" ? "Facebook Watcher — zebrane oferty" : value; }
+// Never "Facebook Watcher" here: this label renders a Finder scan's OWN
+// source-result card, and for facebook that card is always
+// reconcileFacebookFromCanonicalListings's output (manual-scan.ts) --
+// Finder re-evaluates canonical listings the Watcher already saved, it
+// never scans Facebook groups/posts itself. A label implying live Watcher
+// activity misled operators into thinking a scan/scroll/collect step had
+// just run on Facebook.
+function sourceDisplayLabel(value: string): string { return value === "otodom" ? "Otodom" : value === "olx" ? "OLX" : value === "morizon" ? "Morizon" : value === "facebook" ? "Facebook — przeliczono z zapisanych ofert" : value; }
 
 function FilterActions({ filter, onAction }: { filter: SearchFilterListItem; onAction: (filter: SearchFilterListItem, action: "toggle" | "duplicate" | "delete") => Promise<void> }) {
   const [confirmationOpen, setConfirmationOpen] = useState(false);
