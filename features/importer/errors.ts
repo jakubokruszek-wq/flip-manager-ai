@@ -8,15 +8,13 @@ export type PropertyImportErrorCode =
   | "PARSER_FAILED";
 
 export class PropertyImportError extends Error {
+  readonly code: PropertyImportErrorCode;
   readonly cause?: unknown;
 
-  constructor(
-    readonly code: PropertyImportErrorCode,
-    message: string,
-    cause?: unknown
-  ) {
+  constructor(code: PropertyImportErrorCode, message: string, cause?: unknown) {
     super(message);
     this.name = "PropertyImportError";
+    this.code = code;
     this.cause = cause;
   }
 }

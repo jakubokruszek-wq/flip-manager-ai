@@ -1,3 +1,4 @@
+import { isConfirmedOtodomOfferUrl, normalizeOtodomUrl } from "@/features/flip-finder/otodom-search";
 import { PropertyImportError } from "../errors";
 import type { ImportedProperty } from "../types";
 
@@ -98,8 +99,36 @@ export function mapOtodomListing(
           getString(image, "thumbnail")
       )
       .filter((image): image is string => Boolean(image)),
-    originalUrl: listing.url ?? fallbackUrl,
+    originalUrl: resolveConfirmedOtodomUrl(listing.url, fallbackUrl),
   };
+}
+
+/**
+ * Real production bug: manually imported Otodom offers could end up with an
+ * invalid link -- a relative/malformed url field from Otodom's own embedded
+ * payload, or (rarer) a leaked, unsubstituted "[lang]" route placeholder.
+ * Never store either kind, and never fall back to a search/category URL:
+ * a single manual import has exactly one candidate result, so an
+ * unconfirmable link fails the import outright with a clear message rather
+ * than silently saving (or displaying) a fake one.
+ */
+function resolveConfirmedOtodomUrl(candidateUrl: string | null, fallbackUrl: string): string {
+  for (const candidate of [candidateUrl, fallbackUrl]) {
+    if (!candidate) continue;
+    let normalized: string;
+    try {
+      normalized = normalizeOtodomUrl(candidate);
+    } catch {
+      continue;
+    }
+    if (isConfirmedOtodomOfferUrl(normalized)) {
+      return normalized;
+    }
+  }
+  throw new PropertyImportError(
+    "INVALID_URL",
+    "Nie udało się potwierdzić prawidłowego adresu oferty Otodom — import odrzucony, aby nie zapisać błędnego linku."
+  );
 }
 
 function parseJsonLdListing(html: string): OtodomListing | null {
