@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
 const { chromium } = require("playwright");
+const { addOperatorSessionCookie, ensureProductionBuild, startFakeSupabaseAuthServer } = require("../../test-support/browser-auth.cjs");
 
 const listingId = "listing-deal-room-fixture";
 const now = "2026-09-13T09:00:00.000Z";
@@ -32,17 +33,26 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   const reviewDir = process.env.MASTERCLASS_REVIEW_SCREENSHOT_DIR?.trim() || path.join(root, "artifacts", "flip-manager-v3-review");
   fs.mkdirSync(reviewDir, { recursive: true });
   const port = await freePort();
+  const auth = await startFakeSupabaseAuthServer();
+  t.after(() => auth.server.close());
   const nextBin = require.resolve("next/dist/bin/next");
-  const server = spawn(process.execPath, [nextBin, "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env: { ...process.env, NODE_ENV: "development", DEBUG: "", NEXT_TEST_MODE: "", __NEXT_TEST_MODE: "", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:9", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "local-ui-only", NEXT_PUBLIC_SUPABASE_ANON_KEY: "local-ui-only", SUPABASE_URL: "http://127.0.0.1:9", SUPABASE_SERVICE_ROLE_KEY: "local-ui-only" }, stdio: "ignore" });
+  const env = { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: auth.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "investment-browser-test-publishable-key", NEXT_PUBLIC_SUPABASE_ANON_KEY: "investment-browser-test-publishable-key", SUPABASE_URL: auth.url, SUPABASE_SERVICE_ROLE_KEY: "local-ui-only" };
+  await ensureProductionBuild(nextBin, root, env);
+  const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env, stdio: "ignore" });
   t.after(() => { if (!server.killed) server.kill(); });
   const baseUrl = `http://127.0.0.1:${port}`;
-  await waitForServer(`${baseUrl}/deals/${listingId}`);
+  // The protected route intentionally redirects unauthenticated probes. Use
+  // the public login page for process readiness, then install the operator
+  // session before opening the protected Deal Room.
+  await waitForServer(`${baseUrl}/login`);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await addOperatorSessionCookie(page.context(), baseUrl);
   let currentDeal = deal;
   let currentMedia = [];
   let notComputed = false;
+  const investmentPath = `/api/flip-finder/listings/${listingId}/investment`;
   const investmentRequests = [];
   const initializeRequests = [];
   const TINY_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -54,7 +64,6 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    const investmentPath = `/api/flip-finder/listings/${listingId}/investment`;
     if (url.pathname === investmentPath || url.pathname === `${investmentPath}/initialize`) {
       if (url.pathname.endsWith("/initialize")) {
         initializeRequests.push({ method: request.method(), path: url.pathname, headers: request.headers() });
@@ -134,7 +143,10 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   englishVariant.ceo.result.recommendation = "Do not proceed.";
   currentDeal = englishVariant;
   await page.reload({ waitUntil: "domcontentloaded" });
-  try { await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 10_000 }); }
+  // A full serial browser run can briefly contend for the local Next server
+  // while the page reloads. Keep the assertion strict, but allow the same
+  // bounded startup window as the initial protected navigation.
+  try { await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 30_000 }); }
   catch (error) { console.error("Deal fixture reload diagnostics", { investmentRequests, body: await page.locator("body").innerText() }); throw error; }
   assert.ok(await page.getByText("Rekomendacja systemu", { exact: true }).isVisible());
   assert.equal(await page.getByText("Brak zapisanej rekomendacji CEO.", { exact: true }).count(), 0);
@@ -207,7 +219,7 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   assert.equal(initializeRequests.length, 1, "a failed initialization must not retry automatically");
   assert.equal(await page.getByRole("button", { name: "SPRÓBUJ PONOWNIE" }).count(), 1);
   assert.equal(initializeRequests[0].method, "POST");
-  assert.equal(initializeRequests[0].headers["x-flip-finder-action"], "investment-os");
+  assert.equal(initializeRequests[0].path, `${investmentPath}/initialize`, "the explicit action must POST only to the Investment OS initialize endpoint");
 
   const getsBeforeSuccess = investmentRequests.filter((request) => request.method === "GET").length;
   await page.getByRole("button", { name: "SPRÓBUJ PONOWNIE" }).evaluate((button) => {

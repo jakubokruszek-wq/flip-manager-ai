@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
 const { chromium } = require("playwright");
+const { addOperatorSessionCookie, ensureProductionBuild, startFakeSupabaseAuthServer } = require("../../test-support/browser-auth.cjs");
 
 const listingId = "listing-finder-v3-fixture";
 const filterId = "11111111-1111-4111-8111-111111111111";
@@ -64,18 +65,22 @@ test("Finder prioritizes offers and keeps the modal as a quick preview with a ca
   const reviewDir = process.env.PREMIUM_UI_SCREENSHOT_DIR?.trim() || path.join(root, "artifacts", "flip-manager-v3-review");
   fs.mkdirSync(reviewDir, { recursive: true });
   const port = await freePort();
+  const auth = await startFakeSupabaseAuthServer();
+  t.after(() => auth.server.close());
   const nextBin = require.resolve("next/dist/bin/next");
-  const server = spawn(process.execPath, [nextBin, "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: root,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:9", NEXT_PUBLIC_SUPABASE_ANON_KEY: "local-ui-only", SUPABASE_URL: "http://127.0.0.1:9", SUPABASE_SERVICE_ROLE_KEY: "local-ui-only" },
-    stdio: "ignore",
-  });
+  const env = { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: auth.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "investment-browser-test-publishable-key", NEXT_PUBLIC_SUPABASE_ANON_KEY: "investment-browser-test-publishable-key", SUPABASE_URL: auth.url, SUPABASE_SERVICE_ROLE_KEY: "local-ui-only" };
+  await ensureProductionBuild(nextBin, root, env);
+  const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env, stdio: "ignore" });
   t.after(() => { if (!server.killed) server.kill(); });
   const baseUrl = `http://127.0.0.1:${port}`;
-  await waitForServer(`${baseUrl}/flip-finder`);
+  // The protected route intentionally redirects unauthenticated probes. Use
+  // the public login page for process readiness, then install the operator
+  // session before opening Finder.
+  await waitForServer(`${baseUrl}/login`);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await addOperatorSessionCookie(page.context(), baseUrl);
   const apiRequests = [];
   await page.route("**/api/**", (route) => {
     const request = route.request();
@@ -133,8 +138,9 @@ test("Finder prioritizes offers and keeps the modal as a quick preview with a ca
   resultsPayload = { ...resultsPayload, results: [], reviewResults: [{ ...result, price: 63_872.55, decisionBucket: "REVIEW", lifecycleStatus: "REVIEW", reviewReason: "Cena wymaga potwierdzenia", missingFields: ["price"] }], counts: { active: 0, review: 1, archived: 0 } };
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.reload({ waitUntil: "domcontentloaded" });
-  try { await page.getByRole("heading", { name: "DO OCENY" }).waitFor({ state: "visible", timeout: 10_000 }); }
+  try { await page.getByRole("heading", { name: "DO OCENY" }).waitFor({ state: "visible", timeout: 30_000 }); }
   catch (error) { console.error("Finder review reload diagnostics", { url: page.url(), title: await page.title(), apiRequests, body: await page.locator("body").innerText() }); throw error; }
+  assert.ok(apiRequests.some((request) => request.path === `/api/flip-finder/search-filters/${filterId}/results` && request.method === "GET"), "review bucket must be rendered from the results API response");
   const roundedReviewPrice = page.getByText(/63\s*873\s*zł/).first();
   await roundedReviewPrice.waitFor({ state: "visible" });
   assert.doesNotMatch(await page.locator("body").innerText(), /63\s?872\.55\s*zł|63\s?872,55\s*zł/, "Finder cards must not expose fractional PLN formatting");
@@ -144,7 +150,6 @@ test("Finder prioritizes offers and keeps the modal as a quick preview with a ca
 
   await page.goto(`${baseUrl}/properties/new`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Dodaj nieruchomość" }).waitFor({ state: "visible" });
-  await page.waitForLoadState("networkidle");
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
   await page.screenshot({ path: path.join(reviewDir, "17-manual-add-form-v3.png"), fullPage: true });
   const importUrl = page.getByLabel("Link do ogłoszenia");

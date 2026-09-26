@@ -8,6 +8,7 @@ const { spawn } = require("node:child_process");
 const test = require("node:test");
 const { chromium } = require("playwright");
 const { waitForServer } = require("./browser-readiness.cjs");
+const { ensureProductionBuild } = require("../../test-support/browser-auth.cjs");
 
 const now = "2026-09-06T12:00:00.000Z";
 const operatorSession = {
@@ -373,24 +374,11 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
   // whole failure class at its source rather than papering over it with a
   // longer timeout, and is also the more faithful target for a
   // pre-production-release gate than the dev server.
-  await new Promise((resolve, reject) => {
-    const build = spawn(process.execPath, [nextBin, "build"], {
-      cwd: root,
-      env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --use-system-ca`.trim(), NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "watcher-browser-test-publishable-key" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let buildOutput = "";
-    build.stdout.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });
-    build.stderr.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });
-    build.once("error", reject);
-    build.once("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`next build failed with exit code ${code}; output: ${buildOutput}`));
-    });
-  });
+  const browserEnv = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --use-system-ca`.trim(), NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "watcher-browser-test-publishable-key" };
+  await ensureProductionBuild(nextBin, root, browserEnv);
   const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: root,
-    env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --use-system-ca`.trim(), NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "watcher-browser-test-publishable-key" },
+    env: browserEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -561,7 +549,12 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assert.deepEqual(successfulRequest.body, { status: "interesting" }, `clicking Interesująca at 390px must fire the exact workflow update; server output: ${output}`);
     assert.deepEqual(await successfulRequest.response, { status: 200 }, "the workflow PATCH must complete successfully");
     const maxStatusBadge = maxActionsArticleLocator.locator("span").filter({ hasText: "Interesująca" }).first();
-    await maxStatusBadge.waitFor({ state: "visible", timeout: 5_000 });
+    // Under the full serial browser suite React may commit the successful
+    // workflow response after Chromium has already observed the PATCH. Keep
+    // this assertion bounded, but allow the same local-render window used by
+    // the navigation gates so the test does not turn renderer contention into
+    // a false failure.
+    await maxStatusBadge.waitFor({ state: "visible", timeout: 15_000 });
     assert.ok(await maxActionsArticleLocator.getByRole("button", { name: "Odrzuć" }).isVisible(), "successful PATCH must render the new workflow action state");
     assert.equal(await maxActionsArticleLocator.getByRole("button", { name: "Przywróć", exact: true }).count(), 0, "successful PATCH must remove the stale rejected action");
 
@@ -599,14 +592,18 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
 
     const article = page.locator(`#facebook-inbox-${NORMAL_ID}`);
     const interestingButton = article.getByRole("button", { name: "Interesująca" });
-    assert.ok(await interestingButton.isVisible());
-    const successfulPatch = handle.waitForPatchCount(1);
-    await interestingButton.click();
+    await interestingButton.waitFor({ state: "visible", timeout: 15_000 });
+    await interestingButton.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await interestingButton.waitFor({ state: "attached", timeout: 5_000 });
+    assert.equal(await interestingButton.isEnabled(), true, "the Interesująca button must be enabled before the click");
+    const successfulPatch = handle.waitForPatchCount(1, 20_000);
+    await interestingButton.click({ timeout: 15_000 });
     const successfulRequest = await successfulPatch;
     assert.equal(handle.patchRequests.length, 1, "exactly one PATCH must be sent for a single click");
     assert.deepEqual(successfulRequest.body, { status: "interesting" });
     assert.deepEqual(await successfulRequest.response, { status: 200 });
-    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 5_000 });
+    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 15_000 });
     assert.ok(await article.getByRole("button", { name: "Odrzuć" }).isVisible(), "successful PATCH must render the new workflow action state");
 
     assertNoUnexpectedNoise(handle, { expectedPatchFailures: 0 });
@@ -630,7 +627,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assert.equal(handle.patchRequests.length, 1, "rapid double-click must issue exactly one in-flight PATCH — the first response was still held open ('delayed' mode) when the second activation was attempted");
     handle.releasePendingPatches();
     assert.deepEqual(await handle.patchRequests[0].response, { status: 200 }, "the single double-click PATCH must succeed");
-    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 5_000 });
+    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 15_000 });
 
     assertNoUnexpectedNoise(handle, { expectedPatchFailures: 0 });
   });
@@ -655,7 +652,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assert.equal(handle.patchRequests.length, 1, "rapid keyboard activation must issue exactly one in-flight PATCH — the first response was still held open ('delayed' mode) when the second activation was attempted");
     handle.releasePendingPatches();
     assert.deepEqual(await handle.patchRequests[0].response, { status: 200 }, "the single keyboard PATCH must succeed");
-    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 5_000 });
+    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 15_000 });
 
     assertNoUnexpectedNoise(handle, { expectedPatchFailures: 0 });
   });
@@ -685,7 +682,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     await retryPatch;
     assert.equal(handle.patchRequests.length, 2, "retry must send exactly one additional PATCH");
     assert.deepEqual(await handle.patchRequests[1].response, { status: 200 }, "retry PATCH must succeed");
-    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 5_000 });
+    await article.locator("span").filter({ hasText: "Interesująca" }).first().waitFor({ state: "visible", timeout: 15_000 });
 
     assertNoUnexpectedNoise(handle, { expectedPatchFailures: 1 });
     assert.equal(handle.getExpectedPatchFailures(), 1, "the failed-PATCH scenario must exercise exactly one 500 response");

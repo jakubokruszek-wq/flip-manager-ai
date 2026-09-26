@@ -6,6 +6,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
 const { chromium } = require("playwright");
+const { ensureProductionBuild } = require("../test-support/browser-auth.cjs");
 
 const user = {
   id: "44444444-4444-4444-8444-444444444444",
@@ -104,14 +105,7 @@ test("login, protected navigation and logout use the operator session", { timeou
     NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "login-browser-publishable-key",
   };
-  await new Promise((resolve, reject) => {
-    const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
-    let buildOutput = "";
-    build.stdout.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });
-    build.stderr.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });
-    build.once("error", reject);
-    build.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`next build failed with exit code ${code}; output: ${buildOutput}`)));
-  });
+  await ensureProductionBuild(nextBin, root, env);
   const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: root,
     env,

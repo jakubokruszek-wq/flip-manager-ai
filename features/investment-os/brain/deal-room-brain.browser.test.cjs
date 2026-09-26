@@ -11,6 +11,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
 const { chromium } = require("playwright");
+const { addOperatorSessionCookie, ensureProductionBuild, startFakeSupabaseAuthServer } = require("../../test-support/browser-auth.cjs");
 
 const listingId = "listing-brain-acceptance-fixture";
 const now = "2026-09-13T09:00:00.000Z";
@@ -32,14 +33,22 @@ test("Deal Room Brain V1 renders CEO recommendation, one Next Best Action, real 
   const deal = await makeDeal();
   const root = path.resolve(__dirname, "../../..");
   const port = await freePort();
+  const auth = await startFakeSupabaseAuthServer();
+  t.after(() => auth.server.close());
   const nextBin = require.resolve("next/dist/bin/next");
-  const server = spawn(process.execPath, [nextBin, "dev", "--webpack", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env: { ...process.env, NODE_ENV: "development", DEBUG: "", NEXT_TEST_MODE: "", __NEXT_TEST_MODE: "", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:9", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "local-ui-only", NEXT_PUBLIC_SUPABASE_ANON_KEY: "local-ui-only", SUPABASE_URL: "http://127.0.0.1:9", SUPABASE_SERVICE_ROLE_KEY: "local-ui-only" }, stdio: "ignore" });
+  const env = { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: auth.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "investment-browser-test-publishable-key", NEXT_PUBLIC_SUPABASE_ANON_KEY: "investment-browser-test-publishable-key", SUPABASE_URL: auth.url, SUPABASE_SERVICE_ROLE_KEY: "local-ui-only" };
+  await ensureProductionBuild(nextBin, root, env);
+  const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env, stdio: "ignore" });
   t.after(() => { if (!server.killed) server.kill(); });
   const baseUrl = `http://127.0.0.1:${port}`;
-  await waitForServer(`${baseUrl}/deals/${listingId}`);
+  // The protected route intentionally redirects unauthenticated probes. Use
+  // the public login page for process readiness, then install the operator
+  // session before opening the protected Deal Room.
+  await waitForServer(`${baseUrl}/login`);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await addOperatorSessionCookie(page.context(), baseUrl);
 
   const investmentPath = `/api/flip-finder/listings/${listingId}/investment`;
   const requests = [];
@@ -56,7 +65,12 @@ test("Deal Room Brain V1 renders CEO recommendation, one Next Best Action, real 
 
   // --- Initial render: a deal already exists (canonical GET only) ---
   await page.goto(`${baseUrl}/deals/${listingId}`, { waitUntil: "domcontentloaded" });
-  await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 30_000 });
+  try {
+    await page.locator("[data-deal-room]").waitFor({ state: "visible", timeout: 30_000 });
+  } catch (error) {
+    console.error("Deal Room Brain browser diagnostics", { url: page.url(), body: (await page.locator("body").innerText()).slice(0, 1_000) });
+    throw error;
+  }
   await page.getByText("Maks. cena zakupu", { exact: true }).waitFor({ state: "visible" });
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
 

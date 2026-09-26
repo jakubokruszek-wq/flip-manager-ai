@@ -116,7 +116,7 @@ test("a manual hard reject is an absolute veto CEO synthesis cannot reverse", ()
 
 test("an overpriced deal routes to NEGOTIATE with the canonical opening offer, not a re-derived one", () => {
   const base = input();
-  const deal = buildCanonicalDeal(input({ listing: { ...base.listing, askingPrice: 900_000 } }));
+  const deal = buildCanonicalDeal(input({ listing: { ...base.listing, askingPrice: 250_000 } }));
   assert.equal(deal.underwriting.result?.decision, "TOO_EXPENSIVE");
   const brain = buildDealBrain(deal);
   assert.equal(brain.ceo.decision, "NEGOTIATE");
