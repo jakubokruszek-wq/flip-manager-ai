@@ -249,3 +249,49 @@ test("the scan-results panel renders one compact funnel plus separated technical
   assert.match(page, /Dlaczego odrzucone\?/);
   assert.match(page, /numberFromAny\(hardReasons, \[key as string, \.\.\.\(aliases as string\[\]\)\], numberFromAny\(breakdown, \[key as string, \.\.\.\(aliases as string\[\]\)\], 0\)\)/, "every canonical reason must be looked up under BOTH known key shapes before falling back to zero, so a real count under either shape is never silently dropped");
 });
+
+// UI-only change: the rejection-reason diagnostics (the technical/business
+// exclusion tiles, "Dlaczego odrzucone?", "Wyniki wyszukiwania", and the old
+// separate "Szczegóły diagnostyczne" <details>) are now one single
+// collapsible panel, collapsed by default, so a scan result isn't dominated
+// by diagnostic clutter -- while the filter name, status, and funnel
+// (including "Zebrane") stay unconditionally visible. No counter, value, or
+// decision logic changed; only where each one renders.
+test("rejection diagnostics collapse into one panel, closed by default, with correct aria-expanded/aria-controls and native keyboard support", () => {
+  const componentBody = page.match(/function RejectionDiagnostics\([\s\S]*?\n\}/)?.[0];
+  assert.ok(componentBody, "RejectionDiagnostics component must exist");
+
+  assert.match(componentBody, /const \[open, setOpen\] = useState\(false\)/, "the panel must start collapsed (open=false)");
+  assert.match(componentBody, /const panelId = useId\(\)/, "aria-controls must reference a real, unique id, not a hardcoded string shared across scan cards");
+
+  // A real <button>, not a clickable div/span -- Enter and Space activate a
+  // native button without any extra keydown handling.
+  assert.match(componentBody, /<button[\s\S]*?type="button"/);
+  assert.match(componentBody, /aria-expanded=\{open\}/);
+  assert.match(componentBody, /aria-controls=\{panelId\}/);
+  assert.match(componentBody, /onClick=\{\(\) => setOpen\(\(value\) => !value\)\}/, "clicking must toggle open, both expanding and collapsing");
+
+  // The controlled panel's own id must be the exact id aria-controls points
+  // to, and the panel must only be in the DOM while open (never present-but-
+  // hidden), matching a correct disclosure-button pattern.
+  assert.match(componentBody, /id=\{panelId\}/);
+  assert.match(componentBody, /\{open \? \(/, "the panel content must be conditionally rendered on the same `open` state the button toggles");
+
+  // Everything moved into the panel is still present, unchanged, and still
+  // sourced from the same funnel/response the always-visible funnel above
+  // uses -- nothing here is a second, divergent copy of the data.
+  for (const moved of ["DiagnosticMetric label=\"Tożsamość niezweryfikowana\"", "Dlaczego odrzucone?", "Wyniki wyszukiwania", "Szczegóły diagnostyczne", "SourceDiagnosticCard", "technicalDiagnosticBars(response.matchDiagnostics, funnel.collected)"]) {
+    assert.ok(componentBody.includes(moved), `expected "${moved}" inside RejectionDiagnostics`);
+  }
+
+  // The always-visible core (filter name, status badge, funnel including
+  // "Zebrane") must remain directly in ScanResultPanel, never moved behind
+  // the collapse.
+  const scanResultPanelBody = page.match(/function ScanResultPanel\([\s\S]*?\n\}/)?.[0];
+  assert.ok(scanResultPanelBody, "ScanResultPanel must exist");
+  assert.match(scanResultPanelBody, /\{filter\.name\}/);
+  assert.match(scanResultPanelBody, /scanRunStatusLabel\(status\)/);
+  assert.match(scanResultPanelBody, /<FunnelStep label="Zebrane" value=\{funnel\.collected\} \/>/);
+  assert.match(scanResultPanelBody, /<RejectionDiagnostics funnel=\{funnel\} response=\{response\} \/>/, "the collapsible panel must actually be rendered inside the scan result card");
+  assert.doesNotMatch(scanResultPanelBody, /<details/, "the old separate native <details> disclosure must be gone, folded into the one new panel");
+});

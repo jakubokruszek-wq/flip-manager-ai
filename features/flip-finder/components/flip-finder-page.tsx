@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
 
 import {
@@ -737,18 +737,50 @@ function ScanResultPanel({ filter, response }: { filter: SearchFilterListItem; r
       <FunnelStep label="Dopasowane" tone="gold" value={funnel.matched} />
     </div>
     {response.accountingMode === "AUTHORITATIVE" && response.accounting ? <AuthoritativeAccountingPanel accounting={response.accounting} /> : <p className="mt-4 text-xs text-muted-foreground">Dane historyczne — starszy format diagnostyki</p>}
-    {/* Technical losses (never a business decision) and business exclusions (a deliberate rule), kept visually separate from the funnel above and from each other. */}
-    <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-      <DiagnosticMetric label="Tożsamość niezweryfikowana" value={funnel.identityUnverified} />
-      <DiagnosticMetric label="Błędy ekstrakcji" value={funnel.extractionFailed} />
-      <DiagnosticMetric label="Oferty najmu" value={funnel.rent} />
-      <DiagnosticMetric label="Inny typ / bez sprzedaży" value={funnel.otherExact} />
-    </div>
     {noOffers ? <p className="mt-4 rounded-lg border border-border/60 bg-surface-elevated/50 p-3 text-sm text-muted-foreground">{scanNoOffersMessage(funnel.saved, funnel.topRejection)}</p> : null}
-    <div className="mt-6 border-t border-border/60 pt-5"><h3 className="text-sm font-semibold">Dlaczego odrzucone?</h3><p className="mt-1 text-xs text-muted-foreground">Unikalne rekordy: {formatNumber(funnel.rejected)}. Jedna oferta może mieć więcej niż jeden powód, więc suma poniższych liczb może przekraczać liczbę odrzuconych ofert.</p><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={Math.max(1, funnel.rejected)} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
-    {funnel.searchTiles > 0 || funnel.searchQueriesPlanned > 0 ? <div className="mt-6 border-t border-border/60 pt-5"><h3 className="type-card-title">Wyniki wyszukiwania</h3><p className="mt-1 text-xs text-muted-foreground">Osobny mianownik — {formatNumber(funnel.searchQueriesExecuted)}/{formatNumber(funnel.searchQueriesPlanned)} zapytań, {formatNumber(funnel.searchTiles)} kafelków.</p><div className="mt-3"><DiagnosticBar analyzed={Math.max(1, funnel.searchTiles)} count={funnel.searchParentUnverified} label="Wyniki bez potwierdzonego posta" /></div></div> : null}
-    <details className="mt-6 border-t border-border/60 pt-4 text-sm"><summary className="cursor-pointer font-semibold">Szczegóły diagnostyczne</summary><div className="mt-4 space-y-4"><p className="text-xs text-muted-foreground">Statusy źródeł i techniczne kody są dostępne tutaj; nie wpływają na decyzję filtra.</p><div className="grid gap-3 lg:grid-cols-3">{(response.sourceResults ?? []).map((source) => <SourceDiagnosticCard key={source.source} source={source} />)}</div>{response.matchDiagnostics ? <div className="space-y-3">{technicalDiagnosticBars(response.matchDiagnostics, funnel.collected).map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div> : null}</div></details>
+    <RejectionDiagnostics funnel={funnel} response={response} />
   </Card>;
+}
+
+// Presentation only, per the mission: every counter/value below is the same
+// one ScanResultPanel already computed (funnel, response.sourceResults,
+// response.matchDiagnostics) -- nothing here recomputes or changes a
+// decision. Collapsed by default, a single real <button> (native keyboard
+// support: Enter/Space) drives one aria-expanded/aria-controls pair over
+// the one panel holding everything previously spread across the technical-
+// loss/business-exclusion grid, "Dlaczego odrzucone?", "Wyniki
+// wyszukiwania", and the old separate "Szczegóły diagnostyczne" <details>.
+function RejectionDiagnostics({ funnel, response }: { funnel: ScanFunnel; response: ScanResponse }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  return (
+    <div className="mt-6 border-t border-border/60 pt-5">
+      <button
+        aria-controls={panelId}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 text-left"
+        onClick={() => setOpen((value) => !value)}
+        type="button"
+      >
+        <h3 className="text-sm font-semibold">Diagnoza odrzuceń</h3>
+        <ChevronDown aria-hidden="true" className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <div className="mt-4 space-y-6" id={panelId}>
+          {/* Technical losses (never a business decision) and business exclusions (a deliberate rule), kept visually separate from the funnel above and from each other. */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <DiagnosticMetric label="Tożsamość niezweryfikowana" value={funnel.identityUnverified} />
+            <DiagnosticMetric label="Błędy ekstrakcji" value={funnel.extractionFailed} />
+            <DiagnosticMetric label="Oferty najmu" value={funnel.rent} />
+            <DiagnosticMetric label="Inny typ / bez sprzedaży" value={funnel.otherExact} />
+          </div>
+          <div><h4 className="text-sm font-semibold">Dlaczego odrzucone?</h4><p className="mt-1 text-xs text-muted-foreground">Unikalne rekordy: {formatNumber(funnel.rejected)}. Jedna oferta może mieć więcej niż jeden powód, więc suma poniższych liczb może przekraczać liczbę odrzuconych ofert.</p><div className="mt-3 space-y-3">{funnel.rejections.map((reason) => <DiagnosticBar analyzed={Math.max(1, funnel.rejected)} count={reason.count} key={reason.key} label={reason.label} />)}</div></div>
+          {funnel.searchTiles > 0 || funnel.searchQueriesPlanned > 0 ? <div><h4 className="type-card-title">Wyniki wyszukiwania</h4><p className="mt-1 text-xs text-muted-foreground">Osobny mianownik — {formatNumber(funnel.searchQueriesExecuted)}/{formatNumber(funnel.searchQueriesPlanned)} zapytań, {formatNumber(funnel.searchTiles)} kafelków.</p><div className="mt-3"><DiagnosticBar analyzed={Math.max(1, funnel.searchTiles)} count={funnel.searchParentUnverified} label="Wyniki bez potwierdzonego posta" /></div></div> : null}
+          <div><h4 className="text-sm font-semibold">Szczegóły diagnostyczne</h4><p className="mt-1 text-xs text-muted-foreground">Statusy źródeł i techniczne kody są dostępne tutaj; nie wpływają na decyzję filtra.</p><div className="mt-3 grid gap-3 lg:grid-cols-3">{(response.sourceResults ?? []).map((source) => <SourceDiagnosticCard key={source.source} source={source} />)}</div>{response.matchDiagnostics ? <div className="mt-3 space-y-3">{technicalDiagnosticBars(response.matchDiagnostics, funnel.collected).map((reason) => <DiagnosticBar analyzed={funnel.collected} count={reason.count} key={reason.key} label={reason.label} />)}</div> : null}</div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function scanRunStatusLabel(status: string): string { return ({ PARTIAL: "Częściowo zakończony", FAILED: "Błąd", QUEUED: "W kolejce", RUNNING: "W toku", COMPLETED: "Zakończony" } as Record<string, string>)[status] ?? "Do sprawdzenia"; }
