@@ -34,7 +34,16 @@ export async function refreshOperatorSession(request: NextRequest): Promise<Next
     },
   });
 
-  const { data, error } = await supabase.auth.getUser();
+  // getUser() always makes a network round-trip to Supabase Auth to verify
+  // the token server-side (unlike getSession(), which would trust cookies
+  // alone). A transient failure of that round-trip (timeout, DNS blip,
+  // Supabase outage) must never leave `operator` in an undefined state --
+  // treating it as "no session" here is what keeps every downstream branch
+  // (page redirect vs API 401) deterministic instead of depending on
+  // whatever the framework happens to do with an unhandled rejection.
+  const { data, error } = await supabase.auth.getUser().catch(
+    (caught: unknown) => ({ data: { user: null }, error: caught }) as Awaited<ReturnType<typeof supabase.auth.getUser>>,
+  );
   const operator = !error && data.user?.app_metadata?.role === "operator";
   if (PUBLIC_PATHS.has(pathname) || isMachinePath(pathname)) {
     if (pathname === "/login" && operator) {

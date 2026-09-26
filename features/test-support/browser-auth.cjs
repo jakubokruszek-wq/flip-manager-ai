@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
+const crypto = require("node:crypto");
+const fs = require("node:fs");
 const http = require("node:http");
+const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const operatorUser = {
@@ -76,15 +79,54 @@ async function addOperatorSessionCookie(context, baseUrl) {
   }]);
 }
 
+// NEXT_PUBLIC_* variables are inlined into the build output at `next build`
+// time, not re-read from the environment at `next start` time. That means a
+// build produced for one test's fake Supabase auth server keeps calling that
+// exact (now-dead) URL forever, no matter what env `next start` is later
+// given. SKIP_BROWSER_BUILD exists purely to speed up local iteration on the
+// SAME test, so it must never be allowed to serve a build baked for a
+// different auth URL/key -- that exact mismatch was proven (auth-proxy
+// determinism investigation) to be what makes a forged "operator" cookie
+// pass or fail unpredictably depending on which build happens to be on disk.
+function buildEnvFingerprint(env) {
+  return crypto
+    .createHash("sha256")
+    .update(`${env.NEXT_PUBLIC_SUPABASE_URL ?? ""}\u0000${env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ""}`)
+    .digest("hex");
+}
+
 async function ensureProductionBuild(nextBin, root, env) {
-  if (process.env.SKIP_BROWSER_BUILD === "1") return;
+  const markerPath = path.join(root, ".next", "browser-test-build-env.json");
+  const fingerprint = buildEnvFingerprint(env);
+
+  if (process.env.SKIP_BROWSER_BUILD === "1") {
+    let existing = null;
+    try {
+      existing = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+    } catch {
+      existing = null;
+    }
+    if (existing?.fingerprint === fingerprint) return;
+    console.warn(
+      "SKIP_BROWSER_BUILD=1 was set, but the existing .next build (if any) was not built for this test's NEXT_PUBLIC_SUPABASE_URL/KEY. Rebuilding to avoid a stale auth-server URL baked into the served bundle.",
+    );
+  }
+
   await new Promise((resolve, reject) => {
     const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     build.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8_000); });
     build.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8_000); });
     build.once("error", reject);
-    build.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`next build failed with exit code ${code}; output: ${output}`)));
+    build.once("exit", (code) => {
+      if (code !== 0) return reject(new Error(`next build failed with exit code ${code}; output: ${output}`));
+      try {
+        fs.writeFileSync(markerPath, JSON.stringify({ fingerprint }));
+      } catch {
+        // Best-effort only: worst case SKIP_BROWSER_BUILD rebuilds next time too.
+      }
+      resolve();
+    });
   });
 }
 
