@@ -104,6 +104,29 @@ export function extractOtodomListingId(url: string): string | null {
   );
 }
 
+/**
+ * Confirms a URL is a genuine, dereferenceable single-offer Otodom page --
+ * not a search-results/category URL, not a redirect missing an offer id,
+ * and never a literal, unsubstituted Next.js route placeholder (Otodom's
+ * own i18n routing can leak a raw "[lang]" segment into a URL it exposes,
+ * which must never reach a stored/displayed link). Only otodom.pl and
+ * "/pl/oferta/<slug>-ID<code>" is accepted -- this is deliberately separate
+ * from normalizeOtodomUrl, which OLX and Morizon also call for their own,
+ * unrelated URLs.
+ */
+export function isConfirmedOtodomOfferUrl(value: string | null | undefined): boolean {
+  if (!value) return false;
+  let url: URL;
+  try {
+    url = new URL(value, "https://www.otodom.pl");
+  } catch {
+    return false;
+  }
+  if (!/(^|\.)otodom\.pl$/i.test(url.hostname)) return false;
+  if (/\[[^\]/]+\]/.test(url.pathname)) return false;
+  return /^\/pl\/oferta\/[^/]+-id[a-z0-9]+\/?$/i.test(url.pathname);
+}
+
 export function calculateContentHash(value: Record<string, unknown>): string {
   const text = JSON.stringify(value, Object.keys(value).sort());
   let hash = 5381;

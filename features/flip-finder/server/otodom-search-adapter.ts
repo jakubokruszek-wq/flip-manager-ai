@@ -12,6 +12,7 @@ import {
   buildSearchUrl,
   calculateContentHash,
   extractOtodomListingId,
+  isConfirmedOtodomOfferUrl,
   normalizeOtodomUrl,
 } from "@/features/flip-finder/otodom-search";
 import type { PropertySearchListing } from "@/features/properties/types/property";
@@ -267,14 +268,23 @@ function toListing(row: Record<string, unknown>): PropertySearchListing | null {
 
 function listingUrl(row: Record<string, unknown>): string | null {
   const directUrl = text(row, "url", "href", "link");
+  if (!directUrl) return null;
 
-  if (directUrl) {
-    return new URL(directUrl, "https://www.otodom.pl").toString();
+  let resolved: string;
+  try {
+    resolved = new URL(directUrl, "https://www.otodom.pl").toString();
+  } catch {
+    return null;
   }
 
-  const id = text(row, "id", "adId", "listingId");
-  const slug = text(row, "slug");
-  return id && slug ? `https://www.otodom.pl/pl/oferta/${slug}-ID${id}` : null;
+  // Only a confirmed, dereferenceable single-offer URL is ever kept --
+  // never synthesized from this row's own raw numeric id/adId/listingId
+  // field, since Otodom's real offer-URL suffix is a distinct, encoded
+  // alphanumeric code (e.g. "-ID4CRDS"), not necessarily that same numeric
+  // value. A row whose URL can't be confirmed this way is dropped from this
+  // scan cycle entirely, matching how OLX/Morizon rows with no usable URL
+  // are already handled in this same pipeline.
+  return isConfirmedOtodomOfferUrl(resolved) ? resolved : null;
 }
 
 function thumbnailUrl(row: Record<string, unknown>): string | null {
