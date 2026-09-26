@@ -76,7 +76,7 @@ test("Chóralna never becomes EXTRACTION_FAILED: apartment safety finds no hard 
 test("Chóralna does not hard-reject on the top-floor rule when total-floor evidence is unknown", async () => {
   const { effective } = await runChoralnaPipeline();
   const decision = evaluateCanonicalListingDecision(
-    { price: effective.price, area: effective.area, pricePerSqm: resolveFacebookPricePerSqm(effective), rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText: [effective.street, effective.district, effective.city].filter(Boolean).join(", "), buildingType: null, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null },
+    { price: effective.price, area: effective.area, pricePerSqm: resolveFacebookPricePerSqm(effective), rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, description: effective.description, locationText: [effective.street, effective.district, effective.city].filter(Boolean).join(", "), buildingType: null, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null },
     CHORALNA_FILTER,
   );
   assert.equal(decision.hardRejectReasons.includes("floor_max"), false);
@@ -87,7 +87,7 @@ test("Chóralna does not hard-reject on the top-floor rule when total-floor evid
 test("Chóralna reaches REVIEW under the mission's exact active filter, never MATCHED, REJECTED, or a silent disappearance", async () => {
   const { effective } = await runChoralnaPipeline();
   const decision = evaluateCanonicalListingDecision(
-    { price: effective.price, area: effective.area, pricePerSqm: resolveFacebookPricePerSqm(effective), rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, locationText: [effective.street, effective.district, effective.city].filter(Boolean).join(", "), buildingType: null, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null },
+    { price: effective.price, area: effective.area, pricePerSqm: resolveFacebookPricePerSqm(effective), rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, description: effective.description, locationText: [effective.street, effective.district, effective.city].filter(Boolean).join(", "), buildingType: null, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null },
     CHORALNA_FILTER,
   );
   assert.equal(decision.bucket, "REVIEW");

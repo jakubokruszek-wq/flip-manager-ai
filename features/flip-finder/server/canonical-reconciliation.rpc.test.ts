@@ -186,7 +186,7 @@ test("C: post 1595799948904815's known incomplete source evidence (missing price
   // known (2 rooms, Łódź), which is why those two do not appear among the
   // real production missing_fields for this post.
   const decision = evaluateCanonicalListingDecision(
-    { price: null, area: null, pricePerSqm: null, rooms: 2, floor: "3", city: "Łódź", district: null, title: "t", locationText: "t", buildingType: null, ownership: null },
+    { price: null, area: null, pricePerSqm: null, rooms: 2, floor: "3", city: "Łódź", district: null, title: "t", description: null, locationText: "t", buildingType: null, ownership: null },
     CHORALNA_FILTER,
   );
   assert.equal(decision.bucket, "REVIEW", "the real, untouched decision logic must itself derive REVIEW from this incomplete evidence — not asserted, computed");
@@ -213,7 +213,7 @@ test("C: post 1595799948904815's known incomplete source evidence (missing price
 
 test("D: a high price/m2 apartment is correctly rejected by the real filter-evaluation logic, and the RPC persists REJECTED without a reconciliation failure", async () => {
   const decision = evaluateCanonicalListingDecision(
-    { price: 500_000, area: 40, pricePerSqm: 12_500, rooms: 2, floor: "3", city: "Łódź", district: "Śródmieście", title: "t", locationText: "t", buildingType: "blok" },
+    { price: 500_000, area: 40, pricePerSqm: 12_500, rooms: 2, floor: "3", city: "Łódź", district: "Śródmieście", title: "t", description: null, locationText: "t", buildingType: "blok" },
     CHORALNA_FILTER,
   );
   assert.equal(decision.bucket, "REJECTED", "sanity: the real, untouched decision logic must actually reject this fixture");
@@ -231,7 +231,7 @@ test("D: a high price/m2 apartment is correctly rejected by the real filter-eval
 
 test("E: an oversize apartment is correctly rejected by the real filter-evaluation logic, and the RPC persists REJECTED without a reconciliation failure", async () => {
   const decision = evaluateCanonicalListingDecision(
-    { price: 300_000, area: 90, pricePerSqm: 3_333, rooms: 4, floor: "2", city: "Łódź", district: "Śródmieście", title: "t", locationText: "t", buildingType: "blok" },
+    { price: 300_000, area: 90, pricePerSqm: 3_333, rooms: 4, floor: "2", city: "Łódź", district: "Śródmieście", title: "t", description: null, locationText: "t", buildingType: "blok" },
     CHORALNA_FILTER,
   );
   assert.equal(decision.bucket, "REJECTED", "sanity: the real, untouched decision logic must actually reject this fixture");

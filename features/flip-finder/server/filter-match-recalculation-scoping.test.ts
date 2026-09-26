@@ -19,7 +19,7 @@ function baseFilter(overrides: Partial<SearchFilter> = {}): SearchFilter {
 function listing(overrides: Partial<RecalculationListing> & { id: string; source: RecalculationListing["source"] }): RecalculationListing {
   return {
     price: 400_000, area: 50, pricePerSqm: 8_000, rooms: 2, floor: "1", city: "Łódź", district: "Widzew",
-    title: "Test listing", locationText: "Widzew, Łódź", buildingType: null, originalUrl: `https://example.com/${overrides.id}`,
+    title: "Test listing", description: null, locationText: "Widzew, Łódź", buildingType: null, originalUrl: `https://example.com/${overrides.id}`,
     manualDecision: null, lifecycleStatus: "ACTIVE", ...overrides,
   };
 }

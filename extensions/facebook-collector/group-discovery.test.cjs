@@ -102,3 +102,37 @@ test("buildDiscoveryPayload attaches a discoveredAt timestamp to every candidate
   assert.equal(payload[0].url, "https://www.facebook.com/groups/999/");
   assert.equal(payload[0].name, "Group");
 });
+
+// The popup's "Wykryj grupy nieruchomości" button cannot call the scan
+// function directly (it lives in the content script's isolated world, not
+// the popup) -- it must ask this content script to run it via a message.
+test("RUN_GROUP_DISCOVERY message triggers the same scan the automatic page-load run uses, and passes its result straight through", async () => {
+  const sentMessages = [];
+  let registeredListener = null;
+  global.chrome = {
+    runtime: {
+      sendMessage: (message, callback) => { sentMessages.push(message); callback({ ok: true, result: { token: "session-token", expiresAt: "2026-09-26T00:10:00.000Z" } }); },
+      onMessage: { addListener: (listener) => { registeredListener = listener; } },
+    },
+  };
+  global.document = { querySelectorAll: () => [{ href: "https://www.facebook.com/groups/999/", textContent: "A group" }] };
+  try {
+    loadModule();
+    assert.ok(registeredListener, "group-discovery.js must register an onMessage listener for on-demand runs");
+
+    const responses = [];
+    const handled = registeredListener({ type: "RUN_GROUP_DISCOVERY" }, {}, (response) => responses.push(response));
+    assert.equal(handled, true, "the listener must return true to keep the message channel open for its async respond()");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0].type, "REPORT_DISCOVERED_GROUPS");
+    assert.deepEqual(responses, [{ ok: true, result: { token: "session-token", expiresAt: "2026-09-26T00:10:00.000Z" } }]);
+
+    const unrelated = registeredListener({ type: "SOME_OTHER_MESSAGE" }, {}, () => { throw new Error("must not respond to unrelated messages"); });
+    assert.equal(unrelated, undefined, "an unrelated message type must be ignored, not swallowed as a match");
+  } finally {
+    delete global.chrome;
+    delete global.document;
+  }
+});

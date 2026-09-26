@@ -283,8 +283,8 @@ assert.equal(
 );
 
 assert.ok(buildSearchUrl(searchFilterForUrlTests).includes("roomsNumber=%5BTWO%2CTHREE%5D"));
-assert.equal(evaluateFilter({ price: 385000, area: 38, pricePerSqm: null, rooms: 2, floor: "1", city: "Łódź", district: null, title: "Oferta", locationText: null, buildingType: null }, { ...searchFilterForUrlTests, maxPricePerSqm: 7000 }).matches, false);
-assert.equal(evaluateFilter({ price: 279000, area: 38.8, pricePerSqm: null, rooms: 2, floor: "1", city: "Łódź", district: null, title: "Oferta", locationText: null, buildingType: null }, { ...searchFilterForUrlTests, maxPricePerSqm: 7000 }).matches, false);
+assert.equal(evaluateFilter({ price: 385000, area: 38, pricePerSqm: null, rooms: 2, floor: "1", city: "Łódź", district: null, title: "Oferta", description: null, locationText: null, buildingType: null }, { ...searchFilterForUrlTests, maxPricePerSqm: 7000 }).matches, false);
+assert.equal(evaluateFilter({ price: 279000, area: 38.8, pricePerSqm: null, rooms: 2, floor: "1", city: "Łódź", district: null, title: "Oferta", description: null, locationText: null, buildingType: null }, { ...searchFilterForUrlTests, maxPricePerSqm: 7000 }).matches, false);
 
 const pricePerSqmFilter = { ...searchFilterForUrlTests, maxPricePerSqm: 7000 };
 const strictPriceCandidate = {
@@ -296,6 +296,7 @@ const strictPriceCandidate = {
   city: "Łódź",
   district: null,
   title: "Oferta",
+  description: null,
   locationText: null,
   buildingType: null,
 };

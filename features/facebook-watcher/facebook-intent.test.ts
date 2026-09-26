@@ -206,3 +206,54 @@ test("a genuine BUY/SELL conflict is unaffected by the new SELL/RENT conflict pa
   assert.equal(result.intent, "UNKNOWN");
   assert.equal(result.conflict, true);
 });
+
+// Real production bug: a rental with no explicit sale keyword ("wolne od
+// [data]" — the standard Polish "available from" rental phrasing — plus a
+// plain price and area, no "sprzedam"/"na sprzedaż"/"cena sprzedaży" at all)
+// was misread as a confident SELL_PROPERTY, because the weak, keyword-free
+// SELL_STRUCTURED_OFFER heuristic (any property post with an area and a
+// price number) was the only signal that fired. It must be RENT_OFFER (or
+// excluded), never get a sale valuation.
+test("a real 'wolne od' rental with no sale keyword is never read as a sale — the exact reported production case", () => {
+  const result = resolveFacebookListingIntent(
+    "Mieszkanie Łódź Górna wolne od 1 - 100/100 NISKI PRIORYTET 2000 zł 46 m2",
+    null,
+    null,
+  );
+  assert.equal(result.intent, "RENT_OFFER");
+  assert.equal(result.reasonCode, "FACEBOOK_RENT_REQUEST");
+});
+
+test("'wolne od' rental phrasings without any sale keyword stay RENT_OFFER", () => {
+  for (const text of [
+    "Kawalerka, wolne od zaraz, 1800 zł, 28m2",
+    "Mieszkanie 2 pokoje, wolne od 15.02, 2200 zł miesięcznie",
+  ]) {
+    const result = resolveFacebookListingIntent(text, null, null);
+    assert.equal(result.intent, "RENT_OFFER", `expected RENT_OFFER for: ${text}`);
+  }
+});
+
+test("bare 'wynajem'/'najem' labels without any sale keyword are never read as a sale", () => {
+  for (const text of [
+    "Wynajem: mieszkanie 2 pokoje, 46m2, 2000 zł",
+    "Najem mieszkania, Łódź, 46m2, 2000 zł",
+  ]) {
+    const result = resolveFacebookListingIntent(text, null, null);
+    assert.equal(result.intent, "RENT_OFFER", `expected RENT_OFFER for: ${text}`);
+  }
+});
+
+// "wolne od" is ambiguous on its own (a sale listing may also note vacant
+// possession, e.g. "wolne od zaraz" meaning immediate handover) — it must
+// never override an explicit, unambiguous sale keyword.
+test("an explicit sale keyword still wins over 'wolne od' vacant-possession phrasing", () => {
+  const result = resolveFacebookListingIntent(
+    "cena sprzedaży 369000 zł, mieszkanie 46m2, wolne od zaraz",
+    null,
+    null,
+  );
+  assert.equal(result.intent, "SELL_PROPERTY");
+  assert.equal(result.intentSource, "DETERMINISTIC_SELL");
+  assert.equal(result.conflict, false);
+});

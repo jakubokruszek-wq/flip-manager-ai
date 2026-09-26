@@ -12,7 +12,7 @@ const filter = {
   lastScannedAt: null, createdAt: "2026-08-23T00:00:00Z", updatedAt: "2026-08-23T00:00:00Z",
 } satisfies SearchFilter;
 
-const candidate = { price: 300_000, area: 45, pricePerSqm: 6_666, rooms: 2, floor: null, city: "Łódź", district: null, title: "Mieszkanie", locationText: "Łódź", buildingType: null };
+const candidate = { price: 300_000, area: 45, pricePerSqm: 6_666, rooms: 2, floor: null, city: "Łódź", district: null, title: "Mieszkanie", description: null, locationText: "Łódź", buildingType: null };
 
 test("Łódź filter rejects a known Warsaw listing", () => {
   const result = evaluateListingAgainstFilter({ ...candidate, city: "Warszawa", locationText: "Warszawa" }, filter);
@@ -27,6 +27,51 @@ test("city comparison is case and diacritic safe", () => {
 test("unknown city remains explicit metadata instead of becoming a false mismatch", () => {
   const result = evaluateListingAgainstFilter({ ...candidate, city: null }, filter);
   assert.equal(result.matches, false);
+  assert.equal(result.bucket, "REVIEW");
+  assert.deepEqual(result.unknownFields, ["city"]);
+});
+
+// Real production case: a Łódź filter surfaced "MIESZKANIE W ALEKSANDROWIE
+// ŁÓDZKIM NA SPRZEDAŻ" — Aleksandrów Łódzki is its own town, not Łódź — because
+// its structured city field was empty and the fallback simply marked "city"
+// unknown (REVIEW, still visible) without ever reading the title.
+test("a Łódź filter excludes Aleksandrów Łódzki inferred from the title when the structured city is empty", () => {
+  const result = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "MIESZKANIE W ALEKSANDROWIE ŁÓDZKIM NA SPRZEDAŻ", locationText: null },
+    filter,
+  );
+  assert.equal(result.matches, false);
+  assert.equal(result.bucket, "REJECTED");
+  assert.deepEqual(result.reasons, ["city"]);
+});
+
+test("a Łódź filter excludes Aleksandrów Łódzki inferred from the description when the structured city is empty", () => {
+  const result = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "Mieszkanie na sprzedaż", description: "Lokalizacja: Aleksandrów Łódzki", locationText: null },
+    filter,
+  );
+  assert.equal(result.bucket, "REJECTED");
+  assert.deepEqual(result.reasons, ["city"]);
+});
+
+// The exclusion pattern must never fire on an ordinary Łódź street name that
+// merely contains "Aleksandrowska" — this must stay REVIEW (unknown), not a
+// false exclusion, and a positively-confirmed Łódź mention must never be
+// second-guessed by an unrelated street name elsewhere in the same text.
+test("a Łódź filter does not exclude a listing on ul. Aleksandrowska in Łódź", () => {
+  const result = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "Mieszkanie, ul. Aleksandrowska, Łódź", locationText: null },
+    filter,
+  );
+  assert.equal(result.bucket, "REVIEW");
+  assert.deepEqual(result.unknownFields, ["city"]);
+});
+
+test("a non-Łódź filter's unknown-city handling is unchanged by the Łódź-specific inference", () => {
+  const result = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "MIESZKANIE W ALEKSANDROWIE ŁÓDZKIM NA SPRZEDAŻ", locationText: null },
+    { ...filter, city: "Warszawa" },
+  );
   assert.equal(result.bucket, "REVIEW");
   assert.deepEqual(result.unknownFields, ["city"]);
 });

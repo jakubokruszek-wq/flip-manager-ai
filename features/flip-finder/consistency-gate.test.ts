@@ -46,6 +46,7 @@ const base: FilterCandidate = {
   city: "Łódź",
   district: "Widzew",
   title: "Mieszkanie",
+  description: null,
   locationText: "Widzew, Łódź",
   buildingType: "blok",
 };

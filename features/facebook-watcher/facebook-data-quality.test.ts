@@ -60,7 +60,7 @@ test("complete Facebook extraction can pass the unchanged Flip matcher", () => {
     minEstimatedProfit: null, maxEstimatedRenovationCost: null, scanIntervalMinutes: 60, isActive: true,
     lastScannedAt: null, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
   };
-  const decision = evaluateListingAgainstFilter({ price: item.price, area: item.area, pricePerSqm: item.price! / item.area!, rooms: item.rooms, floor: null, city: item.city, district: item.district, title: item.title, locationText: "Bałuty, Łódź", buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter);
+  const decision = evaluateListingAgainstFilter({ price: item.price, area: item.area, pricePerSqm: item.price! / item.area!, rooms: item.rooms, floor: null, city: item.city, district: item.district, title: item.title, description: item.description, locationText: "Bałuty, Łódź", buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter);
   assert.equal(decision.matches, true);
   assert.deepEqual(decision.reasons, []);
 });
@@ -98,7 +98,7 @@ test("Alicja-style exact sell with missing price remains a persisted review cand
   assert.equal(safety.hardReject, false);
   const decision = evaluateListingAgainstFilter({
     price: null, area: 48, pricePerSqm: null, rooms: 2, floor: null, city: "ĹĂłdĹş", district: "Karolew",
-    title: "Na sprzedaĹĽ mieszkanie", locationText: "Karolew, ĹĂłdĹş", buildingType: null,
+    title: "Na sprzedaĹĽ mieszkanie", description: null, locationText: "Karolew, ĹĂłdĹş", buildingType: null,
     sellerType: null, marketType: null, ownership: null,
   }, filter);
   assert.equal(decision.matches, false);
