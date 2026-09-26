@@ -300,6 +300,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         city: safeLocation.city,
         district: safeLocation.district,
         title: listing.title,
+        description: listing.description,
         locationText,
         buildingType: listing.buildingType,
         ownership: listing.ownership,

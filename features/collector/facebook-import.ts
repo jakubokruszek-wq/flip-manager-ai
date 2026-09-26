@@ -78,7 +78,7 @@ async function applyFilters(supabase: ReturnType<typeof createAdminClient>, list
   const filters = await getActiveSearchFiltersForSource("facebook");
   const evaluated = filters.map((filter) => {
     if (hardSourceReject) return { filter, decision: { bucket: "REJECTED" as const, reasons: [`facebook_source_${availability.toLowerCase()}`, `facebook_${propertyType.toLowerCase()}`], missingFields: [], hardRejectReasons: ["facebook_source_policy"] } };
-    return { filter, decision: evaluateCanonicalListingDecision({ price: payload.price, area: payload.area, pricePerSqm: payload.pricePerSqm, rooms: payload.rooms, floor: null, city: null, district: null, title: payload.title ?? payload.content, locationText: payload.location, buildingType: null }, filter) };
+    return { filter, decision: evaluateCanonicalListingDecision({ price: payload.price, area: payload.area, pricePerSqm: payload.pricePerSqm, rooms: payload.rooms, floor: null, city: null, district: null, title: payload.title ?? payload.content, description: payload.content, locationText: payload.location, buildingType: null }, filter) };
   });
   const aggregateBucket = evaluated.some(({ decision }) => decision.bucket === "MATCHED") ? "MATCHED" : evaluated.some(({ decision }) => decision.bucket === "REVIEW") ? "REVIEW" : "REJECTED";
   for (const { filter, decision } of evaluated) {

@@ -1,4 +1,5 @@
 import type { SearchFilter } from "@/features/flip-finder";
+import { LODZ_CONTEXT, OUTSIDE_LODZ_TOWN } from "@/features/location-intelligence/lodz-satellite-towns";
 import type { FacebookProperty } from "./types";
 import type { FacebookBuildingEvidence } from "./facebook-building-evidence";
 
@@ -10,9 +11,6 @@ export type FacebookApartmentSafetyDecision = {
   locationVerified: boolean;
   buildingEvidence: FacebookBuildingEvidence;
 };
-
-const LODZ_CONTEXT = /\b(lodz|balut\w*|teofil\w*|widzew\w*|retkini\w*|polesi\w*|gorn\w*|srodmies\w*|radogoszcz\w*|zubardz\w*|chojn\w*|doly|dabrow\w*|rokici\w*|janow\w*)\b/u;
-const OUTSIDE_LODZ = /\b(belchat\w*|pabianic\w*|zgierz\w*|sokolnik\w*|prusinowic\w*|szadk\w*|jezew\w*|dlutow\w*|aleksandr(?:ow|owa)\s+lodzki\w*|konstantynow\w*\s+lodzki\w*)\b/u;
 
 export function evaluateFacebookApartmentSafety(input: {
   authoritativeText: string | null | undefined;
@@ -38,7 +36,7 @@ export function evaluateFacebookApartmentSafety(input: {
 
   const expectedCity = normalize(input.filter.city ?? "lodz");
   const extractedCity = normalize(input.property.city ?? "");
-  const explicitOutside = OUTSIDE_LODZ.test(text) || Boolean(extractedCity && expectedCity && extractedCity !== expectedCity);
+  const explicitOutside = OUTSIDE_LODZ_TOWN.test(text) || Boolean(extractedCity && expectedCity && extractedCity !== expectedCity);
   const locationVerified = !explicitOutside && (LODZ_CONTEXT.test(text) || Boolean(extractedCity && extractedCity === expectedCity));
   if (explicitOutside) { reasons.push("FACEBOOK_LOCATION_OUTSIDE_LODZ"); hardReasons.add("FACEBOOK_LOCATION_OUTSIDE_LODZ"); }
   else if (!locationVerified) reasons.push("FACEBOOK_LOCATION_UNVERIFIED");

@@ -1,5 +1,6 @@
 import type { SearchFilter } from "@/features/flip-finder";
 import type { PropertyFields } from "@/features/properties/types/property";
+import { LODZ_CONTEXT, OUTSIDE_LODZ_TOWN } from "@/features/location-intelligence/lodz-satellite-towns";
 import { decisionBucket, type DecisionBucket } from "./decision-model.ts";
 
 export type FilterCandidate = Pick<
@@ -12,6 +13,7 @@ export type FilterCandidate = Pick<
   | "city"
   | "district"
   | "title"
+  | "description"
   | "locationText"
   | "buildingType"
 > & {
@@ -154,10 +156,28 @@ export function evaluateListingAgainstFilter(
   );
 
   if (filter.city?.trim()) {
-    if (candidate.city === null) {
-      markUnknown("city");
+    const structuredCity = candidate.city?.trim() ? candidate.city : null;
+    if (structuredCity === null) {
+      // The structured city field is empty/unknown (a common geocoding gap
+      // for imported listings). Rather than silently letting the listing
+      // through as REVIEW regardless of what town it actually is, check
+      // whether the title/description text names a known Łódź-satellite
+      // town that must never be confused with Łódź itself (e.g.
+      // "Aleksandrów Łódzki") — a real production case previously slipped
+      // through a Łódź filter this way. This only ever narrows an otherwise
+      // unknown city to a confident exclusion; it never manufactures a
+      // positive match from free text.
+      const filterIsLodz = normalizeLocation(filter.city) === "lodz";
+      const freeText = normalizeLocation(
+        `${candidate.title ?? ""} ${candidate.description ?? ""} ${candidate.locationText ?? ""}`,
+      );
+      if (filterIsLodz && OUTSIDE_LODZ_TOWN.test(freeText) && !LODZ_CONTEXT.test(freeText)) {
+        reject(true, "city");
+      } else {
+        markUnknown("city");
+      }
     } else {
-      reject(normalizeLocation(candidate.city) !== normalizeLocation(filter.city), "city");
+      reject(normalizeLocation(structuredCity) !== normalizeLocation(filter.city), "city");
     }
   }
 

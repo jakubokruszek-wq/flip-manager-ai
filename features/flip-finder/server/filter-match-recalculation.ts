@@ -222,7 +222,7 @@ async function fetchListingsForSources(
   for (let start = 0; ; start += pageSize) {
     const { data, error } = await supabase
       .from("listings")
-      .select("id,source,original_url,title,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
+      .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
       .in("source", sources)
       .range(start, start + pageSize - 1);
 
@@ -272,7 +272,7 @@ async function fetchListingsByIds(
 
   const { data, error } = await supabase
     .from("listings")
-    .select("id,source,original_url,title,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
+    .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
     .in("id", ids);
 
   if (error) {
@@ -296,6 +296,7 @@ function toListing(row: Row): RecalculationListing | null {
     source,
     originalUrl,
     title: nullableString(row.title),
+    description: nullableString(row.description),
     price: nullableNumber(row.price),
     area: nullableNumber(row.area),
     pricePerSqm: nullableNumber(row.price_per_sqm),

@@ -250,6 +250,7 @@ function hasHardFilterViolation(input: OpportunityListingInput, filter: SearchFi
     city: input.city,
     district: input.district,
     title: input.title,
+    description: input.description,
     locationText: input.address,
     buildingType: input.buildingType,
     ownership: null,
