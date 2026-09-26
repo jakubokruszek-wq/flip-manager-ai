@@ -7,8 +7,40 @@ const connectionDetailsNode = document.querySelector("#connection-details");
 const pairingButton = document.querySelector("#pairing");
 
 document.querySelector("#active").addEventListener("click", () => run("COLLECT_ACTIVE_SOURCE"));
+document.querySelector("#discover-groups").addEventListener("click", () => void discoverGroups());
 document.querySelector("#options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 pairingButton.addEventListener("click", () => chrome.tabs.create({ url: "https://flip-manager-ai.vercel.app/flip-finder/collector/setup" }));
+
+// "Wykryj grupy nieruchomości": a distinct, manual action from "Zbierz
+// aktywne źródło" -- it only asks the already-loaded Facebook "Twoje grupy"
+// page to (re-)run its own discovery scan (group-discovery.js), which never
+// imports anything itself; a human still selects what to add, in the
+// Manager's own preview page the scan opens.
+const GROUPS_JOINS_PATTERN = /^https:\/\/(?:www|m)\.facebook\.com\/groups\/joins\/?(?:[?#].*)?$/i;
+
+async function discoverGroups() {
+  resultNode.textContent = "";
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !tab.url || !GROUPS_JOINS_PATTERN.test(tab.url)) {
+    renderState({ status: "failed", progress: "Błąd" });
+    resultNode.textContent = "Otwórz stronę Facebooka „Twoje grupy” (facebook.com/groups/joins/), aby wykryć grupy.";
+    return;
+  }
+  renderState({ status: "collecting", phase: "GROUP_DISCOVERY", progress: "Wykrywanie grup…" });
+  let response = null;
+  try {
+    response = await chrome.tabs.sendMessage(tab.id, { type: "RUN_GROUP_DISCOVERY" });
+  } catch {
+    response = null;
+  }
+  if (!response?.ok) {
+    renderState({ status: "failed", progress: "Błąd" });
+    resultNode.textContent = response?.error || "Nie udało się wykryć grup. Odśwież stronę Facebooka i spróbuj ponownie.";
+    return;
+  }
+  renderState({ status: "idle", phase: "DONE", progress: "Zakończono" });
+  resultNode.textContent = "Wykryte grupy wysłano do podglądu w Managerze.";
+}
 
 void loadPairingStatus();
 void chrome.runtime.sendMessage({ type: "GET_COLLECTOR_STATE" }).then((state) => {

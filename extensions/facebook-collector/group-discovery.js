@@ -98,6 +98,22 @@
     window.addEventListener("load", () => { void runGroupDiscovery(); });
   }
 
+  // Manual trigger for the popup's "Wykryj grupy nieruchomości" button: the
+  // same scan this content script already runs automatically on page load,
+  // re-run on demand (e.g. after scrolling to load more groups, or if the
+  // automatic run was missed). Never imports/activates anything itself --
+  // identical behavior to the automatic run, just explicitly requested.
+  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+      if (message?.type !== "RUN_GROUP_DISCOVERY") return undefined;
+      // Passes runGroupDiscovery()'s own result straight through (already
+      // { ok, result } / { ok: false, error } from background.js's
+      // REPORT_DISCOVERED_GROUPS handler) rather than wrapping it again.
+      void runGroupDiscovery().then((result) => respond(result)).catch((error) => respond({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      return true;
+    });
+  }
+
   // Test-only export, exactly like content.js's own pattern -- `module`
   // never exists in the browser extension context.
   if (typeof module !== "undefined" && module.exports) {
