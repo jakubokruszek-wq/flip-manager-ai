@@ -14,15 +14,23 @@ export function SearchFiltersPage() {
   const [scanning, setScanning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const recalculationNotice = useMemo(() => {
+    const created = searchParams.get("mode") === "created";
+
     if (searchParams.get("recalculation") === "failed") {
-      return "Filtr zapisano, ale nie udało się odświeżyć wyników.";
+      return created
+        ? "Filtr utworzono, ale nie udało się przeliczyć wyników."
+        : "Filtr zapisano, ale nie udało się odświeżyć wyników.";
     }
 
     if (searchParams.get("recalculated") !== "1") {
       return null;
     }
 
-    return `Filtr zaktualizowany. Dodano ${searchParams.get("added") ?? "0"} dopasowań, usunięto ${searchParams.get("removed") ?? "0"}.`;
+    const added = searchParams.get("added") ?? "0";
+    const removed = searchParams.get("removed") ?? "0";
+    return created
+      ? `Filtr zapisany — wyniki przeliczone. Dopasowano ${added} ofert.`
+      : `Filtr zapisany — wyniki przeliczone. Dodano ${added} dopasowań, usunięto ${removed}.`;
   }, [searchParams]);
   const load = useCallback(async () => {
     try {
