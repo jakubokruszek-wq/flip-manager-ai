@@ -31,6 +31,26 @@ export class SearchFilterWriteError extends Error {
   }
 }
 
+/**
+ * Builds the API response for any failure raised while creating/updating a
+ * filter. Earlier, only a SearchFilterWriteError (the Postgres query itself
+ * returning an {error}) was ever surfaced -- anything thrown before that
+ * point, most importantly createAdminClient() itself throwing when a
+ * required environment credential is missing, is a plain Error and was
+ * silently flattened into the same opaque fallback message. Every Error
+ * instance is now surfaced; this route is operator-authenticated only, so a
+ * configuration or database error message is not exposed to the public.
+ */
+export function searchFilterWriteFailureResponse(error: unknown, fallbackMessage: string): Response {
+  if (error instanceof SearchFilterWriteError) {
+    return Response.json({ message: `${fallbackMessage} (${error.code}): ${error.message}` }, { status: 500 });
+  }
+  if (error instanceof Error) {
+    return Response.json({ message: `${fallbackMessage} ${error.message}` }, { status: 500 });
+  }
+  return Response.json({ message: fallbackMessage }, { status: 500 });
+}
+
 const SOURCE_SCAN_COLUMNS =
   "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message";
 
