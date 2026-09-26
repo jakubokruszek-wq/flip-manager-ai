@@ -74,7 +74,17 @@ export function resolveFacebookListingIntent(
   // word appears constantly in ordinary sale listings (administrative fees,
   // a mortgage estimate) and must never by itself flip a sale to a rental —
   // see "Na sprzedaż mieszkanie. Czynsz 615 zł." in facebook-intent.test.ts.
-  const strongRentOfferSignal = /(?<!\bnie\s)\b(do wynajecia|wynajme|oferuje najem|na wynajem|czynsz najmu|odstepn[\p{L}]*)\b/u.test(normalized) && !rentWantedSignal;
+  const strongRentOfferSignal = /(?<!\bnie\s)\b(do wynajecia|wynajme|oferuje najem|na wynajem|czynsz najmu|odstepn[\p{L}]*|(?:wy)?najem)\b/u.test(normalized) && !rentWantedSignal;
+  // "wolne od [data]" (available-from-date) is the standard Polish phrasing for
+  // when a tenant may move in, and is overwhelmingly rental vocabulary — but,
+  // unlike the phrases above, a sale listing occasionally uses it too ("wolne
+  // od zaraz" = vacant possession available immediately). It must therefore
+  // never override an EXPLICIT sale keyword (sprzedam, na sprzedaż, cena
+  // sprzedaży, ...) — only the weak, keyword-free SELL_STRUCTURED_OFFER
+  // heuristic, which is exactly the gap that let a real rental post with no
+  // sale keyword at all ("Mieszkanie ... wolne od 1 ... 2000 zł 46 m2") be
+  // read as a confident deterministic sale.
+  const wolneOdSignal = /\bwolne\s+od\b/u.test(normalized) && !rentWantedSignal;
   // "zł/mies." is only a WEAK rental signal: it is a generic monthly-price-unit
   // marker, not rental-specific vocabulary — real sale listings routinely state
   // their administrative/HOA fee the same way ("czynsz administracyjny 500
@@ -86,7 +96,7 @@ export function resolveFacebookListingIntent(
   // so that weak, keyword-free heuristic must never itself suppress a rental read.
   const weakRentOfferSignal = /(?<!\bnie\s)\bzl\s*\/\s*mies\b/u.test(normalized) && !rentWantedSignal;
   const explicitSellSignal = signals.sellSignals.some((name) => name !== "SELL_STRUCTURED_OFFER");
-  const rentOfferSignal = strongRentOfferSignal || (weakRentOfferSignal && !explicitSellSignal);
+  const rentOfferSignal = strongRentOfferSignal || (weakRentOfferSignal && !explicitSellSignal) || (wolneOdSignal && !explicitSellSignal);
   const serviceSignal = /\b(uslugi remontowe|wykonczenia wnetrz|posrednictwo|agent nieruchomosci|fotografia nieruchomosci)\b/u.test(normalized);
   // A post with an explicit sale keyword AND a strong, unambiguous rental
   // keyword together ("Sprzedam mieszkanie, ale możliwe też do wynajęcia.")
