@@ -140,7 +140,12 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return true;
   }
   if (message?.type === "REPORT_DISCOVERED_GROUPS") {
-    void reportDiscoveredGroups(Array.isArray(message.candidates) ? message.candidates : [], message.diagnostics).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+    void reportDiscoveredGroups(Array.isArray(message.candidates) ? message.candidates : [], message.diagnostics, { skipTabOpen: message.skipTabOpen === true }).then((result) => respond({ ok: true, result })).catch((error) => respond({ ok: false, error: safeError(error) }));
+    return true;
+  }
+  if (message?.type === "RUN_MANAGER_GROUP_DISCOVERY") {
+    if (!isGroupsManagerUrl(_sender?.tab?.url)) { respond({ ok: false, error: "GROUP_DISCOVERY_ORIGIN_REJECTED" }); return false; }
+    void runManagerGroupDiscovery(_sender.tab.id).then((result) => respond({ ok: true, ...result })).catch((error) => respond({ ok: false, error: safeError(error) }));
     return true;
   }
   if (message?.type === "COLLECT_ACTIVE_SOURCE") {
@@ -961,16 +966,71 @@ async function failCollectorScan(scanId, error, diagnostics = {}) {
  * WERYFIKACJI), and the Manager page is the only place a human explicitly
  * selects what to add.
  */
-async function reportDiscoveredGroups(candidates, rawDiagnostics = null) {
+async function reportDiscoveredGroups(candidates, rawDiagnostics = null, { skipTabOpen = false } = {}) {
   const config = await configValue();
   if (!config.apiUrl || !config.deviceId || !config.deviceToken) throw new Error("COLLECTOR_NOT_PAIRED");
   const base = String(config.apiUrl).replace(/\/+$/, "");
   const diagnostics = safeDiscoveryDiagnostics(rawDiagnostics);
   const result = await signedPost(`${base}/api/facebook-watcher/groups/discover`, JSON.stringify({ candidates: candidates.slice(0, 200), diagnostics }), FAIL_REPORT_TIMEOUT_MS);
-  if (result && typeof result.token === "string" && result.token) {
+  // skipTabOpen: the Manager-initiated flow (runManagerGroupDiscovery) already
+  // knows the token via this same function's return value and delivers it to
+  // the tab that asked for discovery directly -- opening a second, redundant
+  // Manager tab here would just be visual clutter. The popup-triggered and
+  // automatic on-page-load paths have no such originating Manager tab, so
+  // they still need this tab-open to ever deliver the result anywhere.
+  if (!skipTabOpen && result && typeof result.token === "string" && result.token) {
     await chrome.tabs.create({ url: `${base}/facebook-watcher#group-discovery=${encodeURIComponent(result.token)}` }).catch(() => {});
   }
   return result;
+}
+
+const GROUPS_JOINS_URL = "https://www.facebook.com/groups/joins/";
+const GROUPS_JOINS_TAB_QUERY_URLS = ["https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/joins/*"];
+const MANAGER_GROUP_DISCOVERY_TAB_LOAD_TIMEOUT_MS = 30_000;
+const MANAGER_GROUP_DISCOVERY_CONTENT_SCRIPT_MAX_ATTEMPTS = 3;
+const MANAGER_GROUP_DISCOVERY_CONTENT_SCRIPT_RETRY_DELAY_MS = 500;
+
+/**
+ * Drives the ENTIRE discovery round trip from a single click on the Manager
+ * page's "Wykryj grupy nieruchomościowe" button, instead of requiring the
+ * user to separately open Facebook and then separately click the extension
+ * popup's own button. Pushes GROUP_DISCOVERY_PROGRESS messages to the
+ * originating Manager tab as it goes (OPENING_FACEBOOK, then READING) so the
+ * page can show live state, not just a final result.
+ */
+async function runManagerGroupDiscovery(originatingTabId) {
+  await pushManagerDiscoveryProgress(originatingTabId, "OPENING_FACEBOOK");
+  const tab = await openOrFocusGroupsJoinsTab();
+  await waitForTab(tab.id, MANAGER_GROUP_DISCOVERY_TAB_LOAD_TIMEOUT_MS);
+  await pushManagerDiscoveryProgress(originatingTabId, "READING");
+  let response = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < MANAGER_GROUP_DISCOVERY_CONTENT_SCRIPT_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      response = await chrome.tabs.sendMessage(tab.id, { type: "RUN_GROUP_DISCOVERY", skipTabOpen: true });
+      break;
+    } catch (error) {
+      lastError = error;
+      await wait(MANAGER_GROUP_DISCOVERY_CONTENT_SCRIPT_RETRY_DELAY_MS);
+    }
+  }
+  if (!response) throw new Error(`GROUP_DISCOVERY_CONTENT_SCRIPT_UNREACHABLE: ${safeError(lastError)}`);
+  if (!response.ok) throw new Error(response.error || "GROUP_DISCOVERY_FAILED");
+  return response.result;
+}
+
+async function openOrFocusGroupsJoinsTab() {
+  const existing = await chrome.tabs.query({ url: GROUPS_JOINS_TAB_QUERY_URLS });
+  if (existing[0]?.id) {
+    await chrome.tabs.update(existing[0].id, { active: true, url: GROUPS_JOINS_URL });
+    return chrome.tabs.get(existing[0].id);
+  }
+  return chrome.tabs.create({ url: GROUPS_JOINS_URL, active: true });
+}
+
+async function pushManagerDiscoveryProgress(tabId, stage) {
+  if (!tabId) return;
+  await chrome.tabs.sendMessage(tabId, { type: "GROUP_DISCOVERY_PROGRESS", stage }).catch(() => {});
 }
 
 function safeDiscoveryDiagnostics(value) {
@@ -1283,5 +1343,7 @@ function normalizeProductionSourceUrl(value, typeHint = null) {
 function isProductionSource(value) { return Boolean(productionSource(value)); }
 function isAllowedExternalSender(sender) { try { const url = new URL(String(sender?.url || "")); return (url.origin === FINDER_ORIGIN || url.origin === "http://localhost:3000") && (url.pathname === "/" || url.pathname.startsWith("/flip-finder")); } catch { return false; } }
 function isFinderUrl(value) { try { const url = new URL(String(value || "")); return url.origin === FINDER_ORIGIN && url.pathname.startsWith("/flip-finder"); } catch { return false; } }
+const MANAGER_ORIGINS = new Set([FINDER_ORIGIN, "http://localhost:3000"]);
+function isGroupsManagerUrl(value) { try { const url = new URL(String(value || "")); return MANAGER_ORIGINS.has(url.origin) && url.pathname.startsWith("/facebook-watcher/groups"); } catch { return false; } }
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function safeError(error) { return error instanceof Error ? error.message.slice(0, 400) : "COLLECTOR_FAILED"; }

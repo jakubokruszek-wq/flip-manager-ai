@@ -82,13 +82,13 @@
     return candidates.map((candidate) => ({ url: candidate.url, name: candidate.name, discoveredAt }));
   }
 
-  async function runGroupDiscovery(root = document) {
+  async function runGroupDiscovery(root = document, { skipTabOpen = false } = {}) {
     const inspected = inspectGroupCandidatesFromDom(root);
     const candidates = inspected.candidates;
     const payload = buildDiscoveryPayload(candidates);
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
       return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "REPORT_DISCOVERED_GROUPS", candidates: payload, diagnostics: inspected.diagnostics }, (response) => resolve(response));
+        chrome.runtime.sendMessage({ type: "REPORT_DISCOVERED_GROUPS", candidates: payload, diagnostics: inspected.diagnostics, skipTabOpen }, (response) => resolve(response));
       });
     }
     return { ok: false, error: "NO_RUNTIME" };
@@ -109,7 +109,7 @@
       // Passes runGroupDiscovery()'s own result straight through (already
       // { ok, result } / { ok: false, error } from background.js's
       // REPORT_DISCOVERED_GROUPS handler) rather than wrapping it again.
-      void runGroupDiscovery().then((result) => respond(result)).catch((error) => respond({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      void runGroupDiscovery(document, { skipTabOpen: message.skipTabOpen === true }).then((result) => respond(result)).catch((error) => respond({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       return true;
     });
   }

@@ -40,6 +40,11 @@
       "run_at": "document_start"
     },
     {
+      "matches": ["https://flip-manager-ai.vercel.app/facebook-watcher/groups*", "http://localhost:3000/facebook-watcher/groups*"],
+      "js": ["group-discovery-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
       "matches": ["https://flip-manager-ai.vercel.app/flip-finder*", "http://localhost:3000/flip-finder*"],
       "js": ["bootstrap.js"],
       "run_at": "document_start"

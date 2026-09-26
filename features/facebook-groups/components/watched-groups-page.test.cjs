@@ -68,3 +68,37 @@ test("the preview and import requests send the token in a POST body, never a GET
 test("no unauthenticated GET-based 'last preview' fetch remains", () => {
   assert.doesNotMatch(source, /facebookGroupsFetch\("\/api\/facebook-watcher\/groups\/discover",\s*\{\s*cache:\s*"no-store"\s*\}\)/, "the old unauthenticated GET /discover call must be gone");
 });
+
+// Real production bug: "Otwórz Twoje grupy na Facebooku" was a plain <a>
+// link -- it opened Facebook but never told the extension to do anything,
+// so the Manager always showed "no active discovery session" regardless of
+// what happened on Facebook. The button must now actually drive a session.
+test("the discovery button sends a real message to the extension instead of only opening a link", () => {
+  assert.doesNotMatch(source, /render=\{<a href="https:\/\/www\.facebook\.com\/groups\/joins\/"/, "the old plain-link button must be gone");
+  assert.match(source, /window\.postMessage\(\{ type: "FLIP_GROUP_DISCOVERY_REQUEST" \}, window\.location\.origin\)/, "clicking the button must actually message the extension, not just navigate");
+  assert.match(source, /onClick=\{onRunDiscovery\}/, "the button's onClick must trigger the real discovery flow, not just render a link");
+});
+
+test("the discovery flow exposes every mission-required state, driven by the extension's own ACK/progress/result messages", () => {
+  for (const state of ["IDLE", "WAITING", "FACEBOOK_OPENED", "READING", "RECEIVED", "NO_SESSION", "ERROR"]) {
+    assert.match(source, new RegExp(`"${state}"`), `flow state ${state} must exist`);
+  }
+  assert.match(source, /FLIP_GROUP_DISCOVERY_ACK/, "the extension must be able to confirm it received the command");
+  assert.match(source, /FLIP_GROUP_DISCOVERY_PROGRESS/);
+  assert.match(source, /FLIP_GROUP_DISCOVERY_RESULT/);
+  assert.match(source, /stage === "OPENING_FACEBOOK"\) setFlowState\("FACEBOOK_OPENED"\)/);
+  assert.match(source, /stage === "READING"\) setFlowState\("READING"\)/);
+});
+
+test("an unresponsive extension shows a specific 'no session' diagnostic, never a generic 'no groups found' message", () => {
+  assert.match(source, /setFlowState\("NO_SESSION"\)/);
+  assert.match(source, /Rozszerzenie Flip Collector nie odpowiedziało/, "a timed-out request must name the extension as the specific problem");
+  assert.doesNotMatch(source.match(/const timeoutId = window\.setTimeout\([\s\S]*?\}, 8_000\);/)?.[0] ?? "", /Brak wykrytych grup/, "the timeout path must never reuse the generic empty-results copy");
+});
+
+test("the origin check on every posted message prevents another page from spoofing discovery events", () => {
+  const listenerBody = source.match(/const listener = \(event: MessageEvent\) => \{[\s\S]*?\n    \};/)?.[0];
+  assert.ok(listenerBody, "the message listener must exist");
+  assert.match(listenerBody, /event\.origin !== window\.location\.origin/, "messages from a different origin must be ignored");
+  assert.match(listenerBody, /event\.source !== window/, "messages not from this same window must be ignored");
+});

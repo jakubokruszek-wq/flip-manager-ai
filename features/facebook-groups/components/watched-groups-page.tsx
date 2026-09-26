@@ -24,6 +24,27 @@ import { resolveFacebookGroupDisplayName } from "../display-name";
 
 const IMPORTABLE_STATUSES = new Set<FacebookGroupImportPreviewItem["status"]>(["NOWA", "MOZLIWY_DUPLIKAT"]);
 
+type DiscoveryFlowState = "IDLE" | "WAITING" | "FACEBOOK_OPENED" | "READING" | "RECEIVED" | "NO_SESSION" | "ERROR";
+
+const DISCOVERY_FLOW_LABEL: Record<DiscoveryFlowState, string> = {
+  IDLE: "Oczekuje",
+  WAITING: "Oczekuje",
+  FACEBOOK_OPENED: "Otwarto Facebooka",
+  READING: "Odczytywanie",
+  RECEIVED: "Odebrano wyniki",
+  NO_SESSION: "Brak sesji",
+  ERROR: "Błąd",
+};
+
+function discoveryFlowErrorMessage(code: string | undefined): string {
+  if (code === "GROUP_DISCOVERY_ORIGIN_REJECTED") return "Rozszerzenie odrzuciło żądanie z tej strony.";
+  if (code === "COLLECTOR_NOT_PAIRED") return "Rozszerzenie nie jest sparowane z Flip Managerem. Skonfiguruj je najpierw.";
+  if (code?.startsWith("GROUP_DISCOVERY_CONTENT_SCRIPT_UNREACHABLE")) return "Nie udało się połączyć ze stroną Facebooka. Spróbuj ponownie.";
+  if (code === "FACEBOOK_TAB_LOAD_TIMEOUT") return "Facebook nie wczytał się na czas. Spróbuj ponownie.";
+  if (code === "EXTENSION_CONTEXT_INVALIDATED") return "Rozszerzenie zostało przeładowane w trakcie działania. Spróbuj ponownie.";
+  return code ? `Wykrywanie grup nie powiodło się: ${code}` : "Wykrywanie grup nie powiodło się z nieznanego powodu.";
+}
+
 const initial: FacebookGroupCreatePayload = {
   type: "GROUP",
   name: "",
@@ -48,6 +69,8 @@ export function WatchedGroupsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [previewNames, setPreviewNames] = useState<Record<string, string>>({});
   const [historicalMapping, setHistoricalMapping] = useState<HistoricalFacebookSourceMapping[]>([]);
+  const [flowState, setFlowState] = useState<DiscoveryFlowState>("IDLE");
+  const [flowError, setFlowError] = useState<string | null>(null);
 
   const load = async () => {
     const response = await facebookGroupsFetch("/api/facebook-watcher/groups", { cache: "no-store" });
@@ -81,6 +104,54 @@ export function WatchedGroupsPage() {
     setPreview(items);
     setPreviewExpiresAt(body.expiresAt ?? null);
     setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
+  };
+
+  // Drives the ENTIRE discovery round trip from one click, instead of
+  // requiring the user to separately open Facebook and separately click the
+  // extension popup's own button -- the click that reportedly "opened
+  // Facebook but the Manager still showed no session" because the button
+  // was, until now, a plain link with no actual message to the extension.
+  // group-discovery-bridge.js (injected only on this exact page) relays
+  // this to background.js's runManagerGroupDiscovery(), which opens/reloads
+  // the real Facebook "Twoje grupy" tab and runs the same scan the
+  // extension popup's own button triggers.
+  const runDiscoveryViaExtension = () => {
+    setFlowState("WAITING");
+    setFlowError(null);
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("message", listener);
+      setFlowState("NO_SESSION");
+      setFlowError("Rozszerzenie Flip Collector nie odpowiedziało. Sprawdź, czy jest zainstalowane, przeładowane i wskazuje na katalog extensions/facebook-collector.");
+    }, 8_000);
+    const listener = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== window.location.origin || !event.data || typeof event.data !== "object") return;
+      const data = event.data as { type?: string; stage?: string; ok?: boolean; token?: string; expiresAt?: string; error?: string };
+      if (data.type === "FLIP_GROUP_DISCOVERY_ACK") {
+        settled = true;
+        window.clearTimeout(timeoutId);
+        return;
+      }
+      if (data.type === "FLIP_GROUP_DISCOVERY_PROGRESS") {
+        if (data.stage === "OPENING_FACEBOOK") setFlowState("FACEBOOK_OPENED");
+        else if (data.stage === "READING") setFlowState("READING");
+        return;
+      }
+      if (data.type === "FLIP_GROUP_DISCOVERY_RESULT") {
+        window.removeEventListener("message", listener);
+        if (data.ok && typeof data.token === "string") {
+          setFlowState("RECEIVED");
+          void loadDiscoveryPreviewForToken(data.token);
+        } else {
+          setFlowState("ERROR");
+          setFlowError(discoveryFlowErrorMessage(data.error));
+        }
+      }
+    };
+    window.addEventListener("message", listener);
+    window.postMessage({ type: "FLIP_GROUP_DISCOVERY_REQUEST" }, window.location.origin);
   };
 
   const loadHistoricalMapping = async () => {
@@ -307,6 +378,9 @@ export function WatchedGroupsPage() {
         busy={busy}
         onRefresh={discoveryToken ? () => void loadDiscoveryPreviewForToken(discoveryToken).catch((value: unknown) => setDiscoveryError(errorMessage(value, "Nie udało się pobrać wyników wykrywania grup."))) : undefined}
         onImport={() => void importSelected()}
+        flowState={flowState}
+        flowError={flowError}
+        onRunDiscovery={runDiscoveryViaExtension}
       />
 
       <GroupSection title={`Aktywne grupy (${partitioned.active.length})`} empty="Brak aktywnych grup." groups={partitioned.active} onEdit={setEditing} onRemove={setRemoving} onToggle={(group) => void update(group, groupPatch(group, { enabled: false }), "Grupa została wstrzymana.")} />
@@ -335,7 +409,7 @@ export function WatchedGroupsPage() {
   );
 }
 
-function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discoveryError, previewNames, onNameChange, selected, onToggleSelected, busy, onRefresh, onImport }: {
+function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discoveryError, previewNames, onNameChange, selected, onToggleSelected, busy, onRefresh, onImport, flowState, flowError, onRunDiscovery }: {
   preview: FacebookGroupImportPreviewItem[];
   previewExpiresAt: string | null;
   discoveryToken: string | null;
@@ -347,32 +421,37 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
   busy: boolean;
   onRefresh?: () => void;
   onImport: () => void;
+  flowState: DiscoveryFlowState;
+  flowError: string | null;
+  onRunDiscovery: () => void;
 }) {
   const selectableCount = preview.filter((item) => IMPORTABLE_STATUSES.has(item.status)).length;
   const selectedCount = preview.filter((item) => selected.has(item.url) && IMPORTABLE_STATUSES.has(item.status)).length;
+  const flowBusy = flowState === "WAITING" || flowState === "FACEBOOK_OPENED" || flowState === "READING";
   return (
     <section className="ui-section space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold">Wykryj grupy nieruchomościowe</h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Kliknij &quot;Wykryj grupy nieruchomościowe&quot; w rozszerzeniu Facebook Collector (na stronie Twoich grup na Facebooku) — rozszerzenie otworzy tę stronę z wynikami automatycznie. Nazwa każdej grupy pochodzi z tego, co rozszerzenie faktycznie odczytało na Facebooku, nigdy z domysłu ani ze zrzutu ekranu.
+            Kliknij poniższy przycisk, aby otworzyć Facebooka i uruchomić wykrywanie grup jednym krokiem. Nazwa każdej grupy pochodzi z tego, co rozszerzenie faktycznie odczytało na Facebooku, nigdy z domysłu ani ze zrzutu ekranu.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
-            variant="outline"
             className="min-h-11"
-            nativeButton={false}
-            render={<a href="https://www.facebook.com/groups/joins/" target="_blank" rel="noopener noreferrer" />}
+            disabled={flowBusy}
+            onClick={onRunDiscovery}
           >
-            <Search className="size-4" />Otwórz Twoje grupy na Facebooku
+            <Search className="size-4" />{flowBusy ? "Wykrywanie…" : "Wykryj grupy na Facebooku"}
           </Button>
+          <span aria-live="polite" className="ui-badge" data-state={flowState}>{DISCOVERY_FLOW_LABEL[flowState]}</span>
           {onRefresh ? <Button variant="outline" className="min-h-11" onClick={onRefresh}><RefreshCw className="size-4" />Odśwież podgląd</Button> : null}
         </div>
       </div>
+      {flowError ? <p className="text-sm text-danger" role="alert">{flowError}</p> : null}
       {discoveryError ? <p className="text-sm text-danger" role="alert">{discoveryError}</p> : null}
-      {!discoveryToken && !discoveryError ? <p className="text-xs text-muted-foreground">Brak aktywnej sesji wykrywania. Uruchom &quot;Wykryj grupy nieruchomościowe&quot; z rozszerzenia na Facebooku.</p> : null}
+      {!discoveryToken && !discoveryError && !flowError ? <p className="text-xs text-muted-foreground">Brak aktywnej sesji wykrywania. Kliknij &quot;Wykryj grupy na Facebooku&quot; powyżej.</p> : null}
       {discoveryToken && previewExpiresAt ? <p className="text-xs text-muted-foreground">Sesja wykrywania wygasa: {new Date(previewExpiresAt).toLocaleString("pl-PL")}</p> : null}
       {preview.length ? (
         <div className="space-y-2">

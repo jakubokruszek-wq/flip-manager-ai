@@ -290,6 +290,44 @@ test("reportDiscoveredGroups hands off the Manager page via a URL fragment, neve
   assert.match(fn, /signedPost\(/, "the discovery report itself must still go through the existing signed-device request scheme");
 });
 
+// Real production bug: the Manager's "Otwórz Twoje grupy na Facebooku"
+// button only ever opened a link -- it never told the extension to do
+// anything, so the Manager always showed no active session regardless of
+// what happened on Facebook. runManagerGroupDiscovery is the fix: it opens/
+// focuses the real Facebook "Twoje grupy" tab, waits for it to load, then
+// asks that tab's own content script (group-discovery.js) to run the
+// existing scan, with skipTabOpen so reportDiscoveredGroups doesn't also
+// open a second, redundant Manager tab -- the Manager tab that asked is the
+// one that gets the result directly.
+test("RUN_MANAGER_GROUP_DISCOVERY is origin-checked and drives the real Facebook tab, never bypassing REPORT_DISCOVERED_GROUPS's own auth", () => {
+  assert.match(background, /if \(message\?\.type === "RUN_MANAGER_GROUP_DISCOVERY"\) \{/);
+  const start = background.indexOf('if (message?.type === "RUN_MANAGER_GROUP_DISCOVERY")');
+  const branch = background.slice(start, start + 300);
+  assert.match(branch, /isGroupsManagerUrl\(_sender\?\.tab\?\.url\)/, "the caller's own tab URL must be verified before running anything");
+  assert.match(branch, /runManagerGroupDiscovery\(_sender\.tab\.id\)/);
+
+  const fnStart = background.indexOf("async function runManagerGroupDiscovery(");
+  assert.ok(fnStart >= 0, "runManagerGroupDiscovery must exist");
+  const fn = background.slice(fnStart, background.indexOf("\nasync function openOrFocusGroupsJoinsTab"));
+  assert.match(fn, /await pushManagerDiscoveryProgress\(originatingTabId, "OPENING_FACEBOOK"\)/);
+  assert.match(fn, /await waitForTab\(tab\.id, MANAGER_GROUP_DISCOVERY_TAB_LOAD_TIMEOUT_MS\)/, "must reuse the existing, already-tested tab-load waiter, not a new ad-hoc one");
+  assert.match(fn, /await pushManagerDiscoveryProgress\(originatingTabId, "READING"\)/);
+  assert.match(fn, /chrome\.tabs\.sendMessage\(tab\.id, \{ type: "RUN_GROUP_DISCOVERY", skipTabOpen: true \}\)/);
+});
+
+test("isGroupsManagerUrl only accepts the real Manager groups page, never an arbitrary origin", () => {
+  assert.match(background, /function isGroupsManagerUrl\(value\) \{ try \{ const url = new URL\(String\(value \|\| ""\)\); return MANAGER_ORIGINS\.has\(url\.origin\) && url\.pathname\.startsWith\("\/facebook-watcher\/groups"\); \} catch \{ return false; \} \}/);
+});
+
+test("reportDiscoveredGroups accepts a skipTabOpen option, and REPORT_DISCOVERED_GROUPS threads it through from the message", () => {
+  const fn = background.slice(background.indexOf("async function reportDiscoveredGroups"), background.indexOf("\nconst GROUPS_JOINS_URL"));
+  assert.match(fn, /async function reportDiscoveredGroups\(candidates, rawDiagnostics = null, \{ skipTabOpen = false \} = \{\}\)/);
+  assert.match(fn, /if \(!skipTabOpen && result/, "the Manager-driven flow must be able to suppress the redundant second tab");
+  const discoveredGroupsStart = background.indexOf('if (message?.type === "REPORT_DISCOVERED_GROUPS")');
+  const discoveredGroupsBranch = background.slice(discoveredGroupsStart, discoveredGroupsStart + 300);
+  assert.match(discoveredGroupsBranch, /skipTabOpen: message\.skipTabOpen === true/);
+});
+
 test("health preflight always refreshes stale or healthy pairing and fails closed", async () => {
   const context = vm.createContext({ globalThis: {}, Promise, Error });
   vm.runInContext(preflight, context);
