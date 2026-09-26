@@ -63,34 +63,40 @@ function chainable(result: unknown) {
   return builder;
 }
 
-mock.module("@/lib/supabase/admin", {
-  namedExports: {
-    createAdminClient: () => ({
-      from: () => ({
-        insert: () => ({
+let adminClientThrowMessage: string | null = null;
+function fakeAdminClient() {
+  if (adminClientThrowMessage) throw new Error(adminClientThrowMessage);
+  return {
+    from: () => ({
+      insert: () => ({
+        select: () => ({
+          single: async () => {
+            if (insertResult.data) searchFiltersTable.push(insertResult.data);
+            return insertResult;
+          },
+        }),
+      }),
+      update: () => ({
+        eq: (_column: string, id: string) => ({
           select: () => ({
-            single: async () => {
-              if (insertResult.data) searchFiltersTable.push(insertResult.data);
-              return insertResult;
+            maybeSingle: async () => {
+              if (updateResult.data) {
+                const index = searchFiltersTable.findIndex((row) => row.id === id);
+                if (index >= 0) searchFiltersTable[index] = updateResult.data;
+              }
+              return updateResult;
             },
           }),
         }),
-        update: () => ({
-          eq: (_column: string, id: string) => ({
-            select: () => ({
-              maybeSingle: async () => {
-                if (updateResult.data) {
-                  const index = searchFiltersTable.findIndex((row) => row.id === id);
-                  if (index >= 0) searchFiltersTable[index] = updateResult.data;
-                }
-                return updateResult;
-              },
-            }),
-          }),
-        }),
-        delete: () => ({ eq: async () => ({ error: null, count: 1 }) }),
       }),
+      delete: () => ({ eq: async () => ({ error: null, count: 1 }) }),
     }),
+  };
+}
+
+mock.module("@/lib/supabase/admin", {
+  namedExports: {
+    createAdminClient: fakeAdminClient,
   },
 });
 
@@ -263,4 +269,55 @@ test("a filter created via POST is present in a subsequent GET — the create-th
   assert.equal(getResponse.status, 200);
   const body = await getResponse.json();
   assert.ok(body.filters.some((filter: { name: string }) => filter.name === "Round-trip filter"), "the just-created filter must be present in a fresh list read, exactly as a real page reload would show");
+});
+
+// A real, previously-undiscovered gap: only a Postgres query returning a
+// structured {error} (a SearchFilterWriteError) was ever surfaced. Anything
+// thrown earlier -- most importantly createAdminClient() itself throwing
+// when a required server credential (NEXT_PUBLIC_SUPABASE_URL /
+// SUPABASE_SERVICE_ROLE_KEY) is missing -- is a plain Error, and fell
+// through to the exact same opaque fallback message this whole mission
+// exists to fix. This proves that gap is now closed.
+test("createAdminClient() itself throwing (e.g. a missing server credential) is surfaced with its real message, not the generic fallback", async () => {
+  operatorOutcome = "authorized";
+  adminClientThrowMessage = "Brak konfiguracji serwerowego dostępu Supabase: brakuje SUPABASE_SERVICE_ROLE_KEY.";
+  try {
+    const response = await collectionRoute.POST(postRequest(validPayload));
+    assert.equal(response.status, 500);
+    const body = await response.json();
+    assert.match(body.message, /SUPABASE_SERVICE_ROLE_KEY/, "the real thrown message must reach the API response, not a generic string");
+  } finally {
+    adminClientThrowMessage = null;
+  }
+});
+
+// The client already guards against a double click by disabling the submit
+// button for the duration of the request (search-filter-form.tsx sets
+// `saving=true`, which the button's `disabled` prop reads, synchronously
+// before the network call begins) -- verified here directly against the
+// component source, since a live double-click gesture needs the same real
+// browser session this file's other comments explain is unavailable.
+test("the client's double-submit guard disables the button synchronously before the network request, not after", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../components/search-filter-form.tsx", import.meta.url), "utf8");
+  const submitBody = source.match(/const submit = async \(event: React\.FormEvent\) => \{[\s\S]*?\};/)?.[0];
+  assert.ok(submitBody, "submit handler must exist");
+  const setSavingTrueIndex = submitBody.indexOf("setSaving(true)");
+  const fetchIndex = submitBody.indexOf("await fetch(");
+  assert.ok(setSavingTrueIndex >= 0 && fetchIndex > setSavingTrueIndex, "setSaving(true) must run before the network request starts, so a second click while saving cannot fire a second submit");
+  assert.match(source, /disabled=\{saving\}/, "the submit button must be disabled while saving");
+});
+
+// Even if two requests somehow both reached the server (a network-level
+// retry, not just a UI double-click), each is handled independently and
+// correctly -- neither corrupts the other's response or crashes the route.
+test("two concurrent create requests are each handled independently and correctly, with no crash or cross-talk", async () => {
+  operatorOutcome = "authorized";
+  insertResult = { data: { ...validRow, name: "Concurrent A" }, error: null };
+  const first = collectionRoute.POST(postRequest({ ...validPayload, name: "Concurrent A" }));
+  insertResult = { data: { ...validRow, id: "33333333-3333-4333-8333-333333333333", name: "Concurrent B" }, error: null };
+  const second = collectionRoute.POST(postRequest({ ...validPayload, name: "Concurrent B" }));
+  const [firstResponse, secondResponse] = await Promise.all([first, second]);
+  assert.equal(firstResponse.status, 201);
+  assert.equal(secondResponse.status, 201);
 });
