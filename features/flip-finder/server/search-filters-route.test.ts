@@ -108,6 +108,25 @@ mock.module("@/lib/supabase/server", {
   },
 });
 
+// The route-level wiring ("does create/edit trigger a recalculation, scoped
+// how") is verified here via a spy on the direct dependency, not by making
+// this file's fake admin client emulate every table recalculateFilterMatches
+// itself reads. Its own numeric behavior (thresholds, match_reasons,
+// is_current_match, zero facebook_scan_jobs) is proven separately, against
+// the real function, in filter-save-recalculation-runtime.test.ts.
+const recalculateCalls: { filterId: string; options: unknown }[] = [];
+const recalculateFixture: unknown = { evaluated: 1, matchesBefore: 0, addedMatches: 1, removedMatches: 0, unchangedMatches: 0, matchesAfter: 1, rejectedByPricePerSqm: 0, rejectedByOtherCriteria: 0, maxPricePerSqmBefore: null, maxPricePerSqmAfter: 6_625.3, reconciliationAllowed: true, reconciliationReason: "EXPLICIT_MANUAL_RECALCULATION" };
+let recalculateShouldThrow = false;
+mock.module("@/features/flip-finder/server/filter-match-recalculation", {
+  namedExports: {
+    recalculateFilterMatches: async (filterId: string, options: unknown) => {
+      recalculateCalls.push({ filterId, options });
+      if (recalculateShouldThrow) throw new Error("boom");
+      return recalculateFixture;
+    },
+  },
+});
+
 const collectionRoute = await import("../../../app/api/flip-finder/search-filters/route.ts");
 const itemRoute = await import("../../../app/api/flip-finder/search-filters/[id]/route.ts");
 
@@ -206,7 +225,42 @@ test("an authorized operator can create a filter", async () => {
   const response = await collectionRoute.POST(postRequest(validPayload));
   assert.equal(response.status, 201);
   const body = await response.json();
-  assert.equal(body.name, "Test filter");
+  assert.equal(body.filter.name, "Test filter");
+});
+
+// Section 2 of the auth-stability/auto-recalculation mission: a brand-new
+// filter must be matched against already-saved public.listings immediately,
+// not left empty until the next scan. This proves the CREATE route wires
+// recalculateFilterMatches exactly like the edit route already does — the
+// numeric correctness of recalculateFilterMatches itself is proven for real
+// in filter-save-recalculation-runtime.test.ts.
+test("creating a filter recalculates matches against public.listings immediately, without a scan", async () => {
+  operatorOutcome = "authorized";
+  insertResult = { data: validRow, error: null };
+  recalculateCalls.length = 0;
+  const response = await collectionRoute.POST(postRequest(validPayload));
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.deepEqual(body.recalculation, recalculateFixture);
+  assert.equal(recalculateCalls.length, 1);
+  assert.equal(recalculateCalls[0].filterId, validRow.id);
+  assert.deepEqual(recalculateCalls[0].options, { allowWithoutScan: true });
+});
+
+test("if recalculation fails right after creating a filter, the filter is still saved and the response says so — never a false plain success", async () => {
+  operatorOutcome = "authorized";
+  insertResult = { data: validRow, error: null };
+  recalculateShouldThrow = true;
+  try {
+    const response = await collectionRoute.POST(postRequest(validPayload));
+    assert.equal(response.status, 201, "the filter row itself was written successfully and must not be reported as failed");
+    const body = await response.json();
+    assert.equal(body.filter.name, "Test filter");
+    assert.equal(body.recalculation, null);
+    assert.match(body.recalculationWarning, /nie udało się przeliczyć/i);
+  } finally {
+    recalculateShouldThrow = false;
+  }
 });
 
 test("a database error while creating a filter returns a specific, diagnostic message — never the same opaque string regardless of cause", async () => {
@@ -222,10 +276,15 @@ test("a database error while creating a filter returns a specific, diagnostic me
 test("an authorized operator can update a filter, and it round-trips through GET immediately after — the exact regression this mission guards", async () => {
   operatorOutcome = "authorized";
   updateResult = { data: { ...validRow, name: "Updated filter" }, error: null };
+  recalculateCalls.length = 0;
   const response = await itemRoute.PATCH(patchRequest({ ...validPayload, name: "Updated filter" }), { params: Promise.resolve({ id: validRow.id }) });
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.filter.name, "Updated filter");
+  assert.deepEqual(body.recalculation, recalculateFixture);
+  assert.equal(recalculateCalls.length, 1, "editing a filter must also recalculate immediately, exactly like creating one");
+  assert.equal(recalculateCalls[0].filterId, validRow.id);
+  assert.deepEqual(recalculateCalls[0].options, { allowWithoutScan: true });
 });
 
 test("a database error while updating a filter returns a specific, diagnostic message", async () => {
