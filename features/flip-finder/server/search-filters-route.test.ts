@@ -66,7 +66,7 @@ function chainable(result: unknown) {
 mock.module("@/lib/supabase/admin", {
   namedExports: {
     createAdminClient: () => ({
-      from: (table: string) => ({
+      from: () => ({
         insert: () => ({
           select: () => ({
             single: async () => {
