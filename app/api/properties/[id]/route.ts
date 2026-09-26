@@ -68,6 +68,21 @@ export async function DELETE(_request: Request, { params }: Context) {
   }
 
   if (!property) {
+    // A confirmed, distinct id-space mixup this mission could not reproduce
+    // end-to-end (no current UI path was found that passes a listings id
+    // here), but worth guarding regardless: public.properties and
+    // public.listings are separate tables with separately generated UUIDs,
+    // so an id that is a genuine listing must never be silently reported as
+    // "not found" the same way a truly nonexistent id would be — that
+    // generic message is exactly what masks a wrong-table bug from whoever
+    // is debugging it next.
+    const { data: listing } = await supabase.from("listings").select("id").eq("id", id).maybeSingle();
+    if (listing) {
+      return Response.json(
+        { message: "Ten identyfikator odpowiada ofercie (public.listings), a nie nieruchomości (public.properties). Ofert nie można usuwać przez ten punkt końcowy.", code: "ID_BELONGS_TO_LISTING" },
+        { status: 409 },
+      );
+    }
     return Response.json({ message: "Nie znaleziono nieruchomości." }, { status: 404 });
   }
 
