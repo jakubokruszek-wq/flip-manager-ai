@@ -14,6 +14,23 @@ import { selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT }
 
 type Row = Record<string, unknown>;
 
+/**
+ * Carries the real Postgres/PostgREST error code and message so the API
+ * route can return a specific, diagnostic response instead of always the
+ * same generic "Nie udało się zapisać filtra." regardless of cause (a
+ * permission error, a check-constraint violation, a missing environment
+ * credential, etc. all looked identical to the operator before this).
+ */
+export class SearchFilterWriteError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "SearchFilterWriteError";
+    this.code = code;
+  }
+}
+
 const SOURCE_SCAN_COLUMNS =
   "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message";
 
@@ -252,7 +269,7 @@ async function writeSearchFilter(
 
   if (error) {
     console.error("FLIP FINDER WRITE ERROR:", error);
-    throw new Error("Nie udało się zapisać filtra.");
+    throw new SearchFilterWriteError(error.code || "unknown", error.message);
   }
 
   return data ? toSearchFilter(asRow(data)) : null;
