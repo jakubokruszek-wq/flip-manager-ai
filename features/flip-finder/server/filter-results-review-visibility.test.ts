@@ -245,6 +245,46 @@ test("I (duplicate-listing regression): a duplicated listing_filter_matches row 
   assert.equal(payload.reviewResults.filter((item) => item.id === "listing-dup-row").length, 1, "a duplicated match row must never produce two entries for the same canonical listing");
 });
 
+// Duplicate/status-disjointness mission: three write paths (persist-listing.ts's
+// deactivateListingFilterMatch, listing-lifecycle/server.ts's
+// runListingLifecycleBatch, clear-results.ts's clearFilterResults) update
+// is_current_match/lifecycle_status independently, outside the single atomic
+// RPC (reconcile_canonical_listing_decision) that normally keeps them in
+// lockstep -- so real drift between the two is possible. canonicalConsistencyMismatch
+// exists specifically to detect that drift at read time, but had zero test
+// coverage: nothing proved it actually fires. This closes that gap.
+test("J (consistency-detector regression): a listing whose persisted lifecycle_status has drifted from what the live canonical decision computes is flagged canonicalConsistencyMismatch=true, and still lands in exactly one bucket", async () => {
+  const db = freshDb();
+  // Complete evidence (building type + ownership present) plus price/area/
+  // rooms that satisfy the filter outright -> the live canonical decision is
+  // a genuine MATCHED with no missing fields. lifecycle_status is stale at
+  // "REVIEW" (as if only is_current_match had been kept current by a non-RPC
+  // write path, without also correcting lifecycle_status back to ACTIVE).
+  db.seed("listings", [listingRow({ id: "listing-drifted", building_type: "blok", ownership: "pełna własność", price: 300000, area: 45, price_per_sqm: 300000 / 45, missing_fields: [], review_reason: null, lifecycle_status: "REVIEW" })]);
+  db.seed("listing_filter_matches", [membershipRow("listing-drifted", { is_current_match: true, match_reasons: [] })]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  assert.ok(payload);
+  const inResults = payload.results.find((item) => item.id === "listing-drifted");
+  const inReview = payload.reviewResults.some((item) => item.id === "listing-drifted");
+  assert.ok(inResults, "the live canonical decision (MATCHED, no missing fields) must still win and place the listing in results");
+  assert.equal(inReview, false, "never simultaneously in reviewResults despite the stale lifecycle_status='REVIEW'");
+  assert.equal(inResults?.canonicalConsistencyMismatch, true, "the drift between lifecycle_status='REVIEW' and the live MATCHED decision must be flagged, not silently ignored");
+});
+
+test("J2 (consistency-detector regression, no false positive): a healthy, non-drifted MATCHED listing is never flagged canonicalConsistencyMismatch", async () => {
+  const db = freshDb();
+  db.seed("listings", [listingRow({ id: "listing-healthy", building_type: "blok", ownership: "pełna własność", price: 300000, area: 45, price_per_sqm: 300000 / 45, missing_fields: [], review_reason: null, lifecycle_status: "ACTIVE" })]);
+  db.seed("listing_filter_matches", [membershipRow("listing-healthy", { is_current_match: true, match_reasons: [] })]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  const result = payload?.results.find((item) => item.id === "listing-healthy");
+  assert.ok(result);
+  assert.equal(result?.canonicalConsistencyMismatch, false, "a listing whose lifecycle_status already agrees with the live decision must never be flagged");
+});
+
 test("G: a manual_decision=REJECTED listing stays excluded regardless of otherwise-matching canonical evidence — existing manual-decision behavior unchanged", async () => {
   const db = freshDb();
   db.seed("listings", [listingRow({ id: "listing-manual-reject", building_type: "blok", ownership: "pełna własność", missing_fields: [], review_reason: null, manual_decision: "REJECTED" })]);
