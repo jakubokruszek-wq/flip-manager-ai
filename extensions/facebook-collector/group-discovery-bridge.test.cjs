@@ -45,4 +45,5 @@ test("publicResult never forwards anything beyond the documented, whitelisted fi
   assert.match(body, /token: typeof value\?\.token === "string" \? value\.token : undefined/);
   assert.match(body, /expiresAt: typeof value\?\.expiresAt === "string" \? value\.expiresAt : undefined/);
   assert.match(body, /error: typeof value\?\.error === "string" \? value\.error : undefined/);
+  assert.match(body, /diagnostics: value\?\.diagnostics && typeof value\.diagnostics === "object" \? value\.diagnostics : undefined/);
 });

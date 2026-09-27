@@ -91,7 +91,34 @@ test("discovery diagnostics count examined, accepted, rejected, and duplicate an
     anchor("https://www.facebook.com/groups/999/posts/1/", "Post"),
     anchor("https://example.com/groups/100/", "Foreign"),
   ]));
-  assert.deepEqual(result.diagnostics, { examined: 4, accepted: 1, rejected: 2, duplicates: 1, loadedOnly: true });
+  assert.deepEqual(result.diagnostics, { pageUrl: null, examined: 4, accepted: 1, namesFound: 1, rejected: 2, duplicates: 1, loadedOnly: true, reason: null });
+});
+
+// "Nie uznawaj samego działania Collectora za dowód działania discovery":
+// when discovery genuinely finds nothing, the operator needs a specific,
+// actionable reason, not just silence -- distinguishing "the page had no
+// /groups/ links at all" (wrong page, or Facebook's markup changed) from
+// "every examined anchor was rejected" from a generic empty result.
+test("an empty result carries a specific, human-readable reason distinguishing why nothing was found", () => {
+  const { inspectGroupCandidatesFromDom } = loadModule();
+  const noLinksAtAll = inspectGroupCandidatesFromDom(fakeRoot([]));
+  assert.equal(noLinksAtAll.diagnostics.reason, "NO_LINKS_ON_PAGE");
+
+  const onlyRejected = inspectGroupCandidatesFromDom(fakeRoot([anchor("https://example.com/groups/100/", "Foreign")]));
+  assert.equal(onlyRejected.diagnostics.reason, "NO_GROUP_LINKS_AMONG_EXAMINED_ANCHORS");
+
+  const found = inspectGroupCandidatesFromDom(fakeRoot([anchor("https://www.facebook.com/groups/999/", "Group")]));
+  assert.equal(found.diagnostics.reason, null, "a non-empty result must never carry a 'why empty' reason");
+});
+
+test("diagnostics count how many accepted candidates have a real, readable name versus none at all", () => {
+  const { inspectGroupCandidatesFromDom } = loadModule();
+  const result = inspectGroupCandidatesFromDom(fakeRoot([
+    anchor("https://www.facebook.com/groups/111/", "Named Group"),
+    anchor("https://www.facebook.com/groups/222/", "   "),
+  ]));
+  assert.equal(result.diagnostics.accepted, 2);
+  assert.equal(result.diagnostics.namesFound, 1, "only the genuinely named candidate must count toward namesFound");
 });
 
 test("buildDiscoveryPayload attaches a discoveredAt timestamp to every candidate", () => {
@@ -150,6 +177,28 @@ test("a page with no lazy-loaded groups at all (candidate count already stable f
   assert.equal(result.candidates.length, 1);
   assert.equal(result.diagnostics.stabilized, true);
   assert.equal(scrollCalls, 2, "must still confirm stability with the minimum required rounds before stopping, not stop after a single read");
+});
+
+// Facebook is a heavy client-rendered SPA: this content script runs at
+// document_idle, which can fire before React has actually painted the group
+// list -- an immediate read could see zero links even on the right page
+// with intact selectors, purely from a timing race. waitForInitialRender
+// exists to poll for the first real content before the scroll loop starts.
+test("waitForInitialRender polls until the first group link actually appears, instead of reading an empty pre-render DOM once", async () => {
+  const { waitForInitialRender } = loadModule();
+  let renderTick = 0;
+  const root = { querySelectorAll: (selector) => (selector === "a[href]" && renderTick >= 3 ? [anchor("https://www.facebook.com/groups/1/", "Group")] : []) };
+  const result = await waitForInitialRender(root, { waitFn: () => { renderTick += 1; return Promise.resolve(); } });
+  assert.equal(result.rendered, true);
+  assert.equal(result.attempts, 3);
+});
+
+test("waitForInitialRender gives up after maxAttempts on a page that genuinely never renders any group link", async () => {
+  const { waitForInitialRender } = loadModule();
+  const root = { querySelectorAll: () => [] };
+  const result = await waitForInitialRender(root, { waitFn: () => Promise.resolve(), maxAttempts: 5 });
+  assert.equal(result.rendered, false);
+  assert.equal(result.attempts, 5);
 });
 
 // The popup's "Wykryj grupy nieruchomości" button cannot call the scan

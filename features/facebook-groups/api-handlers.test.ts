@@ -52,6 +52,48 @@ test("discovery POST parses candidates, authenticates, and returns an opaque ses
   assert.equal(body.preview, undefined, "the discover response must never itself contain the discovered candidates or their classification");
 });
 
+// "Nie uznawaj samego działania Collectora za dowód działania discovery":
+// the operator needs to see what the extension's own scan actually found
+// (or didn't), so the client-supplied diagnostics are echoed straight back
+// in this same response -- never persisted, never trusted beyond bounded
+// sanitization, but never silently dropped either.
+test("discovery POST echoes back sanitized diagnostics from the request body, unbounded/malformed fields stripped", async () => {
+  const api = createFacebookGroupDiscoveryApi({
+    discover: async () => ({ token: "session-token", expiresAt: "2026-09-23T00:10:00.000Z" }),
+    authenticate: async () => ({ deviceId: "device-1" }),
+  });
+  const response = await api.post(new Request("http://localhost", {
+    method: "POST",
+    body: JSON.stringify({
+      candidates: [{ url: "https://www.facebook.com/groups/example/", name: "Example" }],
+      diagnostics: { pageUrl: "https://www.facebook.com/groups/", examined: 12, accepted: 1, namesFound: 1, rejected: 11, duplicates: 0, reason: null, scrollAttempts: 4, stabilized: true, initialRenderAttempts: 2, initialRenderTimedOut: false, extraUnknownField: "must be dropped" },
+    }),
+  }));
+  const body = await response.json();
+  assert.deepEqual(body.diagnostics, { pageUrl: "https://www.facebook.com/groups/", examined: 12, accepted: 1, namesFound: 1, rejected: 11, duplicates: 0, reason: null, scrollAttempts: 4, stabilized: true, initialRenderAttempts: 2, initialRenderTimedOut: false });
+});
+
+test("discovery POST returns safe, zeroed diagnostics when the request carries none at all (an older extension build)", async () => {
+  const api = createFacebookGroupDiscoveryApi({
+    discover: async () => ({ token: "session-token", expiresAt: "2026-09-23T00:10:00.000Z" }),
+    authenticate: async () => ({ deviceId: "device-1" }),
+  });
+  const response = await api.post(new Request("http://localhost", { method: "POST", body: JSON.stringify({ candidates: [{ url: "https://www.facebook.com/groups/example/", name: "Example" }] }) }));
+  const body = await response.json();
+  assert.equal(body.diagnostics.pageUrl, null);
+  assert.equal(body.diagnostics.examined, 0);
+});
+
+test("discovery POST rejects an unrecognized diagnostics.reason value rather than forwarding an arbitrary string", async () => {
+  const api = createFacebookGroupDiscoveryApi({
+    discover: async () => ({ token: "session-token", expiresAt: "2026-09-23T00:10:00.000Z" }),
+    authenticate: async () => ({ deviceId: "device-1" }),
+  });
+  const response = await api.post(new Request("http://localhost", { method: "POST", body: JSON.stringify({ candidates: [{ url: "https://www.facebook.com/groups/example/", name: "Example" }], diagnostics: { reason: "<script>alert(1)</script>" } }) }));
+  const body = await response.json();
+  assert.equal(body.diagnostics.reason, null);
+});
+
 test("discovery POST rejects a payload with no candidates array", async () => {
   const api = createFacebookGroupDiscoveryApi({ discover: async () => ({ token: "x", expiresAt: "" }), authenticate: async () => ({ deviceId: null }) });
   const response = await api.post(new Request("http://localhost", { method: "POST", body: JSON.stringify({}) }));

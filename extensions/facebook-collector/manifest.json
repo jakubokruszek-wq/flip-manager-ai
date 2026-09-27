@@ -30,7 +30,7 @@
       "run_at": "document_start"
     },
     {
-      "matches": ["https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/joins/*"],
+      "matches": ["https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/joins/*", "https://www.facebook.com/groups/", "https://www.facebook.com/groups/?*", "https://m.facebook.com/groups/", "https://m.facebook.com/groups/?*"],
       "js": ["group-discovery.js"],
       "run_at": "document_idle"
     },

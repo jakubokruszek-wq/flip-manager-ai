@@ -55,7 +55,33 @@
       const name = normalizeName(rawText, identifier);
       candidates.push({ url: `https://www.facebook.com/groups/${identifier}/`, name });
     }
-    return { candidates, diagnostics: { examined: anchors.length, accepted: candidates.length, rejected, duplicates, loadedOnly: true } };
+    const namesFound = candidates.filter((candidate) => candidate.name !== null).length;
+    return {
+      candidates,
+      diagnostics: {
+        // The page URL this scan actually ran on: proves discovery ran on
+        // the page the operator expected, without needing to guess from a
+        // silent zero-result whether the wrong Facebook page loaded.
+        pageUrl: typeof location !== "undefined" ? String(location.href).slice(0, 500) : null,
+        examined: anchors.length,
+        accepted: candidates.length,
+        namesFound,
+        rejected,
+        duplicates,
+        loadedOnly: true,
+        // A concrete, human-readable reason for an empty result -- "found
+        // nothing" alone does not say whether the page had no /groups/
+        // links at all (wrong page, or Facebook's markup changed) or every
+        // link it did have was already known/rejected.
+        reason: candidates.length > 0
+          ? null
+          : anchors.length === 0
+            ? "NO_LINKS_ON_PAGE"
+            : rejected > 0 && rejected === anchors.length
+              ? "NO_GROUP_LINKS_AMONG_EXAMINED_ANCHORS"
+              : "NO_NEW_GROUP_LINKS_FOUND",
+      },
+    };
   }
 
   function accessibleName(anchor) {
@@ -114,16 +140,42 @@
   function defaultScrollFn() { window.scrollTo(0, document.body.scrollHeight); }
   function defaultWaitFn() { return new Promise((resolve) => window.setTimeout(resolve, SCROLL_WAIT_MS)); }
 
+  const INITIAL_RENDER_MAX_ATTEMPTS = 15;
+
+  /**
+   * Facebook is a heavy client-rendered SPA: this content script can run
+   * (document_idle) before React has actually painted the group list, so an
+   * immediate read can see zero links even on the right page with intact
+   * selectors. Polls for at least one candidate to appear before starting
+   * the scroll loop, bounded so a page that genuinely has none (wrong page,
+   * or Facebook's markup changed) still reports a real, timely empty result
+   * rather than hanging.
+   */
+  async function waitForInitialRender(root, { waitFn, maxAttempts = INITIAL_RENDER_MAX_ATTEMPTS } = {}) {
+    let attempts = 0;
+    while (attempts < maxAttempts) {
+      if (inspectGroupCandidatesFromDom(root).candidates.length > 0) return { attempts, rendered: true };
+      await waitFn();
+      attempts += 1;
+    }
+    return { attempts, rendered: false };
+  }
+
   async function runGroupDiscovery(root = document, { skipTabOpen = false, scroll = true } = {}) {
     const canScrollLive = scroll && typeof window !== "undefined" && typeof window.scrollTo === "function";
+    let initialRender = null;
+    if (canScrollLive) initialRender = await waitForInitialRender(root, { waitFn: defaultWaitFn });
     const inspected = canScrollLive
       ? await scrollUntilStable(root, { scrollFn: defaultScrollFn, waitFn: defaultWaitFn })
       : inspectGroupCandidatesFromDom(root);
     const candidates = inspected.candidates;
     const payload = buildDiscoveryPayload(candidates);
+    const diagnostics = initialRender
+      ? { ...inspected.diagnostics, initialRenderAttempts: initialRender.attempts, initialRenderTimedOut: !initialRender.rendered }
+      : inspected.diagnostics;
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
       return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "REPORT_DISCOVERED_GROUPS", candidates: payload, diagnostics: inspected.diagnostics, skipTabOpen }, (response) => resolve(response));
+        chrome.runtime.sendMessage({ type: "REPORT_DISCOVERED_GROUPS", candidates: payload, diagnostics, skipTabOpen }, (response) => resolve(response));
       });
     }
     return { ok: false, error: "NO_RUNTIME" };
@@ -152,6 +204,6 @@
   // Test-only export, exactly like content.js's own pattern -- `module`
   // never exists in the browser extension context.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { extractGroupCandidatesFromDom, inspectGroupCandidatesFromDom, buildDiscoveryPayload, normalizeName, accessibleName, scrollUntilStable, runGroupDiscovery };
+    module.exports = { extractGroupCandidatesFromDom, inspectGroupCandidatesFromDom, buildDiscoveryPayload, normalizeName, accessibleName, scrollUntilStable, waitForInitialRender, runGroupDiscovery };
   }
 })();

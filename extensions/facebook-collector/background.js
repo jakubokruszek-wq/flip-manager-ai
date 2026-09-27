@@ -984,8 +984,14 @@ async function reportDiscoveredGroups(candidates, rawDiagnostics = null, { skipT
   return result;
 }
 
-const GROUPS_JOINS_URL = "https://www.facebook.com/groups/joins/";
-const GROUPS_JOINS_TAB_QUERY_URLS = ["https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/joins/*"];
+// Facebook has used more than one URL for the "your groups" list over time;
+// this navigates to the bare /groups/ page (confirmed reachable in a real,
+// logged-in session) while still recognizing an already-open /groups/joins/
+// tab so a manual visit there is reused rather than opening a second tab.
+// group-discovery.js's own content-script matches (manifest.json) cover
+// both paths, so discovery runs regardless of which one actually renders.
+const GROUPS_JOINS_URL = "https://www.facebook.com/groups/";
+const GROUPS_JOINS_TAB_QUERY_URLS = ["https://www.facebook.com/groups/", "https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/", "https://m.facebook.com/groups/joins/*"];
 const MANAGER_GROUP_DISCOVERY_TAB_LOAD_TIMEOUT_MS = 30_000;
 const MANAGER_GROUP_DISCOVERY_CONTENT_SCRIPT_MAX_ATTEMPTS = 3;
 const MANAGER_GROUP_DISCOVERY_CONTENT_SCRIPT_RETRY_DELAY_MS = 500;
@@ -1035,7 +1041,24 @@ async function pushManagerDiscoveryProgress(tabId, stage) {
 
 function safeDiscoveryDiagnostics(value) {
   const number = (candidate) => Number.isFinite(candidate) ? Math.max(0, Math.min(2000, Math.floor(candidate))) : 0;
-  return { examined: number(value?.examined), accepted: number(value?.accepted), rejected: number(value?.rejected), duplicates: number(value?.duplicates), loadedOnly: value?.loadedOnly === true };
+  const KNOWN_REASONS = new Set(["NO_LINKS_ON_PAGE", "NO_GROUP_LINKS_AMONG_EXAMINED_ANCHORS", "NO_NEW_GROUP_LINKS_FOUND"]);
+  return {
+    // Bounded to a URL's own natural length, never trusted further -- this
+    // is the one non-numeric field, needed precisely so an empty discovery
+    // result can be diagnosed as "ran on the wrong page" without guessing.
+    pageUrl: typeof value?.pageUrl === "string" ? value.pageUrl.slice(0, 500) : null,
+    examined: number(value?.examined),
+    accepted: number(value?.accepted),
+    namesFound: number(value?.namesFound),
+    rejected: number(value?.rejected),
+    duplicates: number(value?.duplicates),
+    loadedOnly: value?.loadedOnly === true,
+    reason: typeof value?.reason === "string" && KNOWN_REASONS.has(value.reason) ? value.reason : null,
+    scrollAttempts: number(value?.scrollAttempts),
+    stabilized: value?.stabilized === true,
+    initialRenderAttempts: number(value?.initialRenderAttempts),
+    initialRenderTimedOut: value?.initialRenderTimedOut === true,
+  };
 }
 
 async function signedPost(urlValue, body, timeoutMs = null) {

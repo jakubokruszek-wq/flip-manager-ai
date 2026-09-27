@@ -52,8 +52,18 @@ test("group-discovery.js exposes an on-demand listener for the same scan the pop
   assert.match(groupDiscovery, /window\.addEventListener\("load", \(\) => \{ void runGroupDiscovery\(\); \}\)/, "the pre-existing automatic run must remain, not be replaced");
 });
 
-test("the manifest still registers group-discovery.js only on Facebook's own 'Twoje grupy' page, on both desktop and mobile domains", () => {
+// Discovery investigation mission: Facebook has used more than one URL for
+// the "your groups" list over time -- /groups/joins/ alone was too narrow
+// (a plausible reason live discovery silently returned zero groups: the
+// content script never even loaded on whatever URL actually rendered). The
+// manifest now also covers the bare /groups/ page on both domains, so
+// discovery has a real chance to run regardless of which one is current.
+test("the manifest registers group-discovery.js on both known 'your groups' Facebook URLs (/groups/joins/ and bare /groups/), on desktop and mobile", () => {
   const groupsContentScript = manifest.content_scripts.find((entry) => entry.js.includes("group-discovery.js"));
   assert.ok(groupsContentScript, "group-discovery.js must be a registered content script");
-  assert.deepEqual(new Set(groupsContentScript.matches), new Set(["https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/joins/*"]));
+  assert.deepEqual(new Set(groupsContentScript.matches), new Set([
+    "https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/joins/*",
+    "https://www.facebook.com/groups/", "https://www.facebook.com/groups/?*",
+    "https://m.facebook.com/groups/", "https://m.facebook.com/groups/?*",
+  ]));
 });

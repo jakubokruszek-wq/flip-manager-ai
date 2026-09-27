@@ -21,7 +21,11 @@
  *     stage is "OPENING_FACEBOOK" then "READING", pushed live from
  *     background.js's runManagerGroupDiscovery() as it happens.
  *   extension -> page: { type: "FLIP_GROUP_DISCOVERY_RESULT", ok, token?,
- *     expiresAt?, error? } -- the final outcome.
+ *     expiresAt?, error?, diagnostics? } -- the final outcome. diagnostics
+ *     (page URL, links examined/accepted/rejected, why an empty result is
+ *     empty) is echoed straight through from the server's own response to
+ *     the same discovery POST, so a genuinely empty result is explainable
+ *     without guessing.
  */
 const ALLOWED_ORIGINS = new Set(["https://flip-manager-ai.vercel.app", "http://localhost:3000"]);
 
@@ -55,6 +59,11 @@ function publicResult(value) {
     token: typeof value?.token === "string" ? value.token : undefined,
     expiresAt: typeof value?.expiresAt === "string" ? value.expiresAt : undefined,
     error: typeof value?.error === "string" ? value.error : undefined,
+    // Lets the Manager page explain a real, empty discovery result (page
+    // URL, links examined/accepted/rejected, why nothing was found) instead
+    // of a bare "no groups" with no way to tell a wrong-page/DOM-change
+    // problem apart from a genuinely empty groups list.
+    diagnostics: value?.diagnostics && typeof value.diagnostics === "object" ? value.diagnostics : undefined,
   };
 }
 

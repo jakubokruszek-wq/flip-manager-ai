@@ -36,6 +36,33 @@ const REAL_ESTATE_BULK_STATUSES = new Set<FacebookGroupImportPreviewItem["status
 
 type DiscoveryFlowState = "IDLE" | "WAITING" | "FACEBOOK_OPENED" | "READING" | "RECEIVED" | "NO_SESSION" | "ERROR";
 
+/**
+ * "Nie uznawaj samego działania Collectora za dowód działania discovery":
+ * echoed straight through from the extension's own group-discovery.js scan
+ * (via the server's discover response), so an empty or unexpected result can
+ * be explained -- which page it actually ran on, how many /groups/ links it
+ * examined/accepted/rejected, and why -- instead of a bare "no groups".
+ */
+type DiscoveryRunDiagnostics = {
+  pageUrl: string | null;
+  examined: number;
+  accepted: number;
+  namesFound: number;
+  rejected: number;
+  duplicates: number;
+  reason: string | null;
+  scrollAttempts: number;
+  stabilized: boolean;
+  initialRenderAttempts: number;
+  initialRenderTimedOut: boolean;
+};
+
+const DISCOVERY_EMPTY_REASON_LABEL: Record<string, string> = {
+  NO_LINKS_ON_PAGE: "Na stronie nie znaleziono żadnych linków — to prawdopodobnie zła strona Facebooka albo Facebook zmienił układ.",
+  NO_GROUP_LINKS_AMONG_EXAMINED_ANCHORS: "Znaleziono linki na stronie, ale żaden nie prowadził do grupy Facebooka.",
+  NO_NEW_GROUP_LINKS_FOUND: "Nie znaleziono żadnych nowych linków do grup.",
+};
+
 const DISCOVERY_FLOW_LABEL: Record<DiscoveryFlowState, string> = {
   IDLE: "Oczekuje",
   WAITING: "Oczekuje",
@@ -81,6 +108,7 @@ export function WatchedGroupsPage() {
   const [historicalMapping, setHistoricalMapping] = useState<HistoricalFacebookSourceMapping[]>([]);
   const [flowState, setFlowState] = useState<DiscoveryFlowState>("IDLE");
   const [flowError, setFlowError] = useState<string | null>(null);
+  const [discoveryDiagnostics, setDiscoveryDiagnostics] = useState<DiscoveryRunDiagnostics | null>(null);
 
   const load = async () => {
     const response = await facebookGroupsFetch("/api/facebook-watcher/groups", { cache: "no-store" });
@@ -128,6 +156,7 @@ export function WatchedGroupsPage() {
   const runDiscoveryViaExtension = () => {
     setFlowState("WAITING");
     setFlowError(null);
+    setDiscoveryDiagnostics(null);
     let settled = false;
     const timeoutId = window.setTimeout(() => {
       if (settled) return;
@@ -138,7 +167,7 @@ export function WatchedGroupsPage() {
     }, 8_000);
     const listener = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== window.location.origin || !event.data || typeof event.data !== "object") return;
-      const data = event.data as { type?: string; stage?: string; ok?: boolean; token?: string; expiresAt?: string; error?: string };
+      const data = event.data as { type?: string; stage?: string; ok?: boolean; token?: string; expiresAt?: string; error?: string; diagnostics?: DiscoveryRunDiagnostics };
       if (data.type === "FLIP_GROUP_DISCOVERY_ACK") {
         settled = true;
         window.clearTimeout(timeoutId);
@@ -151,6 +180,7 @@ export function WatchedGroupsPage() {
       }
       if (data.type === "FLIP_GROUP_DISCOVERY_RESULT") {
         window.removeEventListener("message", listener);
+        if (data.diagnostics && typeof data.diagnostics === "object") setDiscoveryDiagnostics(data.diagnostics);
         if (data.ok && typeof data.token === "string") {
           setFlowState("RECEIVED");
           void loadDiscoveryPreviewForToken(data.token);
@@ -403,6 +433,7 @@ export function WatchedGroupsPage() {
         flowState={flowState}
         flowError={flowError}
         onRunDiscovery={runDiscoveryViaExtension}
+        diagnostics={discoveryDiagnostics}
       />
 
       <GroupSection title={`Aktywne grupy (${partitioned.active.length})`} empty="Brak aktywnych grup." groups={partitioned.active} onEdit={setEditing} onRemove={setRemoving} onToggle={(group) => void update(group, groupPatch(group, { enabled: false }), "Grupa została wstrzymana.")} />
@@ -431,7 +462,7 @@ export function WatchedGroupsPage() {
   );
 }
 
-function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discoveryError, previewNames, onNameChange, selected, onToggleSelected, onImportAllRealEstate, busy, onRefresh, onImport, flowState, flowError, onRunDiscovery }: {
+function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discoveryError, previewNames, onNameChange, selected, onToggleSelected, onImportAllRealEstate, busy, onRefresh, onImport, flowState, flowError, onRunDiscovery, diagnostics }: {
   preview: FacebookGroupImportPreviewItem[];
   previewExpiresAt: string | null;
   discoveryToken: string | null;
@@ -447,6 +478,7 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
   flowState: DiscoveryFlowState;
   flowError: string | null;
   onRunDiscovery: () => void;
+  diagnostics: DiscoveryRunDiagnostics | null;
 }) {
   const selectableCount = preview.filter((item) => IMPORTABLE_STATUSES.has(item.status)).length;
   const selectedCount = preview.filter((item) => selected.has(item.url) && IMPORTABLE_STATUSES.has(item.status)).length;
@@ -476,6 +508,7 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
       {flowError ? <p className="text-sm text-danger" role="alert">{flowError}</p> : null}
       {discoveryError ? <p className="text-sm text-danger" role="alert">{discoveryError}</p> : null}
       {!discoveryToken && !discoveryError && !flowError ? <p className="text-xs text-muted-foreground">Brak aktywnej sesji wykrywania. Kliknij &quot;Wykryj grupy na Facebooku&quot; powyżej.</p> : null}
+      {diagnostics ? <DiscoveryDiagnosticsPanel diagnostics={diagnostics} /> : null}
       {discoveryToken && previewExpiresAt ? <p className="text-xs text-muted-foreground">Sesja wykrywania wygasa: {new Date(previewExpiresAt).toLocaleString("pl-PL")}</p> : null}
       {preview.length ? (
         <div className="space-y-2">
@@ -502,6 +535,32 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
         <p className="text-sm text-muted-foreground">Brak wykrytych grup do przejrzenia.</p>
       )}
     </section>
+  );
+}
+
+/**
+ * "Nie uznawaj samego działania Collectora za dowód działania discovery":
+ * shows exactly what the extension's own scan saw, so an unexpected result
+ * (especially an empty one) is diagnosable from the Manager page itself --
+ * which Facebook page it actually ran on, how many /groups/ links it
+ * examined/accepted/rejected/deduplicated, and a specific reason when
+ * nothing was found -- instead of only "no groups" with no further detail.
+ */
+function DiscoveryDiagnosticsPanel({ diagnostics }: { diagnostics: DiscoveryRunDiagnostics }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-xs text-muted-foreground" data-testid="discovery-diagnostics">
+      <p className="font-semibold text-foreground">Diagnostyka ostatniego wykrywania</p>
+      <p className="mt-1 break-all">Strona: {diagnostics.pageUrl ?? "nieznana"}</p>
+      <p className="mt-1">
+        Zbadane linki: {diagnostics.examined} · Zaakceptowane grupy: {diagnostics.accepted} · Z nazwą: {diagnostics.namesFound} · Odrzucone: {diagnostics.rejected} · Duplikaty: {diagnostics.duplicates}
+      </p>
+      {diagnostics.initialRenderTimedOut ? (
+        <p className="mt-1 text-amber-600 dark:text-amber-400">Strona Facebooka nie wyrenderowała żadnej grupy w oczekiwanym czasie — mogła się jeszcze ładować albo to zła strona.</p>
+      ) : null}
+      {diagnostics.reason ? (
+        <p className="mt-1 text-amber-600 dark:text-amber-400">{DISCOVERY_EMPTY_REASON_LABEL[diagnostics.reason] ?? diagnostics.reason}</p>
+      ) : null}
+    </div>
   );
 }
 

@@ -56,9 +56,16 @@ export function createFacebookGroupDiscoveryApi(deps: {
         const rawBody = await request.text();
         if (new TextEncoder().encode(rawBody).byteLength > MAX_DISCOVERY_BODY_BYTES) throw new Error("Zbyt duży payload wykrywania grup.");
         const { deviceId } = await deps.authenticate(request, rawBody);
-        const candidates = parseCandidates(JSON.parse(rawBody));
+        const parsed = JSON.parse(rawBody);
+        const candidates = parseCandidates(parsed);
         const session = await deps.discover(candidates, deviceId);
-        return Response.json(session, { headers: { "Cache-Control": "no-store" } });
+        // Echoed straight back in this same response, never persisted: this
+        // is single-run diagnostic context (page URL, links examined/
+        // accepted/rejected, why an empty result is empty), useful only to
+        // explain THIS discovery attempt to the operator who just triggered
+        // it -- not a durable record, so no new column/migration is needed.
+        const diagnostics = parseDiscoveryDiagnostics(parsed);
+        return Response.json({ ...session, diagnostics }, { headers: { "Cache-Control": "no-store" } });
       } catch (error) { return failure(error, 400); }
     },
   };
@@ -132,6 +139,48 @@ function parseCandidates(value: unknown): DiscoveredFacebookGroupCandidate[] {
       skipReason: typeof row.skipReason === "string" && row.skipReason.trim() ? row.skipReason.trim().slice(0, 200) : null,
     };
   });
+}
+
+export type DiscoveryDiagnostics = {
+  pageUrl: string | null;
+  examined: number;
+  accepted: number;
+  namesFound: number;
+  rejected: number;
+  duplicates: number;
+  reason: string | null;
+  scrollAttempts: number;
+  stabilized: boolean;
+  initialRenderAttempts: number;
+  initialRenderTimedOut: boolean;
+};
+
+const KNOWN_DISCOVERY_REASONS = new Set(["NO_LINKS_ON_PAGE", "NO_GROUP_LINKS_AMONG_EXAMINED_ANCHORS", "NO_NEW_GROUP_LINKS_FOUND"]);
+
+/**
+ * The extension's own group-discovery.js already bounds/sanitizes this
+ * shape before sending it (see its safeDiscoveryDiagnostics), but the server
+ * never trusts a client-supplied payload by construction -- re-bounded here
+ * exactly the same way, tolerant of a missing/malformed diagnostics object
+ * (an older extension build) rather than failing the whole discovery call.
+ */
+function parseDiscoveryDiagnostics(value: unknown): DiscoveryDiagnostics {
+  const row = value && typeof value === "object" ? (value as Record<string, unknown>).diagnostics : null;
+  const source = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+  const number = (candidate: unknown) => (typeof candidate === "number" && Number.isFinite(candidate) ? Math.max(0, Math.min(2_000, Math.floor(candidate))) : 0);
+  return {
+    pageUrl: typeof source.pageUrl === "string" ? source.pageUrl.slice(0, 500) : null,
+    examined: number(source.examined),
+    accepted: number(source.accepted),
+    namesFound: number(source.namesFound),
+    rejected: number(source.rejected),
+    duplicates: number(source.duplicates),
+    reason: typeof source.reason === "string" && KNOWN_DISCOVERY_REASONS.has(source.reason) ? source.reason : null,
+    scrollAttempts: number(source.scrollAttempts),
+    stabilized: source.stabilized === true,
+    initialRenderAttempts: number(source.initialRenderAttempts),
+    initialRenderTimedOut: source.initialRenderTimedOut === true,
+  };
 }
 
 function parseSelections(value: unknown): FacebookGroupImportSelection[] {

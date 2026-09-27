@@ -116,3 +116,18 @@ test("the origin check on every posted message prevents another page from spoofi
   assert.match(listenerBody, /event\.origin !== window\.location\.origin/, "messages from a different origin must be ignored");
   assert.match(listenerBody, /event\.source !== window/, "messages not from this same window must be ignored");
 });
+
+// "Nie uznawaj samego działania Collectora za dowód działania discovery":
+// the extension's own scan diagnostics (page URL, links examined/accepted/
+// rejected, why an empty result is empty) must reach the Manager UI and be
+// rendered, not silently discarded after the FLIP_GROUP_DISCOVERY_RESULT
+// message carries them.
+test("discovery diagnostics from the extension's own scan are captured from the result message and rendered", () => {
+  const listenerBody = source.match(/const listener = \(event: MessageEvent\) => \{[\s\S]*?\n    \};/)?.[0];
+  assert.ok(listenerBody, "the message listener must exist");
+  assert.match(listenerBody, /data\.diagnostics && typeof data\.diagnostics === "object"\) setDiscoveryDiagnostics\(data\.diagnostics\)/, "the result message's diagnostics must be captured into state");
+  assert.match(source, /function DiscoveryDiagnosticsPanel/, "a dedicated panel must exist to render the diagnostics");
+  assert.match(source, /\{diagnostics \? <DiscoveryDiagnosticsPanel diagnostics=\{diagnostics\} \/> : null\}/, "the panel must actually be rendered when diagnostics are present");
+  assert.match(source, /Zbadane linki: \{diagnostics\.examined\}/, "the panel must show the examined-link count");
+  assert.match(source, /DISCOVERY_EMPTY_REASON_LABEL/, "an empty-result reason must be translated to a specific, readable explanation");
+});
