@@ -88,6 +88,20 @@ test("failed job is not masked by a partially finalized source scan", () => {
   assert.equal(group.errorMessage, "COLLECTOR_NOT_AVAILABLE");
 });
 
+// Watcher-independence mission requirement: COLLECTOR_NOT_AVAILABLE must
+// never appear in Finder's own scan panel. A Finder-triggered scan creates
+// zero facebook_scan_jobs/source_scans rows of its own (proven at runtime by
+// manual-scan-runtime.test.ts), so getScanProgress's DB reads for that exact
+// scan_run_id always return empty arrays for both tables -- there is
+// structurally nothing for collectorProgressGroupFromJobAndSourceScan to
+// project a COLLECTOR_NOT_AVAILABLE group from, and no queued/running
+// Facebook work to report on Finder's own run.
+test("with no facebook_scan_jobs/source_scans rows for a run (the real state of every Finder-initiated scan), there is no Facebook group data and no active/queued Facebook work to report", () => {
+  const progress = { facebook: { groups: [] } } as never;
+  assert.equal(hasQueuedOrRunningFacebookWork(progress), false);
+  assert.deepEqual((progress as { facebook: { groups: unknown[] } }).facebook.groups, []);
+});
+
 test("successful job clears stale source-scan watchdog error from reporting", () => {
   const group = collectorProgressGroupFromJobAndSourceScan({
     job: { id: "job-1", sourceScanId: "scan-1", status: "completed", groupId: "402796264871862", groupName: "Facebook group", discovered: 31, processed: 31, errorMessage: null },

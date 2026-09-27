@@ -145,6 +145,27 @@ test("collector eligibility requires sourceId and URL to name the same registere
   assert.equal(await isEnabledWatchedFacebookSource({ sourceId: "999000111222", type: "GROUP", url: "https://www.facebook.com/groups/333444555666/" }), false);
 });
 
+// Watcher-independence mission requirement: the scheduler must run
+// regardless of whether the Finder page has ever been opened. Proven two
+// ways: (1) structurally, scheduler.ts imports nothing from flip-finder's UI
+// layer (components/pages) or any client-only module -- only a plain shared
+// type -- so it cannot depend on Finder page state even by accident; (2)
+// every test above already calls schedulerContext/enqueueFacebookJobs as
+// plain server functions against a fake database, with no React component,
+// browser, or Finder page involved at all, which is only possible if the
+// scheduler has no such dependency.
+test("scheduler.ts has no dependency on Finder's UI/client code -- it can only ever run independently of the Finder page", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const source = fs.readFileSync(path.join(import.meta.dirname, "scheduler.ts"), "utf8");
+  const importLines = source.match(/^import[^;]*;/gm) ?? [];
+  for (const line of importLines) {
+    if (!line.includes("flip-finder")) continue;
+    assert.doesNotMatch(line, /components|\.tsx/, `scheduler.ts must not import Finder UI code: "${line}"`);
+  }
+  assert.match(source, /import type \{ SearchFilter \} from "@\/features\/flip-finder"/, "the only flip-finder import must be this plain shared type");
+});
+
 test("manual enqueue skips a malformed registry URL instead of throwing", async () => {
   const db = freshDb();
   currentDb = db;
