@@ -135,3 +135,123 @@ test("a listing that is automatically REJECTED and still does not satisfy the (n
   assert.equal(plan.evaluated, 1, "it must still be evaluated, not skipped");
   assert.equal(plan.removedListingIds.includes(STUCK_LISTING_ID), false, "already-absent from the current match set, so there is nothing to remove again");
 });
+
+/**
+ * Second mission on the same filter: "Flip" now also requires a confirmed
+ * building type (blok/apartamentowiec) and ownership (pełna własność/
+ * spółdzielcze), at max_price_per_sqm 8200. Root cause found by reading the
+ * code, not guessing: filter-match-recalculation.ts's removed-listing branch
+ * hard-coded bucket "REJECTED" and the same two generic reasons
+ * ("reconciled_out", "complete_scan_filter_mismatch") for EVERY listing that
+ * stopped matching, regardless of what evaluateListingAgainstFilter actually
+ * found. That threw away two things every removal needs: (1) a listing
+ * missing only building type/ownership data must become REVIEW, not
+ * REJECTED — decisionBucket() already says so, but the write path ignored
+ * it; (2) the real, specific reason (e.g. "max_price_per_sqm") was replaced
+ * by a meaningless generic pair, so a later filter change (e.g. raising the
+ * cap) left the OLD reason frozen in listing_filter_matches forever, because
+ * nothing about it looked like it needed a fresh write.
+ */
+const flip8200Filter: SearchFilter = {
+  ...flipFilter,
+  maxPricePerSqm: 8_200,
+  buildingTypes: ["blok", "apartamentowiec"],
+  ownershipTypes: ["pełna własność", "spółdzielcze"],
+};
+
+function flipListing(overrides: Partial<RecalculationListing> = {}): RecalculationListing {
+  return {
+    id: "00000000-aaaa-4aaa-8aaa-000000000001",
+    source: "facebook",
+    originalUrl: "https://www.facebook.com/groups/example/permalink/1111111111/",
+    title: "Mieszkanie, Łódź",
+    description: null,
+    price: 265_000,
+    area: 38.6,
+    pricePerSqm: 265_000 / 38.6,
+    rooms: 2,
+    floor: "1",
+    city: "Łódź",
+    district: null,
+    locationText: "Łódź",
+    buildingType: null,
+    ownership: null,
+    manualDecision: null,
+    lifecycleStatus: "ACTIVE",
+    ...overrides,
+  };
+}
+
+test("265000 zł / 38.6 m² (~6865 zł/m², under the 8200 cap) with no confirmed building type or ownership becomes REVIEW, never REJECTED for price it does not violate", () => {
+  const listingId = "00000000-aaaa-4aaa-8aaa-000000000010";
+  const listing = flipListing({ id: listingId, price: 265_000, area: 38.6, pricePerSqm: 265_000 / 38.6 });
+  // Was previously visible as a plain MATCHED row (e.g. from before building
+  // type/ownership were required by this filter).
+  const previousMatch: RecalculationMatch = { listingId, isCurrentMatch: true, matchReasons: [] };
+
+  const plan = planFilterMatchRecalculation(flip8200Filter, [listing], [previousMatch]);
+
+  assert.equal(plan.addedListingIds.includes(listingId), false);
+  const removed = plan.removedListingDecisions.find((entry) => entry.listingId === listingId);
+  assert.ok(removed, "the listing must be reconciled with a fresh decision, not silently left alone");
+  assert.equal(removed?.bucket, "REVIEW", "missing data must produce REVIEW, never REJECTED, and never a silent MATCHED accept");
+  assert.equal(removed?.reasons.includes("max_price_per_sqm"), false, "265000/38.6m² (~6865 zł/m²) does not violate the 8200 cap and must never be rejected for price");
+  assert.ok(removed?.missingFields.includes("buildingType"), "missing building type must be surfaced");
+  assert.ok(removed?.missingFields.includes("ownership"), "missing ownership must be surfaced");
+});
+
+test("385000 zł / 49.89 m² (~7717 zł/m², under the 8200 cap) is re-matched with a fresh reason, never the stale max_price_per_sqm from an old, stricter cap", () => {
+  const listingId = "00000000-aaaa-4aaa-8aaa-000000000011";
+  const listing = flipListing({
+    id: listingId,
+    price: 385_000,
+    area: 49.89,
+    pricePerSqm: 385_000 / 49.89,
+    buildingType: "blok",
+    ownership: "pełna własność",
+  });
+  // Persisted from an old, stricter cap (e.g. 7000): rejected for price,
+  // therefore not "visible" (is_current_match=false, no review/unknown_
+  // reason) and so not in existingIds -- exactly production's real state.
+  const staleMatch: RecalculationMatch = { listingId, isCurrentMatch: false, matchReasons: ["max_price_per_sqm"] };
+
+  const plan = planFilterMatchRecalculation(flip8200Filter, [listing], [staleMatch]);
+
+  assert.equal(plan.addedListingIds.includes(listingId), true, "7717 zł/m² is under the current 8200 cap and must be matched");
+  const stillFlaggedStale = plan.removedListingDecisions.some((entry) => entry.listingId === listingId && entry.reasons.includes("max_price_per_sqm"));
+  assert.equal(stillFlaggedStale, false, "must never keep reporting the old max_price_per_sqm reason once the listing satisfies the current cap");
+});
+
+test("409000 zł / 39 m² (~10487 zł/m², over the 8200 cap) is rejected with the real, current, specific reason", () => {
+  const listingId = "00000000-aaaa-4aaa-8aaa-000000000012";
+  const listing = flipListing({
+    id: listingId,
+    price: 409_000,
+    area: 39,
+    pricePerSqm: 409_000 / 39,
+    buildingType: "blok",
+    ownership: "pełna własność",
+  });
+  // Was previously visible/matched (e.g. under a much higher old cap).
+  const previousMatch: RecalculationMatch = { listingId, isCurrentMatch: true, matchReasons: [] };
+
+  const plan = planFilterMatchRecalculation(flip8200Filter, [listing], [previousMatch]);
+
+  assert.equal(plan.addedListingIds.includes(listingId), false);
+  const removed = plan.removedListingDecisions.find((entry) => entry.listingId === listingId);
+  assert.ok(removed, "an actual price violation must produce a real, persisted decision");
+  assert.equal(removed?.bucket, "REJECTED", "409000/39m² (~10487 zł/m²) genuinely exceeds the 8200 cap and must be REJECTED, not REVIEW");
+  assert.deepEqual(removed?.reasons, ["max_price_per_sqm"], "the specific, real reason must be persisted -- never a generic placeholder");
+});
+
+test("a listing whose source no longer belongs to the filter is removed with a specific, non-generic reason", () => {
+  const listingId = "00000000-aaaa-4aaa-8aaa-000000000013";
+  const listing = flipListing({ id: listingId, source: "olx" as RecalculationListing["source"] });
+  const previousMatch: RecalculationMatch = { listingId, isCurrentMatch: true, matchReasons: [] };
+
+  const plan = planFilterMatchRecalculation({ ...flip8200Filter, sources: ["facebook"] }, [listing], [previousMatch]);
+
+  const removed = plan.removedListingDecisions.find((entry) => entry.listingId === listingId);
+  assert.ok(removed);
+  assert.deepEqual(removed?.reasons, ["source_not_in_filter"]);
+});
