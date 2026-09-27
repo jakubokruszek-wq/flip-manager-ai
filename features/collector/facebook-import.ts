@@ -8,6 +8,7 @@ import { resolveFacebookListingIntent } from "@/features/facebook-watcher/facebo
 import { classifyFacebookAvailability, classifyFacebookPropertyType } from "@/features/facebook-watcher/search-quality";
 
 import { normalizeFacebookCollectorPayload, type FacebookCollectorPayload, type NormalizedFacebookImport } from "./facebook-normalization";
+import { canonicalFacebookIdentity } from "@/features/listing-identity";
 
 type ImportRow = { id: string; listingId: string | null; status: string };
 export type FacebookImportResult = { status: "created" | "updated" | "duplicate"; listingId: string; matchedFilters: string[]; rejectedFilters: Array<{ filterId: string; reasons: string[] }>; calculatedPricePerSqm: number | null; missingFields: string[] };
@@ -49,6 +50,9 @@ async function upsertListing(supabase: ReturnType<typeof createAdminClient>, pay
   const { data: exact, error: exactError } = await supabase.from("listings").select("id").eq("source", "facebook").eq("external_listing_id", payload.externalListingId).maybeSingle();
   if (exactError) throw new Error("Nie udało się sprawdzić istniejącej oferty Facebooka.");
   if (!isRecord(exact) || typeof exact.id !== "string") {
+    const { data: sameUrl, error: urlError } = await supabase.from("listings").select("id").eq("source", "facebook").eq("normalized_url", payload.normalizedPostUrl).maybeSingle();
+    if (urlError) throw new Error("Nie udało się sprawdzić adresu źródłowego Facebooka.");
+    if (isRecord(sameUrl) && typeof sameUrl.id === "string") return { id: sameUrl.id, status: "updated" };
     const { data: sameContent, error } = await supabase.from("listings").select("id").eq("source", "facebook").eq("content_hash", payload.contentHash).maybeSingle();
     if (error) throw new Error("Nie udało się sprawdzić duplikatu treści Facebooka.");
     if (isRecord(sameContent) && typeof sameContent.id === "string") return { id: sameContent.id, status: "updated" };
@@ -64,7 +68,8 @@ async function upsertMetadata(supabase: ReturnType<typeof createAdminClient>, li
   const existing = await supabase.from("listing_source_metadata").select("metadata").eq("source", "facebook").eq("source_post_url", payload.normalizedPostUrl).maybeSingle();
   if (existing.error) throw new Error("Nie udało się odczytać workflow posta Facebooka.");
   const previous = isRecord(existing.data?.metadata) ? existing.data.metadata : {};
-  const { error } = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: payload.normalizedPostUrl, group_name: payload.groupName, author_name: payload.authorName, published_at: payload.publishedAt, collected_at: payload.collectedAt, metadata: { ...previous, source: "collector", firstImportedAt: typeof previous.firstImportedAt === "string" ? previous.firstImportedAt : payload.collectedAt, imageCount: payload.imageUrls.length, workflowStatus: typeof previous.workflowStatus === "string" ? previous.workflowStatus : "new" } }, { onConflict: "source,source_post_url" });
+  const identity = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: payload.normalizedPostUrl, externalListingId: payload.externalListingId });
+  const { error } = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: payload.normalizedPostUrl, group_name: payload.groupName, author_name: payload.authorName, published_at: payload.publishedAt, collected_at: payload.collectedAt, metadata: { ...previous, source: "collector", postId: identity.postId ?? previous.postId ?? null, firstImportedAt: typeof previous.firstImportedAt === "string" ? previous.firstImportedAt : payload.collectedAt, imageCount: payload.imageUrls.length, workflowStatus: typeof previous.workflowStatus === "string" ? previous.workflowStatus : "new" } }, { onConflict: "source,source_post_url" });
   if (error) throw new Error("Nie udało się zapisać metadanych posta Facebooka.");
 }
 
@@ -78,7 +83,7 @@ async function applyFilters(supabase: ReturnType<typeof createAdminClient>, list
   const filters = await getActiveSearchFiltersForSource("facebook");
   const evaluated = filters.map((filter) => {
     if (hardSourceReject) return { filter, decision: { bucket: "REJECTED" as const, reasons: [`facebook_source_${availability.toLowerCase()}`, `facebook_${propertyType.toLowerCase()}`], missingFields: [], hardRejectReasons: ["facebook_source_policy"] } };
-    return { filter, decision: evaluateCanonicalListingDecision({ price: payload.price, area: payload.area, pricePerSqm: payload.pricePerSqm, rooms: payload.rooms, floor: null, city: null, district: null, title: payload.title ?? payload.content, description: payload.content, locationText: payload.location, buildingType: null }, filter) };
+    return { filter, decision: evaluateCanonicalListingDecision({ price: payload.price, area: payload.area, pricePerSqm: payload.pricePerSqm, rooms: payload.rooms, floor: null, city: null, district: null, title: payload.title ?? payload.content, description: payload.content, locationText: payload.location, buildingType: null, listingIntent: intent.intent }, filter) };
   });
   const aggregateBucket = evaluated.some(({ decision }) => decision.bucket === "MATCHED") ? "MATCHED" : evaluated.some(({ decision }) => decision.bucket === "REVIEW") ? "REVIEW" : "REJECTED";
   for (const { filter, decision } of evaluated) {

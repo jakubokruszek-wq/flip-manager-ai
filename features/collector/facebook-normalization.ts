@@ -3,6 +3,7 @@ import type {
   FacebookCollectorPropertyPayload,
   NormalizedFacebookPropertyImport,
 } from "@/features/properties/types/property";
+import { canonicalFacebookContentFingerprint } from "@/features/listing-identity";
 
 export type FacebookCollectorPayload = FacebookCollectorPropertyPayload;
 export type NormalizedFacebookImport = NormalizedFacebookPropertyImport;
@@ -36,14 +37,15 @@ export function normalizeFacebookCollectorPayload(value: unknown): NormalizedFac
     collectedAt,
   };
   const externalListingId = facebookExternalListingId(normalizedPostUrl);
-  const contentHash = sha256(
-    JSON.stringify({
-      groupName: payload.groupName,
-      authorName: payload.authorName,
-      content: payload.content,
-      imageUrls: [...payload.imageUrls].sort(),
-    }),
-  );
+  const contentHash = canonicalFacebookContentFingerprint({
+    title: payload.title,
+    description: payload.content,
+    price: payload.price,
+    area: payload.area,
+    rooms: payload.rooms,
+    location: payload.location,
+    imageUrls: payload.imageUrls,
+  });
 
   return {
     ...payload,
@@ -57,10 +59,10 @@ export function normalizeFacebookCollectorPayload(value: unknown): NormalizedFac
 export function facebookExternalListingId(normalizedPostUrl: string): string {
   const url = new URL(normalizedPostUrl);
   const groupPost = /^\/groups\/([^/]+)\/posts\/([^/]+)$/i.exec(url.pathname);
-  if (groupPost) return `facebook:group:${groupPost[1]}:post:${groupPost[2]}`;
+  if (groupPost) return `facebook:post:${groupPost[2]}`;
   const story = url.searchParams.get("story_fbid");
   const owner = url.searchParams.get("id");
-  if (story && owner) return `facebook:story:${owner}:${story}`;
+  if (story && owner) return `facebook:post:${story}`;
   return `facebook:url:${sha256(normalizedPostUrl)}`;
 }
 

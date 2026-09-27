@@ -25,7 +25,7 @@ import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadat
 import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
 import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
 import { resolveListingUrl } from "@/features/listing-url";
-import { dedupeByListingIdentity } from "@/features/listing-identity";
+import { dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
 
 type Row = Record<string, unknown>;
 
@@ -95,6 +95,9 @@ type ListingRow = Pick<
   | "galleryPersistedCount"
 > & {
   externalListingId?: string | null;
+  contentHash?: string | null;
+  contentFingerprint?: string | null;
+  facebookPostId?: string | null;
   listingIntent?: string | null;
   sourceMetadataCollectedAt?: string | null;
   sourcePostUrl?: string | null;
@@ -200,7 +203,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const listingQuery = supabase
     .from("listings")
     .select(
-      "id,external_listing_id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
+      "id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
     )
     .in("id", listingIds)
     .eq("status", "active")
@@ -223,6 +226,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   ]);
   const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
   const sourcePostUrlByListingId = new Map<string, string | null>();
+  const sourcePostIdByListingId = new Map<string, string | null>();
   const listingIntentByListingId = new Map<string, string | null>();
   const sourceMetadataCollectedAtByListingId = new Map<string, string>();
   // Distinguish "the query ran and this Facebook listing simply has no
@@ -239,11 +243,12 @@ export async function getFilterResults(filterId: string, includeArchived = false
       const listingId = nullableString(row.listing_id);
       const sourcePostUrl = nullableString(row.source_post_url);
       const collectedAt = nullableString(row.collected_at);
+      const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Row : {};
       const previousCollectedAt = listingId ? sourceMetadataCollectedAtByListingId.get(listingId) : null;
       const isNewer = !previousCollectedAt || !collectedAt || collectedAt > previousCollectedAt;
       if (listingId && isNewer) {
         sourcePostUrlByListingId.set(listingId, sourcePostUrl);
-        const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Row : {};
+        sourcePostIdByListingId.set(listingId, nullableString(metadata.postId));
         const intent = nullableString(metadata.listingIntent);
         listingIntentByListingId.set(listingId, intent);
         if (collectedAt) sourceMetadataCollectedAtByListingId.set(listingId, collectedAt);
@@ -283,6 +288,8 @@ export async function getFilterResults(filterId: string, includeArchived = false
         return [listing.id, {
           ...listing,
           sourcePostUrl,
+          facebookPostId: sourcePostIdByListingId.get(listing.id) ?? null,
+          contentFingerprint: listing.contentHash,
           listingIntent: listingIntentByListingId.get(listing.id) ?? null,
           sourceMetadataCollectedAt: sourceMetadataCollectedAtByListingId.get(listing.id) ?? null,
           originalUrl: resolveListingUrl({ source: listing.source, sourcePostUrl, originalUrl: listing.originalUrl }),
@@ -426,6 +433,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
   });
   const dedupedResults = dedupeByListingIdentity(
     [...allResults].sort((left, right) => {
+      const leftQuality = (normalizeListingIdentityUrl(left.source, left.sourcePostUrl) ? 2 : 0) + (left.images.length > 0 ? 1 : 0);
+      const rightQuality = (normalizeListingIdentityUrl(right.source, right.sourcePostUrl) ? 2 : 0) + (right.images.length > 0 ? 1 : 0);
+      if (rightQuality !== leftQuality) return rightQuality - leftQuality;
       const leftObserved = sourceMetadataCollectedAtByListingId.get(left.id) ?? left.lastSeenAt ?? left.firstSeenAt;
       const rightObserved = sourceMetadataCollectedAtByListingId.get(right.id) ?? right.lastSeenAt ?? right.firstSeenAt;
       return Date.parse(rightObserved) - Date.parse(leftObserved);
@@ -435,6 +445,8 @@ export async function getFilterResults(filterId: string, includeArchived = false
       source: result.source,
       externalListingId: listingsById.get(result.id)?.externalListingId ?? null,
       sourcePostUrl: result.sourcePostUrl,
+      facebookPostId: listingsById.get(result.id)?.facebookPostId ?? null,
+      contentFingerprint: listingsById.get(result.id)?.contentFingerprint ?? listingsById.get(result.id)?.contentHash ?? null,
     }),
   );
   // Duplicate-listing mission: a listing whose stored lifecycle is
@@ -520,6 +532,7 @@ function toListingRow(row: Row): ListingRow | null {
   return {
     id,
     externalListingId: nullableString(row.external_listing_id),
+    contentHash: nullableString(row.content_hash),
     title: nullableString(row.title),
     price: nullableNumber(row.price),
     area: nullableNumber(row.area),

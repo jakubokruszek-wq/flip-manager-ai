@@ -1,10 +1,8 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
 import { decisionBucket } from "@/features/flip-finder/decision-model";
-import { calculateContentHash } from "@/features/flip-finder/otodom-search";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { reconcileCanonicalListingDecision } from "@/features/flip-finder/server/canonical-reconciliation";
 import { getActiveSearchFiltersForSource } from "@/features/flip-finder/server/search-filters";
@@ -39,7 +37,7 @@ import { classifyFacebookPostAgeZone } from "./post-age-zone";
 import { resolveFacebookPricePerSqm } from "./extract-facebook-property";
 import { isFacebookOrphan, orphanDiagnostic, type FacebookOrphanDiagnostic } from "./facebook-orphan-recovery";
 import { facebookPersistenceFailure } from "./facebook-persistence-contract";
-import { dedupeByListingIdentity } from "@/features/listing-identity";
+import { canonicalFacebookContentFingerprint, canonicalFacebookIdentity, dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
 import { isBelowMinimumSalePrice, isSaleListingIntent } from "@/features/flip-finder/sale-price-policy";
 
 type Row = Record<string, unknown>;
@@ -137,8 +135,9 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   if (context && apartmentSafety && apartmentSafety.hardReject) {
     return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: apartmentSafety.reasons, notProperty: { realEstateLanguage: true, structuredFieldCount: classification.structuredFieldCount, detectedFields: classification.detectedFields, classification: "non_sale_intent", reasonCode: "FACEBOOK_PROPERTY_FILTER_REJECTED" } };
   }
-  const hash = createHash("sha256").update([normalized.postText, extracted.price, extracted.area, extracted.neighborhood].join("|")).digest("hex");
-  const sourceUrl = extracted.originalUrl ?? (context ? facebookPostUrl(context.groupUrl, context.postId) : `manual:${hash}`);
+  const hash = canonicalFacebookContentFingerprint({ title: extracted.title, description: extracted.description, price: extracted.price, area: extracted.area, rooms: extracted.rooms, location: [extracted.street, extracted.neighborhood, extracted.district, extracted.city].filter(Boolean).join(", "), imageUrls: extracted.images });
+  const rawSourceUrl = extracted.originalUrl ?? (context ? facebookPostUrl(context.groupUrl, context.postId) : `manual:${hash}`);
+  const sourceUrl = normalizeListingIdentityUrl("facebook", rawSourceUrl) ?? rawSourceUrl;
   const externalId = context?.postId ?? extracted.originalUrl?.match(/(?:posts|videos)\/(\d+)/)?.[1] ?? hash.slice(0, 32);
   const supabase = createFacebookWatcherAdminClient();
   const existing = await findExisting(supabase, extracted, sourceUrl, externalId, hash, context?.activeListingsCache);
@@ -174,8 +173,8 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   const rent = extracted.sourceFacts?.administrativeRent ?? null;
 
   if (!listingId) {
-    const storedUrl = extracted.originalUrl ?? `https://www.facebook.com/flip-manager/manual/${hash}`;
-    const { data, error } = await supabase.from("listings").insert({ source: "facebook", external_listing_id: externalId, original_url: storedUrl, normalized_url: extracted.originalUrl, title: extracted.title, price: extracted.price, area: extracted.area, price_per_sqm: pricePerSqm, rent, rooms: extracted.rooms, floor: extracted.floor === null ? null : String(extracted.floor), address: extracted.street, district: extracted.district, city: extracted.city, description: extracted.description, images: [], status: "active", removed_at: null, content_hash: hash, flip_score: score, last_seen_at: now }).select("id").single();
+    const storedUrl = extracted.originalUrl ? sourceUrl : null;
+    const { data, error } = await supabase.from("listings").insert({ source: "facebook", external_listing_id: externalId, original_url: storedUrl, normalized_url: storedUrl, title: extracted.title, price: extracted.price, area: extracted.area, price_per_sqm: pricePerSqm, rent, rooms: extracted.rooms, floor: extracted.floor === null ? null : String(extracted.floor), address: extracted.street, district: extracted.district, city: extracted.city, description: extracted.description, images: [], status: "active", removed_at: null, content_hash: hash, flip_score: score, last_seen_at: now }).select("id").single();
     if (error || !data?.id) throw new Error(`Nie udało się zapisać oferty Facebooka: ${error?.message ?? "brak ID"}`);
     listingId = String(data.id);
   } else if (!crossSourceMatch) {
@@ -224,12 +223,19 @@ async function importAutomatedFacebook(input: {
   context: FacebookAutomatedImportContext;
   sourceUrl: string;
   externalId: string;
-  existing: { id: string; source: string } | null;
+  existing: { id: string; source: string; externalListingId: string | null } | null;
   now: string;
   buildingType: string | null;
   buildingEvidence: FacebookBuildingEvidence;
 }): Promise<FacebookImportResult> {
   const { supabase, normalized, extracted, context, sourceUrl, externalId, existing, now, buildingType, buildingEvidence } = input;
+  // Once a Facebook post has been matched to an existing Facebook listing by
+  // URL, post id, or content fingerprint, keep that listing's stable external
+  // id for the generic persistence layer. This prevents a route/group alias
+  // from creating a second listings.id during a later scan.
+  const canonicalExternalId = existing?.source === "facebook" && existing.externalListingId
+    ? existing.externalListingId
+    : externalId;
   const crossSourceMatch = Boolean(existing && existing.source !== "facebook");
   const existingState = existing ? await readListingState(supabase, existing.id) : emptyListingState();
   const previousSource = await readSourceMetadata(supabase, sourceUrl);
@@ -306,8 +312,8 @@ async function importAutomatedFacebook(input: {
     matchCreated = canonical.isCurrentMatch;
   } else {
     const rawPayload = { source: "facebook", postId: context.postId, groupId: context.groupId, groupName: context.groupName, publishedAt: preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt), authoritativeTextSource: normalized.postText ? "AUTHOR_TEXT" : null, mediaBinding: facebookMediaBindingSummary(normalized, externalId), buildingEvidence, flags: effective.flags, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, locationProvenance: locationResolution.provenance, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED" };
-    const contentHash = calculateContentHash({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor, locationText, images: imageMirror.images });
-    const listing: SourceListing = { source: "facebook", externalListingId: externalId, originalUrl: sourceUrl, normalizedUrl: sourceUrl, title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), pricePerSqm, city: effective.city, district: effective.district, locationText, images: imageMirror.images, thumbnailUrl: imageMirror.images[0] ?? null, buildingType, description: effective.description, rawPayload, contentHash };
+    const contentHash = canonicalFacebookContentFingerprint({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, location: locationText, imageUrls: imageMirror.images });
+    const listing: SourceListing = { source: "facebook", externalListingId: canonicalExternalId, originalUrl: sourceUrl, normalizedUrl: sourceUrl, title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), pricePerSqm, city: effective.city, district: effective.district, locationText, images: imageMirror.images, thumbnailUrl: imageMirror.images[0] ?? null, buildingType, description: effective.description, rawPayload, contentHash };
     let saved: Awaited<ReturnType<typeof persistListing>>;
     try {
       saved = await persistListing(supabase, context.filter.id, listing, decision.matches, decision.unknownFields, context.sourceScanId, now, AbortSignal.timeout(75_000), decision);
@@ -339,7 +345,7 @@ async function importAutomatedFacebook(input: {
   if (crossSourceMatch) {
     const sidecarListing: SourceListing = {
       source: "facebook",
-      externalListingId: externalId,
+      externalListingId: canonicalExternalId,
       originalUrl: sourceUrl,
       normalizedUrl: sourceUrl,
       title: effective.title,
@@ -356,7 +362,7 @@ async function importAutomatedFacebook(input: {
       buildingType,
       description: effective.description,
       rawPayload: {},
-      contentHash: calculateContentHash({ title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, locationText }),
+      contentHash: canonicalFacebookContentFingerprint({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, location: locationText, imageUrls: imageMirror.images }),
     };
     void syncResaleCompFromListing(supabase, sidecarListing, listingId, now).catch((reason) => {
       console.warn("RESALE_COMP_SYNC_DEFERRED", { source: "facebook", externalListingId: externalId, error: reason instanceof Error ? reason.message : "unknown" });
@@ -514,14 +520,56 @@ function listingStateValues(state: FacebookListingState, metadata: Row) {
   };
 }
 
-async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, item: FacebookProperty, sourceUrl: string, externalId: string, hash: string, activeListingsCache?: FacebookActiveListingCandidate[]): Promise<{id:string;source:string}|null> {
-  const metadata = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").eq("source_post_url", sourceUrl).maybeSingle();
-  if (metadata.data?.listing_id) return { id: String(metadata.data.listing_id), source: "facebook" };
-  const exact = await supabase.from("listings").select("id,source").or(`normalized_url.eq.${sourceUrl},and(source.eq.facebook,external_listing_id.eq.${externalId}),content_hash.eq.${hash}`).limit(1).maybeSingle();
-  if (exact.data?.id) return { id: String(exact.data.id), source: String(exact.data.source) };
+async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, item: FacebookProperty, sourceUrl: string, externalId: string, hash: string, activeListingsCache?: FacebookActiveListingCandidate[]): Promise<{id:string;source:string;externalListingId:string|null}|null> {
+  const identity = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: sourceUrl, externalListingId: externalId, contentFingerprint: hash });
+  const canonicalSourceUrl = identity.sourcePostUrl ?? sourceUrl;
+  const metadata = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").eq("source_post_url", canonicalSourceUrl).order("collected_at", { ascending: false }).limit(1);
+  if (metadata.error) throw new Error(`Nie udało się sprawdzić tożsamości posta Facebooka: ${metadata.error.message}`);
+  const metadataListingId = Array.isArray(metadata.data) ? metadata.data[0]?.listing_id : null;
+  if (metadataListingId) {
+    const existing = await supabase.from("listings").select("id,source,external_listing_id").eq("id", String(metadataListingId)).maybeSingle();
+    if (existing.error) throw new Error(`Nie udało się odczytać istniejącej oferty Facebooka: ${existing.error.message}`);
+    if (existing.data?.id) return { id: String(existing.data.id), source: String(existing.data.source), externalListingId: str(existing.data.external_listing_id) };
+  }
+
+  const lookup = async (query: PromiseLike<{ data: unknown; error: { message: string } | null }>) => {
+    const result = await query;
+    if (result.error) throw new Error(`Nie udało się sprawdzić duplikatu oferty Facebooka: ${result.error.message}`);
+    const row = Array.isArray(result.data) ? result.data[0] as Row | undefined : undefined;
+    return row?.id ? { id: String(row.id), source: String(row.source), externalListingId: str(row.external_listing_id) } : null;
+  };
+
+  const normalizedUrlMatch = identity.sourcePostUrl ? await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("normalized_url", identity.sourcePostUrl).order("last_seen_at", { ascending: false }).limit(1)) : null;
+  if (normalizedUrlMatch) return normalizedUrlMatch;
+  const externalMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("external_listing_id", externalId).order("last_seen_at", { ascending: false }).limit(1));
+  if (externalMatch) return externalMatch;
+  if (identity.postId && identity.postId !== externalId) {
+    const postIdMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("external_listing_id", identity.postId).order("last_seen_at", { ascending: false }).limit(1));
+    if (postIdMatch) return postIdMatch;
+    const canonicalPostIdMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("external_listing_id", `facebook:post:${identity.postId}`).order("last_seen_at", { ascending: false }).limit(1));
+    if (canonicalPostIdMatch) return canonicalPostIdMatch;
+  }
+  const contentMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("content_hash", hash).order("last_seen_at", { ascending: false }).limit(1));
+  if (contentMatch) return contentMatch;
+
+  if (identity.postId) {
+    const postMetadata = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").filter("metadata->>postId", "eq", identity.postId).order("collected_at", { ascending: false }).limit(1);
+    if (!postMetadata.error) {
+      const postListingId = Array.isArray(postMetadata.data) ? postMetadata.data[0]?.listing_id : null;
+      if (postListingId) {
+        const existing = await supabase.from("listings").select("id,source,external_listing_id").eq("id", String(postListingId)).maybeSingle();
+        if (existing.error) throw new Error(`Nie udało się odczytać istniejącej oferty Facebooka: ${existing.error.message}`);
+        if (existing.data?.id) return { id: String(existing.data.id), source: String(existing.data.source), externalListingId: str(existing.data.external_listing_id) };
+      }
+    }
+  }
+
   const candidates = activeListingsCache ?? await fetchFacebookActiveListingCandidates();
   for (const row of candidates) {
-    if (isLikelySameFacebookProperty(item, { price: row.price, area: row.area, district: row.district, address: row.address })) return { id: row.id, source: row.source };
+    // A title/price/area match is enough only for a Facebook post matching an
+    // existing listing from another portal. Two separate Facebook posts can
+    // legitimately describe similarly priced, similarly sized flats.
+    if (row.source !== "facebook" && isLikelySameFacebookProperty(item, { price: row.price, area: row.area, district: row.district, address: row.address })) return { id: row.id, source: row.source, externalListingId: null };
   }
   return null;
 }
@@ -538,13 +586,12 @@ async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdm
 
 export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
   const supabase = createFacebookWatcherAdminClient();
-  const { data, error } = await supabase.from("listing_source_metadata").select("source_post_url,group_name,published_at,collected_at,metadata,listings(id,external_listing_id,title,price,price_per_sqm,area,rooms,floor,district,city,address,description,original_url,images,status,source,flip_score,estimated_profit,first_seen_at,last_seen_at,created_at,building_type,ownership,lifecycle_status,archived_at)").eq("source", "facebook").order("collected_at", { ascending: false }).limit(500);
+  const { data, error } = await supabase.from("listing_source_metadata").select("source_post_url,group_name,published_at,collected_at,metadata,listings(id,external_listing_id,content_hash,title,price,price_per_sqm,area,rooms,floor,district,city,address,description,original_url,images,status,source,flip_score,estimated_profit,first_seen_at,last_seen_at,created_at,building_type,ownership,lifecycle_status,archived_at)").eq("source", "facebook").order("collected_at", { ascending: false }).limit(500);
   if (error) throw new Error(`Nie udało się pobrać ofert Facebooka: ${error.message}`);
   const activeFilters = await getActiveSearchFiltersForSource("facebook");
-  const seenListingIds = new Set<string>();
   const records: FacebookWatcherListing[] = ((data ?? []) as unknown as Row[]).flatMap((row) => {
     const listing = (Array.isArray(row.listings) ? row.listings[0] : row.listings) as Row | undefined; if (!listing) return [];
-    const listingId = String(listing.id); if (seenListingIds.has(listingId)) return []; seenListingIds.add(listingId);
+    const listingId = String(listing.id);
     const meta = (row.metadata ?? {}) as Row;
     const flags = Array.isArray(meta.flags) ? meta.flags.filter((x):x is string=>typeof x==="string") : [];
     const importedAt = str(meta.firstImportedAt) ?? str(row.collected_at) ?? str(listing.created_at) ?? new Date(0).toISOString();
@@ -572,9 +619,16 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     const current = classifyFacebookRestore({ price: num(listing.price), area: num(listing.area), pricePerSqm: num(listing.price_per_sqm), rooms: num(listing.rooms), floor: typeof listing.floor === "string" ? listing.floor : listing.floor === null || listing.floor === undefined ? null : String(listing.floor), city: str(listing.city), district: str(listing.district), title: str(listing.title), description: str(listing.description), locationText: [str(listing.address), str(listing.district), str(listing.city)].filter(Boolean).join(", ") || null, buildingType: str(listing.building_type), sellerType, ownership: str(listing.ownership), marketType: null, listingIntent }, activeFilters);
     const currentReasons = current.decision ? [...current.decision.reasons, ...(current.bucket === "REVIEW" ? ["review", ...current.decision.unknownFields.map((field) => `unknown_${field}`)] : [])] : ["no_active_facebook_filter_match"];
     const historical = lifecycleStatus === "ARCHIVED" || lifecycleStatus === "STALE";
-    return [{ listingId, externalListingId: str(listing.external_listing_id), title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), listingIntent, sourcePostUrl: facebookUrl, originalUrl: resolveListingUrl({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl }), images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: resolveFacebookGroupDisplayName({ name: str(row.group_name) }), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
+    const canonical = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl, externalListingId: str(listing.external_listing_id), facebookPostId: str(meta.postId), contentFingerprint: str(listing.content_hash) });
+    return [{ listingId, externalListingId: str(listing.external_listing_id), facebookPostId: canonical.postId, contentFingerprint: str(listing.content_hash), sourceMetadataCollectedAt: str(row.collected_at), title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), listingIntent, sourcePostUrl: facebookUrl, originalUrl: resolveListingUrl({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl }), images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: resolveFacebookGroupDisplayName({ name: str(row.group_name) }), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
   });
-  return dedupeByListingIdentity(records, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl }));
+  const preferred = records.sort((left, right) => {
+    const leftQuality = (normalizeListingIdentityUrl("facebook", left.sourcePostUrl) ? 2 : 0) + (left.images.length > 0 ? 1 : 0);
+    const rightQuality = (normalizeListingIdentityUrl("facebook", right.sourcePostUrl) ? 2 : 0) + (right.images.length > 0 ? 1 : 0);
+    if (rightQuality !== leftQuality) return rightQuality - leftQuality;
+    return Date.parse(right.sourceMetadataCollectedAt ?? right.importedAt) - Date.parse(left.sourceMetadataCollectedAt ?? left.importedAt);
+  });
+  return dedupeByListingIdentity(preferred, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl, facebookPostId: item.facebookPostId, contentFingerprint: item.contentFingerprint }));
 }
 
 /** Read-only maintenance view. It never mutates an orphan while listing it. */

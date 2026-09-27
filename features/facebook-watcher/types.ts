@@ -74,6 +74,9 @@ export type FacebookProperty = {
 export type FacebookWatcherListing = FacebookProperty & {
   listingId: string;
   externalListingId?: string | null;
+  facebookPostId?: string | null;
+  contentFingerprint?: string | null;
+  sourceMetadataCollectedAt?: string | null;
   sourcePostUrl?: string | null;
   status: string;
   groupName: string | null;
