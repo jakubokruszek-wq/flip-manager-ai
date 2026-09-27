@@ -123,6 +123,7 @@ test("login, protected navigation and logout use the operator session", { timeou
   const baseUrl = `http://127.0.0.1:${port}`;
   await page.goto(`${baseUrl}/login?returnTo=%2Fdashboard`, { waitUntil: "domcontentloaded" });
   await assert.doesNotReject(() => page.getByLabel("E-mail").waitFor({ state: "visible" }));
+  await assert.doesNotReject(() => page.getByLabel("Flip Manager by Jakub Okruszek").waitFor({ state: "visible" }));
   assert.equal(await page.getByText("Rejestracja").count(), 0, "login must not expose public signup");
 
   await page.getByLabel("E-mail").fill("operator@example.test");

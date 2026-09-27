@@ -12,9 +12,10 @@ export function Logo({ collapsed = false, className }: LogoProps) {
     <Link
       href="/dashboard"
       className={cn(
-        "group flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-muted",
+        "group flex min-w-0 items-center gap-3 overflow-hidden rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-muted",
         className,
       )}
+      aria-label="Flip Manager by Jakub Okruszek"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gold/25 bg-gold/10 text-gold shadow-[0_8px_24px_-14px_rgba(0,0,0,1)]">
         <svg
@@ -38,9 +39,11 @@ export function Logo({ collapsed = false, className }: LogoProps) {
         </svg>
       </span>
       {!collapsed && (
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate font-heading text-base font-semibold tracking-tight text-foreground">
-            Flip Manager
+        <span className="flex min-w-0 flex-col" data-testid="product-brand">
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-1 leading-tight">
+            <span className="truncate font-heading text-base font-semibold tracking-tight text-foreground">Flip Manager</span>
+            <span className="text-[10px] font-medium text-muted-foreground">by</span>
+            <span className="brand-signature truncate" aria-label="Jakub Okruszek">Jakub Okruszek</span>
           </span>
           <span className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
             Investment OS

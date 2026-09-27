@@ -56,7 +56,7 @@ export function TopNav({ title = "Pulpit" }: TopNavProps) {
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-muted-foreground lg:hidden">
-            Flip Manager
+            Flip Manager by Jakub Okruszek
           </p>
           <h2 className="hidden truncate text-sm font-semibold tracking-tight text-foreground lg:block">
             {title}

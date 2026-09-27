@@ -11,7 +11,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <Logo />
           <div>
             <h1 className="text-xl font-semibold">Logowanie operatora</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Zaloguj się do panelu Flip Manager.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Zaloguj się do panelu Flip Manager by Jakub Okruszek.</p>
           </div>
         </div>
         <LoginForm returnTo={safeReturnTo(params.returnTo)} />

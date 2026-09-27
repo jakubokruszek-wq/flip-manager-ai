@@ -159,6 +159,17 @@ input[type="search"]::-webkit-search-cancel-button {
   .type-financial-standard { font-family: var(--font-ui); font-size: var(--type-financial-standard); font-variant-numeric: tabular-nums lining-nums; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; }
   .type-badge { font-family: var(--font-ui); font-size: var(--type-badge); font-weight: 650; letter-spacing: 0.035em; line-height: 1.25; }
 
+  .brand-signature {
+    color: var(--gold);
+    font-family: "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive;
+    font-size: clamp(0.7rem, 1.4vw, 0.84rem);
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 1.2;
+    transform: rotate(-2deg);
+    transform-origin: left center;
+  }
+
   .ui-card {
     @apply rounded-[1.125rem] border border-border bg-card/95 shadow-[0_18px_52px_-32px_rgba(0,0,0,1)] backdrop-blur-sm;
   }

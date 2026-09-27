@@ -38,7 +38,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
 
       <div className="border-t border-border/80 px-5 py-4">
         <p className="text-xs font-medium tracking-wide text-muted-foreground">
-          Flip Manager AI
+          Flip Manager by Jakub Okruszek
         </p>
         <form action={logoutOperator} className="mt-3">
           <button type="submit" className="text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
