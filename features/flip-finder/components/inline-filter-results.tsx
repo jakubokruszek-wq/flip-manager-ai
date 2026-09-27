@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { formatListingDescription } from "@/lib/listing-description";
 import { cleanDisplayText, dedupeLocationText, friendlyMissingFields } from "@/features/flip-finder/display-format";
+import { describeRejectionReason } from "@/features/flip-finder/rejection-reasons";
 import { analyzeProperty } from "@/features/ai-analysis/analyze-property";
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { MarketIntelligencePanel } from "@/features/market-intelligence/market-intelligence-panel";
@@ -195,10 +196,10 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
       {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / DOPASOWANE <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
       {data && reviewCount > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewCount}</p><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div></div><div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard highlight={result.id === deepLinkListingId} key={result.id} result={result} onChanged={() => void load()} />)}</div></section> : null}
       <div className="grid gap-4 lg:grid-cols-2" data-finder-offers>
-        {renderedResults.map((result) => <ExpandableListingCard autoOpen={result.id === deepLinkListingId} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
+        {renderedResults.map((result) => <ExpandableListingCard autoOpen={result.id === deepLinkListingId} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
       </div>
       {data ? <div className="flex justify-end border-t border-border/60 pt-4"><Button aria-label="Otwórz historię ofert" onClick={() => setArchiveOpen((current) => !current)} type="button" variant="outline">{archiveOpen ? "Wróć do bieżących ofert" : "Historia ofert"}</Button></div> : null}
-      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} key={result.id} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
+      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} filter={data.filter} key={result.id} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
       {data ? <details className="rounded-xl border border-border/60 bg-muted/10 px-3 py-2">
         <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Źródła i historia skanów · {activeSourcesSummary(activeSources)}</summary>
         <p className="mt-3 text-xs text-muted-foreground">{latestActiveScansText(data.sourceScans, activeSources)}</p>
@@ -263,6 +264,13 @@ type GalleryTraceEntry = {
 
 const GALLERY_TRACE_STORAGE_KEY = "flipFinderGalleryRequestTraces";
 const CLIENT_BUILD_ID = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_COMMIT_SHA ?? "gallery-render-probe-v1";
+// The single, shared "whole offer" gold border every Finder card variant
+// (matched/archived via ExpandableListingCard, and review via
+// ReviewListingCard) must use identically -- same color, width, opacity,
+// hover/focus, corner radius. A `display:contents` wrapper (no box of its
+// own) cannot paint this at all, which is exactly what made review cards
+// fall back to their inner <article>'s own separate, weaker border.
+const FINDER_CARD_BORDER_CLASSNAME = "overflow-hidden rounded-[1.125rem] !border-2 !border-gold/55 transition-colors duration-300 focus-within:!border-gold/80 hover:!border-gold/80";
 
 function createGalleryTraceId(): string {
   try {
@@ -593,7 +601,7 @@ function ReviewListingCardContent({ result, onChanged, highlight = false }: { re
   const title = result.opportunityScore == null ? titleBase : `${titleBase} · ${result.opportunityScore}/100${result.opportunityPriority ? ` ${priorityLabel(result.opportunityPriority)}` : ""}`;
   const location = dedupeLocationText(result.locationText) ?? "Lokalizacja nieznana";
   const missing = friendlyMissingFields((result.opportunityMissingFields ?? result.missingFields ?? []).filter((field) => !(field === "buildingType" && result.buildingType)));
-  return <article className={`ui-card border-amber-400/25 p-4 ${highlight ? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""}`} ref={articleRef}><div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-xl bg-muted">{result.thumbnailUrl ? <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover" fill sizes="(max-width: 640px) 100vw, 420px" src={result.thumbnailUrl} /> : <Placeholder />}</div><div className="flex items-start justify-between gap-3"><div><h3 className="type-card-title">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="ui-badge border-warning/30 text-warning">{decisionLabelForUi(result.underwriting?.decision)}</span></div><OpportunitySummary result={result} /><p className="mt-3 text-sm font-semibold">{currency(result.price)}</p><p className="text-sm font-semibold text-gold">{currencyPerSqm(result.pricePerSqm)}</p><div className="mt-2 grid grid-cols-2 gap-2 text-sm"><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><div className="mt-3 space-y-1 text-xs text-muted-foreground"><p>{firstSeenLabel(result.firstSeenAt)}</p><p>{publicationLabel(result.publishedAt)}</p></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}{result.sourceConflict ? " · Źródło wymaga weryfikacji" : ""}</p><details className="mt-3 rounded-xl border bg-background"><summary className="cursor-pointer px-3 py-2 text-sm font-bold">Analiza inwestycji</summary><UnderwritingPanel result={result} /></details><div className="mt-3 flex flex-wrap gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">{sourceLabelForResult(result.source)} <ExternalLink className="size-3" /></a> : null}</div></article>;
+  return <article className={`ui-card !border-transparent p-4 hover:!border-transparent ${highlight ? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""}`} ref={articleRef}><div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-xl bg-muted">{result.thumbnailUrl ? <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover" fill sizes="(max-width: 640px) 100vw, 420px" src={result.thumbnailUrl} /> : <Placeholder />}</div><div className="flex items-start justify-between gap-3"><div><h3 className="type-card-title">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="ui-badge border-warning/30 text-warning">{decisionLabelForUi(result.underwriting?.decision)}</span></div><OpportunitySummary result={result} /><p className="mt-3 text-sm font-semibold">{currency(result.price)}</p><p className="text-sm font-semibold text-gold">{currencyPerSqm(result.pricePerSqm)}</p><div className="mt-2 grid grid-cols-2 gap-2 text-sm"><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><div className="mt-3 space-y-1 text-xs text-muted-foreground"><p>{firstSeenLabel(result.firstSeenAt)}</p><p>{publicationLabel(result.publishedAt)}</p></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}{result.sourceConflict ? " · Źródło wymaga weryfikacji" : ""}</p><details className="mt-3 rounded-xl border bg-background"><summary className="cursor-pointer px-3 py-2 text-sm font-bold">Analiza inwestycji</summary><UnderwritingPanel result={result} /></details><div className="mt-3 flex flex-wrap gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{result.originalUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={result.originalUrl} rel="noreferrer" target="_blank">{sourceLabelForResult(result.source)} <ExternalLink className="size-3" /></a> : null}</div></article>;
 }
 
 function ReviewListingCard({ result, onChanged, highlight = false }: { result: FilterResult; onChanged: () => void; highlight?: boolean }) {
@@ -604,7 +612,7 @@ function ReviewListingCard({ result, onChanged, highlight = false }: { result: F
   const handleCardClickCapture = (event: MouseEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_CLICK_CAPTURE", event, result, result.galleryStatus ?? "NOT_REQUESTED", traceId);
   };
-  return <div className="contents" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ReviewListingCardContent highlight={highlight} onChanged={onChanged} result={result} /><div className="px-4 pb-3"><Link className="inline-flex min-h-10 items-center rounded-xl border border-gold/35 bg-gold/[0.08] px-3 text-sm font-semibold text-gold outline-none transition hover:bg-gold/[0.14] focus-visible:ring-2 focus-visible:ring-ring" href={`/deals/${encodeURIComponent(result.id)}`}>Otwórz Deal Room</Link></div><GalleryRequestButton onChanged={onChanged} result={result} traceId={traceId} /></div>;
+  return <div className={FINDER_CARD_BORDER_CLASSNAME} data-listing-id={result.id} data-testid="finder-card" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ReviewListingCardContent highlight={highlight} onChanged={onChanged} result={result} /><div className="px-4 pb-3"><Link className="inline-flex min-h-10 items-center rounded-xl border border-gold/35 bg-gold/[0.08] px-3 text-sm font-semibold text-gold outline-none transition hover:bg-gold/[0.14] focus-visible:ring-2 focus-visible:ring-ring" href={`/deals/${encodeURIComponent(result.id)}`}>Otwórz Deal Room</Link></div><GalleryRequestButton onChanged={onChanged} result={result} traceId={traceId} /></div>;
 }
 
 function QuickInvestmentPreview({ result, flipScore }: { result: FilterResult; flipScore: number }) {
@@ -627,7 +635,7 @@ function PreviewMetric({ label, value, emphasis = false }: { label: string; valu
   return <article className={`rounded-xl border p-4 ${emphasis ? "border-gold/35 bg-gold/[0.06]" : "border-border/70 bg-background/40"}`}><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-2 text-lg font-semibold tabular-nums ${emphasis ? "text-gold" : "text-foreground"}`}>{value}</p></article>;
 }
 
-function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, onOpen, onCrmImported, variant = "standalone", hideLifecycleBadge = false, autoOpen = false }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
+function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, filter = null, onOpen, onCrmImported, variant = "standalone", hideLifecycleBadge = false, autoOpen = false }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   // A push notification's deep link identifies the exact listing to open —
   // never any other card, and never re-triggered by an unrelated rerender
@@ -883,7 +891,11 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           </div>
           <div className="rounded-xl border border-border/70 bg-muted/20 p-4 sm:p-5"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Opis ogłoszenia</p><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/80">{cleanDisplayText(formatListingDescription(result.description)) || "Brak opisu ogłoszenia."}</p></div>
           <div className="grid gap-3 rounded-xl bg-muted/40 p-4 text-sm sm:grid-cols-2"><Metric label="Piętro" value={result.floor ?? "—"} /><Metric label="Liczba pięter" value={result.totalFloors ?? "—"} /><Metric label="Typ budynku" value={result.buildingType ?? "—"} /><Metric label="Własność" value={result.ownership ?? "—"} /></div>
-          <DetailList label="Powody dopasowania" values={result.matchReasons} empty="Brak dodatkowych danych." />
+          <DetailList
+            label={result.decisionBucket === "REJECTED" ? "Powody odrzucenia" : "Powody dopasowania"}
+            values={filter ? realRejectionReasons(result, filter) : result.matchReasons}
+            empty="Brak dodatkowych danych."
+          />
           <DetailList label="Do weryfikacji" values={friendlyMissingFields(result.unknownFields.filter((field) => !(field === "buildingType" && result.buildingType)))} empty="Brak." />
           <DetailList label="Atuty oceny inwestycji" values={flipScore.reasons} empty="Brak punktów dodatnich." />
           <DetailList label="Ryzyka oceny inwestycji" values={flipScore.risks} empty="Nie wykryto ryzyk." />
@@ -911,7 +923,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   );
 }
 
-export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
+export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
   const [traceId] = useState(createGalleryTraceId);
   const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);
@@ -932,8 +944,8 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
   // outer gold border for the whole listing (status/action panel + this
   // card together) — this wrapper must render borderless there, or the
   // listing would show two nested gold rectangles instead of one.
-  const wrapperBorderClassName = props.variant === "watcher" ? "" : "overflow-hidden rounded-[1.125rem] !border-2 !border-gold/55 transition-colors duration-300 focus-within:!border-gold/80 hover:!border-gold/80";
-  return <div className={wrapperBorderClassName} onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
+  const wrapperBorderClassName = props.variant === "watcher" ? "" : FINDER_CARD_BORDER_CLASSNAME;
+  return <div className={wrapperBorderClassName} data-listing-id={props.result.id} data-testid="finder-card" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {
@@ -998,6 +1010,16 @@ function countSources(results: FilterResult[]): Record<FilterResult["source"], n
 function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 truncate font-medium">{value}</p></div>; }
 function OpportunityFinancialMetric({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="type-financial-standard mt-0.5 text-foreground" title={value}>{value}</p></div>; }
 function DetailList({ label, values, empty }: { label: string; values: string[]; empty: string }) { return <div className="mt-4 text-sm"><p className="font-medium">{label}</p><p className="mt-1 text-muted-foreground">{values.length ? values.join(", ") : empty}</p></div>; }
+// Specific, real reasons only — "review" and "unknown_*" are internal
+// bookkeeping markers the "Do weryfikacji" list already covers, and a bare
+// reason code (e.g. "max_price_per_sqm") tells an operator nothing on its
+// own. filterDecision (server-computed, see filter-results.ts) is always a
+// FRESH evaluation against the filter's current criteria, so these reasons
+// can never be stale leftovers from a previous, different threshold.
+function realRejectionReasons(result: FilterResult, filter: SearchFilter): string[] {
+  const realReasons = result.matchReasons.filter((reason) => reason !== "review" && !reason.startsWith("unknown_"));
+  return realReasons.map((reason) => describeRejectionReason(reason, result, filter));
+}
 function SourceBadge({ source }: { source: FilterResult["source"] }) { return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{source === "otodom" ? "Otodom" : source === "olx" ? "OLX" : source === "morizon" ? "Morizon" : "Facebook"}</span>; }
 function StatusBadge({ status }: { status: FilterResult["listingStatus"] }) { return <span className="type-badge inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success/10 px-2.5 py-1 text-success"><span className="size-1.5 rounded-full bg-success" />{status === "active" ? "Aktywna" : status === "removed" ? "Usunięta" : status === "sold" ? "Sprzedana" : "Obserwowana"}</span>; }
 function Badge({ label }: { label: string }) { return <span className="rounded-full bg-background/90 px-2.5 py-1 text-xs font-semibold text-foreground shadow-sm backdrop-blur">{label}</span>; }

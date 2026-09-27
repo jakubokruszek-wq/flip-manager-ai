@@ -44,7 +44,7 @@ test("non-Facebook REVIEW: the exact deep-linked card scrolls into view and is h
   assert.match(page, /function ReviewListingCardContent\(\{ result, onChanged, highlight = false \}: \{ result: FilterResult; onChanged: \(\) => void; highlight\?: boolean \}\)/, "ReviewListingCardContent must accept an optional highlight prop, default false, so every existing call site keeps working unchanged");
   assert.match(page, /const articleRef = useRef<HTMLElement>\(null\);/, "a ref on the card's own root element is required to scroll it into view");
   assert.match(page, /if \(highlight && !highlightedRef\.current\) \{\s*highlightedRef\.current = true;\s*articleRef\.current\?\.scrollIntoView\(\{ behavior: "smooth", block: "center" \}\);/, "highlighting must scroll the exact card into view exactly once, never re-triggered by an unrelated rerender");
-  assert.match(page, /<article className=\{`ui-card border-amber-400\/25 p-4 \$\{highlight \? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""\}`\} ref=\{articleRef\}>/, "the highlight must be a purely visual ring on the existing card styling, not a new component or layout");
+  assert.match(page, /<article className=\{`ui-card !border-transparent p-4 hover:!border-transparent \$\{highlight \? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""\}`\} ref=\{articleRef\}>/, "the highlight must be a purely visual ring on the existing card styling, not a new component or layout");
   assert.match(page, /function ReviewListingCard\(\{ result, onChanged, highlight = false \}: \{ result: FilterResult; onChanged: \(\) => void; highlight\?: boolean \}\)/, "the outer ReviewListingCard wrapper must forward the same optional highlight prop");
   assert.match(page, /<ReviewListingCardContent highlight=\{highlight\} onChanged=\{onChanged\} result=\{result\} \/>/, "ReviewListingCard must actually pass highlight down to its content, not just accept and drop it");
   assert.match(page, /<ReviewListingCard highlight=\{result\.id === deepLinkListingId\} key=\{result\.id\} result=\{result\} onChanged=\{\(\) => void load\(\)\} \/>/, "the review results list must wire highlight to the exact same deepLinkListingId contract already used for MATCHED cards");
@@ -54,7 +54,7 @@ test("non-Facebook REVIEW: the exact deep-linked card scrolls into view and is h
 // byte-identical to before this hotfix — this patch only adds REVIEW support
 // alongside it, never touches the MATCHED path.
 test("non-Facebook MATCHED deep link has no regression: autoOpen is still wired to the same deepLinkListingId contract", () => {
-  assert.match(page, /<ExpandableListingCard autoOpen=\{result\.id === deepLinkListingId\} averagePricePerSqm=\{data\?\.filter\.maxPricePerSqm \?\? null\} key=\{result\.id\} marketType=\{data\?\.filter\.marketType \?\? null\} onChanged=\{\(\) => void load\(\)\} result=\{result\} \/>/);
+  assert.match(page, /<ExpandableListingCard autoOpen=\{result\.id === deepLinkListingId\} averagePricePerSqm=\{data\?\.filter\.maxPricePerSqm \?\? null\} filter=\{data\?\.filter \?\? null\} key=\{result\.id\} marketType=\{data\?\.filter\.marketType \?\? null\} onChanged=\{\(\) => void load\(\)\} result=\{result\} \/>/);
   assert.match(page, /const autoOpenedRef = useRef\(false\);/);
 });
 
@@ -77,13 +77,27 @@ test("ExpandableListingCard draws exactly one thin gold border around the whole 
   const start = page.indexOf("export function ExpandableListingCard(");
   assert.ok(start >= 0, "ExpandableListingCard must exist");
   const source = page.slice(start, page.indexOf("\n}\n", start));
-  assert.match(source, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : "overflow-hidden rounded-\[1\.125rem\] !border-2 !border-gold\/55 transition-colors duration-300 focus-within:!border-gold\/80 hover:!border-gold\/80";/, "the border must be computed from variant, empty only for \"watcher\", so the standalone Finder usage keeps its own single, stronger (2px, 55%->80%) border");
-  assert.match(source, /return <div className=\{wrapperBorderClassName\} onClickCapture=\{handleCardClickCapture\} onPointerDownCapture=\{handleCardPointerCapture\}/, "the wrapper (top card + bottom panel) must carry the computed border class, not display:contents");
-  // ReviewListingCard (a separate, untouched component) legitimately keeps
-  // its own identically-named display:contents wrapper — this check is
-  // scoped to ExpandableListingCard's own source only, not the whole file.
+  assert.match(source, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : FINDER_CARD_BORDER_CLASSNAME;/, "the border must be computed from variant, empty only for \"watcher\", so the standalone Finder usage keeps its own single, stronger (2px, 55%->80%) border");
+  assert.match(source, /return <div className=\{wrapperBorderClassName\} data-listing-id=\{props\.result\.id\} data-testid="finder-card" onClickCapture=\{handleCardClickCapture\} onPointerDownCapture=\{handleCardPointerCapture\}/, "the wrapper (top card + bottom panel) must carry the computed border class, not display:contents");
   assert.doesNotMatch(source, /<div className="contents" onClickCapture=\{handleCardClickCapture\}/, "the old display:contents wrapper (which cannot paint a border) must be gone from ExpandableListingCard specifically");
   assert.match(page, /<article className="ui-card ui-card-hover group overflow-hidden !border-transparent hover:!border-transparent">/, "the inner article's own border must be suppressed so it never doubles the outer one");
+});
+
+// Gold-border-consistency mission: ReviewListingCard ("DO OCENY" / current
+// offers awaiting a decision) used its own separate display:contents
+// wrapper -- exactly the same defect ExpandableListingCard was already
+// fixed for -- so it painted no outer border at all, falling back to its
+// inner <article>'s own separate, much weaker border-amber-400/25. Both
+// card variants now share one constant (FINDER_CARD_BORDER_CLASSNAME), so
+// they can never drift apart again, and neither uses a global CSS hack.
+test("ReviewListingCard draws the exact same single gold border as ExpandableListingCard, never its own separate weaker style", () => {
+  assert.match(page, /const FINDER_CARD_BORDER_CLASSNAME = "overflow-hidden rounded-\[1\.125rem\] !border-2 !border-gold\/55 transition-colors duration-300 focus-within:!border-gold\/80 hover:!border-gold\/80";/, "one shared constant must be the single source of truth for this border, reused rather than duplicated");
+  const start = page.indexOf("function ReviewListingCard(");
+  assert.ok(start >= 0, "ReviewListingCard must exist");
+  const source = page.slice(start, page.indexOf("\n}\n", start));
+  assert.match(source, /return <div className=\{FINDER_CARD_BORDER_CLASSNAME\} data-listing-id=\{result\.id\} data-testid="finder-card" onClickCapture=\{handleCardClickCapture\} onPointerDownCapture=\{handleCardPointerCapture\}/, "ReviewListingCard's own wrapper must carry the exact same border class as ExpandableListingCard's, not display:contents");
+  assert.doesNotMatch(source, /className="contents"/, "the old display:contents wrapper, which cannot paint a border at all, must be gone");
+  assert.doesNotMatch(page, /border-amber-400\/25/, "the old, separate, weaker amber border must be gone from the whole file");
 });
 
 test("opening a card notifies the parent outside React's state updater", () => {
@@ -101,4 +115,19 @@ test("opening a card notifies the parent outside React's state updater", () => {
 test("the dialog header's action row can wrap instead of forcing a horizontal scrollbar at desktop width", () => {
   assert.match(page, /<div className="flex w-full min-w-0 flex-wrap items-center gap-3 sm:w-auto">/, "the action row must allow wrapping at every breakpoint, not force sm:flex-nowrap");
   assert.doesNotMatch(page, /flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap/, "the forced no-wrap that caused the overflow must be gone");
+});
+
+// Real production bug: a rejected offer's card showed the bare internal
+// reason code (e.g. "max_price_per_sqm") instead of a specific, readable
+// sentence with real numbers -- or, once filter thresholds changed, a stale
+// reason left over from a previous, different limit. The reasons list is now
+// built from a fresh, per-request translation (rejection-reasons.ts),
+// against the filter's CURRENT criteria, never the raw persisted codes.
+test("a rejected/reviewed offer shows specific, human-readable reasons — never the bare internal code — computed fresh against the current filter", () => {
+  assert.match(page, /import \{ describeRejectionReason \} from "@\/features\/flip-finder\/rejection-reasons";/);
+  assert.match(page, /function realRejectionReasons\(result: FilterResult, filter: SearchFilter\): string\[\] \{/, "a dedicated helper must translate reasons, not inline logic scattered at the call site");
+  assert.match(page, /realReasons\.map\(\(reason\) => describeRejectionReason\(reason, result, filter\)\)/, "each real reason must be translated through describeRejectionReason with the live result and filter — never a stale, pre-computed string");
+  assert.match(page, /result\.matchReasons\.filter\(\(reason\) => reason !== "review" && !reason\.startsWith\("unknown_"\)\)/, "internal bookkeeping markers (review/unknown_*) must never be shown as if they were real reasons");
+  assert.match(page, /label=\{result\.decisionBucket === "REJECTED" \? "Powody odrzucenia" : "Powody dopasowania"\}/, "a rejected offer must be labeled as a rejection, not the generic match-reasons heading");
+  assert.match(page, /values=\{filter \? realRejectionReasons\(result, filter\) : result\.matchReasons\}/, "the translated reasons must actually be what's rendered whenever the filter is available");
 });
