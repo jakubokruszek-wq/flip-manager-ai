@@ -285,8 +285,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
       .filter((listing): listing is ListingRow => listing !== null)
       .map((listing) => {
         const sourcePostUrl = sourcePostUrlByListingId.get(listing.id) ?? null;
-        const contentFingerprint = listing.source === "facebook" && (listing.title || listing.description || listing.price !== null || listing.area !== null || listing.images.length > 0)
-          ? canonicalFacebookContentFingerprint({ title: listing.title, description: listing.description, price: listing.price, area: listing.area, rooms: listing.rooms, location: [listing.address, listing.district, listing.city].filter(Boolean).join(", "), imageUrls: listing.images })
+        const location = [listing.address, listing.district, listing.city].filter(Boolean).join(", ");
+        const contentFingerprint = listing.source === "facebook" && (Boolean(listing.description) || Boolean(location) || listing.images.length > 0)
+          ? canonicalFacebookContentFingerprint({ title: listing.title, description: listing.description, price: listing.price, area: listing.area, rooms: listing.rooms, location, imageUrls: listing.images })
           : listing.contentHash;
         return [listing.id, {
           ...listing,
