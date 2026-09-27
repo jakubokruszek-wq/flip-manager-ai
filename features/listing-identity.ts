@@ -120,7 +120,7 @@ function normalizeIdentityPart(value: string | null | undefined): string | null 
 }
 
 function normalizeFingerprintText(value: string | null | undefined): string | null {
-  const normalized = value?.normalize("NFKC").replace(/\s+/gu, " ").trim().toLocaleLowerCase("pl-PL");
+  const normalized = value?.normalize("NFKC").replace(/[*_~`#]/gu, "").replace(/\s+/gu, " ").trim().toLocaleLowerCase("pl-PL");
   return normalized || null;
 }
 

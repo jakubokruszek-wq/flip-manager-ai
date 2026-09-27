@@ -25,7 +25,7 @@ import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadat
 import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
 import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
 import { resolveListingUrl } from "@/features/listing-url";
-import { dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
+import { canonicalFacebookContentFingerprint, dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
 
 type Row = Record<string, unknown>;
 
@@ -285,11 +285,14 @@ export async function getFilterResults(filterId: string, includeArchived = false
       .filter((listing): listing is ListingRow => listing !== null)
       .map((listing) => {
         const sourcePostUrl = sourcePostUrlByListingId.get(listing.id) ?? null;
+        const contentFingerprint = listing.source === "facebook" && (listing.title || listing.description || listing.price !== null || listing.area !== null || listing.images.length > 0)
+          ? canonicalFacebookContentFingerprint({ title: listing.title, description: listing.description, price: listing.price, area: listing.area, rooms: listing.rooms, location: [listing.address, listing.district, listing.city].filter(Boolean).join(", "), imageUrls: listing.images })
+          : listing.contentHash;
         return [listing.id, {
           ...listing,
           sourcePostUrl,
           facebookPostId: sourcePostIdByListingId.get(listing.id) ?? null,
-          contentFingerprint: listing.contentHash,
+          contentFingerprint,
           listingIntent: listingIntentByListingId.get(listing.id) ?? null,
           sourceMetadataCollectedAt: sourceMetadataCollectedAtByListingId.get(listing.id) ?? null,
           originalUrl: resolveListingUrl({ source: listing.source, sourcePostUrl, originalUrl: listing.originalUrl }),

@@ -66,7 +66,7 @@ test("Watcher collapses exact Facebook content duplicates from different post ro
   rows = [
     { source_post_url: sourcePostUrl("group-a", "280000000000001"), group_name: "A", published_at: null, collected_at: "2026-09-27T12:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("one", 280_000), external_listing_id: "280000000000001", content_hash: "same-content" } },
     { source_post_url: sourcePostUrl("group-b", "280000000000002"), group_name: "B", published_at: null, collected_at: "2026-09-27T11:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("two", 280_000), external_listing_id: "280000000000002", content_hash: "same-content" } },
-    { source_post_url: sourcePostUrl("group-c", "280000000000003"), group_name: "C", published_at: null, collected_at: "2026-09-27T10:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("three", 280_000), external_listing_id: "280000000000003", content_hash: "different-content" } },
+    { source_post_url: sourcePostUrl("group-c", "280000000000003"), group_name: "C", published_at: null, collected_at: "2026-09-27T10:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("three", 280_000), description: "Inna oferta", external_listing_id: "280000000000003", content_hash: "different-content" } },
   ];
   const result = await listFacebookWatcher();
   assert.equal(result.length, 2);
