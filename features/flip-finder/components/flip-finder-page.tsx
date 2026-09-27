@@ -146,25 +146,25 @@ export function FlipFinderPage() {
     return () => window.clearTimeout(timeoutId);
   }, [load]);
 
-  useEffect(() => {
-    if (!data) return;
-    const filter = data.filters.find((item) => item.id === requestedFilterId) ?? data.filters.find((item) => item.isActive) ?? data.filters[0];
-    const runId = filter?.lastScan?.scanRunId;
-    if (!filter || !runId || scanningFilterIdsRef.current.has(filter.id)) return;
-    let cancelled = false;
-    const refresh = async () => {
-      while (!cancelled) {
-        const progress = await fetchScanProgress(runId).catch(() => null);
-        if (!progress || cancelled) return;
-        setScanProgress(progress);
-        setActiveScanRunId((current) => current ?? runId);
-        if (isTerminalScanStatus(progress.status)) return;
-        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-      }
-    };
-    void refresh();
-    return () => { cancelled = true; };
-  }, [data, requestedFilterId]);
+  // REMOVED: an auto-resume effect used to poll filter.lastScan.scanRunId on
+  // every page load/data refresh, entirely independent of any "Skanuj"
+  // click. filter.lastScan is the most recent source_scans row for the
+  // filter from ANY origin -- including the Facebook Watcher's own
+  // independent scheduler cycle, which creates its own source_scans/
+  // facebook_scan_jobs rows for any active filter whose sources include
+  // "facebook" (see features/facebook-worker/scheduler.ts). That made
+  // simply viewing the Finder page (no click required) start rendering the
+  // Watcher's live, in-progress, per-group Facebook scan under the Finder
+  // scan panel -- real group names, real post counts, real collector queue
+  // timeouts -- creating the exact appearance of "Finder is scanning
+  // Facebook groups" a real production screenshot confirmed. Finder's own
+  // scan (runManualOtodomScan) never creates a facebook_scan_jobs row and
+  // always completes its facebook step synchronously (status "completed",
+  // never "running"), so a "running" lastScan for a facebook-enabled filter
+  // can only ever be a run Finder did not start. The live "Skanuj" click
+  // flow below is unaffected: it already polls activeScanRunId, the exact
+  // run id runManualOtodomScan itself just returned, never the filter's
+  // general lastScan.
 
   const scanFilter = async (filter: SearchFilterListItem) => {
     if (
@@ -426,7 +426,12 @@ export function FlipFinderPage() {
   }
 
   const activeFilter = data.filters.find((filter) => filter.id === requestedFilterId) ?? data.filters.find((filter) => filter.isActive) ?? data.filters[0] ?? null;
-  const latestProgressResponse = activeFilter && scanProgress && scanProgress.runId === activeFilter.lastScan?.scanRunId
+  // Deliberately keyed on activeScanRunId (the run Finder itself started and
+  // is tracking), never activeFilter.lastScan?.scanRunId -- the filter's
+  // last scan can belong to the Facebook Watcher's own independent
+  // scheduler cycle, which Finder must never read into its own progress/
+  // diagnostics display (see the removed auto-resume effect above).
+  const latestProgressResponse = activeFilter && scanProgress && scanProgress.runId === activeScanRunId
     ? scanResponseFromProgress(scanProgress)
     : null;
   const displayedScanResult = latestProgressResponse && activeFilter
@@ -488,9 +493,9 @@ export function FlipFinderPage() {
               </details>
             </div>
           </div>
-          {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
+          {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults deepLinkListingId={deepLinkListingId} key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
-          {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanProgress.runId === activeFilter.lastScan?.scanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
+          {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
           <Dialog onOpenChange={(open) => { if (!clearingResults) setClearResultsOpen(open); }} open={clearResultsOpen}>
             <DialogContent className="max-w-md">
               <DialogHeader>

@@ -314,3 +314,33 @@ test("the Finder scan-result card never labels a facebook source result as Faceb
   // triggered scan itself did.
   assert.match(page, /setNotice\("Facebook Watcher zbiera jeszcze nowe oferty w tle\. Pozostałe źródła zakończyły swój bieżący przebieg\.".*\);/, "the remaining Facebook Watcher mention must describe real, separate background work, not something this scan did");
 });
+
+// Production proof (screenshot, 2026-09-27): clicking Finder's "Skanuj" was
+// NOT the only way its scan panel could start showing live progress. An
+// auto-poll effect used to run on every page load/data-refresh and follow
+// activeFilter.lastScan.scanRunId -- the most recent source_scans row for
+// the filter from ANY origin, including a facebook_scan_jobs-backed run the
+// Facebook Watcher's own independent scheduler started on its own cadence
+// (see features/facebook-worker/scheduler.ts). That let a concurrent
+// Watcher run "leak" into Finder's UI with zero clicks: real group names,
+// real post counts, real collector-queue timeouts, exactly what the
+// production screenshot showed. The fix removes that effect entirely and
+// proves scanProgress/activeScanRunId can only ever be set from a runId a
+// Finder-initiated POST to /scan itself returned.
+test("scanProgress and activeScanRunId are only ever set from a Finder-initiated scan's own runId, never from activeFilter.lastScan", () => {
+  // Strip `//` line comments first: the removed effect's own explanatory
+  // comment names "lastScan.scanRunId" in prose, which must not itself trip
+  // this check meant to catch live CODE reading that value.
+  const codeOnly = page.replace(/^\s*\/\/.*$/gm, "");
+  assert.doesNotMatch(codeOnly, /lastScan\.scanRunId/, "no code path may read a filter's lastScan.scanRunId into Finder's live scan state");
+  assert.doesNotMatch(codeOnly, /activeFilter(?:\??)\.lastScan/, "activeFilter.lastScan may only feed a static, non-live display (e.g. an 'Ostatni skan' timestamp), never scanProgress/activeScanRunId state");
+
+  const setActiveScanRunIdCalls = [...page.matchAll(/setActiveScanRunId\(([^)]*)\)/g)].map((match) => match[1].trim());
+  assert.deepEqual(setActiveScanRunIdCalls.sort(), ["null", "payload.runId"].sort(), "setActiveScanRunId must only ever be cleared or set from a scan response's own runId");
+
+  // The one automatic effect left on mount only triggers the initial data
+  // load (`load()`); it must never touch scanProgress or activeScanRunId.
+  const mountEffectBody = page.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[load\]\);/)?.[0];
+  assert.ok(mountEffectBody, "the mount-time load effect must exist");
+  assert.doesNotMatch(mountEffectBody, /setScanProgress|setActiveScanRunId/, "the mount-time effect may only call load(), never touch live scan state");
+});
