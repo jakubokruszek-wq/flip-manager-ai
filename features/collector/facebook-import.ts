@@ -47,9 +47,20 @@ async function createImport(supabase: ReturnType<typeof createAdminClient>, devi
 }
 
 async function upsertListing(supabase: ReturnType<typeof createAdminClient>, payload: NormalizedFacebookImport): Promise<{ id: string; status: "created" | "updated" }> {
+  const identity = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: payload.normalizedPostUrl, externalListingId: payload.externalListingId });
   const { data: exact, error: exactError } = await supabase.from("listings").select("id").eq("source", "facebook").eq("external_listing_id", payload.externalListingId).maybeSingle();
   if (exactError) throw new Error("Nie udało się sprawdzić istniejącej oferty Facebooka.");
   if (!isRecord(exact) || typeof exact.id !== "string") {
+    const metadataByUrl = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").eq("source_post_url", payload.normalizedPostUrl).order("collected_at", { ascending: false }).limit(1);
+    if (metadataByUrl.error) throw new Error("Nie udało się sprawdzić metadanych posta Facebooka.");
+    const metadataUrlListingId = Array.isArray(metadataByUrl.data) && isRecord(metadataByUrl.data[0]) && typeof metadataByUrl.data[0].listing_id === "string" ? metadataByUrl.data[0].listing_id : null;
+    if (metadataUrlListingId) return { id: metadataUrlListingId, status: "updated" };
+    if (identity.postId) {
+      const metadataByPost = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").filter("metadata->>postId", "eq", identity.postId).order("collected_at", { ascending: false }).limit(1);
+      if (metadataByPost.error) throw new Error("Nie udało się sprawdzić tożsamości posta Facebooka.");
+      const metadataPostListingId = Array.isArray(metadataByPost.data) && isRecord(metadataByPost.data[0]) && typeof metadataByPost.data[0].listing_id === "string" ? metadataByPost.data[0].listing_id : null;
+      if (metadataPostListingId) return { id: metadataPostListingId, status: "updated" };
+    }
     const { data: sameUrl, error: urlError } = await supabase.from("listings").select("id").eq("source", "facebook").eq("normalized_url", payload.normalizedPostUrl).maybeSingle();
     if (urlError) throw new Error("Nie udało się sprawdzić adresu źródłowego Facebooka.");
     if (isRecord(sameUrl) && typeof sameUrl.id === "string") return { id: sameUrl.id, status: "updated" };

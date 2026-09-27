@@ -55,7 +55,8 @@ export function canonicalFacebookIdentity(input: Omit<ListingIdentity, "listingI
   const source = input.source ?? "facebook";
   if (source !== "facebook") return { postId: null, sourcePostUrl: null, externalListingId: null, contentFingerprint: null, keys: [] };
 
-  const sourcePostUrl = normalizeListingIdentityUrl("facebook", input.sourcePostUrl ?? input.originalUrl);
+  const sourcePostUrl = normalizeListingIdentityUrl("facebook", input.sourcePostUrl)
+    ?? normalizeListingIdentityUrl("facebook", input.originalUrl);
   const postId = normalizeFacebookPostId(input.facebookPostId)
     ?? extractFacebookPostId(input.sourcePostUrl)
     ?? extractFacebookPostId(input.originalUrl)

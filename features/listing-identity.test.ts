@@ -48,6 +48,22 @@ test("tracking and mobile/group route variants resolve to one Facebook post", ()
   assert.equal(canonicalFacebookIdentity(records[0]).postId, "4486483384955652");
 });
 
+test("a valid listing URL remains the fallback when source metadata is missing or a placeholder", () => {
+  const records = [
+    {
+      ...facebook("listing-valid", "https://www.facebook.com/flip-manager/manual/placeholder", "legacy-1", "2026-09-27T12:00:00Z"),
+      originalUrl: "https://www.facebook.com/groups/a/posts/4486483384955652",
+    },
+    {
+      ...facebook("listing-route", null, "facebook:group:b:post:4486483384955652", "2026-09-27T11:00:00Z"),
+      originalUrl: "https://m.facebook.com/groups/b/posts/4486483384955652?utm_source=feed",
+    },
+  ];
+  const canonical = canonicalFacebookIdentity(records[0]);
+  assert.equal(canonical.sourcePostUrl, "https://facebook.com/groups/a/posts/4486483384955652");
+  assert.equal(dedupeByListingIdentity(records, (record) => record).length, 1);
+});
+
 test("identical full-content fingerprints collapse cross-post duplicates, while similar offers remain separate", () => {
   const fingerprint = canonicalFacebookContentFingerprint({ title: "Mieszkanie", description: "Pełny opis oferty", price: 280000, area: 59.9, rooms: 2, location: "Łódź", imageUrls: ["https://img.example/one.jpg"] });
   const duplicate = [

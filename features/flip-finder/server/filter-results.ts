@@ -436,8 +436,8 @@ export async function getFilterResults(filterId: string, includeArchived = false
   });
   const dedupedResults = dedupeByListingIdentity(
     [...allResults].sort((left, right) => {
-      const leftQuality = (normalizeListingIdentityUrl(left.source, left.sourcePostUrl) ? 2 : 0) + (left.images.length > 0 ? 1 : 0);
-      const rightQuality = (normalizeListingIdentityUrl(right.source, right.sourcePostUrl) ? 2 : 0) + (right.images.length > 0 ? 1 : 0);
+      const leftQuality = ((normalizeListingIdentityUrl(left.source, left.sourcePostUrl) ?? normalizeListingIdentityUrl(left.source, left.originalUrl)) ? 2 : 0) + (left.images.length > 0 ? 1 : 0);
+      const rightQuality = ((normalizeListingIdentityUrl(right.source, right.sourcePostUrl) ?? normalizeListingIdentityUrl(right.source, right.originalUrl)) ? 2 : 0) + (right.images.length > 0 ? 1 : 0);
       if (rightQuality !== leftQuality) return rightQuality - leftQuality;
       const leftObserved = sourceMetadataCollectedAtByListingId.get(left.id) ?? left.lastSeenAt ?? left.firstSeenAt;
       const rightObserved = sourceMetadataCollectedAtByListingId.get(right.id) ?? right.lastSeenAt ?? right.firstSeenAt;
@@ -448,6 +448,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       source: result.source,
       externalListingId: listingsById.get(result.id)?.externalListingId ?? null,
       sourcePostUrl: result.sourcePostUrl,
+      originalUrl: result.originalUrl,
       facebookPostId: listingsById.get(result.id)?.facebookPostId ?? null,
       contentFingerprint: listingsById.get(result.id)?.contentFingerprint ?? listingsById.get(result.id)?.contentHash ?? null,
     }),
