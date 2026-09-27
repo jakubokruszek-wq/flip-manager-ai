@@ -56,7 +56,21 @@ export function planFilterMatchRecalculation(
     }
 
     evaluated += 1;
-    const permanentlyExcluded = listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "REJECTED" || listing.lifecycleStatus === "ARCHIVED";
+    // manualDecision "REJECTED" is a deliberate, permanent operator decision
+    // (features/flip-finder's review RPC only ever sets it from an explicit
+    // operator action) and ARCHIVED requires an explicit restore action --
+    // both are genuinely sticky. lifecycleStatus "REJECTED" on its own is
+    // NOT: it is also the value this very recalculation writes onto
+    // public.listings (a single, cross-filter column) whenever a listing
+    // fails ANY filter's criteria. Treating a bare "REJECTED" lifecycle as
+    // permanent made that self-perpetuating -- once any filter rejected a
+    // listing, no later recalculation (even the same filter after loosening
+    // its own thresholds) would ever evaluate it again. Real production
+    // case: filter "Flip" raised max_price_per_sqm to 7300, but 148/154
+    // Facebook listings stayed stuck REJECTED with
+    // match_reasons=["reconciled_out","complete_scan_filter_mismatch"]
+    // forever, including offers well under the new cap.
+    const permanentlyExcluded = listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "ARCHIVED";
     if (permanentlyExcluded) {
       if (existingIds.has(listing.id)) removedIds.add(listing.id);
       continue;
