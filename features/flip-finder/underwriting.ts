@@ -73,7 +73,7 @@ export const DEFAULT_UNDERWRITING_SETTINGS: UnderwritingSettings = {
 export type UnderwritingInput = {
   listingId: string;
   source: string;
-  sourceUrl: string;
+  sourceUrl: string | null;
   lifecycleStatus: string | null;
   decisionBucket: "MATCHED" | "REVIEW" | "REJECTED";
   manualDecision: "ACCEPTED" | "REJECTED" | null;

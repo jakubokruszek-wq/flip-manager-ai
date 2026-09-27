@@ -90,7 +90,9 @@ function baseResult(overrides) {
     city: "Łódź",
     district: null,
     thumbnailUrl: null,
-    originalUrl: "https://www.facebook.com/groups/example/permalink/1234567890/",
+    // Finder receives authoritative source metadata while the legacy listing column is empty.
+    sourcePostUrl: "https://www.facebook.com/groups/example/posts/1234567890/",
+    originalUrl: null,
     source: "facebook",
     listingStatus: "active",
     isActive: true,
@@ -338,6 +340,17 @@ test("Flip Finder card border: real browser comparison of a current (active) car
       const box = await openButton.boundingBox();
       assert.ok(box, "the primary action button must have a real, visible bounding box");
       assert.ok(box.width > 0 && box.height > 0, `the primary action button must be clickable (non-zero size) at ${viewport.width}px`);
+
+      const listingLink = page.locator('a[href="https://www.facebook.com/groups/example/posts/1234567890/"]').first();
+      await listingLink.waitFor({ state: "visible" });
+      assert.equal(await listingLink.getAttribute("href"), "https://www.facebook.com/groups/example/posts/1234567890/");
+      if (viewport.width === 1280) {
+        const popupPromise = page.waitForEvent("popup");
+        await listingLink.click();
+        const popup = await popupPromise;
+        assert.equal(popup.url(), "https://www.facebook.com/groups/example/posts/1234567890/");
+        await popup.close();
+      }
 
       const reviewAddButton = page.getByRole("button", { name: "DODAJ" }).first();
       await reviewAddButton.waitFor({ state: "visible" });

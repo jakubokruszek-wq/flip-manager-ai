@@ -26,6 +26,7 @@ export type ResultStatusInput = {
 };
 
 export type FilterResult = PropertyListingResult & {
+  sourcePostUrl?: string | null;
   canonicalDecisionDebug?: CanonicalVisibilityDebug;
   canonicalConsistencyMismatch?: boolean;
   finderStatus?: FinderStatus;

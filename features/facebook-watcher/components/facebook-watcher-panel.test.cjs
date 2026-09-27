@@ -175,13 +175,15 @@ test("addToCrm can never show success after a swallowed workflow-update failure"
   assert.match(panel, /updateWorkflow=\{guardedUpdateWorkflow\}/, "InboxItem's other fire-and-forget actions (Interesująca/Odrzuć/Przywróć/markRead) must go through the guarded wrapper, which toasts on failure instead of silently swallowing it");
 });
 
-// Hotfix D regression guard: the Facebook Watcher's own ?listing= deep link
-// (used for both MATCHED and REVIEW Facebook alerts — this handler never
-// distinguishes bucket, it just clicks whichever inbox item has the matching
-// id) is untouched by this hotfix. It must remain wired exactly as before.
-test("the ?listing= deep link still clicks the exact matching inbox item, for any bucket, and is not re-triggered by later rerenders", () => {
-  assert.match(panel, /const listingId=new URLSearchParams\(window\.location\.search\)\.get\("listing"\);if\(!listingId\)return;handledDeepLink\.current=true;const timeout=window\.setTimeout\(\(\)=>document\.querySelector<HTMLElement>\(`#facebook-inbox-\$\{CSS\.escape\(listingId\)\} \[role=button\]`\)\?\.click\(\),0\);/);
-  assert.match(panel, /id=\{`facebook-inbox-\$\{item\.listingId\}/, "every inbox item, regardless of MATCHED/REVIEW bucket, must render the id the deep-link handler queries for");
+// The ?listing= deep link must activate the exact native analysis button.
+// Registration uses a ref callback because a native <button> does not expose
+// an explicit [role=button] attribute to querySelector.
+test("the ?listing= deep link clicks the exact matching analysis button once", () => {
+  assert.match(panel, /const analysisButtonsRef=useRef\(new Map<string,HTMLButtonElement>\(\)\)/);
+  assert.match(panel, /const timeout=window\.setTimeout\(\(\)=>analysisButtonsRef\.current\.get\(listingId\)\?\.click\(\),0\);/);
+  assert.match(panel, /const openAnalysis=\(id:string\)=>analysisButtonsRef\.current\.get\(id\)\?\.click\(\);/);
+  assert.match(panel, /buttonRef=\{button=>registerAnalysisButton\(item\.listingId,button\)\}[^>]+label="Analizuj"/);
+  assert.doesNotMatch(panel, /querySelector<HTMLElement>/);
 });
 
 // FIX ACTUAL FACEBOOK WATCHER CARD UI mission. Confirmed review finding: a

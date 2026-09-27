@@ -17,6 +17,7 @@ import {
 } from "@/features/flip-finder/results";
 import type { SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
+import { resolveListingUrl } from "@/features/listing-url";
 
 type ResultsResponse = {
   filter: SearchFilter;
@@ -155,6 +156,7 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
 }
 
 function ListingResultCard({ result }: { result: FilterResult }) {
+  const listingUrl = resolveListingUrl({ source: result.source, sourcePostUrl: result.sourcePostUrl, originalUrl: result.originalUrl });
   const price = formatCurrency(result.price);
   const pricePerSqm = formatCurrency(result.pricePerSqm);
   const location = result.locationText ?? resultLocation(result.address, result.district, result.city);
@@ -227,17 +229,21 @@ function ListingResultCard({ result }: { result: FilterResult }) {
           </dl>
 
           <div className="mt-4">
-            <Button
-              nativeButton={false}
-              render={
-                <a href={result.originalUrl} rel="noopener noreferrer" target="_blank" />
-              }
-              className="w-full sm:w-auto"
-              size="sm"
-              variant="outline"
-            >
-              Otwórz ogłoszenie
-            </Button>
+            {listingUrl ? (
+              <Button
+                nativeButton={false}
+                render={<a href={listingUrl} rel="noopener noreferrer" target="_blank" />}
+                className="w-full sm:w-auto"
+                size="sm"
+                variant="outline"
+              >
+                Otwórz ogłoszenie
+              </Button>
+            ) : (
+              <Button className="w-full sm:w-auto" disabled size="sm" type="button" variant="outline">
+                Brak prawidłowego linku do ogłoszenia
+              </Button>
+            )}
           </div>
         </div>
       </div>

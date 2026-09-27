@@ -24,6 +24,7 @@ import { visibleMembership } from "@/features/flip-finder/membership-reconciliat
 import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadataFailure, type FacebookPriceStatus } from "@/features/facebook-watcher/price-quality";
 import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
 import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
+import { resolveListingUrl } from "@/features/listing-url";
 
 type Row = Record<string, unknown>;
 
@@ -92,6 +93,7 @@ type ListingRow = Pick<
   | "galleryTotal"
   | "galleryPersistedCount"
 > & {
+  sourcePostUrl?: string | null;
   /**
    * Generic, source-agnostic price-trust signal for the Opportunity Engine.
    * Populated today only from Facebook's own price-quality metadata (see
@@ -211,11 +213,12 @@ export async function getFilterResults(filterId: string, includeArchived = false
     // this metadata today; OLX/Otodom simply have no rows here and are unaffected.
     supabase
       .from("listing_source_metadata")
-      .select("listing_id,metadata")
+      .select("listing_id,source_post_url,metadata")
       .in("listing_id", listingIds)
       .eq("source", "facebook"),
   ]);
   const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
+  const sourcePostUrlByListingId = new Map<string, string>();
   // Distinguish "the query ran and this Facebook listing simply has no
   // priceQuality yet" (backward-compatible: trusted, same as before this
   // feature existed) from "the query itself failed" (must not silently
@@ -228,6 +231,10 @@ export async function getFilterResults(filterId: string, includeArchived = false
   } else {
     for (const row of asRows(priceQualityResult.data)) {
       const listingId = nullableString(row.listing_id);
+      const sourcePostUrl = nullableString(row.source_post_url);
+      if (listingId && sourcePostUrl && !sourcePostUrlByListingId.has(listingId)) {
+        sourcePostUrlByListingId.set(listingId, sourcePostUrl);
+      }
       const status = parseFacebookPriceReliability(row.metadata);
       if (listingId && status) priceReliabilityByListingId.set(listingId, status);
     }
@@ -258,7 +265,15 @@ export async function getFilterResults(filterId: string, includeArchived = false
     asRows(listingsResult.data)
       .map(toListingRow)
       .filter((listing): listing is ListingRow => listing !== null)
-      .map((listing) => [listing.id, { ...listing, priceReliability: resolveFacebookPriceReliabilityOnMetadataFailure(listing.source, priceReliabilityByListingId.get(listing.id), priceQualityMetadataQueryFailed) }]),
+      .map((listing) => {
+        const sourcePostUrl = sourcePostUrlByListingId.get(listing.id) ?? null;
+        return [listing.id, {
+          ...listing,
+          sourcePostUrl,
+          originalUrl: resolveListingUrl({ source: listing.source, sourcePostUrl, originalUrl: listing.originalUrl }),
+          priceReliability: resolveFacebookPriceReliabilityOnMetadataFailure(listing.source, priceReliabilityByListingId.get(listing.id), priceQualityMetadataQueryFailed),
+        }];
+      }),
   );
   const snapshotsByListingId = new Map<string, SnapshotRow[]>();
 
@@ -307,7 +322,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       },
       filter,
     );
-    const sourceConflict = !sourceDomainMatchesSource(listing.source, listing.originalUrl);
+    const sourceConflict = listing.originalUrl ? !sourceDomainMatchesSource(listing.source, listing.originalUrl) : false;
     const hardFilterReject = filterDecision.hardRejectReasons.length > 0;
     const effectiveGalleryDisplay = effectiveGalleryDisplayState(listing.galleryStatus ?? null, listing.galleryRequestedAt ?? null, listing.galleryError ?? null);
     const decisionBucket: FilterResult["decisionBucket"] = sourceConflict || hardFilterReject
@@ -353,6 +368,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         district: safeLocation.district,
         thumbnailUrl: listing.images[0] ?? null,
         originalUrl: listing.originalUrl,
+        sourcePostUrl: listing.sourcePostUrl ?? null,
         source: listing.source,
         sourceConflict,
         listingStatus: listing.status,
@@ -464,7 +480,6 @@ function toListingRow(row: Row): ListingRow | null {
 
   if (
     !id ||
-    !originalUrl ||
     !isListingSource(source) ||
     !isListingStatus(status) ||
     !firstSeenAt ||
@@ -522,7 +537,7 @@ function opportunityFields(
   const assessment = calculateOpportunityAssessment({
     id: listing.id,
     source: listing.source,
-    sourceUrl: listing.originalUrl,
+    sourceUrl: listing.originalUrl ?? undefined,
     lifecycleStatus: listing.lifecycleStatus,
     decisionBucket,
     manualDecision: listing.manualDecision,

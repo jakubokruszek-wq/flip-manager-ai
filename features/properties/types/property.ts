@@ -128,7 +128,7 @@ export type NormalizedFacebookPropertyImport = FacebookCollectorPropertyPayload 
 export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "buildingType" | "ownership" | "description" | "images" | "pricePerSqm" | "locationText" | "address" | "city" | "district" | "thumbnailUrl"> & {
   id: string;
   publishedAt?: string | null;
-  originalUrl: string;
+  originalUrl: string | null;
   source: PropertyFinderSource;
   listingStatus: PropertyListingStatus;
   isActive: boolean;
@@ -162,7 +162,7 @@ export type PropertyListing = Pick<PropertyFields, "externalListingId" | "normal
   id: string;
   source: PropertyFinderSource;
   externalListingId: string;
-  originalUrl: string;
+  originalUrl: string | null;
   normalizedUrl: string | null;
   status: PropertyListingStatus;
   firstSeenAt: string;

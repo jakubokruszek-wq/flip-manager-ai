@@ -73,6 +73,7 @@ export type FacebookProperty = {
 
 export type FacebookWatcherListing = FacebookProperty & {
   listingId: string;
+  sourcePostUrl?: string | null;
   status: string;
   groupName: string | null;
   publishedAt: string | null;

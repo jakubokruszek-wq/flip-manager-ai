@@ -475,7 +475,8 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
 
       // Every fixture state's action set is actually rendered (Task 4).
       const byId = Object.fromEntries(geometry.articles.map((article) => [article.listingId, article.buttons.map((button) => button.label)]));
-      assert.deepEqual(byId[NORMAL_ID].sort(), ["Analizuj", "Dodaj do CRM", "Interesująca", "Napraw galerię", "Odrzuć"].sort(), `${viewport.name}: normal listing action set`);
+      assert.equal(byId[NORMAL_ID].length, 6, `${viewport.name}: normal listing renders every action including the disabled external-link state`);
+      assert.ok(byId[NORMAL_ID].includes("Brak prawid\u0142owego linku do og\u0142oszenia"), `${viewport.name}: a missing listing URL must render the disabled-link message`);
       assert.ok(byId[REJECTED_ID].includes("Przywróć") && !byId[REJECTED_ID].includes("Odrzuć"), `${viewport.name}: REJECTED listing must offer Przywróć, not Odrzuć`);
       assert.ok(byId[RESTORABLE_ID].includes("Przywróć do Flip Finder"), `${viewport.name}: ARCHIVED listing must offer Przywróć do Flip Finder`);
       assert.ok(byId[FACEBOOK_LINK_ID].includes("Facebook"), `${viewport.name}: listing with originalUrl must offer the external Facebook link`);
