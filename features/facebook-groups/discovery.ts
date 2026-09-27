@@ -1,9 +1,10 @@
 import { FACEBOOK_PRODUCTION_SOURCES, type FacebookProductionSource } from "@/features/collector/facebook-production";
 import { findDuplicateFacebookGroup, normalizeFacebookGroupUrl } from "./group-url";
 import { resolveFacebookGroupDisplayName } from "./display-name";
+import { isRealEstateGroupName } from "./real-estate-classifier";
 import type { WatchedFacebookGroup } from "./types";
 
-export const FACEBOOK_GROUP_IMPORT_STATUSES = ["NOWA", "JUZ_W_MANAGERZE", "MOZLIWY_DUPLIKAT", "WYMAGA_WERYFIKACJI", "POMINIETA"] as const;
+export const FACEBOOK_GROUP_IMPORT_STATUSES = ["NOWA_NIERUCHOMOSCIOWA", "JUZ_W_MANAGERZE", "MOZLIWY_DUPLIKAT", "WYMAGA_WERYFIKACJI", "POMINIETA_NIERNIERUCHOMOSCIOWA"] as const;
 export type FacebookGroupImportStatus = (typeof FACEBOOK_GROUP_IMPORT_STATUSES)[number];
 
 export const UNKNOWN_GROUP_NAME = "Nieznana grupa";
@@ -48,7 +49,7 @@ export function classifyDiscoveredFacebookGroupCandidate(
 ): FacebookGroupImportPreviewItem {
   const discoveredName = candidate.name?.trim() || null;
   if (candidate.skipReason) {
-    return { url: candidate.url, normalizedUrl: null, identifier: null, discoveredName, status: "POMINIETA", reason: candidate.skipReason };
+    return { url: candidate.url, normalizedUrl: null, identifier: null, discoveredName, status: "POMINIETA_NIERNIERUCHOMOSCIOWA", reason: candidate.skipReason };
   }
   let normalized: { url: string; identifier: string } | null;
   try {
@@ -76,7 +77,15 @@ export function classifyDiscoveredFacebookGroupCandidate(
   if (nameCollision) {
     return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "MOZLIWY_DUPLIKAT", reason: `Nazwa pokrywa się z już obserwowaną grupą "${resolveFacebookGroupDisplayName(nameCollision)}", ale adres jest inny — sprawdź ręcznie przed importem.` };
   }
-  return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "NOWA", reason: "Nowa grupa, nieznana w Managerze ani wśród zatwierdzonych źródeł." };
+  // Not every group the user has ever joined is a real-estate group -- only
+  // offer the ones whose own Facebook name reads as one for the "select all
+  // real estate" bulk action. This never blocks a manual import: the
+  // operator can still reclassify and select any POMINIETA_NIERNIERUCHOMOSCIOWA
+  // row before importing (see watched-groups-page.tsx's manual override).
+  if (!isRealEstateGroupName(discoveredName)) {
+    return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "POMINIETA_NIERNIERUCHOMOSCIOWA", reason: "Nazwa grupy nie wskazuje na tematykę nieruchomości. Można ręcznie oznaczyć jako nieruchomościową przed importem." };
+  }
+  return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "NOWA_NIERUCHOMOSCIOWA", reason: "Nowa grupa nieruchomościowa, nieznana w Managerze ani wśród zatwierdzonych źródeł." };
 }
 
 /**

@@ -30,8 +30,22 @@ test("every mission-required import preview status label is rendered", () => {
   }
 });
 
-test("only NOWA and MOZLIWY_DUPLIKAT rows are ever selectable for import", () => {
-  assert.match(source, /IMPORTABLE_STATUSES = new Set<FacebookGroupImportPreviewItem\["status"\]>\(\["NOWA", "MOZLIWY_DUPLIKAT"\]\)/);
+// Manual-override mission requirement: a name that reads as non-real-estate
+// (POMINIETA_NIERNIERUCHOMOSCIOWA) or unreadable (WYMAGA_WERYFIKACJI) can
+// still be manually ticked and imported after the operator confirms/edits
+// its name -- only an already-registered group (JUZ_W_MANAGERZE) is excluded,
+// since re-importing it makes no sense.
+test("every row except JUZ_W_MANAGERZE is manually selectable for import", () => {
+  assert.match(source, /IMPORTABLE_STATUSES = new Set<FacebookGroupImportPreviewItem\["status"\]>\(\["NOWA_NIERUCHOMOSCIOWA", "MOZLIWY_DUPLIKAT", "WYMAGA_WERYFIKACJI", "POMINIETA_NIERNIERUCHOMOSCIOWA"\]\)/);
+});
+
+// "Importuj wszystkie grupy nieruchomościowe" mission requirement: the bulk
+// action must only ever pre-select/act on rows the classifier itself marked
+// as real estate, never a POMINIETA/WYMAGA_WERYFIKACJI row -- that always
+// requires the explicit manual tick above.
+test("the bulk 'import all real estate groups' action is restricted to classifier-confirmed real-estate rows", () => {
+  assert.match(source, /REAL_ESTATE_BULK_STATUSES = new Set<FacebookGroupImportPreviewItem\["status"\]>\(\["NOWA_NIERUCHOMOSCIOWA"\]\)/);
+  assert.match(source, /Importuj wszystkie grupy nieruchomościowe/);
 });
 
 test("a discovered candidate's name always comes from what the extension actually reported, never invented client-side", () => {

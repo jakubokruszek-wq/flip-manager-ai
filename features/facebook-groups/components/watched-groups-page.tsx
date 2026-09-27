@@ -22,7 +22,17 @@ import type { FacebookGroupImportPreviewItem, HistoricalFacebookSourceMapping } 
 import type { AddWatchedFacebookGroupResult, WatchedFacebookGroup } from "../types";
 import { resolveFacebookGroupDisplayName } from "../display-name";
 
-const IMPORTABLE_STATUSES = new Set<FacebookGroupImportPreviewItem["status"]>(["NOWA", "MOZLIWY_DUPLIKAT"]);
+// Every status except JUZ_W_MANAGERZE (already a real, existing watched
+// group or approved production source -- re-importing it makes no sense)
+// can be manually selected for import. The automatic real-estate
+// classification only decides what "Importuj wszystkie grupy
+// nieruchomościowe" pre-selects; the operator can still tick the checkbox
+// for any WYMAGA_WERYFIKACJI or POMINIETA_NIERNIERUCHOMOSCIOWA row and
+// supply/edit its name, exactly the manual override the mission requires.
+// addWatchedFacebookGroup's own required-name and duplicate checks are the
+// real safety net regardless of what is ticked here.
+const IMPORTABLE_STATUSES = new Set<FacebookGroupImportPreviewItem["status"]>(["NOWA_NIERUCHOMOSCIOWA", "MOZLIWY_DUPLIKAT", "WYMAGA_WERYFIKACJI", "POMINIETA_NIERNIERUCHOMOSCIOWA"]);
+const REAL_ESTATE_BULK_STATUSES = new Set<FacebookGroupImportPreviewItem["status"]>(["NOWA_NIERUCHOMOSCIOWA"]);
 
 type DiscoveryFlowState = "IDLE" | "WAITING" | "FACEBOOK_OPENED" | "READING" | "RECEIVED" | "NO_SESSION" | "ERROR";
 
@@ -217,16 +227,16 @@ export function WatchedGroupsPage() {
     });
   };
 
-  const importSelected = async () => {
+  const importUrls = async (urls: Set<string>, emptySelectionMessage: string) => {
     if (!discoveryToken) {
       setError("Brak aktywnej sesji wykrywania — uruchom wykrywanie ponownie z rozszerzenia.");
       return;
     }
     const selections = preview
-      .filter((item) => selected.has(item.url) && IMPORTABLE_STATUSES.has(item.status))
+      .filter((item) => urls.has(item.url) && IMPORTABLE_STATUSES.has(item.status))
       .map((item) => ({ url: item.url, name: (previewNames[item.url] ?? item.discoveredName ?? "").trim() }));
     if (!selections.length) {
-      setError("Wybierz co najmniej jedną grupę do zaimportowania.");
+      setError(emptySelectionMessage);
       return;
     }
     if (selections.some((selection) => !selection.name)) {
@@ -259,6 +269,17 @@ export function WatchedGroupsPage() {
       setBusy(false);
     }
   };
+
+  const importSelected = () => importUrls(selected, "Wybierz co najmniej jedną grupę do zaimportowania.");
+  // Real-estate classification alone decides what this imports -- computed
+  // fresh from the current preview, never from the (possibly stale, async)
+  // `selected` checkbox state, so this is always exactly "every currently
+  // NOWA_NIERUCHOMOSCIOWA row", regardless of what the operator has manually
+  // ticked for the separate "Importuj wybrane" action.
+  const importAllRealEstate = () => importUrls(
+    new Set(preview.filter((item) => REAL_ESTATE_BULK_STATUSES.has(item.status)).map((item) => item.url)),
+    "Brak nowych grup nieruchomościowych do zaimportowania.",
+  );
 
   const create = async () => {
     setBusy(true);
@@ -375,6 +396,7 @@ export function WatchedGroupsPage() {
         onNameChange={(url, name) => setPreviewNames((current) => ({ ...current, [url]: name }))}
         selected={selected}
         onToggleSelected={toggleSelected}
+        onImportAllRealEstate={() => void importAllRealEstate()}
         busy={busy}
         onRefresh={discoveryToken ? () => void loadDiscoveryPreviewForToken(discoveryToken).catch((value: unknown) => setDiscoveryError(errorMessage(value, "Nie udało się pobrać wyników wykrywania grup."))) : undefined}
         onImport={() => void importSelected()}
@@ -409,7 +431,7 @@ export function WatchedGroupsPage() {
   );
 }
 
-function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discoveryError, previewNames, onNameChange, selected, onToggleSelected, busy, onRefresh, onImport, flowState, flowError, onRunDiscovery }: {
+function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discoveryError, previewNames, onNameChange, selected, onToggleSelected, onImportAllRealEstate, busy, onRefresh, onImport, flowState, flowError, onRunDiscovery }: {
   preview: FacebookGroupImportPreviewItem[];
   previewExpiresAt: string | null;
   discoveryToken: string | null;
@@ -418,6 +440,7 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
   onNameChange: (url: string, name: string) => void;
   selected: Set<string>;
   onToggleSelected: (url: string) => void;
+  onImportAllRealEstate: () => void;
   busy: boolean;
   onRefresh?: () => void;
   onImport: () => void;
@@ -427,6 +450,7 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
 }) {
   const selectableCount = preview.filter((item) => IMPORTABLE_STATUSES.has(item.status)).length;
   const selectedCount = preview.filter((item) => selected.has(item.url) && IMPORTABLE_STATUSES.has(item.status)).length;
+  const realEstateCount = preview.filter((item) => REAL_ESTATE_BULK_STATUSES.has(item.status)).length;
   const flowBusy = flowState === "WAITING" || flowState === "FACEBOOK_OPENED" || flowState === "READING";
   return (
     <section className="ui-section space-y-3">
@@ -465,9 +489,14 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
               onToggle={() => onToggleSelected(item.url)}
             />
           ))}
-          <Button className="mt-2 min-h-11" disabled={busy || selectedCount === 0} onClick={onImport}>
-            {busy ? "Importowanie…" : `Importuj wybrane (${selectedCount}/${selectableCount})`}
-          </Button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button variant="outline" className="min-h-11" disabled={busy || realEstateCount === 0} onClick={onImportAllRealEstate}>
+              {busy ? "Importowanie…" : `Importuj wszystkie grupy nieruchomościowe (${realEstateCount})`}
+            </Button>
+            <Button className="min-h-11" disabled={busy || selectedCount === 0} onClick={onImport}>
+              {busy ? "Importowanie…" : `Importuj wybrane (${selectedCount}/${selectableCount})`}
+            </Button>
+          </div>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">Brak wykrytych grup do przejrzenia.</p>
@@ -477,11 +506,11 @@ function DiscoverySection({ preview, previewExpiresAt, discoveryToken, discovery
 }
 
 const IMPORT_STATUS_LABEL: Record<FacebookGroupImportPreviewItem["status"], string> = {
-  NOWA: "Nowa",
+  NOWA_NIERUCHOMOSCIOWA: "Nowa nieruchomościowa",
   JUZ_W_MANAGERZE: "Już w Managerze",
   MOZLIWY_DUPLIKAT: "Możliwy duplikat",
   WYMAGA_WERYFIKACJI: "Wymaga weryfikacji",
-  POMINIETA: "Pominięta",
+  POMINIETA_NIERNIERUCHOMOSCIOWA: "Pominięta (nie nieruchomościowa)",
 };
 
 function ImportPreviewRow({ item, name, onNameChange, checked, onToggle }: { item: FacebookGroupImportPreviewItem; name: string; onNameChange: (name: string) => void; checked: boolean; onToggle: () => void }) {

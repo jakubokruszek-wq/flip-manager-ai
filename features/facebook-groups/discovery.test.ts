@@ -16,11 +16,26 @@ function candidate(overrides: Partial<{ url: string; name: string | null; discov
   return { url: "https://www.facebook.com/groups/999888777/", name: "Łódź Nieruchomości Flip", discoveredAt: "2026-09-23T00:00:00.000Z", ...overrides };
 }
 
-test("a brand new group with a real captured name is NOWA", () => {
+test("a brand new group with a real captured name is NOWA_NIERUCHOMOSCIOWA", () => {
   const result = classifyDiscoveredFacebookGroupCandidate(candidate(), [], PRODUCTION_SOURCES);
-  assert.equal(result.status, "NOWA");
+  assert.equal(result.status, "NOWA_NIERUCHOMOSCIOWA");
   assert.equal(result.identifier, "999888777");
   assert.equal(result.discoveredName, "Łódź Nieruchomości Flip");
+});
+
+// Real-estate classification mission: not every group the user has ever
+// joined is real estate. A brand new, non-duplicate, named candidate whose
+// name does not read as real estate must be POMINIETA_NIERNIERUCHOMOSCIOWA,
+// never silently treated as NOWA_NIERUCHOMOSCIOWA.
+test("a brand new group with a real name that is NOT real-estate-related is POMINIETA_NIERNIERUCHOMOSCIOWA, not NOWA_NIERUCHOMOSCIOWA", () => {
+  const result = classifyDiscoveredFacebookGroupCandidate(candidate({ name: "Miłośnicy kotów Łódź" }), [], PRODUCTION_SOURCES);
+  assert.equal(result.status, "POMINIETA_NIERNIERUCHOMOSCIOWA");
+  assert.equal(result.discoveredName, "Miłośnicy kotów Łódź");
+});
+
+test("a bare city name or weak business/investment term alone is not sufficient for NOWA_NIERUCHOMOSCIOWA", () => {
+  assert.equal(classifyDiscoveredFacebookGroupCandidate(candidate({ name: "Łódź" }), [], PRODUCTION_SOURCES).status, "POMINIETA_NIERNIERUCHOMOSCIOWA");
+  assert.equal(classifyDiscoveredFacebookGroupCandidate(candidate({ name: "Biznes i inwestycje" }), [], PRODUCTION_SOURCES).status, "POMINIETA_NIERNIERUCHOMOSCIOWA");
 });
 
 test("a URL matching an existing watched group is JUZ_W_MANAGERZE", () => {
@@ -58,7 +73,7 @@ test("a candidate whose name collides with an existing watched group but at a di
 
 test("an extension-flagged skip reason is always POMINIETA, even for an otherwise-valid URL", () => {
   const result = classifyDiscoveredFacebookGroupCandidate(candidate({ skipReason: "Grupa ogólna, niezwiązana z nieruchomościami." }), [], PRODUCTION_SOURCES);
-  assert.equal(result.status, "POMINIETA");
+  assert.equal(result.status, "POMINIETA_NIERNIERUCHOMOSCIOWA");
   assert.equal(result.reason, "Grupa ogólna, niezwiązana z nieruchomościami.");
 });
 
@@ -74,7 +89,7 @@ test("buildGroupImportPreview classifies each distinct candidate independently",
     PRODUCTION_SOURCES,
   );
   assert.equal(preview.length, 3);
-  assert.deepEqual(preview.map((item) => item.status), ["NOWA", "JUZ_W_MANAGERZE", "WYMAGA_WERYFIKACJI"]);
+  assert.deepEqual(preview.map((item) => item.status), ["NOWA_NIERUCHOMOSCIOWA", "JUZ_W_MANAGERZE", "WYMAGA_WERYFIKACJI"]);
 });
 
 test("buildHistoricalFacebookSourceMapping shows a real captured name when a matching watched group exists", () => {

@@ -103,6 +103,55 @@ test("buildDiscoveryPayload attaches a discoveredAt timestamp to every candidate
   assert.equal(payload[0].name, "Group");
 });
 
+// Facebook's "Twoje grupy" page lazy-loads groups as the user scrolls -- a
+// single immediate DOM read only sees the first rendered batch. This proves
+// scrollUntilStable keeps scrolling while new groups keep appearing, and
+// stops once the count is unchanged for two consecutive rounds.
+test("scrollUntilStable keeps scrolling while new groups keep appearing, and stops once stable", async () => {
+  const { scrollUntilStable } = loadModule();
+  // Simulates three lazy-loaded batches: 1 group, then 2, then 3 -- stable
+  // (3) for the required two consecutive rounds after that.
+  const batches = [
+    [anchor("https://www.facebook.com/groups/1/", "Group 1")],
+    [anchor("https://www.facebook.com/groups/1/", "Group 1"), anchor("https://www.facebook.com/groups/2/", "Group 2")],
+    [anchor("https://www.facebook.com/groups/1/", "Group 1"), anchor("https://www.facebook.com/groups/2/", "Group 2"), anchor("https://www.facebook.com/groups/3/", "Group 3")],
+  ];
+  let scrollCalls = 0;
+  const root = { querySelectorAll: (selector) => (selector === "a[href]" ? (batches[Math.min(scrollCalls, batches.length - 1)]) : []) };
+  const scrollFn = () => { scrollCalls += 1; };
+  const waitFn = () => Promise.resolve();
+
+  const result = await scrollUntilStable(root, { scrollFn, waitFn });
+  assert.equal(result.candidates.length, 3, "must have picked up all three lazy-loaded groups");
+  assert.equal(result.diagnostics.stabilized, true);
+  // Scroll 1 reveals batch 2 (2 groups), scroll 2 reveals batch 3/final (3
+  // groups), scrolls 3 and 4 each re-confirm the same count (3) -- two
+  // consecutive stable rounds -- before stopping.
+  assert.equal(scrollCalls, 4);
+});
+
+test("scrollUntilStable gives up after maxAttempts on a page that never stabilizes", async () => {
+  const { scrollUntilStable } = loadModule();
+  let n = 0;
+  // Every scroll reveals exactly one more group forever -- simulates an
+  // unrelated infinite feed that must never hang discovery.
+  const root = { querySelectorAll: (selector) => (selector === "a[href]" ? Array.from({ length: n }, (_, i) => anchor(`https://www.facebook.com/groups/${i}/`, `Group ${i}`)) : []) };
+  const result = await scrollUntilStable(root, { scrollFn: () => { n += 1; }, waitFn: () => Promise.resolve(), maxAttempts: 5 });
+  assert.equal(result.diagnostics.scrollAttempts, 5);
+  assert.equal(result.diagnostics.stabilized, false);
+});
+
+test("a page with no lazy-loaded groups at all (candidate count already stable from the first read) stops after the minimum confirming rounds", async () => {
+  const { scrollUntilStable } = loadModule();
+  const fixed = [anchor("https://www.facebook.com/groups/1/", "Only Group")];
+  let scrollCalls = 0;
+  const root = fakeRoot(fixed);
+  const result = await scrollUntilStable(root, { scrollFn: () => { scrollCalls += 1; }, waitFn: () => Promise.resolve() });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.diagnostics.stabilized, true);
+  assert.equal(scrollCalls, 2, "must still confirm stability with the minimum required rounds before stopping, not stop after a single read");
+});
+
 // The popup's "Wykryj grupy nieruchomości" button cannot call the scan
 // function directly (it lives in the content script's isolated world, not
 // the popup) -- it must ask this content script to run it via a message.

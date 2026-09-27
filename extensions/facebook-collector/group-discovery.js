@@ -82,8 +82,43 @@
     return candidates.map((candidate) => ({ url: candidate.url, name: candidate.name, discoveredAt }));
   }
 
-  async function runGroupDiscovery(root = document, { skipTabOpen = false } = {}) {
-    const inspected = inspectGroupCandidatesFromDom(root);
+  const MAX_SCROLL_ATTEMPTS = 20;
+  const STABLE_ROUNDS_REQUIRED = 2;
+  const SCROLL_WAIT_MS = 800;
+
+  /**
+   * Facebook's "Twoje grupy" page lazy-loads groups as the user scrolls, so a
+   * single, immediate DOM read only ever sees the first rendered page. This
+   * repeatedly scrolls and re-inspects the DOM until the discovered-candidate
+   * count stops growing for `stableRoundsRequired` consecutive rounds (or
+   * `maxAttempts` is hit, so a page that never stabilizes -- e.g. an infinite
+   * unrelated feed -- cannot hang discovery forever). scrollFn/waitFn are
+   * injectable so this is unit-testable without real browser timers/scrolling.
+   */
+  async function scrollUntilStable(root, { scrollFn, waitFn, maxAttempts = MAX_SCROLL_ATTEMPTS, stableRoundsRequired = STABLE_ROUNDS_REQUIRED } = {}) {
+    let previousCount = inspectGroupCandidatesFromDom(root).candidates.length;
+    let stableRounds = 0;
+    let attempts = 0;
+    while (attempts < maxAttempts && stableRounds < stableRoundsRequired) {
+      scrollFn();
+      await waitFn();
+      attempts += 1;
+      const currentCount = inspectGroupCandidatesFromDom(root).candidates.length;
+      stableRounds = currentCount === previousCount ? stableRounds + 1 : 0;
+      previousCount = currentCount;
+    }
+    const final = inspectGroupCandidatesFromDom(root);
+    return { ...final, diagnostics: { ...final.diagnostics, scrollAttempts: attempts, stabilized: stableRounds >= stableRoundsRequired, loadedOnly: false } };
+  }
+
+  function defaultScrollFn() { window.scrollTo(0, document.body.scrollHeight); }
+  function defaultWaitFn() { return new Promise((resolve) => window.setTimeout(resolve, SCROLL_WAIT_MS)); }
+
+  async function runGroupDiscovery(root = document, { skipTabOpen = false, scroll = true } = {}) {
+    const canScrollLive = scroll && typeof window !== "undefined" && typeof window.scrollTo === "function";
+    const inspected = canScrollLive
+      ? await scrollUntilStable(root, { scrollFn: defaultScrollFn, waitFn: defaultWaitFn })
+      : inspectGroupCandidatesFromDom(root);
     const candidates = inspected.candidates;
     const payload = buildDiscoveryPayload(candidates);
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
@@ -117,6 +152,6 @@
   // Test-only export, exactly like content.js's own pattern -- `module`
   // never exists in the browser extension context.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { extractGroupCandidatesFromDom, inspectGroupCandidatesFromDom, buildDiscoveryPayload, normalizeName, accessibleName };
+    module.exports = { extractGroupCandidatesFromDom, inspectGroupCandidatesFromDom, buildDiscoveryPayload, normalizeName, accessibleName, scrollUntilStable, runGroupDiscovery };
   }
 })();
