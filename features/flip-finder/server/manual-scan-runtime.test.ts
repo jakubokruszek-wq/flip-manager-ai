@@ -71,7 +71,12 @@ test("a Finder scan of a facebook-only filter never touches facebook_scan_jobs a
   const summary = await runManualOtodomScan(testFilter.id);
 
   assert.equal(touchedTables.includes("facebook_scan_jobs"), false, "no facebook_scan_jobs row may be read or written by a Finder-triggered scan");
-  assert.deepEqual(new Set(touchedTables), new Set(["source_scans", "search_filters"]), "a facebook-only Finder scan must touch only source_scans (its own lock bookkeeping) and search_filters (last_scanned_at)");
+  // Second Finder/Watcher separation bug: source_scans rows with
+  // source="facebook" are exclusively Watcher-owned (activeSources() never
+  // returns "facebook"), so a facebook-only filter has no Finder-owned row
+  // to lock or recover -- Finder must never even query source_scans in this
+  // case, since every row it could find there belongs to the Watcher.
+  assert.deepEqual(new Set(touchedTables), new Set(["search_filters"]), "a facebook-only Finder scan must never touch source_scans at all -- every row there for a facebook-only filter belongs exclusively to the Watcher");
 
   assert.equal(recalculateCalls.length, 1, "recalculateFilterMatches must be called exactly once for a facebook-only filter");
   assert.equal(recalculateCalls[0].filterId, testFilter.id);

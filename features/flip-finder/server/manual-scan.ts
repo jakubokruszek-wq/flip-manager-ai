@@ -39,6 +39,22 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
   const facebookEnabled = filter.sources.includes("facebook");
   const sourceIds = [...sources.map((source) => source.id), ...(facebookEnabled ? ["facebook"] : [])];
   if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
+  // Second Finder/Watcher separation bug, proven live: source_scans has no
+  // per-row owner. Every source_scans row with source="facebook" is written
+  // exclusively by the Watcher's own scheduler (features/facebook-worker/
+  // jobs.ts's enqueueAutomaticSource) -- a Finder-triggered scan NEVER
+  // inserts one for facebook; its own facebook step is the synchronous
+  // reconcileFacebookFromCanonicalListings call below, which never touches
+  // this table at all (activeSources() only ever returns otodom/olx/
+  // morizon). Locking/staleness-recovering "facebook" here therefore never
+  // protects Finder against itself -- it can only ever collide with a
+  // concurrently active Watcher scan for the same filter, which is exactly
+  // what produced "Skan tego filtra już trwa." on Production while the
+  // Watcher's own scheduler cycle was genuinely running. Watcher's own
+  // scans are already self-healing on the Watcher's own schedule
+  // (scheduler.ts's repairOrphanedCycleScans/FAIL_NEVER_CLAIMED), so Finder
+  // must never lock on, or "recover", a source_scans row it did not create.
+  const lockableSourceIds = sources.map((source) => source.id);
   // The scan/persist/reconciliation pipeline below writes through
   // reconcile_canonical_listing_decision (a service_role-only RPC, by
   // design — see the grant migration), plus source_scans/listings rows.
@@ -50,10 +66,12 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
   // CANONICAL_RECONCILIATION_FAILED and silently failed every listing a
   // live scan tried to persist.
   const supabase = createAdminClient();
-  await failStaleScans(supabase, filterId, sourceIds);
-  const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", sourceIds).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
-  if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
-  if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
+  if (lockableSourceIds.length) {
+    await failStaleScans(supabase, filterId, lockableSourceIds);
+    const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", lockableSourceIds).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+    if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
+    if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
+  }
 
   scanLog("SCAN START", { scanId: runId, source: "all", checked: 0, new: 0, matched: 0, durationMs: 0 });
   try {
