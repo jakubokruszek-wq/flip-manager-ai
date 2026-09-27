@@ -255,3 +255,41 @@ test("a listing whose source no longer belongs to the filter is removed with a s
   assert.ok(removed);
   assert.deepEqual(removed?.reasons, ["source_not_in_filter"]);
 });
+
+// Rejection-reason-freshness invariant: filter-match-recalculation.ts's
+// write path only falls back to the generic ["reconciled_out",
+// "complete_scan_filter_mismatch"] pair when plan.removedListingDecisions
+// has NO entry for a removed id at all -- a "must not happen" defensive
+// safety net, never a normal code path. This proves that invariant across
+// every distinct removal reason the plan can produce (source mismatch,
+// manual reject, archived, a genuine evaluation rejection/review, and a
+// vanished listing), so that generic fallback stays permanently
+// unreachable rather than silently becoming live again through a future
+// change that adds a removal path without also calling markRemoved.
+test("every removedListingId always has a matching removedListingDecisions entry, for every distinct removal reason (the generic fallback pair must stay unreachable)", () => {
+  const matched: RecalculationListing = flipListing({ id: "00000000-bbbb-4bbb-8bbb-000000000001", buildingType: "blok", ownership: "pełna własność" });
+  const sourceMismatch: RecalculationListing = flipListing({ id: "00000000-bbbb-4bbb-8bbb-000000000002", source: "olx" as RecalculationListing["source"] });
+  const manualRejected: RecalculationListing = flipListing({ id: "00000000-bbbb-4bbb-8bbb-000000000003", manualDecision: "REJECTED" });
+  const archived: RecalculationListing = flipListing({ id: "00000000-bbbb-4bbb-8bbb-000000000004", lifecycleStatus: "ARCHIVED" });
+  const priceViolation: RecalculationListing = flipListing({ id: "00000000-bbbb-4bbb-8bbb-000000000005", price: 900_000, area: 39, pricePerSqm: 900_000 / 39, buildingType: "blok", ownership: "pełna własność" });
+  const vanishedId = "00000000-bbbb-4bbb-8bbb-000000000006";
+
+  const previouslyVisible = [matched, sourceMismatch, manualRejected, archived, priceViolation];
+  const matches: RecalculationMatch[] = [
+    ...previouslyVisible.map((listing): RecalculationMatch => ({ listingId: listing.id, isCurrentMatch: true, matchReasons: [] })),
+    { listingId: vanishedId, isCurrentMatch: true, matchReasons: [] },
+  ];
+
+  const plan = planFilterMatchRecalculation(flip8200Filter, previouslyVisible, matches);
+
+  assert.equal(plan.removedListingIds.length, 5, "sourceMismatch, manualRejected, archived, priceViolation, and the vanished listing must all be removed");
+  const decisionIds = new Set(plan.removedListingDecisions.map((entry) => entry.listingId));
+  for (const removedId of plan.removedListingIds) {
+    assert.ok(decisionIds.has(removedId), `removedListingIds contains ${removedId} but removedListingDecisions has no entry for it -- the caller would fall back to the generic, stale reason pair`);
+  }
+  // Every real decision must carry its own specific reason, never the
+  // generic placeholder pair.
+  for (const decision of plan.removedListingDecisions) {
+    assert.notDeepEqual(decision.reasons, ["reconciled_out", "complete_scan_filter_mismatch"], `listing ${decision.listingId} must never carry the generic fallback reason pair`);
+  }
+});
