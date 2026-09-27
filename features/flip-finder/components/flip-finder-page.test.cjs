@@ -344,3 +344,30 @@ test("scanProgress and activeScanRunId are only ever set from a Finder-initiated
   assert.ok(mountEffectBody, "the mount-time load effect must exist");
   assert.doesNotMatch(mountEffectBody, /setScanProgress|setActiveScanRunId/, "the mount-time effect may only call load(), never touch live scan state");
 });
+
+// Strict separation mission requirement: Finder must never open Facebook,
+// never open a Facebook group, never talk to the browser extension directly
+// (chrome.tabs/chrome.runtime), and never send it a command. Its only
+// browser-extension contact anywhere in this file is the pre-existing,
+// unrelated "collector bridge" (document.dispatchEvent/addEventListener of
+// same-page CustomEvents, used by validateCollector's separate "sprawdź
+// gotowość" action) -- itself never a chrome.* call, and never invoked by
+// scanFilter, the function "Skanuj" actually calls.
+test("Finder never references a facebook.com URL or the chrome.tabs/chrome.runtime extension APIs anywhere in this file", () => {
+  assert.doesNotMatch(page, /facebook\.com/, "Finder must never construct or reference a facebook.com URL");
+  assert.doesNotMatch(page, /chrome\.tabs/, "Finder must never call chrome.tabs");
+  assert.doesNotMatch(page, /chrome\.runtime\.sendMessage/, "Finder must never call chrome.runtime.sendMessage");
+  assert.doesNotMatch(page, /window\.open\(/, "Finder must never open a new browser tab/window itself");
+});
+
+test("clicking 'Skanuj' (scanFilter) never invokes the collector-bridge/extension-messaging mechanism used by the separate 'validate collector' action", () => {
+  const scanFilterBody = page.match(/const scanFilter = async \(filter: SearchFilterListItem\) => \{[\s\S]*?\n  \};/)?.[0];
+  assert.ok(scanFilterBody, "scanFilter must exist");
+  assert.doesNotMatch(scanFilterBody, /requestCollectorBridgePing|dispatchEvent|CustomEvent/, "Skanuj's own click handler must never dispatch a collector-bridge event or otherwise talk to the extension");
+  assert.doesNotMatch(scanFilterBody, /facebook\.com|chrome\.|window\.open\(/, "Skanuj's own click handler must never open a Facebook URL, call a chrome.* API, or open a new window/tab");
+  // The one legitimate "Facebook" mention inside scanFilter is a notice
+  // about the Watcher's own separate, concurrent background work -- never
+  // something this scan itself did (see the dedicated test above proving
+  // exactly that notice's real wording).
+  assert.match(scanFilterBody, /Facebook Watcher zbiera jeszcze nowe oferty w tle/);
+});
