@@ -6,7 +6,7 @@ import { validateFacebookRevalidationCandidates } from "./image-revalidation";
 import { isExactGalleryRootBindingProvenance, type FacebookMediaBindingProvenance, type FacebookMediaCandidate } from "./types.ts";
 import { galleryMediaIds as collectGalleryMediaIds, selectMissingGalleryCandidates } from "./gallery-policy";
 import { safeFacebookPostUrl } from "./facebook-post-url";
-import { deriveMonotonicGalleryFailure } from "./gallery-state";
+import { deriveMonotonicGalleryFailure, effectiveGalleryDisplayState } from "./gallery-state";
 
 export type FacebookGalleryStatus = "NOT_REQUESTED" | "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "FAILED";
 
@@ -163,10 +163,23 @@ export async function enqueueFacebookGalleryJob(listingId: string): Promise<{ jo
   return { jobId, status, listingId, created: result?.job_created === true };
 }
 
+// A stuck gallery is already safe to retry indefinitely (each call is
+// serialized/idempotent -- see enqueue_facebook_gallery_job's own active-job
+// check and repair_facebook_gallery_job's FACEBOOK_GALLERY_REPAIR_ALREADY_RUNNING
+// guard), but "safe" is not "bounded": nothing stopped an endless string of
+// manual retries against a listing whose gallery can never succeed (e.g. a
+// permanently deleted Facebook post). Counting existing GALLERY_HYDRATION
+// jobs for this listing needs no new column/migration -- facebook_scan_jobs
+// already links every hydration attempt back to its listing.
+export const FACEBOOK_GALLERY_REPAIR_MAX_ATTEMPTS = 5;
+
 /** Reset one Facebook gallery and enqueue exactly one ordinary hydration job.
  * The post id and permalink always come from the server-side listing row. */
 export async function repairFacebookGalleryJob(listingId: string): Promise<{ jobId: string | null; status: FacebookGalleryStatus; listingId: string; created?: boolean }> {
   const supabase = createFacebookWatcherAdminClient();
+  const priorAttempts = await supabase.from("facebook_scan_jobs").select("id", { count: "exact", head: true }).eq("gallery_listing_id", listingId).eq("job_type", "GALLERY_HYDRATION");
+  if (priorAttempts.error) throw new Error(`FACEBOOK_GALLERY_REPAIR_FAILED: ${priorAttempts.error.message}`);
+  if ((priorAttempts.count ?? 0) >= FACEBOOK_GALLERY_REPAIR_MAX_ATTEMPTS) throw new Error("FACEBOOK_GALLERY_REPAIR_LIMIT_REACHED");
   const result = await supabase.rpc("repair_facebook_gallery_job", { p_listing_id: listingId }).single();
   if (result.error || !result.data) {
     const message = result.error?.message ?? "missing result";
@@ -182,16 +195,24 @@ export async function repairFacebookGalleryJob(listingId: string): Promise<{ job
 
 export async function getFacebookGalleryStatus(listingId: string): Promise<FacebookGalleryStatusResult> {
   const supabase = createFacebookWatcherAdminClient();
-  const result = await supabase.from("listings").select("id,source,gallery_status,gallery_job_id,gallery_total,gallery_persisted_count,gallery_error").eq("id", listingId).maybeSingle();
+  const result = await supabase.from("listings").select("id,source,gallery_status,gallery_job_id,gallery_requested_at,gallery_total,gallery_persisted_count,gallery_error").eq("id", listingId).maybeSingle();
   const listing = row(result.data);
   if (result.error || !listing || listing.source !== "facebook") throw new Error("FACEBOOK_GALLERY_LISTING_NOT_FOUND");
+  // A job the extension never claimed at all has no reaper anywhere in this
+  // codebase (see effectiveGalleryDisplayState's own doc comment) -- without
+  // this override, this specific per-listing status endpoint would report
+  // PENDING/RUNNING forever even after Finder's own listing feed already
+  // shows it as a normal, actionable FAILED/timeout state, since the two
+  // previously computed this differently (filter-results.ts applied the
+  // override, this endpoint returned the raw DB row unchanged).
+  const display = effectiveGalleryDisplayState(galleryStatus(listing.gallery_status), string(listing.gallery_requested_at), string(listing.gallery_error));
   return {
     listingId,
-    status: galleryStatus(listing.gallery_status),
+    status: display.status ?? "NOT_REQUESTED",
     jobId: string(listing.gallery_job_id),
     total: boundedCount(listing.gallery_total, 0),
     persistedCount: boundedCount(listing.gallery_persisted_count, 0),
-    error: string(listing.gallery_error),
+    error: display.error,
   };
 }
 

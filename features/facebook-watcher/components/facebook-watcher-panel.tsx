@@ -35,6 +35,7 @@ const GALLERY_REPAIR_ERROR_MESSAGES: Record<string, string> = {
   FACEBOOK_GALLERY_REPAIR_ALREADY_RUNNING: "Naprawa galerii już trwa dla tej oferty.",
   FACEBOOK_GALLERY_METADATA_IDENTITY_AMBIGUOUS: "Tożsamość posta jest niejednoznaczna — naprawa galerii została wstrzymana.",
   FACEBOOK_GALLERY_METADATA_GROUP_MISMATCH: "Grupa źródłowa nie zgadza się z zapisaną — naprawa galerii została wstrzymana.",
+  FACEBOOK_GALLERY_REPAIR_LIMIT_REACHED: "Osiągnięto limit prób naprawy galerii dla tej oferty. Skontaktuj się z administratorem, jeśli problem się powtarza.",
 };
 
 export function FacebookWatcherPanel() {
