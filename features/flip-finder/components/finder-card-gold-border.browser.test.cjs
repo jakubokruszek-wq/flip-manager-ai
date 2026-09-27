@@ -350,6 +350,64 @@ test("Flip Finder card border: real browser comparison of a current (active) car
         const popup = await popupPromise;
         assert.equal(popup.url(), "https://www.facebook.com/groups/example/posts/1234567890/");
         await popup.close();
+
+        const activeCard = page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`);
+        const reviewCard = page.locator(`[data-testid="finder-card"][data-listing-id="${reviewId}"]`);
+        const activePreview = activeCard.locator("article > button").first();
+        const dialog = page.getByRole("dialog");
+
+        // MATCHED: the whole card and the explicit Analizuj action use the
+        // same canonical listing id and open the same detail dialog.
+        await activePreview.click();
+        await dialog.waitFor({ state: "visible" });
+        assert.match(await dialog.textContent(), /Aktualna oferta/);
+        assert.equal(await dialog.getByRole("link", { name: /Deal Room/ }).getAttribute("href"), `/deals/${activeId}`);
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
+
+        await activeCard.getByRole("button", { name: "Analizuj", exact: true }).click();
+        await dialog.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
+
+        // Enter and Space on the card's native button are equivalent to a
+        // pointer click; Escape closes the details without any scan request.
+        await activePreview.focus();
+        await page.keyboard.press("Enter");
+        await dialog.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
+        await activePreview.focus();
+        await page.keyboard.press(" ");
+        await dialog.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
+
+        // REVIEW: the same card interaction contract is backed by the
+        // controlled native <details>, with no accidental action bubbling.
+        const reviewArticle = reviewCard.locator("article");
+        const reviewDetails = reviewCard.locator("details");
+        await reviewCard.getByRole("button", { name: "Analizuj", exact: true }).click();
+        assert.notEqual(await reviewDetails.getAttribute("open"), null, "REVIEW Analizuj must open its analysis details");
+        await page.keyboard.press("Escape");
+        assert.equal(await reviewDetails.getAttribute("open"), null, "REVIEW Escape must close its analysis details");
+
+        await reviewArticle.click({ position: { x: 12, y: 12 } });
+        assert.notEqual(await reviewDetails.getAttribute("open"), null, "clicking the REVIEW card must open its analysis details");
+        await page.keyboard.press("Escape");
+        await reviewArticle.focus();
+        await page.keyboard.press("Enter");
+        assert.notEqual(await reviewDetails.getAttribute("open"), null, "Enter on the REVIEW card must open its analysis details");
+        await page.keyboard.press("Escape");
+        await reviewArticle.focus();
+        await page.keyboard.press(" ");
+        assert.notEqual(await reviewDetails.getAttribute("open"), null, "Space on the REVIEW card must open its analysis details");
+        await page.keyboard.press("Escape");
+
+        const reviewDecisionRequest = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith(`/api/flip-finder/listings/${reviewId}/review`));
+        await reviewCard.getByRole("button", { name: "DODAJ", exact: true }).click();
+        const reviewDecision = await reviewDecisionRequest;
+        assert.deepEqual(JSON.parse(reviewDecision.postData() || "{}"), { decision: "ACCEPTED" }, "REVIEW action buttons must keep their existing decision payload");
       }
 
       const reviewAddButton = page.getByRole("button", { name: "DODAJ" }).first();

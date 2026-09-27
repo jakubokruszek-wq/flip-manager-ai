@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { BedDouble, BrainCircuit, Clock3, ExternalLink, MapPin, Plus, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -577,6 +577,7 @@ function isGalleryState(value: unknown): value is GalleryState {
 
 function ReviewListingCardContent({ result, onChanged, highlight = false }: { result: FilterResult; onChanged: () => void; highlight?: boolean }) {
   const [busy, setBusy] = useState(false);
+  const [analysisExpanded, setAnalysisExpanded] = useState(false);
   // ReviewListingCard has no dialog to open (it renders fully expanded
   // already) — the deep-link equivalent of ExpandableListingCardContent's
   // autoOpen is scrolling the exact card into view and highlighting it once,
@@ -603,7 +604,27 @@ function ReviewListingCardContent({ result, onChanged, highlight = false }: { re
   const location = dedupeLocationText(result.locationText) ?? "Lokalizacja nieznana";
   const missing = friendlyMissingFields((result.opportunityMissingFields ?? result.missingFields ?? []).filter((field) => !(field === "buildingType" && result.buildingType)));
   const listingUrl = resolveListingUrl({ source: result.source, sourcePostUrl: result.sourcePostUrl, originalUrl: result.originalUrl });
-  return <article className={`ui-card !border-transparent p-4 hover:!border-transparent ${highlight ? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""}`} ref={articleRef}><div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-xl bg-muted">{result.thumbnailUrl ? <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover" fill sizes="(max-width: 640px) 100vw, 420px" src={result.thumbnailUrl} /> : <Placeholder />}</div><div className="flex items-start justify-between gap-3"><div><h3 className="type-card-title">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="ui-badge border-warning/30 text-warning">{decisionLabelForUi(result.underwriting?.decision)}</span></div><OpportunitySummary result={result} /><p className="mt-3 text-sm font-semibold">{currency(result.price)}</p><p className="text-sm font-semibold text-gold">{currencyPerSqm(result.pricePerSqm)}</p><div className="mt-2 grid grid-cols-2 gap-2 text-sm"><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><div className="mt-3 space-y-1 text-xs text-muted-foreground"><p>{firstSeenLabel(result.firstSeenAt)}</p><p>{publicationLabel(result.publishedAt)}</p></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}{result.sourceConflict ? " · Źródło wymaga weryfikacji" : ""}</p><details className="mt-3 rounded-xl border bg-background"><summary className="cursor-pointer px-3 py-2 text-sm font-bold">Analiza inwestycji</summary><UnderwritingPanel result={result} /></details><div className="mt-3 flex flex-wrap gap-2"><Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button><Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>{listingUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={listingUrl} rel="noreferrer" target="_blank">{sourceLabelForResult(result.source)} <ExternalLink className="size-3" /></a> : <button className="min-h-10 rounded-md border px-3 text-sm text-muted-foreground" disabled type="button">Brak prawidłowego linku do ogłoszenia</button>}</div></article>;
+  const openAnalysis = () => setAnalysisExpanded(true);
+  const handleCardClick = (event: MouseEvent<HTMLElement>) => {
+    const target = event.target;
+    const interactiveTarget = target instanceof Element ? target.closest("button,a,input,select,textarea,summary,[role='button']") : null;
+    if (interactiveTarget && interactiveTarget !== event.currentTarget) return;
+    openAnalysis();
+  };
+  const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      if (analysisExpanded) {
+        event.preventDefault();
+        setAnalysisExpanded(false);
+      }
+      return;
+    }
+    if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
+      event.preventDefault();
+      openAnalysis();
+    }
+  };
+  return <article aria-label={`Szczegóły oferty ${title}`} className={`ui-card !border-transparent p-4 hover:!border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${highlight ? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""}`} onClick={handleCardClick} onKeyDown={handleCardKeyDown} ref={articleRef} role="group" tabIndex={0}><div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-xl bg-muted">{result.thumbnailUrl ? <SafeImage alt={`Zdjęcie: ${title}`} className="object-cover" fill sizes="(max-width: 640px) 100vw, 420px" src={result.thumbnailUrl} /> : <Placeholder />}</div><div className="flex items-start justify-between gap-3"><div><h3 className="type-card-title">{title}</h3><p className="mt-1 text-sm text-muted-foreground">{location}</p></div><span className="ui-badge border-warning/30 text-warning">{decisionLabelForUi(result.underwriting?.decision)}</span></div><OpportunitySummary result={result} /><p className="mt-3 text-sm font-semibold">{currency(result.price)}</p><p className="text-sm font-semibold text-gold">{currencyPerSqm(result.pricePerSqm)}</p><div className="mt-2 grid grid-cols-2 gap-2 text-sm"><span>Metraż: {result.area == null ? "brak" : `${result.area} m²`}</span><span>Pokoje: {result.rooms ?? "brak"}</span><span>Typ budynku: {result.buildingType ?? "brak"}</span></div><div className="mt-3 space-y-1 text-xs text-muted-foreground"><p>{firstSeenLabel(result.firstSeenAt)}</p><p>{publicationLabel(result.publishedAt)}</p></div><p className="mt-3 text-xs text-muted-foreground">{result.reviewReason ?? "Wymaga ręcznej oceny"}{missing.length ? ` · Brak: ${missing.join(", ")}` : ""}{result.sourceConflict ? " · Źródło wymaga weryfikacji" : ""}</p><details className="mt-3 rounded-xl border bg-background" open={analysisExpanded}><summary className="cursor-pointer px-3 py-2 text-sm font-bold" onClick={(event) => { event.stopPropagation(); setAnalysisExpanded((current) => !current); }}>Analiza inwestycji</summary><UnderwritingPanel result={result} /></details><div className="mt-3 flex flex-wrap gap-2"><Button onClick={(event) => { event.stopPropagation(); openAnalysis(); }} type="button" variant="outline">Analizuj</Button><Button disabled={busy} onClick={(event) => { event.stopPropagation(); void decide("ACCEPTED"); }} type="button">DODAJ</Button><Button disabled={busy} onClick={(event) => { event.stopPropagation(); void decide("REJECTED"); }} type="button" variant="outline">ODRZUĆ</Button>{listingUrl ? <a className="flex items-center gap-1 rounded-md border px-3 text-sm" href={listingUrl} onClick={(event) => event.stopPropagation()} rel="noreferrer" target="_blank">{sourceLabelForResult(result.source)} <ExternalLink className="size-3" /></a> : <button className="min-h-10 rounded-md border px-3 text-sm text-muted-foreground" disabled onClick={(event) => event.stopPropagation()} type="button">Brak prawidłowego linku do ogłoszenia</button>}</div></article>;
 }
 
 function ReviewListingCard({ result, onChanged, highlight = false }: { result: FilterResult; onChanged: () => void; highlight?: boolean }) {
@@ -861,7 +882,8 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           <p className="mt-auto pt-4 text-xs font-medium text-muted-foreground/80">Kliknij kartę, aby zobaczyć szczegóły</p>
         </div>
        </div>
-       </button>
+        </button>
+        {variant === "watcher" ? null : <div className="flex justify-end px-3 pb-4 sm:px-5"><Button aria-expanded={expanded} className="min-h-11 rounded-xl font-semibold" onClick={() => { if (!expanded) onOpen?.(); setExpanded(true); }} type="button" variant="outline">Analizuj</Button></div>}
        </article>
       <DialogContent className="left-0 top-0 h-dvh max-h-none max-w-none translate-x-0 translate-y-0 gap-0 overflow-x-hidden overflow-y-auto rounded-none border-border/70 bg-card p-0 shadow-2xl shadow-black/15 sm:left-1/2 sm:top-1/2 sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:max-w-4xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl">
         <div className="border-b border-border/70 px-5 pb-5 pt-6 sm:px-8 sm:pb-6 sm:pt-8">

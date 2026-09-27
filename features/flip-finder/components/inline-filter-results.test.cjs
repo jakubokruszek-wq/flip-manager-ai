@@ -44,7 +44,7 @@ test("non-Facebook REVIEW: the exact deep-linked card scrolls into view and is h
   assert.match(page, /function ReviewListingCardContent\(\{ result, onChanged, highlight = false \}: \{ result: FilterResult; onChanged: \(\) => void; highlight\?: boolean \}\)/, "ReviewListingCardContent must accept an optional highlight prop, default false, so every existing call site keeps working unchanged");
   assert.match(page, /const articleRef = useRef<HTMLElement>\(null\);/, "a ref on the card's own root element is required to scroll it into view");
   assert.match(page, /if \(highlight && !highlightedRef\.current\) \{\s*highlightedRef\.current = true;\s*articleRef\.current\?\.scrollIntoView\(\{ behavior: "smooth", block: "center" \}\);/, "highlighting must scroll the exact card into view exactly once, never re-triggered by an unrelated rerender");
-  assert.match(page, /<article className=\{`ui-card !border-transparent p-4 hover:!border-transparent \$\{highlight \? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""\}`\} ref=\{articleRef\}>/, "the highlight must be a purely visual ring on the existing card styling, not a new component or layout");
+  assert.match(page, /className=\{`ui-card !border-transparent p-4 hover:!border-transparent[^`]*\$\{highlight \? "ring-2 ring-gold ring-offset-2 ring-offset-background" : ""\}`\}[^>]*ref=\{articleRef\}/, "the highlight must remain a purely visual ring on the existing card styling, not a new component or layout");
   assert.match(page, /function ReviewListingCard\(\{ result, onChanged, highlight = false \}: \{ result: FilterResult; onChanged: \(\) => void; highlight\?: boolean \}\)/, "the outer ReviewListingCard wrapper must forward the same optional highlight prop");
   assert.match(page, /<ReviewListingCardContent highlight=\{highlight\} onChanged=\{onChanged\} result=\{result\} \/>/, "ReviewListingCard must actually pass highlight down to its content, not just accept and drop it");
   assert.match(page, /<ReviewListingCard highlight=\{result\.id === deepLinkListingId\} key=\{result\.id\} result=\{result\} onChanged=\{\(\) => void load\(\)\} \/>/, "the review results list must wire highlight to the exact same deepLinkListingId contract already used for MATCHED cards");
@@ -104,6 +104,18 @@ test("opening a card notifies the parent outside React's state updater", () => {
   const source = fs.readFileSync(path.join(__dirname, "inline-filter-results.tsx"), "utf8");
   assert.match(source, /const toggle = \(\) => \{\s*if \(!expanded\) onOpen\?\.\(\);\s*setExpanded\(\(current\) => !current\);\s*\};/);
   assert.doesNotMatch(source, /setExpanded\(\(current\) => \{\s*if \(!current\) onOpen\?\.\(\);/);
+});
+
+test("MATCHED and REVIEW cards expose the same keyboard-safe analysis entry point", () => {
+  assert.match(page, /variant === "watcher" \? null : <div className="flex justify-end px-3 pb-4 sm:px-5">/, "Finder MATCHED cards must expose an explicit Analizuj action without adding it to the Watcher variant");
+  assert.match(page, /<Button aria-expanded=\{expanded\}.*?>Analizuj<\/Button>/, "the MATCHED Analizuj button must open the controlled dialog");
+  assert.match(page, /const \[analysisExpanded, setAnalysisExpanded\] = useState\(false\);/, "REVIEW details must have controlled shared state");
+  assert.match(page, /onClick=\{handleCardClick\} onKeyDown=\{handleCardKeyDown\}[^>]*role="group" tabIndex=\{0\}/, "REVIEW cards must open from pointer and keyboard interaction with a visible focus target");
+  assert.match(page, /<details className="mt-3 rounded-xl border bg-background" open=\{analysisExpanded\}>/, "REVIEW analysis details must be controlled by the card state");
+  assert.match(page, /<Button onClick=\{\(event\) => \{ event\.stopPropagation\(\); openAnalysis\(\); \}\} type="button" variant="outline">Analizuj<\/Button>/, "REVIEW Analizuj must open details without triggering a second card click");
+  assert.match(page, /event\.key === "Escape"/, "REVIEW Escape must close analysis details");
+  assert.match(page, /event\.key === "Enter" \|\| event\.key === " "/, "REVIEW Enter and Space must open analysis details");
+  assert.match(page, /href=\{`\/deals\/\$\{encodeURIComponent\(result\.id\)\}`\}/, "Deal Room must continue to use the canonical listing id");
 });
 
 // The dialog header's score-badge + "Otwórz Deal Room" action row forced
