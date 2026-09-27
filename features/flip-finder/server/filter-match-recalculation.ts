@@ -15,7 +15,7 @@ import {
   visibleMembership,
   type MembershipAuditEntry,
 } from "@/features/flip-finder/membership-reconciliation";
-import { reconcileCanonicalListingDecision } from "./canonical-reconciliation";
+import { canonicalMatchReasons, reconcileCanonicalListingDecision } from "./canonical-reconciliation";
 
 type Row = Record<string, unknown>;
 
@@ -85,26 +85,60 @@ export async function recalculateFilterMatches(
   const plan = planFilterMatchRecalculation(filter, [...listings, ...missingMatchedListings], matches);
 
   if (plan.removedListingIds.length > 0) {
-    const auditRows = plan.removedListingIds.map((listingId) => {
+    const removedDecisions = new Map(plan.removedListingDecisions.map((entry) => [entry.listingId, entry]));
+    // The real, fresh reason this listing no longer matches -- never the old
+    // generic "reconciled_out"/"complete_scan_filter_mismatch" pair, which
+    // told an operator nothing and, worse, collapsed a genuine REVIEW
+    // (missing data, legitimately zero reject reasons) into a REJECTED.
+    // Falling back to that generic pair only when the plan has NO decision
+    // at all for this id (must not happen, but must never crash a save over
+    // it) -- not merely when its real reasons happen to be an empty array,
+    // which is the normal, correct shape of a REVIEW decision.
+    const resolveDecision = (listingId: string) => {
+      const removed = removedDecisions.get(listingId);
+      const bucket = removed?.bucket ?? "REJECTED";
+      const reasons = removed ? removed.reasons : ["reconciled_out", "complete_scan_filter_mismatch"];
+      const missingFields = removed?.missingFields ?? [];
+      return { bucket, reasons, missingFields };
+    };
+    // A REVIEW-bucket listing (missing data) never lands in unchangedListingIds
+    // -- it is not a MATCHED decision -- so without this check it would be
+    // re-written on every single recalculation forever, even when nothing
+    // about it changed. Comparing against the exact projected match_reasons
+    // a real write would produce is what makes a repeated save genuinely
+    // idempotent (no audit row, no canonical RPC call) rather than merely
+    // "producing the same end state via a redundant write every time".
+    const listingsNeedingWrite = plan.removedListingIds.filter((listingId) => {
+      const { bucket, reasons, missingFields } = resolveDecision(listingId);
+      const prospectiveReasons = canonicalMatchReasons({ bucket, reasons, missingFields, hardRejectReasons: bucket === "REJECTED" ? reasons : [] });
       const previous = matches.find((match) => match.listingId === listingId);
-      return membershipAuditEntry({
-        filterId: searchFilterId,
-        listingId,
-        previousState: previous ? reconciliationMembershipState(previous.isCurrentMatch === true, previous.matchReasons ?? []) : "NONE",
-        newState: "INACTIVE",
-        reason: "COMPLETE_SCAN_FILTER_MISMATCH",
-        scanRunId: options.scanRunId ?? null,
-      });
+      const alreadyCorrect = previous?.isCurrentMatch === false && sameReasons(previous.matchReasons ?? [], prospectiveReasons);
+      return !alreadyCorrect;
     });
-    await writeMembershipAudit(supabase, auditRows);
-    for (const listingId of plan.removedListingIds) {
-      await reconcileCanonicalListingDecision({
-        supabase,
-        listingId,
-        filterId: searchFilterId,
-        decision: { bucket: "REJECTED", reasons: ["reconciled_out", "complete_scan_filter_mismatch"], missingFields: [], hardRejectReasons: ["reconciled_out", "complete_scan_filter_mismatch"] },
-        matchOrigin: "filter_recalculation",
+
+    if (listingsNeedingWrite.length > 0) {
+      const auditRows = listingsNeedingWrite.map((listingId) => {
+        const previous = matches.find((match) => match.listingId === listingId);
+        return membershipAuditEntry({
+          filterId: searchFilterId,
+          listingId,
+          previousState: previous ? reconciliationMembershipState(previous.isCurrentMatch === true, previous.matchReasons ?? []) : "NONE",
+          newState: "INACTIVE",
+          reason: "COMPLETE_SCAN_FILTER_MISMATCH",
+          scanRunId: options.scanRunId ?? null,
+        });
       });
+      await writeMembershipAudit(supabase, auditRows);
+      for (const listingId of listingsNeedingWrite) {
+        const { bucket, reasons, missingFields } = resolveDecision(listingId);
+        await reconcileCanonicalListingDecision({
+          supabase,
+          listingId,
+          filterId: searchFilterId,
+          decision: { bucket, reasons, missingFields, hardRejectReasons: bucket === "REJECTED" ? reasons : [] },
+          matchOrigin: "filter_recalculation",
+        });
+      }
     }
   }
 
@@ -343,6 +377,13 @@ function stringValue(value: unknown): string | null {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function sameReasons(previous: string[], next: string[]): boolean {
+  if (previous.length !== next.length) return false;
+  const sortedPrevious = [...previous].sort();
+  const sortedNext = [...next].sort();
+  return sortedPrevious.every((value, index) => value === sortedNext[index]);
 }
 
 function isMissingAuditTable(error: { code?: unknown; message?: unknown }): boolean {

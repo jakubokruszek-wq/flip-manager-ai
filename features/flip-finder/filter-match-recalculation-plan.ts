@@ -15,11 +15,28 @@ export type RecalculationMatch = {
   matchReasons?: string[];
 };
 
+/**
+ * The real, fresh reason a removed listing no longer belongs to the filter's
+ * current matches -- carried through so the caller can persist the actual
+ * bucket (REJECTED vs REVIEW) and specific reasons/missingFields, instead of
+ * collapsing every removal into the same generic "REJECTED" with no real
+ * explanation. A listing missing required data must become REVIEW here, not
+ * REJECTED -- matching exactly what a fresh evaluation of the same listing
+ * would produce for a brand-new scan.
+ */
+export type RemovedListingDecision = {
+  listingId: string;
+  bucket: "REJECTED" | "REVIEW";
+  reasons: string[];
+  missingFields: string[];
+};
+
 export type FilterRecalculationPlan = {
   evaluated: number;
   matchesBefore: number;
   addedListingIds: string[];
   removedListingIds: string[];
+  removedListingDecisions: RemovedListingDecision[];
   unchangedListingIds: string[];
   matchesAfter: number;
   rejectedByPricePerSqm: number;
@@ -41,16 +58,21 @@ export function planFilterMatchRecalculation(
   );
   const addedListingIds: string[] = [];
   const removedIds = new Set<string>();
+  const removedDecisions = new Map<string, RemovedListingDecision>();
   const unchangedListingIds: string[] = [];
   const keptListings: RecalculationListing[] = [];
   let evaluated = 0;
   let rejectedByPricePerSqm = 0;
   let rejectedByOtherCriteria = 0;
+  const markRemoved = (listingId: string, decision: RemovedListingDecision) => {
+    removedIds.add(listingId);
+    removedDecisions.set(listingId, decision);
+  };
 
   for (const listing of listings) {
     if (!filter.sources.includes(listing.source)) {
       if (existingIds.has(listing.id)) {
-        removedIds.add(listing.id);
+        markRemoved(listing.id, { listingId: listing.id, bucket: "REJECTED", reasons: ["source_not_in_filter"], missingFields: [] });
       }
       continue;
     }
@@ -72,7 +94,14 @@ export function planFilterMatchRecalculation(
     // forever, including offers well under the new cap.
     const permanentlyExcluded = listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "ARCHIVED";
     if (permanentlyExcluded) {
-      if (existingIds.has(listing.id)) removedIds.add(listing.id);
+      if (existingIds.has(listing.id)) {
+        markRemoved(listing.id, {
+          listingId: listing.id,
+          bucket: "REJECTED",
+          reasons: [listing.manualDecision === "REJECTED" ? "manual_rejected" : "archived"],
+          missingFields: [],
+        });
+      }
       continue;
     }
     const decision = evaluateListingAgainstFilter(listing, filter);
@@ -96,13 +125,22 @@ export function planFilterMatchRecalculation(
     }
 
     if (existingIds.has(listing.id)) {
-      removedIds.add(listing.id);
+      // A listing that no longer matches is not automatically "rejected":
+      // missing required data (no reasons, only unknownFields) is REVIEW per
+      // this same contract's decisionBucket(), never a silent accept and
+      // never a REJECTED masquerading as a data gap. categoryPage (a Morizon
+      // listing-collection page masquerading as one listing) has no filter-
+      // evaluation reasons of its own, so it is reported as a real, specific
+      // rejection rather than an empty one.
+      const bucket: RemovedListingDecision["bucket"] = categoryPage || decision.bucket === "REJECTED" ? "REJECTED" : "REVIEW";
+      const reasons = categoryPage && decision.reasons.length === 0 ? ["category_page"] : decision.reasons;
+      markRemoved(listing.id, { listingId: listing.id, bucket, reasons, missingFields: decision.unknownFields });
     }
   }
 
   for (const listingId of existingIds) {
     if (!listingsById.has(listingId)) {
-      removedIds.add(listingId);
+      markRemoved(listingId, { listingId, bucket: "REJECTED", reasons: ["listing_missing"], missingFields: [] });
     }
   }
 
@@ -111,6 +149,7 @@ export function planFilterMatchRecalculation(
     matchesBefore: existingIds.size,
     addedListingIds,
     removedListingIds: [...removedIds],
+    removedListingDecisions: [...removedDecisions.values()],
     unchangedListingIds,
     matchesAfter: existingIds.size - removedIds.size + addedListingIds.length,
     rejectedByPricePerSqm,
