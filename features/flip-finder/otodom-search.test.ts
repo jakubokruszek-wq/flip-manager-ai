@@ -19,6 +19,24 @@ test("a mobile-style Otodom URL (no www.) is still confirmed", () => {
   assert.equal(isConfirmedOtodomOfferUrl("https://otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS"), true);
 });
 
+test("a true mobile subdomain (m.otodom.pl) is confirmed like any other otodom.pl subdomain", () => {
+  assert.equal(isConfirmedOtodomOfferUrl("https://m.otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS"), true);
+});
+
+// The hostname check is anchored ($ at the end, requiring a dot or the
+// string start immediately before "otodom.pl"), which already defeats both
+// classic lookalike-domain tricks below by construction -- these tests make
+// that guarantee explicit and regression-proof rather than only implicit in
+// the regex.
+test("lookalike/spoofed hostnames are rejected, never mistaken for otodom.pl", () => {
+  assert.equal(isConfirmedOtodomOfferUrl("https://evilotodom.pl/pl/oferta/fake-ID123"), false, "a hostname that merely ends with 'otodom.pl' without a preceding dot must not match");
+  assert.equal(isConfirmedOtodomOfferUrl("https://otodom.pl.evil.com/pl/oferta/fake-ID123"), false, "otodom.pl as a subdomain prefix of an unrelated domain must not match");
+});
+
+test("a non-https scheme is rejected even with an otherwise valid otodom.pl offer path", () => {
+  assert.equal(isConfirmedOtodomOfferUrl("http://www.otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS"), false);
+});
+
 test("tracking query params never disqualify an otherwise valid offer URL", () => {
   assert.equal(isConfirmedOtodomOfferUrl("https://www.otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS?utm_source=facebook&fbclid=abc123"), true);
 });

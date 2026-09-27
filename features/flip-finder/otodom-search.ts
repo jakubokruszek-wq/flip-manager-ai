@@ -122,6 +122,7 @@ export function isConfirmedOtodomOfferUrl(value: string | null | undefined): boo
   } catch {
     return false;
   }
+  if (url.protocol !== "https:") return false;
   if (!/(^|\.)otodom\.pl$/i.test(url.hostname)) return false;
   if (/\[[^\]/]+\]/.test(url.pathname)) return false;
   return /^\/pl\/oferta\/[^/]+-id[a-z0-9]+\/?$/i.test(url.pathname);
