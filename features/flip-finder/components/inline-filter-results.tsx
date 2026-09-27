@@ -607,7 +607,7 @@ function ReviewListingCardContent({ result, onChanged, highlight = false }: { re
   const openAnalysis = () => setAnalysisExpanded(true);
   const handleCardClick = (event: MouseEvent<HTMLElement>) => {
     const target = event.target;
-    const interactiveTarget = target instanceof Element ? target.closest("button,a,input,select,textarea,summary,[role='button']") : null;
+    const interactiveTarget = target instanceof Element ? target.closest("button,a,input,select,textarea,summary") : null;
     if (interactiveTarget && interactiveTarget !== event.currentTarget) return;
     openAnalysis();
   };
