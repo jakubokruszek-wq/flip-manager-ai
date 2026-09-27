@@ -91,14 +91,22 @@ export function normalizeOtodomUrl(value: string): string {
   }
 
   url.hash = "";
-  url.hostname = url.hostname.replace(/^www\./, "");
+  if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "");
+  if (/(^|\.)otodom\.pl$/i.test(url.hostname)) {
+    // Desktop, mobile, and www. offer links are the same Otodom identity.
+    // Canonicalizing the host here makes tracking/mobile duplicates collapse
+    // without affecting the other source parsers that reuse this helper.
+    url.hostname = "otodom.pl";
+  } else {
+    url.hostname = url.hostname.replace(/^www\./, "");
+  }
   return url.toString();
 }
 
 export function extractOtodomListingId(url: string): string | null {
   return (
     new URL(url, "https://www.otodom.pl").pathname
-      .match(/-ID([A-Za-z0-9]+)|\/(\d+)(?:\/|$)/)
+      .match(/-ID([A-Za-z0-9]+)|\/(\d+)(?:\/|$)/i)
       ?.slice(1)
       .find(Boolean) ?? null
   );

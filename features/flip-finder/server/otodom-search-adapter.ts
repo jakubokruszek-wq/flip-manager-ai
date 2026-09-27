@@ -15,6 +15,12 @@ import {
   isConfirmedOtodomOfferUrl,
   normalizeOtodomUrl,
 } from "@/features/flip-finder/otodom-search";
+import {
+  classifyOtodomUrl,
+  rejectionWarnings,
+  type OtodomRejectionCounts,
+  type OtodomRejectionReason,
+} from "@/features/flip-finder/otodom-normalization";
 import type { PropertySearchListing } from "@/features/properties/types/property";
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -28,6 +34,7 @@ export type OtodomSearchResponse = {
   rawItems: number;
   normalizedItems: number;
   warnings: string[];
+  rejectionReasons: OtodomRejectionCounts;
 };
 
 type SearchAdsItemsResult =
@@ -130,24 +137,30 @@ export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal): 
   }
 
   console.info("OTODOM ITEM SHAPE:", searchAds.items.slice(0, 3).map(itemShape));
-  const normalization = searchAds.items.map((item) => ({ listing: toListing(item), reason: normalizationReason(item) }));
-  const rejectionReasons = normalization.reduce<Record<string, number>>((counts, item) => {
-    if (item.listing === null) counts[item.reason] = (counts[item.reason] ?? 0) + 1;
-    return counts;
-  }, {});
-  const normalized = normalization
-    .map((item) => item.listing)
-    .filter((item): item is PropertySearchListing => item !== null);
-  console.info("OTODOM NORMALIZATION SUMMARY:", { rawItems: searchAds.items.length, normalizedItems: normalized.length, rejectedItems: searchAds.items.length - normalized.length, rejectionReasons });
-  if (searchAds.items.length > 0 && normalized.length === 0) {
-    throw new Error(`Otodom zwrócił ${searchAds.items.length} ofert, ale żadnej nie udało się znormalizować. Struktura pojedynczej oferty prawdopodobnie się zmieniła.`);
+  const normalization = searchAds.items.map((item) => normalizeItem(item));
+  const rejectionReasons: OtodomRejectionCounts = {};
+  const normalized: PropertySearchListing[] = [];
+  const identity = new Set<string>();
+  for (const item of normalization) {
+    if (!item.listing) {
+      incrementReason(rejectionReasons, item.reason ?? "parser_error");
+      continue;
+    }
+    const key = `${item.listing.externalListingId}:${item.listing.normalizedUrl}`;
+    if (identity.has(key)) {
+      incrementReason(rejectionReasons, "duplicate");
+      continue;
+    }
+    identity.add(key);
+    normalized.push(item.listing);
   }
+  console.info("OTODOM NORMALIZATION SUMMARY:", { rawItems: searchAds.items.length, normalizedItems: normalized.length, rejectedItems: searchAds.items.length - normalized.length, rejectionReasons });
   const listings = normalized.slice(0, MAX_LISTINGS);
-  const warnings: string[] = [];
+  const warnings: string[] = [...rejectionWarnings(rejectionReasons)];
 
   if (searchAds.items.length === 0) {
     warnings.push("Otodom zwrócił pustą pierwszą stronę wyników dla tego filtra.");
-  } else if (listings.length === 0) {
+  } else if (listings.length === 0 && Object.keys(rejectionReasons).length === 0) {
     warnings.push("Żadna oferta z pierwszej strony nie spełniła lokalnych warunków filtra.");
   }
 
@@ -160,17 +173,35 @@ export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal): 
     firstExternalIdPresent: Boolean(listings[0]?.externalListingId),
     firstSourceUrlPresent: Boolean(listings[0]?.originalUrl),
   });
-  return { listings, rawItems: searchAds.items.length, normalizedItems: normalized.length, warnings };
+  return { listings, rawItems: searchAds.items.length, normalizedItems: normalized.length, warnings, rejectionReasons };
 }
 
 function itemShape(item: Record<string, unknown>) {
   return { itemKeys: Object.keys(item), idType: typeof item.id, hasSlug: "slug" in item, hasUrl: "url" in item, totalPriceType: typeof item.totalPrice, priceType: typeof item.price, areaInSquareMetersType: typeof item.areaInSquareMeters, areaType: typeof item.area, roomsNumberType: typeof item.roomsNumber, floorNumberType: typeof item.floorNumber, locationKeys: isRecord(item.location) ? Object.keys(item.location) : [], imageKeys: Array.isArray(item.images) && isRecord(item.images[0]) ? Object.keys(item.images[0]) : [], totalPriceKeys: isRecord(item.totalPrice) ? Object.keys(item.totalPrice) : [], priceKeys: isRecord(item.price) ? Object.keys(item.price) : [], propertiesKeys: isRecord(item.properties) ? Object.keys(item.properties) : [], estateKeys: isRecord(item.estate) ? Object.keys(item.estate) : [] };
 }
 
-function normalizationReason(item: Record<string, unknown>): string {
-  if (!listingUrl(item)) return text(item, "slug") ? "missing_external_id" : "missing_url_or_slug";
-  if (!text(item, "id", "adId", "listingId") && !extractOtodomListingId(listingUrl(item) ?? "")) return "missing_external_id";
-  return "mapper_exception";
+function normalizeItem(item: Record<string, unknown>): { listing: PropertySearchListing | null; reason: OtodomRejectionReason | null } {
+  try {
+    const reason = normalizationReason(item);
+    return reason ? { listing: null, reason } : { listing: toListing(item), reason: null };
+  } catch {
+    return { listing: null, reason: "parser_error" };
+  }
+}
+
+function normalizationReason(item: Record<string, unknown>): OtodomRejectionReason | null {
+  const directUrl = text(item, "url", "href", "link");
+  const urlReason = classifyOtodomUrl(directUrl);
+  if (urlReason) return urlReason;
+  const url = listingUrl(item);
+  if (!url) return "invalid_url";
+  if (!text(item, "id", "adId", "listingId") && !extractOtodomListingId(url)) return "missing_offer_id";
+  if (!text(item, "title", "name")) return "missing_title";
+  const price = numberValue(item.totalPrice ?? item.price);
+  if (price === null || price <= 0) return "missing_price";
+  const area = numberValue(item.areaInSquareMeters ?? item.area);
+  if (area === null || area <= 0) return "missing_area";
+  return null;
 }
 
 function readSearchAdsItems(html: string): SearchAdsItemsResult {
@@ -264,6 +295,10 @@ function toListing(row: Record<string, unknown>): PropertySearchListing | null {
     rawPayload,
     contentHash: calculateContentHash(rawPayload),
   };
+}
+
+function incrementReason(counts: OtodomRejectionCounts, reason: OtodomRejectionReason): void {
+  counts[reason] = (counts[reason] ?? 0) + 1;
 }
 
 function listingUrl(row: Record<string, unknown>): string | null {

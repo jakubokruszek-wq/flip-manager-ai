@@ -13,7 +13,7 @@ import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { RECOVERABLE_SCAN_STATUSES, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
 export { scanStatus } from "./scan-start-errors";
 
-export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; matchDiagnostics: MatchDiagnosticSummary };
+export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
 export type ScanSummary = { runId: string; status: "running" | "completed" | "partial"; sourcesRun: number; sourcesCompleted: number; sourcesFailed: number; fetched: number; normalized: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; actualErrors: number; sourceResults: SourceScanResult[]; matchDiagnostics: MatchDiagnosticSummary; scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number; warnings: string[] };
 type SupabaseClient = DatabaseClient;
 type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
@@ -96,7 +96,10 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
       throw statusError(500, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
     }
     const sum = (key: keyof Pick<SourceScanResult, "fetched" | "normalized" | "matched" | "listingsCreated" | "newMatches" | "updated" | "priceDrops" | "rejected">) => sourceResults.reduce((total, result) => total + result[key], 0);
-    const warnings = sourceResults.filter((result) => result.errorMessage).map((result) => `${result.source}: ${result.errorMessage}`);
+    const warnings = sourceResults.flatMap((result) => [
+      ...(result.warnings ?? []).map((warning) => `${result.source}: ${warning}`),
+      ...(result.errorMessage ? [`${result.source}: ${result.errorMessage}`] : []),
+    ]);
     const matchDiagnostics = mergeMatchDiagnosticSummaries(sourceResults.map((result) => result.matchDiagnostics));
     console.info("MATCH DIAGNOSTICS SUMMARY", JSON.stringify(matchDiagnostics));
     const { error: updateError } = await supabase.from("search_filters").update({ last_scanned_at: new Date().toISOString() }).eq("id", filterId).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
@@ -149,7 +152,7 @@ async function scanSource(source: SearchSource, filterId: string, filter: Loaded
     clearTimeout(timeoutId);
     await finalizeSourceScan(supabase, scan.id, scanClock, status, { fetched, matched, counters, updated, priceDrops, warnings, errorMessage });
   }
-  const result = { source: source.id, status, fetched, normalized, matched, listingsCreated: counters.listingsCreatedCount, newMatches: counters.newMatchesCount, updated, priceDrops, rejected: Math.max(0, fetched - normalized), durationMs: Date.now() - started, errorCode, errorMessage, matchDiagnostics };
+  const result = { source: source.id, status, fetched, normalized, matched, listingsCreated: counters.listingsCreatedCount, newMatches: counters.newMatchesCount, updated, priceDrops, rejected: Math.max(0, fetched - normalized), durationMs: Date.now() - started, errorCode, errorMessage, warnings, matchDiagnostics };
   scanLog(status === "completed" ? "SOURCE DONE" : "SOURCE ERROR", { scanId: runId, source: source.id, checked: fetched, new: counters.newMatchesCount, matched, durationMs: result.durationMs });
   return result;
 }
@@ -226,8 +229,8 @@ async function reconcileFacebookFromCanonicalListings(filterId: string, runId: s
   }
 }
 
-function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
-function pendingResult(source: string, errorMessage = `${source === "olx" ? "OLX" : "Facebook"}: oczekuje na lokalny worker`): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage, matchDiagnostics: emptyMatchDiagnosticSummary() }; }
+function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
+function pendingResult(source: string, errorMessage = `${source === "olx" ? "OLX" : "Facebook"}: oczekuje na lokalny worker`): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
 function total(results: SourceScanResult[], key: "fetched" | "newMatches" | "matched"): number { return results.reduce((sum, result) => sum + result[key], 0); }
 function scanLog(event: "SCAN START" | "SOURCE START" | "SOURCE DONE" | "SOURCE ERROR" | "SCAN FINALIZE", data: { scanId: string; source: string; checked: number; new: number; matched: number; durationMs: number }): void { if (process.env.NODE_ENV === "development") console.info(event, data); }
 

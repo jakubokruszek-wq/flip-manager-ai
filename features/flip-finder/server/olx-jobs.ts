@@ -128,7 +128,7 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
     source: "olx", status: "completed", fetched: input.fetched, normalized: input.listings.length, matched,
     listingsCreated: counters.listingsCreatedCount, newMatches: counters.newMatchesCount, updated, priceDrops,
     rejected: Math.max(0, input.fetched - input.listings.length), durationMs: input.durationMs,
-    errorCode: null, errorMessage: null, matchDiagnostics: diagnostics,
+    errorCode: null, errorMessage: null, warnings: input.warnings, matchDiagnostics: diagnostics,
   };
   const now = new Date().toISOString();
   const scanUpdate = await supabase.from("source_scans").update({
