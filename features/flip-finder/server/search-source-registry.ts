@@ -52,7 +52,10 @@ async function fetchOtodom(criteria: SearchFilter, signal?: AbortSignal): Promis
       description: null,
     })),
     warnings: result.warnings,
-    fetched: result.listings.length,
+    // Keep the raw count here. A page with 26 rows and zero normalized
+    // listings must still show operators "26 found" plus the concrete
+    // rejection reasons, rather than silently becoming "0 found".
+    fetched: result.rawItems,
   };
 }
 
