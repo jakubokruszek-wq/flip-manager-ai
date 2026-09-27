@@ -25,6 +25,7 @@ import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadat
 import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
 import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
 import { resolveListingUrl } from "@/features/listing-url";
+import { dedupeByListingIdentity } from "@/features/listing-identity";
 
 type Row = Record<string, unknown>;
 
@@ -93,6 +94,9 @@ type ListingRow = Pick<
   | "galleryTotal"
   | "galleryPersistedCount"
 > & {
+  externalListingId?: string | null;
+  listingIntent?: string | null;
+  sourceMetadataCollectedAt?: string | null;
   sourcePostUrl?: string | null;
   /**
    * Generic, source-agnostic price-trust signal for the Opportunity Engine.
@@ -196,7 +200,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const listingQuery = supabase
     .from("listings")
     .select(
-      "id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
+      "id,external_listing_id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
     )
     .in("id", listingIds)
     .eq("status", "active")
@@ -213,12 +217,14 @@ export async function getFilterResults(filterId: string, includeArchived = false
     // this metadata today; OLX/Otodom simply have no rows here and are unaffected.
     supabase
       .from("listing_source_metadata")
-      .select("listing_id,source_post_url,metadata")
+      .select("listing_id,source_post_url,collected_at,metadata")
       .in("listing_id", listingIds)
       .eq("source", "facebook"),
   ]);
   const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
-  const sourcePostUrlByListingId = new Map<string, string>();
+  const sourcePostUrlByListingId = new Map<string, string | null>();
+  const listingIntentByListingId = new Map<string, string | null>();
+  const sourceMetadataCollectedAtByListingId = new Map<string, string>();
   // Distinguish "the query ran and this Facebook listing simply has no
   // priceQuality yet" (backward-compatible: trusted, same as before this
   // feature existed) from "the query itself failed" (must not silently
@@ -232,8 +238,15 @@ export async function getFilterResults(filterId: string, includeArchived = false
     for (const row of asRows(priceQualityResult.data)) {
       const listingId = nullableString(row.listing_id);
       const sourcePostUrl = nullableString(row.source_post_url);
-      if (listingId && sourcePostUrl && !sourcePostUrlByListingId.has(listingId)) {
+      const collectedAt = nullableString(row.collected_at);
+      const previousCollectedAt = listingId ? sourceMetadataCollectedAtByListingId.get(listingId) : null;
+      const isNewer = !previousCollectedAt || !collectedAt || collectedAt > previousCollectedAt;
+      if (listingId && isNewer) {
         sourcePostUrlByListingId.set(listingId, sourcePostUrl);
+        const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Row : {};
+        const intent = nullableString(metadata.listingIntent);
+        listingIntentByListingId.set(listingId, intent);
+        if (collectedAt) sourceMetadataCollectedAtByListingId.set(listingId, collectedAt);
       }
       const status = parseFacebookPriceReliability(row.metadata);
       if (listingId && status) priceReliabilityByListingId.set(listingId, status);
@@ -270,6 +283,8 @@ export async function getFilterResults(filterId: string, includeArchived = false
         return [listing.id, {
           ...listing,
           sourcePostUrl,
+          listingIntent: listingIntentByListingId.get(listing.id) ?? null,
+          sourceMetadataCollectedAt: sourceMetadataCollectedAtByListingId.get(listing.id) ?? null,
           originalUrl: resolveListingUrl({ source: listing.source, sourcePostUrl, originalUrl: listing.originalUrl }),
           priceReliability: resolveFacebookPriceReliabilityOnMetadataFailure(listing.source, priceReliabilityByListingId.get(listing.id), priceQualityMetadataQueryFailed),
         }];
@@ -319,6 +334,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         locationText,
         buildingType: listing.buildingType,
         ownership: listing.ownership,
+        listingIntent: listing.listingIntent,
       },
       filter,
     );
@@ -408,6 +424,19 @@ export async function getFilterResults(filterId: string, includeArchived = false
       },
     ];
   });
+  const dedupedResults = dedupeByListingIdentity(
+    [...allResults].sort((left, right) => {
+      const leftObserved = sourceMetadataCollectedAtByListingId.get(left.id) ?? left.lastSeenAt ?? left.firstSeenAt;
+      const rightObserved = sourceMetadataCollectedAtByListingId.get(right.id) ?? right.lastSeenAt ?? right.firstSeenAt;
+      return Date.parse(rightObserved) - Date.parse(leftObserved);
+    }),
+    (result) => ({
+      listingId: result.id,
+      source: result.source,
+      externalListingId: listingsById.get(result.id)?.externalListingId ?? null,
+      sourcePostUrl: result.sourcePostUrl,
+    }),
+  );
   // Duplicate-listing mission: a listing whose stored lifecycle is
   // STALE/ARCHIVED (set by some other process — aging out, a manual archive
   // action, restoration bookkeeping) can still independently satisfy the
@@ -422,9 +451,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
   // exclusive by construction: every listing lands in exactly one.
   const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
   const isArchivedLifecycle = (result: FilterResult) => archivedLifecycle.has(result.lifecycleStatus ?? "");
-  const sortedResults = sortResults(allResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result)), "newest");
-  const reviewResults = sortResults(allResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result)), "newest");
-  const archivedResults = includeArchived ? sortResults(allResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true), "newest") : [];
+  const sortedResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result)), "newest");
+  const reviewResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result)), "newest");
+  const archivedResults = includeArchived ? sortResults(dedupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true), "newest") : [];
 
   return {
     filter,
@@ -490,6 +519,7 @@ function toListingRow(row: Row): ListingRow | null {
 
   return {
     id,
+    externalListingId: nullableString(row.external_listing_id),
     title: nullableString(row.title),
     price: nullableNumber(row.price),
     area: nullableNumber(row.area),

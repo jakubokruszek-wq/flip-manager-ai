@@ -1,4 +1,5 @@
 import type { SearchFilter } from "@/features/flip-finder";
+import { MIN_TOTAL_SALE_PRICE_PLN } from "./sale-price-policy";
 
 /**
  * Turns the internal reason codes evaluateListingAgainstFilter() produces
@@ -38,6 +39,10 @@ export function describeRejectionReason(reason: string, context: RejectionReason
       return `Cena za m²: ${zl(context.pricePerSqm)} > limit ${zl(filter.maxPricePerSqm)}`;
     case "price_min":
       return `Cena: ${zl(context.price)} < minimum ${zl(filter.priceMin)}`;
+    case "min_total_sale_price":
+      return `Cena całkowita: ${zl(context.price)} < minimalna cena sprzedaży ${zl(MIN_TOTAL_SALE_PRICE_PLN)}`;
+    case "non_sale_intent":
+      return "Ogłoszenie nie dotyczy sprzedaży mieszkania";
     case "price_max":
       return `Cena: ${zl(context.price)} > maksimum ${zl(filter.priceMax)}`;
     case "price_invalid":

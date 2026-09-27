@@ -3,6 +3,7 @@ import type { PropertyFields } from "@/features/properties/types/property";
 import { LODZ_CONTEXT, OUTSIDE_LODZ_TOWN } from "@/features/location-intelligence/lodz-satellite-towns";
 import { OTHER_POLISH_CITY } from "@/features/location-intelligence/other-polish-cities";
 import { decisionBucket, type DecisionBucket } from "./decision-model.ts";
+import { isKnownNonSaleListingIntent, MIN_TOTAL_SALE_PRICE_PLN, isSaleListingIntent } from "./sale-price-policy.ts";
 
 export type FilterCandidate = Pick<
   PropertyFields,
@@ -21,6 +22,8 @@ export type FilterCandidate = Pick<
   sellerType?: PropertyFields["sellerType"];
   ownership?: PropertyFields["ownership"];
   marketType?: SearchFilter["marketType"] | null;
+  /** Source intent is present for Facebook; absent means a normal sale listing. */
+  listingIntent?: string | null;
 };
 
 export type FilterDecision = {
@@ -69,6 +72,8 @@ export function evaluateListingAgainstFilter(
   };
   const markUnknown = (field: string) => unknownFields.add(field);
 
+  reject(isKnownNonSaleListingIntent(candidate.listingIntent), "non_sale_intent");
+
   const price = candidate.price;
   const area = candidate.area;
   const hasValidPrice = isPositiveFinite(price);
@@ -88,6 +93,10 @@ export function evaluateListingAgainstFilter(
     } else if (!hasValidArea) {
       reject(true, "area_invalid");
     }
+  }
+
+  if (price !== null && Number.isFinite(price)) {
+    reject(isSaleListingIntent(candidate.listingIntent) && price < Math.max(MIN_TOTAL_SALE_PRICE_PLN, filter.priceMin ?? 0), "min_total_sale_price");
   }
 
   if (hasValidPrice) {

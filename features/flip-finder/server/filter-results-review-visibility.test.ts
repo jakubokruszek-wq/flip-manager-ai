@@ -245,6 +245,31 @@ test("I (duplicate-listing regression): a duplicated listing_filter_matches row 
   assert.equal(payload.reviewResults.filter((item) => item.id === "listing-dup-row").length, 1, "a duplicated match row must never produce two entries for the same canonical listing");
 });
 
+test("same Facebook source URL is one Finder card, while a below-minimum price is absent", async () => {
+  const db = freshDb();
+  const sourcePostUrl = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/shared-post";
+  db.seed("listings", [
+    listingRow({ id: "listing-source-new", original_url: sourcePostUrl, price: 439_000, area: 70, price_per_sqm: 439_000 / 70, lifecycle_status: "REVIEW" }),
+    listingRow({ id: "listing-source-old", original_url: sourcePostUrl, price: 439_000, area: 70, price_per_sqm: 439_000 / 70, lifecycle_status: "REVIEW" }),
+    listingRow({ id: "listing-too-cheap", price: 15_000, area: 70, price_per_sqm: 15_000 / 70, lifecycle_status: "REVIEW" }),
+  ]);
+  db.seed("listing_filter_matches", [
+    membershipRow("listing-source-new", { is_current_match: true, match_reasons: [] }),
+    membershipRow("listing-source-old", { is_current_match: true, match_reasons: [] }),
+    membershipRow("listing-too-cheap", { is_current_match: true, match_reasons: [] }),
+  ]);
+  db.seed("listing_source_metadata", [
+    { listing_id: "listing-source-new", source: "facebook", source_post_url: sourcePostUrl, collected_at: "2026-09-27T12:00:00Z", metadata: { listingIntent: "SELL_PROPERTY" } },
+    { listing_id: "listing-source-old", source: "facebook", source_post_url: sourcePostUrl, collected_at: "2026-09-27T11:00:00Z", metadata: { listingIntent: "SELL_PROPERTY" } },
+  ]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  assert.equal(payload?.reviewResults.filter((item) => item.id === "listing-source-new").length, 1);
+  assert.equal(payload?.reviewResults.some((item) => item.id === "listing-source-old"), false);
+  assert.equal(payload?.reviewResults.some((item) => item.id === "listing-too-cheap"), false);
+});
+
 // Duplicate/status-disjointness mission: three write paths (persist-listing.ts's
 // deactivateListingFilterMatch, listing-lifecycle/server.ts's
 // runListingLifecycleBatch, clear-results.ts's clearFilterResults) update

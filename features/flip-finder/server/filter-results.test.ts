@@ -54,14 +54,14 @@ function comp(pricePerM2: number): ResaleCompRecord {
 function listingInput(overrides: Record<string, unknown> = {}) {
   return {
     id: "listing-1", source: "facebook", lifecycleStatus: "REVIEW" as const, decisionBucket: "REVIEW" as const,
-    price: 666, area: 38, rooms: 2, pricePerSqm: 666 / 38, city: "Łódź", district: "Bałuty", address: "ul. Testowa 10",
+    price: 166_000, area: 38, rooms: 2, pricePerSqm: 166_000 / 38, city: "Łódź", district: "Bałuty", address: "ul. Testowa 10",
     buildingType: null, floor: null, title: "Mieszkanie", description: "Mieszkanie na sprzedaż",
     missingFields: [], lastSeenAt: "2026-09-05T00:00:00.000Z",
     ...overrides,
   };
 }
 
-test("REAL 666 SAFETY CASE: a Facebook listing_source_metadata row with priceQuality SUSPECT blocks price-driven upside end to end", () => {
+test("REAL low-price safety case: a Facebook listing_source_metadata row with priceQuality SUSPECT blocks price-driven upside end to end", () => {
   const metadataRow = { listing_id: "listing-1", metadata: { source: "facebook_watcher", priceQuality: { status: "SUSPECT", category: "OTHER_AMOUNT", reasonCodes: ["PRICE_BELOW_PLAUSIBLE_FLOOR"] } } };
   const priceReliability = parsePriceReliability(metadataRow.metadata);
   assert.equal(priceReliability, "SUSPECT");
@@ -138,7 +138,7 @@ test("resolveFacebookPriceReliabilityOnMetadataFailure: query FAILURE + OLX/Otod
   assert.equal(resolvePriceReliability("otodom", undefined, true), undefined);
 });
 
-test("D. METADATA QUERY FAILURE + Facebook askingPrice=666: reliability resolves MISSING, no false TOP/HIGH", () => {
+test("D. METADATA QUERY FAILURE + Facebook askingPrice=166000: reliability resolves MISSING, no false TOP/HIGH", () => {
   const priceReliability = resolvePriceReliability("facebook", undefined, true);
   assert.equal(priceReliability, "MISSING");
   const assessment = calculateOpportunityAssessment({ ...listingInput(), priceReliability }, filter, [comp(18_000), comp(19_000)], Date.parse("2026-09-06T00:00:00.000Z"));

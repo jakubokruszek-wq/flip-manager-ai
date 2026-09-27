@@ -168,14 +168,14 @@ test("strong economics can remain high priority when secondary ownership data is
 function suspectPriceListing(overrides: Partial<Parameters<typeof calculateOpportunityAssessment>[0]> = {}) {
   return {
     id: "suspect-1", source: "facebook", lifecycleStatus: "REVIEW" as const, decisionBucket: "REVIEW" as const,
-    price: 666, area: 38, rooms: 2, pricePerSqm: 666 / 38, city: "Łódź", district: "Chojny", address: "ul. Ogniskowa 8",
+    price: 166_000, area: 38, rooms: 2, pricePerSqm: 166_000 / 38, city: "Łódź", district: "Chojny", address: "ul. Ogniskowa 8",
     buildingType: null, floor: null, title: "Mieszkanie po remoncie", description: "Mieszkanie po generalnym remoncie",
     missingFields: [], lastSeenAt: "2026-09-05T00:00:00.000Z",
     ...overrides,
   };
 }
 
-test("PRICE SUSPECT GUARD: a 666 zł price marked SUSPECT never produces price-driven profit, ROI or market discount", () => {
+test("PRICE SUSPECT GUARD: a low price marked SUSPECT never produces price-driven profit, ROI or market discount", () => {
   const assessment = calculateOpportunityAssessment(
     { ...suspectPriceListing(), priceReliability: "SUSPECT" }, filter, [comp(8_500), comp(8_800)], Date.parse("2026-09-06T00:00:00.000Z"),
   );
@@ -187,7 +187,7 @@ test("PRICE SUSPECT GUARD: a 666 zł price marked SUSPECT never produces price-d
   assert.ok(assessment.missingFields.includes("price"));
 });
 
-test("FALSE 666 PLN OPPORTUNITY BLOCKED: even with strong comparables, a SUSPECT-priced listing cannot reach TOP priority", () => {
+test("LOW-PRICE OPPORTUNITY BLOCKED: even with strong comparables, a SUSPECT-priced listing cannot reach TOP priority", () => {
   const assessment = calculateOpportunityAssessment(
     { ...suspectPriceListing(), priceReliability: "SUSPECT" }, filter, [comp(18_000), comp(19_000)], Date.parse("2026-09-06T00:00:00.000Z"),
   );

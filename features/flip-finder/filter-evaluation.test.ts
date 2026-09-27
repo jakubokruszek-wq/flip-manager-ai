@@ -154,3 +154,23 @@ test("canonical decision rejects a known hard constraint even when other fields 
   assert.deepEqual(result.hardRejectReasons, ["max_price_per_sqm"]);
   assert.notEqual(result.bucket, "REVIEW");
 });
+
+test("minimum total sale price rejects below 160000 and accepts the exact boundary", () => {
+  for (const price of [15_000, 150_000, 159_999]) {
+    const result = evaluateListingAgainstFilter({ ...candidate, price }, filter);
+    assert.equal(result.bucket, "REJECTED", `${price} must be rejected`);
+    assert.ok(result.reasons.includes("min_total_sale_price"));
+  }
+  for (const price of [160_000, 160_001]) {
+    const result = evaluateListingAgainstFilter({ ...candidate, price }, filter);
+    assert.equal(result.bucket, "MATCHED", `${price} must pass the minimum`);
+    assert.ok(!result.reasons.includes("min_total_sale_price"));
+  }
+});
+
+test("rent intent is never treated as a sale price", () => {
+  const result = evaluateListingAgainstFilter({ ...candidate, price: 15_000, listingIntent: "RENT_OFFER" }, filter);
+  assert.equal(result.bucket, "REJECTED");
+  assert.deepEqual(result.reasons, ["non_sale_intent"]);
+  assert.ok(!result.reasons.includes("min_total_sale_price"));
+});

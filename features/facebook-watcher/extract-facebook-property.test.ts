@@ -211,6 +211,14 @@ test("Watcher data quality: a rent amount mentioned before the sale price is nev
   assert.notEqual(result.price, 615);
 });
 
+test("rent-only monthly amounts never become sale prices", async () => {
+  assert.equal(resolveFacebookPrice("15 000 zł/mies.", null).price, null);
+  const value = await extractFacebookProperty({ postText: "Do wynajęcia mieszkanie, 15 000 zł/mies., 53m2" });
+  assert.equal(value.listingIntent, "RENT_OFFER");
+  assert.equal(value.price, null);
+  assert.equal(value.pricePerM2, null);
+});
+
 test("Watcher data quality: an auxiliary fee immediately next to its own number is still excluded — the sentence-break fix must not weaken this", () => {
   assert.equal(resolveFacebookPrice("Czynsz 1500zł. Cena 399000zł", null).price, 399000, "the real sale price after czynsz must still resolve");
   assert.equal(resolveFacebookPrice("Czynsz 1500zł, mieszkanie 48m2", null).price, null, "with no sale price anywhere in the text, 1500 (the fee) must never be guessed as one");

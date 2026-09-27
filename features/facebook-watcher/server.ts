@@ -39,6 +39,8 @@ import { classifyFacebookPostAgeZone } from "./post-age-zone";
 import { resolveFacebookPricePerSqm } from "./extract-facebook-property";
 import { isFacebookOrphan, orphanDiagnostic, type FacebookOrphanDiagnostic } from "./facebook-orphan-recovery";
 import { facebookPersistenceFailure } from "./facebook-persistence-contract";
+import { dedupeByListingIdentity } from "@/features/listing-identity";
+import { isBelowMinimumSalePrice, isSaleListingIntent } from "@/features/flip-finder/sale-price-policy";
 
 type Row = Record<string, unknown>;
 
@@ -99,7 +101,7 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   const normalized = await manualFacebookAdapter.importManual(input);
   if (classifyFacebookPostAgeZone(normalized.publishedAt) === "OLD") return staleFacebookImportResult(normalized);
   const intent = resolveFacebookListingIntent(normalized.postText, normalized.listingIntent, normalized.intentConfidence);
-  if (context && intent.intent !== "SELL_PROPERTY") {
+  if (intent.intent !== "SELL_PROPERTY" && (context || intent.intent !== "UNKNOWN")) {
     const extracted = skippedFacebookProperty(normalized, intent.intent, intent.confidence, intent.intentSource);
     const realEstateLanguage = intent.intent === "BUY_PROPERTY" || intent.intent === "RENT_OFFER" || intent.intent === "RENT_WANTED";
     return { status: "skipped", listingId: null, extracted, opportunityScore: 0, listingCreated: false, listingUpdated: false, matched: false, matchCreated: false, imagesMirrored: 0, priceDrops: 0, warnings: [], notProperty: { realEstateLanguage, structuredFieldCount: 0, detectedFields: [], classification: "non_sale_intent", reasonCode: intent.reasonCode ?? "FACEBOOK_INTENT_UNKNOWN" } };
@@ -119,6 +121,11 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   }
   const extractedBase = await extractFacebookListing(normalized);
   const extracted = { ...extractedBase, ...normalized.overrides, originalUrl: extractedBase.originalUrl, images: extractedBase.images, flags: normalized.analysisFlags ?? extractedBase.flags, confidence: typeof normalized.analysisConfidence === "number" ? Math.max(0, Math.min(1, normalized.analysisConfidence)) : extractedBase.confidence, fieldConfidence: { ...extractedBase.fieldConfidence, ...normalized.analysisFieldConfidence }, listingIntent: intent.intent, intentConfidence: intent.confidence, intentSource: intent.intentSource, imageAssessments: normalized.imageAssessments ?? extractedBase.imageAssessments };
+  if (extractedBase.priceProvenance === "AUTHORITATIVE_TEXT") {
+    extracted.price = extractedBase.price;
+    extracted.pricePerM2 = extractedBase.pricePerM2;
+    extracted.priceProvenance = extractedBase.priceProvenance;
+  }
   let locationResolution = reconcileFacebookLocation(extracted, { authoritativeText: normalized.postText, groupName: normalized.groupName, groupUrl: normalized.url });
   Object.assign(extracted, locationResolution.property);
   const classification = classifyFacebookProperty(extracted, normalized.postText);
@@ -270,7 +277,7 @@ async function importAutomatedFacebook(input: {
   const rawScore = calculateFlipScore({ price: effective.price, pricePerSqm, averagePricePerSqm: null, rooms: effective.rooms, area: effective.area, marketType: effective.marketType, title: effective.title, description: effective.description }).score;
   const score = isFacebookPriceSuspect(priceQuality.status) ? Math.min(rawScore, PRICE_SUSPECT_SCORE_CAP) : rawScore;
   const locationText = composeFacebookLocation({ street: effective.street, neighborhood: effective.neighborhood, district: effective.district, city: effective.city });
-  const baseDecision = evaluateCanonicalListingDecision({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, description: effective.description, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null }, context.filter);
+  const baseDecision = evaluateCanonicalListingDecision({ price: effective.price, area: effective.area, pricePerSqm, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor), city: effective.city, district: effective.district, title: effective.title, description: effective.description, locationText, buildingType, sellerType: effective.sellerType, marketType: effective.marketType, ownership: null, listingIntent: effective.listingIntent }, context.filter);
   const safetyUnknown = apartmentUnknownFields(context.filter, buildingEvidence, effective.city);
   const decisionUnknownFields = [...new Set([...baseDecision.missingFields, ...safetyUnknown])];
   const decision = { ...baseDecision, unknownFields: decisionUnknownFields, missingFields: decisionUnknownFields, bucket: decisionBucket({ reasons: baseDecision.reasons, unknownFields: decisionUnknownFields }), matches: baseDecision.reasons.length === 0 && decisionUnknownFields.length === 0 };
@@ -521,7 +528,7 @@ async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdm
 
 async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, listingId: string, item: FacebookProperty, pricePerSqm: number | null): Promise<Array<{ filterId: string; bucket: "MATCHED" | "REVIEW" | "REJECTED" }>> {
   const filters = await getActiveSearchFiltersForSource("facebook");
-  const evaluated = filters.map((filter) => ({ filter, decision: evaluateCanonicalListingDecision({ price: item.price, area: item.area, pricePerSqm, rooms: item.rooms, floor: item.floor === null ? null : String(item.floor), city: item.city, district: item.district, title: item.title, description: item.description, locationText: [item.neighborhood,item.district,item.city].filter(Boolean).join(", "), buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null }, filter) }));
+  const evaluated = filters.map((filter) => ({ filter, decision: evaluateCanonicalListingDecision({ price: item.price, area: item.area, pricePerSqm, rooms: item.rooms, floor: item.floor === null ? null : String(item.floor), city: item.city, district: item.district, title: item.title, description: item.description, locationText: [item.neighborhood,item.district,item.city].filter(Boolean).join(", "), buildingType: null, sellerType: item.sellerType, marketType: item.marketType, ownership: null, listingIntent: item.listingIntent }, filter) }));
   const currentBucket: "MATCHED" | "REVIEW" | "REJECTED" = evaluated.some(({ decision }) => decision.bucket === "MATCHED") ? "MATCHED" : evaluated.some(({ decision }) => decision.bucket === "REVIEW") ? "REVIEW" : "REJECTED";
   for (const { filter, decision } of evaluated) {
     await reconcileFacebookDecision({ supabase, listingId, filterId: filter.id, decision: { ...decision, reasons: decision.bucket === "MATCHED" ? ["collector_import", ...item.flags, ...decision.reasons] : decision.reasons }, lifecycleStatus: currentBucket === "MATCHED" ? "ACTIVE" : currentBucket, matchOrigin: "collector_import" });
@@ -531,11 +538,11 @@ async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdm
 
 export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
   const supabase = createFacebookWatcherAdminClient();
-  const { data, error } = await supabase.from("listing_source_metadata").select("source_post_url,group_name,published_at,collected_at,metadata,listings(id,title,price,price_per_sqm,area,rooms,floor,district,city,address,description,original_url,images,status,source,flip_score,estimated_profit,first_seen_at,last_seen_at,created_at,building_type,ownership,lifecycle_status,archived_at)").eq("source", "facebook").order("collected_at", { ascending: false }).limit(500);
+  const { data, error } = await supabase.from("listing_source_metadata").select("source_post_url,group_name,published_at,collected_at,metadata,listings(id,external_listing_id,title,price,price_per_sqm,area,rooms,floor,district,city,address,description,original_url,images,status,source,flip_score,estimated_profit,first_seen_at,last_seen_at,created_at,building_type,ownership,lifecycle_status,archived_at)").eq("source", "facebook").order("collected_at", { ascending: false }).limit(500);
   if (error) throw new Error(`Nie udało się pobrać ofert Facebooka: ${error.message}`);
   const activeFilters = await getActiveSearchFiltersForSource("facebook");
   const seenListingIds = new Set<string>();
-  return ((data ?? []) as unknown as Row[]).flatMap((row) => {
+  const records: FacebookWatcherListing[] = ((data ?? []) as unknown as Row[]).flatMap((row) => {
     const listing = (Array.isArray(row.listings) ? row.listings[0] : row.listings) as Row | undefined; if (!listing) return [];
     const listingId = String(listing.id); if (seenListingIds.has(listingId)) return []; seenListingIds.add(listingId);
     const meta = (row.metadata ?? {}) as Row;
@@ -550,6 +557,8 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     const source = String(listing.source);
     const facebookUrl = str(row.source_post_url);
     const sourceUrl = str(listing.original_url);
+    const listingIntent = parseEnum(meta.listingIntent, ["SELL_PROPERTY", "BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE", "OTHER", "UNKNOWN"] as const);
+    if (!isSaleListingIntent(listingIntent) || isBelowMinimumSalePrice(num(listing.price), listingIntent)) return [];
     const priceQuality = parseFacebookPriceQuality(meta.priceQuality);
     const listingQuality = parseFacebookListingQuality(meta.listingQuality);
     const priceSuspect = isFacebookPriceSuspect(priceQuality?.status ?? "LIKELY");
@@ -560,11 +569,12 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     const locationState = parseEnum(meta.locationState, FACEBOOK_LOCATION_STATES);
     const contentQuality = parseEnum(meta.contentQuality, FACEBOOK_CONTENT_QUALITY_GRADES);
     const lifecycleStatus = str(listing.lifecycle_status);
-    const current = classifyFacebookRestore({ price: num(listing.price), area: num(listing.area), pricePerSqm: num(listing.price_per_sqm), rooms: num(listing.rooms), floor: typeof listing.floor === "string" ? listing.floor : listing.floor === null || listing.floor === undefined ? null : String(listing.floor), city: str(listing.city), district: str(listing.district), title: str(listing.title), description: str(listing.description), locationText: [str(listing.address), str(listing.district), str(listing.city)].filter(Boolean).join(", ") || null, buildingType: str(listing.building_type), sellerType, ownership: str(listing.ownership), marketType: null }, activeFilters);
+    const current = classifyFacebookRestore({ price: num(listing.price), area: num(listing.area), pricePerSqm: num(listing.price_per_sqm), rooms: num(listing.rooms), floor: typeof listing.floor === "string" ? listing.floor : listing.floor === null || listing.floor === undefined ? null : String(listing.floor), city: str(listing.city), district: str(listing.district), title: str(listing.title), description: str(listing.description), locationText: [str(listing.address), str(listing.district), str(listing.city)].filter(Boolean).join(", ") || null, buildingType: str(listing.building_type), sellerType, ownership: str(listing.ownership), marketType: null, listingIntent }, activeFilters);
     const currentReasons = current.decision ? [...current.decision.reasons, ...(current.bucket === "REVIEW" ? ["review", ...current.decision.unknownFields.map((field) => `unknown_${field}`)] : [])] : ["no_active_facebook_filter_match"];
     const historical = lifecycleStatus === "ARCHIVED" || lifecycleStatus === "STALE";
-    return [{ listingId, title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), sourcePostUrl: facebookUrl, originalUrl: resolveListingUrl({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl }), images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: resolveFacebookGroupDisplayName({ name: str(row.group_name) }), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
+    return [{ listingId, externalListingId: str(listing.external_listing_id), title: String(listing.title ?? "Oferta z Facebooka"), city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description: str(listing.description), listingIntent, sourcePostUrl: facebookUrl, originalUrl: resolveListingUrl({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl }), images: Array.isArray(listing.images) ? listing.images.filter((x):x is string=>typeof x==="string") : [], confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: resolveFacebookGroupDisplayName({ name: str(row.group_name) }), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority: (score >= 85 || flipScore >= 85) && !priceSuspect || sellerType === "private" && condition === "renovation", crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
   });
+  return dedupeByListingIdentity(records, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl }));
 }
 
 /** Read-only maintenance view. It never mutates an orphan while listing it. */

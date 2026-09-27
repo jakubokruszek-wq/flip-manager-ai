@@ -16,6 +16,7 @@ import {
   type MembershipAuditEntry,
 } from "@/features/flip-finder/membership-reconciliation";
 import { canonicalMatchReasons, reconcileCanonicalListingDecision } from "./canonical-reconciliation";
+import { MIN_TOTAL_SALE_PRICE_PLN } from "@/features/flip-finder/sale-price-policy";
 
 type Row = Record<string, unknown>;
 
@@ -82,7 +83,8 @@ export async function recalculateFilterMatches(
     .map((match) => match.listingId)
     .filter((listingId) => !listings.some((listing) => listing.id === listingId));
   const missingMatchedListings = await fetchListingsByIds(supabase, missingMatchedIds);
-  const plan = planFilterMatchRecalculation(filter, [...listings, ...missingMatchedListings], matches);
+  const combinedListings = await hydrateFacebookListingIntents(supabase, [...listings, ...missingMatchedListings]);
+  const plan = planFilterMatchRecalculation(filter, combinedListings, matches);
 
   if (plan.removedListingIds.length > 0) {
     const removedDecisions = new Map(plan.removedListingDecisions.map((entry) => [entry.listingId, entry]));
@@ -314,6 +316,41 @@ async function fetchListingsByIds(
   }
 
   return asRows(data).map(toListing).filter((listing): listing is RecalculationListing => listing !== null);
+}
+
+async function hydrateFacebookListingIntents(
+  supabase: Awaited<ReturnType<typeof createAdminClient>>,
+  listings: RecalculationListing[],
+): Promise<RecalculationListing[]> {
+  // Keep the normal non-Facebook and healthy Facebook recalculation path
+  // limited to its existing tables. Only rows that could otherwise be shown
+  // with an unsafe price/unknown sale intent need the sidecar metadata lookup.
+  const facebookIds = [...new Set(listings
+    .filter((listing) => listing.source === "facebook" && (listing.price === null || listing.price < MIN_TOTAL_SALE_PRICE_PLN))
+    .map((listing) => listing.id))];
+  if (facebookIds.length === 0) return listings;
+
+  const { data, error } = await supabase
+    .from("listing_source_metadata")
+    .select("listing_id,metadata,collected_at")
+    .in("listing_id", facebookIds)
+    .eq("source", "facebook");
+  if (error) throw new Error("Nie udało się pobrać intencji ofert Facebooka do przeliczenia.");
+
+  const latestByListingId = new Map<string, { intent: string | null; collectedAt: string | null }>();
+  for (const row of asRows(data)) {
+    const listingId = nullableString(row.listing_id);
+    if (!listingId) continue;
+    const collectedAt = nullableString(row.collected_at);
+    const previous = latestByListingId.get(listingId);
+    if (previous?.collectedAt && collectedAt && collectedAt <= previous.collectedAt) continue;
+    const metadata = isRow(row.metadata) ? row.metadata : {};
+    latestByListingId.set(listingId, { intent: nullableString(metadata.listingIntent), collectedAt });
+  }
+
+  return listings.map((listing) => listing.source === "facebook"
+    ? { ...listing, listingIntent: latestByListingId.get(listing.id)?.intent ?? null }
+    : listing);
 }
 
 function toListing(row: Row): RecalculationListing | null {

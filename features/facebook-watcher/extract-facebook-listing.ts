@@ -23,6 +23,7 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
   const acceptedImages = (input.images ?? []).filter((_, index) => vision.imageAssessments.some((assessment) => assessment.imageIndex === index && assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8));
   const priceSourceText = input.postText?.trim() || vision.visibleText || "";
   const resolvedPrice = resolveFacebookPrice(priceSourceText, textResult.area ?? vision.area);
+  const isSaleProperty = intent.intent === "SELL_PROPERTY" || intent.intent === "UNKNOWN";
 
   return {
     ...textResult,
@@ -30,9 +31,9 @@ export async function extractFacebookListing(input: FacebookListingInput): Promi
     district: textResult.district ?? vision.district,
     neighborhood: textResult.neighborhood ?? vision.neighborhood,
     street: textResult.street ?? vision.street,
-    price: resolvedPrice.price,
-    priceProvenance: resolvedPrice.price !== null ? (input.priceProvenance ?? (input.postText ? "AUTHORITATIVE_TEXT" : "VISION")) : textResult.priceProvenance,
-    pricePerM2: resolvedPrice.pricePerM2,
+    price: isSaleProperty ? resolvedPrice.price : null,
+    priceProvenance: isSaleProperty && resolvedPrice.price !== null ? (input.postText?.trim() ? "AUTHORITATIVE_TEXT" : input.priceProvenance ?? "VISION") : undefined,
+    pricePerM2: isSaleProperty ? resolvedPrice.pricePerM2 : null,
     // Vision's own `.price` reading is never authoritative (see resolvedPrice above);
     // kept only so a text-vs-image price mismatch can be surfaced, not silently picked.
     visionPriceCandidate: typeof vision.price === "number" ? vision.price : null,

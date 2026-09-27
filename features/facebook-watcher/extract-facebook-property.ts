@@ -40,6 +40,7 @@ export type FacebookPriceResolution = {
 };
 
 const AUXILIARY_PRICE_CONTEXT = /(?:czynsz|opłat|kaucj|wyposażeni|mebl|remont|prowizj|telefon|tel\.?|\brat[ay]\b|zaliczk|przedpłat|\bmedi[ae]\b|administracj|wspólnot|fundusz\s*remontow\w*|abonament|ubezpieczeni|\bpodatek\b|\bpr[ąa]d\b|\bgaz\b|\bwod[ęya]\b|internet)[^\n]{0,24}$/i;
+const MONTHLY_AMOUNT_SUFFIX = /^\s*(?:\/\s*mies(?:\.|iąc\w*)?|miesięczn\w*)/iu;
 const SALE_PRICE_RESET_KEYWORD = /cena|kwota/gi;
 
 /**
@@ -68,15 +69,15 @@ export function resolveFacebookPrice(text: string, area: number | null): Faceboo
   // separator: a dot between two groups of exactly 3 digits is structurally
   // always a group separator here, never a decimal point.
   const explicitTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{1,3}(?:[\s.]\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?\s*(?:zł|pln)(?!\p{L})/giu))
-    .filter((match) => !/^\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => decimalNumber(match[1], match[2]));
+    .filter((match) => !/^\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !MONTHLY_AMOUNT_SUFFIX.test(normalized.slice(match.index! + match[0].length)) && !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => decimalNumber(match[1], match[2]));
   // "tyś" (colloquial misspelling with an accented ś) is at least as common in
   // real listing text as the correct "tys" — both must resolve identically.
   const thousandsTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*(?:ty[sś]\.?|tysi(?:ąc(?:e|y)?)?)/giu))
-    .filter((match) => !/^\s*(?:zł|pln)?\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
+    .filter((match) => !/^\s*(?:zł|pln)?\s*\/\s*m(?:2|²)/iu.test(normalized.slice(match.index! + match[0].length)) && !MONTHLY_AMOUNT_SUFFIX.test(normalized.slice(match.index! + match[0].length)) && !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
   // Colloquial "399k" / "300 K" shorthand. `(?!\w)` keeps it from matching inside another
   // word (e.g. "300km"), so only a bare k/K right after the digits counts.
   const kNotationTotals = uniqueNumbers(Array.from(normalized.matchAll(/(\d{2,4}(?:[.,]\d+)?)\s*[kK](?!\w)/g))
-    .filter((match) => !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
+    .filter((match) => !MONTHLY_AMOUNT_SUFFIX.test(normalized.slice(match.index! + match[0].length)) && !isAuxiliaryPriceContext(normalized.slice(Math.max(0, match.index! - 32), match.index))), (match) => Math.round((number(match[1]) ?? 0) * 1000));
 
   const contextualTotals = Array.from(normalized.matchAll(/(?:^|[^\p{L}])(?:cena(?:\s+(?:ofertowa|sprzeda[żz]y?))?|kwota(?:\s+do\s+negocjacji)?)\s*[:=-]?\s*(\d{1,3}(?:[\s.]\d{3})+|\d{4,9})(?:[.,](\d{1,2}))?(?![\d])/giu));
   const contextual = singleValue(uniqueNumbers(contextualTotals, (match) => decimalNumber(match[1], match[2])));
@@ -187,15 +188,16 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const confidence = Math.min(0.98, 0.35 + known * 0.12);
   const intent = resolveFacebookListingIntent(text, input.listingIntent, input.intentConfidence);
   const describesConcreteProperty = !["BUY_PROPERTY", "RENT_WANTED", "SERVICE", "OTHER"].includes(intent.intent);
+  const isSaleProperty = intent.intent === "SELL_PROPERTY" || intent.intent === "UNKNOWN";
   const property: FacebookProperty = {
     title: text.split(/[.!?\n]/)[0]?.trim().slice(0, 180) || "Oferta z Facebooka",
     city: location.city,
     neighborhood: explicitNeighborhood ?? location.neighborhood,
     district: explicitDistrict ?? location.district,
     street: street ?? location.street,
-    price: describesConcreteProperty ? price.price : null,
-    priceProvenance: describesConcreteProperty ? (input.priceProvenance ?? (price.price !== null ? "AUTHORITATIVE_TEXT" : undefined)) : undefined,
-    pricePerM2: describesConcreteProperty ? price.pricePerM2 : null,
+    price: isSaleProperty ? price.price : null,
+    priceProvenance: isSaleProperty ? (price.price !== null ? (text.trim() ? "AUTHORITATIVE_TEXT" : input.priceProvenance ?? "AUTHORITATIVE_TEXT") : input.priceProvenance) : undefined,
+    pricePerM2: isSaleProperty ? price.pricePerM2 : null,
     area: describesConcreteProperty ? effectiveArea : null,
     rooms: describesConcreteProperty ? explicitRoomCount ?? (mRooms ? Math.max(1, mRooms - 1) : null) : null,
     floor: describesConcreteProperty ? fraction ? boundedFloor(Number(fraction[1])) : floor : null,
