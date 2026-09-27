@@ -64,7 +64,7 @@ export function describeRejectionReason(reason: string, context: RejectionReason
       return `Forma własności „${context.ownership ?? "?"}” nie pasuje do filtra (${filter.ownershipTypes.join("/")})`;
     case "district":
       return `Dzielnica „${context.district ?? "?"}” nie pasuje do filtra`;
-    case "city":
+    case "city_mismatch":
       return `Poza miastem ${filter.city ?? "?"}`;
     case "private_only":
       return "Oferta nie jest prywatna — filtr wymaga ofert prywatnych";

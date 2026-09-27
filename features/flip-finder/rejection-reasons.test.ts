@@ -67,11 +67,11 @@ test("missing ownership reads exactly: Brak potwierdzonej formy własności", ()
 });
 
 test("outside the filter's city reads exactly: Poza miastem Łódź", () => {
-  assert.equal(describeRejectionReason("city", context(), filter), "Poza miastem Łódź");
+  assert.equal(describeRejectionReason("city_mismatch", context(), filter), "Poza miastem Łódź");
 });
 
 test("no reason ever renders as a bare internal code or a generic 'odrzucona'", () => {
-  const reasons = ["max_price_per_sqm", "city", "building_type", "ownership", "rooms", "price_min", "area_max"];
+  const reasons = ["max_price_per_sqm", "city_mismatch", "building_type", "ownership", "rooms", "price_min", "area_max"];
   for (const reason of reasons) {
     const text = describeRejectionReason(reason, context({ pricePerSqm: 6_000, price: 300_000, area: 40, rooms: 2, city: "Zgierz", buildingType: "dom", ownership: "udział" }), filter);
     assert.notEqual(text, reason, `reason "${reason}" must not render as its own bare code`);

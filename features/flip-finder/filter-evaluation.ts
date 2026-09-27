@@ -1,6 +1,7 @@
 import type { SearchFilter } from "@/features/flip-finder";
 import type { PropertyFields } from "@/features/properties/types/property";
 import { LODZ_CONTEXT, OUTSIDE_LODZ_TOWN } from "@/features/location-intelligence/lodz-satellite-towns";
+import { OTHER_POLISH_CITY } from "@/features/location-intelligence/other-polish-cities";
 import { decisionBucket, type DecisionBucket } from "./decision-model.ts";
 
 export type FilterCandidate = Pick<
@@ -159,25 +160,40 @@ export function evaluateListingAgainstFilter(
     const structuredCity = candidate.city?.trim() ? candidate.city : null;
     if (structuredCity === null) {
       // The structured city field is empty/unknown (a common geocoding gap
-      // for imported listings). Rather than silently letting the listing
-      // through as REVIEW regardless of what town it actually is, check
-      // whether the title/description text names a known Łódź-satellite
-      // town that must never be confused with Łódź itself (e.g.
-      // "Aleksandrów Łódzki") — a real production case previously slipped
-      // through a Łódź filter this way. This only ever narrows an otherwise
-      // unknown city to a confident exclusion; it never manufactures a
-      // positive match from free text.
+      // for imported listings, especially Facebook). Rather than silently
+      // letting the listing through as REVIEW regardless of what town it
+      // actually is, check whether the title/description/locationText names
+      // a real, known Polish place that is not Łódź -- either a Łódź-
+      // satellite town easily confused with Łódź itself (e.g. "Aleksandrów
+      // Łódzki") or any other major Polish city (e.g. "Rzeszów", "Piotrków
+      // Trybunalski") -- real production cases that both previously slipped
+      // through a Łódź filter this way, reaching Finder as `unknown_city`
+      // instead of a genuine city_mismatch. This only ever narrows an
+      // otherwise unknown city to a confident exclusion; it never
+      // manufactures a positive match from free text, and a name this
+      // codebase does not recognize correctly stays unknown_city rather
+      // than guessing -- "no location evidence" is the only case
+      // unknown_city may still describe.
       const filterIsLodz = normalizeLocation(filter.city) === "lodz";
       const freeText = normalizeLocation(
         `${candidate.title ?? ""} ${candidate.description ?? ""} ${candidate.locationText ?? ""}`,
       );
-      if (filterIsLodz && OUTSIDE_LODZ_TOWN.test(freeText) && !LODZ_CONTEXT.test(freeText)) {
-        reject(true, "city");
+      const namesAnotherRealPlace = (OUTSIDE_LODZ_TOWN.test(freeText) || OTHER_POLISH_CITY.test(freeText)) && !LODZ_CONTEXT.test(freeText);
+      if (filterIsLodz && namesAnotherRealPlace) {
+        reject(true, "city_mismatch");
       } else {
         markUnknown("city");
       }
     } else {
-      reject(normalizeLocation(structuredCity) !== normalizeLocation(filter.city), "city");
+      // Some sources embed a district/neighborhood into the city field
+      // itself (e.g. "Łódź-Bałuty", "Łódź-Widzew"). Treated as a match when
+      // it names the filter's city as its own leading component, never as a
+      // substring match anywhere (which could accept an unrelated place
+      // that merely contains "Łódź" elsewhere in a longer compound value).
+      const normalizedCandidate = normalizeLocation(structuredCity);
+      const normalizedFilterCity = normalizeLocation(filter.city);
+      const isSameCity = normalizedCandidate === normalizedFilterCity || normalizedCandidate.startsWith(`${normalizedFilterCity} `);
+      reject(!isSameCity, "city_mismatch");
     }
   }
 

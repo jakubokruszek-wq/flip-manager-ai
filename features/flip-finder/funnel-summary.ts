@@ -19,7 +19,7 @@ export function summarizeHardRejects(rows: FunnelDecisionRow[]): { unique: numbe
 
 function mapHardReason(reason: string): string | null {
   const value = reason.toLowerCase();
-  if (["city", "outside_lodz", "outside_location"].includes(value)) return "outsideLocation";
+  if (["city", "city_mismatch", "outside_lodz", "outside_location"].includes(value)) return "outsideLocation";
   if (value === "district") return "districtMismatch";
   if (["area_min", "area_below_min"].includes(value)) return "areaBelowMin";
   if (["area_max", "area_above_max"].includes(value)) return "areaAboveMax";

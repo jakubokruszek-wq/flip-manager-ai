@@ -17,7 +17,7 @@ const candidate = { price: 300_000, area: 45, pricePerSqm: 6_666, rooms: 2, floo
 test("Łódź filter rejects a known Warsaw listing", () => {
   const result = evaluateListingAgainstFilter({ ...candidate, city: "Warszawa", locationText: "Warszawa" }, filter);
   assert.equal(result.matches, false);
-  assert.deepEqual(result.reasons, ["city"]);
+  assert.deepEqual(result.reasons, ["city_mismatch"]);
 });
 
 test("city comparison is case and diacritic safe", () => {
@@ -42,7 +42,7 @@ test("a Łódź filter excludes Aleksandrów Łódzki inferred from the title wh
   );
   assert.equal(result.matches, false);
   assert.equal(result.bucket, "REJECTED");
-  assert.deepEqual(result.reasons, ["city"]);
+  assert.deepEqual(result.reasons, ["city_mismatch"]);
 });
 
 test("a Łódź filter excludes Aleksandrów Łódzki inferred from the description when the structured city is empty", () => {
@@ -51,7 +51,63 @@ test("a Łódź filter excludes Aleksandrów Łódzki inferred from the descript
     filter,
   );
   assert.equal(result.bucket, "REJECTED");
-  assert.deepEqual(result.reasons, ["city"]);
+  assert.deepEqual(result.reasons, ["city_mismatch"]);
+});
+
+// Real production case: a Łódź filter showed listings from Rzeszów and
+// Piotrków Trybunalski with "Lokalizacja nieznana" / unknown_city, because
+// the only free-text city check that existed (OUTSIDE_LODZ_TOWN) only ever
+// listed towns immediately around Łódź, never the rest of the country.
+test("a Łódź filter excludes Rzeszów inferred from the title when the structured city is empty", () => {
+  const result = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "Mieszkanie na sprzedaż, Rzeszów, ul. Grunwaldzka", locationText: null },
+    filter,
+  );
+  assert.equal(result.bucket, "REJECTED");
+  assert.deepEqual(result.reasons, ["city_mismatch"]);
+});
+
+// "Piotrków Trybunalski" must be excluded, but bare "piotrkow\w*" would also
+// match "Piotrkowska" -- Łódź's own best-known street -- so this specifically
+// proves the compound match works and never fires on the Łódź street alone.
+test("a Łódź filter excludes Piotrków Trybunalski inferred from the description, and never confuses it with ul. Piotrkowska in Łódź", () => {
+  const rejected = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "Kawalerka", description: "Lokalizacja: Piotrków Trybunalski, centrum", locationText: null },
+    filter,
+  );
+  assert.equal(rejected.bucket, "REJECTED");
+  assert.deepEqual(rejected.reasons, ["city_mismatch"]);
+
+  const lodzStreet = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "Mieszkanie, ul. Piotrkowska, Łódź", locationText: null },
+    filter,
+  );
+  assert.equal(lodzStreet.bucket, "REVIEW", "ul. Piotrkowska is a real Łódź street and must never be confused with the city Piotrków Trybunalski");
+  assert.deepEqual(lodzStreet.unknownFields, ["city"]);
+});
+
+test("a Łódź filter excludes any other named major Polish city, not just the mission's own worked examples", () => {
+  for (const city of ["Kraków", "Wrocław", "Gdańsk", "Rzeszów"]) {
+    const result = evaluateListingAgainstFilter(
+      { ...candidate, city: null, title: `Mieszkanie na sprzedaż, ${city}`, locationText: null },
+      filter,
+    );
+    assert.equal(result.bucket, "REJECTED", `${city} must be excluded`);
+    assert.deepEqual(result.reasons, ["city_mismatch"]);
+  }
+});
+
+// Diacritic/variant normalization: "Łódź", "Lodz", and a hyphenated
+// district-style suffix must all still positively match the Łódź filter --
+// this proves normalizeLocation folds "ł"->"l" and strips diacritics before
+// any comparison, both for the structured field and the free-text fallback.
+test("Łódź, Lodz, and a hyphenated Łódź-... district-style structured city value all normalize to a positive match", () => {
+  for (const city of ["Łódź", "Lodz", "ŁÓDŹ", "łódź", "Łódź-Bałuty", "Łódź-Widzew"]) {
+    assert.equal(evaluateListingAgainstFilter({ ...candidate, city }, filter).matches, true, `"${city}" must match the Łódź filter`);
+  }
+  // A structured city value must never match merely because it CONTAINS
+  // "Łódź" somewhere -- only as its own leading component.
+  assert.equal(evaluateListingAgainstFilter({ ...candidate, city: "Nowa Łódź-wieś" }, filter).matches, false, "a place that only happens to contain \"Łódź\" mid-name must never be treated as Łódź itself");
 });
 
 // The exclusion pattern must never fire on an ordinary Łódź street name that
