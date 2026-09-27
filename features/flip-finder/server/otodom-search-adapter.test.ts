@@ -72,7 +72,7 @@ test("valid duplicate Otodom rows collapse after URL normalization and valid row
   };
   const items = [
     { ...base, id: "same-id", url: "https://www.otodom.pl/pl/oferta/mieszkanie-IDABC123/?utm_source=feed" },
-    { ...base, id: "same-id", url: "https://m.otodom.pl/pl/oferta/mieszkanie-IDABC123?fbclid=tracking" },
+    { ...base, id: "different-id", url: "https://m.otodom.pl/pl/oferta/mieszkanie-IDABC123?fbclid=tracking" },
     { ...base, id: "other-id", url: "https://www.otodom.pl/pl/oferta/inne-IDXYZ987" },
   ];
   globalThis.fetch = async () => responseFor(items);

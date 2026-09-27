@@ -140,18 +140,20 @@ export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal): 
   const normalization = searchAds.items.map((item) => normalizeItem(item));
   const rejectionReasons: OtodomRejectionCounts = {};
   const normalized: PropertySearchListing[] = [];
-  const identity = new Set<string>();
+  const seenExternalIds = new Set<string>();
+  const seenUrls = new Set<string>();
   for (const item of normalization) {
     if (!item.listing) {
       incrementReason(rejectionReasons, item.reason ?? "parser_error");
       continue;
     }
-    const key = `${item.listing.externalListingId}:${item.listing.normalizedUrl}`;
-    if (identity.has(key)) {
+    const duplicate = seenExternalIds.has(item.listing.externalListingId) || seenUrls.has(item.listing.normalizedUrl);
+    if (duplicate) {
       incrementReason(rejectionReasons, "duplicate");
       continue;
     }
-    identity.add(key);
+    seenExternalIds.add(item.listing.externalListingId);
+    seenUrls.add(item.listing.normalizedUrl);
     normalized.push(item.listing);
   }
   console.info("OTODOM NORMALIZATION SUMMARY:", { rawItems: searchAds.items.length, normalizedItems: normalized.length, rejectedItems: searchAds.items.length - normalized.length, rejectionReasons });
