@@ -371,3 +371,16 @@ test("clicking 'Skanuj' (scanFilter) never invokes the collector-bridge/extensio
   // exactly that notice's real wording).
   assert.match(scanFilterBody, /Facebook Watcher zbiera jeszcze nowe oferty w tle/);
 });
+
+// Third Finder/Watcher separation bug, proven via real production read-only
+// evidence: filter.lastScan is the most recent source_scans row for this
+// filter from ANY origin, including the Watcher's own independent scheduler
+// -- a failed Watcher facebook scan rendered here under "Ostatni skan" read
+// as if it were Finder's own last action. filter.lastScannedAt is written
+// exclusively by Finder's own runManualOtodomScan and can never carry a
+// Watcher-owned timestamp.
+test("the per-filter row's last-recalculation text reads filter.lastScannedAt (Finder-exclusive), never the Watcher-influenced filter.lastScan", () => {
+  assert.doesNotMatch(page, /`Ostatni skan: \$\{formatDateTime\(filter\.lastScan\.startedAt\)\}`/, "the old, Watcher-influenced 'Ostatni skan' text must be gone");
+  assert.match(page, /`Ostatnie przeliczenie zapisanych ofert: \$\{formatDateTime\(filter\.lastScannedAt\)\}`/, "the row must use the recalculation-specific label sourced from the Finder-exclusive field");
+  assert.match(page, /\{filter\.lastScannedAt\s*\n\s*\? `Ostatnie przeliczenie zapisanych ofert/, "the display must be gated on lastScannedAt, not lastScan");
+});

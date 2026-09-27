@@ -96,8 +96,12 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
         <div className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
           <HeaderMetric label="Wszystkie wyniki" value={formatNumber(data.total)} />
           <HeaderMetric label="Nowe w ostatnim skanie" value={formatNumber(data.newMatches)} />
-          {data.lastScan ? (
-            <HeaderMetric label="Ostatni skan" value={formatDateTime(data.lastScan.startedAt)} />
+          {/* data.filter.lastScannedAt is written exclusively by Finder's own
+              runManualOtodomScan; data.lastScan (below, unused here on purpose)
+              is the most recent source_scans row for this filter from ANY
+              origin, including the Watcher's own independent scheduler cycle. */}
+          {data.filter.lastScannedAt ? (
+            <HeaderMetric label="Ostatnie przeliczenie zapisanych ofert" value={formatDateTime(data.filter.lastScannedAt)} />
           ) : null}
         </div>
       </header>

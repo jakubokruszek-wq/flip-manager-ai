@@ -33,3 +33,17 @@ test("the per-filter results page's response type guard validates reviewResults 
 test("MATCHED listings still render through the unchanged results section — no redesign of the matched path", () => {
   assert.match(page, /results\.map\(\(result\) => \(\s*<ListingResultCard key=\{result\.id\} result=\{result\} \/>/);
 });
+
+// Third Finder/Watcher separation bug, proven via real production read-only
+// evidence: data.lastScan is the most recent source_scans row for this
+// filter from ANY origin, including the Watcher's own independent scheduler
+// -- a failed Watcher facebook scan (e.g. COLLECTOR_UPLOAD_422) rendered
+// here under "Ostatni skan" read as if it were Finder's own last action.
+// data.filter.lastScannedAt is written exclusively by Finder's own
+// runManualOtodomScan and can never carry a Watcher-owned timestamp.
+test("the header's last-recalculation metric reads filter.lastScannedAt (Finder-exclusive), never the Watcher-influenced top-level lastScan", () => {
+  assert.doesNotMatch(page, /label="Ostatni skan"/, "the old, Watcher-influenced 'Ostatni skan' label must be gone");
+  assert.match(page, /label="Ostatnie przeliczenie zapisanych ofert"/, "the header must use the recalculation-specific label");
+  assert.match(page, /data\.filter\.lastScannedAt/, "the header must read the Finder-exclusive lastScannedAt field");
+  assert.doesNotMatch(page, /formatDateTime\(data\.lastScan\.startedAt\)/, "the header must never format a timestamp from the Watcher-influenced top-level lastScan");
+});

@@ -628,10 +628,16 @@ export function FlipFinderPage() {
                         <span>Wszystkie dopasowania: {formatNumber(filter.totalMatches ?? 0)}</span>
                         <span>Nowe dopasowania: {formatNumber(filter.newMatches ?? 0)}</span>
                       </div>
+                      {/* filter.lastScannedAt (search_filters.last_scanned_at) is
+                          written exclusively by Finder's own runManualOtodomScan,
+                          never by the Watcher's scheduler -- unlike filter.lastScan
+                          (the most recent source_scans row for this filter from ANY
+                          origin), this can never surface a Watcher-owned run's
+                          timestamp under a label that reads as Finder's own. */}
                       <p className="text-xs text-muted-foreground">
-                        {filter.lastScan
-                          ? `Ostatni skan: ${formatDateTime(filter.lastScan.startedAt)}`
-                          : "Skan nie został jeszcze uruchomiony."}
+                        {filter.lastScannedAt
+                          ? `Ostatnie przeliczenie zapisanych ofert: ${formatDateTime(filter.lastScannedAt)}`
+                          : "Przeliczenie nie zostało jeszcze uruchomione."}
                       </p>
                       {!filter.isActive ? (
                         <p className="text-xs text-muted-foreground">
