@@ -357,11 +357,30 @@ test("Flip Finder card border: real browser comparison of a current (active) car
         const dialog = page.getByRole("dialog");
 
         // MATCHED: the whole card and the explicit Analizuj action use the
-        // same canonical listing id and open the same detail dialog.
+        // same canonical listing id and open the same detail dialog -- with
+        // the exact same full content set Watcher's own card (the identical
+        // shared ExpandableListingCardContent component, variant="watcher")
+        // would show for this listing: title, location, price, area,
+        // price/m², a photo or its placeholder, description, an investment
+        // score, the Deal Room button, and every detail tab.
+        const pagesBeforeClick = page.context().pages().length;
         await activePreview.click();
         await dialog.waitFor({ state: "visible" });
-        assert.match(await dialog.textContent(), /Aktualna oferta/);
-        assert.equal(await dialog.getByRole("link", { name: /Deal Room/ }).getAttribute("href"), `/deals/${activeId}`);
+        assert.equal(page.context().pages().length, pagesBeforeClick, "opening the card's own detail dialog must never itself open a new tab/popup (e.g. to Facebook)");
+        assert.equal(page.url(), baseUrl + "/flip-finder", "opening the detail dialog must never navigate the page itself");
+        const dialogText = (await dialog.textContent()).replace(/ /g, " ");
+        assert.match(dialogText, /Aktualna oferta/, "title");
+        assert.match(dialogText, /Łódź/, "location");
+        assert.match(dialogText, /300 000/, "price");
+        assert.match(dialogText, /44/, "area");
+        assert.match(dialogText, /6[\s ]?818/, "price per m²");
+        assert.match(dialogText, /Opis oferty testowej/, "description");
+        assert.match(dialogText, /Ocena inwestycji/, "investment score");
+        assert.ok(await dialog.locator('[aria-label="Brak zweryfikowanego zdjęcia"], img, [alt]').first().isVisible().catch(() => false) || /Brak zweryfikowanego zdjęcia/.test(dialogText), "a photo or its explicit placeholder must render");
+        for (const tab of ["Informacje", "Szybki podgląd", "Kalkulator", "Ocena potencjału", "Rynek", "Historia ceny"]) {
+          assert.ok(await dialog.getByRole("tab", { name: tab }).isVisible(), `tab "${tab}" must be present`);
+        }
+        assert.equal(await dialog.getByRole("link", { name: /Deal Room/ }).getAttribute("href"), `/deals/${activeId}`, "Deal Room must carry the real canonical listing id, never a guessed one");
         await page.keyboard.press("Escape");
         await dialog.waitFor({ state: "hidden" });
 
