@@ -126,6 +126,14 @@ test("login, protected navigation and logout use the operator session", { timeou
   await assert.doesNotReject(() => page.getByLabel("Flip Manager by Jakub Okruszek").waitFor({ state: "visible" }));
   assert.equal(await page.getByText("Rejestracja").count(), 0, "login must not expose public signup");
 
+  const signatureStyle = await page.locator(".brand-signature").evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { color: style.color, fontWeight: style.fontWeight, fontFamily: style.fontFamily };
+  });
+  assert.equal(signatureStyle.color, "rgb(214, 179, 90)", "the Jakub Okruszek signature must render in the gold brand color");
+  assert.ok(Number(signatureStyle.fontWeight) >= 700, `the Jakub Okruszek signature must render bold, got font-weight ${signatureStyle.fontWeight}`);
+  assert.match(signatureStyle.fontFamily, /cursive|Segoe Print|Bradley Hand|Comic Sans MS/i, "the Jakub Okruszek signature must render in a handwritten-style font");
+
   await page.getByLabel("E-mail").fill("operator@example.test");
   await page.getByLabel(/Has/).fill("wrong-password");
   await page.getByRole("button", { name: /Zaloguj/ }).click();
