@@ -352,9 +352,20 @@ export function FlipFinderPage() {
       setNotice(archivedCount > 0 ? "Wyniki przeniesiono do historii." : "Brak ofert do wyczyszczenia.");
       setClearResultsOpen(false);
       setResultsRevision((current) => current + 1);
+      // Deliberately NOT reset here (unlike the catch branch below): resetting
+      // this ref immediately re-arms the guard before React has necessarily
+      // re-rendered and removed the dialog/confirm button from the DOM, so a
+      // rapid extra click landing in that window could still reach a fresh
+      // clearResults() call and fire a genuine second mutation even though
+      // the operation already succeeded -- reproduced live (not assumed):
+      // a real Playwright click immediately after the success toast appeared
+      // intermittently sent a second POST before this fix. The guard now
+      // only ever resets on failure (where the dialog stays open and a retry
+      // must be possible) or when the dialog is explicitly reopened.
+      clearingResultsRef.current = true;
+      setClearingResults(false);
     } catch (reason) {
       setClearResultsError(reason instanceof Error ? reason.message : "Nie udało się wyczyścić wyników.");
-    } finally {
       clearingResultsRef.current = false;
       setClearingResults(false);
     }
@@ -480,7 +491,7 @@ export function FlipFinderPage() {
                 {scanningFilterIds.has(activeFilter.id) ? "Skanowanie…" : "Skanuj oferty"}
               </Button>
               {scanningFilterIds.has(activeFilter.id) ? <Button className="h-11" onClick={() => void stopScan(activeFilter)} variant="destructive">Zatrzymaj skanowanie</Button> : null}
-              <Button className="h-11" onClick={() => { setClearResultsError(null); setClearResultsOpen(true); }} type="button" variant="outline">Wyczyść wyniki</Button>
+              <Button className="h-11" onClick={() => { clearingResultsRef.current = false; setClearResultsError(null); setClearResultsOpen(true); }} type="button" variant="outline">Wyczyść wyniki</Button>
               <details className="relative">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center rounded-xl border border-border px-3 text-sm font-semibold text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary">Ustawienia filtra</summary>
                 <div className="absolute right-0 z-30 mt-2 w-[min(92vw,34rem)] rounded-2xl border border-border bg-card p-4 shadow-2xl">
