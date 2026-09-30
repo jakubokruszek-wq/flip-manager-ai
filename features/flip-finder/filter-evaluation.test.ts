@@ -155,6 +155,22 @@ test("canonical decision rejects a known hard constraint even when other fields 
   assert.notEqual(result.bucket, "REVIEW");
 });
 
+// Real production bug closure: "2 pokoje z balkonem za 260 000 zł" used to
+// persist with price=null (extract-facebook-listing.ts's classifyFacebookProperty
+// discarded the whole listing as "not real estate" before the price ever
+// reached the canonical record), which showed up here as an unknown "price"
+// field -- i.e. exactly the "unknown_price" a saved filter's recalculation
+// would render in Finder. With the parser fix, the same listing now carries
+// its real, non-null price, and recalculating a filter against it must never
+// mark price unknown again.
+test("a listing with the now-correctly-parsed Facebook title price never shows unknown_price on recalculation", () => {
+  const priceFilter = { ...filter, maxPricePerSqm: 8_000 };
+  const beforeFix = evaluateListingAgainstFilter({ ...candidate, price: null, area: null, pricePerSqm: null }, priceFilter);
+  assert.deepEqual(beforeFix.unknownFields, ["price", "area"], "reproduces the exact pre-fix symptom: price (and area) unknown");
+  const afterFix = evaluateListingAgainstFilter({ ...candidate, price: 260_000, area: 38, pricePerSqm: 260_000 / 38, rooms: 2 }, priceFilter);
+  assert.ok(!afterFix.unknownFields.includes("price"), "the real, non-null price from the title must never be reported as unknown_price again");
+});
+
 test("minimum total sale price rejects below 160000 and accepts the exact boundary", () => {
   for (const price of [15_000, 150_000, 159_999]) {
     const result = evaluateListingAgainstFilter({ ...candidate, price }, filter);

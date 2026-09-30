@@ -87,7 +87,15 @@ export type FacebookPropertyClassification = {
 
 export function classifyFacebookProperty(property: FacebookProperty, sourceText: string | undefined): FacebookPropertyClassification {
   const text = sourceText?.toLocaleLowerCase("pl-PL") ?? "";
-  const realEstateLanguage = /mieszkan|nieruchomo|kawalerk|apartament|lokal mieszkal|\bm[2-6]\b/.test(text);
+  // "pok[oó]j" (pokój/pokoje/pokoju/pokojowe -- a stated room count) and
+  // "balkon" are just as unambiguous real-estate language as the words
+  // already listed here, but were missing entirely: a short, structured post
+  // like "2 pokoje z balkonem za 260 000 zł" has a confidently-parsed price
+  // and room count yet named neither "mieszkanie" nor an m2/m3/... token, so
+  // it fell below the >=3 structured-field threshold below and was silently
+  // discarded as "not real estate" during automated import -- despite giving
+  // an entirely unambiguous, correctly parsed sale price.
+  const realEstateLanguage = /mieszkan|nieruchomo|kawalerk|apartament|lokal mieszkal|\bm[2-6]\b|pok[oó]j|balkon/.test(text);
   const detectedFields = (["price", "area", "rooms", "neighborhood", "district", "street"] as const)
     .filter((field) => property[field] !== null);
   return { usable: realEstateLanguage || detectedFields.length >= 3, realEstateLanguage, structuredFieldCount: detectedFields.length, detectedFields };

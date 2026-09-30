@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyFacebookCondition, extractFacebookProperty, extractPolishStreet, resolveFacebookPrice, resolveFacebookPricePerSqm } from "./extract-facebook-property.ts";
+import { classifyFacebookProperty } from "./extract-facebook-listing.ts";
 
 test("Teofilów M3", async()=>{ const value=await extractFacebookProperty({postText:"Sprzedam M3 na Teofilowie 46m2 289 tys bez pośredników"}); assert.equal(value.neighborhood,"Teofilów"); assert.equal(value.district,"Bałuty"); assert.equal(value.area,46); assert.equal(value.rooms,2); assert.equal(value.price,289000); assert.equal(value.sellerType,"private"); });
 test("Radogoszcz Zachód", async()=>{ const value=await extractFacebookProperty({postText:"Radogoszcz Zachód, 3 pokoje, 58 m2, do generalnego remontu"}); assert.equal(value.neighborhood,"Radogoszcz Zachód"); assert.equal(value.rooms,3); assert.equal(value.condition,"renovation"); });
@@ -227,4 +228,46 @@ test("Watcher data quality: an auxiliary fee immediately next to its own number 
 test("Watcher data quality: bare 'Xm' is only recognized as area right after an explicit metraż/powierzchnia keyword, never as a stray distance", async () => {
   assert.equal((await extractFacebookProperty({ postText: "5m od szkoły, mieszkanie na sprzedaż" })).area, null, "a bare distance mention must never be read as area");
   assert.equal((await extractFacebookProperty({ postText: "Powierzchnia 61m, blisko centrum" })).area, 61, "'Powierzchnia' is an equally valid area keyword to 'Metraż'");
+});
+
+// Real production bug: a short, structured Facebook title with an
+// unambiguous, correctly-parsed price and room count -- but no "mieszkanie"
+// or m2/m3/... token -- was discarded as "not real estate" during automated
+// import (classifyFacebookProperty's realEstateLanguage regex didn't
+// recognize "pokoje"/"balkon"), so Finder showed no price and no location for
+// a listing that plainly, unambiguously stated both a price and a layout.
+test("real production bug: '2 pokoje z balkonem za 260 000 zł' resolves a real price and is classified as usable real estate", async () => {
+  const title = "2 pokoje z balkonem za 260 000 zł";
+  assert.deepEqual(resolveFacebookPrice(title, null), { price: 260_000, pricePerM2: null, source: "EXPLICIT_TOTAL" });
+  const property = await extractFacebookProperty({ postText: title });
+  assert.equal(property.price, 260_000, "the price from the title must reach the canonical property, never left null");
+  assert.equal(property.priceProvenance, "AUTHORITATIVE_TEXT", "the price must be attributed to the real post text, never a guess");
+  assert.equal(property.rooms, 2);
+  const classification = classifyFacebookProperty(property, title);
+  assert.equal(classification.usable, true, "a post with a confidently-parsed price and room count must not be discarded as non-real-estate");
+  assert.equal(classification.realEstateLanguage, true, "'pokoje'/'balkon' must be recognized as real-estate language");
+});
+
+test("regression: 'Kawalerka 1500 zł/mies.' never assigns a rent amount as a sale price", async () => {
+  assert.equal(resolveFacebookPrice("Kawalerka 1500 zł/mies.", null).price, null);
+  const property = await extractFacebookProperty({ postText: "Kawalerka 1500 zł/mies." });
+  assert.equal(property.listingIntent, "RENT_OFFER");
+  assert.equal(property.price, null, "a rent listing must never end up with an askingPrice at all");
+});
+
+test("regression: an administrative czynsz fee never blocks a later, clearly re-anchored sale price ('sprzedam za')", () => {
+  assert.equal(resolveFacebookPrice("Czynsz 700 zł, sprzedam za 260 000 zł", null).price, 260_000, "'sprzedam za' re-anchors the number to the sale price exactly like 'cena'/'kwota' already do");
+});
+
+test("regression: the minimum sale price boundary (159 999 vs 160 000) is a filter concern, never a parsing failure -- both resolve to a real price", async () => {
+  const below = await extractFacebookProperty({ postText: "Sprzedam mieszkanie 159 999 zł" });
+  assert.equal(below.price, 159_999, "159 999 must resolve as a real, known price -- rejection by min_total_sale_price happens at the filter layer, not here");
+  const atThreshold = await extractFacebookProperty({ postText: "Sprzedam mieszkanie 160 000 zł" });
+  assert.equal(atThreshold.price, 160_000, "160 000 must resolve as a real, known price and pass the minimum threshold at the filter layer");
+});
+
+test("'Górna' in the title/description is recognized as a Łódź district", async () => {
+  const property = await extractFacebookProperty({ postText: "Górna, 2 pokoje z balkonem, 260 000 zł" });
+  assert.equal(property.district, "Górna");
+  assert.equal(property.city, "Łódź", "a recognized Łódź district must resolve the city to Łódź even without the city being named explicitly");
 });

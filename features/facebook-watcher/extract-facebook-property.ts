@@ -41,7 +41,13 @@ export type FacebookPriceResolution = {
 
 const AUXILIARY_PRICE_CONTEXT = /(?:czynsz|opłat|kaucj|wyposażeni|mebl|remont|prowizj|telefon|tel\.?|\brat[ay]\b|zaliczk|przedpłat|\bmedi[ae]\b|administracj|wspólnot|fundusz\s*remontow\w*|abonament|ubezpieczeni|\bpodatek\b|\bpr[ąa]d\b|\bgaz\b|\bwod[ęya]\b|internet)[^\n]{0,24}$/i;
 const MONTHLY_AMOUNT_SUFFIX = /^\s*(?:\/\s*mies(?:\.|iąc\w*)?|miesięczn\w*)/iu;
-const SALE_PRICE_RESET_KEYWORD = /cena|kwota/gi;
+// "sprzeda*" ("sprzedam"/"sprzedaż"/"sprzedaje") re-anchors a number to the
+// sale price exactly as authoritatively as "cena"/"kwota" -- without it,
+// "Czynsz 700 zł, sprzedam za 260 000 zł" wrongly treated the 260 000 as part
+// of the earlier czynsz's auxiliary context too, since nothing between them
+// reset the anchor, and returned no price at all for a post that states one
+// completely unambiguously.
+const SALE_PRICE_RESET_KEYWORD = /cena|kwota|sprzeda/gi;
 
 /**
  * A fee mentioned earlier in the same lookback window (e.g. "Niski czynsz
