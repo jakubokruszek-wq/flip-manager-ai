@@ -201,9 +201,11 @@ test("one Watcher listing (the outer <article>) carries exactly one gold border;
   assert.match(panel, /<div className="bg-card px-3 py-3">/, "the status/action panel keeps its background and padding as an internal section, without its own full border/radius that would read as a second card");
   // The gold-border unification mission (ec913d4) later factored the literal
   // border class this test originally matched inline into a single shared
-  // FINDER_CARD_BORDER_CLASSNAME constant (also used by ReviewListingCard),
-  // so the wrapper now references it by name rather than repeating the
-  // string -- same behavior (still "" for variant="watcher"), just DRY.
+  // FINDER_CARD_BORDER_CLASSNAME constant, so the wrapper now references it
+  // by name rather than repeating the string -- same behavior (still "" for
+  // variant="watcher"), just DRY. REVIEW-status Finder cards later stopped
+  // defining any border of their own entirely, rendering through this exact
+  // same ExpandableListingCard instead of a separate component.
   assert.match(finderCard, /const FINDER_CARD_BORDER_CLASSNAME = "overflow-hidden rounded-\[1\.125rem\] !border-2 !border-gold\/55 transition-colors duration-300 focus-within:!border-gold\/80 hover:!border-gold\/80";/, "the shared border class constant must still carry this exact gold border");
   assert.match(finderCard, /const wrapperBorderClassName = props\.variant === "watcher" \? "" : FINDER_CARD_BORDER_CLASSNAME;/, "ExpandableListingCard must render borderless specifically for variant=\"watcher\", since the Watcher's own <article> now owns the single outer border");
   assert.match(finderCard, /return <div className=\{wrapperBorderClassName\} data-listing-id=\{props\.result\.id\} data-testid="finder-card" onClickCapture=\{handleCardClickCapture\}/, "the conditional class must actually be applied to the wrapper, not just computed and discarded");

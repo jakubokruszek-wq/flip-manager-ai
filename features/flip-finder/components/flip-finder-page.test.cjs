@@ -117,12 +117,16 @@ test("review counter and rendered cards use the same current-filter dataset", ()
   assert.match(inlineResults, /counts\?: \{ active: number; review: number; archived: number \}/);
 });
 
-test("review cards expose safe image and persisted source provenance", () => {
-  assert.match(inlineResults, /result\.thumbnailUrl \? <SafeImage/);
-  assert.match(inlineResults, /sourceLabelForResult\(result\.source\)/);
+// REVIEW now renders through the exact same ExpandableListingCard as
+// MATCHED, so it automatically gets the same real photo (or placeholder),
+// timestamps and source badge/provenance -- with no separate, REVIEW-only
+// implementation of any of them left to drift out of sync.
+test("review cards expose safe image and persisted source provenance through the same shared card as MATCHED", () => {
+  assert.match(inlineResults, /result\.thumbnailUrl \? \(\s*<SafeImage/, "the shared card must render a real photo when one exists");
   assert.match(inlineResults, /firstSeenLabel\(result\.firstSeenAt\)/);
   assert.match(inlineResults, /publicationLabel\(result\.publishedAt\)/);
   assert.doesNotMatch(inlineResults, /target="_blank">Facebook <ExternalLink/);
+  assert.doesNotMatch(inlineResults, /sourceLabelForResult/, "the old REVIEW-only source label helper must be gone -- provenance now comes from the shared card's own SourceBadge");
 });
 
 test("Facebook cards expose an explicit, non-blocking on-demand gallery request", () => {

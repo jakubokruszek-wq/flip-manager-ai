@@ -135,8 +135,9 @@ const archivedResult = baseResult({
   matchReasons: ["max_price_per_sqm"],
 });
 // The mission's actual real-world case: a "DO OCENY" (current, pending)
-// offer missing only building type/ownership -- rendered by the separate
-// ReviewListingCard component, not ExpandableListingCard.
+// offer missing only building type/ownership -- rendered through the same
+// shared ExpandableListingCard as MATCHED and every Watcher card, wrapped by
+// ReviewListingCard only to add the accept/reject decision actions.
 const reviewResult = baseResult({
   id: reviewId,
   title: "Oferta do oceny",
@@ -341,20 +342,18 @@ test("Flip Finder card border: real browser comparison of a current (active) car
       assert.ok(box, "the primary action button must have a real, visible bounding box");
       assert.ok(box.width > 0 && box.height > 0, `the primary action button must be clickable (non-zero size) at ${viewport.width}px`);
 
-      const listingLink = page.locator('a[href="https://www.facebook.com/groups/example/posts/1234567890/"]').first();
-      await listingLink.waitFor({ state: "visible" });
-      assert.equal(await listingLink.getAttribute("href"), "https://www.facebook.com/groups/example/posts/1234567890/");
       if (viewport.width === 1280) {
-        const popupPromise = page.waitForEvent("popup");
-        await listingLink.click();
-        const popup = await popupPromise;
-        assert.equal(popup.url(), "https://www.facebook.com/groups/example/posts/1234567890/");
-        await popup.close();
-
         const activeCard = page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`);
         const reviewCard = page.locator(`[data-testid="finder-card"][data-listing-id="${reviewId}"]`);
+        // The accept/reject decision actions are REVIEW-specific chrome
+        // rendered as a sibling of the shared card, not inside it (the same
+        // shared ExpandableListingCard renders reviewCard itself) -- so they
+        // are reached through its parent wrapper, not reviewCard directly.
+        const reviewWrapper = reviewCard.locator("xpath=..");
         const activePreview = activeCard.locator("article > button").first();
+        const reviewPreview = reviewCard.locator("article > button").first();
         const dialog = page.getByRole("dialog");
+        assert.equal(await activePreview.evaluate((el) => getComputedStyle(el).cursor), "pointer", "hovering the card's clickable region must show the pointer cursor, exactly like Watcher");
 
         // MATCHED: the whole card and the explicit Analizuj action use the
         // same canonical listing id and open the same detail dialog -- with
@@ -381,6 +380,20 @@ test("Flip Finder card border: real browser comparison of a current (active) car
           assert.ok(await dialog.getByRole("tab", { name: tab }).isVisible(), `tab "${tab}" must be present`);
         }
         assert.equal(await dialog.getByRole("link", { name: /Deal Room/ }).getAttribute("href"), `/deals/${activeId}`, "Deal Room must carry the real canonical listing id, never a guessed one");
+
+        // The real source link only ever appears inside the opened detail
+        // dialog -- never as a bare, always-visible link on the collapsed
+        // card face (which would risk an accidental click straight through
+        // to Facebook before the operator has even opened the offer).
+        const listingLink = dialog.locator('a[href="https://www.facebook.com/groups/example/posts/1234567890/"]').first();
+        await listingLink.waitFor({ state: "visible" });
+        assert.equal(await listingLink.getAttribute("href"), "https://www.facebook.com/groups/example/posts/1234567890/");
+        const popupPromise = page.waitForEvent("popup");
+        await listingLink.click();
+        const popup = await popupPromise;
+        assert.equal(popup.url(), "https://www.facebook.com/groups/example/posts/1234567890/");
+        await popup.close();
+
         await page.keyboard.press("Escape");
         await dialog.waitFor({ state: "hidden" });
 
@@ -402,29 +415,47 @@ test("Flip Finder card border: real browser comparison of a current (active) car
         await page.keyboard.press("Escape");
         await dialog.waitFor({ state: "hidden" });
 
-        // REVIEW: the same card interaction contract is backed by the
-        // controlled native <details>, with no accidental action bubbling.
-        const reviewArticle = reviewCard.locator("article");
-        const reviewDetails = reviewCard.locator("details");
+        // REVIEW: must open the exact same full detail dialog as MATCHED and
+        // Watcher -- the same component, the same tabs, the same Deal Room
+        // link and canonical listing id -- never a separate, simplified
+        // panel. This fails immediately if REVIEW ever again renders through
+        // anything other than the shared ExpandableListingCard.
+        assert.equal(await reviewPreview.evaluate((el) => getComputedStyle(el).cursor), "pointer", "hovering the REVIEW card's clickable region must show the pointer cursor too");
+        await reviewPreview.click();
+        await dialog.waitFor({ state: "visible" });
+        assert.equal(page.context().pages().length, pagesBeforeClick, "opening the REVIEW card's detail dialog must never open a new tab/popup");
+        assert.equal(page.url(), baseUrl + "/flip-finder", "opening the REVIEW detail dialog must never navigate the page itself");
+        const reviewDialogText = (await dialog.textContent()).replace(/ /g, " ");
+        assert.match(reviewDialogText, /Oferta do oceny/, "REVIEW title");
+        assert.match(reviewDialogText, /Ocena inwestycji/, "REVIEW investment score, same as MATCHED");
+        for (const tab of ["Informacje", "Szybki podgląd", "Kalkulator", "Ocena potencjału", "Rynek", "Historia ceny"]) {
+          assert.ok(await dialog.getByRole("tab", { name: tab }).isVisible(), `REVIEW tab "${tab}" must be present, exactly like MATCHED and Watcher`);
+        }
+        assert.equal(await dialog.getByRole("link", { name: /Deal Room/ }).getAttribute("href"), `/deals/${reviewId}`, "the REVIEW dialog's Deal Room must carry the REVIEW listing's own canonical id");
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
+
         await reviewCard.getByRole("button", { name: "Analizuj", exact: true }).click();
-        assert.notEqual(await reviewDetails.getAttribute("open"), null, "REVIEW Analizuj must open its analysis details");
+        await dialog.waitFor({ state: "visible" });
         await page.keyboard.press("Escape");
-        assert.equal(await reviewDetails.getAttribute("open"), null, "REVIEW Escape must close its analysis details");
+        await dialog.waitFor({ state: "hidden" });
 
-        await reviewArticle.click({ position: { x: 12, y: 12 } });
-        assert.notEqual(await reviewDetails.getAttribute("open"), null, "clicking the REVIEW card must open its analysis details");
-        await page.keyboard.press("Escape");
-        await reviewArticle.focus();
+        await reviewPreview.focus();
         await page.keyboard.press("Enter");
-        assert.notEqual(await reviewDetails.getAttribute("open"), null, "Enter on the REVIEW card must open its analysis details");
+        await dialog.waitFor({ state: "visible" });
         await page.keyboard.press("Escape");
-        await reviewArticle.focus();
+        await dialog.waitFor({ state: "hidden" });
+        await reviewPreview.focus();
         await page.keyboard.press(" ");
-        assert.notEqual(await reviewDetails.getAttribute("open"), null, "Space on the REVIEW card must open its analysis details");
+        await dialog.waitFor({ state: "visible" });
         await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
 
+        // The REVIEW-specific accept/reject decision actions stay, rendered
+        // outside the shared card, exactly like Watcher's own workflow
+        // actions render outside the same shared card.
         const reviewDecisionRequest = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith(`/api/flip-finder/listings/${reviewId}/review`));
-        await reviewCard.getByRole("button", { name: "DODAJ", exact: true }).click();
+        await reviewWrapper.getByRole("button", { name: "DODAJ", exact: true }).click();
         const reviewDecision = await reviewDecisionRequest;
         assert.deepEqual(JSON.parse(reviewDecision.postData() || "{}"), { decision: "ACCEPTED" }, "REVIEW action buttons must keep their existing decision payload");
       }
