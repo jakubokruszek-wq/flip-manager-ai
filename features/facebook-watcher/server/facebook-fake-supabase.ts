@@ -173,6 +173,25 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     this.filters.push((row) => row[column] === value);
     return this;
   }
+  /**
+   * PostgREST's generic filter, as used for a JSON-path column expression
+   * (e.g. `.filter("metadata->>postId", "eq", value)` -- Postgres's `->>`
+   * extracts a JSONB key as text). Only "eq" is implemented, since that is
+   * the only operator any real caller currently uses through this fake.
+   */
+  filter(column: string, operator: string, value: unknown): this {
+    const jsonPath = column.match(/^(\w+)->>(\w+)$/);
+    if (jsonPath) {
+      const [, base, key] = jsonPath;
+      this.filters.push((row) => {
+        const container = row[base];
+        return typeof container === "object" && container !== null ? String((container as Row)[key]) === String(value) : false;
+      });
+      return this;
+    }
+    if (operator === "eq") this.filters.push((row) => row[column] === value);
+    return this;
+  }
   order(): this {
     return this;
   }
@@ -238,7 +257,13 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
 
     const table = this.db._table(this.table);
     if (this.op === "insert") {
-      const row = { id: this.payload!.id ?? this.db._nextId(), ...this.payload };
+      // Real callers (persist-listing.ts) never set listings.first_seen_at
+      // explicitly on creation -- it relies on the real column's `DEFAULT
+      // now()`, which this in-memory table must simulate or every
+      // getFilterResults() read of a freshly-inserted listing silently drops
+      // it (toListingRow requires a non-null first_seen_at).
+      const defaults = this.table === "listings" && this.payload!.first_seen_at === undefined ? { first_seen_at: new Date().toISOString() } : {};
+      const row = { id: this.payload!.id ?? this.db._nextId(), ...defaults, ...this.payload };
       this.db._setTable(this.table, [...table, row]);
       return { data: this.wantsSelectBack ? [row] : null, error: null };
     }
@@ -277,7 +302,14 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
         row = { ...nextTable[existingIndex], ...item };
         nextTable = [...nextTable.slice(0, existingIndex), row, ...nextTable.slice(existingIndex + 1)];
       } else {
-        row = { id: item.id ?? this.db._nextId(), ...item };
+        // Real callers (persist-listing.ts) never set listings.first_seen_at
+        // explicitly on creation -- it relies on the real column's `DEFAULT
+        // now()`, which this in-memory table must simulate for a genuinely
+        // new row (never for an update to an existing one) or every
+        // getFilterResults() read of it silently drops the listing
+        // (toListingRow requires a non-null first_seen_at).
+        const defaults = this.table === "listings" && item.first_seen_at === undefined ? { first_seen_at: new Date().toISOString() } : {};
+        row = { id: item.id ?? this.db._nextId(), ...defaults, ...item };
         nextTable = [...nextTable, row];
       }
       rows.push(row);

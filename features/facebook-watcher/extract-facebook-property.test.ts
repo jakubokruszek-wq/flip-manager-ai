@@ -271,3 +271,31 @@ test("'Górna' in the title/description is recognized as a Łódź district", as
   assert.equal(property.district, "Górna");
   assert.equal(property.city, "Łódź", "a recognized Łódź district must resolve the city to Łódź even without the city being named explicitly");
 });
+
+// "Górna" is spelled identically to the ordinary Polish adjective "górna"
+// ("upper") in nominative form, and its other grammatical cases ("Górnej")
+// are spelled identically to that adjective's own cases too -- unlike every
+// other Łódź district name in this file, which have no such collision.
+test("grammatically inflected 'na Górnej' is also recognized as the Łódź district, in the two structural forms a real post actually uses", async () => {
+  const preposition = await extractFacebookProperty({ postText: "Sprzedam mieszkanie na Górnej, 2 pokoje z balkonem za 260 000 zł" });
+  assert.equal(preposition.district, "Górna");
+  assert.equal(preposition.city, "Łódź");
+  const label = await extractFacebookProperty({ postText: "Osiedle Górna, 2 pokoje, 260 000 zł" });
+  assert.equal(label.district, "Górna");
+  assert.equal(label.city, "Łódź");
+});
+
+test("'górna' as the ordinary adjective ('upper') is never misread as the Górna district, in nominative or inflected form", async () => {
+  const cases = [
+    "Mieszkanie na górnej kondygnacji, 2 pokoje, 260 000 zł",
+    "Górna granica ceny to 300 tys, mieszkanie 2 pokoje, 260 000 zł",
+    "Mieszkanie w górnej części budynku, 2 pokoje, 260 000 zł",
+    "Górna półka szafy w cenie, mieszkanie 2 pokoje, 260 000 zł",
+    "Mieszkanie na górnym piętrze, 2 pokoje, 260 000 zł",
+  ];
+  for (const text of cases) {
+    const property = await extractFacebookProperty({ postText: text });
+    assert.equal(property.district, null, `"${text}" must never resolve a district from the ordinary "upper" adjective`);
+    assert.equal(property.city, null, `"${text}" must never infer Łódź from a false district match`);
+  }
+});

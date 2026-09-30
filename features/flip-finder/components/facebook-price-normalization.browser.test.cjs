@@ -105,6 +105,11 @@ test("a Facebook listing with the fixed canonical price/location renders a real 
   const baseUrl = `http://127.0.0.1:${port}`;
   const page = await browser.newPage();
   await addOperatorSessionCookie(page.context(), baseUrl);
+  const disallowedRequests = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (/facebook\.com/i.test(url) || /\/api\/facebook-watcher\//.test(url) || /\/api\/jobs\/facebook-watch/.test(url)) disallowedRequests.push(url);
+  });
   await page.route("**/api/flip-finder/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/flip-finder/search-filters") return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload), status: 200 });
@@ -128,6 +133,8 @@ test("a Facebook listing with the fixed canonical price/location renders a real 
   const dialogText = (await dialog.textContent()).replace(/ /g, " ");
   assert.match(dialogText, /260[\s ]?000/, "the opened detail dialog must also show the real price");
   assert.doesNotMatch(dialogText, /unknown_price/i, "the raw internal unknown_price code must never leak into the UI");
+
+  assert.deepEqual(disallowedRequests, [], "Finder must never contact facebook.com or any Watcher-specific endpoint while reading and displaying this saved listing");
 
   await page.close();
 });

@@ -6,7 +6,30 @@ const PLACES = [
   ["radogoszcz zachód", "Radogoszcz Zachód", "Bałuty"], ["radogoszcz", "Radogoszcz", "Bałuty"],
   ["teofil", "Teofilów", "Bałuty"], ["retkini", "Retkinia", "Polesie"], ["dąbrow", "Dąbrowa", "Górna"],
 ] as const;
-const DISTRICTS = ["Bałuty", "Widzew", "Polesie", "Górna", "Śródmieście"];
+const DISTRICTS = ["Bałuty", "Widzew", "Polesie", "Śródmieście"];
+// "Górna" is Łódź's only district name that is also an ordinary Polish
+// adjective ("górny/górna" = "upper") -- unlike Bałuty/Widzew/Polesie/
+// Śródmieście, a blind substring match (in ANY grammatical form, including
+// the bare nominative "Górna" itself) would misread "Górna granica
+// ceny"/"górna kondygnacja"/"w górnej części"/"z górnej szuflady" as the
+// district, since "górna" the adjective and "Górna" the district are
+// spelled identically in nominative form. It is therefore deliberately
+// excluded from the generic DISTRICTS list above and handled only through
+// mentionsGornaDistrict below: a mention is accepted only when it follows a
+// location preposition ("na"/"w") or an explicit "dzielnica"/"osiedle"
+// label, or ends the phrase at a comma/period (a real listing's "Górna,
+// Łódź" / "na Górnej." pattern) -- and even then only when nothing that
+// makes it the ordinary "upper X" adjective immediately follows.
+const GORNA_UPPER_ADJACENT_NOUN = /^[^,.\n]{0,3}\b(kondygnacj|pietr|czesc|polow|warstw|granic|szafk|polk|szuflad|klatc|sufit|stron\w*)\w*/iu;
+const GORNA_DISTRICT_MENTION = /\b(?:na|w|dzielnic\w*|osiedl\w*)\s+gorn(?:ej|a|ym|ych|emu|ego)\b|\bgorn(?:a|ej)\b\s*[,.]/giu;
+
+/** Takes the already-diacritic-stripped, lowercased text (see extractFacebookProperty's `normalizedText`). */
+function mentionsGornaDistrict(normalizedText: string): boolean {
+  return [...normalizedText.matchAll(GORNA_DISTRICT_MENTION)].some((mention) => {
+    const start = (mention.index ?? 0) + mention[0].length;
+    return !GORNA_UPPER_ADJACENT_NOUN.test(normalizedText.slice(start, start + 24));
+  });
+}
 const FLAG_PHRASES = ["bezpośrednio", "bez pośredników", "do remontu", "generalny remont", "po babci", "pilnie", "okazja", "spadek", "do negocjacji", "prywatnie"];
 const number = (value?: string) => value ? Number(value.replace(",", ".").replace(/\s/g, "")) : null;
 const boundedFloor = (value: number | null) => value !== null && value >= 0 && value <= 30 ? value : null;
@@ -161,7 +184,7 @@ export async function extractFacebookProperty(input: FacebookListingInput): Prom
   const lower = text.toLocaleLowerCase("pl-PL");
   const normalizedText = text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l");
   const place = PLACES.find(([needle]) => lower.includes(needle));
-  const districtFound = DISTRICTS.find((item) => lower.includes(item.toLocaleLowerCase("pl-PL"))) ?? null;
+  const districtFound = DISTRICTS.find((item) => lower.includes(item.toLocaleLowerCase("pl-PL"))) ?? (mentionsGornaDistrict(normalizedText) ? "Górna" : null);
   const area = number(text.match(/(\d{1,3}(?:[.,]\d+)?)\s*m(?:²|2)\b/i)?.[1]);
   const unicodeArea = number(text.match(/(\d{1,3}(?:[.,]\d+)?)\s*m\u00b2(?![\p{L}\d])/iu)?.[1]);
   // Colloquial "Metraż 53m" / "Powierzchnia 53m" drops the "2"/area-sign
