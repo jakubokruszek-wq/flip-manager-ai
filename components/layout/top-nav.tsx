@@ -55,8 +55,17 @@ export function TopNav({ title = "Pulpit" }: TopNavProps) {
         </IconButton>
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-muted-foreground lg:hidden">
-            Flip Manager by Jakub Okruszek
+          {/* Compact mobile brand mark: the full "Flip Manager by Jakub
+              Okruszek" name does not fit next to the menu/alerts/theme
+              buttons at narrow widths. The full name stays available to
+              assistive tech via aria-label/title, and is shown in full,
+              unclipped, once the mobile menu below is opened. */}
+          <p
+            className="text-sm font-medium text-muted-foreground lg:hidden"
+            title="Flip Manager by Jakub Okruszek"
+            aria-label="Flip Manager by Jakub Okruszek"
+          >
+            Flip Manager
           </p>
           <h2 className="hidden truncate text-sm font-semibold tracking-tight text-foreground lg:block">
             {title}
@@ -91,6 +100,7 @@ export function TopNav({ title = "Pulpit" }: TopNavProps) {
         />
 
         <div
+          data-testid="mobile-nav-drawer"
           className={cn(
             "absolute inset-y-0 left-0 w-[min(18rem,85vw)] transition-transform duration-300 ease-out",
             mobileMenuOpen ? "translate-x-0" : "-translate-x-full",

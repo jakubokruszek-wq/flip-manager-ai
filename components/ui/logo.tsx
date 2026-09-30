@@ -39,15 +39,14 @@ export function Logo({ collapsed = false, className }: LogoProps) {
         </svg>
       </span>
       {!collapsed && (
-        <span className="flex min-w-0 flex-col" data-testid="product-brand">
-          <span className="flex min-w-0 flex-wrap items-baseline gap-x-1 leading-tight">
-            <span className="truncate font-heading text-base font-semibold tracking-tight text-foreground">Flip Manager</span>
-            <span className="text-[10px] font-medium text-muted-foreground">by</span>
-            <span className="brand-signature truncate" aria-label="Jakub Okruszek">Jakub Okruszek</span>
-          </span>
-          <span className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            Investment OS
-          </span>
+        // Each line has its own row (never a single truncating row) so the
+        // full brand name and signature are always fully visible, however
+        // narrow the sidebar column is -- a long name wraps to an extra line
+        // instead of being clipped with an ellipsis.
+        <span className="flex min-w-0 flex-col justify-center gap-0.5" data-testid="product-brand">
+          <span className="font-heading text-base font-semibold leading-tight tracking-tight text-foreground">Flip Manager</span>
+          <span className="text-[10px] font-medium leading-tight text-muted-foreground">by</span>
+          <span className="brand-signature leading-tight" aria-label="Jakub Okruszek">Jakub Okruszek</span>
         </span>
       )}
     </Link>

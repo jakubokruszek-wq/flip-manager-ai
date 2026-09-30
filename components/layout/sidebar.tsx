@@ -11,7 +11,7 @@ type SidebarProps = {
 export function Sidebar({ onNavigate }: SidebarProps) {
   return (
     <aside className="flex h-full w-full flex-col border-r border-border/80 bg-surface/90 backdrop-blur-xl">
-      <div className="flex h-16 items-center border-b border-border/80 px-5">
+      <div className="flex min-h-16 items-center border-b border-border/80 px-5 py-3">
         <Logo />
       </div>
 
