@@ -299,3 +299,23 @@ test("'górna' as the ordinary adjective ('upper') is never misread as the Górn
     assert.equal(property.city, null, `"${text}" must never infer Łódź from a false district match`);
   }
 });
+
+// Real production bug (found while verifying the live deployment, read-only):
+// a genuine production listing's raw Facebook text renders its price in
+// markdown bold ("za **260 000** zł"), which Facebook returns literally as
+// part of the post text. The asterisks sit directly between the number and
+// its currency marker, where every price pattern expects only whitespace, so
+// the whole post resolved price:null despite stating one completely
+// unambiguously -- identical symptom to the mission's original bug, but not
+// covered by any of the fixtures tested so far since none contained markdown.
+test("real production bug: Facebook's literal markdown bold around a price ('za **260 000** zł') does not block parsing it", async () => {
+  const realPostText = "🏡 2 pokoje z balkonem za **260 000** zł Na sprzedaż mieszkanie na Górnej, przy ul. Niemcewicza 4 📐 38,6 m² 🏢 3. piętro 🛋 2 pokoje 🌿 balkon 🍳 oddzielna kuchnia z oknem 📦 piwnica 🔥 ogrzewanie miejskie i ciepła woda z sieci 📌 czynsz 650 zł 📞 793 900 262 Aleksander Ivashchenko | BRIKLI ESTATE";
+  assert.deepEqual(resolveFacebookPrice(realPostText, 38.6), { price: 260_000, pricePerM2: null, source: "EXPLICIT_TOTAL" });
+  const property = await extractFacebookProperty({ postText: realPostText });
+  assert.equal(property.price, 260_000, "the markdown-wrapped price must still reach the canonical property");
+  assert.equal(property.priceProvenance, "AUTHORITATIVE_TEXT");
+  assert.equal(property.district, "Górna", "district recognition must be unaffected by the surrounding markdown");
+  assert.equal(property.city, "Łódź");
+  assert.equal(property.area, 38.6, "the comma-decimal area ('38,6 m²') must still resolve correctly alongside the markdown fix");
+  assert.equal(property.rooms, 2);
+});

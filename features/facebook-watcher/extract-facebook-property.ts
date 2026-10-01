@@ -90,7 +90,13 @@ function isAuxiliaryPriceContext(window: string): boolean {
 }
 
 export function resolveFacebookPrice(text: string, area: number | null): FacebookPriceResolution {
-  const normalized = text.replace(/[\u00a0\u202f]/g, " ");
+  // Facebook renders "**bold**" (and "_italic_") markdown literally in the
+  // post text it hands back -- "za **260 000** z\u0142" has the asterisks sitting
+  // directly between the number and its currency marker, which every pattern
+  // below expects to be separated only by whitespace. Stripping markdown
+  // emphasis markers before matching fixes this for every pattern at once,
+  // rather than patching each one's gap individually.
+  const normalized = text.replace(/[\u00a0\u202f]/g, " ").replace(/[*_]+/g, "");
   const perM2 = uniqueNumbers(Array.from(normalized.matchAll(/(\d{1,3}(?:\s\d{3})+|\d{3,6})(?:[.,](\d{1,2}))?\s*(?:zł|pln)\s*\/\s*m(?:2|²)(?![\p{L}\d])/giu)), (match) => decimalNumber(match[1], match[2]));
   // Thousands groups are colloquially separated by a space OR a dot
   // ("489 000 zł" / "489.000 zł") — contextualTotals already accepted both;
