@@ -4,6 +4,7 @@ import { ModulePageShell } from "@/components/shared/module-page-shell";
 import { AlertSettings } from "@/features/alerts/components/alert-settings";
 import { PushSettings } from "@/features/push/components/push-settings";
 import { InvestmentOsSettings } from "@/features/investment-os/components/investment-settings";
+import { WatcherScanIntervalSettings } from "./watcher-scan-interval-settings";
 
 import { FEATURE_TITLE } from "../constants";
 
@@ -12,5 +13,5 @@ export const settingsMetadata: Metadata = {
 };
 
 export function SettingsPage() {
-  return <div className="space-y-6"><ModulePageShell title={FEATURE_TITLE} /><InvestmentOsSettings /><PushSettings /><AlertSettings /></div>;
+  return <div className="space-y-6"><ModulePageShell title={FEATURE_TITLE} /><WatcherScanIntervalSettings /><InvestmentOsSettings /><PushSettings /><AlertSettings /></div>;
 }
