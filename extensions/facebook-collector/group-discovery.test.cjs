@@ -50,6 +50,27 @@ test("mobile Facebook anchors normalize to desktop URLs and prefer an accessible
   assert.deepEqual(extractGroupCandidatesFromDom(root), [{ url: "https://www.facebook.com/groups/MobileGroup/", name: "Mobile Human Group" }]);
 });
 
+// Real production bug, confirmed against the exact text a live discovery
+// run actually reported: Facebook's own group-tile markup wraps the real
+// group name and its own "Ostatnia aktywność/wizyta ... temu" subtitle in
+// the same anchor with no separating whitespace, so a naive textContent
+// read glues them into one string, which then reached the registry as the
+// group's own name.
+test("Facebook's own 'Ostatnia aktywność/wizyta ... temu' tile subtitle is stripped, even with zero whitespace before it", () => {
+  const { extractGroupCandidatesFromDom } = loadModule();
+  const root = fakeRoot([
+    anchor("https://www.facebook.com/groups/mieszkaniawlodzi/", "Mieszkania Łódź - Odstępne, Sprzedaż, WynajemOstatnia aktywność 8 min temu"),
+    anchor("https://www.facebook.com/groups/mieszkania.na.sprzedaz.lodz/", "Mieszkania na sprzedaż Łódź. TYLKO SPRZEDAŻOstatnia aktywność 31 min temu"),
+    anchor("https://www.facebook.com/groups/w.lodzkim.dzialka.dom.mieszkanie/", "Nieruchomości woj. Łódzkie (kupno/sprzedaż/ wynajem)Ostatnia aktywność 10 min temu"),
+    anchor("https://www.facebook.com/groups/someoldgroup/", "Stara Grupa Ostatnia wizyta 2 tygodnie temu"),
+  ]);
+  const candidates = extractGroupCandidatesFromDom(root);
+  assert.equal(candidates.find((c) => c.url.includes("mieszkaniawlodzi")).name, "Mieszkania Łódź - Odstępne, Sprzedaż, Wynajem");
+  assert.equal(candidates.find((c) => c.url.includes("mieszkania.na.sprzedaz.lodz")).name, "Mieszkania na sprzedaż Łódź. TYLKO SPRZEDAŻ");
+  assert.equal(candidates.find((c) => c.url.includes("w.lodzkim.dzialka.dom.mieszkanie")).name, "Nieruchomości woj. Łódzkie (kupno/sprzedaż/ wynajem)");
+  assert.equal(candidates.find((c) => c.url.includes("someoldgroup")).name, "Stara Grupa", "the suffix must also strip cleanly when whitespace does separate it from the real name");
+});
+
 // "No activation from a screenshot name alone": a link with no readable text
 // must report name=null, never invent one from the URL/identifier.
 test("a link with no visible text (or whose text is just the raw identifier) has name=null", () => {

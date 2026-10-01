@@ -93,8 +93,22 @@
     return typeof anchor.textContent === "string" ? anchor.textContent : "";
   }
 
+  // Real, now-proven production bug: Facebook's own group-tile markup often
+  // wraps both the group's real name and its own "Ostatnia aktywność/wizyta
+  // ... temu" (last activity/last visit) subtitle inside the exact same
+  // anchor, with no separating whitespace between the two text nodes when
+  // read back via textContent. A real discovery run reached the registry
+  // with names like "...WynajemOstatnia aktywność 8 min temu" -- the
+  // trailing, Facebook-authored subtitle glued directly onto the real name.
+  // That subtitle is never part of the group's own name, so it is stripped
+  // before anything else; unanchored at the start (it needs to match even
+  // with zero preceding whitespace/punctuation) but anchored at the end,
+  // since it is always Facebook's own trailing addition, never a prefix.
+  const TRAILING_FACEBOOK_ACTIVITY_SUFFIX = /Ostatnia\s+(?:aktywność|wizyta)\s.*$/isu;
+
   function normalizeName(rawText, identifier) {
-    const trimmed = rawText.replace(/\s+/g, " ").trim();
+    const withoutActivitySuffix = rawText.replace(TRAILING_FACEBOOK_ACTIVITY_SUFFIX, "");
+    const trimmed = withoutActivitySuffix.replace(/\s+/g, " ").trim();
     if (!trimmed) return null;
     // A link Facebook renders with nothing but its own numeric ID as text
     // (e.g. an image-only tile whose accessible name happens to be the raw
