@@ -1,4 +1,6 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+import type { ListingSource } from "@/features/flip-finder";
+import { isListingSource } from "@/features/flip-finder/search-filter-contract";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { PropertyInvestmentAnalysis } from "@/features/properties/types";
@@ -20,7 +22,7 @@ type FinderImport = {
   district: string | null;
   originalUrl: string;
   normalizedUrl: string;
-  source: "otodom" | "olx" | "morizon" | "facebook";
+  source: ListingSource;
   externalListingId: string | null;
   investmentAnalysis: PropertyInvestmentAnalysis | null;
 };
@@ -127,7 +129,7 @@ async function readFinderImport(request: Request): Promise<FinderImport> {
 }
 
 function readInvestmentAnalysis(value: unknown): PropertyInvestmentAnalysis | null { return isRecord(value) && isRecord(value.flipScore) && isRecord(value.aiAnalysis) && isRecord(value.marketIntelligence) && isRecord(value.purchaseRecommendation) && isRecord(value.calculator) && nullableString(value.analyzedAt) ? value as PropertyInvestmentAnalysis : null; }
-function sourceValue(value: unknown): FinderImport["source"] { if (value === "otodom" || value === "olx" || value === "morizon" || value === "facebook") return value; throw new Error("Źródło oferty jest nieobsługiwane."); }
+function sourceValue(value: unknown): FinderImport["source"] { if (typeof value === "string" && isListingSource(value)) return value; throw new Error("?r?d?o oferty jest nieobs?ugiwane."); }
 function normalizeUrl(value: string): string { const url = new URL(value); url.hash = ""; for (const key of [...url.searchParams.keys()]) if (/^(utm_|fbclid$|gclid$)/i.test(key)) url.searchParams.delete(key); return url.toString(); }
 function databaseFloor(value: string | null): number | null {
   if (!value) return null;

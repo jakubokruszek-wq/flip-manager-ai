@@ -2,10 +2,12 @@ import type { ListingSource } from "./index.ts";
 import type { SearchFilterScan } from "./search-filter-contract.ts";
 
 export function sourceLabel(source: ListingSource): string {
-  if (source === "otodom") return "Otodom";
-  if (source === "olx") return "OLX";
-  if (source === "morizon") return "Morizon";
-  return "Facebook";
+  return ({
+    otodom: "Otodom", olx: "OLX", morizon: "Morizon", facebook: "Facebook",
+    gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta",
+    sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net",
+    szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie",
+  } satisfies Record<ListingSource, string>)[source];
 }
 
 export function activeSourcesSummary(sources: ListingSource[]): string {

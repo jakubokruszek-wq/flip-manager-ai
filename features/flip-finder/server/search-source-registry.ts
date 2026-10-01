@@ -5,24 +5,57 @@ import { isOlxChallengeHtml, parseOlxHtml } from "@/features/flip-finder/olx-par
 import { calculateContentHash, normalizeOtodomUrl } from "@/features/flip-finder/otodom-search";
 import { searchOtodom } from "@/features/flip-finder/server/otodom-search-adapter";
 import type { PropertySourceListing } from "@/features/properties/types/property";
+import {
+  parseExternalSourceJsonLd,
+  type ExternalSourceConfig,
+  type ExternalSourceId,
+} from "@/features/flip-finder/external-source-parser";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+const SOURCE_MAX_ATTEMPTS = 2;
 
 export type SourceListing = PropertySourceListing;
 
 export type SourceFetchResult = { listings: SourceListing[]; warnings: string[]; fetched: number };
 export type SearchSource = {
-  id: Extract<ListingSource, "otodom" | "olx" | "morizon">;
+  id: Exclude<ListingSource, "facebook">;
   label: string;
   fetch(criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult>;
 };
+
+export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
+  { id: "gratka", label: "Gratka", hostnames: ["gratka.pl"], searchPath: (city) => `/nieruchomosci/mieszkania/sprzedam/${slugifyCity(city)}` },
+  { id: "nieruchomosci_online", label: "Nieruchomosci-online.pl", hostnames: ["nieruchomosci-online.pl"], searchPath: (city) => `/sprzedaz/mieszkanie/${slugifyCity(city)}.html` },
+  { id: "domiporta", label: "Domiporta", hostnames: ["domiporta.pl"], searchPath: (city) => `/mieszkanie/sprzedam/lodzkie/${slugifyCity(city)}` },
+  { id: "sprzedajemy", label: "Sprzedajemy.pl", hostnames: ["sprzedajemy.pl"], searchPath: (city) => `/${slugifyCity(city)}/nieruchomosci/mieszkania` },
+  { id: "adresowo", label: "Adresowo.pl", hostnames: ["adresowo.pl"], searchPath: (city) => `/mieszkania/${slugifyCity(city)}/` },
+  { id: "oferty_net", label: "Oferty.net", hostnames: ["oferty.net"], searchPath: (city) => `/mieszkania/sprzedam/${slugifyCity(city)}` },
+  { id: "szybko", label: "Szybko.pl", hostnames: ["szybko.pl"], searchPath: (city) => `/${slugifyCity(city)}/mieszkania/sprzedaz` },
+  { id: "bezposrednio", label: "Bezposrednio.net.pl", hostnames: ["bezposrednio.net.pl"], searchPath: (city) => `/mieszkania/${slugifyCity(city)}` },
+  { id: "domy", label: "Domy.pl", hostnames: ["domy.pl"], searchPath: (city) => `/mieszkania/sprzedam/${slugifyCity(city)}` },
+  { id: "allegro_lokalnie", label: "Allegro Lokalnie", hostnames: ["allegrolokalnie.pl"], searchPath: () => "/oferty/nieruchomosci/mieszkania" },
+];
+
+export const EXTERNAL_SOURCE_STATUS = {
+  gratka: "path_requires_live_source_verification",
+  nieruchomosci_online: "path_requires_live_source_verification",
+  domiporta: "public_html_adapter",
+  sprzedajemy: "public_html_adapter",
+  adresowo: "public_html_adapter",
+  oferty_net: "path_requires_live_source_verification",
+  szybko: "public_html_adapter",
+  bezposrednio: "access_limited_without_authentication",
+  domy: "public_html_adapter",
+  allegro_lokalnie: "public_html_adapter",
+} as const satisfies Record<ExternalSourceId, string>;
 
 export const SOURCES: SearchSource[] = [
   { id: "otodom", label: "Otodom", fetch: fetchOtodom },
   { id: "olx", label: "OLX", fetch: fetchOlx },
   { id: "morizon", label: "Morizon", fetch: fetchMorizon },
+  ...EXTERNAL_SOURCE_CONFIGS.map((config) => ({ id: config.id, label: config.label, fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchExternal(config, criteria, signal) })),
 ];
 
 export function activeSources(criteria: SearchFilter): SearchSource[] {
@@ -33,6 +66,7 @@ export function slugifyCity(city: string | null): string {
   return (city ?? "")
     .trim()
     .toLocaleLowerCase("pl-PL")
+    .replace(/[łŁ]/g, "l")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/ł/g, "l")
@@ -80,25 +114,55 @@ async function fetchMorizon(criteria: SearchFilter, signal?: AbortSignal): Promi
   return { listings, fetched: offers.length, warnings: offers.length ? [] : ["Morizon zwrócił pustą listę ofert."] };
 }
 
+async function fetchExternal(config: ExternalSourceConfig, criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult> {
+  const url = new URL(config.searchPath(criteria.city ?? ""), `https://${config.hostnames[0]}`).toString();
+  const html = await fetchHtml(url, config.label, signal);
+  const listings = parseExternalSourceJsonLd(html, config, criteria.city);
+  return {
+    listings,
+    fetched: listings.length,
+    warnings: listings.length ? [] : [`${config.label}: odpowiedź nie zawiera zweryfikowanych ofert sprzedaży w JSON-LD.`],
+  };
+}
+
 async function fetchHtml(url: string, source: string, signal?: AbortSignal): Promise<string> {
-  let response: Response;
-  try {
-    const headers: Record<string, string> = source === "OLX"
-      ? { Accept: ACCEPT, "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.7,en;q=0.6", Referer: "https://www.olx.pl/", "User-Agent": USER_AGENT }
-      : { Accept: ACCEPT, "User-Agent": USER_AGENT };
-    response = await fetch(url, { cache: "no-store", headers, redirect: "follow", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
-  } catch (error) {
-    throw new Error(`${source}: błąd połączenia (${error instanceof Error ? error.name : "unknown"}).`);
+  const headers: Record<string, string> = source === "OLX"
+    ? { Accept: ACCEPT, "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.7,en;q=0.6", Referer: "https://www.olx.pl/", "User-Agent": USER_AGENT }
+    : { Accept: ACCEPT, "User-Agent": USER_AGENT };
+  let response: Response | null = null;
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= SOURCE_MAX_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) throw new Error(source + ": request aborted.");
+    try {
+      response = await fetch(url, { cache: "no-store", headers, redirect: "follow", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
+      if ((response.status === 429 || response.status >= 500) && attempt < SOURCE_MAX_ATTEMPTS) {
+        await retryDelay(attempt, signal);
+        continue;
+      }
+      break;
+    } catch (error) {
+      lastError = error;
+      if (signal?.aborted || attempt === SOURCE_MAX_ATTEMPTS) break;
+      await retryDelay(attempt, signal);
+    }
   }
+  if (!response) throw new Error(source + ": connection error (" + (lastError instanceof Error ? lastError.name : "unknown") + ").");
   if (source === "OLX" && process.env.NODE_ENV === "development") {
     console.info("OLX REQUEST", JSON.stringify({ url, status: response.status, contentType: response.headers.get("content-type"), redirected: response.redirected, finalUrl: response.url }));
   }
   const html = await response.text();
   console.info("FLIP FINDER SOURCE RESPONSE:", { source, url, status: response.status, contentType: response.headers.get("content-type"), finalUrl: response.url, bodyLength: html.length });
-  if (response.status === 403 || response.status === 429) throw new Error(`${source}: HTTP ${response.status}.`);
-  if (!response.ok) throw new Error(`${source}: HTTP ${response.status}.`);
-  if (source === "OLX" && isOlxChallengeHtml(html)) throw new Error(`${source}: challenge HTML.`);
+  if (response.status === 403 || response.status === 429) throw new Error(source + ": HTTP " + response.status + ".");
+  if (!response.ok) throw new Error(source + ": HTTP " + response.status + ".");
+  if (source === "OLX" && isOlxChallengeHtml(html)) throw new Error(source + ": challenge HTML.");
   return html;
+}
+
+async function retryDelay(attempt: number, signal?: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, 150 * 2 ** (attempt - 1));
+    if (signal) signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+  });
 }
 
 function parseMorizonOffers(html: string): Record<string, unknown>[] {

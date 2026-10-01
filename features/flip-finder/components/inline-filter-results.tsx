@@ -31,7 +31,7 @@ import { priorityLabel } from "@/features/flip-finder/opportunity-score";
 import { calculateResultUnderwriting, loadUnderwritingSettings } from "@/features/flip-finder/components/underwriting-panel";
 import { DEFAULT_UNDERWRITING_SETTINGS } from "@/features/flip-finder/underwriting";
 import { activeSourcesSummary, latestActiveScansText, sourceLabel } from "@/features/flip-finder/source-summary";
-import type { SearchFilter } from "@/features/flip-finder";
+import { LISTING_SOURCES, type SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { shouldShowGenericStatusBadge } from "@/features/flip-finder/listing-card-variant";
 import { resolveListingUrl } from "@/features/listing-url";
@@ -141,7 +141,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
   const archivedResults = useMemo(() => archiveOpen ? sortResults(data?.archivedResults ?? [], sort) : [], [archiveOpen, data?.archivedResults, sort]);
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
   const activeSources = data?.filter.sources ?? [];
-  const historicalSources = (["otodom", "olx", "morizon", "facebook"] as const).filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
+  const historicalSources = LISTING_SOURCES.filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
   const dealOfDay = useMemo(() => selectDealOfDay([...allResults, ...reviewResults]), [allResults, reviewResults]);
 
   if (error) {
@@ -996,7 +996,11 @@ function CalculatorComputed({ label, value }: { label: string; value: string }) 
 function CalculatorResult({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "negative" | "warning" | "positive" }) { const toneClass = tone === "positive" ? "border-emerald-500/20 bg-emerald-500/[0.07] text-emerald-200" : tone === "negative" ? "border-red-500/20 bg-red-500/[0.07] text-red-200" : tone === "warning" ? "border-amber-500/20 bg-amber-500/[0.07] text-amber-100" : "border-border/70 bg-surface-elevated/55 text-foreground"; return <div className={`min-w-0 rounded-xl border p-3 ${toneClass}`}><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="type-financial-standard mt-1">{value}</p></div>; }
 function AnalysisList({ label, values, empty, accent }: { label: string; values: string[]; empty: string; accent: "emerald" | "amber" | "rose" | "gold" }) { const accentClass = accent === "emerald" ? "border-success/20 bg-success/[0.05]" : accent === "amber" ? "border-warning/20 bg-warning/[0.05]" : accent === "rose" ? "border-danger/20 bg-danger/[0.05]" : "border-gold/20 bg-gold/[0.05]"; return <section className={`rounded-2xl border p-4 ${accentClass}`}><h3 className="text-sm font-bold">{label}</h3><ul className="mt-3 space-y-2 text-sm leading-5 text-foreground/80">{values.length ? values.map((value) => <li className="flex gap-2" key={value}><span className="mt-2 size-1.5 shrink-0 rounded-full bg-current/70" />{value}</li>) : <li className="text-muted-foreground">{empty}</li>}</ul></section>; }
 function SourceCount({ label, value, active, onClick }: { label: string; value: number; active: boolean; onClick: () => void }) { return <button aria-pressed={active} className={`min-h-11 rounded-xl border px-3 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary ${active ? "bg-primary text-primary-foreground" : "bg-card"}`} onClick={onClick} type="button">{label}: {value}</button>; }
-function countSources(results: FilterResult[]): Record<FilterResult["source"], number> { return results.reduce((counts, result) => ({ ...counts, [result.source]: counts[result.source] + 1 }), { otodom: 0, olx: 0, morizon: 0, facebook: 0 }); }
+function countSources(results: FilterResult[]): Record<FilterResult["source"], number> {
+  const counts = Object.fromEntries(LISTING_SOURCES.map((source) => [source, 0])) as Record<FilterResult["source"], number>;
+  for (const result of results) counts[result.source] += 1;
+  return counts;
+}
 function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 truncate font-medium">{value}</p></div>; }
 function OpportunityFinancialMetric({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="type-financial-standard mt-0.5 text-foreground" title={value}>{value}</p></div>; }
 function DetailList({ label, values, empty }: { label: string; values: string[]; empty: string }) { return <div className="mt-4 text-sm"><p className="font-medium">{label}</p><p className="mt-1 text-muted-foreground">{values.length ? values.join(", ") : empty}</p></div>; }
@@ -1010,7 +1014,7 @@ function realRejectionReasons(result: FilterResult, filter: SearchFilter): strin
   const realReasons = result.matchReasons.filter((reason) => reason !== "review" && !reason.startsWith("unknown_"));
   return realReasons.map((reason) => describeRejectionReason(reason, result, filter));
 }
-function SourceBadge({ source }: { source: FilterResult["source"] }) { return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{source === "otodom" ? "Otodom" : source === "olx" ? "OLX" : source === "morizon" ? "Morizon" : "Facebook"}</span>; }
+function SourceBadge({ source }: { source: FilterResult["source"] }) { return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{({ otodom: "Otodom", olx: "OLX", morizon: "Morizon", facebook: "Facebook", gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta", sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net", szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie" } as const)[source]}</span>; }
 function StatusBadge({ status }: { status: FilterResult["listingStatus"] }) { return <span className="type-badge inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success/10 px-2.5 py-1 text-success"><span className="size-1.5 rounded-full bg-success" />{status === "active" ? "Aktywna" : status === "removed" ? "Usunięta" : status === "sold" ? "Sprzedana" : "Obserwowana"}</span>; }
 function Badge({ label }: { label: string }) { return <span className="rounded-full bg-background/90 px-2.5 py-1 text-xs font-semibold text-foreground shadow-sm backdrop-blur">{label}</span>; }
 function LifecycleBadge({ status }: { status: FilterResult["lifecycleStatus"] }) { const label = status === "REVIEW" ? "DO OCENY" : status === "STALE" ? "NIEAKTUALNA" : status === "ARCHIVED" ? "ARCHIWALNA" : status === "REJECTED" ? "ODRZUCONA" : "AKTYWNA"; return <span className="rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs font-semibold shadow-sm backdrop-blur">{label}</span>; }

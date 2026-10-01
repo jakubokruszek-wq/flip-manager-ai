@@ -22,6 +22,7 @@ import {
   type WorkerJobStatus,
 } from "@/features/flip-finder/scan-progress";
 import type { ListingSource } from "@/features/flip-finder";
+import { isListingSource } from "@/features/flip-finder/search-filter-contract";
 import { summarizeHardRejects } from "@/features/flip-finder/funnel-summary";
 import { explainPartialFacebookScan } from "@/features/facebook-worker/scan-accounting";
 import { projectPersistedFacebookAccounting } from "./scan-accounting-projection";
@@ -621,6 +622,6 @@ function optionalNumber(value: unknown): number | null { return typeof value ===
 function boundedTelemetryNumber(value: unknown, max: number): number { return Math.min(max, optionalNumber(value) ?? 0); }
 function sum(values: Row[], key: string): number { return values.reduce((total, value) => total + number(value[key]), 0); }
 function unique(values: string[]): string[] { return [...new Set(values)]; }
-function listingSource(value: unknown): ListingSource | null { return value === "facebook" || value === "olx" || value === "otodom" || value === "morizon" ? value : null; }
+function listingSource(value: unknown): ListingSource | null { return typeof value === "string" && isListingSource(value) ? value : null; }
 function sourceStatus(value: unknown): ScanWorkUnit["status"] | null { return value === "pending" || value === "running" || value === "completed" || value === "partial" || value === "failed" ? value : null; }
 function jobStatus(value: unknown): WorkerJobStatus | null { return value === "queued" || value === "running" || value === "completed" || value === "failed" ? value : null; }

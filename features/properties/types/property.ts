@@ -1,6 +1,20 @@
-export type PropertySource = "otodom" | "olx" | "facebook" | "gratka" | "morizon";
+export type PropertySource =
+  | "otodom"
+  | "olx"
+  | "facebook"
+  | "morizon"
+  | "gratka"
+  | "nieruchomosci_online"
+  | "domiporta"
+  | "sprzedajemy"
+  | "adresowo"
+  | "oferty_net"
+  | "szybko"
+  | "bezposrednio"
+  | "domy"
+  | "allegro_lokalnie";
 export type PropertyDetectedSource = PropertySource | "unknown";
-export type PropertyFinderSource = Extract<PropertySource, "otodom" | "olx" | "morizon" | "facebook">;
+export type PropertyFinderSource = Exclude<PropertySource, never>;
 export type PropertyMarketType = "primary" | "secondary";
 export type PropertyListingStatus = "active" | "removed" | "sold" | "watched";
 export type PropertyStatus = "draft" | "analysis" | "acquired" | "renovation" | "listed" | "sold";
@@ -83,7 +97,7 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
   /** Optional to keep existing source adapters compatible while allowing gallery persistence. */
   images?: string[];
   publishedAt?: string | null;
-  source: Extract<PropertySource, "otodom" | "olx" | "morizon" | "facebook">;
+  source: PropertySource;
   externalListingId: string;
   originalUrl: string;
   normalizedUrl: string;
@@ -93,7 +107,7 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
 
 /** Listing returned by a source-specific search before it is matched or persisted. */
 export type PropertySearchListing = Omit<Pick<PropertyFields, "title" | "price" | "area" | "rooms" | "floor" | "pricePerSqm" | "city" | "district" | "locationText" | "thumbnailUrl" | "sellerType" | "marketType" | "publishedAt">, "marketType"> & {
-  source: Extract<PropertySource, "otodom">;
+  source: "otodom";
   externalListingId: string;
   originalUrl: string;
   normalizedUrl: string;

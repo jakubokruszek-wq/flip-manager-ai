@@ -63,6 +63,16 @@ export function sourceDomainMatchesSource(
       olx: ["olx.pl"],
       otodom: ["otodom.pl"],
       morizon: ["morizon.pl"],
+      gratka: ["gratka.pl"],
+      nieruchomosci_online: ["nieruchomosci-online.pl"],
+      domiporta: ["domiporta.pl"],
+      sprzedajemy: ["sprzedajemy.pl"],
+      adresowo: ["adresowo.pl"],
+      oferty_net: ["oferty.net"],
+      szybko: ["szybko.pl"],
+      bezposrednio: ["bezposrednio.net.pl"],
+      domy: ["domy.pl"],
+      allegro_lokalnie: ["allegrolokalnie.pl"],
     };
     return domains[source].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
   } catch {
@@ -71,7 +81,12 @@ export function sourceDomainMatchesSource(
 }
 
 export function sourceLabelForResult(source: FilterResult["source"]): string {
-  return source === "otodom" ? "Otodom" : source === "olx" ? "OLX" : source === "morizon" ? "Morizon" : "Facebook";
+  return ({
+    otodom: "Otodom", olx: "OLX", morizon: "Morizon", facebook: "Facebook",
+    gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta",
+    sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net",
+    szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie",
+  } satisfies Record<FilterResult["source"], string>)[source];
 }
 
 export function filterResultsByText(results: FilterResult[], query: string): FilterResult[] {

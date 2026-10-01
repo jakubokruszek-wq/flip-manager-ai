@@ -51,6 +51,16 @@ export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: 
   { value: "olx", label: "OLX" },
   { value: "morizon", label: "Morizon" },
   { value: "facebook", label: "Facebook Watcher — zebrane oferty" },
+  { value: "gratka", label: "Gratka" },
+  { value: "nieruchomosci_online", label: "Nieruchomosci-online.pl" },
+  { value: "domiporta", label: "Domiporta" },
+  { value: "sprzedajemy", label: "Sprzedajemy.pl" },
+  { value: "adresowo", label: "Adresowo.pl" },
+  { value: "oferty_net", label: "Oferty.net" },
+  { value: "szybko", label: "Szybko.pl" },
+  { value: "bezposrednio", label: "Bezposrednio.net.pl" },
+  { value: "domy", label: "Domy.pl" },
+  { value: "allegro_lokalnie", label: "Allegro Lokalnie" },
 ];
 
 /** Shown next to the source picker whenever "facebook" is selected — this filter's Facebook results only ever come from Watcher's own, independently-collected canonical listings; enabling it never starts a new Facebook scan. */

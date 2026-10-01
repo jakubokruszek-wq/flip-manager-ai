@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { SearchFilter } from "@/features/flip-finder";
-import { SOURCES } from "./search-source-registry.ts";
+import { SOURCES, slugifyCity } from "./search-source-registry.ts";
 
 const filter: SearchFilter = {
   id: "00000000-0000-4000-8000-000000000002",
@@ -35,6 +35,37 @@ test("Otodom source preserves raw rows for 26-to-zero diagnostics", async () => 
     assert.equal(result.fetched, 26);
     assert.equal(result.listings.length, 0);
     assert.deepEqual(result.warnings, ["Otodom: search_or_category_url (26)"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("registry exposes every requested external adapter without touching the network", () => {
+  assert.deepEqual(
+    SOURCES.map((source) => source.id),
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie"],
+  );
+});
+
+test("source paths use the stable Łódź slug", () => {
+  assert.equal(slugifyCity("Łódź"), "lodz");
+  assert.equal(slugifyCity("Łódź-Bałuty"), "lodz-baluty");
+});
+
+test("external adapters retry a rate-limited response once and parse only the verified listing", async () => {
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  const body = `<script type="application/ld+json">${JSON.stringify({ "@type": "Product", sku: "g-1", url: "https://gratka.pl/oferta/lodz-1", name: "Mieszkanie Łódź", offers: { price: 489000 }, itemOffered: { floorSize: { value: 53 }, address: { addressLocality: "Łódź" } } })}</script>`;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) return new Response("rate limited", { status: 429 });
+    return new Response(body, { status: 200, headers: { "content-type": "text/html" } });
+  };
+  try {
+    const result = await SOURCES.find((source) => source.id === "gratka")!.fetch(filter);
+    assert.equal(calls, 2);
+    assert.equal(result.listings.length, 1);
+    assert.equal(result.listings[0]?.price, 489000);
   } finally {
     globalThis.fetch = previousFetch;
   }

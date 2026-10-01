@@ -1,10 +1,17 @@
 import type { PropertyFinderSource, PropertyListing, PropertyListingStatus, PropertyMarketType } from "@/features/properties/types/property";
 
-export const LISTING_SOURCES = ["otodom", "olx", "morizon", "facebook"] as const;
+export const LISTING_SOURCES = [
+  "otodom", "olx", "morizon", "facebook", "gratka", "nieruchomosci_online",
+  "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio",
+  "domy", "allegro_lokalnie",
+] as const satisfies readonly ListingSource[];
 
 export type ListingSource = PropertyFinderSource;
 
-export const ACTIVE_SCAN_SOURCES = ["otodom", "olx", "morizon"] as const;
+export const ACTIVE_SCAN_SOURCES = [
+  "otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta",
+  "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie",
+] as const satisfies readonly ListingSource[];
 
 export type ActiveScanSource = (typeof ACTIVE_SCAN_SOURCES)[number];
 
