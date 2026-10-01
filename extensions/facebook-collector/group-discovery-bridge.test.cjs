@@ -19,7 +19,7 @@ test("the bridge only reacts to messages from this exact window, on an allowed o
 });
 
 test("a request is acknowledged immediately, before the extension does anything else", () => {
-  const body = source.match(/window\.addEventListener\("message", \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  const body = source.match(/window\.addEventListener\("message", \(event\) => \{[\s\S]*?\n\s*\}\);/)?.[0];
   assert.ok(body, "the request listener must exist");
   const ackIndex = body.indexOf("FLIP_GROUP_DISCOVERY_ACK");
   const sendIndex = body.indexOf("chrome.runtime.sendMessage");

@@ -137,6 +137,56 @@ test("importing the exact same candidate a second time is idempotent: no duplica
   assert.equal(current.groupRows.length, 1, "no second row may ever be created for the same group");
 });
 
+// Mission: automatically add Łódź real-estate groups to the Watcher, never
+// anything else -- discovery.test.ts already unit-tests classification in
+// isolation, but nothing before this test drove the extension's own raw
+// candidate shape through the REAL discoverFacebookGroups/
+// previewDiscoveryToken/importSelectedFacebookGroups pipeline end to end to
+// prove the Łódź+real-estate gate actually reaches the registry, not just
+// the classifier's return value. Mirrors watched-groups-page.tsx's own
+// importAllRealEstate bulk action, which only ever selects
+// NOWA_NIERUCHOMOSCIOWA rows for import.
+test("end-to-end: of four extension-shaped discovered candidates, only the Łódź real-estate group reaches the registry, and re-running discovery is idempotent", async () => {
+  current = fakeCombinedAdmin();
+  const lodzRealEstate = candidate("https://www.facebook.com/groups/400111222331/", "Łódź Nieruchomości Flip");
+  const otherCityRealEstate = candidate("https://www.facebook.com/groups/400111222332/", "Nieruchomości Kraków Sprzedam Wynajmę");
+  const noCityRealEstate = candidate("https://www.facebook.com/groups/400111222333/", "Mieszkania i Domy Sprzedam Wynajmę");
+  const lodzNonRealEstate = candidate("https://www.facebook.com/groups/400111222334/", "Przepisy Kulinarne Łódź");
+  const candidates = [lodzRealEstate, otherCityRealEstate, noCityRealEstate, lodzNonRealEstate];
+
+  const { token } = await discoverFacebookGroups(candidates, "device-e2e");
+  const preview = await previewDiscoveryToken(token);
+  assert.ok(preview);
+  const byUrl = new Map(preview!.preview.map((item) => [item.url, item]));
+  assert.equal(byUrl.get(lodzRealEstate.url)?.status, "NOWA_NIERUCHOMOSCIOWA", "Łódź + real-estate must be the only auto-import-eligible classification");
+  assert.equal(byUrl.get(otherCityRealEstate.url)?.status, "POMINIETA_NIERNIERUCHOMOSCIOWA", "a confidently different city must be excluded, never left ambiguous");
+  assert.equal(byUrl.get(noCityRealEstate.url)?.status, "WYMAGA_WERYFIKACJI", "real estate with no city mentioned must require manual review, never be guessed either way");
+  assert.equal(byUrl.get(lodzNonRealEstate.url)?.status, "POMINIETA_NIERNIERUCHOMOSCIOWA", "mentioning Łódź alone, with no real-estate signal, must never qualify");
+
+  // The exact same filter watched-groups-page.tsx's importAllRealEstate applies.
+  const eligible = preview!.preview.filter((item) => item.status === "NOWA_NIERUCHOMOSCIOWA");
+  assert.equal(eligible.length, 1);
+  const outcomes = await importSelectedFacebookGroups(token, eligible.map((item) => ({ url: item.url, name: item.discoveredName! })));
+  assert.ok(outcomes);
+  assert.equal(outcomes!.length, 1);
+  assert.equal(outcomes![0].result.success, true);
+  assert.equal(current.groupRows.length, 1, "only the Łódź real-estate candidate may ever reach the registry -- never the other three");
+  assert.equal(current.groupRows[0].name, "Łódź Nieruchomości Flip");
+
+  // Idempotency: the operator re-running discovery (e.g. the next day) must
+  // see the already-imported group reclassified as JUZ_W_MANAGERZE, and an
+  // import attempt on it must fail as a duplicate rather than create a
+  // second row -- proving the registry's own duplicate-URL check, not just
+  // the discovery session's.
+  const second = await discoverFacebookGroups(candidates, "device-e2e");
+  const secondPreview = await previewDiscoveryToken(second.token);
+  assert.equal(secondPreview!.preview.find((item) => item.url === lodzRealEstate.url)?.status, "JUZ_W_MANAGERZE");
+  const secondOutcomes = await importSelectedFacebookGroups(second.token, [{ url: lodzRealEstate.url, name: "Łódź Nieruchomości Flip" }]);
+  assert.equal(secondOutcomes?.[0]?.result.success, false);
+  assert.equal(secondOutcomes?.[0]?.result.duplicate, true);
+  assert.equal(current.groupRows.length, 1, "the registry must still contain exactly one row after the repeat run");
+});
+
 test("a URL not present in this session's own discovered candidates is rejected even with a valid token (no cross-session candidate injection)", async () => {
   current = fakeCombinedAdmin();
   const { token } = await discoverFacebookGroups([candidate("https://www.facebook.com/groups/900111222333/")], null);

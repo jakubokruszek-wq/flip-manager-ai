@@ -105,6 +105,28 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   void pollCollectorJobs().catch(() => {}).finally(() => { void ensureCollectorJobPollAlarm().catch((error) => recordCollectorPollAlarmError(error)); });
 });
 
+// Root cause of "the discovery button never gets any response at all": the
+// manifest's static content_scripts entry for group-discovery-bridge.js only
+// ever (re-)injects on a real browser navigation (document_start) -- never
+// on the client-side SPA/pushState transition Next.js's own <Link>
+// performs, which is exactly how an operator normally reaches this page
+// (e.g. clicking "Obserwowane grupy" from the already-loaded Watcher
+// inbox). That left the bridge's message listener simply never registered
+// for the single most common real navigation path -- not a session,
+// installation, or reload problem. webNavigation.onHistoryStateUpdated
+// fires for exactly that pushState transition, so this explicitly
+// (re-)injects the bridge whenever a tab's URL becomes the groups manager
+// page, regardless of how it got there. group-discovery-bridge.js itself is
+// idempotent (globalThis-keyed guard) against the resulting double
+// injection on an ordinary full navigation, where the static content_script
+// entry already covers it.
+if (chrome.webNavigation?.onHistoryStateUpdated) {
+  chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+    if (details.frameId !== 0 || !isGroupsManagerUrl(details.url)) return;
+    void chrome.scripting.executeScript({ target: { tabId: details.tabId }, files: ["group-discovery-bridge.js"] }).catch(() => {});
+  });
+}
+
 chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
   if (message?.type !== "FLIP_COLLECTOR_EXTERNAL_PING" || !isAllowedExternalSender(sender) || safeRequestId(message.requestId) === "unknown") {
     respond({ ok: false, type: "FLIP_COLLECTOR_EXTERNAL_PONG", requestId: safeRequestId(message?.requestId), error: "EXTERNAL_ORIGIN_REJECTED" });

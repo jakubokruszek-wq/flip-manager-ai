@@ -319,6 +319,71 @@ test("isGroupsManagerUrl only accepts the real Manager groups page, never an arb
   assert.match(background, /function isGroupsManagerUrl\(value\) \{ try \{ const url = new URL\(String\(value \|\| ""\)\); return MANAGER_ORIGINS\.has\(url\.origin\) && url\.pathname\.startsWith\("\/facebook-watcher\/groups"\); \} catch \{ return false; \} \}/);
 });
 
+// Real root cause of "the discovery button gets no response at all when you
+// reach the page the normal way": the manifest's static content_scripts
+// entry for group-discovery-bridge.js only (re-)injects on a real browser
+// navigation -- never on the SPA/pushState transition Next.js's own <Link>
+// performs (facebook-watcher-panel.tsx's "Obserwowane grupy" button). This
+// genuinely EXECUTES the exact onHistoryStateUpdated listener added to fix
+// that (extracted verbatim from background.js, not retyped) against fake
+// chrome.webNavigation/chrome.scripting globals, proving the guard
+// conditions and the executeScript call shape -- not just that the source
+// text looks right. The listener firing for a *real* SPA navigation in a
+// *real* installed extension is still only provable with a live Chrome
+// session; that remains unverified here, same as every other live-browser
+// behavior this test suite cannot reach.
+test("onHistoryStateUpdated re-injects the group-discovery bridge exactly when a top-level navigation lands on the real Manager groups page", () => {
+  const listenerStart = background.indexOf("if (chrome.webNavigation?.onHistoryStateUpdated) {");
+  assert.ok(listenerStart >= 0, "the onHistoryStateUpdated registration must exist");
+  const listenerEnd = background.indexOf("\n}\r\n", listenerStart) + 2;
+  const listenerSource = background.slice(listenerStart, listenerEnd);
+
+  const finderOriginLine = background.match(/^const FINDER_ORIGIN = .*;$/m)?.[0];
+  const managerOriginsLine = background.match(/^const MANAGER_ORIGINS = new Set\(.*\);$/m)?.[0];
+  const isGroupsManagerUrlLine = background.match(/^function isGroupsManagerUrl\(value\) \{.*\}$/m)?.[0];
+  assert.ok(finderOriginLine, "FINDER_ORIGIN must exist, or this test proves nothing");
+  assert.ok(managerOriginsLine, "MANAGER_ORIGINS must exist, or this test proves nothing");
+  assert.ok(isGroupsManagerUrlLine, "isGroupsManagerUrl must exist, or this test proves nothing");
+  const helperSource = `${finderOriginLine}\n${managerOriginsLine}\n${isGroupsManagerUrlLine}`;
+
+  function run(details) {
+    let capturedListener = null;
+    const executeScriptCalls = [];
+    const chrome = {
+      webNavigation: { onHistoryStateUpdated: { addListener(listener) { capturedListener = listener; } } },
+      scripting: { executeScript(options) { executeScriptCalls.push(options); return Promise.resolve(); } },
+    };
+    const context = vm.createContext({ chrome, URL, Promise, console: { debug() {} } });
+    vm.runInContext(`${helperSource}\n${listenerSource}`, context);
+    assert.equal(typeof capturedListener, "function", "the listener must actually be registered");
+    capturedListener(details);
+    return executeScriptCalls;
+  }
+
+  const hit = run({ frameId: 0, tabId: 42, url: "https://flip-manager-ai.vercel.app/facebook-watcher/groups" });
+  assert.equal(hit.length, 1, "a top-level SPA navigation onto the real groups page must re-inject the bridge");
+  assert.equal(hit[0].target.tabId, 42);
+  assert.equal(hit[0].files.length, 1);
+  assert.equal(hit[0].files[0], "group-discovery-bridge.js");
+
+  assert.equal(run({ frameId: 0, tabId: 42, url: "http://localhost:3000/facebook-watcher/groups?x=1" }).length, 1, "localhost must work the same as production");
+  assert.equal(run({ frameId: 1, tabId: 42, url: "https://flip-manager-ai.vercel.app/facebook-watcher/groups" }).length, 0, "a subframe navigation must never trigger re-injection");
+  assert.equal(run({ frameId: 0, tabId: 42, url: "https://flip-manager-ai.vercel.app/facebook-watcher/inbox" }).length, 0, "navigating to a different page of the app must not re-inject the bridge");
+  assert.equal(run({ frameId: 0, tabId: 42, url: "https://evil.example.com/facebook-watcher/groups" }).length, 0, "an unrelated origin spoofing the same path must never trigger re-injection");
+});
+
+test("the onHistoryStateUpdated registration is itself optional-chained, so it never throws in a test/older-Chrome context missing the webNavigation API", () => {
+  const listenerStart = background.indexOf("if (chrome.webNavigation?.onHistoryStateUpdated) {");
+  const listenerEnd = background.indexOf("\n}\r\n", listenerStart) + 2;
+  const listenerSource = background.slice(listenerStart, listenerEnd);
+  const context = vm.createContext({ chrome: {}, console: { debug() {} } });
+  assert.doesNotThrow(() => vm.runInContext(listenerSource, context));
+});
+
+test("manifest declares the webNavigation permission the onHistoryStateUpdated fix depends on", () => {
+  assert.ok(manifest.permissions.includes("webNavigation"), "chrome.webNavigation is undefined without this permission, silently disabling the whole re-injection fix");
+});
+
 test("reportDiscoveredGroups accepts a skipTabOpen option, and REPORT_DISCOVERED_GROUPS threads it through from the message", () => {
   const fn = background.slice(background.indexOf("async function reportDiscoveredGroups"), background.indexOf("\nconst GROUPS_JOINS_URL"));
   assert.match(fn, /async function reportDiscoveredGroups\(candidates, rawDiagnostics = null, \{ skipTabOpen = false \} = \{\}\)/);

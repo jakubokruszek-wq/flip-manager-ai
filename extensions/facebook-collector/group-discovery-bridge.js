@@ -1,3 +1,4 @@
+(() => {
 "use strict";
 
 /**
@@ -26,32 +27,59 @@
  *     empty) is echoed straight through from the server's own response to
  *     the same discovery POST, so a genuinely empty result is explainable
  *     without guessing.
+ *
+ * Injection: the manifest's static content_scripts entry only ever fires on
+ * a real browser navigation (document_start) -- never on the SPA/pushState
+ * transition Next.js's own <Link> actually performs when the operator
+ * reaches this page from within the already-loaded app (e.g. the Watcher
+ * inbox's "Obserwowane grupy" button). That left this listener simply never
+ * registered for the single most common way a real user actually arrives
+ * here -- the root cause behind "the extension never responds", not a
+ * session or installation problem at all. background.js's own
+ * webNavigation.onHistoryStateUpdated listener now additionally injects
+ * this exact file via chrome.scripting.executeScript on every such
+ * SPA transition, so it is guarded here to be idempotent against running
+ * twice on the same page (the static content_scripts entry AND a dynamic
+ * re-injection both firing for one navigation) -- exactly the same
+ * globalThis-keyed guard bootstrap.js already uses for its own,
+ * structurally identical multiple-injection risk. The whole file is wrapped
+ * in an IIFE (also matching bootstrap.js) because a bare top-level const/let
+ * re-executed a second time in the same page throws
+ * "Identifier has already been declared" -- without the IIFE, the second
+ * injection wouldn't just skip re-registering, it would throw before the
+ * guard check ever ran.
  */
-const ALLOWED_ORIGINS = new Set(["https://flip-manager-ai.vercel.app", "http://localhost:3000"]);
+const BRIDGE_STATE_KEY = "__flipGroupDiscoveryBridgeInjected";
 
-window.addEventListener("message", (event) => {
-  if (event.source !== window || !ALLOWED_ORIGINS.has(event.origin)) return;
-  if (event.data?.type !== "FLIP_GROUP_DISCOVERY_REQUEST") return;
-  window.postMessage({ type: "FLIP_GROUP_DISCOVERY_ACK" }, event.origin);
-  try {
-    chrome.runtime.sendMessage({ type: "RUN_MANAGER_GROUP_DISCOVERY" }, (response) => {
-      const runtimeError = chrome.runtime.lastError;
-      if (runtimeError) {
-        window.postMessage({ type: "FLIP_GROUP_DISCOVERY_RESULT", ok: false, error: normalizeRuntimeError(runtimeError) }, event.origin);
-        return;
-      }
-      window.postMessage({ type: "FLIP_GROUP_DISCOVERY_RESULT", ...publicResult(response) }, event.origin);
-    });
-  } catch (error) {
-    window.postMessage({ type: "FLIP_GROUP_DISCOVERY_RESULT", ok: false, error: normalizeRuntimeError(error) }, event.origin);
-  }
-});
+if (!globalThis[BRIDGE_STATE_KEY]) {
+  globalThis[BRIDGE_STATE_KEY] = true;
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type !== "GROUP_DISCOVERY_PROGRESS") return undefined;
-  window.postMessage({ type: "FLIP_GROUP_DISCOVERY_PROGRESS", stage: message.stage }, window.location.origin);
-  return undefined;
-});
+  const ALLOWED_ORIGINS = new Set(["https://flip-manager-ai.vercel.app", "http://localhost:3000"]);
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || !ALLOWED_ORIGINS.has(event.origin)) return;
+    if (event.data?.type !== "FLIP_GROUP_DISCOVERY_REQUEST") return;
+    window.postMessage({ type: "FLIP_GROUP_DISCOVERY_ACK" }, event.origin);
+    try {
+      chrome.runtime.sendMessage({ type: "RUN_MANAGER_GROUP_DISCOVERY" }, (response) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          window.postMessage({ type: "FLIP_GROUP_DISCOVERY_RESULT", ok: false, error: normalizeRuntimeError(runtimeError) }, event.origin);
+          return;
+        }
+        window.postMessage({ type: "FLIP_GROUP_DISCOVERY_RESULT", ...publicResult(response) }, event.origin);
+      });
+    } catch (error) {
+      window.postMessage({ type: "FLIP_GROUP_DISCOVERY_RESULT", ok: false, error: normalizeRuntimeError(error) }, event.origin);
+    }
+  });
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== "GROUP_DISCOVERY_PROGRESS") return undefined;
+    window.postMessage({ type: "FLIP_GROUP_DISCOVERY_PROGRESS", stage: message.stage }, window.location.origin);
+    return undefined;
+  });
+}
 
 function publicResult(value) {
   return {
@@ -71,3 +99,4 @@ function normalizeRuntimeError(error) {
   const message = error instanceof Error ? error.message : typeof error?.message === "string" ? error.message : String(error || "");
   return /extension context invalidated/i.test(message) ? "EXTENSION_CONTEXT_INVALIDATED" : message.slice(0, 300) || "EXTENSION_RUNTIME_FAILED";
 }
+})();

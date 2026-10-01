@@ -139,6 +139,38 @@ test("an unrelated onMessage type (not GROUP_DISCOVERY_PROGRESS) is ignored, nev
   assert.equal(posted.length, 0);
 });
 
+// Fix verification: background.js's new webNavigation.onHistoryStateUpdated
+// listener re-injects this exact script via chrome.scripting.executeScript
+// whenever a SPA/pushState navigation lands on the groups manager page --
+// which, on an ordinary FULL navigation, runs in addition to (not instead
+// of) the manifest's own static content_scripts injection. Both executions
+// land in the SAME page context, so the globalThis-keyed guard this file
+// now has must make that genuinely harmless: exactly one listener, one ACK,
+// one chrome.runtime call per request -- never two.
+test("executing the script twice in the same page context (static injection + a dynamic re-injection) never double-registers the listener", () => {
+  const windowListeners = [];
+  const posted = [];
+  const window = {
+    addEventListener(type, listener) { if (type === "message") windowListeners.push(listener); },
+    removeEventListener(type, listener) { if (type === "message") { const index = windowListeners.indexOf(listener); if (index >= 0) windowListeners.splice(index, 1); } },
+    postMessage(message, origin) { posted.push({ message, origin }); },
+    location: { origin: "http://localhost:3000" },
+  };
+  let sendMessageCalls = 0;
+  const runtime = {
+    lastError: null,
+    onMessage: { addListener() {} },
+    sendMessage(_message, callback) { sendMessageCalls += 1; callback({ ok: true, token: "t", expiresAt: "2026-10-01T00:00:00.000Z" }); },
+  };
+  const context = vm.createContext({ window, chrome: { runtime }, console: { debug() {}, warn() {} } });
+  vm.runInContext(source, context);
+  vm.runInContext(source, context);
+  assert.equal(windowListeners.length, 1, "running the script twice in the same page must never register the message listener twice");
+  dispatchFromPage(windowListeners, window, { type: "FLIP_GROUP_DISCOVERY_REQUEST" });
+  assert.equal(posted.filter((entry) => entry.message.type === "FLIP_GROUP_DISCOVERY_ACK").length, 1, "exactly one ACK, never two, for one request");
+  assert.equal(sendMessageCalls, 1, "the extension runtime must be contacted exactly once per request, not once per injection");
+});
+
 test("a second, independent request after an earlier one already completed works the same way -- the bridge is not a one-shot listener", () => {
   const { window, windowListeners, posted } = buildContext({
     sendMessage(_message, callback) { callback({ ok: true, token: "token-a", expiresAt: "2026-10-01T00:00:00.000Z" }); },

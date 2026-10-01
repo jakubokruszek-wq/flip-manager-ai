@@ -13,8 +13,13 @@ const { addOperatorSessionCookie, ensureProductionBuild, startFakeSupabaseAuthSe
  * app<->extension discovery handshake (which showed "Rozszerzenie Flip
  * Collector nie odpowiada" / "Brak sesji" / "Brak wykrytych grup"). Proves,
  * in a real browser against the real page:
- *   1. an active group card's "Facebook" link opens the group's own real
- *      URL, never a blank/wrong address;
+ *   1. an active group card's "Facebook" link actually opens a new tab that
+ *      navigates toward the group's own real URL when clicked -- not merely
+ *      that its href attribute looks right. The intended request is
+ *      intercepted and aborted at the browser-context level before it ever
+ *      leaves for facebook.com, so this proves real click->navigation
+ *      behavior without violating the "never contact facebook.com" rule
+ *      this same file enforces at the bottom;
  *   2. clicking "Wykryj grupy na Facebooku" genuinely drives the documented
  *      window.postMessage protocol -- a simulated extension's ACK/RESULT is
  *      actually received and rendered, not just claimed by source text;
@@ -92,7 +97,8 @@ test("watched groups page: real group links, a real simulated extension handshak
 
   await t.test("an active group's Facebook link opens its own real URL", async () => {
     const page = await browser.newPage();
-    await addOperatorSessionCookie(page.context(), baseUrl);
+    const context = page.context();
+    await addOperatorSessionCookie(context, baseUrl);
     page.on("request", (request) => {
       const url = request.url();
       if (/facebook\.com/i.test(url)) facebookRequests.push(url);
@@ -106,6 +112,23 @@ test("watched groups page: real group links, a real simulated extension handshak
     await link.waitFor({ state: "visible", timeout: 20_000 });
     assert.equal(await link.getAttribute("href"), GROUP_URL, "the card's own link must point at the group's real, stored URL, never blank or wrong");
     assert.equal(await link.getAttribute("target"), "_blank");
+
+    // Real navigation proof, not just href inspection: intercept and abort
+    // the intended request at the browser-context level (registered before
+    // the click, so it also covers the new tab Chromium is about to create)
+    // so the actual outbound request to facebook.com never leaves, while
+    // still proving the click genuinely opened a tab navigating to the
+    // group's exact URL.
+    let interceptedUrl = null;
+    await context.route("**/*", (route) => {
+      const url = route.request().url();
+      if (/facebook\.com/i.test(url)) { interceptedUrl = url; return route.abort(); }
+      return route.continue();
+    });
+    const [popup] = await Promise.all([context.waitForEvent("page"), link.click()]);
+    await popup.waitForLoadState("domcontentloaded").catch(() => {});
+    assert.equal(interceptedUrl, GROUP_URL, "clicking the link must drive a real browser navigation toward the group's exact stored URL, not just carry the right href");
+    await popup.close();
     await page.close();
   });
 
