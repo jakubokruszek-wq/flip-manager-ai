@@ -144,12 +144,52 @@ export function WatchedGroupsPage() {
       setDiscoveryError(body.error ?? "Token wykrywania grup jest nieprawidłowy lub wygasł. Uruchom wykrywanie ponownie z rozszerzenia.");
       return;
     }
-    const items = body.preview ?? [];
     setDiscoveryToken(token);
     setDiscoveryError(null);
-    setPreview(items);
     setPreviewExpiresAt(body.expiresAt ?? null);
-    setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
+    await applyDiscoveryPreview(token, body.preview ?? []);
+  };
+
+  // High-confidence candidates (NOWA_NIERUCHOMOSCIOWA: real estate AND
+  // Łódź, per classifyDiscoveredFacebookGroupCandidate's own contract) are
+  // added to the Watcher immediately, with no extra click -- the mission's
+  // explicit requirement. Everything else (a different city, no city
+  // mentioned, a name collision, not real estate at all) still requires the
+  // operator's own review via "Importuj wybrane", exactly as before; those
+  // rows are what populate the preview table. Takes the token/items that
+  // were just read directly, never the discoveryToken/preview state (which
+  // may not have committed yet), so this can never race its own setState.
+  const applyDiscoveryPreview = async (token: string, items: FacebookGroupImportPreviewItem[]) => {
+    const autoImportable = items.filter((item) => REAL_ESTATE_BULK_STATUSES.has(item.status));
+    const remaining = items.filter((item) => !REAL_ESTATE_BULK_STATUSES.has(item.status));
+    setPreview(remaining);
+    setPreviewNames(Object.fromEntries(remaining.map((item) => [item.url, item.discoveredName ?? ""])));
+    if (!autoImportable.length) return;
+    const selections = autoImportable.map((item) => ({ url: item.url, name: item.discoveredName ?? "" }));
+    setBusy(true);
+    try {
+      const response = await facebookGroupsFetch("/api/facebook-watcher/groups/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token, selections }),
+      });
+      const resultBody = (await response.json()) as { outcomes?: Array<{ url: string; result: AddWatchedFacebookGroupResult }>; error?: string };
+      if (!response.ok) throw new Error(resultBody.error ?? "Nie udało się automatycznie dodać wykrytych grup.");
+      const outcomes = resultBody.outcomes ?? [];
+      for (const outcome of outcomes) if (outcome.result.success) replaceGroup(outcome.result.group);
+      const created = outcomes.filter((outcome) => outcome.result.success);
+      const failed = outcomes.filter((outcome) => !outcome.result.success);
+      await load();
+      if (failed.length) {
+        setError(`Automatycznie dodano ${created.length} z ${outcomes.length} grup nieruchomościowych w Łodzi. Błędy: ${failed.map((item) => item.result.success ? "" : item.result.error).join("; ")}`);
+      } else if (created.length) {
+        setSuccess(`Automatycznie dodano do Watchera ${created.length} ${created.length === 1 ? "grupę" : "grup"} (nieruchomości, Łódź).`);
+      }
+    } catch (value) {
+      setError(errorMessage(value, "Nie udało się automatycznie dodać wykrytych grup nieruchomościowych."));
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Drives the ENTIRE discovery round trip from one click, instead of
@@ -226,22 +266,8 @@ export function WatchedGroupsPage() {
     const hashToken = readDiscoveryTokenFromHash();
     if (hashToken) {
       clearDiscoveryHash();
-      void facebookGroupsFetch("/api/facebook-watcher/groups/discover/preview", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: hashToken }),
-        cache: "no-store",
-      })
-        .then(async (response) => ({ response, body: (await response.json()) as { preview?: FacebookGroupImportPreviewItem[]; expiresAt?: string; error?: string } }))
-        .then(({ response, body }) => {
-          if (!active) return;
-          if (!response.ok) { setDiscoveryError(body.error ?? "Token wykrywania grup jest nieprawidłowy lub wygasł. Uruchom wykrywanie ponownie z rozszerzenia."); return; }
-          const items = body.preview ?? [];
-          setDiscoveryToken(hashToken);
-          setPreview(items);
-          setPreviewExpiresAt(body.expiresAt ?? null);
-          setPreviewNames(Object.fromEntries(items.map((item) => [item.url, item.discoveredName ?? ""])));
-        })
+      void Promise.resolve()
+        .then(() => loadDiscoveryPreviewForToken(hashToken))
         .catch((value: unknown) => {
           if (active) setDiscoveryError(errorMessage(value, "Nie udało się pobrać wyników wykrywania grup."));
         });

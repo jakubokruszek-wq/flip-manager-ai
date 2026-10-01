@@ -23,10 +23,15 @@ const { addOperatorSessionCookie, ensureProductionBuild, startFakeSupabaseAuthSe
  *   2. clicking "Wykryj grupy na Facebooku" genuinely drives the documented
  *      window.postMessage protocol -- a simulated extension's ACK/RESULT is
  *      actually received and rendered, not just claimed by source text;
- *   3. when nothing responds at all, the UI reaches a real, honest
+ *   3. a high-confidence (real estate + Łódź) discovered candidate is added
+ *      to the Watcher's registry automatically -- the real import endpoint
+ *      is genuinely called, with no "Importuj wszystkie"/"Importuj wybrane"
+ *      click ever made -- while a candidate that still needs manual review
+ *      is left in the preview table exactly as before;
+ *   4. when nothing responds at all, the UI reaches a real, honest
  *      "Rozszerzenie nie odpowiada" state with the specific fix instruction
  *      -- never the old, unverifiable "Brak sesji" claim;
- *   4. none of this ever contacts facebook.com or any Watcher scan endpoint.
+ *   5. none of this ever contacts facebook.com or any Watcher scan endpoint.
  */
 const GROUP_ID = "aaaaaaaa-0000-4000-8000-000000000001";
 const GROUP_URL = "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/";
@@ -137,10 +142,15 @@ test("watched groups page: real group links, a real simulated extension handshak
     await addOperatorSessionCookie(page.context(), baseUrl);
     await page.route("**/api/facebook-watcher/groups", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(groupsPayload), status: 200 }));
     await page.route("**/api/facebook-watcher/groups/historical-mapping", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ mapping: [] }), status: 200 }));
+    // This candidate deliberately needs manual review (real estate, but no
+    // city mentioned) rather than being Łódź real estate -- the dedicated
+    // auto-import test below covers the NOWA_NIERUCHOMOSCIOWA case, where
+    // this exact "the discovered name renders in the preview table" check
+    // would no longer hold once it's imported automatically.
     await page.route("**/api/facebook-watcher/groups/discover/preview", (route) => route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
-        preview: [{ url: "https://www.facebook.com/groups/999888777/", normalizedUrl: "https://www.facebook.com/groups/999888777/", identifier: "999888777", discoveredName: "Nieruchomości Łódź Test", status: "NOWA_NIERUCHOMOSCIOWA", reason: "Nowa grupa nieruchomościowa związana z Łodzią, nieznana w Managerze ani wśród zatwierdzonych źródeł." }],
+        preview: [{ url: "https://www.facebook.com/groups/999888777/", normalizedUrl: "https://www.facebook.com/groups/999888777/", identifier: "999888777", discoveredName: "Mieszkania Wynajem Test", status: "WYMAGA_WERYFIKACJI", reason: "Nazwa grupy wskazuje na nieruchomości, ale nie wspomina Łodzi — wymagana ręczna weryfikacja przed importem." }],
         expiresAt: "2026-10-01T00:00:00.000Z",
       }),
       status: 200,
@@ -160,8 +170,67 @@ test("watched groups page: real group links, a real simulated extension handshak
     await button.waitFor({ state: "visible" });
     await button.click();
     await page.getByText("Odebrano wyniki").waitFor({ state: "visible", timeout: 10_000 });
-    await page.getByText("Nieruchomości Łódź Test").waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByText("Mieszkania Wynajem Test").waitFor({ state: "visible", timeout: 10_000 });
     assert.doesNotMatch(await page.locator("body").innerText(), /Brak sesji/, "the old, unverifiable 'no session' claim must never appear");
+    await page.close();
+  });
+
+  await t.test("a high-confidence Łódź real-estate candidate is added to the Watcher automatically, with no 'Importuj wszystkie'/'Importuj wybrane' click ever made", async () => {
+    const page = await browser.newPage();
+    await addOperatorSessionCookie(page.context(), baseUrl);
+    await page.route("**/api/facebook-watcher/groups", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(groupsPayload), status: 200 }));
+    await page.route("**/api/facebook-watcher/groups/historical-mapping", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ mapping: [] }), status: 200 }));
+    await page.route("**/api/facebook-watcher/groups/discover/preview", (route) => route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        preview: [{ url: "https://www.facebook.com/groups/555444333/", normalizedUrl: "https://www.facebook.com/groups/555444333/", identifier: "555444333", discoveredName: "Łódź Nieruchomości Auto Test", status: "NOWA_NIERUCHOMOSCIOWA", reason: "Nowa grupa nieruchomościowa związana z Łodzią, nieznana w Managerze ani wśród zatwierdzonych źródeł." }],
+        expiresAt: "2026-10-01T00:00:00.000Z",
+      }),
+      status: 200,
+    }));
+    const importCalls = [];
+    await page.route("**/api/facebook-watcher/groups/import", async (route) => {
+      const body = JSON.parse(route.request().postData() || "{}");
+      importCalls.push(body);
+      const selection = body.selections?.[0] ?? {};
+      await route.fulfill({
+        contentType: "application/json",
+        status: 200,
+        body: JSON.stringify({
+          outcomes: [{
+            url: selection.url,
+            result: {
+              success: true,
+              duplicate: false,
+              group: {
+                id: "cccccccc-0000-4000-8000-000000000003", type: "GROUP", sourceId: "555444333", name: selection.name, nameVerified: true,
+                url: selection.url, city: "Łódź", district: null, neighborhood: null, priority: "normal", keywords: [], enabled: true,
+                accessStatus: "CONNECTED", lastCheckedAt: null, importedPosts: 0, newToday: 0, opportunities: 0, lastError: null,
+              },
+            },
+          }],
+        }),
+      });
+    });
+    await page.addInitScript(() => {
+      window.addEventListener("message", (event) => {
+        if (event.source !== window || event.data?.type !== "FLIP_GROUP_DISCOVERY_REQUEST") return;
+        window.postMessage({ type: "FLIP_GROUP_DISCOVERY_ACK" }, event.origin);
+        window.setTimeout(() => window.postMessage({ type: "FLIP_GROUP_DISCOVERY_RESULT", ok: true, token: "sim-token-auto", expiresAt: "2026-10-01T00:00:00.000Z" }, event.origin), 50);
+      });
+    });
+    await page.goto(`${baseUrl}/facebook-watcher/groups`, { waitUntil: "domcontentloaded" });
+    const button = page.getByRole("button", { name: "Wykryj grupy na Facebooku" });
+    await button.waitFor({ state: "visible" });
+    await button.click();
+    // Deliberately never clicks "Importuj wszystkie grupy nieruchomościowe"
+    // or "Importuj wybrane" -- the entire point under test is that nothing
+    // further is needed for a high-confidence candidate.
+    await page.getByText("Automatycznie dodano do Watchera").waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(importCalls.length, 1, "the real import endpoint must be called automatically for a high-confidence candidate, with no operator click");
+    assert.equal(importCalls[0].selections?.length, 1);
+    assert.equal(importCalls[0].selections[0].url, "https://www.facebook.com/groups/555444333/");
+    assert.equal(importCalls[0].selections[0].name, "Łódź Nieruchomości Auto Test");
     await page.close();
   });
 

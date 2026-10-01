@@ -53,6 +53,13 @@ const BRIDGE_STATE_KEY = "__flipGroupDiscoveryBridgeInjected";
 
 if (!globalThis[BRIDGE_STATE_KEY]) {
   globalThis[BRIDGE_STATE_KEY] = true;
+  // Matches bootstrap.js's own FLIP_COLLECTOR_BOOTSTRAP_LISTENER_REGISTERED
+  // line: a real, one-line signal (visible in the page's own devtools
+  // console) that this exact injection actually ran and registered its
+  // listener -- the only way to confirm from outside the extension that the
+  // SPA re-injection fix actually fired for a given navigation, without
+  // sending a real discovery request.
+  console.debug("FLIP_GROUP_DISCOVERY_BRIDGE_INJECTED");
 
   const ALLOWED_ORIGINS = new Set(["https://flip-manager-ai.vercel.app", "http://localhost:3000"]);
 

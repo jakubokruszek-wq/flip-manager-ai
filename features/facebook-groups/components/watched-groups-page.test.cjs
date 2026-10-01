@@ -16,12 +16,35 @@ test("the add-group submit button is disabled until both URL and name are suppli
   assert.match(source, /disabled=\{busy \|\| !form\.url\.trim\(\) \|\| !form\.name\?\.trim\(\)\}/);
 });
 
-test("'Wykryj grupy nieruchomościowe' discovery action is present, with explicit-selection import, never automatic activation", () => {
+test("'Wykryj grupy nieruchomościowe' discovery action is present; manual review candidates still require explicit selection", () => {
   assert.match(source, /Wykryj grupy nieruchomościowe/);
   assert.match(source, /Importuj wybrane/);
-  // The import button is disabled while nothing is checked -- nothing can be
-  // imported just because it was discovered/previewed.
+  // The manual "Importuj wybrane" button is disabled while nothing is
+  // checked -- this still governs every row that needs human review
+  // (WYMAGA_WERYFIKACJI, POMINIETA, MOZLIWY_DUPLIKAT); it does not govern
+  // the separate, automatic high-confidence path below.
   assert.match(source, /disabled=\{busy \|\| selectedCount === 0\}/);
+});
+
+// Mission requirement: a high-confidence (real estate + Łódź) discovered
+// candidate must reach the Watcher's registry with no extra operator click
+// -- the preview alone is not enough. applyDiscoveryPreview is the fix:
+// it splits every classified candidate the moment the preview is read, and
+// immediately POSTs the real import endpoint for the high-confidence subset
+// -- the SAME endpoint/contract "Importuj wybrane" already uses and
+// addWatchedFacebookGroup's own required-name/duplicate checks already
+// guard, never a separate, unaudited write path. Everything else still
+// populates the preview table exactly as before, for explicit manual review.
+test("a high-confidence (NOWA_NIERUCHOMOSCIOWA) discovered candidate is imported automatically; everything else still needs manual review", () => {
+  const fnBody = source.match(/const applyDiscoveryPreview = async \(token: string, items: FacebookGroupImportPreviewItem\[\]\) => \{[\s\S]*?\n  \};/)?.[0];
+  assert.ok(fnBody, "applyDiscoveryPreview must exist");
+  assert.match(fnBody, /autoImportable = items\.filter\(\(item\) => REAL_ESTATE_BULK_STATUSES\.has\(item\.status\)\)/, "only classifier-confirmed Łódź real-estate rows may ever auto-import");
+  assert.match(fnBody, /remaining = items\.filter\(\(item\) => !REAL_ESTATE_BULK_STATUSES\.has\(item\.status\)\)/);
+  assert.match(fnBody, /setPreview\(remaining\)/, "an auto-imported row must never also sit in the manual-review preview table");
+  assert.match(fnBody, /facebookGroupsFetch\("\/api\/facebook-watcher\/groups\/import", \{/, "auto-import must call the exact same, already-authorized import endpoint -- never a separate write path");
+  assert.match(fnBody, /body: JSON\.stringify\(\{ token, selections \}\)/);
+  assert.match(fnBody, /Automatycznie dodano do Watchera/, "the operator must be told plainly that something was added without their own click");
+  assert.match(source, /\.then\(\(\) => loadDiscoveryPreviewForToken\(hashToken\)\)/, "a token arriving via the URL fragment on page load must go through the same auto-import path, not a separate, divergent code path");
 });
 
 test("every mission-required import preview status label is rendered", () => {
