@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isRealEstateGroupName } from "./real-estate-classifier.ts";
+import { isLodzRelatedGroupName, isOtherCityGroupName, isRealEstateGroupName } from "./real-estate-classifier.ts";
 
 const POSITIVE_NAMES = [
   "Nieruchomości Łódź",
@@ -76,4 +76,28 @@ test("'inwestorzy' alone (no other real-estate noun) is independently sufficient
   assert.equal(isRealEstateGroupName("Inwestorzy Łódź"), true);
   assert.equal(isRealEstateGroupName("Grupa Inwestorów"), true);
   assert.equal(isRealEstateGroupName("Inwestycje giełdowe"), false, "the generic business term 'inwestycje' must remain insufficient alone");
+});
+
+test("isLodzRelatedGroupName recognizes the bare city, its districts, and the 'łódzki/łódzkie' adjective family", () => {
+  assert.equal(isLodzRelatedGroupName("Nieruchomości Łódź"), true, "bare city name");
+  assert.equal(isLodzRelatedGroupName("Nieruchomości Łódzkie"), true, "voivodeship-style adjective, mission's own example");
+  assert.equal(isLodzRelatedGroupName("Mieszkania Łódzkie na sprzedaż"), true, "adjective inflected for gender/case");
+  assert.equal(isLodzRelatedGroupName("Mieszkania Bałuty"), true, "a named Łódź district, via the shared LODZ_CONTEXT list");
+  assert.equal(isLodzRelatedGroupName("NIERUCHOMOŚCI ŁÓDŹ"), true, "case-insensitive");
+  assert.equal(isLodzRelatedGroupName(null), false);
+  assert.equal(isLodzRelatedGroupName(""), false);
+});
+
+test("isLodzRelatedGroupName never matches an unrelated word that merely starts with the same letters", () => {
+  assert.equal(isLodzRelatedGroupName("Lodziarnia Mania Łódź"), true, "the group DOES also name Łódź explicitly here, so this must still be true");
+  assert.equal(isLodzRelatedGroupName("Najlepsze lodziarnie w Polsce"), false, "'lodziarnie' (ice cream parlours) alone, with no actual city name, must never match");
+});
+
+test("isOtherCityGroupName confidently recognizes a different, real Polish city and is false for Łódź itself", () => {
+  assert.equal(isOtherCityGroupName("Nieruchomości Warszawa"), true);
+  assert.equal(isOtherCityGroupName("Mieszkania Kraków - sprzedaż i wynajem"), true);
+  assert.equal(isOtherCityGroupName("Nieruchomości Łódź"), false, "Łódź itself must never be treated as 'another city'");
+  assert.equal(isOtherCityGroupName("Nieruchomości Łódzkie"), false, "the łódzkie adjective must never be misread as another city either");
+  assert.equal(isOtherCityGroupName("Nieruchomości"), false, "no city named at all is ambiguous, not confidently 'another city'");
+  assert.equal(isOtherCityGroupName(null), false);
 });

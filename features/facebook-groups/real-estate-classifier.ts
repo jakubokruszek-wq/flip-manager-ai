@@ -1,3 +1,6 @@
+import { LODZ_CONTEXT } from "@/features/location-intelligence/lodz-satellite-towns";
+import { OTHER_POLISH_CITY } from "@/features/location-intelligence/other-polish-cities";
+
 /**
  * Decides whether a Facebook group's own (real, Facebook-rendered) name
  * reads as a real-estate group, so discovery never offers every group the
@@ -53,4 +56,45 @@ export function isRealEstateGroupName(name: string | null | undefined): boolean 
   const normalized = normalizeGroupNameForClassification(name);
   if (REAL_ESTATE_NOUN_PATTERN.test(normalized) || RENTAL_PATTERN.test(normalized)) return true;
   return BUY_PATTERN.test(normalized) && SELL_PATTERN.test(normalized);
+}
+
+// "łódzki/łódzka/łódzkie/..." (the voivodeship-style adjective, as in
+// "Nieruchomości Łódzkie") shares no inflected form with the bare city name
+// "Łódź" itself, so it needs its own pattern rather than reusing
+// LODZ_CONTEXT's bare "lodz" alternative (which deliberately requires an
+// exact word match, for unrelated reasons specific to free-text listing
+// inference). The optional suffix is enumerated rather than a bare `\w*`
+// specifically so this never matches "lodziarnia" (ice cream parlour) or
+// other unrelated "łódz-"-prefixed words that share no real connection to
+// the city.
+const LODZ_ADJECTIVE_PATTERN = /\blodz(?:ki|ka|kie|kim|kiego|kiej|anin\w*|iank\w*|iani\w*)?\b/u;
+
+/**
+ * Whether a Facebook group's name is itself evidence the group is about
+ * Łódź: the bare city name, one of its districts (LODZ_CONTEXT, shared with
+ * the free-text location inference this codebase already uses), or the
+ * "łódzki/łódzka/łódzkie" adjective family the mission names explicitly.
+ * A group with no city mentioned at all is NOT "about Łódź" by this
+ * function -- that ambiguous case is handled separately by the caller
+ * (routed to manual review, never silently imported or silently skipped).
+ */
+export function isLodzRelatedGroupName(name: string | null | undefined): boolean {
+  if (!name || !name.trim()) return false;
+  const normalized = normalizeGroupNameForClassification(name);
+  return LODZ_ADJECTIVE_PATTERN.test(normalized) || LODZ_CONTEXT.test(normalized);
+}
+
+/**
+ * Whether a Facebook group's name names a different, real Polish city --
+ * never Łódź itself or one of its districts/satellite towns -- strongly
+ * enough to confidently exclude it from the Łódź-only bulk-import action,
+ * rather than leaving it in the ambiguous "needs review" bucket. Reuses the
+ * exact same OTHER_POLISH_CITY list the free-text listing-location filter
+ * already relies on, so a city name is never treated differently here than
+ * it already is for an individual listing.
+ */
+export function isOtherCityGroupName(name: string | null | undefined): boolean {
+  if (!name || !name.trim()) return false;
+  const normalized = normalizeGroupNameForClassification(name);
+  return OTHER_POLISH_CITY.test(normalized) && !isLodzRelatedGroupName(name);
 }

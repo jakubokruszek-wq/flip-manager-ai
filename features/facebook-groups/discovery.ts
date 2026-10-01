@@ -1,7 +1,7 @@
 import { FACEBOOK_PRODUCTION_SOURCES, type FacebookProductionSource } from "@/features/collector/facebook-production";
 import { findDuplicateFacebookGroup, normalizeFacebookGroupUrl } from "./group-url";
 import { resolveFacebookGroupDisplayName } from "./display-name";
-import { isRealEstateGroupName } from "./real-estate-classifier";
+import { isLodzRelatedGroupName, isOtherCityGroupName, isRealEstateGroupName } from "./real-estate-classifier";
 import type { WatchedFacebookGroup } from "./types";
 
 export const FACEBOOK_GROUP_IMPORT_STATUSES = ["NOWA_NIERUCHOMOSCIOWA", "JUZ_W_MANAGERZE", "MOZLIWY_DUPLIKAT", "WYMAGA_WERYFIKACJI", "POMINIETA_NIERNIERUCHOMOSCIOWA"] as const;
@@ -85,7 +85,20 @@ export function classifyDiscoveredFacebookGroupCandidate(
   if (!isRealEstateGroupName(discoveredName)) {
     return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "POMINIETA_NIERNIERUCHOMOSCIOWA", reason: "Nazwa grupy nie wskazuje na tematykę nieruchomości. Można ręcznie oznaczyć jako nieruchomościową przed importem." };
   }
-  return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "NOWA_NIERUCHOMOSCIOWA", reason: "Nowa grupa nieruchomościowa, nieznana w Managerze ani wśród zatwierdzonych źródeł." };
+  // A real-estate group is only "high confidence" (auto-import-eligible via
+  // the bulk action) once its own name also names Łódź itself, one of its
+  // districts, or the "łódzki/łódzkie" adjective family -- this Watcher only
+  // ever scans Łódź. A name that clearly names a DIFFERENT real Polish city
+  // is confidently excluded (never silently imported); a real-estate name
+  // that mentions no city at all is genuinely ambiguous and left for manual
+  // review rather than guessed either way.
+  if (isOtherCityGroupName(discoveredName)) {
+    return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "POMINIETA_NIERNIERUCHOMOSCIOWA", reason: "Nazwa grupy wskazuje na nieruchomości w innym mieście niż Łódź. Można ręcznie oznaczyć jako łódzką przed importem." };
+  }
+  if (!isLodzRelatedGroupName(discoveredName)) {
+    return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "WYMAGA_WERYFIKACJI", reason: "Nazwa grupy wskazuje na nieruchomości, ale nie wspomina Łodzi — wymagana ręczna weryfikacja przed importem." };
+  }
+  return { url: candidate.url, normalizedUrl: normalized.url, identifier: normalized.identifier, discoveredName, status: "NOWA_NIERUCHOMOSCIOWA", reason: "Nowa grupa nieruchomościowa związana z Łodzią, nieznana w Managerze ani wśród zatwierdzonych źródeł." };
 }
 
 /**

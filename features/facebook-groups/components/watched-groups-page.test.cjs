@@ -94,7 +94,7 @@ test("the discovery button sends a real message to the extension instead of only
 });
 
 test("the discovery flow exposes every mission-required state, driven by the extension's own ACK/progress/result messages", () => {
-  for (const state of ["IDLE", "WAITING", "FACEBOOK_OPENED", "READING", "RECEIVED", "NO_SESSION", "ERROR"]) {
+  for (const state of ["IDLE", "WAITING", "FACEBOOK_OPENED", "READING", "RECEIVED", "EXTENSION_UNRESPONSIVE", "ERROR"]) {
     assert.match(source, new RegExp(`"${state}"`), `flow state ${state} must exist`);
   }
   assert.match(source, /FLIP_GROUP_DISCOVERY_ACK/, "the extension must be able to confirm it received the command");
@@ -104,9 +104,12 @@ test("the discovery flow exposes every mission-required state, driven by the ext
   assert.match(source, /stage === "READING"\) setFlowState\("READING"\)/);
 });
 
-test("an unresponsive extension shows a specific 'no session' diagnostic, never a generic 'no groups found' message", () => {
-  assert.match(source, /setFlowState\("NO_SESSION"\)/);
+test("an unresponsive extension shows a specific 'extension not responding' diagnostic, never a generic 'no groups found' or unverifiable 'no session' claim", () => {
+  assert.match(source, /setFlowState\("EXTENSION_UNRESPONSIVE"\)/);
   assert.match(source, /Rozszerzenie Flip Collector nie odpowiedziało/, "a timed-out request must name the extension as the specific problem");
+  const labelRecord = source.match(/const DISCOVERY_FLOW_LABEL: Record<DiscoveryFlowState, string> = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  assert.doesNotMatch(labelRecord, /Brak sesji/, "the state label must never assert a Facebook-session fact the app has no way to verify");
+  assert.match(labelRecord, /EXTENSION_UNRESPONSIVE: "Rozszerzenie nie odpowiada"/, "the label must accurately describe what the app actually knows: the extension didn't respond");
   assert.doesNotMatch(source.match(/const timeoutId = window\.setTimeout\([\s\S]*?\}, 8_000\);/)?.[0] ?? "", /Brak wykrytych grup/, "the timeout path must never reuse the generic empty-results copy");
 });
 

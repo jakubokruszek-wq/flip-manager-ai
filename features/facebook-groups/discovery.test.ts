@@ -92,6 +92,34 @@ test("buildGroupImportPreview classifies each distinct candidate independently",
   assert.deepEqual(preview.map((item) => item.status), ["NOWA_NIERUCHOMOSCIOWA", "JUZ_W_MANAGERZE", "WYMAGA_WERYFIKACJI"]);
 });
 
+// Łódź-gating mission: this Watcher only ever scans Łódź, so a real-estate
+// group's own name must also name Łódź (itself, a district, or the
+// "łódzki/łódzkie" family) to be NOWA_NIERUCHOMOSCIOWA (the only
+// bulk-import-eligible status). A confidently different city is excluded
+// outright; a real-estate name with no city at all is genuinely ambiguous
+// and left for manual review -- never guessed either way.
+test("a real-estate group for a different, named Polish city is POMINIETA, never bulk-import-eligible", () => {
+  const result = classifyDiscoveredFacebookGroupCandidate(candidate({ name: "Nieruchomości Warszawa - sprzedaż mieszkań" }), [], PRODUCTION_SOURCES);
+  assert.equal(result.status, "POMINIETA_NIERNIERUCHOMOSCIOWA");
+  assert.match(result.reason, /innym mieście niż Łódź/);
+});
+
+test("a real-estate group that names no city at all is WYMAGA_WERYFIKACJI, not silently imported or silently skipped", () => {
+  const result = classifyDiscoveredFacebookGroupCandidate(candidate({ name: "Nieruchomości na sprzedaż" }), [], PRODUCTION_SOURCES);
+  assert.equal(result.status, "WYMAGA_WERYFIKACJI");
+  assert.match(result.reason, /nie wspomina Łodzi/);
+});
+
+test("a real-estate group naming the 'łódzkie' adjective (the mission's own example) is NOWA_NIERUCHOMOSCIOWA, exactly like naming Łódź itself", () => {
+  const result = classifyDiscoveredFacebookGroupCandidate(candidate({ name: "Nieruchomości Łódzkie - sprzedaż i wynajem" }), [], PRODUCTION_SOURCES);
+  assert.equal(result.status, "NOWA_NIERUCHOMOSCIOWA");
+});
+
+test("a real-estate group naming a Łódź district (not the bare city name) is NOWA_NIERUCHOMOSCIOWA", () => {
+  const result = classifyDiscoveredFacebookGroupCandidate(candidate({ name: "Mieszkania Bałuty i Widzew" }), [], PRODUCTION_SOURCES);
+  assert.equal(result.status, "NOWA_NIERUCHOMOSCIOWA");
+});
+
 test("buildHistoricalFacebookSourceMapping shows a real captured name when a matching watched group exists", () => {
   const watched = [{ name: "Łódź Sprzedaż Zakup Wynajem", sourceId: "lodzsprzedazzakupwynajem" }];
   const mapping = buildHistoricalFacebookSourceMapping(watched, PRODUCTION_SOURCES);

@@ -34,7 +34,15 @@ import { resolveFacebookGroupDisplayName } from "../display-name";
 const IMPORTABLE_STATUSES = new Set<FacebookGroupImportPreviewItem["status"]>(["NOWA_NIERUCHOMOSCIOWA", "MOZLIWY_DUPLIKAT", "WYMAGA_WERYFIKACJI", "POMINIETA_NIERNIERUCHOMOSCIOWA"]);
 const REAL_ESTATE_BULK_STATUSES = new Set<FacebookGroupImportPreviewItem["status"]>(["NOWA_NIERUCHOMOSCIOWA"]);
 
-type DiscoveryFlowState = "IDLE" | "WAITING" | "FACEBOOK_OPENED" | "READING" | "RECEIVED" | "NO_SESSION" | "ERROR";
+// Renamed from the former "NO_SESSION"/"Brak sesji": this state is set
+// exclusively by a client-side timeout when literally no message of any
+// kind (not even the extension's immediate ACK) arrives back -- the app has
+// no way to know *why*, and specifically no way to know anything about a
+// Facebook session. "Brak sesji" asserted a specific, unverified fact; the
+// real, only-ever-true cause this state can mean is that the extension
+// itself never responded (not installed, not reloaded, wrong directory,
+// or a crashed/unreachable content script) -- labelled accordingly.
+type DiscoveryFlowState = "IDLE" | "WAITING" | "FACEBOOK_OPENED" | "READING" | "RECEIVED" | "EXTENSION_UNRESPONSIVE" | "ERROR";
 
 /**
  * "Nie uznawaj samego działania Collectora za dowód działania discovery":
@@ -69,7 +77,7 @@ const DISCOVERY_FLOW_LABEL: Record<DiscoveryFlowState, string> = {
   FACEBOOK_OPENED: "Otwarto Facebooka",
   READING: "Odczytywanie",
   RECEIVED: "Odebrano wyniki",
-  NO_SESSION: "Brak sesji",
+  EXTENSION_UNRESPONSIVE: "Rozszerzenie nie odpowiada",
   ERROR: "Błąd",
 };
 
@@ -162,7 +170,7 @@ export function WatchedGroupsPage() {
       if (settled) return;
       settled = true;
       window.removeEventListener("message", listener);
-      setFlowState("NO_SESSION");
+      setFlowState("EXTENSION_UNRESPONSIVE");
       setFlowError("Rozszerzenie Flip Collector nie odpowiedziało. Sprawdź, czy jest zainstalowane, przeładowane i wskazuje na katalog extensions/facebook-collector.");
     }, 8_000);
     const listener = (event: MessageEvent) => {
