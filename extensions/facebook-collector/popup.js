@@ -33,6 +33,26 @@ async function discoverGroups() {
   } catch {
     response = null;
   }
+  // Facebook is a heavy client-rendered SPA: the operator may have reached
+  // this exact tab/URL through Facebook's own internal navigation rather
+  // than a full page load, in which case group-discovery.js's static
+  // content_scripts entry (manifest.json) never actually ran here at all --
+  // chrome.tabs.sendMessage then throws "receiving end does not exist",
+  // caught above as a bare null response. Mirrors the same recovery
+  // background.js's waitForContentScript already uses for collector-core.js/
+  // content.js: inject the script directly and retry once before giving up.
+  // Re-running RUN_GROUP_DISCOVERY is always safe -- it only scans and
+  // reports candidates, never adding or activating a watched group itself,
+  // and group-discovery.js's own globalThis-keyed guard makes landing a
+  // second copy in an already-running page harmless.
+  if (!response) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["group-discovery.js"] });
+      response = await chrome.tabs.sendMessage(tab.id, { type: "RUN_GROUP_DISCOVERY" });
+    } catch {
+      response = null;
+    }
+  }
   if (!response?.ok) {
     renderState({ status: "failed", progress: "Błąd" });
     resultNode.textContent = response?.error || "Nie udało się wykryć grup. Odśwież stronę Facebooka i spróbuj ponownie.";

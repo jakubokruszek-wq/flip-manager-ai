@@ -5,6 +5,11 @@ const path = require("node:path");
 
 function loadModule() {
   delete require.cache[require.resolve("./group-discovery.js")];
+  // Mirrors a real, separate page's own isolated-world globalThis: each test
+  // here simulates a fresh injection into a fresh page, which the
+  // globalThis-keyed idempotency guard must not conflate with an earlier
+  // test's (unrelated) "page".
+  delete globalThis.__flipGroupDiscoveryInjected;
   return require(path.join(__dirname, "group-discovery.js"));
 }
 
@@ -232,5 +237,38 @@ test("RUN_GROUP_DISCOVERY message triggers the same scan the automatic page-load
   } finally {
     delete global.chrome;
     delete global.document;
+  }
+});
+
+// Real risk introduced by popup.js's own injection-retry fix: if the static
+// content_scripts entry actually did fire (just slower than the retry's own
+// "no response yet" check), the retry's chrome.scripting.executeScript call
+// lands a second copy of this exact file in the same page. Proves that
+// landing is harmless: injecting it twice into what the guard sees as the
+// SAME page (same globalThis, deliberately not reset between the two loads
+// below) registers the onMessage listener only once.
+test("injecting this file twice into the same page (the static entry, then popup.js's own retry) never double-registers the onMessage listener", () => {
+  const registeredListeners = [];
+  global.chrome = {
+    runtime: {
+      sendMessage: (_message, callback) => callback({ ok: true, result: {} }),
+      onMessage: { addListener: (listener) => { registeredListeners.push(listener); } },
+    },
+  };
+  global.document = { querySelectorAll: () => [] };
+  try {
+    delete require.cache[require.resolve("./group-discovery.js")];
+    delete globalThis.__flipGroupDiscoveryInjected;
+    require(path.join(__dirname, "group-discovery.js"));
+    delete require.cache[require.resolve("./group-discovery.js")];
+    // Deliberately do NOT delete globalThis.__flipGroupDiscoveryInjected here
+    // -- this second require simulates a second injection into the SAME
+    // page, which is exactly the scenario the guard must make harmless.
+    require(path.join(__dirname, "group-discovery.js"));
+    assert.equal(registeredListeners.length, 1, "a second injection into the same page must never register a second onMessage listener");
+  } finally {
+    delete global.chrome;
+    delete global.document;
+    delete globalThis.__flipGroupDiscoveryInjected;
   }
 });

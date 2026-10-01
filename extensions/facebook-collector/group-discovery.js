@@ -181,24 +181,38 @@
     return { ok: false, error: "NO_RUNTIME" };
   }
 
-  if (typeof window !== "undefined" && typeof document !== "undefined") {
-    window.addEventListener("load", () => { void runGroupDiscovery(); });
-  }
+  // popup.js's discoverGroups() now retries by explicitly re-injecting this
+  // exact file (chrome.scripting.executeScript) when the content script
+  // does not answer at all -- the same recovery already used for
+  // collector-core.js/content.js (background.js's waitForContentScript).
+  // That retry can land in the same page as an already-running copy (the
+  // static content_scripts entry fired, but was merely slow to finish
+  // registering its listener, not actually missing), so this guard makes a
+  // second injection into the same page harmless: at most one "load"
+  // listener and one onMessage listener ever end up registered.
+  const GROUP_DISCOVERY_STATE_KEY = "__flipGroupDiscoveryInjected";
+  if (!globalThis[GROUP_DISCOVERY_STATE_KEY]) {
+    globalThis[GROUP_DISCOVERY_STATE_KEY] = true;
 
-  // Manual trigger for the popup's "Wykryj grupy nieruchomości" button: the
-  // same scan this content script already runs automatically on page load,
-  // re-run on demand (e.g. after scrolling to load more groups, or if the
-  // automatic run was missed). Never imports/activates anything itself --
-  // identical behavior to the automatic run, just explicitly requested.
-  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-      if (message?.type !== "RUN_GROUP_DISCOVERY") return undefined;
-      // Passes runGroupDiscovery()'s own result straight through (already
-      // { ok, result } / { ok: false, error } from background.js's
-      // REPORT_DISCOVERED_GROUPS handler) rather than wrapping it again.
-      void runGroupDiscovery(document, { skipTabOpen: message.skipTabOpen === true }).then((result) => respond(result)).catch((error) => respond({ ok: false, error: error instanceof Error ? error.message : String(error) }));
-      return true;
-    });
+    if (typeof window !== "undefined" && typeof document !== "undefined") {
+      window.addEventListener("load", () => { void runGroupDiscovery(); });
+    }
+
+    // Manual trigger for the popup's "Wykryj grupy nieruchomości" button: the
+    // same scan this content script already runs automatically on page load,
+    // re-run on demand (e.g. after scrolling to load more groups, or if the
+    // automatic run was missed). Never imports/activates anything itself --
+    // identical behavior to the automatic run, just explicitly requested.
+    if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+        if (message?.type !== "RUN_GROUP_DISCOVERY") return undefined;
+        // Passes runGroupDiscovery()'s own result straight through (already
+        // { ok, result } / { ok: false, error } from background.js's
+        // REPORT_DISCOVERED_GROUPS handler) rather than wrapping it again.
+        void runGroupDiscovery(document, { skipTabOpen: message.skipTabOpen === true }).then((result) => respond(result)).catch((error) => respond({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+        return true;
+      });
+    }
   }
 
   // Test-only export, exactly like content.js's own pattern -- `module`
