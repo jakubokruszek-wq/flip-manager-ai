@@ -351,6 +351,9 @@ test("Flip Finder card border: real browser comparison of a current (active) car
       assert.ok(box.width > 0 && box.height > 0, `the primary action button must be clickable (non-zero size) at ${viewport.width}px`);
 
       if (viewport.width === 1280) {
+        const brandIcon = page.locator('img[src*="flip-manager-48"]');
+        await brandIcon.first().waitFor({ state: "visible" });
+        assert.ok(await brandIcon.count() >= 1, "the rendered application chrome must use the supplied Flip Manager brand icon");
         assert.equal(await page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`).count(), 1, "the first post must render exactly once");
         assert.equal(await page.locator(`[data-testid="finder-card"][data-listing-id="${sameContentDifferentPostId}"]`).count(), 1, "the second post must render exactly once");
         const activeCard = page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`);
