@@ -1006,13 +1006,22 @@ async function reportDiscoveredGroups(candidates, rawDiagnostics = null, { skipT
   return result;
 }
 
-// Facebook has used more than one URL for the "your groups" list over time;
-// this navigates to the bare /groups/ page (confirmed reachable in a real,
-// logged-in session) while still recognizing an already-open /groups/joins/
-// tab so a manual visit there is reused rather than opening a second tab.
-// group-discovery.js's own content-script matches (manifest.json) cover
-// both paths, so discovery runs regardless of which one actually renders.
-const GROUPS_JOINS_URL = "https://www.facebook.com/groups/";
+// Real user report, confirmed by a real screenshot of a live, logged-in
+// session: the bare /groups/ page (what this navigated to previously) is
+// Facebook's own Groups *activity feed* ("Twoje Aktualności" -- individual
+// posts from groups the user already belongs to), not the groups list this
+// scan actually needs. The real "Twoje grupy" listing -- the one rendering
+// the joinable/viewable group tiles group-discovery.js's GROUP_LINK_PATTERN
+// looks for -- is specifically /groups/joins/ (confirmed by the same
+// screenshot: popup.js's own stricter GROUPS_JOINS_PATTERN, which only ever
+// matches /groups/joins/, accepted that exact tab). Navigating to the
+// activity feed instead meant this flow usually opened a real Facebook page
+// that could never contain what it was scanning for, regardless of timing
+// or selectors -- group-discovery.js's own content-script matches
+// (manifest.json) still also cover the bare /groups/ page defensively, in
+// case Facebook's URL scheme varies, but navigation itself now always
+// targets the confirmed-correct listing.
+const GROUPS_JOINS_URL = "https://www.facebook.com/groups/joins/";
 const GROUPS_JOINS_TAB_QUERY_URLS = ["https://www.facebook.com/groups/", "https://www.facebook.com/groups/joins/*", "https://m.facebook.com/groups/", "https://m.facebook.com/groups/joins/*"];
 const MANAGER_GROUP_DISCOVERY_TAB_LOAD_TIMEOUT_MS = 30_000;
 const MANAGER_GROUP_DISCOVERY_CONTENT_SCRIPT_MAX_ATTEMPTS = 3;

@@ -315,6 +315,58 @@ test("RUN_MANAGER_GROUP_DISCOVERY is origin-checked and drives the real Facebook
   assert.match(fn, /chrome\.tabs\.sendMessage\(tab\.id, \{ type: "RUN_GROUP_DISCOVERY", skipTabOpen: true \}\)/);
 });
 
+// Real user report, confirmed by a real screenshot of a live, logged-in
+// session: the bare https://www.facebook.com/groups/ page is Facebook's own
+// Groups *activity feed* ("Twoje Aktualności" -- posts, not group tiles),
+// never a page group-discovery.js's GROUP_LINK_PATTERN can find anything on.
+// The real listing is specifically /groups/joins/ -- confirmed by the same
+// screenshot sequence: popup.js's own GROUPS_JOINS_PATTERN, which matches
+// ONLY /groups/joins/, accepted that exact tab. This genuinely EXECUTES
+// openOrFocusGroupsJoinsTab (extracted verbatim from background.js) against
+// fake chrome.tabs globals to prove the navigation target, not just that
+// the source text looks right -- so a future edit can't silently regress
+// this to the activity feed again without a test failing.
+test("openOrFocusGroupsJoinsTab always navigates to the real groups listing (/groups/joins/), never the activity feed, whether reusing a tab or opening a new one", async () => {
+  const fnStart = background.indexOf("async function openOrFocusGroupsJoinsTab()");
+  const fnEnd = background.indexOf("\nasync function pushManagerDiscoveryProgress");
+  assert.ok(fnStart >= 0 && fnEnd > fnStart, "openOrFocusGroupsJoinsTab must exist");
+  const constStart = background.indexOf("const GROUPS_JOINS_URL =");
+  const constEnd = background.indexOf("\n", background.indexOf("const GROUPS_JOINS_TAB_QUERY_URLS ="));
+  const source = `${background.slice(constStart, constEnd)}\n${background.slice(fnStart, fnEnd)}`;
+  assert.match(source, /const GROUPS_JOINS_URL = "https:\/\/www\.facebook\.com\/groups\/joins\/";/, "the extracted slice must actually include the real constant, or this test proves nothing");
+
+  // No existing tab: must create a new one at the real listing.
+  {
+    const createCalls = [];
+    const chrome = { tabs: { query: async () => [], create: async (options) => { createCalls.push(options); return { id: 99, ...options }; } } };
+    const context = vm.createContext({ chrome });
+    vm.runInContext(source, context);
+    const tab = await vm.runInContext("openOrFocusGroupsJoinsTab()", context);
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].url, "https://www.facebook.com/groups/joins/");
+    assert.equal(tab.id, 99);
+  }
+  // An existing tab already open (even on the wrong, activity-feed URL):
+  // must still be redirected to the real listing, never left as-is.
+  {
+    const updateCalls = [];
+    const chrome = {
+      tabs: {
+        query: async () => [{ id: 7, url: "https://www.facebook.com/groups/" }],
+        update: async (tabId, options) => { updateCalls.push({ tabId, options }); },
+        get: async (tabId) => ({ id: tabId, url: "https://www.facebook.com/groups/joins/" }),
+      },
+    };
+    const context = vm.createContext({ chrome });
+    vm.runInContext(source, context);
+    const tab = await vm.runInContext("openOrFocusGroupsJoinsTab()", context);
+    assert.equal(updateCalls.length, 1);
+    assert.equal(updateCalls[0].tabId, 7);
+    assert.equal(updateCalls[0].options.url, "https://www.facebook.com/groups/joins/", "an existing tab must be redirected to the real listing even if it was on the wrong page");
+    assert.equal(tab.url, "https://www.facebook.com/groups/joins/");
+  }
+});
+
 test("isGroupsManagerUrl only accepts the real Manager groups page, never an arbitrary origin", () => {
   assert.match(background, /function isGroupsManagerUrl\(value\) \{ try \{ const url = new URL\(String\(value \|\| ""\)\); return MANAGER_ORIGINS\.has\(url\.origin\) && url\.pathname\.startsWith\("\/facebook-watcher\/groups"\); \} catch \{ return false; \} \}/);
 });
