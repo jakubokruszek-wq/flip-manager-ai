@@ -20,6 +20,7 @@ import { dataFirstFacebookImageResult, type FacebookImageMode } from "./facebook
 import { FACEBOOK_WORKFLOW_STATUSES, type FacebookListingInput, type FacebookWatcherListing, type FacebookWorkflowStatus } from "./types";
 import { recordFacebookGroupImport } from "@/features/facebook-groups/server";
 import { resolveFacebookGroupDisplayName } from "@/features/facebook-groups/display-name";
+import { normalizeFacebookSourceUrl as normalizeFacebookSourceIdentity } from "@/features/collector/facebook-production";
 import { facebookNoMatchWarnings, mergeFacebookPropertyByConfidence, parseFacebookFieldConfidence } from "./facebook-data-quality";
 import { resolveFacebookListingIntent } from "./facebook-intent";
 import { composeFacebookLocation, reconcileFacebookLocation } from "./facebook-location-quality";
@@ -616,8 +617,13 @@ async function applyFilters(supabase: ReturnType<typeof createFacebookWatcherAdm
 
 export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
   const supabase = createFacebookWatcherAdminClient();
-  const { data, error } = await supabase.from("listing_source_metadata").select("source_post_url,group_name,published_at,collected_at,metadata,listings(id,external_listing_id,content_hash,title,price,price_per_sqm,area,rooms,floor,district,city,address,description,original_url,images,status,source,flip_score,estimated_profit,first_seen_at,last_seen_at,created_at,building_type,ownership,lifecycle_status,archived_at)").eq("source", "facebook").order("collected_at", { ascending: false }).limit(500);
+  const [metadataResult, groupsResult] = await Promise.all([
+    supabase.from("listing_source_metadata").select("source_post_url,group_name,published_at,collected_at,metadata,listings(id,external_listing_id,content_hash,title,price,price_per_sqm,area,rooms,floor,district,city,address,description,original_url,images,status,source,flip_score,estimated_profit,first_seen_at,last_seen_at,created_at,building_type,ownership,lifecycle_status,archived_at)").eq("source", "facebook").order("collected_at", { ascending: false }).limit(500),
+    supabase.from("watched_facebook_groups").select("id,name,name_verified,url"),
+  ]);
+  const { data, error } = metadataResult;
   if (error) throw new Error(`Nie udało się pobrać ofert Facebooka: ${error.message}`);
+  const knownGroupNames = buildKnownFacebookGroupNameIndex(groupsResult.error ? [] : (groupsResult.data ?? []) as unknown as Row[]);
   const activeFilters = await getActiveSearchFiltersForSource("facebook");
   const records: FacebookWatcherListing[] = ((data ?? []) as unknown as Row[]).flatMap((row) => {
     const listing = (Array.isArray(row.listings) ? row.listings[0] : row.listings) as Row | undefined; if (!listing) return [];
@@ -663,7 +669,7 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
       : null;
     const canonical = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl, externalListingId: str(listing.external_listing_id), facebookPostId: str(meta.postId), parameterFingerprint, contentFingerprint });
     const highPriority = isHighPriorityFacebookListing({ opportunityScore: score, flipScore, priceSuspect, sellerType, condition, listingIntent: listingIntent ?? null, decisionBucket: current.bucket, lifecycleStatus });
-    return [{ listingId, externalListingId: str(listing.external_listing_id), facebookPostId: canonical.postId, parameterFingerprint, contentFingerprint, sourceMetadataCollectedAt: str(row.collected_at), title, city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description, listingIntent, sourcePostUrl: facebookUrl, originalUrl: resolveListingUrl({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl }), images, confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: resolveFacebookGroupDisplayName({ name: str(row.group_name) }), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority, crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
+    return [{ listingId, externalListingId: str(listing.external_listing_id), facebookPostId: canonical.postId, parameterFingerprint, contentFingerprint, sourceMetadataCollectedAt: str(row.collected_at), title, city: str(listing.city), district: str(listing.district), neighborhood: str(meta.neighborhood), street: str(listing.address), price: num(listing.price), pricePerM2: num(listing.price_per_sqm), pricePerSqm: num(listing.price_per_sqm), area: num(listing.area), rooms: num(listing.rooms), floor: num(listing.floor), totalFloors: null, marketType: null, sellerType, condition, description, listingIntent, sourcePostUrl: facebookUrl, originalUrl: resolveListingUrl({ source: "facebook", sourcePostUrl: facebookUrl, originalUrl: sourceUrl }), images, confidence: num(meta.confidence) ?? 0, flags, status: String(listing.status), groupName: resolveFacebookWatcherGroupName(row, meta, facebookUrl, knownGroupNames), workflowStatus: workflowStatus(meta.workflowStatus), readAt, importedAt, publishedAt, opportunityScore: score, flipScore, potentialProfit: num(listing.estimated_profit), isNew: !readAt && Date.now() - Date.parse(importedAt) <= 86_400_000, highPriority, crossSourceMatch: meta.crossSourceMatch === true, crossSourceLinks: meta.crossSourceMatch === true && source !== "facebook" && sourceUrl ? [{ source, url: sourceUrl }] : [], source, lifecycleStatus, archivedAt: str(listing.archived_at), priceQuality, listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, currentFilterDecision: current.bucket, currentFilterReasons: currentReasons, currentFilterMissingFields: current.decision?.unknownFields ?? [], finderStatus: historical ? "HISTORICAL" : current.bucket, finderVisible: !historical && (current.bucket === "MATCHED" || current.bucket === "REVIEW") && String(listing.status) === "active" }];
   });
   const preferred = records.sort((left, right) => {
     const leftQuality = ((normalizeListingIdentityUrl("facebook", left.sourcePostUrl) ?? normalizeListingIdentityUrl("facebook", left.originalUrl)) ? 2 : 0) + (left.images.length > 0 ? 1 : 0);
@@ -672,6 +678,48 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     return Date.parse(right.sourceMetadataCollectedAt ?? right.importedAt) - Date.parse(left.sourceMetadataCollectedAt ?? left.importedAt);
   });
   return dedupeByListingIdentity(preferred, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl, originalUrl: item.originalUrl, facebookPostId: item.facebookPostId, parameterFingerprint: item.parameterFingerprint, contentFingerprint: item.contentFingerprint }));
+}
+
+/**
+ * Indexes the human names already stored in the watched-source registry. A
+ * listing may carry only a numeric/technical group id in legacy metadata, so
+ * the read path resolves that id back to the registry name before falling
+ * back to the captured metadata label.
+ */
+function buildKnownFacebookGroupNameIndex(rows: Row[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const row of rows) {
+    const name = resolveFacebookGroupDisplayName({ name: str(row.name), nameVerified: row.name_verified === false ? false : undefined });
+    if (name === "Nieznana grupa") continue;
+    const id = str(row.id);
+    if (id) names.set(id.toLocaleLowerCase("en-US"), name);
+    const rawUrl = str(row.url);
+    if (!rawUrl) continue;
+    const normalized = normalizeFacebookSourceIdentity(rawUrl);
+    if (!normalized) continue;
+    names.set(normalized.sourceId.toLocaleLowerCase("en-US"), name);
+    names.set(normalized.url.toLocaleLowerCase("en-US"), name);
+  }
+  return names;
+}
+
+function resolveFacebookWatcherGroupName(row: Row, metadata: Row, sourcePostUrl: string | null, knownNames: Map<string, string>): string {
+  const identityCandidates = [str(metadata.groupId), str(metadata.sourceId), str(row.group_name)].filter((value): value is string => Boolean(value));
+  if (sourcePostUrl) {
+    const groupMatch = /^https?:\/\/[^/]+\/groups\/([^/]+)/iu.exec(sourcePostUrl);
+    if (groupMatch?.[1]) identityCandidates.push(groupMatch[1]);
+  }
+  for (const candidate of identityCandidates) {
+    const known = knownNames.get(candidate.toLocaleLowerCase("en-US"));
+    if (known) return known;
+  }
+
+  const directNames = [str(metadata.groupName), str(row.group_name)];
+  for (const candidate of directNames) {
+    const resolved = resolveFacebookGroupDisplayName({ name: candidate });
+    if (resolved !== "Nieznana grupa") return resolved;
+  }
+  return "Nieznana grupa";
 }
 
 /** Read-only maintenance view. It never mutates an orphan while listing it. */

@@ -5,15 +5,21 @@ type Row = Record<string, unknown>;
 
 const filters: never[] = [];
 let rows: Row[] = [];
+let knownGroups: Row[] = [];
 
 class Query {
+  private readonly table: string;
+  constructor(table: string) { this.table = table; }
   select() { return this; }
   eq() { return this; }
   order() { return this; }
-  limit() { return Promise.resolve({ data: rows, error: null }); }
+  limit() { return Promise.resolve({ data: this.table === "watched_facebook_groups" ? knownGroups : rows, error: null }); }
+  then(onFulfilled: (value: { data: Row[]; error: null }) => unknown, onRejected?: (reason: unknown) => unknown) {
+    return Promise.resolve({ data: this.table === "watched_facebook_groups" ? knownGroups : rows, error: null }).then(onFulfilled, onRejected);
+  }
 }
 
-const adminClient = { from: () => new Query() };
+const adminClient = { from: (table: string) => new Query(table) };
 
 mock.module("./supabase-admin", { namedExports: { createFacebookWatcherAdminClient: () => adminClient } });
 mock.module("@/features/flip-finder/server/search-filters", { namedExports: { getActiveSearchFiltersForSource: async () => filters } });
@@ -115,4 +121,34 @@ test("a rejected low-score private renovation never receives the high-priority b
   }];
   const result = await listFacebookWatcher();
   assert.equal(result[0]?.highPriority, false);
+});
+
+test("a technical group id is resolved through the watched-group registry", async () => {
+  knownGroups = [{ id: "watched-1", name: "Mieszkania Łódź", name_verified: true, url: "https://www.facebook.com/groups/1424921570856189/" }];
+  rows = [{
+    source_post_url: "https://www.facebook.com/groups/1424921570856189/posts/4486483384955654",
+    group_name: "1424921570856189",
+    published_at: null,
+    collected_at: "2026-09-27T12:00:00.000Z",
+    metadata: { groupId: "watched-1", listingIntent: "SELL_PROPERTY" },
+    listings: listing("known-group", 439_000),
+  }];
+  const result = await listFacebookWatcher();
+  assert.equal(result[0]?.groupName, "Mieszkania Łódź");
+  knownGroups = [];
+});
+
+test("a group slug captured as group_name is replaced by the registered human name", async () => {
+  knownGroups = [{ id: "watched-2", name: "Łódź Mieszkania Sprzedaż", name_verified: true, url: "https://www.facebook.com/groups/mieszkaniwlodzi/" }];
+  rows = [{
+    source_post_url: "https://www.facebook.com/groups/mieszkaniwlodzi/posts/4486483384955655",
+    group_name: "mieszkaniwlodzi",
+    published_at: null,
+    collected_at: "2026-09-27T12:00:00.000Z",
+    metadata: { listingIntent: "SELL_PROPERTY" },
+    listings: listing("known-slug", 439_000),
+  }];
+  const result = await listFacebookWatcher();
+  assert.equal(result[0]?.groupName, "Łódź Mieszkania Sprzedaż");
+  knownGroups = [];
 });
