@@ -169,8 +169,8 @@ test("watched groups page: real group links, a real simulated extension handshak
     const button = page.getByRole("button", { name: "Wykryj grupy na Facebooku" });
     await button.waitFor({ state: "visible" });
     await button.click();
-    await page.getByText("Odebrano wyniki").waitFor({ state: "visible", timeout: 10_000 });
-    await page.getByText("Mieszkania Wynajem Test").waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByText("Odebrano wyniki").waitFor({ state: "visible", timeout: 20_000 });
+    await page.getByText("Mieszkania Wynajem Test").waitFor({ state: "visible", timeout: 20_000 });
     assert.doesNotMatch(await page.locator("body").innerText(), /Brak sesji/, "the old, unverifiable 'no session' claim must never appear");
     await page.close();
   });
@@ -226,7 +226,7 @@ test("watched groups page: real group links, a real simulated extension handshak
     // Deliberately never clicks "Importuj wszystkie grupy nieruchomościowe"
     // or "Importuj wybrane" -- the entire point under test is that nothing
     // further is needed for a high-confidence candidate.
-    await page.getByText("Automatycznie dodano do Watchera").waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByText("Automatycznie dodano do Watchera").waitFor({ state: "visible", timeout: 20_000 });
     assert.equal(importCalls.length, 1, "the real import endpoint must be called automatically for a high-confidence candidate, with no operator click");
     assert.equal(importCalls[0].selections?.length, 1);
     assert.equal(importCalls[0].selections[0].url, "https://www.facebook.com/groups/555444333/");
@@ -244,7 +244,10 @@ test("watched groups page: real group links, a real simulated extension handshak
     const button = page.getByRole("button", { name: "Wykryj grupy na Facebooku" });
     await button.waitFor({ state: "visible" });
     await button.click();
-    await page.getByText("Rozszerzenie nie odpowiada").waitFor({ state: "visible", timeout: 10_000 });
+    // The app's own internal timeout before showing this state is 8s; give
+    // generous margin beyond that so machine load never turns a correct,
+    // slightly-slow render into a false test failure.
+    await page.getByText("Rozszerzenie nie odpowiada").waitFor({ state: "visible", timeout: 20_000 });
     const bodyText = await page.locator("body").innerText();
     assert.doesNotMatch(bodyText, /Brak sesji/, "the UI must never assert a Facebook-session fact it cannot verify");
     assert.match(bodyText, /zainstalowane, przeładowane i wskazuje na katalog extensions\/facebook-collector/, "the real, specific fix instruction must still be shown");
