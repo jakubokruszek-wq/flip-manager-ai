@@ -130,3 +130,37 @@ test("the real Watcher import writes the fixed price/district to canonical listi
   assert.deepEqual(db.rows("facebook_scan_jobs"), [], "Finder's own read must never touch facebook_scan_jobs either");
   assert.deepEqual(db.rows("collector_scan_batches"), [], "Finder's own read must never touch collector data either");
 });
+
+test("confirmed different Facebook posts with identical content get separate listings, while retries update their own rows", async () => {
+  const db = new FakeFacebookSupabase();
+  installCanonicalReconciliationRpc(db);
+  currentDb = db;
+  const sharedText = "Sprzedam mieszkanie 2 pokoje 280000 zł, 59,9 m2, Bałuty Łódź.";
+  const firstPostId = "998877665545";
+  const secondPostId = "998877665546";
+  const firstUrl = `${GROUP_URL}posts/${firstPostId}/`;
+  const secondUrl = `${GROUP_URL}posts/${secondPostId}/`;
+  const context = (postId: string, sourceUrl: string, checkedAt: string) => ({
+    filter: PRICE_BUG_FILTER,
+    sourceScanId: SOURCE_SCAN_ID,
+    groupId: GROUP_ID,
+    groupName: "Łódź Sprzedaż Zakup Wynajem",
+    groupUrl: GROUP_URL,
+    postId,
+    checkedAt,
+  });
+
+  const first = await importFacebookWatcher({ postText: sharedText, url: firstUrl, images: [] }, context(firstPostId, firstUrl, "2026-09-30T12:00:00.000Z"));
+  const second = await importFacebookWatcher({ postText: sharedText, url: secondUrl, images: [] }, context(secondPostId, secondUrl, "2026-09-30T12:01:00.000Z"));
+  assert.equal(first.status, "created");
+  assert.equal(second.status, "created");
+  assert.notEqual(first.listingId, second.listingId, "different confirmed post ids must never share a listings.id");
+  assert.equal(db.rows("listings").length, 2, "identical content_hash must not collapse two confirmed posts during ingest");
+
+  const firstRetry = await importFacebookWatcher({ postText: `${sharedText} Aktualizacja pierwszego posta.`, url: firstUrl, images: [] }, context(firstPostId, firstUrl, "2026-09-30T12:02:00.000Z"));
+  const secondRetry = await importFacebookWatcher({ postText: `${sharedText} Aktualizacja drugiego posta.`, url: secondUrl, images: [] }, context(secondPostId, secondUrl, "2026-09-30T12:03:00.000Z"));
+  assert.equal(firstRetry.listingId, first.listingId, "a retry must resolve the first post's existing listing");
+  assert.equal(secondRetry.listingId, second.listingId, "a retry must resolve the second post's existing listing");
+  assert.equal(db.rows("listings").length, 2, "retries must update, never create extra rows");
+  assert.deepEqual(db.rows("facebook_scan_jobs"), [], "the regression proof must not create Facebook scan jobs");
+});

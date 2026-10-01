@@ -67,16 +67,17 @@ test("Watcher list hides a below-minimum sale and keeps a valid sale once", asyn
   assert.equal(result[0]?.price, 439_000);
 });
 
-test("Watcher collapses exact Facebook content duplicates from different post routes", async () => {
+test("Watcher collapses route duplicates for one Facebook post but keeps a different post with identical content", async () => {
   const sourcePostUrl = (group: string, id: string) => `https://www.facebook.com/groups/${group}/posts/${id}`;
   rows = [
     { source_post_url: sourcePostUrl("group-a", "280000000000001"), group_name: "A", published_at: null, collected_at: "2026-09-27T12:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("one", 280_000), external_listing_id: "280000000000001", content_hash: "same-content" } },
-    { source_post_url: sourcePostUrl("group-b", "280000000000002"), group_name: "B", published_at: null, collected_at: "2026-09-27T11:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("two", 280_000), external_listing_id: "280000000000002", content_hash: "same-content" } },
+    { source_post_url: sourcePostUrl("group-b", "280000000000001"), group_name: "B", published_at: null, collected_at: "2026-09-27T11:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("two", 280_000), external_listing_id: "280000000000001", content_hash: "same-content" } },
     { source_post_url: sourcePostUrl("group-c", "280000000000003"), group_name: "C", published_at: null, collected_at: "2026-09-27T10:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("three", 280_000), description: "Inna oferta", external_listing_id: "280000000000003", content_hash: "different-content" } },
+    { source_post_url: sourcePostUrl("group-d", "280000000000004"), group_name: "D", published_at: null, collected_at: "2026-09-27T09:00:00.000Z", metadata: { listingIntent: "SELL_PROPERTY" }, listings: { ...listing("four", 280_000), external_listing_id: "280000000000004", content_hash: "same-content" } },
   ];
   const result = await listFacebookWatcher();
-  assert.equal(result.length, 2);
-  assert.deepEqual(result.map((item) => item.listingId), ["one", "three"]);
+  assert.equal(result.length, 3);
+  assert.deepEqual(result.map((item) => item.listingId), ["one", "three", "four"]);
 });
 
 test("the reported 280k, 550k, 599k and 499k duplicates each render once", async () => {
@@ -87,12 +88,12 @@ test("the reported 280k, 550k, 599k and 499k duplicates each render once", async
     ["499000", 499_000, 50.5],
   ] as const;
   rows = examples.flatMap(([key, price, area], index) => [1, 2].map((copy) => ({
-    source_post_url: `https://www.facebook.com/groups/group-${index}/posts/${key}0000000000${copy}`,
+    source_post_url: `https://www.facebook.com/groups/group-${index}/posts/${key}000000000001`,
     group_name: `G${index}`,
     published_at: null,
     collected_at: `2026-09-27T${String(12 - index).padStart(2, "0")}:${copy}0:00.000Z`,
     metadata: { listingIntent: "SELL_PROPERTY" },
-    listings: { ...listing(`${key}-${copy}`, price), area, content_hash: `fingerprint-${key}` },
+    listings: { ...listing(`${key}-${copy}`, price), area, external_listing_id: `${key}000000000001`, content_hash: `fingerprint-${key}` },
   })));
   const result = await listFacebookWatcher();
   assert.equal(result.length, examples.length);

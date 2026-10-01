@@ -64,15 +64,18 @@ test("a valid listing URL remains the fallback when source metadata is missing o
   assert.equal(dedupeByListingIdentity(records, (record) => record).length, 1);
 });
 
-test("identical full-content fingerprints collapse cross-post duplicates, while similar offers remain separate", () => {
+test("identical full-content fingerprints collapse route duplicates for one post, while distinct posts remain separate", () => {
   const fingerprint = canonicalFacebookContentFingerprint({ title: "Mieszkanie", description: "Pełny opis oferty", price: 280000, area: 59.9, rooms: 2, location: "Łódź", imageUrls: ["https://img.example/one.jpg"] });
   const duplicate = [
     { ...facebook("listing-a", "https://www.facebook.com/groups/a/posts/100000000000001", "100000000000001", "2026-09-27T12:00:00Z"), contentFingerprint: fingerprint },
-    { ...facebook("listing-b", "https://www.facebook.com/groups/b/posts/100000000000002", "100000000000002", "2026-09-27T11:00:00Z"), contentFingerprint: fingerprint },
+    { ...facebook("listing-b", "https://www.facebook.com/groups/b/posts/100000000000001", "100000000000001", "2026-09-27T11:00:00Z"), contentFingerprint: fingerprint },
   ];
   assert.equal(dedupeByListingIdentity(duplicate, (record) => record).length, 1);
 
-  const distinct = duplicate.map((record, index) => ({ ...record, contentFingerprint: `${fingerprint}-${index}` }));
+  const distinct = [
+    duplicate[0],
+    { ...facebook("listing-c", "https://www.facebook.com/groups/c/posts/100000000000002", "100000000000002", "2026-09-27T10:00:00Z"), contentFingerprint: fingerprint },
+  ];
   assert.equal(dedupeByListingIdentity(distinct, (record) => record).length, 2);
 });
 
@@ -94,6 +97,32 @@ test("different Facebook posts stay separate even when visible parameters match"
     { ...facebook("listing-b", "https://www.facebook.com/groups/b/posts/100000000000002", "100000000000002", "2026-09-27T11:00:00Z"), parameterFingerprint: parameters, contentFingerprint: "b" },
   ];
   assert.equal(dedupeByListingIdentity(records, (record) => record).length, 2);
+});
+
+test("different confirmed post ids stay separate even with identical full fingerprints", () => {
+  const parameters = canonicalFacebookParameterFingerprint({ title: "Mieszkanie", description: "Identyczny opis", price: 280000, area: 59.9, rooms: 2, location: "Bałuty, Łódź" });
+  assert.ok(parameters);
+  const records = [
+    { ...facebook("listing-a", "https://www.facebook.com/groups/a/posts/100000000000001", "100000000000001", "2026-09-27T12:00:00Z"), parameterFingerprint: parameters, contentFingerprint: "same-full-content" },
+    { ...facebook("listing-b", "https://www.facebook.com/groups/b/posts/100000000000002", "100000000000002", "2026-09-27T11:00:00Z"), parameterFingerprint: parameters, contentFingerprint: "same-full-content" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record).map((record) => record.listingId), ["listing-a", "listing-b"]);
+});
+
+test("different confirmed post ids stay separate even when a legacy external id is reused", () => {
+  const records = [
+    { ...facebook("listing-a", "https://www.facebook.com/groups/a/posts/100000000000001", "legacy-shared", "2026-09-27T12:00:00Z"), contentFingerprint: "same-full-content" },
+    { ...facebook("listing-b", "https://www.facebook.com/groups/b/posts/100000000000002", "legacy-shared", "2026-09-27T11:00:00Z"), contentFingerprint: "same-full-content" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record).map((record) => record.listingId), ["listing-a", "listing-b"]);
+});
+
+test("the same confirmed post id still deduplicates when its content changes", () => {
+  const records = [
+    { ...facebook("listing-newer", "https://www.facebook.com/groups/a/posts/100000000000001", "100000000000001", "2026-09-27T12:00:00Z"), contentFingerprint: "before" },
+    { ...facebook("listing-older", "https://www.facebook.com/groups/b/posts/100000000000001", "100000000000001", "2026-09-27T11:00:00Z"), contentFingerprint: "after" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record).map((record) => record.listingId), ["listing-newer"]);
 });
 
 test("parameter fingerprint requires a location and keeps distinct parameters separate", () => {

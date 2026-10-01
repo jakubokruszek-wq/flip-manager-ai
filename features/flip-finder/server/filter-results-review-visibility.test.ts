@@ -270,23 +270,25 @@ test("same Facebook source URL is one Finder card, while a below-minimum price i
   assert.equal(payload?.reviewResults.some((item) => item.id === "listing-too-cheap"), false);
 });
 
-test("Facebook content identity collapses cross-post duplicates without collapsing similar offers", async () => {
+test("Facebook content identity collapses route duplicates for one post without hiding a different post", async () => {
   const db = freshDb();
   const matchedFields = { building_type: "blok", ownership: "pełna własność", lifecycle_status: "ACTIVE", missing_fields: [] };
   const duplicateA = listingRow({ id: "listing-280-a", original_url: "https://www.facebook.com/groups/a/posts/100000000000001", content_hash: "same-full-content", price: 280000, area: 59.9, ...matchedFields });
-  const duplicateB = listingRow({ id: "listing-280-b", original_url: "https://www.facebook.com/groups/b/posts/100000000000002", content_hash: "same-full-content", price: 280000, area: 59.9, ...matchedFields });
+  const duplicateB = listingRow({ id: "listing-280-b", original_url: "https://www.facebook.com/groups/b/posts/100000000000001", content_hash: "same-full-content", price: 280000, area: 59.9, ...matchedFields });
+  const differentPost = listingRow({ id: "listing-280-c", original_url: "https://www.facebook.com/groups/d/posts/100000000000002", content_hash: "same-full-content", price: 280000, area: 59.9, ...matchedFields });
   const distinct = listingRow({ id: "listing-550", original_url: "https://www.facebook.com/groups/c/posts/100000000000003", content_hash: "different-full-content", title: "Podobna oferta", price: 280000, area: 59.9, ...matchedFields });
-  db.seed("listings", [duplicateA, duplicateB, distinct]);
-  db.seed("listing_filter_matches", [membershipRow("listing-280-a", { is_current_match: true, match_reasons: [] }), membershipRow("listing-280-b", { is_current_match: true, match_reasons: [] }), membershipRow("listing-550", { is_current_match: true, match_reasons: [] })]);
+  db.seed("listings", [duplicateA, duplicateB, differentPost, distinct]);
+  db.seed("listing_filter_matches", [membershipRow("listing-280-a", { is_current_match: true, match_reasons: [] }), membershipRow("listing-280-b", { is_current_match: true, match_reasons: [] }), membershipRow("listing-280-c", { is_current_match: true, match_reasons: [] }), membershipRow("listing-550", { is_current_match: true, match_reasons: [] })]);
   db.seed("listing_source_metadata", [
     { listing_id: "listing-280-a", source: "facebook", source_post_url: duplicateA.original_url, collected_at: "2026-09-27T12:00:00Z", metadata: { listingIntent: "SELL_PROPERTY" } },
     { listing_id: "listing-280-b", source: "facebook", source_post_url: duplicateB.original_url, collected_at: "2026-09-27T11:00:00Z", metadata: { listingIntent: "SELL_PROPERTY" } },
+    { listing_id: "listing-280-c", source: "facebook", source_post_url: differentPost.original_url, collected_at: "2026-09-27T10:30:00Z", metadata: { listingIntent: "SELL_PROPERTY" } },
     { listing_id: "listing-550", source: "facebook", source_post_url: distinct.original_url, collected_at: "2026-09-27T10:00:00Z", metadata: { listingIntent: "SELL_PROPERTY" } },
   ]);
   currentDb = db;
   const payload = await getFilterResults(FILTER_ID);
-  assert.equal(payload?.results.length, 2);
-  assert.deepEqual(new Set(payload?.results.map((result) => result.id)), new Set(["listing-280-a", "listing-550"]));
+  assert.equal(payload?.results.length, 3);
+  assert.deepEqual(new Set(payload?.results.map((result) => result.id)), new Set(["listing-280-a", "listing-280-c", "listing-550"]));
 });
 
 // Duplicate/status-disjointness mission: three write paths (persist-listing.ts's

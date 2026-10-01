@@ -19,6 +19,7 @@ const { chromium } = require("playwright");
  * browser, across the four required viewports.
  */
 const activeId = "aaaaaaaa-0000-4000-8000-000000000001";
+const sameContentDifferentPostId = "aaaaaaaa-0000-4000-8000-000000000004";
 const archivedId = "bbbbbbbb-0000-4000-8000-000000000002";
 const reviewId = "cccccccc-0000-4000-8000-000000000003";
 const filterId = "11111111-1111-4111-8111-111111111111";
@@ -122,6 +123,11 @@ function baseResult(overrides) {
 }
 
 const activeResult = baseResult({ id: activeId, title: "Aktualna oferta" });
+const sameContentDifferentPost = baseResult({
+  id: sameContentDifferentPostId,
+  title: "Aktualna oferta",
+  sourcePostUrl: "https://www.facebook.com/groups/another-group/posts/9876543210/",
+});
 const archivedResult = baseResult({
   id: archivedId,
   title: "Archiwalna oferta",
@@ -153,17 +159,17 @@ const reviewResult = baseResult({
 const listPayload = {
   filters: [filter],
   latestScan: null,
-  summary: { activeFilters: 1, pausedFilters: 0, listingsCount: 3, activeListings: 1, removedListings: 1, newMatches: 0 },
+  summary: { activeFilters: 1, pausedFilters: 0, listingsCount: 4, activeListings: 2, removedListings: 1, newMatches: 0 },
 };
 
 function resultsPayload(includeArchived) {
   return {
     filter,
-    results: [activeResult],
+    results: [activeResult, sameContentDifferentPost],
     reviewResults: [reviewResult],
     archivedResults: includeArchived ? [archivedResult] : [],
-    counts: { active: 1, review: 1, archived: includeArchived ? 1 : 0 },
-    total: 1,
+    counts: { active: 2, review: 1, archived: includeArchived ? 1 : 0 },
+    total: 2,
     newMatches: 0,
     lastScan: null,
     sourceScans: [],
@@ -321,9 +327,11 @@ test("Flip Finder card border: real browser comparison of a current (active) car
       await page.waitForTimeout(50);
 
       const active = await borderInfo(page, activeId);
+      const sameContentDifferentPostCard = await borderInfo(page, sameContentDifferentPostId);
       const review = await borderInfo(page, reviewId);
       const archived = await borderInfo(page, archivedId);
       assert.ok(active, `active card not found at ${viewport.width}px; server output: ${output}`);
+      assert.ok(sameContentDifferentPostCard, `a different Facebook post with identical visible content must remain a separate Finder card at ${viewport.width}px`);
       assert.ok(review, `review (DO OCENY) card not found at ${viewport.width}px; server output: ${output}`);
       assert.ok(archived, `archived card not found at ${viewport.width}px; server output: ${output}`);
 
@@ -343,6 +351,8 @@ test("Flip Finder card border: real browser comparison of a current (active) car
       assert.ok(box.width > 0 && box.height > 0, `the primary action button must be clickable (non-zero size) at ${viewport.width}px`);
 
       if (viewport.width === 1280) {
+        assert.equal(await page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`).count(), 1, "the first post must render exactly once");
+        assert.equal(await page.locator(`[data-testid="finder-card"][data-listing-id="${sameContentDifferentPostId}"]`).count(), 1, "the second post must render exactly once");
         const activeCard = page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`);
         const reviewCard = page.locator(`[data-testid="finder-card"][data-listing-id="${reviewId}"]`);
         // The accept/reject decision actions are REVIEW-specific chrome

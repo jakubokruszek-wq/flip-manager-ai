@@ -525,7 +525,15 @@ function listingStateValues(state: FacebookListingState, metadata: Row) {
 async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, item: FacebookProperty, sourceUrl: string, externalId: string, hash: string, activeListingsCache?: FacebookActiveListingCandidate[]): Promise<{id:string;source:string;externalListingId:string|null}|null> {
   const identity = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: sourceUrl, externalListingId: externalId, contentFingerprint: hash });
   const canonicalSourceUrl = identity.sourcePostUrl ?? sourceUrl;
-  const metadata = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").eq("source_post_url", canonicalSourceUrl).order("collected_at", { ascending: false }).limit(1);
+  // A URL lookup is safe for a confirmed post only when the URL itself proves
+  // the same post id. Context imports can carry a post id alongside a generic
+  // group URL; in that case a URL fallback must never steal another post's
+  // listing before the confirmed-id lookups below run.
+  const sourceUrlPostId = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: sourceUrl }).postId;
+  const sourceUrlMatchesConfirmedPost = !identity.postId || sourceUrlPostId === identity.postId;
+  const metadata = sourceUrlMatchesConfirmedPost
+    ? await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").eq("source_post_url", canonicalSourceUrl).order("collected_at", { ascending: false }).limit(1)
+    : { data: [], error: null };
   if (metadata.error) throw new Error(`Nie udało się sprawdzić tożsamości posta Facebooka: ${metadata.error.message}`);
   const metadataListingId = Array.isArray(metadata.data) ? metadata.data[0]?.listing_id : null;
   if (metadataListingId) {
@@ -541,20 +549,16 @@ async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdm
     return row?.id ? { id: String(row.id), source: String(row.source), externalListingId: str(row.external_listing_id) } : null;
   };
 
-  const normalizedUrlMatch = identity.sourcePostUrl ? await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("normalized_url", identity.sourcePostUrl).order("last_seen_at", { ascending: false }).limit(1)) : null;
+  const normalizedUrlMatch = identity.sourcePostUrl && sourceUrlMatchesConfirmedPost ? await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("normalized_url", identity.sourcePostUrl).order("last_seen_at", { ascending: false }).limit(1)) : null;
   if (normalizedUrlMatch) return normalizedUrlMatch;
-  const externalMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("external_listing_id", externalId).order("last_seen_at", { ascending: false }).limit(1));
-  if (externalMatch) return externalMatch;
-  if (identity.postId && identity.postId !== externalId) {
+  if (identity.postId) {
+    // Once the source proves a post id, resolve that id before considering any
+    // legacy external key. An unstable/reused external_listing_id must never
+    // redirect one confirmed Facebook post onto another post's listing.
     const postIdMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("external_listing_id", identity.postId).order("last_seen_at", { ascending: false }).limit(1));
     if (postIdMatch) return postIdMatch;
     const canonicalPostIdMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("external_listing_id", `facebook:post:${identity.postId}`).order("last_seen_at", { ascending: false }).limit(1));
     if (canonicalPostIdMatch) return canonicalPostIdMatch;
-  }
-  const contentMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("content_hash", hash).order("last_seen_at", { ascending: false }).limit(1));
-  if (contentMatch) return contentMatch;
-
-  if (identity.postId) {
     const postMetadata = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").filter("metadata->>postId", "eq", identity.postId).order("collected_at", { ascending: false }).limit(1);
     if (!postMetadata.error) {
       const postListingId = Array.isArray(postMetadata.data) ? postMetadata.data[0]?.listing_id : null;
@@ -564,6 +568,19 @@ async function findExisting(supabase: ReturnType<typeof createFacebookWatcherAdm
         if (existing.data?.id) return { id: String(existing.data.id), source: String(existing.data.source), externalListingId: str(existing.data.external_listing_id) };
       }
     }
+  } else {
+    const externalMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("external_listing_id", externalId).order("last_seen_at", { ascending: false }).limit(1));
+    if (externalMatch) return externalMatch;
+  }
+
+  // A confirmed Facebook post id is authoritative. Never let an identical
+  // content hash from another post redirect this import onto an existing
+  // listing; the second post must receive its own listings.id. Content hash
+  // remains a useful fallback only for imports which carry no confirmed post
+  // identity at all.
+  if (!identity.postId) {
+    const contentMatch = await lookup(supabase.from("listings").select("id,source,external_listing_id").eq("source", "facebook").eq("content_hash", hash).order("last_seen_at", { ascending: false }).limit(1));
+    if (contentMatch) return contentMatch;
   }
 
   const candidates = activeListingsCache ?? await fetchFacebookActiveListingCandidates();

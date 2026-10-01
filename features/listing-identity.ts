@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 
 /**
  * Stable identity helpers shared by the Facebook Collector, Watcher and
- * Finder. The first record wins, so callers must order records by their
- * preferred winner before calling dedupeByListingIdentity().
+ * Finder. The first record in each identity tier wins, so callers must order
+ * records by their preferred winner before calling dedupeByListingIdentity().
  */
 export type ListingIdentity = {
   listingId: string;
@@ -164,12 +164,24 @@ function finiteNumber(value: number | null | undefined): number | null {
 
 export function dedupeByListingIdentity<T>(records: T[], identityOf: (record: T) => ListingIdentity): T[] {
   const seenListingIds = new Set<string>();
-  const seenCanonicalKeys = new Set<string>();
+  /**
+   * Keep the post id which owns every canonical key. A content/parameter key
+   * is a weak fallback: it may merge two records only while neither record
+   * proves a different Facebook post. Once two confirmed post ids differ,
+   * that weak key must not hide either real post.
+   */
+  const seenCanonicalKeys = new Map<string, string | null>();
 
-  return records.filter((record) => {
+  // Confirmed post identities are processed first so an unconfirmed legacy
+  // row can never occupy a weak fingerprint slot and hide a later real post.
+  // Within each tier the caller's preferred ordering remains authoritative.
+  const ordered = records.map((record) => {
     const identity = identityOf(record);
+    return { record, identity, canonical: canonicalFacebookIdentity(identity) };
+  }).sort((left, right) => Number(right.canonical.postId !== null) - Number(left.canonical.postId !== null));
+
+  return ordered.filter(({ identity, canonical }) => {
     if (seenListingIds.has(identity.listingId)) return false;
-    const canonical = canonicalFacebookIdentity(identity);
     const keys = identity.source === "facebook"
       ? canonical.keys
       : [identity.externalListingId?.trim() ? `${identity.source}:${identity.externalListingId.trim()}` : null, normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl)].filter((key): key is string => Boolean(key));
@@ -180,11 +192,26 @@ export function dedupeByListingIdentity<T>(records: T[], identityOf: (record: T)
     // collapsing parameter-only legacy rows.
     const strongKeys = identity.source === "facebook" ? keys.filter((key) => !key.startsWith("facebook:parameters:")) : keys;
     const parameterKeys = identity.source === "facebook" ? keys.filter((key) => key.startsWith("facebook:parameters:")) : [];
-    if (strongKeys.some((key) => seenCanonicalKeys.has(key))) return false;
-    if (strongKeys.length === 0 && parameterKeys.some((key) => seenCanonicalKeys.has(key))) return false;
+    const currentPostId = identity.source === "facebook" ? canonical.postId : null;
+    const conflictsWithDifferentPost = (key: string) => {
+      const ownerPostId = seenCanonicalKeys.get(key);
+      return ownerPostId !== undefined && ownerPostId !== null && currentPostId !== null && ownerPostId !== currentPostId;
+    };
+    const duplicateOfSamePost = (key: string) => {
+      const ownerPostId = seenCanonicalKeys.get(key);
+      return ownerPostId !== undefined && (ownerPostId === null || currentPostId === null || ownerPostId === currentPostId);
+    };
+    // A shared content/external/URL key cannot collapse two confirmed post
+    // ids. A same-post key still deduplicates duplicate listings normally.
+    if (strongKeys.some((key) => !conflictsWithDifferentPost(key) && duplicateOfSamePost(key))) return false;
+    if (strongKeys.length === 0 && parameterKeys.some((key) => !conflictsWithDifferentPost(key) && duplicateOfSamePost(key))) return false;
     seenListingIds.add(identity.listingId);
-    for (const key of strongKeys) seenCanonicalKeys.add(key);
-    if (strongKeys.length === 0) for (const key of parameterKeys) seenCanonicalKeys.add(key);
+    for (const key of strongKeys) {
+      if (!seenCanonicalKeys.has(key) || currentPostId !== null) seenCanonicalKeys.set(key, currentPostId);
+    }
+    if (strongKeys.length === 0) for (const key of parameterKeys) {
+      if (!seenCanonicalKeys.has(key) || currentPostId !== null) seenCanonicalKeys.set(key, currentPostId);
+    }
     return true;
-  });
+  }).map(({ record }) => record);
 }
