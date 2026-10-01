@@ -9,8 +9,7 @@ export const LISTING_SOURCES = [
 export type ListingSource = PropertyFinderSource;
 
 export const ACTIVE_SCAN_SOURCES = [
-  "otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta",
-  "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie",
+  "otodom", "olx", "morizon",
 ] as const satisfies readonly ListingSource[];
 
 export type ActiveScanSource = (typeof ACTIVE_SCAN_SOURCES)[number];

@@ -25,6 +25,11 @@ export type SearchSource = {
   fetch(criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult>;
 };
 
+/** The current Production schema accepts only these source values. External
+ * adapters stay registered for local fixtures, but cannot be scheduled until
+ * their source constraint is separately approved and migrated. */
+export const SCHEMA_READY_SOURCE_IDS = ["otodom", "olx", "morizon"] as const;
+
 export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
   { id: "gratka", label: "Gratka", hostnames: ["gratka.pl"], searchPath: (city) => `/nieruchomosci/mieszkania/sprzedam/${slugifyCity(city)}` },
   { id: "nieruchomosci_online", label: "Nieruchomosci-online.pl", hostnames: ["nieruchomosci-online.pl"], searchPath: (city) => `/sprzedaz/mieszkanie/${slugifyCity(city)}.html` },
@@ -59,7 +64,7 @@ export const SOURCES: SearchSource[] = [
 ];
 
 export function activeSources(criteria: SearchFilter): SearchSource[] {
-  return SOURCES.filter((source) => criteria.sources.includes(source.id));
+  return SOURCES.filter((source) => criteria.sources.includes(source.id) && SCHEMA_READY_SOURCE_IDS.includes(source.id as (typeof SCHEMA_READY_SOURCE_IDS)[number]));
 }
 
 export function slugifyCity(city: string | null): string {

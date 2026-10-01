@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { SearchFilter } from "@/features/flip-finder";
-import { SOURCES, slugifyCity } from "./search-source-registry.ts";
+import { activeSources, SOURCES, slugifyCity } from "./search-source-registry.ts";
 
 const filter: SearchFilter = {
   id: "00000000-0000-4000-8000-000000000002",
@@ -50,6 +50,11 @@ test("registry exposes every requested external adapter without touching the net
 test("source paths use the stable Łódź slug", () => {
   assert.equal(slugifyCity("Łódź"), "lodz");
   assert.equal(slugifyCity("Łódź-Bałuty"), "lodz-baluty");
+});
+
+test("external adapters stay registered but are not schedulable before schema approval", () => {
+  assert.deepEqual(activeSources({ ...filter, sources: ["gratka"] }).map((source) => source.id), []);
+  assert.deepEqual(activeSources({ ...filter, sources: ["otodom", "domy"] }).map((source) => source.id), ["otodom"]);
 });
 
 test("external adapters retry a rate-limited response once and parse only the verified listing", async () => {
