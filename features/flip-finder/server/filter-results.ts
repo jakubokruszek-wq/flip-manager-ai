@@ -25,7 +25,7 @@ import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadat
 import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
 import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
 import { resolveListingUrl } from "@/features/listing-url";
-import { canonicalFacebookContentFingerprint, dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
+import { canonicalFacebookContentFingerprint, canonicalFacebookParameterFingerprint, dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
 
 type Row = Record<string, unknown>;
 
@@ -97,6 +97,7 @@ type ListingRow = Pick<
   externalListingId?: string | null;
   contentHash?: string | null;
   contentFingerprint?: string | null;
+  parameterFingerprint?: string | null;
   facebookPostId?: string | null;
   listingIntent?: string | null;
   sourceMetadataCollectedAt?: string | null;
@@ -286,12 +287,17 @@ export async function getFilterResults(filterId: string, includeArchived = false
       .map((listing) => {
         const sourcePostUrl = sourcePostUrlByListingId.get(listing.id) ?? null;
         const location = [listing.address, listing.district, listing.city].filter(Boolean).join(", ");
+        const parameterLocation = [listing.address, listing.district].filter(Boolean);
+        const parameterFingerprint = listing.source === "facebook" && parameterLocation.length > 0
+          ? canonicalFacebookParameterFingerprint({ title: listing.title, description: listing.description, price: listing.price, area: listing.area, rooms: listing.rooms, location: [...parameterLocation, listing.city].filter(Boolean).join(", ") })
+          : null;
         const contentFingerprint = listing.source === "facebook" && (Boolean(listing.description) || Boolean(location) || listing.images.length > 0)
           ? canonicalFacebookContentFingerprint({ title: listing.title, description: listing.description, price: listing.price, area: listing.area, rooms: listing.rooms, location, imageUrls: listing.images })
           : listing.contentHash;
         return [listing.id, {
           ...listing,
           sourcePostUrl,
+          parameterFingerprint,
           facebookPostId: sourcePostIdByListingId.get(listing.id) ?? null,
           contentFingerprint,
           listingIntent: listingIntentByListingId.get(listing.id) ?? null,
@@ -451,6 +457,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       sourcePostUrl: result.sourcePostUrl,
       originalUrl: result.originalUrl,
       facebookPostId: listingsById.get(result.id)?.facebookPostId ?? null,
+      parameterFingerprint: listingsById.get(result.id)?.parameterFingerprint ?? null,
       contentFingerprint: listingsById.get(result.id)?.contentFingerprint ?? listingsById.get(result.id)?.contentHash ?? null,
     }),
   );

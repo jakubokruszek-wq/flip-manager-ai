@@ -12,6 +12,8 @@ export type ListingIdentity = {
   sourcePostUrl?: string | null;
   originalUrl?: string | null;
   facebookPostId?: string | null;
+  /** Stable property parameters, deliberately independent of image URLs. */
+  parameterFingerprint?: string | null;
   contentFingerprint?: string | null;
 };
 
@@ -40,6 +42,7 @@ export type CanonicalFacebookIdentity = {
   postId: string | null;
   sourcePostUrl: string | null;
   externalListingId: string | null;
+  parameterFingerprint: string | null;
   contentFingerprint: string | null;
   keys: string[];
 };
@@ -47,13 +50,14 @@ export type CanonicalFacebookIdentity = {
 /**
  * Resolves every stable Facebook identity we can prove. A post ID is the
  * strongest key, followed by the normalized source URL and external ID. The
- * fingerprint is deliberately last: it is based on the full listing content,
- * never only title, price and area, and is used to collapse identical
- * cross-posted payloads while keeping merely similar offers separate.
+ * Parameter identity is optional and is only a conservative fallback for
+ * Facebook reposts. The full-content fingerprint remains the last fallback;
+ * it is based on the full listing content and never only title, price and
+ * area.
  */
 export function canonicalFacebookIdentity(input: Omit<ListingIdentity, "listingId" | "source"> & { source?: string | null }): CanonicalFacebookIdentity {
   const source = input.source ?? "facebook";
-  if (source !== "facebook") return { postId: null, sourcePostUrl: null, externalListingId: null, contentFingerprint: null, keys: [] };
+  if (source !== "facebook") return { postId: null, sourcePostUrl: null, externalListingId: null, parameterFingerprint: null, contentFingerprint: null, keys: [] };
 
   const sourcePostUrl = normalizeListingIdentityUrl("facebook", input.sourcePostUrl)
     ?? normalizeListingIdentityUrl("facebook", input.originalUrl);
@@ -62,14 +66,43 @@ export function canonicalFacebookIdentity(input: Omit<ListingIdentity, "listingI
     ?? extractFacebookPostId(input.originalUrl)
     ?? extractFacebookPostId(input.externalListingId);
   const externalListingId = normalizeIdentityPart(input.externalListingId);
+  const parameterFingerprint = normalizeIdentityPart(input.parameterFingerprint);
   const contentFingerprint = normalizeIdentityPart(input.contentFingerprint);
   const keys = [
     postId ? `facebook:post:${postId}` : null,
     sourcePostUrl ? `facebook:url:${sourcePostUrl}` : null,
     externalListingId ? `facebook:external:${externalListingId}` : null,
+    parameterFingerprint ? `facebook:parameters:${parameterFingerprint}` : null,
     contentFingerprint ? `facebook:fingerprint:${contentFingerprint}` : null,
   ].filter((key): key is string => Boolean(key));
-  return { postId, sourcePostUrl, externalListingId, contentFingerprint, keys };
+  return { postId, sourcePostUrl, externalListingId, parameterFingerprint, contentFingerprint, keys };
+}
+
+/**
+ * Computes a conservative property-level identity for Facebook reposts.
+ *
+ * This intentionally needs a title, total price, area and a location. It is
+ * therefore stronger than a title/price/area-only comparison, while ignoring
+ * image URLs that may be missing on one scan or replaced after gallery
+ * hydration. Callers should only provide a location when it contains a
+ * property-level component (street, neighbourhood or district), not just a
+ * city. A post ID or URL always wins when available.
+ */
+export function canonicalFacebookParameterFingerprint(input: {
+  title?: string | null;
+  description?: string | null;
+  price?: number | null;
+  area?: number | null;
+  rooms?: number | null;
+  location?: string | null;
+}): string | null {
+  const title = normalizeFingerprintText(input.title);
+  const description = normalizeFingerprintText(input.description);
+  const location = normalizeFingerprintText(input.location);
+  const price = finiteNumber(input.price);
+  const area = finiteNumber(input.area);
+  if (!title || !location || price === null || area === null) return null;
+  return createHash("sha256").update(JSON.stringify({ title, description, price, area, rooms: finiteNumber(input.rooms), location })).digest("hex");
 }
 
 export function canonicalFacebookContentFingerprint(input: {
@@ -140,9 +173,18 @@ export function dedupeByListingIdentity<T>(records: T[], identityOf: (record: T)
     const keys = identity.source === "facebook"
       ? canonical.keys
       : [identity.externalListingId?.trim() ? `${identity.source}:${identity.externalListingId.trim()}` : null, normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl)].filter((key): key is string => Boolean(key));
-    if (keys.some((key) => seenCanonicalKeys.has(key))) return false;
+    // Parameter identity is a last-resort key only. If either record has a
+    // stronger Facebook identity (post id, URL, external id or full content),
+    // do not collapse it merely because a second post has the same visible
+    // parameters. This keeps genuinely different posts separate while still
+    // collapsing parameter-only legacy rows.
+    const strongKeys = identity.source === "facebook" ? keys.filter((key) => !key.startsWith("facebook:parameters:")) : keys;
+    const parameterKeys = identity.source === "facebook" ? keys.filter((key) => key.startsWith("facebook:parameters:")) : [];
+    if (strongKeys.some((key) => seenCanonicalKeys.has(key))) return false;
+    if (strongKeys.length === 0 && parameterKeys.some((key) => seenCanonicalKeys.has(key))) return false;
     seenListingIds.add(identity.listingId);
-    for (const key of keys) seenCanonicalKeys.add(key);
+    for (const key of strongKeys) seenCanonicalKeys.add(key);
+    if (strongKeys.length === 0) for (const key of parameterKeys) seenCanonicalKeys.add(key);
     return true;
   });
 }

@@ -103,3 +103,16 @@ test("multiple metadata rows for one listing prefer a valid URL before recency",
   assert.equal(result.length, 1);
   assert.equal(result[0]?.sourcePostUrl, "https://www.facebook.com/groups/test/posts/4486483384955652");
 });
+
+test("a rejected low-score private renovation never receives the high-priority badge", async () => {
+  rows = [{
+    source_post_url: "https://www.facebook.com/groups/test/posts/4486483384955653",
+    group_name: "Test",
+    published_at: null,
+    collected_at: "2026-09-27T12:00:00.000Z",
+    metadata: { listingIntent: "SELL_PROPERTY", sellerType: "private", condition: "renovation", opportunityScore: 20 },
+    listings: { ...listing("rejected-low", 439_000), lifecycle_status: "REJECTED", flip_score: 20 },
+  }];
+  const result = await listFacebookWatcher();
+  assert.equal(result[0]?.highPriority, false);
+});

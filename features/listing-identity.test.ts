@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalFacebookContentFingerprint, canonicalFacebookIdentity, dedupeByListingIdentity } from "./listing-identity.ts";
+import { canonicalFacebookContentFingerprint, canonicalFacebookIdentity, canonicalFacebookParameterFingerprint, dedupeByListingIdentity } from "./listing-identity.ts";
 
 const facebook = (listingId: string, sourcePostUrl: string | null, externalListingId: string | null, observedAt: string) => ({
   listingId,
@@ -74,4 +74,33 @@ test("identical full-content fingerprints collapse cross-post duplicates, while 
 
   const distinct = duplicate.map((record, index) => ({ ...record, contentFingerprint: `${fingerprint}-${index}` }));
   assert.equal(dedupeByListingIdentity(distinct, (record) => record).length, 2);
+});
+
+test("parameter fingerprint collapses a repost when gallery/content differs", () => {
+  const parameters = canonicalFacebookParameterFingerprint({ title: "Mieszkanie 2 pokoje", price: 280000, area: 59.9, rooms: 2, location: "Bałuty, Łódź" });
+  assert.ok(parameters);
+  const records = [
+    { ...facebook("listing-with-photo", null, null, "2026-09-27T12:00:00Z"), parameterFingerprint: parameters },
+    { ...facebook("listing-without-photo", null, null, "2026-09-27T11:00:00Z"), parameterFingerprint: parameters },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record), [records[0]]);
+});
+
+test("different Facebook posts stay separate even when visible parameters match", () => {
+  const parameters = canonicalFacebookParameterFingerprint({ title: "Mieszkanie", description: "Ten sam opis", price: 280000, area: 59.9, rooms: 2, location: "Bałuty, Łódź" });
+  assert.ok(parameters);
+  const records = [
+    { ...facebook("listing-a", "https://www.facebook.com/groups/a/posts/100000000000001", "100000000000001", "2026-09-27T12:00:00Z"), parameterFingerprint: parameters, contentFingerprint: "a" },
+    { ...facebook("listing-b", "https://www.facebook.com/groups/b/posts/100000000000002", "100000000000002", "2026-09-27T11:00:00Z"), parameterFingerprint: parameters, contentFingerprint: "b" },
+  ];
+  assert.equal(dedupeByListingIdentity(records, (record) => record).length, 2);
+});
+
+test("parameter fingerprint requires a location and keeps distinct parameters separate", () => {
+  assert.equal(canonicalFacebookParameterFingerprint({ title: "Mieszkanie", price: 280000, area: 59.9, rooms: 2 }), null);
+  const first = canonicalFacebookParameterFingerprint({ title: "Mieszkanie", price: 280000, area: 59.9, rooms: 2, location: "Bałuty, Łódź" });
+  const second = canonicalFacebookParameterFingerprint({ title: "Mieszkanie", price: 550000, area: 55, rooms: 2, location: "Bałuty, Łódź" });
+  assert.ok(first);
+  assert.ok(second);
+  assert.notEqual(first, second);
 });
