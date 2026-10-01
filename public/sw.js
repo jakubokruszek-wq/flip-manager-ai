@@ -3,7 +3,7 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 self.addEventListener("push", (event) => {
   let payload = { title: "Flip Manager", body: "Nowa okazja inwestycyjna.", data: { url: "/alerts" } };
   try { if (event.data) payload = { ...payload, ...event.data.json() }; } catch { if (event.data) payload.body = event.data.text(); }
-  event.waitUntil(self.registration.showNotification(payload.title, { body: payload.body, icon: payload.icon || "/icon", badge: payload.badge || "/icon", data: payload.data, tag: payload.data?.eventType && payload.data?.listingId ? `${payload.data.eventType}:${payload.data.listingId}` : undefined }));
+  event.waitUntil(self.registration.showNotification(payload.title, { body: payload.body, icon: payload.icon || "/icons/flip-manager-192.png", badge: payload.badge || "/icons/flip-manager-192.png", data: payload.data, tag: payload.data?.eventType && payload.data?.listingId ? `${payload.data.eventType}:${payload.data.listingId}` : undefined }));
 });
 self.addEventListener("notificationclick", (event) => {
   event.notification.close(); const target = new URL(event.notification.data?.url || "/alerts", self.location.origin).href;

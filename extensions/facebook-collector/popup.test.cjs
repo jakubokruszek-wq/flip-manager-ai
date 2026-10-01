@@ -67,3 +67,12 @@ test("the manifest registers group-discovery.js on both known 'your groups' Face
     "https://m.facebook.com/groups/", "https://m.facebook.com/groups/?*",
   ]));
 });
+
+test("the extension popup carries the Flip Manager brand icon", () => {
+  assert.match(popupHtml, /<img src="icons\/flip-manager-48\.png" alt="Flip Manager"/);
+  assert.deepEqual(manifest.action.default_icon, {
+    16: "icons/flip-manager-16.png",
+    32: "icons/flip-manager-32.png",
+    48: "icons/flip-manager-48.png",
+  });
+});

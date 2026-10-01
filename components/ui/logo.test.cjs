@@ -15,6 +15,7 @@ test("visible product branding includes the exact product and operator signature
     assert.match(source, /Flip Manager by Jakub Okruszek/);
   }
   assert.match(logo, /aria-label="Jakub Okruszek"/);
+  assert.match(logo, /\/icons\/flip-manager-48\.png/);
   assert.match(globals, /Segoe Print/);
   assert.match(globals, /color: var\(--gold\)/);
   assert.doesNotMatch(globals, /https?:\/\//);
