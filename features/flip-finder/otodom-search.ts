@@ -133,7 +133,11 @@ export function isConfirmedOtodomOfferUrl(value: string | null | undefined): boo
   if (url.protocol !== "https:") return false;
   if (!/(^|\.)otodom\.pl$/i.test(url.hostname)) return false;
   if (/\[[^\]/]+\]/.test(url.pathname)) return false;
-  return /^\/pl\/oferta\/[^/]+-id[a-z0-9]+\/?$/i.test(url.pathname);
+  // Otodom serves both canonical paths with and without the legacy `.html`
+  // suffix. Both are single-offer URLs and carry the same stable `-ID...`
+  // identity; rejecting the suffix silently dropped otherwise valid offers
+  // before they reached the Finder persistence pipeline.
+  return /^\/pl\/oferta\/[^/]+-id[a-z0-9]+(?:\.html)?\/?$/i.test(url.pathname);
 }
 
 export function calculateContentHash(value: Record<string, unknown>): string {

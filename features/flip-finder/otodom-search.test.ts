@@ -23,6 +23,10 @@ test("a true mobile subdomain (m.otodom.pl) is confirmed like any other otodom.p
   assert.equal(isConfirmedOtodomOfferUrl("https://m.otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS"), true);
 });
 
+test("a legacy .html suffix on a real Otodom offer remains confirmed", () => {
+  assert.equal(isConfirmedOtodomOfferUrl("https://www.otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS.html"), true);
+});
+
 // The hostname check is anchored ($ at the end, requiring a dot or the
 // string start immediately before "otodom.pl"), which already defeats both
 // classic lookalike-domain tricks below by construction -- these tests make

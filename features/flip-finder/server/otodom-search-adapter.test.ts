@@ -73,7 +73,7 @@ test("valid duplicate Otodom rows collapse after URL normalization and valid row
   const items = [
     { ...base, id: "same-id", url: "https://www.otodom.pl/pl/oferta/mieszkanie-IDABC123/?utm_source=feed" },
     { ...base, id: "different-id", url: "https://m.otodom.pl/pl/oferta/mieszkanie-IDABC123?fbclid=tracking" },
-    { ...base, id: "other-id", url: "https://www.otodom.pl/pl/oferta/inne-IDXYZ987" },
+    { ...base, id: "other-id", url: "https://www.otodom.pl/pl/oferta/inne-IDXYZ987.html" },
   ];
   globalThis.fetch = async () => responseFor(items);
   try {
@@ -82,6 +82,7 @@ test("valid duplicate Otodom rows collapse after URL normalization and valid row
     assert.equal(result.normalizedItems, 2);
     assert.equal(result.listings.length, 2);
     assert.equal(result.rejectionReasons.duplicate, 1);
+    assert.equal(result.listings[1]?.originalUrl, "https://otodom.pl/pl/oferta/inne-IDXYZ987.html");
   } finally {
     globalThis.fetch = originalFetch;
   }
