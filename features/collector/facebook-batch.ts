@@ -812,9 +812,20 @@ function normalizeMainFeedTelemetry(value: unknown): CollectorMainFeedDiagnostic
 function facebookSourceUrl(value: string, type: CollectorSourceType): string {
   const url = new URL(value);
   if (url.protocol !== "https:" || url.hostname !== "www.facebook.com") throw new Error("COLLECTOR_SOURCE_URL_INVALID");
-  if (type === "GROUP" && !/^\/groups\/[^/]+\/?$/i.test(url.pathname)) throw new Error("COLLECTOR_GROUP_URL_INVALID");
-  url.search = ""; url.hash = ""; url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
-  return url.toString();
+  if (type === "GROUP") {
+    if (!/^\/groups\/[^/]+\/?$/i.test(url.pathname)) throw new Error("COLLECTOR_GROUP_URL_INVALID");
+    url.search = ""; url.hash = ""; url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
+    return url.toString();
+  }
+
+  // Facebook emits profile sources in both `/123.../` and
+  // `/profile.php?id=123...` forms.  Keep the numeric identity when
+  // canonicalizing the latter; clearing the query first changed the source
+  // id to the literal `profile.php` and made every such batch fail with a
+  // 422 before it could reach persistence.
+  const profileId = url.searchParams.get("id") ?? url.pathname.match(/^\/(\d{5,30})\/?$/i)?.[1] ?? null;
+  if (!profileId || !/^\d{5,30}$/.test(profileId)) throw new Error("COLLECTOR_PROFILE_URL_INVALID");
+  return `https://www.facebook.com/profile.php?id=${profileId}`;
 }
 
 function facebookPostUrl(value: string, postId: string, sourceId: string, sourceType: CollectorSourceType): string {

@@ -340,6 +340,24 @@ test("fails closed on source mismatch and forged media association", () => {
   assert.throws(() => normalizeFacebookCollectorBatch({ ...raw, posts: [{ ...raw.posts[0], permalink: "https://www.facebook.com/groups/foreign/posts/1577700267381450/" }] }), /COLLECTOR_POST_SOURCE_URL_MISMATCH/);
 });
 
+test("accepts a PROFILE batch when the source uses Facebook's profile.php?id URL", () => {
+  const profileId = "100008036582269";
+  const postId = "1577700267381450";
+  const batch = normalizeFacebookCollectorBatch({
+    scanId: "11111111-1111-4111-8111-111111111111",
+    batchId: "22222222-2222-4222-8222-222222222222",
+    sourceId: profileId,
+    sourceType: "PROFILE",
+    sourceUrl: `https://www.facebook.com/profile.php?id=${profileId}`,
+    collectedAt: "2026-08-29T12:00:00Z",
+    health: { status: "HEALTHY", visibleCardCount: 1, capturedPostCount: 1, scrolls: 3, durationMs: 5000, stopReason: "NO_NEW_IDS", reasons: [] },
+    posts: [{ postId, permalink: `https://www.facebook.com/${profileId}/posts/${postId}/`, sourceId: profileId, sourceType: "PROFILE", media: [], discoveryLayers: ["DOM"], firstSeenIteration: 0 }],
+  });
+  assert.equal(batch.sourceUrl, `https://www.facebook.com/profile.php?id=${profileId}`);
+  assert.equal(batch.sourceId, profileId);
+  assert.equal(batch.posts[0]?.permalink, `https://www.facebook.com/${profileId}/posts/${postId}/`);
+});
+
 test("health check marks low coverage and growing feeds without IDs as degraded", () => {
   const health = evaluateCollectorHealth({ visibleCardCount: 10, capturedPostCount: 2, scrolls: 3, durationMs: 8000, feedGrew: true, newIdsAfterScroll: false, stopReason: "NO_NEW_IDS" });
   assert.equal(health.status, "DEGRADED");

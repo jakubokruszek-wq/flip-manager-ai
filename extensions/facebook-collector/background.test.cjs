@@ -511,6 +511,12 @@ test("start trace uses request ids, bounded safe stages and never stores credent
   assert.doesNotMatch(background, /collectorStartTraces[\s\S]{0,200}deviceToken/);
 });
 
+test("upload failures retain the server rejection code without exposing response details", () => {
+  assert.match(background, /globalThis\.FlipCollectorRuntime\.safeErrorCode\(payload\.code\)/);
+  assert.match(background, /error\.code = `\$\{uploadCode\}\$\{serverCode \? `_\$\{serverCode\}` : ""\}`\.slice\(0, 120\)/);
+  assert.doesNotMatch(background, /error\.code\s*=\s*payload\.code/);
+});
+
 test("COLLECT_SOURCE response and whole-source deadlines are hard, terminal and fail-closed", () => {
   assert.match(background, /importScripts\("collector-runtime\.js"\)/);
   assert.match(background, /COLLECT_SOURCE_RESPONSE_MIN_TIMEOUT_MS = 40_000/);

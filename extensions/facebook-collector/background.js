@@ -1104,7 +1104,15 @@ async function signedPost(urlValue, body, timeoutMs = null) {
   const signature = hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical)));
   const response = await fetch(url.toString(), { method: "POST", headers: { "Content-Type": "application/json", "X-Flip-Collector-Device-Id": config.deviceId, "X-Flip-Collector-Timestamp": timestamp, "X-Flip-Collector-Nonce": nonce, "X-Flip-Collector-Signature": signature }, body, ...(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}) });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`COLLECTOR_UPLOAD_${response.status}:${payload.code || "FAILED"}`);
+  if (!response.ok) {
+    const uploadCode = `COLLECTOR_UPLOAD_${response.status}`;
+    const serverCode = globalThis.FlipCollectorRuntime.safeErrorCode(payload.code);
+    const error = new Error(`${uploadCode}:${serverCode || "FAILED"}`);
+    // Keep the HTTP status visible to poll diagnostics while retaining the
+    // server's bounded machine-readable reason for the failure report.
+    error.code = `${uploadCode}${serverCode ? `_${serverCode}` : ""}`.slice(0, 120);
+    throw error;
+  }
   return payload;
 }
 

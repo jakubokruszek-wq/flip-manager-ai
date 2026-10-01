@@ -66,3 +66,10 @@ test("timeout diagnostics cannot retain arbitrary credentials", () => {
   const diagnostics = JSON.parse(JSON.stringify(runtime.safeDiagnostics({ query: "mieszkanie", tabId: 4, elapsedMs: 12, source: "group", deviceToken: "secret", cookie: "secret" })));
   assert.deepEqual(diagnostics, { query: "mieszkanie", tabId: 4, elapsedMs: 12, source: "group" });
 });
+
+test("server rejection codes stay bounded and preserve the actionable code", () => {
+  assert.equal(runtime.safeErrorCode("COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST: details"), "COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST");
+  assert.equal(runtime.safeErrorCode("COLLECTOR_BATCH_LOOKUP_FAILED"), "COLLECTOR_BATCH_LOOKUP_FAILED");
+  assert.equal(runtime.safeErrorCode("credentials=must-not-survive"), null);
+  assert.equal(runtime.safeErrorCode("x".repeat(500)), null);
+});

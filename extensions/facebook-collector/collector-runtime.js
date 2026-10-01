@@ -76,5 +76,10 @@
     return output;
   }
 
-  root.FlipCollectorRuntime = { createDeadline, safeDiagnostics, sendMessageWithTimeout, timeoutError, withTimeout };
+  function safeErrorCode(value) {
+    const code = typeof value === "string" ? value.trim().toUpperCase().split(":", 1)[0] : "";
+    return /^[A-Z][A-Z0-9_]{2,119}$/.test(code) ? code : null;
+  }
+
+  root.FlipCollectorRuntime = { createDeadline, safeDiagnostics, safeErrorCode, sendMessageWithTimeout, timeoutError, withTimeout };
 })(globalThis);
