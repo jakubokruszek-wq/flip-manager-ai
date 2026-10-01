@@ -133,3 +133,19 @@ test("parameter fingerprint requires a location and keeps distinct parameters se
   assert.ok(second);
   assert.notEqual(first, second);
 });
+
+test("same non-Facebook source URL is deduplicated even when external ids differ", () => {
+  const records = [
+    { listingId: "olx-new", source: "olx", externalListingId: "new-id", originalUrl: "https://www.olx.pl/d/oferta/mieszkanie-lodz-IDnew/?utm_source=feed&fbclid=tracking" },
+    { listingId: "olx-old", source: "olx", externalListingId: "old-id", originalUrl: "https://olx.pl/d/oferta/mieszkanie-lodz-IDnew" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record), [records[0]]);
+});
+
+test("same normalized URL deduplication never crosses source boundaries", () => {
+  const records = [
+    { listingId: "olx-1", source: "olx", externalListingId: "shared", originalUrl: "https://example.test/listing/1?utm_campaign=x" },
+    { listingId: "morizon-1", source: "morizon", externalListingId: "shared", originalUrl: "https://example.test/listing/1" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record), records);
+});

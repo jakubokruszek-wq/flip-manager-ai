@@ -18,17 +18,18 @@ export type ListingIdentity = {
 };
 
 export function normalizeListingIdentityUrl(source: string, value: string | null | undefined): string | null {
-  if (source !== "facebook" || !value?.trim()) return null;
+  if (!value?.trim()) return null;
   try {
     const url = new URL(value.trim());
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const normalizedSource = source.toLocaleLowerCase("en-US");
     const hostname = url.hostname.toLocaleLowerCase("en-US").replace(/^(?:www|m)\./, "");
-    const isFacebook = source.toLocaleLowerCase("en-US") === "facebook";
+    const isFacebook = normalizedSource === "facebook";
     if (isFacebook && hostname !== "facebook.com" && !hostname.endsWith(".facebook.com")) return null;
     const pathname = url.pathname.replace(/\/+$/, "");
     if (!pathname || pathname === "/" || isFacebook && pathname.toLocaleLowerCase("en-US").includes("/flip-manager/manual/")) return null;
     const query = [...url.searchParams.entries()]
-      .filter(([key]) => !/^utm_/iu.test(key) && !["ref", "mibextid", "__tn__", "locale"].includes(key.toLocaleLowerCase("en-US")))
+      .filter(([key]) => !/^utm_/iu.test(key) && !["ref", "mibextid", "__tn__", "locale", "fbclid", "gclid", "dclid", "msclkid", "yclid"].includes(key.toLocaleLowerCase("en-US")))
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
       .join("&");
@@ -184,7 +185,11 @@ export function dedupeByListingIdentity<T>(records: T[], identityOf: (record: T)
     if (seenListingIds.has(identity.listingId)) return false;
     const keys = identity.source === "facebook"
       ? canonical.keys
-      : [identity.externalListingId?.trim() ? `${identity.source}:${identity.externalListingId.trim()}` : null, normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl)].filter((key): key is string => Boolean(key));
+      : [
+        identity.externalListingId?.trim() ? `${identity.source}:${identity.externalListingId.trim()}` : null,
+        normalizeListingIdentityUrl(identity.source, identity.originalUrl) ? `${identity.source}:url:${normalizeListingIdentityUrl(identity.source, identity.originalUrl)}` : null,
+        normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl) ? `${identity.source}:url:${normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl)}` : null,
+      ].filter((key): key is string => Boolean(key));
     // Parameter identity is a last-resort key only. If either record has a
     // stronger Facebook identity (post id, URL, external id or full content),
     // do not collapse it merely because a second post has the same visible
