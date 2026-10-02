@@ -71,7 +71,7 @@ test("the grouped registry flow reaches every source parser before canonical per
     for (const [group, expected] of [["official_cooperative", saleSources.filter((source) => source.kind === "cooperative").length], ["official_uml", saleSources.filter((source) => source.kind === "municipal").length], ["official_auction", saleSources.filter((source) => source.kind === "krk" || source.kind === "syndic").length]] as const) {
       const result = await fetchOfficialLodzGroup(group, { city: "Łódź" });
       assert.equal(result.listings.length, expected, group);
-      assert.equal(result.listings.every((listing) => listing.officialOffer.sourceId.length > 0), true, group);
+      assert.equal(result.listings.every((listing) => Boolean(listing.officialOffer?.sourceId)), true, group);
     }
   } finally { globalThis.fetch = previousFetch; }
 });

@@ -62,13 +62,13 @@ function expectedWithoutExternalSources(): Set<string> {
   return new Set(EXISTING_SOURCES);
 }
 
-test("the migration is schema-only and does not open the runtime source gate", () => {
+test("the migration is schema-only and the runtime gate lists only locally complete adapters", () => {
   assert.match(migration, /^begin;[\s\S]*commit;\s*$/i);
   assert.doesNotMatch(migration, /\b(insert|update|delete|truncate)\b/i);
   assert.doesNotMatch(migration, /\bdrop\s+(?:table|column)\b/i);
 
   const registry = fs.readFileSync(registryPath, "utf8");
-  assert.match(registry, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[\s*"otodom"\s*,\s*"olx"\s*,\s*"morizon"\s*\]/);
+  assert.match(registry, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[[\s\S]*"otodom"[\s\S]*"olx"[\s\S]*"morizon"[\s\S]*"domiporta"[\s\S]*"sprzedajemy"[\s\S]*"adresowo"[\s\S]*"szybko"[\s\S]*"domy"[\s\S]*"allegro_lokalnie"[\s\S]*"official_uml"[\s\S]*\]/);
   for (const source of REGISTERED_EXTERNAL_SOURCES) {
     assert.match(migration, new RegExp(`['"]${source}['"]`));
   }

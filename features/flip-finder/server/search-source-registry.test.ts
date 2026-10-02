@@ -52,10 +52,15 @@ test("source paths use the stable Łódź slug", () => {
   assert.equal(slugifyCity("Łódź-Bałuty"), "lodz-baluty");
 });
 
-test("external adapters stay registered but are not schedulable before schema approval", () => {
-  assert.deepEqual(activeSources({ ...filter, sources: ["gratka"] }).map((source) => source.id), []);
-  assert.deepEqual(activeSources({ ...filter, sources: ["otodom", "domy"] }).map((source) => source.id), ["otodom"]);
-  assert.deepEqual(activeSources({ ...filter, sources: ["official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
+test("only complete schema-ready adapters are schedulable", () => {
+  assert.deepEqual(
+    activeSources({
+      ...filter,
+      sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie", "official_uml"],
+    }).map((source) => source.id),
+    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie", "official_uml"],
+  );
+  assert.deepEqual(activeSources({ ...filter, sources: ["gratka", "nieruchomosci_online", "oferty_net", "bezposrednio", "official_cooperative", "official_auction"] }).map((source) => source.id), []);
 });
 
 test("external adapters retry a rate-limited response once and parse only the verified listing", async () => {

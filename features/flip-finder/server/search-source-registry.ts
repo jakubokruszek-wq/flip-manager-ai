@@ -26,10 +26,21 @@ export type SearchSource = {
   fetch(criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult>;
 };
 
-/** The current Production schema accepts only these source values. External
- * adapters stay registered for local fixtures, but cannot be scheduled until
- * their source constraint is separately approved and migrated. */
-export const SCHEMA_READY_SOURCE_IDS = ["otodom", "olx", "morizon"] as const;
+/** Sources with a complete local adapter -> persistListing -> canonical path.
+ * The remaining registered adapters stay visible to the registry and fixtures
+ * but remain unschedulable until their live/access gaps are closed. */
+export const SCHEMA_READY_SOURCE_IDS = [
+  "otodom",
+  "olx",
+  "morizon",
+  "domiporta",
+  "sprzedajemy",
+  "adresowo",
+  "szybko",
+  "domy",
+  "allegro_lokalnie",
+  "official_uml",
+] as const;
 
 export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
   { id: "gratka", label: "Gratka", hostnames: ["gratka.pl"], searchPath: (city) => `/nieruchomosci/mieszkania/sprzedam/${slugifyCity(city)}` },
