@@ -26,3 +26,9 @@ test("the other sources keep their plain source-name labels — only Facebook ne
   assert.equal(labels.olx, "OLX");
   assert.equal(labels.morizon, "Morizon");
 });
+
+test("Szybko is labeled as requiring live source verification, not a migration", () => {
+  const schnell = SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === "szybko");
+  assert.equal(schnell?.label, "Szybko.pl — wymaga weryfikacji źródła");
+  assert.doesNotMatch(schnell?.label ?? "", /migracj/i);
+});

@@ -75,8 +75,12 @@ test("malformed portal pages fail closed and HTTP errors never become listings",
     assert.deepEqual(EXTERNAL_PORTAL_PARSERS[source]("<html>blocked</html>", "Łódź").listings, [], source);
   }
   const previousFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("blocked", { status: 403 });
-  try { await assert.rejects(fetchExternalPortal(config("domy"), filter), /HTTP 403/); } finally { globalThis.fetch = previousFetch; }
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return new Response("blocked", { status: 403 }); };
+  try {
+    await assert.rejects(fetchExternalPortal(config("szybko"), filter), /Szybko\.pl: HTTP 403\./);
+    assert.equal(calls, 1, "HTTP 403 must fail closed without proxy/rotation/retry");
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test("each adapter output is idempotent through the existing canonical persistListing path", async () => {

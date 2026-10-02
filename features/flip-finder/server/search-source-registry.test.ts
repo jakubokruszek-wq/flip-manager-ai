@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { SearchFilter } from "@/features/flip-finder";
-import { activeSources, SOURCES, slugifyCity } from "./search-source-registry.ts";
+import { activeSources, EXTERNAL_SOURCE_STATUS, SOURCES, slugifyCity } from "./search-source-registry.ts";
 
 const filter: SearchFilter = {
   id: "00000000-0000-4000-8000-000000000002",
@@ -58,9 +58,14 @@ test("only complete schema-ready adapters are schedulable", () => {
       ...filter,
       sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie"],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
   );
   assert.deepEqual(activeSources({ ...filter, sources: ["gratka", "nieruchomosci_online", "oferty_net", "bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
+});
+
+test("Szybko remains registered but is disabled pending live access verification", () => {
+  assert.equal(EXTERNAL_SOURCE_STATUS.szybko, "path_requires_live_source_verification");
+  assert.deepEqual(activeSources({ ...filter, sources: ["szybko"] }).map((source) => source.id), []);
 });
 
 test("external adapters retry a rate-limited response once and parse only the verified listing", async () => {

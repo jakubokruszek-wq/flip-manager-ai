@@ -68,11 +68,13 @@ test("the migration is schema-only and the runtime gate lists only locally compl
   assert.doesNotMatch(migration, /\bdrop\s+(?:table|column)\b/i);
 
   const registry = fs.readFileSync(registryPath, "utf8");
-  assert.match(registry, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[[\s\S]*"otodom"[\s\S]*"olx"[\s\S]*"morizon"[\s\S]*"domiporta"[\s\S]*"sprzedajemy"[\s\S]*"adresowo"[\s\S]*"szybko"[\s\S]*"domy"[\s\S]*"allegro_lokalnie"[\s\S]*\]/);
+  assert.match(registry, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[[\s\S]*"otodom"[\s\S]*"olx"[\s\S]*"morizon"[\s\S]*"domiporta"[\s\S]*"sprzedajemy"[\s\S]*"adresowo"[\s\S]*"domy"[\s\S]*"allegro_lokalnie"[\s\S]*\]/);
   const gateStart = registry.indexOf("SCHEMA_READY_SOURCE_IDS");
   const gateEnd = registry.indexOf("] as const", gateStart);
   assert.ok(gateStart >= 0 && gateEnd > gateStart, "missing schema-ready source gate");
   assert.doesNotMatch(registry.slice(gateStart, gateEnd), /official_uml/);
+  assert.doesNotMatch(registry.slice(gateStart, gateEnd), /"szybko"/);
+  assert.match(registry, /szybko:\s*"path_requires_live_source_verification"/);
   for (const source of REGISTERED_EXTERNAL_SOURCES) {
     assert.match(migration, new RegExp(`['"]${source}['"]`));
   }

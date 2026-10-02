@@ -57,7 +57,7 @@ export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: 
   { value: "sprzedajemy", label: "Sprzedajemy.pl" },
   { value: "adresowo", label: "Adresowo.pl" },
   { value: "oferty_net", label: "Oferty.net — migracja wymagana" },
-  { value: "szybko", label: "Szybko.pl" },
+  { value: "szybko", label: "Szybko.pl — wymaga weryfikacji źródła" },
   { value: "bezposrednio", label: "Bezposrednio.net.pl — migracja wymagana" },
   { value: "domy", label: "Domy.pl" },
   { value: "allegro_lokalnie", label: "Allegro Lokalnie" },
