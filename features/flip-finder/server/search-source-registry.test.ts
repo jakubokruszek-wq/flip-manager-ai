@@ -58,7 +58,7 @@ test("only complete schema-ready adapters are schedulable", () => {
       ...filter,
       sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie"],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo"],
   );
   assert.deepEqual(activeSources({ ...filter, sources: ["gratka", "nieruchomosci_online", "oferty_net", "bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
 });
@@ -78,7 +78,7 @@ test("a legacy filter cannot schedule unavailable sources while preserving activ
         "official_cooperative", "official_uml", "official_auction",
       ],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo"],
   );
 });
 

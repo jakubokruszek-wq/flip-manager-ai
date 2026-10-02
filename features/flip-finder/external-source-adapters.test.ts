@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { fetchExternalPortal, EXTERNAL_PORTAL_PARSERS } from "./external-source-adapters.ts";
-import { EXTERNAL_SOURCE_CONFIGS, SOURCES } from "./server/search-source-registry.ts";
+import { activeSources, EXTERNAL_SOURCE_CONFIGS, SOURCES } from "./server/search-source-registry.ts";
 import type { ExternalSourceId } from "./external-source-parser.ts";
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
@@ -95,6 +95,34 @@ test("each adapter output is idempotent through the existing canonical persistLi
   }
   assert.equal(rows.length, SOURCE_IDS.length);
   assert.deepEqual(rows.map((row) => row.source), SOURCE_IDS);
+});
+
+test("current public result-page structures reach persistListing and the Finder gate", async () => {
+  const publicFixtures: Record<ExternalSourceId, string> = {
+    domiporta: jsonLd({ "@graph": [{ "@type": "ItemList", itemListElement: [{ "@type": "ListItem", item: { "@type": ["Product", "RealEstateListing"], name: "Mieszkanie 3 pokoje 49 m² Łódź", description: "Oferta sprzedaży mieszkania.", image: "https://galeria.domiporta.pl/offer.jpg", datePosted: "2026-10-01", offers: { "@type": "Offer", price: 439000, priceCurrency: "PLN", itemOffered: { "@type": "Accommodation", numberOfRooms: 3, floorSize: { value: 49 }, address: { addressLocality: "Łódź", addressRegion: "łódzkie" } } }, url: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-lodz-49m2/156937475" } }] }] }),
+    sprzedajemy: jsonLd({ "@type": "ItemList", itemListElement: [{ "@type": ["ListItem", "Offer"], name: "Mieszkanie 2 pokoje 46 m² Łódź", image: "https://thumbs.img-sprzedajemy.pl/offer.jpg", url: "https://sprzedajemy.pl/mieszkanie-2-pokoje-lodz-nr73909448", position: 1, price: 439000, priceCurrency: "PLN" }] }),
+    adresowo: `<div data-offer-card data-id="4224120"><a href="/o/mieszkanie-lodz-polesie-2-pokojowe-m3s4f8"><img src="https://s2.adresowo.pl/offer.webp" alt="Mieszkanie 2-pokojowe Łódź Polesie"></a><h2>Mieszkanie 2-pokojowe Łódź Polesie</h2><span class="font-bold">439 000</span><span> zł</span><span class="font-bold">46</span><span> m²</span><span class="font-bold">2</span><span> pok.</span></div>`,
+  } as Record<ExternalSourceId, string>;
+  const rows: Record<string, unknown>[] = [];
+  const db = fakeDb(rows);
+  const previousFetch = globalThis.fetch;
+  try {
+    for (const source of ["domiporta", "sprzedajemy", "adresowo"] as const) {
+      const parsed = EXTERNAL_PORTAL_PARSERS[source](publicFixtures[source], "Łódź");
+      assert.equal(parsed.listings.length, 1, `${source} parser`);
+      const listing = parsed.listings[0]!;
+      assert.equal(listing.price, 439000, `${source} price`);
+      assert.equal(listing.area, source === "domiporta" ? 49 : 46, `${source} area`);
+      globalThis.fetch = async () => new Response(publicFixtures[source], { status: 200, headers: { "content-type": "text/html" } });
+      const fetched = await fetchExternalPortal(config(source), filter, undefined);
+      assert.equal(fetched.listings.length, 1, `${source} fetch`);
+      const persisted = await import("./server/persist-listing.ts").then(({ persistListing }) => persistListing(db as never, "filter-1", listing, true, [], "scan-1", "2026-10-02T10:00:00Z", AbortSignal.timeout(1000)));
+      assert.ok(persisted.listingId, `${source} canonical listing`);
+    }
+    assert.deepEqual(activeSources({ city: "Łódź", sources: ["domiporta", "sprzedajemy", "adresowo"] } as never).map((source) => source.id), ["domiporta", "sprzedajemy", "adresowo"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 function fakeDb(rows: Record<string, unknown>[]) {

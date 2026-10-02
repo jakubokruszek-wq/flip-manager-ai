@@ -8,8 +8,6 @@ export const SCHEMA_READY_SOURCE_IDS = [
   "domiporta",
   "sprzedajemy",
   "adresowo",
-  "domy",
-  "allegro_lokalnie",
 ] as const satisfies readonly Exclude<ListingSource, "facebook">[];
 
 export type SchemaReadySourceId = (typeof SCHEMA_READY_SOURCE_IDS)[number];

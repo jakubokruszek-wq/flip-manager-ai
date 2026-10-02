@@ -5,7 +5,7 @@ import { activeFilterSources, isActiveFilterSource, SCHEMA_READY_SOURCE_IDS } fr
 import type { ListingSource } from "./index.ts";
 
 test("the active gate has only the locally verified Finder adapters", () => {
-  assert.deepEqual(SCHEMA_READY_SOURCE_IDS, ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"]);
+  assert.deepEqual(SCHEMA_READY_SOURCE_IDS, ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo"]);
   assert.equal(isActiveFilterSource("facebook"), true);
   assert.equal(isActiveFilterSource("official_uml"), false);
 });

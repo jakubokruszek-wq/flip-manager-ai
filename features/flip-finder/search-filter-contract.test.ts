@@ -34,8 +34,8 @@ test("Szybko is labeled as requiring live source verification, not a migration",
 });
 
 test("legacy unavailable source options are disabled while active sources remain selectable", () => {
-  const unavailable = ["gratka", "nieruchomosci_online", "oferty_net", "szybko", "bezposrednio", "official_cooperative", "official_uml", "official_auction"];
-  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"];
+  const unavailable = ["gratka", "nieruchomosci_online", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"];
+  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo"];
   for (const source of unavailable) {
     assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === source)?.disabled, true, `${source} must be disabled`);
   }
