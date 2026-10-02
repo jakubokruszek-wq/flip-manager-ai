@@ -9,6 +9,7 @@ import {
 test("Otodom accepts desktop/mobile offer URLs with tracking and trailing slash", () => {
   assert.equal(classifyOtodomUrl("https://www.otodom.pl/pl/oferta/mieszkanie-IDABC123/?utm_source=feed"), null);
   assert.equal(classifyOtodomUrl("https://m.otodom.pl/pl/oferta/mieszkanie-IDabc123"), null);
+  assert.equal(classifyOtodomUrl("/pl/oferta/mieszkanie-IDabc123.html?utm_source=feed"), null);
 });
 
 test("Otodom diagnostics distinguish malformed, search, placeholder, and missing-id URLs", () => {

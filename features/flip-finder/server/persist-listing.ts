@@ -38,8 +38,17 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   // A portal can rotate an external id while keeping the canonical URL. Reuse
   // the newest source-local URL match instead of creating a second listing.
   if (!existingResult.error && !existingResult.data && item.normalizedUrl) {
-    const byUrl = await supabase.from("listings").select("id,external_listing_id,price,content_hash,images,manual_decision,lifecycle_status,archived_at").eq("source", item.source).eq("normalized_url", item.normalizedUrl).order("last_seen_at", { ascending: false }).limit(1).maybeSingle();
-    existingResult = byUrl.data ? byUrl : existingResult;
+    for (const normalizedUrl of normalizedUrlCandidates(item.source, item.normalizedUrl)) {
+      const byUrl = await supabase.from("listings").select("id,external_listing_id,price,content_hash,images,manual_decision,lifecycle_status,archived_at").eq("source", item.source).eq("normalized_url", normalizedUrl).order("last_seen_at", { ascending: false }).limit(1).maybeSingle();
+      if (byUrl.data) {
+        existingResult = byUrl;
+        break;
+      }
+      if (byUrl.error) {
+        existingResult = byUrl;
+        break;
+      }
+    }
   }
   const existingError = existingResult.error;
   const existing = existingResult.data;
@@ -104,4 +113,15 @@ function isMissingReviewLifecycleColumn(error: { code?: unknown; message?: unkno
   const code = typeof error.code === "string" ? error.code : "";
   const message = typeof error.message === "string" ? error.message : "";
   return (code === "42703" || code === "PGRST204") && /lifecycle_status|review_reason|missing_fields|archived_at|manual_decision/.test(message);
+}
+
+function normalizedUrlCandidates(source: string, normalizedUrl: string): string[] {
+  const candidates = [normalizedUrl];
+  if (source === "otodom" && /^https:\/\/otodom\.pl\/pl\/oferta\/[^/]+-id[a-z0-9]+$/i.test(normalizedUrl)) {
+    // Rows written before the canonical `.html` normalization may still have
+    // the legacy suffix in normalized_url. Read it during ingest so the next
+    // scan repairs that row in place instead of creating a duplicate.
+    candidates.push(`${normalizedUrl}.html`);
+  }
+  return candidates;
 }

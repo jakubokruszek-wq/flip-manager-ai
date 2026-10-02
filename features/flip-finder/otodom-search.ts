@@ -92,11 +92,18 @@ export function normalizeOtodomUrl(value: string): string {
 
   url.hash = "";
   if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "");
-  if (/(^|\.)otodom\.pl$/i.test(url.hostname)) {
+  const isOtodom = /(^|\.)otodom\.pl$/i.test(url.hostname);
+  if (isOtodom) {
     // Desktop, mobile, and www. offer links are the same Otodom identity.
     // Canonicalizing the host here makes tracking/mobile duplicates collapse
     // without affecting the other source parsers that reuse this helper.
     url.hostname = "otodom.pl";
+    // The legacy `.html` suffix is an alternate representation of the same
+    // `/pl/oferta/<slug>-ID...` page. Keep it out of the canonical identity so
+    // a portal route change cannot create a second saved listing.
+    if (/^\/pl\/oferta\/[^/]+-id[a-z0-9]+\.html$/i.test(url.pathname)) {
+      url.pathname = url.pathname.slice(0, -5);
+    }
   } else {
     url.hostname = url.hostname.replace(/^www\./, "");
   }

@@ -82,7 +82,51 @@ test("valid duplicate Otodom rows collapse after URL normalization and valid row
     assert.equal(result.normalizedItems, 2);
     assert.equal(result.listings.length, 2);
     assert.equal(result.rejectionReasons.duplicate, 1);
-    assert.equal(result.listings[1]?.originalUrl, "https://otodom.pl/pl/oferta/inne-IDXYZ987.html");
+    assert.equal(result.listings[1]?.originalUrl, "https://otodom.pl/pl/oferta/inne-IDXYZ987");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("current Otodom rows with relative href and no url reach the normalized listing pipeline", async () => {
+  const originalFetch = globalThis.fetch;
+  const items = [{
+    id: "otodom-row-1",
+    slug: "mieszkanie-testowe-IDABC123",
+    href: "/pl/oferta/mieszkanie-testowe-IDABC123.html?utm_source=search",
+    title: "Mieszkanie testowe",
+    totalPrice: 439000,
+    areaInSquareMeters: 50,
+  }];
+  globalThis.fetch = async () => responseFor(items);
+  try {
+    const result = await searchOtodom(filter);
+    assert.equal(result.normalizedItems, 1);
+    assert.equal(result.listings.length, 1);
+    assert.equal(result.rejectionReasons.placeholder_url, undefined);
+    assert.equal(result.listings[0]?.originalUrl, "https://otodom.pl/pl/oferta/mieszkanie-testowe-IDABC123");
+    assert.equal(result.listings[0]?.normalizedUrl, "https://otodom.pl/pl/oferta/mieszkanie-testowe-IDABC123");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a placeholder or search href remains rejected while a valid sibling URL is accepted", async () => {
+  const originalFetch = globalThis.fetch;
+  const items = [
+    { id: "placeholder", href: "/[lang]/oferta/mieszkanie-IDBAD123", title: "Placeholder", totalPrice: 439000, areaInSquareMeters: 50 },
+    { id: "search", href: "/pl/wyniki/sprzedaz/mieszkanie/lodz", title: "Search", totalPrice: 439000, areaInSquareMeters: 50 },
+    { id: "foreign-host", href: "https://evil.example/pl/oferta/mieszkanie-IDBAD999", title: "Foreign host", totalPrice: 439000, areaInSquareMeters: 50 },
+    { id: "valid-sibling", url: "/[lang]/oferta/mieszkanie-IDBAD123", href: "/pl/oferta/mieszkanie-IDGOOD123", title: "Valid sibling", totalPrice: 439000, areaInSquareMeters: 50 },
+  ];
+  globalThis.fetch = async () => responseFor(items);
+  try {
+    const result = await searchOtodom(filter);
+    assert.equal(result.listings.length, 1);
+    assert.equal(result.listings[0]?.externalListingId, "valid-sibling");
+    assert.equal(result.rejectionReasons.placeholder_url, 1);
+    assert.equal(result.rejectionReasons.search_or_category_url, 1);
+    assert.equal(result.rejectionReasons.invalid_url, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

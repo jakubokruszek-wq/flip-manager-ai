@@ -26,7 +26,10 @@ export function normalizeListingIdentityUrl(source: string, value: string | null
     const hostname = url.hostname.toLocaleLowerCase("en-US").replace(/^(?:www|m)\./, "");
     const isFacebook = normalizedSource === "facebook";
     if (isFacebook && hostname !== "facebook.com" && !hostname.endsWith(".facebook.com")) return null;
-    const pathname = url.pathname.replace(/\/+$/, "");
+    let pathname = url.pathname.replace(/\/+$/, "");
+    if (normalizedSource === "otodom" && /^\/pl\/oferta\/[^/]+-id[a-z0-9]+\.html$/i.test(pathname)) {
+      pathname = pathname.slice(0, -5);
+    }
     if (!pathname || pathname === "/" || isFacebook && pathname.toLocaleLowerCase("en-US").includes("/flip-manager/manual/")) return null;
     const query = [...url.searchParams.entries()]
       .filter(([key]) => !/^utm_/iu.test(key) && !["ref", "mibextid", "__tn__", "locale", "fbclid", "gclid", "dclid", "msclkid", "yclid"].includes(key.toLocaleLowerCase("en-US")))

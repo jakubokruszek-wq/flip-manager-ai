@@ -80,3 +80,16 @@ test("normalizeOtodomUrl still strips tracking params and the www. prefix (unaff
     "https://otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS",
   );
 });
+
+test("normalizeOtodomUrl gives .html and extensionless offer routes one identity", () => {
+  const extensionless = normalizeOtodomUrl("https://www.otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS");
+  const legacy = normalizeOtodomUrl("https://m.otodom.pl/pl/oferta/przykladowe-mieszkanie-ID4CRDS.html?utm_source=feed#details");
+  assert.equal(legacy, extensionless);
+});
+
+test("non-offer Otodom paths keep their path instead of being treated as offers", () => {
+  assert.equal(
+    normalizeOtodomUrl("https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/lodz?utm_source=feed"),
+    "https://otodom.pl/pl/wyniki/sprzedaz/mieszkanie/lodz",
+  );
+});

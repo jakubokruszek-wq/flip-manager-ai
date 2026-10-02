@@ -192,11 +192,19 @@ function normalizeItem(item: Record<string, unknown>): { listing: PropertySearch
 }
 
 function normalizationReason(item: Record<string, unknown>): OtodomRejectionReason | null {
-  const directUrl = text(item, "url", "href", "link");
-  const urlReason = classifyOtodomUrl(directUrl);
-  if (urlReason) return urlReason;
+  const candidates = urlCandidates(item);
+  if (candidates.length === 0) return "invalid_url";
   const url = listingUrl(item);
-  if (!url) return "invalid_url";
+  if (!url) {
+    // Preserve the most useful diagnostic when every candidate is unusable,
+    // but never let a bad `url` field mask a valid `href` in the same row.
+    const reasons = candidates.map((candidate) => classifyOtodomUrl(candidate));
+    return reasons.find((reason) => reason === "placeholder_url")
+      ?? reasons.find((reason) => reason === "search_or_category_url")
+      ?? reasons.find((reason) => reason === "missing_offer_id")
+      ?? reasons.find((reason) => reason !== null)
+      ?? "invalid_url";
+  }
   if (!text(item, "id", "adId", "listingId") && !extractOtodomListingId(url)) return "missing_offer_id";
   if (!text(item, "title", "name")) return "missing_title";
   const price = numberValue(item.totalPrice ?? item.price);
@@ -304,24 +312,25 @@ function incrementReason(counts: OtodomRejectionCounts, reason: OtodomRejectionR
 }
 
 function listingUrl(row: Record<string, unknown>): string | null {
-  const directUrl = text(row, "url", "href", "link");
-  if (!directUrl) return null;
-
-  let resolved: string;
-  try {
-    resolved = new URL(directUrl, "https://www.otodom.pl").toString();
-  } catch {
-    return null;
+  for (const directUrl of urlCandidates(row)) {
+    let resolved: string;
+    try {
+      resolved = new URL(directUrl, "https://www.otodom.pl").toString();
+    } catch {
+      continue;
+    }
+    if (isConfirmedOtodomOfferUrl(resolved)) return resolved;
   }
-
   // Only a confirmed, dereferenceable single-offer URL is ever kept --
-  // never synthesized from this row's own raw numeric id/adId/listingId
-  // field, since Otodom's real offer-URL suffix is a distinct, encoded
-  // alphanumeric code (e.g. "-ID4CRDS"), not necessarily that same numeric
-  // value. A row whose URL can't be confirmed this way is dropped from this
-  // scan cycle entirely, matching how OLX/Morizon rows with no usable URL
-  // are already handled in this same pipeline.
-  return isConfirmedOtodomOfferUrl(resolved) ? resolved : null;
+  // never synthesize one from a raw numeric id/adId/listingId field.
+  return null;
+}
+
+function urlCandidates(row: Record<string, unknown>): string[] {
+  return ["url", "href", "link"]
+    .map((key) => row[key])
+    .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    .map((value) => value.trim());
 }
 
 function thumbnailUrl(row: Record<string, unknown>): string | null {

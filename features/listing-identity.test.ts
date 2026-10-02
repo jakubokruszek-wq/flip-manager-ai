@@ -142,6 +142,22 @@ test("same non-Facebook source URL is deduplicated even when external ids differ
   assert.deepEqual(dedupeByListingIdentity(records, (record) => record), [records[0]]);
 });
 
+test("Otodom .html and extensionless offer URLs deduplicate even when external ids differ", () => {
+  const records = [
+    { listingId: "otodom-new", source: "otodom", externalListingId: "new-id", originalUrl: "https://www.otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS.html?utm_source=feed" },
+    { listingId: "otodom-old", source: "otodom", externalListingId: "old-id", originalUrl: "https://otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record), [records[0]]);
+});
+
+test("different confirmed Otodom offer ids remain separate", () => {
+  const records = [
+    { listingId: "otodom-a", source: "otodom", externalListingId: "id-a", originalUrl: "https://otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS.html" },
+    { listingId: "otodom-b", source: "otodom", externalListingId: "id-b", originalUrl: "https://otodom.pl/pl/oferta/mieszkanie-lodz-ID4CKQu" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record).map((record) => record.listingId), ["otodom-a", "otodom-b"]);
+});
+
 test("same normalized URL deduplication never crosses source boundaries", () => {
   const records = [
     { listingId: "olx-1", source: "olx", externalListingId: "shared", originalUrl: "https://example.test/listing/1?utm_campaign=x" },

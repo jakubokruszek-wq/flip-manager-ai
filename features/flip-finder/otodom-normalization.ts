@@ -26,7 +26,13 @@ export function classifyOtodomUrl(value: string | null | undefined): OtodomRejec
   if (!value?.trim()) return "invalid_url";
   const trimmed = value.trim();
   if (/^manual:|\/flip-manager\/manual\/|\[[^\]]+\]/i.test(trimmed)) return "placeholder_url";
-  if (!/^(?:https?:\/\/|\/)/i.test(trimmed)) return "invalid_url";
+  // A search result may expose either an absolute URL or a relative href.
+  // Let URL resolve the latter against the trusted Otodom origin, while
+  // rejecting non-HTTP schemes before they can be treated as a path.
+  const hasHttpScheme = /^https?:\/\//i.test(trimmed);
+  const hasOtherScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !hasHttpScheme;
+  const isRelativePath = /^(?:\/|\.\.?\/|pl\/)/i.test(trimmed);
+  if (hasOtherScheme || (!hasHttpScheme && !isRelativePath)) return "invalid_url";
 
   let url: URL;
   try {

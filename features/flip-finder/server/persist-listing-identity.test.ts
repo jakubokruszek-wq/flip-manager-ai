@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
+import { normalizeOtodomUrl } from "../otodom-search.ts";
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
 mock.module("@/features/market-intelligence/resale-comps-store", { namedExports: { syncResaleCompFromListing: async () => ({ saved: false, created: false, compId: null, available: true }) } });
@@ -68,6 +69,31 @@ function listing(externalListingId: string, title: string) {
   };
 }
 
+function otodomListing(externalListingId: string, url: string) {
+  return {
+    source: "otodom" as const,
+    externalListingId,
+    originalUrl: url,
+    normalizedUrl: normalizeOtodomUrl(url),
+    title: "Mieszkanie Otodom",
+    price: 439000,
+    area: 50,
+    rooms: 2,
+    floor: "2",
+    pricePerSqm: 8780,
+    city: "Łódź",
+    district: "Bałuty",
+    locationText: "Bałuty, Łódź",
+    thumbnailUrl: null,
+    images: [],
+    buildingType: null,
+    description: "Oferta testowa",
+    publishedAt: null,
+    rawPayload: {},
+    contentHash: "otodom-content",
+  };
+}
+
 test("persistListing reuses a canonical listing when a portal rotates its external id but URL stays stable", async () => {
   const rows: Row[] = [{ id: "canonical-1", source: "domiporta", external_listing_id: "old-id", normalized_url: "https://domiporta.pl/oferta/lodz-1", price: 480000, content_hash: "old", images: [] }];
   const db = fakeDb(rows);
@@ -76,4 +102,31 @@ test("persistListing reuses a canonical listing when a portal rotates its extern
   assert.equal(rows.length, 1);
   assert.equal(rows[0].external_listing_id, "old-id");
   assert.equal(rows[0].title, "Nowy tytuł");
+});
+
+test("persistListing treats Otodom .html and extensionless URLs as one canonical listing", async () => {
+  const rows: Row[] = [{
+    id: "otodom-canonical",
+    source: "otodom",
+    external_listing_id: "old-otodom-id",
+    normalized_url: "https://otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS.html",
+    price: 439000,
+    content_hash: "old",
+    images: [],
+  }];
+  const db = fakeDb(rows);
+  const saved = await persistListing(
+    db as never,
+    "filter-1",
+    otodomListing("new-otodom-id", "https://www.otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS.html?utm_source=feed"),
+    true,
+    [],
+    "scan-otodom",
+    "2026-10-01T10:00:00Z",
+    AbortSignal.timeout(1000),
+  );
+  assert.equal(saved.listingId, "otodom-canonical");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].external_listing_id, "old-otodom-id");
+  assert.equal(rows[0].normalized_url, "https://otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS");
 });
