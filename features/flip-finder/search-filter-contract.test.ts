@@ -32,3 +32,14 @@ test("Szybko is labeled as requiring live source verification, not a migration",
   assert.equal(schnell?.label, "Szybko.pl — wymaga weryfikacji źródła");
   assert.doesNotMatch(schnell?.label ?? "", /migracj/i);
 });
+
+test("legacy unavailable source options are disabled while active sources remain selectable", () => {
+  const unavailable = ["gratka", "nieruchomosci_online", "oferty_net", "szybko", "bezposrednio", "official_cooperative", "official_uml", "official_auction"];
+  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"];
+  for (const source of unavailable) {
+    assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === source)?.disabled, true, `${source} must be disabled`);
+  }
+  for (const source of active) {
+    assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === source)?.disabled, false, `${source} must remain selectable`);
+  }
+});

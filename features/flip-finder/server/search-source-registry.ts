@@ -11,6 +11,8 @@ import {
 } from "@/features/flip-finder/external-source-parser";
 import { fetchExternalPortal } from "@/features/flip-finder/external-source-adapters";
 import { fetchOfficialLodzGroup } from "@/features/flip-finder/official-lodz-adapters";
+import { SCHEMA_READY_SOURCE_IDS as SHARED_SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
+export { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
@@ -25,20 +27,6 @@ export type SearchSource = {
   label: string;
   fetch(criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult>;
 };
-
-/** Sources with a complete local adapter -> persistListing -> canonical path.
- * The remaining registered adapters stay visible to the registry and fixtures
- * but remain unschedulable until their live/access gaps are closed. */
-export const SCHEMA_READY_SOURCE_IDS = [
-  "otodom",
-  "olx",
-  "morizon",
-  "domiporta",
-  "sprzedajemy",
-  "adresowo",
-  "domy",
-  "allegro_lokalnie",
-] as const;
 
 export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
   { id: "gratka", label: "Gratka", hostnames: ["gratka.pl"], searchPath: (city) => `/nieruchomosci/mieszkania/sprzedam/${slugifyCity(city)}` },
@@ -77,7 +65,7 @@ export const SOURCES: SearchSource[] = [
 ];
 
 export function activeSources(criteria: SearchFilter): SearchSource[] {
-  return SOURCES.filter((source) => criteria.sources.includes(source.id) && SCHEMA_READY_SOURCE_IDS.includes(source.id as (typeof SCHEMA_READY_SOURCE_IDS)[number]));
+  return SOURCES.filter((source) => criteria.sources.includes(source.id) && SHARED_SCHEMA_READY_SOURCE_IDS.includes(source.id as (typeof SHARED_SCHEMA_READY_SOURCE_IDS)[number]));
 }
 
 export function slugifyCity(city: string | null): string {

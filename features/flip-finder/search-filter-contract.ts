@@ -5,6 +5,7 @@ import {
   type MarketType,
   type SearchFilter,
 } from "@/features/flip-finder";
+import { isActiveFilterSource } from "@/features/flip-finder/source-availability";
 
 export type SearchFilterInput = Omit<SearchFilter, "id" | "lastScannedAt" | "createdAt" | "updatedAt">;
 
@@ -46,7 +47,9 @@ export type SearchFilterListResponse = {
   };
 };
 
-export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: string }> = [
+type SearchFilterSourceOptionDefinition = { value: ListingSource; label: string };
+
+const SEARCH_FILTER_SOURCE_OPTION_DEFINITIONS: SearchFilterSourceOptionDefinition[] = [
   { value: "otodom", label: "Otodom" },
   { value: "olx", label: "OLX" },
   { value: "morizon", label: "Morizon" },
@@ -65,6 +68,13 @@ export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: 
   { value: "official_uml", label: "UMŁ/BIP Łódź — migracja wymagana" },
   { value: "official_auction", label: "Licytacje i syndycy — migracja wymagana" },
 ];
+
+export type SearchFilterSourceOption = SearchFilterSourceOptionDefinition & { disabled: boolean };
+
+export const SEARCH_FILTER_SOURCE_OPTIONS: SearchFilterSourceOption[] = SEARCH_FILTER_SOURCE_OPTION_DEFINITIONS.map((option) => ({
+  ...option,
+  disabled: !isActiveFilterSource(option.value),
+}));
 
 /** Shown next to the source picker whenever "facebook" is selected — this filter's Facebook results only ever come from Watcher's own, independently-collected canonical listings; enabling it never starts a new Facebook scan. */
 export const FACEBOOK_SOURCE_HELPER_TEXT = "Finder korzysta z ofert zebranych przez Watcher i nie uruchamia nowego skanowania Facebooka.";

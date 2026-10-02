@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { activeSourcesSummary, latestActiveScansText } from "./source-summary.ts";
+import { activeFilterSources } from "./source-availability.ts";
 import type { SearchFilterScan } from "./search-filter-contract.ts";
 
 function scan(source: SearchFilterScan["source"], startedAt: string): SearchFilterScan {
@@ -23,4 +24,10 @@ test("latest scan summary excludes historical disabled sources", () => {
   assert.match(result, /Facebook/);
   assert.match(result, /OLX/);
   assert.doesNotMatch(result, /Otodom|Morizon/);
+});
+
+test("a legacy filter summary excludes unavailable source IDs", () => {
+  const active = activeFilterSources(["otodom", "facebook", "gratka", "official_uml", "szybko"]);
+  assert.deepEqual(active, ["otodom", "facebook"]);
+  assert.equal(activeSourcesSummary(active), "Aktywne źródła: Otodom, Facebook");
 });

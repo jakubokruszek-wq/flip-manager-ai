@@ -32,6 +32,7 @@ import { InlineFilterResults } from "@/features/flip-finder/components/inline-fi
 import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
 import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
+import { activeFilterSources } from "@/features/flip-finder/source-availability";
 
 type ScanResponse = {
   runId?: string;
@@ -500,7 +501,7 @@ export function FlipFinderPage() {
                     <span>Maks. cena/m²: {activeFilter.maxPricePerSqm !== null ? formatCurrency(activeFilter.maxPricePerSqm) : "Nie ustawiono"}</span>
                     <span>Powierzchnia: {formatAreaRange(activeFilter)}</span>
                     <span>Pokoje: {activeFilter.rooms.length ? activeFilter.rooms.join(", ") : "Nie ustawiono"}</span>
-                    <span>Aktywne źródła: {activeFilter.sources.map(sourceLabel).join(", ")}</span>
+                    <span>Aktywne źródła: {activeFilterSources(activeFilter.sources).map(sourceLabel).join(", ") || "brak"}</span>
                   </div>
                   <div className="mt-3 border-t border-border/70 pt-3"><FilterActions filter={activeFilter} onAction={manageFilter} /></div>
                 </div>

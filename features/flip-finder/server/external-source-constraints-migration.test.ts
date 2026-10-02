@@ -5,7 +5,7 @@ import test from "node:test";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 const migrationPath = path.join(root, "supabase/migrations/20261002190000_allow_registered_external_sources.sql");
-const registryPath = path.join(root, "features/flip-finder/server/search-source-registry.ts");
+const availabilityPath = path.join(root, "features/flip-finder/source-availability.ts");
 const foundationMigrationPath = path.join(root, "supabase/migrations/20260719113000_create_flip_finder_foundation.sql");
 const morizonMigrationPath = path.join(root, "supabase/migrations/20260719130000_add_morizon_source.sql");
 const resaleCompsMigrationPath = path.join(root, "supabase/migrations/20260905120000_create_resale_comps.sql");
@@ -67,13 +67,14 @@ test("the migration is schema-only and the runtime gate lists only locally compl
   assert.doesNotMatch(migration, /\b(insert|update|delete|truncate)\b/i);
   assert.doesNotMatch(migration, /\bdrop\s+(?:table|column)\b/i);
 
-  const registry = fs.readFileSync(registryPath, "utf8");
-  assert.match(registry, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[[\s\S]*"otodom"[\s\S]*"olx"[\s\S]*"morizon"[\s\S]*"domiporta"[\s\S]*"sprzedajemy"[\s\S]*"adresowo"[\s\S]*"domy"[\s\S]*"allegro_lokalnie"[\s\S]*\]/);
-  const gateStart = registry.indexOf("SCHEMA_READY_SOURCE_IDS");
-  const gateEnd = registry.indexOf("] as const", gateStart);
+  const availability = fs.readFileSync(availabilityPath, "utf8");
+  assert.match(availability, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[[\s\S]*"otodom"[\s\S]*"olx"[\s\S]*"morizon"[\s\S]*"domiporta"[\s\S]*"sprzedajemy"[\s\S]*"adresowo"[\s\S]*"domy"[\s\S]*"allegro_lokalnie"[\s\S]*\]/);
+  const gateStart = availability.indexOf("SCHEMA_READY_SOURCE_IDS");
+  const gateEnd = availability.indexOf("] as const", gateStart);
   assert.ok(gateStart >= 0 && gateEnd > gateStart, "missing schema-ready source gate");
-  assert.doesNotMatch(registry.slice(gateStart, gateEnd), /official_uml/);
-  assert.doesNotMatch(registry.slice(gateStart, gateEnd), /"szybko"/);
+  assert.doesNotMatch(availability.slice(gateStart, gateEnd), /official_uml/);
+  assert.doesNotMatch(availability.slice(gateStart, gateEnd), /"szybko"/);
+  const registry = fs.readFileSync(path.join(root, "features/flip-finder/server/search-source-registry.ts"), "utf8");
   assert.match(registry, /szybko:\s*"path_requires_live_source_verification"/);
   for (const source of REGISTERED_EXTERNAL_SOURCES) {
     assert.match(migration, new RegExp(`['"]${source}['"]`));

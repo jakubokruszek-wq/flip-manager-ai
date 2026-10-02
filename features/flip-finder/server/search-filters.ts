@@ -10,6 +10,7 @@ import {
 } from "@/features/flip-finder/search-filter-contract";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { isActiveFilterSource } from "@/features/flip-finder/source-availability";
 import { selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT } from "./scan-lifecycle";
 
 type Row = Record<string, unknown>;
@@ -132,6 +133,13 @@ export async function getSearchFilter(id: string): Promise<SearchFilter | null> 
 export async function getActiveSearchFiltersForSource(
   source: ListingSource,
 ): Promise<SearchFilter[]> {
+  // Old filters may retain IDs that are registered but not approved for
+  // runtime. Never hand those filters to a source worker. Facebook remains
+  // valid here only for the independent Watcher/Collector path.
+  if (!isActiveFilterSource(source)) {
+    return [];
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("search_filters")

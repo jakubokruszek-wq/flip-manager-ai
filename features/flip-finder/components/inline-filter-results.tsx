@@ -31,6 +31,7 @@ import { priorityLabel } from "@/features/flip-finder/opportunity-score";
 import { calculateResultUnderwriting, loadUnderwritingSettings } from "@/features/flip-finder/components/underwriting-panel";
 import { DEFAULT_UNDERWRITING_SETTINGS } from "@/features/flip-finder/underwriting";
 import { activeSourcesSummary, latestActiveScansText, sourceLabel } from "@/features/flip-finder/source-summary";
+import { activeFilterSources } from "@/features/flip-finder/source-availability";
 import { LISTING_SOURCES, type SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { shouldShowGenericStatusBadge } from "@/features/flip-finder/listing-card-variant";
@@ -140,7 +141,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
   const reviewCount = data?.counts?.review ?? sortedReviewResults.length;
   const archivedResults = useMemo(() => archiveOpen ? sortResults(data?.archivedResults ?? [], sort) : [], [archiveOpen, data?.archivedResults, sort]);
   const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
-  const activeSources = data?.filter.sources ?? [];
+  const activeSources = activeFilterSources(data?.filter.sources ?? []);
   const historicalSources = LISTING_SOURCES.filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
   const dealOfDay = useMemo(() => selectDealOfDay([...allResults, ...reviewResults]), [allResults, reviewResults]);
 

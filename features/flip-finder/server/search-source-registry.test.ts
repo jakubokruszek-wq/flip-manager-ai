@@ -68,6 +68,20 @@ test("Szybko remains registered but is disabled pending live access verification
   assert.deepEqual(activeSources({ ...filter, sources: ["szybko"] }).map((source) => source.id), []);
 });
 
+test("a legacy filter cannot schedule unavailable sources while preserving active source IDs", () => {
+  assert.deepEqual(
+    activeSources({
+      ...filter,
+      sources: [
+        "otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie",
+        "facebook", "gratka", "nieruchomosci_online", "oferty_net", "szybko", "bezposrednio",
+        "official_cooperative", "official_uml", "official_auction",
+      ],
+    }).map((source) => source.id),
+    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
+  );
+});
+
 test("external adapters retry a rate-limited response once and parse only the verified listing", async () => {
   const previousFetch = globalThis.fetch;
   let calls = 0;
