@@ -6,10 +6,10 @@ import { calculateContentHash, normalizeOtodomUrl } from "@/features/flip-finder
 import { searchOtodom } from "@/features/flip-finder/server/otodom-search-adapter";
 import type { PropertySourceListing } from "@/features/properties/types/property";
 import {
-  parseExternalSourceJsonLd,
   type ExternalSourceConfig,
   type ExternalSourceId,
 } from "@/features/flip-finder/external-source-parser";
+import { fetchExternalPortal } from "@/features/flip-finder/external-source-adapters";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
@@ -120,16 +120,8 @@ async function fetchMorizon(criteria: SearchFilter, signal?: AbortSignal): Promi
 }
 
 async function fetchExternal(config: ExternalSourceConfig, criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult> {
-  const url = new URL(config.searchPath(criteria.city ?? ""), `https://${config.hostnames[0]}`).toString();
-  const html = await fetchHtml(url, config.label, signal);
-  const listings = parseExternalSourceJsonLd(html, config, criteria.city);
-  return {
-    listings,
-    fetched: listings.length,
-    warnings: listings.length ? [] : [`${config.label}: odpowiedź nie zawiera zweryfikowanych ofert sprzedaży w JSON-LD.`],
-  };
+  return fetchExternalPortal(config, criteria, signal);
 }
-
 async function fetchHtml(url: string, source: string, signal?: AbortSignal): Promise<string> {
   const headers: Record<string, string> = source === "OLX"
     ? { Accept: ACCEPT, "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.7,en;q=0.6", Referer: "https://www.olx.pl/", "User-Agent": USER_AGENT }
