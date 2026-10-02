@@ -62,7 +62,7 @@ export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: 
   { value: "domy", label: "Domy.pl" },
   { value: "allegro_lokalnie", label: "Allegro Lokalnie" },
   { value: "official_cooperative", label: "Spółdzielnie Łódź — migracja wymagana" },
-  { value: "official_uml", label: "UMŁ/BIP Łódź" },
+  { value: "official_uml", label: "UMŁ/BIP Łódź — migracja wymagana" },
   { value: "official_auction", label: "Licytacje i syndycy — migracja wymagana" },
 ];
 

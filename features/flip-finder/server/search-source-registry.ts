@@ -39,7 +39,6 @@ export const SCHEMA_READY_SOURCE_IDS = [
   "szybko",
   "domy",
   "allegro_lokalnie",
-  "official_uml",
 ] as const;
 
 export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
