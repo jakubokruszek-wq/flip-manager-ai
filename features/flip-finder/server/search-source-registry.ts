@@ -10,6 +10,7 @@ import {
   type ExternalSourceId,
 } from "@/features/flip-finder/external-source-parser";
 import { fetchExternalPortal } from "@/features/flip-finder/external-source-adapters";
+import { fetchOfficialLodzGroup } from "@/features/flip-finder/official-lodz-adapters";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
@@ -61,6 +62,9 @@ export const SOURCES: SearchSource[] = [
   { id: "olx", label: "OLX", fetch: fetchOlx },
   { id: "morizon", label: "Morizon", fetch: fetchMorizon },
   ...EXTERNAL_SOURCE_CONFIGS.map((config) => ({ id: config.id, label: config.label, fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchExternal(config, criteria, signal) })),
+  { id: "official_cooperative", label: "Spółdzielnie Łódź", fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchOfficialLodzGroup("official_cooperative", criteria, signal) },
+  { id: "official_uml", label: "UMŁ/BIP Łódź", fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchOfficialLodzGroup("official_uml", criteria, signal) },
+  { id: "official_auction", label: "Licytacje i syndycy", fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchOfficialLodzGroup("official_auction", criteria, signal) },
 ];
 
 export function activeSources(criteria: SearchFilter): SearchSource[] {

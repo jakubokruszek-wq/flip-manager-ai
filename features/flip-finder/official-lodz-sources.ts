@@ -1,8 +1,8 @@
 /**
- * Read-only source catalogue for Łódź municipal, cooperative and insolvency
- * notices. These pages are deliberately not part of the portal scanner: they
- * publish mixed tenders (apartments, commercial units, works and services), so
- * an operator must verify the original notice before importing a sale listing.
+ * Catalogue and safety policy for Łódź municipal, cooperative and insolvency
+ * notices. Their adapters remain schema-gated because pages publish mixed
+ * tenders (apartments, commercial units, works and services); the parser must
+ * classify each notice before a sale listing can be persisted.
  */
 export type OfficialLodzSourceKind = "cooperative" | "municipal" | "krk" | "syndic" | "rental_program";
 export type OfficialLodzSource = {

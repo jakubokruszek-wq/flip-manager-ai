@@ -12,7 +12,10 @@ export type PropertySource =
   | "szybko"
   | "bezposrednio"
   | "domy"
-  | "allegro_lokalnie";
+  | "allegro_lokalnie"
+  | "official_cooperative"
+  | "official_uml"
+  | "official_auction";
 export type PropertyDetectedSource = PropertySource | "unknown";
 export type PropertyFinderSource = Exclude<PropertySource, never>;
 export type PropertyMarketType = "primary" | "secondary";
@@ -103,6 +106,17 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
   normalizedUrl: string;
   rawPayload: Record<string, unknown>;
   contentHash: string;
+  /** Structured metadata for official notices; persisted inside the existing snapshot raw_data. */
+  officialOffer?: {
+    sourceId: string;
+    noticeType: string;
+    priceKind: string;
+    price: number;
+    deposit: number | null;
+    deadline: string | null;
+    eventDate: string | null;
+    eligibilityCriteria: string[];
+  };
 };
 
 /** Listing returned by a source-specific search before it is matched or persisted. */

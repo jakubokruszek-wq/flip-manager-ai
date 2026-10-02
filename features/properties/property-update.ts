@@ -42,7 +42,7 @@ export type PropertyUpdateColumns = {
   roi: number | null;
 };
 
-const SOURCES = ["otodom", "olx", "facebook", "gratka", "morizon", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie"] as const satisfies readonly PropertySource[];
+const SOURCES = ["otodom", "olx", "facebook", "gratka", "morizon", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"] as const satisfies readonly PropertySource[];
 const STATUSES = ["draft", "analysis", "acquired", "renovation", "listed", "sold"] as const satisfies readonly PropertyStatus[];
 
 export function propertyToEditValues(property: Property): Record<string, string | string[]> {

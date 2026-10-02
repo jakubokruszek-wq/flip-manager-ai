@@ -3,7 +3,7 @@ import type { PropertyFinderSource, PropertyListing, PropertyListingStatus, Prop
 export const LISTING_SOURCES = [
   "otodom", "olx", "morizon", "facebook", "gratka", "nieruchomosci_online",
   "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio",
-  "domy", "allegro_lokalnie",
+  "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction",
 ] as const satisfies readonly ListingSource[];
 
 export type ListingSource = PropertyFinderSource;

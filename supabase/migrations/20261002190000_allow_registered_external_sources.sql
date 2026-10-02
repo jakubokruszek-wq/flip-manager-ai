@@ -22,7 +22,10 @@ alter table public.listings
     'szybko',
     'bezposrednio',
     'domy',
-    'allegro_lokalnie'
+    'allegro_lokalnie',
+    'official_cooperative',
+    'official_uml',
+    'official_auction'
   ));
 
 alter table public.source_scans
@@ -44,7 +47,10 @@ alter table public.source_scans
     'szybko',
     'bezposrednio',
     'domy',
-    'allegro_lokalnie'
+    'allegro_lokalnie',
+    'official_cooperative',
+    'official_uml',
+    'official_auction'
   ));
 
 alter table public.resale_comps
@@ -66,7 +72,10 @@ alter table public.resale_comps
     'szybko',
     'bezposrednio',
     'domy',
-    'allegro_lokalnie'
+    'allegro_lokalnie',
+    'official_cooperative',
+    'official_uml',
+    'official_auction'
   ));
 
 commit;

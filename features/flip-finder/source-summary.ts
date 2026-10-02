@@ -7,6 +7,7 @@ export function sourceLabel(source: ListingSource): string {
     gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta",
     sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net",
     szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie",
+    official_cooperative: "Spółdzielnie Łódź", official_uml: "UMŁ/BIP Łódź", official_auction: "Licytacje i syndycy",
   } satisfies Record<ListingSource, string>)[source];
 }
 

@@ -275,7 +275,7 @@ function FilterStatusBadge({ isActive }: { isActive: boolean }) {
 }
 
 function SourceBadge({ source }: { source: FilterResult["source"] }) {
-  const label = ({ otodom: "Otodom", olx: "OLX", morizon: "Morizon", facebook: "Facebook", gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta", sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net", szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie" } as const)[source];
+  const label = ({ otodom: "Otodom", olx: "OLX", morizon: "Morizon", facebook: "Facebook", gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta", sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net", szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie", official_cooperative: "Spółdzielnie Łódź", official_uml: "UMŁ/BIP Łódź", official_auction: "Licytacje i syndycy" } as const)[source];
 
   return <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{label}</span>;
 }

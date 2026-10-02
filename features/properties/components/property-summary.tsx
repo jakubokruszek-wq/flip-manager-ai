@@ -79,5 +79,5 @@ function formatPricePerSquareMeter(value: number | null): string {
 
 function sourceLabel(value: string): string {
   const normalized = value.trim().toLowerCase();
-  return ({ otodom: "Otodom", facebook: "Facebook", olx: "OLX", morizon: "Morizon", gratka: "Gratka", manual: "Wpis ręczny" } as Record<string, string>)[normalized] ?? "Źródło nieustalone";
+  return ({ otodom: "Otodom", facebook: "Facebook", olx: "OLX", morizon: "Morizon", gratka: "Gratka", official_cooperative: "Spółdzielnie Łódź", official_uml: "UMŁ/BIP Łódź", official_auction: "Licytacje i syndycy", manual: "Wpis ręczny" } as Record<string, string>)[normalized] ?? "Źródło nieustalone";
 }

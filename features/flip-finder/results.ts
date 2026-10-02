@@ -73,6 +73,9 @@ export function sourceDomainMatchesSource(
       bezposrednio: ["bezposrednio.net.pl"],
       domy: ["domy.pl"],
       allegro_lokalnie: ["allegrolokalnie.pl"],
+      official_cooperative: ["smdabrowa.pl", "smteofilow.com.pl", "smtl.pl", "chojny.lodz.pl", "srodmiescie.lodz.pl", "karolew.eu", "smlodz.pl", "retkiniapoludnie.pl", "smrw.pl", "smdmlodz.pl"],
+      official_uml: ["uml.lodz.pl", "bip.uml.lodz.pl"],
+      official_auction: ["licytacje.komornik.pl", "gov.pl"],
     };
     return domains[source].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
   } catch {
@@ -86,6 +89,7 @@ export function sourceLabelForResult(source: FilterResult["source"]): string {
     gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta",
     sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net",
     szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie",
+    official_cooperative: "Spółdzielnie Łódź", official_uml: "UMŁ/BIP Łódź", official_auction: "Licytacje i syndycy",
   } satisfies Record<FilterResult["source"], string>)[source];
 }
 

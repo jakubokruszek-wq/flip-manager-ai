@@ -24,6 +24,7 @@ const REGISTERED_EXTERNAL_SOURCES = [
   "domy",
   "allegro_lokalnie",
 ] as const;
+const REGISTERED_OFFICIAL_SOURCES = ["official_cooperative", "official_uml", "official_auction"] as const;
 
 function sourceValues(definition: string): Set<string> {
   return new Set([...definition.matchAll(/'([^']+)'/g)].map((match) => match[1]));
@@ -45,7 +46,7 @@ test("the prepared migration preserves the exact existing source values and adds
   const foundation = fs.readFileSync(foundationMigrationPath, "utf8");
   const morizon = fs.readFileSync(morizonMigrationPath, "utf8");
   const resaleComps = fs.readFileSync(resaleCompsMigrationPath, "utf8");
-  const expected = new Set([...EXISTING_SOURCES, ...REGISTERED_EXTERNAL_SOURCES]);
+  const expected = new Set([...EXISTING_SOURCES, ...REGISTERED_EXTERNAL_SOURCES, ...REGISTERED_OFFICIAL_SOURCES]);
 
   assert.deepEqual(sourceValuesAfter(morizon, "add constraint listings_source_check"), expectedWithoutExternalSources(), "listings_source_check baseline");
   assert.deepEqual(sourceValuesAfter(morizon, "add constraint source_scans_source_check"), expectedWithoutExternalSources(), "source_scans_source_check baseline");
@@ -69,6 +70,9 @@ test("the migration is schema-only and does not open the runtime source gate", (
   const registry = fs.readFileSync(registryPath, "utf8");
   assert.match(registry, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[\s*"otodom"\s*,\s*"olx"\s*,\s*"morizon"\s*\]/);
   for (const source of REGISTERED_EXTERNAL_SOURCES) {
+    assert.match(migration, new RegExp(`['"]${source}['"]`));
+  }
+  for (const source of REGISTERED_OFFICIAL_SOURCES) {
     assert.match(migration, new RegExp(`['"]${source}['"]`));
   }
 });

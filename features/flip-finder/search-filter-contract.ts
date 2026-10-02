@@ -61,6 +61,9 @@ export const SEARCH_FILTER_SOURCE_OPTIONS: Array<{ value: ListingSource; label: 
   { value: "bezposrednio", label: "Bezposrednio.net.pl — migracja wymagana" },
   { value: "domy", label: "Domy.pl — migracja wymagana" },
   { value: "allegro_lokalnie", label: "Allegro Lokalnie — migracja wymagana" },
+  { value: "official_cooperative", label: "Spółdzielnie Łódź — migracja wymagana" },
+  { value: "official_uml", label: "UMŁ/BIP Łódź — migracja wymagana" },
+  { value: "official_auction", label: "Licytacje i syndycy — migracja wymagana" },
 ];
 
 /** Shown next to the source picker whenever "facebook" is selected — this filter's Facebook results only ever come from Watcher's own, independently-collected canonical listings; enabling it never starts a new Facebook scan. */

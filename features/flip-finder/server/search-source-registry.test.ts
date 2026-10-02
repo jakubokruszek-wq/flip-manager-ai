@@ -43,7 +43,7 @@ test("Otodom source preserves raw rows for 26-to-zero diagnostics", async () => 
 test("registry exposes every requested external adapter without touching the network", () => {
   assert.deepEqual(
     SOURCES.map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"],
   );
 });
 
@@ -55,6 +55,7 @@ test("source paths use the stable Łódź slug", () => {
 test("external adapters stay registered but are not schedulable before schema approval", () => {
   assert.deepEqual(activeSources({ ...filter, sources: ["gratka"] }).map((source) => source.id), []);
   assert.deepEqual(activeSources({ ...filter, sources: ["otodom", "domy"] }).map((source) => source.id), ["otodom"]);
+  assert.deepEqual(activeSources({ ...filter, sources: ["official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
 });
 
 test("external adapters retry a rate-limited response once and parse only the verified listing", async () => {
