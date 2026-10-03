@@ -844,7 +844,13 @@ function stringArray(value: unknown): string[] {
 }
 
 function isListingSource(value: string | null): value is FilterResult["source"] {
-  return value === "otodom" || value === "olx" || value === "morizon" || value === "facebook";
+  return value === "otodom"
+    || value === "olx"
+    || value === "morizon"
+    || value === "facebook"
+    || value === "official_cooperative"
+    || value === "official_uml"
+    || value === "official_auction";
 }
 
 function isListingStatus(value: string | null): value is FilterResult["listingStatus"] {

@@ -19,6 +19,7 @@ test("the supplied Flip Manager artwork is installed for web and PWA branding", 
     "app/icon.png",
     "app/apple-icon.png",
     "public/icons/flip-manager-180.png",
+    "public/icons/flip-manager-48.png",
     "public/icons/flip-manager-192.png",
     "public/icons/flip-manager-512.png",
   ]) {

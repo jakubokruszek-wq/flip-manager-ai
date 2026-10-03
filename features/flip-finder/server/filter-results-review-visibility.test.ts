@@ -111,7 +111,50 @@ function freshDb(): FakeFacebookSupabase {
 let currentDb = freshDb();
 mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => currentDb } });
 const { getFilterResults } = await import("./filter-results.ts");
+mock.module("@/features/auth/operator", {
+  namedExports: {
+    requireOperator: async () => ({ id: "operator-test", email: "operator@example.test" }),
+    operatorAuthorizationResponse: () => Response.json({ ok: false }, { status: 401 }),
+  },
+});
+const { GET: getFilterResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/results/route.ts");
 
+
+test("endpoint E2E: an official canonical listing survives the real Finder results route", async () => {
+  const db = freshDb();
+  db.seed("search_filters", [{ ...CHORALNA_FILTER_ROW, sources: ["official_cooperative"] }]);
+  db.seed("listings", [listingRow({
+    id: "listing-official-dabrowa",
+    source: "official_cooperative",
+    original_url: "https://smdabrowa.pl/informacje/oferty-przetargi/397-lokal-mieszkalny-na-przetarg",
+    title: "Lokal mieszkalny - przetarg",
+    price: 222000,
+    area: 36.74,
+    rooms: 2,
+    building_type: "blok",
+    ownership: CHORALNA_FILTER_ROW.ownership_types[1],
+    address: "ul. Zbaraska 25",
+    city: CHORALNA_FILTER_ROW.city,
+    lifecycle_status: "ACTIVE",
+    review_reason: null,
+    missing_fields: [],
+  })]);
+  db.seed("listing_filter_matches", [membershipRow("listing-official-dabrowa", {
+    is_current_match: true,
+    match_reasons: [],
+  })]);
+  currentDb = db;
+
+  const response = await getFilterResultsRoute(
+    new Request("http://localhost/api/flip-finder/search-filters/" + FILTER_ID + "/results"),
+    { params: Promise.resolve({ id: FILTER_ID }) },
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { results: Array<{ id: string; source: string }> };
+  assert.equal(payload.results.length, 1);
+  assert.equal(payload.results[0]?.id, "listing-official-dabrowa");
+  assert.equal(payload.results[0]?.source, "official_cooperative");
+});
 test("A: a Chóralna-like canonical REVIEW listing (missing buildingType/ownership, is_current_match=false, match_reasons contains 'review') is surfaced by the real getFilterResults(), never dropped", async () => {
   const db = freshDb();
   db.seed("listings", [listingRow()]);
