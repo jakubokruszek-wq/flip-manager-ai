@@ -56,11 +56,11 @@ test("only complete schema-ready adapters are schedulable", () => {
   assert.deepEqual(
     activeSources({
       ...filter,
-      sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie"],
+      sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie", "gratka"],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "gratka", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
   );
-  assert.deepEqual(activeSources({ ...filter, sources: ["gratka", "nieruchomosci_online", "oferty_net", "bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
+  assert.deepEqual(activeSources({ ...filter, sources: ["nieruchomosci_online", "oferty_net", "bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
 });
 
 test("Szybko remains registered but is disabled pending live access verification", () => {
@@ -73,19 +73,19 @@ test("a legacy filter cannot schedule unavailable sources while preserving activ
     activeSources({
       ...filter,
       sources: [
-        "otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie",
-        "facebook", "gratka", "nieruchomosci_online", "oferty_net", "szybko", "bezposrednio",
+        "otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie", "gratka",
+        "facebook", "nieruchomosci_online", "oferty_net", "szybko", "bezposrednio",
         "official_cooperative", "official_uml", "official_auction",
       ],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "gratka", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie"],
   );
 });
 
 test("external adapters retry a rate-limited response once and parse only the verified listing", async () => {
   const previousFetch = globalThis.fetch;
   let calls = 0;
-  const body = `<script type="application/ld+json">${JSON.stringify({ "@type": "Product", sku: "g-1", url: "https://gratka.pl/oferta/lodz-1", name: "Mieszkanie Łódź", offers: { price: 489000 }, itemOffered: { floorSize: { value: 53 }, address: { addressLocality: "Łódź" } } })}</script>`;
+  const body = `<script type="application/ld+json">${JSON.stringify({ "@type": "Product", url: "https://gratka.pl/nieruchomosci/mieszkania/lodz", name: "Mieszkania na sprzedaż Łódź", offers: { "@type": "AggregateOffer", offers: [{ "@type": "Offer", url: "https://gratka.pl/nieruchomosci/mieszkanie-lodz-1/ob/12345", name: "Mieszkanie Łódź", price: "489000.00", itemOffered: { floorSize: { value: 53 }, address: { addressLocality: "Bałuty" } } }] } })}</script>`;
   globalThis.fetch = async () => {
     calls += 1;
     if (calls === 1) return new Response("rate limited", { status: 429 });

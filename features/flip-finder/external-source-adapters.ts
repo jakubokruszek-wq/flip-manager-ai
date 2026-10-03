@@ -74,9 +74,22 @@ function pageUrl(config: ExternalSourceConfig, city: string, page: number): stri
   return base.toString();
 }
 
+// Real public structure, confirmed against gratka.pl/nieruchomosci/mieszkania/<city>
+// (read-only GET, 2026-10-03): the page embeds exactly one schema.org Product
+// whose `offers` is a single AggregateOffer carrying every visible listing as
+// its own nested Offer in `offers.offers[]` -- never an ItemList, and never one
+// JSON-LD record per listing the way domiporta/adresowo/szybko/domy render.
+// jsonLdRecords() only recurses into `@graph`, so it hands back that one
+// top-level Product record; its own `offers`/`itemOffered` fields are the
+// page-level aggregate (lowPrice/highPrice, no single listing), not a listing
+// itself -- mapping it directly (the previous implementation) always produced
+// a single, price-less, non-listing candidate that failed validation, so this
+// source silently returned zero listings regardless of how many were on the
+// page.
 function parseGratka(html: string, fallbackCity: string): ExternalPortalPage {
-  const records = jsonLdRecords(html).filter((record) => /product|offer|residence|apartment/iu.test(text(record, "@type") ?? ""));
-  return fromCandidates("gratka", records.map(fromGratkaRecord), fallbackCity, hasNextMarker(html));
+  const aggregate = jsonLdRecords(html).find((record) => isRecord(record.offers) && Array.isArray((record.offers as PortalRecord).offers));
+  const offers = aggregate ? ((aggregate.offers as PortalRecord).offers as unknown[]).filter(isRecord) : [];
+  return fromCandidates("gratka", offers.map(fromGratkaOfferRecord), fallbackCity, hasNextMarker(html));
 }
 
 function parseNieruchomosciOnline(html: string, fallbackCity: string): ExternalPortalPage {
@@ -131,7 +144,19 @@ function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPorta
   return fromCandidates("allegro_lokalnie", candidates, fallbackCity, Boolean(atPath(data, ["props", "pageProps", "pagination", "hasNext"])));
 }
 
-function fromGratkaRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.sku ?? record.productID ?? record.identifier, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
+// Each nested Offer carries its own itemOffered/address -- but Gratka puts the
+// LISTING'S OWN DISTRICT in address.addressLocality (e.g. "Teofilów",
+// "Dąbrowa", "Śródmieście" -- all real Łódź districts in the confirmed live
+// data), never a separate city. There is no per-offer sku/productID/
+// identifier field in the real data; city is deliberately left unset here so
+// toListing()'s own existing fallbackCity logic supplies it, exactly as it
+// already does for every other adapter lacking an explicit per-candidate city.
+function fromGratkaOfferRecord(record: PortalRecord): PortalCandidate {
+  const itemOffered = isRecord(record.itemOffered) ? record.itemOffered : record;
+  const url = text(record, "url");
+  return { id: record.sku ?? record.productID ?? record.identifier ?? (url ? gratkaIdFromUrl(url) : undefined), url: record.url, title: record.name, description: itemOffered.description, price: record.price, area: atPath(itemOffered, ["floorSize", "value"]) ?? itemOffered.area, rooms: itemOffered.numberOfRooms, floor: itemOffered.floorLevel, district: atPath(itemOffered, ["address", "addressLocality"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished };
+}
+function gratkaIdFromUrl(url: string): string | null { try { return new URL(url).pathname.split("/").filter(Boolean).pop() ?? null; } catch { return null; } }
 function fromAdresowoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.identifier ?? record.sku, url: record.url ?? record.mainEntityOfPage, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
 function fromSzybkoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.sku ?? record.productID ?? record.identifier, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
 function fromDomyRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.sku ?? record.productID, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
@@ -140,7 +165,7 @@ function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[],
 function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbackCity: string): PropertySourceListing | null { const url = absoluteUrl(candidate.url, source); const title = stringValue(candidate.title); const description = stringValue(candidate.description); if (!url || isSearchUrl(url) || RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`)) return null; const price = money(candidate.price); const area = decimal(candidate.area); if (price === null || price <= 0 || area === null || area <= 0) return null; const city = stringValue(candidate.city) ?? fallbackCity; const district = stringValue(candidate.district); const externalListingId = stringValue(candidate.id) ?? new URL(url).pathname.replace(/\/+$/u, ""); const images = imageValues(candidate.images); const rooms = decimal(candidate.rooms); const payload = { id: externalListingId, url: normalizeUrl(url), title, price, area, rooms, city, district }; return { source, externalListingId, originalUrl: url, normalizedUrl: payload.url, title, price, area, rooms, floor: stringValue(candidate.floor), pricePerSqm: price / area, city, district, locationText: [district, city].filter(Boolean).join(", ") || null, thumbnailUrl: images[0] ?? null, images, buildingType: null, description: description ? stripHtml(description) : null, publishedAt: stringValue(candidate.publishedAt), rawPayload: { source, candidate }, contentHash: calculateContentHash(payload) }; }
 
 function absoluteUrl(value: unknown, source: ExternalSourceId): string | null { const raw = stringValue(value); if (!raw) return null; const host = SOURCE_HOSTS[source]; try { const url = new URL(raw, `https://${host}`); if (url.protocol !== "https:" || (url.hostname !== host && !url.hostname.endsWith(`.${host}`))) return null; return url.toString(); } catch { return null; } }
-function isSearchUrl(value: string): boolean { const path = new URL(value).pathname.toLocaleLowerCase("pl-PL"); return /\/(wyniki|search|szukaj|mieszkania\/sprzedam|nieruchomosci\/mieszkania\/sprzedam|oferty\/nieruchomosci\/mieszkania)\/?$/u.test(path); }
+function isSearchUrl(value: string): boolean { const path = new URL(value).pathname.toLocaleLowerCase("pl-PL"); return /\/(wyniki|search|szukaj|mieszkania\/sprzedam|nieruchomosci\/mieszkania\/sprzedam|oferty\/nieruchomosci\/mieszkania|nieruchomosci\/mieszkania\/[a-z-]+)\/?$/u.test(path); }
 function normalizeUrl(value: string): string { const url = new URL(value); url.hash = ""; url.hostname = url.hostname.toLowerCase(); for (const key of [...url.searchParams.keys()]) if (TRACKING_PARAM.test(key)) url.searchParams.delete(key); url.pathname = url.pathname.replace(/\/{2,}/gu, "/").replace(/\/$/u, "") || "/"; return url.toString(); }
 function jsonLdRecords(html: string): PortalRecord[] { const output: PortalRecord[] = []; for (const match of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/giu)) { try { collectJson(JSON.parse(decodeEntities(match[1])), output); } catch { /* malformed blocks are ignored */ } } return output; }
 function collectJson(value: unknown, output: PortalRecord[]): void { if (Array.isArray(value)) { value.filter(isRecord).forEach((item) => collectJson(item, output)); return; } if (!isRecord(value)) return; output.push(value); if (Array.isArray(value["@graph"])) value["@graph"].forEach((item) => collectJson(item, output)); }

@@ -29,7 +29,11 @@ export type SearchSource = {
 };
 
 export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
-  { id: "gratka", label: "Gratka", hostnames: ["gratka.pl"], searchPath: (city) => `/nieruchomosci/mieszkania/sprzedam/${slugifyCity(city)}` },
+  // Confirmed against a real, read-only GET (2026-10-03): /nieruchomosci/mieszkania/sprzedam/<city>
+  // is a 404 on the live site. The real sale listing page is
+  // /nieruchomosci/mieszkania/<city> (no "sprzedam" segment -- sale is the
+  // default; rentals live under the separate .../wynajem suffix this never requests).
+  { id: "gratka", label: "Gratka", hostnames: ["gratka.pl"], searchPath: (city) => `/nieruchomosci/mieszkania/${slugifyCity(city)}` },
   { id: "nieruchomosci_online", label: "Nieruchomosci-online.pl", hostnames: ["nieruchomosci-online.pl"], searchPath: (city) => `/sprzedaz/mieszkanie/${slugifyCity(city)}.html` },
   { id: "domiporta", label: "Domiporta", hostnames: ["domiporta.pl"], searchPath: (city) => `/mieszkanie/sprzedam/lodzkie/${slugifyCity(city)}` },
   { id: "sprzedajemy", label: "Sprzedajemy.pl", hostnames: ["sprzedajemy.pl"], searchPath: (city) => `/${slugifyCity(city)}/nieruchomosci/mieszkania` },
@@ -42,7 +46,7 @@ export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
 ];
 
 export const EXTERNAL_SOURCE_STATUS = {
-  gratka: "path_requires_live_source_verification",
+  gratka: "public_html_adapter",
   nieruchomosci_online: "path_requires_live_source_verification",
   domiporta: "public_html_adapter",
   sprzedajemy: "public_html_adapter",

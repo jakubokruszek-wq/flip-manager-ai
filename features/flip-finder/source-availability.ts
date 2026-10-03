@@ -10,6 +10,7 @@ export const SCHEMA_READY_SOURCE_IDS = [
   "adresowo",
   "domy",
   "allegro_lokalnie",
+  "gratka",
 ] as const satisfies readonly Exclude<ListingSource, "facebook">[];
 
 export type SchemaReadySourceId = (typeof SCHEMA_READY_SOURCE_IDS)[number];
