@@ -9,6 +9,7 @@ import { runFacebookJobCompletion, waitForFacebookTargetJob } from "./job-runner
 import { parseFacebookMaxPostsArgument, parseFacebookPostIdArgument } from "./post-page.ts";
 import { parseFacebookImageRevalidationArguments, runFacebookImageRevalidation } from "./image-revalidation.ts";
 import { runWithFacebookGroupDeadline } from "./group-deadline.ts";
+import { createIdlePollBackoff } from "../../shared/idle-poll-backoff.ts";
 
 const loginMode = process.argv.includes("--login");
 const timeDiagnosticMode = process.argv.includes("--time-diagnostic");
@@ -21,7 +22,7 @@ if (imageRevalidation.enabled && (loginMode || debugPostId || timeDiagnosticMode
 if (loginMode) {
   await openFacebookLogin(resolveFacebookProfileDir());
 } else {
-  const config = loadFacebookWorkerConfig(); const api = createFacebookApiClient(config); const shutdown = new AbortController(); let activeJob: FacebookWorkerJob | null = null;
+  const config = loadFacebookWorkerConfig(); const api = createFacebookApiClient(config); const pollBackoff = createIdlePollBackoff(config.pollIntervalMs); const shutdown = new AbortController(); let activeJob: FacebookWorkerJob | null = null;
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { logFacebookWorker("FACEBOOK_WORKER_SHUTDOWN", { signal, activeJobId: activeJob?.id ?? null }); shutdown.abort(); });
   logFacebookWorker("FACEBOOK_WORKER_START", { workerId: config.workerId, once: config.once, timeDiagnosticMode, mediaDiagnosticMode, debugMaxPosts, debugPostId });
   if (imageRevalidation.enabled) {
@@ -39,6 +40,7 @@ if (loginMode) {
         })
         : (await api.claim(shutdown.signal)).job;
       if (job) {
+        pollBackoff.recordClaimWithJob();
         activeJob = job; logFacebookWorker("FACEBOOK_JOB_START", { jobId: job.id, runId: job.runId, attempt: job.attempts });
         const heartbeat = setInterval(() => void api.heartbeat(job, shutdown.signal).then(() => logFacebookWorker("FACEBOOK_JOB_HEARTBEAT", { jobId: job.id })).catch((error) => logFacebookWorker("FACEBOOK_JOB_HEARTBEAT_ERROR", { jobId: job.id, message: safeMessage(error) })), 30_000);
         try {
@@ -53,10 +55,13 @@ if (loginMode) {
           if (!shutdown.signal.aborted) await api.fail(job, code, safeMessage(error)).catch((failure) => logFacebookWorker("FACEBOOK_JOB_FAIL_REPORT_ERROR", { jobId: job.id, message: safeMessage(failure) }));
         } finally { clearInterval(heartbeat); activeJob = null; }
         if (debugPostId) break;
-      } else if (config.once) break;
-    } catch (error) { if (shutdown.signal.aborted) break; logFacebookWorker("FACEBOOK_WORKER_POLL_ERROR", { message: safeMessage(error) }); }
+      } else {
+        pollBackoff.recordEmptyClaim();
+        if (config.once) break;
+      }
+    } catch (error) { if (shutdown.signal.aborted) break; pollBackoff.recordRequestError(); logFacebookWorker("FACEBOOK_WORKER_POLL_ERROR", { message: safeMessage(error) }); }
     if (config.once) break;
-    if (!debugPostId) await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
+    if (!debugPostId) await new Promise((resolve) => setTimeout(resolve, pollBackoff.currentDelayMs()));
   }
   if (!imageRevalidation.enabled) logFacebookWorker("FACEBOOK_WORKER_STOP", { workerId: config.workerId });
 }

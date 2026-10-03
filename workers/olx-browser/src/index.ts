@@ -3,9 +3,11 @@ import { fetchOlxWithBrowser } from "./browser.ts";
 import { loadConfig } from "./config.ts";
 import { log } from "./logger.ts";
 import { ControlledOlxFailure, withTransientRetry } from "./retry.ts";
+import { createIdlePollBackoff } from "../../shared/idle-poll-backoff.ts";
 
 const config = loadConfig();
 const api = createApiClient(config);
+const pollBackoff = createIdlePollBackoff(config.pollIntervalMs);
 const shutdown = new AbortController();
 let activeJob: WorkerJob | null = null;
 
@@ -44,14 +46,20 @@ async function main(): Promise<void> {
   while (!shutdown.signal.aborted) {
     try {
       const { job } = await api.claim(shutdown.signal);
-      if (job) await runJob(job);
-      else if (config.once) break;
+      if (job) {
+        pollBackoff.recordClaimWithJob();
+        await runJob(job);
+      } else {
+        pollBackoff.recordEmptyClaim();
+        if (config.once) break;
+      }
     } catch (error) {
       if (shutdown.signal.aborted) break;
+      pollBackoff.recordRequestError();
       log("WORKER_POLL_ERROR", { message: error instanceof Error ? error.message : String(error) });
     }
     if (config.once) break;
-    await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
+    await new Promise((resolve) => setTimeout(resolve, pollBackoff.currentDelayMs()));
   }
   log("WORKER_STOP", { workerId: config.workerId });
 }
