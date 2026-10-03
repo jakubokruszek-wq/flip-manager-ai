@@ -55,7 +55,7 @@ const SEARCH_FILTER_SOURCE_OPTION_DEFINITIONS: SearchFilterSourceOptionDefinitio
   { value: "morizon", label: "Morizon" },
   { value: "facebook", label: "Facebook Watcher — zebrane oferty" },
   { value: "gratka", label: "Gratka" },
-  { value: "nieruchomosci_online", label: "Nieruchomosci-online.pl — migracja wymagana" },
+  { value: "nieruchomosci_online", label: "Nieruchomosci-online.pl" },
   { value: "domiporta", label: "Domiporta" },
   { value: "sprzedajemy", label: "Sprzedajemy.pl" },
   { value: "adresowo", label: "Adresowo.pl" },

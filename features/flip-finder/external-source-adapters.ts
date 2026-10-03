@@ -92,11 +92,26 @@ function parseGratka(html: string, fallbackCity: string): ExternalPortalPage {
   return fromCandidates("gratka", offers.map(fromGratkaOfferRecord), fallbackCity, hasNextMarker(html));
 }
 
+// Real public structure, confirmed against lodz.nieruchomosci-online.pl/mieszkania,sprzedaz/
+// (read-only GET, 2026-10-03): the page has no __NEXT_DATA__ at all (the
+// previous implementation's entire approach never matched anything real).
+// It embeds a CollectionPage whose mainEntity (a Product) carries every
+// visible listing as a nested Offer inside mainEntity.offers[0].offers[] --
+// the exact same AggregateOffer-wraps-individual-Offers shape Gratka uses,
+// just one level deeper (CollectionPage -> mainEntity -> offers[0] rather
+// than Product -> offers directly). addressLocality here genuinely IS the
+// city ("Łódź"), unlike Gratka's quirk -- used directly, not left to
+// fallbackCity.
 function parseNieruchomosciOnline(html: string, fallbackCity: string): ExternalPortalPage {
-  const data = nextData(html);
-  const rows = arrayAt(data, ["props", "pageProps", "ads"]) ?? arrayAt(data, ["props", "pageProps", "data", "ads"]) ?? [];
-  const candidates = rows.filter(isRecord).map((row) => ({ id: row.id ?? row.offerId, url: row.href ?? row.url, title: row.title ?? row.name, description: row.description, price: row.price ?? atPath(row, ["offers", "price"]), area: atPath(row, ["area", "value"]) ?? row.area, rooms: row.rooms ?? row.numberOfRooms, floor: row.floor, city: row.city, district: row.district, images: row.images, publishedAt: row.publishedAt }));
-  return fromCandidates("nieruchomosci_online", candidates, fallbackCity, Boolean(atPath(data, ["props", "pageProps", "pagination", "hasNext"])));
+  const collectionPage = jsonLdRecords(html).find((record) => isRecord(record.mainEntity));
+  const offers = collectionPage ? aggregateOfferItems((collectionPage.mainEntity as PortalRecord).offers) : [];
+  return fromCandidates("nieruchomosci_online", offers.map(fromNieruchomosciOnlineRecord), fallbackCity, hasNextMarker(html));
+}
+
+/** Unwraps `{...AggregateOffer, offers: [...]}` whether it arrives as that object directly (Gratka) or as a one-element array wrapping it (nieruchomosci-online's `mainEntity.offers[0]`). */
+function aggregateOfferItems(value: unknown): PortalRecord[] {
+  const aggregate = Array.isArray(value) ? value.find(isRecord) : isRecord(value) ? value : null;
+  return aggregate && Array.isArray(aggregate.offers) ? (aggregate.offers as unknown[]).filter(isRecord) : [];
 }
 
 function parseDomiporta(html: string, fallbackCity: string): ExternalPortalPage {
@@ -182,9 +197,10 @@ function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPorta
 function fromGratkaOfferRecord(record: PortalRecord): PortalCandidate {
   const itemOffered = isRecord(record.itemOffered) ? record.itemOffered : record;
   const url = text(record, "url");
-  return { id: record.sku ?? record.productID ?? record.identifier ?? (url ? gratkaIdFromUrl(url) : undefined), url: record.url, title: record.name, description: itemOffered.description, price: record.price, area: atPath(itemOffered, ["floorSize", "value"]) ?? itemOffered.area, rooms: itemOffered.numberOfRooms, floor: itemOffered.floorLevel, district: atPath(itemOffered, ["address", "addressLocality"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished };
+  return { id: record.sku ?? record.productID ?? record.identifier ?? (url ? lastPathSegmentId(url) : undefined), url: record.url, title: record.name, description: itemOffered.description, price: record.price, area: atPath(itemOffered, ["floorSize", "value"]) ?? itemOffered.area, rooms: itemOffered.numberOfRooms, floor: itemOffered.floorLevel, district: atPath(itemOffered, ["address", "addressLocality"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished };
 }
-function gratkaIdFromUrl(url: string): string | null { try { return new URL(url).pathname.split("/").filter(Boolean).pop() ?? null; } catch { return null; } }
+function lastPathSegmentId(url: string): string | null { try { return new URL(url).pathname.split("/").filter(Boolean).pop() ?? null; } catch { return null; } }
+function fromNieruchomosciOnlineRecord(record: PortalRecord): PortalCandidate { const itemOffered = isRecord(record.itemOffered) ? record.itemOffered : record; const address = isRecord(itemOffered.address) ? itemOffered.address : {}; const url = text(record, "url"); return { id: record.sku ?? record.productID ?? record.identifier ?? (url ? lastPathSegmentId(url) : undefined), url: record.url, title: record.name, description: itemOffered.description, price: record.price, area: atPath(itemOffered, ["floorSize", "value"]), rooms: itemOffered.numberOfRooms, city: text(address, "addressLocality"), images: record.image, publishedAt: record.datePosted }; }
 function fromDomiportaRecord(record: PortalRecord): PortalCandidate { const nestedOffer = atPath(record, ["offers", "itemOffered"]); const offered = isRecord(record.itemOffered) ? record.itemOffered : isRecord(nestedOffer) ? nestedOffer : record; return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
 function fromAdresowoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.identifier ?? record.sku, url: record.url ?? record.mainEntityOfPage, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
 function fromSprzedajemyRecord(record: PortalRecord): PortalCandidate { const title = stringValue(record.name) ?? stringValue(record.title); return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: record.area ?? areaFromText(title), rooms: record.numberOfRooms ?? record.rooms ?? roomsFromText(title), city: atPath(record, ["address", "addressLocality"]), district: atPath(record, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }

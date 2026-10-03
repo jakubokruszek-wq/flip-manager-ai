@@ -38,7 +38,12 @@ function fixture(source: ExternalSourceId, page: number): string {
   if (source === "adresowo") return jsonLd({ "@type": "Residence", identifier: item.id, url: item.url, name: item.title, description: item.description, image: item.images, datePosted: item.publishedAt, offers: { price: item.price }, itemOffered: { floorSize: { value: item.area }, numberOfRooms: item.rooms, address: { addressLocality: item.city, addressSuburb: item.district } } }, next);
   if (source === "domy") return jsonLd({ "@type": "Product", productID: item.id, url: item.url, name: item.title, description: item.description, image: item.images, datePosted: item.publishedAt, offers: { price: item.price }, itemOffered: { floorSize: { value: item.area }, numberOfRooms: item.rooms, address: { addressLocality: item.city, addressSuburb: item.district } } }, next);
   if (source === "szybko") return jsonLd({ "@type": "ItemList", itemListElement: [{ item: { "@type": "Product", sku: item.id, url: item.url, name: item.title, description: item.description, image: item.images, offers: { price: item.price }, itemOffered: { floorSize: { value: item.area }, numberOfRooms: item.rooms, address: { addressLocality: item.city, addressSuburb: item.district } } } }] }, next);
-  if (source === "nieruchomosci_online") return `<script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: { ads: [{ id: item.id, href: item.url, title: item.title, description: item.description, price: item.price, area: { value: item.area }, rooms: item.rooms, city: item.city, district: item.district, images: item.images, publishedAt: item.publishedAt }], pagination: { hasNext: next } } } })}</script>`;
+  // Real structure (confirmed against a live, read-only GET of
+  // lodz.nieruchomosci-online.pl/mieszkania,sprzedaz/, 2026-10-03): a
+  // CollectionPage whose mainEntity (a Product) carries every listing as a
+  // nested Offer inside mainEntity.offers[0].offers[] -- there is no
+  // __NEXT_DATA__ on this site at all.
+  if (source === "nieruchomosci_online") return jsonLd({ "@type": "CollectionPage", mainEntity: { "@type": "Product", offers: [{ "@type": "AggregateOffer", offers: [{ "@type": "Offer", sku: item.id, url: item.url, name: item.title, price: item.price, image: item.images, datePosted: item.publishedAt, itemOffered: { "@type": "Accommodation", description: item.description, numberOfRooms: item.rooms, floorSize: { value: item.area }, address: { addressLocality: item.city } } }] }] } }, next);
   if (source === "bezposrednio") return `<script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: { listings: [{ id: item.id, href: item.url, title: item.title, description: item.description, price: item.price, area: item.area, rooms: item.rooms, city: item.city, district: item.district, images: item.images, publishedAt: item.publishedAt }], pagination: { hasNextPage: next } } } })}</script>`;
   if (source === "allegro_lokalnie") return `<script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: { items: [{ id: item.id, href: item.url, title: item.title, description: item.description, price: { amount: item.price }, size: item.area, rooms: item.rooms, city: item.city, district: item.district, photos: item.images, publishedAt: item.publishedAt }], pagination: { hasNext: next } } } })}</script>`;
   if (source === "sprzedajemy") return `<script>window.__INITIAL_STATE__=${JSON.stringify({ offers: [{ id: item.id, url: item.url, title: item.title, description: item.description, price: item.price, area: item.area, rooms: item.rooms, city: item.city, district: item.district, images: item.images, publishedAt: item.publishedAt }], pagination: { next: next ? "?page=2" : null } })};</script>`;
@@ -191,6 +196,47 @@ test("the real gratka.pl public page structure (AggregateOffer.offers[], capture
   const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
   assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
   assert.equal(rows[0]?.price, 419000);
+});
+
+// Real public page excerpt (read-only GET of lodz.nieruchomosci-online.pl/
+// mieszkania,sprzedaz/, 2026-10-03), trimmed to 2 of the page's real 47
+// offers. Unlike Gratka, addressLocality here genuinely IS the city
+// ("Łódź"), and real offers carry no sku/productID/identifier either --
+// recovered from the URL the same way.
+const NOL_REAL_PAGE_1 = JSON.stringify({
+  "@context": "https://schema.org", "@type": "CollectionPage",
+  name: "Mieszkania na sprzedaż Łódź - Oferty „sprzedam mieszkanie”",
+  url: "https://lodz.nieruchomosci-online.pl/mieszkania,sprzedaz/",
+  mainEntity: {
+    "@type": "Product", additionalType: ["RealEstateListing", "Accommodation"],
+    url: "https://lodz.nieruchomosci-online.pl/mieszkania,sprzedaz/",
+    offers: [{
+      "@type": "AggregateOffer", highPrice: "1600000", lowPrice: "120000", offerCount: "47", priceCurrency: "PLN",
+      offers: [
+        { "@type": "Offer", availability: "InStock", price: "305000", priceCurrency: "PLN", url: "https://lodz.nieruchomosci-online.pl/mieszkanie-w-bloku-mieszkalnym,wysoki-standard/27005435.html", image: "https://i.st-nieruchomosci-online.pl/k2kq72l/mieszkanie-lodz.jpg", itemOffered: { "@type": "Accommodation", description: "Sprzedam mieszkanie spółdzielcze własnościowe z księgą wieczystą o powierzchni 28,32 m.", address: { "@type": "PostalAddress", streetAddress: "Rojna", addressLocality: "Łódź", addressCountry: "Polska", addressRegion: "łódzkie" }, floorSize: { "@type": "QuantitativeValue", value: "28.32", unitCode: "MTR" }, numberOfRooms: 1 }, name: "Sprzedam Mieszkanie Łódź - 28,32 m²" },
+        { "@type": "Offer", availability: "InStock", price: "", priceCurrency: "PLN", url: "https://lodz.nieruchomosci-online.pl/nowe-mieszkanie,boska-pabianicka/26818769.html", image: "https://i.st-nieruchomosci-online.pl/kp9z8bl/boska-pabianicka.jpg", itemOffered: { "@type": "Accommodation", description: "3-pokojowe mieszkanie o powierzchni 51 m.", address: { "@type": "PostalAddress", streetAddress: "Boska", addressLocality: "Łódź", addressCountry: "Polska" }, floorSize: { "@type": "QuantitativeValue", value: "51", unitCode: "MTK" }, numberOfRooms: 3 }, name: "Sprzedam Mieszkanie Łódź - 51 m²" },
+      ],
+    }],
+  },
+});
+
+test("the real nieruchomosci-online.pl public page structure (CollectionPage -> mainEntity -> offers[0].offers[], captured 2026-10-03) reaches persistListing and the Finder gate", async () => {
+  const html = `<script type="application/ld+json">${NOL_REAL_PAGE_1}</script>`;
+  const parsed = EXTERNAL_PORTAL_PARSERS.nieruchomosci_online(html, "Łódź");
+  assert.equal(parsed.listings.length, 1, "the price-less second offer must be filtered out, never kept with a fake/zero price");
+  const [first] = parsed.listings;
+  assert.equal(first?.price, 305000);
+  assert.equal(first?.area, 28.32);
+  assert.equal(first?.rooms, 1);
+  assert.equal(first?.city, "Łódź", "addressLocality genuinely is the city on this site, unlike Gratka's district quirk");
+  assert.equal(first?.externalListingId, "27005435.html", "the id must be recovered from the URL since real offers carry no sku/productID/identifier");
+
+  const rows: Record<string, unknown>[] = [];
+  const db = fakeDb(rows);
+  const { persistListing } = await import("./server/persist-listing.ts");
+  const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
+  assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
+  assert.equal(rows[0]?.price, 305000);
 });
 
 test("the registry exposes every new adapter for the schema gate", () => {

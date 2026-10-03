@@ -56,11 +56,11 @@ test("only complete schema-ready adapters are schedulable", () => {
   assert.deepEqual(
     activeSources({
       ...filter,
-      sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie", "gratka"],
+      sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie", "gratka", "nieruchomosci_online"],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "domiporta", "sprzedajemy", "adresowo"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo"],
   );
-  assert.deepEqual(activeSources({ ...filter, sources: ["nieruchomosci_online", "oferty_net", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
+  assert.deepEqual(activeSources({ ...filter, sources: ["oferty_net", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
 });
 
 test("Szybko remains registered but is disabled pending live access verification", () => {
@@ -73,12 +73,12 @@ test("a legacy filter cannot schedule unavailable sources while preserving activ
     activeSources({
       ...filter,
       sources: [
-        "otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie", "gratka",
-        "facebook", "nieruchomosci_online", "oferty_net", "szybko", "bezposrednio",
+        "otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "domy", "allegro_lokalnie", "gratka", "nieruchomosci_online",
+        "facebook", "oferty_net", "szybko", "bezposrednio",
         "official_cooperative", "official_uml", "official_auction",
       ],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "domiporta", "sprzedajemy", "adresowo"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo"],
   );
 });
 

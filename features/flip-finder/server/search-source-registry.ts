@@ -34,20 +34,65 @@ export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
   // /nieruchomosci/mieszkania/<city> (no "sprzedam" segment -- sale is the
   // default; rentals live under the separate .../wynajem suffix this never requests).
   { id: "gratka", label: "Gratka", hostnames: ["gratka.pl"], searchPath: (city) => `/nieruchomosci/mieszkania/${slugifyCity(city)}` },
-  { id: "nieruchomosci_online", label: "Nieruchomosci-online.pl", hostnames: ["nieruchomosci-online.pl"], searchPath: (city) => `/sprzedaz/mieszkanie/${slugifyCity(city)}.html` },
+  // Confirmed against a real, read-only GET (2026-10-03): the registered
+  // /sprzedaz/mieszkanie/<city>.html path is a 404. The real sale-listing
+  // page lives on a per-city SUBDOMAIN (lodz.nieruchomosci-online.pl), not a
+  // path segment -- searchPath returns an absolute URL here (new URL()
+  // resolves an absolute first argument as-is, ignoring the base host), and
+  // absoluteUrl()'s own host check already accepts any *.nieruchomosci-online.pl
+  // subdomain.
+  { id: "nieruchomosci_online", label: "Nieruchomosci-online.pl", hostnames: ["nieruchomosci-online.pl"], searchPath: (city) => `https://${slugifyCity(city)}.nieruchomosci-online.pl/mieszkania,sprzedaz/` },
   { id: "domiporta", label: "Domiporta", hostnames: ["domiporta.pl"], searchPath: (city) => `/mieszkanie/sprzedam/lodzkie/${slugifyCity(city)}` },
   { id: "sprzedajemy", label: "Sprzedajemy.pl", hostnames: ["sprzedajemy.pl"], searchPath: (city) => `/${slugifyCity(city)}/nieruchomosci/mieszkania` },
   { id: "adresowo", label: "Adresowo.pl", hostnames: ["adresowo.pl"], searchPath: (city) => `/mieszkania/${slugifyCity(city)}/` },
-  { id: "oferty_net", label: "Oferty.net", hostnames: ["oferty.net"], searchPath: (city) => `/mieszkania/sprzedam/${slugifyCity(city)}` },
+  // Confirmed against a real, read-only GET (2026-10-03): the registered
+  // /mieszkania/sprzedam/<city> path is a 404; the real path is
+  // /mieszkania,<city> (comma, no "sprzedam" segment) and correctly reaches
+  // a Łódź-titled page -- but that page's results are populated by a
+  // client-side AJAX call (myTools.getJsonSimple(...)) the static HTML never
+  // contains (zero price mentions anywhere in the response), so this fixes
+  // reachability only; EXTERNAL_SOURCE_STATUS below still gates it pending a
+  // real listing payload this session could not locate via a plain GET.
+  { id: "oferty_net", label: "Oferty.net", hostnames: ["oferty.net"], searchPath: (city) => `/mieszkania,${slugifyCity(city)}` },
+  // Investigated (read-only, 2026-10-03): the registered path returns 200,
+  // but its content is the SAME nationwide "63622 ofert" listing regardless
+  // of city -- confirmed by also trying /l/lodz, /l/mieszkania-sprzedaz/lodz
+  // and /mieszkania/sprzedaz/lodz, all three returning the identical
+  // nationwide count. The page's own SearchAction JSON-LD
+  // (target: ".../l/oferty/nieruchomosci?localization_search_text={...}")
+  // suggests search needs either an internal, pre-resolved location id or a
+  // client-side-only form flow, not a plain city slug/query string. No
+  // working city-filtered URL found within a few read-only GETs.
   { id: "szybko", label: "Szybko.pl", hostnames: ["szybko.pl"], searchPath: (city) => `/${slugifyCity(city)}/mieszkania/sprzedaz` },
+  // Confirmed (read-only, 2026-10-03): returns HTTP 403 on every request
+  // (this session's own User-Agent included) -- bot/scraper blocking, not a
+  // wrong URL. Matches the existing access_limited_without_authentication
+  // status below; left entirely alone rather than attempting to work around
+  // the block.
   { id: "bezposrednio", label: "Bezposrednio.net.pl", hostnames: ["bezposrednio.net.pl"], searchPath: (city) => `/mieszkania/${slugifyCity(city)}` },
+  // Confirmed (read-only, 2026-10-03): the registered path returns 200 and
+  // genuinely mentions Łódź 23 times, but contains zero price mentions and
+  // no JSON-LD/__NEXT_DATA__ anywhere -- its <article> cards that do exist
+  // are a "podobne inwestycje" (similar developments) widget showing
+  // unrelated cities (Pobierowo, Kraków, Poznań), not Łódź sale listings.
+  // Real listing data is rendered client-side after the initial response;
+  // not reachable via a plain GET.
   { id: "domy", label: "Domy.pl", hostnames: ["domy.pl"], searchPath: (city) => `/mieszkania/sprzedam/${slugifyCity(city)}` },
+  // Investigated (read-only, 2026-10-03): the registered path returns 200
+  // with a real ItemList of 60 Product offers in JSON-LD (not the
+  // __NEXT_DATA__ shape the previous parser assumed), proving the data path
+  // itself is real -- but every query-string city filter tried
+  // (?string=, ?locationLabel=, ?city=) returned byte-identical nationwide
+  // results (Bielsko-Biała, Warszawa, ...), and no city-specific link was
+  // found on the page either. No working way to scope this to Łódź found
+  // within a few read-only GETs, so it stays gated even though the listing
+  // shape itself is understood.
   { id: "allegro_lokalnie", label: "Allegro Lokalnie", hostnames: ["allegrolokalnie.pl"], searchPath: () => "/oferty/nieruchomosci/mieszkania" },
 ];
 
 export const EXTERNAL_SOURCE_STATUS = {
   gratka: "public_html_adapter",
-  nieruchomosci_online: "path_requires_live_source_verification",
+  nieruchomosci_online: "public_html_adapter",
   domiporta: "public_html_adapter",
   sprzedajemy: "public_html_adapter",
   adresowo: "public_html_adapter",

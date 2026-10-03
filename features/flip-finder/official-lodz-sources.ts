@@ -3,6 +3,25 @@
  * notices. Their adapters remain schema-gated because pages publish mixed
  * tenders (apartments, commercial units, works and services); the parser must
  * classify each notice before a sale listing can be persisted.
+ *
+ * Investigated with a sample of real, read-only GETs (2026-10-03), one per
+ * kind: smdabrowa.pl (cooperative), uml.lodz.pl's own sale page (municipal),
+ * bip.uml.lodz.pl (municipal/BIP), licytacje.komornik.pl (krk). All four
+ * returned 200, but the shared parser's selector (official-lodz-adapters.ts's
+ * parseNoticeCards, matching `[data-notice-id]`) matched ZERO elements on
+ * every one -- none of these small, independently-run municipal/cooperative/
+ * court sites use that attribute, or any other markup convention in common
+ * with each other. uml.lodz.pl's own registered sale page in particular
+ * turned out to be a category MENU (linking to a separate "Mieszkania"
+ * sub-page), not a listings page itself, zero price mentions anywhere.
+ * Reaching genuine, parseable listing content for even one of these 14
+ * sources would need its own dedicated exploration (follow the real
+ * sub-navigation, then design a bespoke selector against its specific
+ * markup) comparable to what each portal adapter in external-source-adapters.ts
+ * already required individually -- realistically well beyond "a few
+ * read-only GETs" for all 14 at once. Left exactly as implemented
+ * (OFFICIAL_LODZ_SOURCES/OFFICIAL_LODZ_PARSERS unchanged, nothing removed),
+ * genuinely unverified rather than silently assumed working.
  */
 export type OfficialLodzSourceKind = "cooperative" | "municipal" | "krk" | "syndic" | "rental_program";
 export type OfficialLodzSource = {
