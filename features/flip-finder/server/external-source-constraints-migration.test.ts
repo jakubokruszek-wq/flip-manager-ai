@@ -90,7 +90,9 @@ test("the migration is schema-only and the runtime gate lists only locally compl
   const gateStart = availability.indexOf("SCHEMA_READY_SOURCE_IDS");
   const gateEnd = availability.indexOf("] as const", gateStart);
   assert.ok(gateStart >= 0 && gateEnd > gateStart, "missing schema-ready source gate");
-  assert.doesNotMatch(availability.slice(gateStart, gateEnd), /official_uml/);
+  assert.match(availability.slice(gateStart, gateEnd), /"official_cooperative"/);
+  assert.match(availability.slice(gateStart, gateEnd), /"official_uml"/);
+  assert.doesNotMatch(availability.slice(gateStart, gateEnd), /"official_auction"/);
   assert.doesNotMatch(availability.slice(gateStart, gateEnd), /"bezposrednio"/);
   const registry = fs.readFileSync(path.join(root, "features/flip-finder/server/search-source-registry.ts"), "utf8");
   assert.match(registry, /bezposrednio:\s*"access_limited_without_authentication"/);

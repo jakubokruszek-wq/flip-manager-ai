@@ -33,8 +33,8 @@ test("Szybko has a plain source-name label now that its real city-scoped URL and
 });
 
 test("legacy unavailable source options are disabled while active sources remain selectable", () => {
-  const unavailable = ["bezposrednio", "official_cooperative", "official_uml", "official_auction"];
-  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "gratka", "nieruchomosci_online", "oferty_net", "szybko", "domy", "allegro_lokalnie"];
+  const unavailable = ["bezposrednio", "official_auction"];
+  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "gratka", "nieruchomosci_online", "oferty_net", "szybko", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"];
   for (const source of unavailable) {
     assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === source)?.disabled, true, `${source} must be disabled`);
   }

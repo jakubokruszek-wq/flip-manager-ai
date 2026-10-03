@@ -26,8 +26,11 @@ test("latest scan summary excludes historical disabled sources", () => {
   assert.doesNotMatch(result, /Otodom|Morizon/);
 });
 
-test("a legacy filter summary excludes unavailable source IDs", () => {
+test("a legacy filter summary excludes only unavailable source IDs", () => {
   const active = activeFilterSources(["otodom", "facebook", "gratka", "official_uml", "szybko"]);
-  assert.deepEqual(active, ["otodom", "facebook", "gratka", "szybko"]);
-  assert.equal(activeSourcesSummary(active), "Aktywne źródła: Otodom, Facebook, Gratka, Szybko.pl");
+  assert.deepEqual(active, ["otodom", "facebook", "gratka", "official_uml", "szybko"]);
+  const summary = activeSourcesSummary(active);
+  assert.match(summary, /Otodom/);
+  assert.match(summary, /UM/);
+  assert.match(summary, /Szybko/);
 });

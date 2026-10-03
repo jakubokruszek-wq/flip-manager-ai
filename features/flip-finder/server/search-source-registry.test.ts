@@ -60,7 +60,7 @@ test("only complete schema-ready adapters are schedulable", () => {
     }).map((source) => source.id),
     ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie"],
   );
-  assert.deepEqual(activeSources({ ...filter, sources: ["bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
+  assert.deepEqual(activeSources({ ...filter, sources: ["bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), ["official_cooperative", "official_uml"]);
 });
 
 test("Oferty.net, Szybko, Domy.pl and Allegro Lokalnie are active now that their real city-scoped URLs and parsers are verified", () => {
@@ -81,7 +81,7 @@ test("a legacy filter cannot schedule unavailable sources while preserving activ
         "official_cooperative", "official_uml", "official_auction",
       ],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"],
   );
 });
 

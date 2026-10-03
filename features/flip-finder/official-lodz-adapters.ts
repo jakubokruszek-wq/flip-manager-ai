@@ -53,6 +53,11 @@ const SOURCE_KIND: Record<string, OfficialCanonicalSource> = {
   syndic: "official_auction",
 };
 
+/** Only catalog entries independently verified as public and parseable may run in a group scan. */
+export function isOfficialSourceRuntimeEligible(source: OfficialLodzSource): boolean {
+  return source.status === "verified_public_page" && typeof OFFICIAL_LODZ_PARSERS[source.id] === "function";
+}
+
 /**
  * Every catalogued site runs a different CMS with its own markup (Joomla,
  * WordPress, a bespoke "Strony" CMS, TYPO3, a Nuxt SPA) -- confirmed by
@@ -85,7 +90,7 @@ export const OFFICIAL_LODZ_PARSERS: Record<string, OfficialParser> = {
 export const OFFICIAL_LODZ_SOURCE_IDS = SOURCE_IDS as readonly string[];
 
 export async function fetchOfficialLodzGroup(group: OfficialCanonicalSource, criteria: { city: string | null }, signal?: AbortSignal): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
-  const sources = OFFICIAL_LODZ_SOURCES.filter((source) => source.kind !== "rental_program" && SOURCE_KIND[source.kind] === group);
+  const sources = OFFICIAL_LODZ_SOURCES.filter((source) => isOfficialSourceRuntimeEligible(source) && SOURCE_KIND[source.kind] === group);
   const all: OfficialSourceListing[] = [];
   const warnings: string[] = [];
   let fetched = 0;

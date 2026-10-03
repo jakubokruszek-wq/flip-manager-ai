@@ -13,9 +13,9 @@ mock.module("@/lib/supabase/server", {
 
 const { getActiveSearchFiltersForSource } = await import("./search-filters.ts");
 
-test("a legacy unavailable source never reaches the active-filter worker query", async () => {
+test("the all-blocked official auction category never reaches the active-filter worker query", async () => {
   clientCalls = 0;
-  assert.deepEqual(await getActiveSearchFiltersForSource("official_uml"), []);
+  assert.deepEqual(await getActiveSearchFiltersForSource("official_auction"), []);
   assert.equal(clientCalls, 0);
 });
 

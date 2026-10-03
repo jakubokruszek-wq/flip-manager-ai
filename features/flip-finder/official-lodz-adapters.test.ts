@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
-import { OFFICIAL_LODZ_PARSERS, fetchOfficialLodzGroup, fetchOfficialSource, type OfficialCanonicalSource } from "./official-lodz-adapters.ts";
+import { OFFICIAL_LODZ_PARSERS, fetchOfficialLodzGroup, fetchOfficialSource, isOfficialSourceRuntimeEligible, type OfficialCanonicalSource } from "./official-lodz-adapters.ts";
 import { OFFICIAL_LODZ_SOURCES } from "./official-lodz-sources.ts";
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
@@ -272,6 +272,27 @@ test("blocked sources (sm-chojny, bip-uml-sale, krk-licytacje, syndic-public-not
     assert.equal(result.warnings.length, 1, id);
     assert.ok(result.warnings[0]!.length > 20, `${id} warning must explain the concrete blocker, not be a generic placeholder`);
   }
+});
+
+test("group runtime selects only verified public catalog entries and never schedules blocked official sources", async () => {
+  assert.equal(isOfficialSourceRuntimeEligible(source("uml-sale")), true);
+  assert.equal(isOfficialSourceRuntimeEligible(source("bip-uml-sale")), false);
+  assert.equal(isOfficialSourceRuntimeEligible(source("krk-licytacje")), false);
+
+  const previousFetch = globalThis.fetch;
+  const requested: string[] = [];
+  try {
+    globalThis.fetch = async (input) => {
+      requested.push(String(input));
+      return new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
+    };
+    await fetchOfficialLodzGroup("official_uml", { city: "ĹĂłdĹş" });
+    const requestedAfterUml = [...requested];
+    await fetchOfficialLodzGroup("official_auction", { city: "ĹĂłdĹş" });
+    assert.ok(requestedAfterUml.some((url) => url.includes("uml.lodz.pl")), "the verified UMŁ source must be selected");
+    assert.ok(!requestedAfterUml.some((url) => url.includes("bip.uml.lodz.pl")), "the blocked BIP source must be filtered before fetch");
+    assert.equal(requested.length, requestedAfterUml.length, "the all-blocked auction category must not issue a request");
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test("smtl fails closed at the connection level (TLS certificate mismatch), never with insecure fallback", async () => {
