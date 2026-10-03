@@ -24,6 +24,33 @@ type ManualScanOptions = { runId?: string; usePreparedRows?: boolean; skipLock?:
 
 const SOURCE_TIMEOUT_MS = 75_000;
 const DATABASE_TIMEOUT_MS = 12_000;
+// Mirrors the scan route's `export const maxDuration = 300` (app/api/flip-finder/
+// search-filters/[id]/scan/route.ts) -- keep these two numbers in sync.
+const WORKER_MAX_DURATION_MS = 300_000;
+// Reserves time for everything in runManualOtodomScan besides the sequential
+// per-source fetch loop itself: getSearchFilter, the lock/staleness check,
+// enqueueOlxJob, reconcileFacebookFromCanonicalListings, the final
+// search_filters update, and the finally block's cleanup writes.
+const WORKER_OVERHEAD_RESERVE_MS = 45_000;
+// A scrape fetch cannot do meaningful work below this; if the number of
+// sequential sources ever grows enough to hit this floor, the per-source
+// budget below can no longer guarantee the worker stays inside
+// WORKER_MAX_DURATION_MS on its own -- that would need real parallel source
+// execution, not a smaller slice of a fixed budget.
+const MIN_SOURCE_TIMEOUT_MS = 10_000;
+
+/**
+ * Bounds the per-source fetch timeout so that SOURCE_TIMEOUT_MS * sourceCount
+ * can never collectively exceed the worker's own platform-enforced lifetime.
+ * Every currently active source still runs -- nothing is disabled or skipped
+ * -- it is only given a smaller abort window when many sources share one
+ * worker invocation.
+ */
+export function sourceTimeoutBudgetMs(sourceCount: number, ceilingMs: number = SOURCE_TIMEOUT_MS): number {
+  if (sourceCount <= 0) return ceilingMs;
+  const available = WORKER_MAX_DURATION_MS - WORKER_OVERHEAD_RESERVE_MS;
+  return Math.max(MIN_SOURCE_TIMEOUT_MS, Math.min(ceilingMs, Math.floor(available / sourceCount)));
+}
 
 export function sourceScanMetrics(result: SourceFetchResult, matchedCount: number) {
   return { scannedCount: result.fetched, listingsFound: result.fetched, matchedCount };
@@ -112,11 +139,13 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
 
   scanLog("SCAN START", { scanId: runId, source: "all", checked: 0, new: 0, matched: 0, durationMs: 0 });
   try {
-    for (const source of sources.filter((item) => item.id !== "olx")) {
+    const sequentialSources = sources.filter((item) => item.id !== "olx");
+    const perSourceTimeoutMs = sourceTimeoutBudgetMs(sequentialSources.length);
+    for (const source of sequentialSources) {
       const prepared = preparedScans.get(source.id);
       sourceResults.push(options.usePreparedRows && !prepared
         ? failedResult(source.id, 0, "SCAN_RESERVATION_MISSING", "Nie znaleziono zarezerwowanego etapu skanu.")
-        : await scanSource(source, filterId, filter, supabase, runId, ownedScans, prepared));
+        : await scanSource(source, filterId, filter, supabase, runId, ownedScans, prepared, perSourceTimeoutMs));
     }
     if (sources.some((source) => source.id === "olx")) {
       try {
@@ -152,7 +181,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   }
 }
 
-async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>, prepared?: PreparedSourceScan): Promise<SourceScanResult> {
+export async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>, prepared?: PreparedSourceScan, timeoutMs: number = SOURCE_TIMEOUT_MS): Promise<SourceScanResult> {
   const started = Date.now();
   const { data: scan, error } = prepared
     ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter }).eq("id", prepared.id).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single()
@@ -168,7 +197,7 @@ async function scanSource(source: SearchSource, filterId: string, filter: Loaded
   const otodomSummary = createOtodomFilterSummary();
   const matchDiagnostics = emptyMatchDiagnosticSummary();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const result = await source.fetch(filter, controller.signal);
     fetched = result.fetched; normalized = result.listings.length; warnings = result.warnings;
@@ -190,7 +219,7 @@ async function scanSource(source: SearchSource, filterId: string, filter: Loaded
   } catch (reason) {
     status = "failed";
     errorCode = controller.signal.aborted ? "SOURCE_TIMEOUT" : "SOURCE_FAILED";
-    errorMessage = controller.signal.aborted ? `${source.label}: source timeout after ${SOURCE_TIMEOUT_MS / 1000}s` : reason instanceof Error ? reason.message : "Błąd źródła.";
+    errorMessage = controller.signal.aborted ? `${source.label}: source timeout after ${timeoutMs / 1000}s` : reason instanceof Error ? reason.message : "Błąd źródła.";
   } finally {
     clearTimeout(timeoutId);
     await finalizeSourceScan(supabase, scan.id, scanClock, status, { fetched, matched, counters, updated, priceDrops, warnings, errorMessage });

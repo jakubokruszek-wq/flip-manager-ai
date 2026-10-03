@@ -24,9 +24,22 @@ import test, { mock } from "node:test";
 
 type Row = Record<string, unknown>;
 
-function fakeAdmin(seedSourceScans: Row[] = []) {
+/**
+ * `raceBarrier` lets a test force the exact adversarial interleaving two
+ * separate requests/instances would produce on real Postgres: every
+ * "is anything already running" read (the SELECT with .limit(1) and no
+ * .lt(), i.e. startManualOtodomScan's lock check, as opposed to
+ * failStaleScans' own .lt()-qualified read) blocks until `raceBarrier`
+ * concurrent callers have all arrived at that exact read, so none of them
+ * can observe a write made by another participant of the race. This is a
+ * controlled reproduction of the race window, not a sequential test
+ * dressed up as concurrent -- natural microtask ordering is not a reliable
+ * way to prove or disprove a TOCTOU race.
+ */
+function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number } = {}) {
   const sourceScans: Row[] = seedSourceScans.map((row) => ({ ...row }));
   let idSeq = 1;
+  let waitingForRace: Array<() => void> = [];
 
   function matches(row: Row, filters: Array<{ op: "eq" | "in" | "lt"; column: string; value: unknown }>): boolean {
     return filters.every(({ op, column, value }) => {
@@ -42,6 +55,7 @@ function fakeAdmin(seedSourceScans: Row[] = []) {
     let mode: "select" | "update" | "insert" = "select";
     let updatePatch: Row = {};
     let insertPayload: Row | Row[] | null = null;
+    let isLockCheckRead = false;
     const builder = {
       select: (_cols?: string) => builder,
       insert: (payload: Row | Row[]) => { mode = "insert"; insertPayload = payload; return builder; },
@@ -49,7 +63,7 @@ function fakeAdmin(seedSourceScans: Row[] = []) {
       eq: (column: string, value: unknown) => { filters.push({ op: "eq", column, value }); return builder; },
       in: (column: string, value: unknown) => { filters.push({ op: "in", column, value }); return builder; },
       lt: (column: string, value: unknown) => { filters.push({ op: "lt", column, value }); return builder; },
-      limit: (_n: number) => builder,
+      limit: (_n: number) => { isLockCheckRead = true; return builder; },
       order: () => builder,
       abortSignal: () => builder,
       async single() {
@@ -69,17 +83,29 @@ function fakeAdmin(seedSourceScans: Row[] = []) {
         return { data: found ?? null, error: null };
       },
       then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
-        if (mode === "insert" && insertPayload) {
-          const payloads = Array.isArray(insertPayload) ? insertPayload : [insertPayload];
-          for (const payload of payloads) sourceScans.push({ id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "pending", ...payload });
-          return Promise.resolve({ data: null, error: null }).then(resolve, reject);
-        }
-        if (mode === "update") {
-          for (const row of sourceScans) if (matches(row, filters)) Object.assign(row, updatePatch);
-          return Promise.resolve({ data: null, error: null }).then(resolve, reject);
-        }
-        const found = sourceScans.filter((row) => matches(row, filters));
-        return Promise.resolve({ data: found, error: null }).then(resolve, reject);
+        const run = async () => {
+          if (mode === "insert" && insertPayload) {
+            const payloads = Array.isArray(insertPayload) ? insertPayload : [insertPayload];
+            for (const payload of payloads) sourceScans.push({ id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "pending", ...payload });
+            return { data: null, error: null };
+          }
+          if (mode === "update") {
+            for (const row of sourceScans) if (matches(row, filters)) Object.assign(row, updatePatch);
+            return { data: null, error: null };
+          }
+          if (isLockCheckRead && options.raceBarrier && options.raceBarrier > 1) {
+            await new Promise<void>((release) => {
+              waitingForRace.push(release);
+              if (waitingForRace.length >= (options.raceBarrier as number)) {
+                const toRelease = waitingForRace;
+                waitingForRace = [];
+                toRelease.forEach((fn) => fn());
+              }
+            });
+          }
+          return { data: sourceScans.filter((row) => matches(row, filters)), error: null };
+        };
+        return run().then(resolve, reject);
       },
     };
     return builder;
@@ -180,6 +206,39 @@ test("background start reserves the Finder row and a second start is rejected be
   await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/);
 });
 
+// Issue 1 from the scan-lifecycle review: startManualOtodomScan's reservation
+// is a plain SELECT-then-INSERT with no database-level mutual exclusion.
+// Confirmed via supabase/migrations: source_scans has no unique constraint on
+// (search_filter_id, source) at all, scoped or not -- the table's own
+// creation migration (20260719113000) defines only a plain primary key on
+// id, and the only atomic "claim" pattern anywhere in this codebase
+// (claim_olx_scan_job, in 20260810190000_create_olx_local_worker_queue.sql)
+// exists purely because that migration added a dedicated unique column plus
+// a security-definer RPC wrapping an UPDATE...RETURNING. No equivalent
+// exists, or can be synthesized from the existing schema/RPCs, for
+// source_scans. A JS-level mutex here would not help either: it only
+// protects a single process/instance, while this guarantee must hold across
+// separate requests/instances (separate Vercel invocations, separate
+// Postgres connections) -- exactly what this barrier-forced race simulates.
+// This is marked `todo` rather than deleted or silently left red: it proves
+// the gap, stays visible, and becomes the regression test for whichever
+// migration closes it (a partial unique index on
+// source_scans(search_filter_id, source) WHERE status IN
+// ('pending','running'), or a claim_olx_scan_job-style atomic RPC).
+test(
+  "two concurrent background-scan starts for the exact same filter+source must not both win the reservation",
+  { todo: "Requires a migration (partial unique index on source_scans(search_filter_id, source) WHERE status IN ('pending','running'), or an atomic claim RPC like claim_olx_scan_job) -- not addable here; see the comment above this test." },
+  async () => {
+    current = fakeAdmin([], { raceBarrier: 2 });
+    const [a, b] = await Promise.allSettled([startManualOtodomScan(mixedFilter.id), startManualOtodomScan(mixedFilter.id)]);
+    const succeeded = [a, b].filter((result) => result.status === "fulfilled");
+    const rejected = [a, b].filter((result) => result.status === "rejected");
+    assert.equal(succeeded.length, 1, "exactly one concurrent start must win the reservation for the same filter+source");
+    assert.equal(rejected.length, 1, "the other concurrent start must be rejected, never silently also reserve the same source");
+    assert.equal(current.sourceScans.filter((row) => row.source === "otodom" && row.search_filter_id === mixedFilter.id).length, 1, "only one otodom source_scans row may exist for this filter after the race");
+  },
+);
+
 test("prepared background rows become running and finalize through the real scan runner", async () => {
   current = fakeAdmin();
   const start = await startManualOtodomScan(mixedFilter.id);
@@ -187,6 +246,23 @@ test("prepared background rows become running and finalize through the real scan
   assert.equal(summary.status, "completed");
   const row = current.sourceScans.find((candidate) => candidate.scan_run_id === start.runId && candidate.source === "otodom");
   assert.equal(row?.status, "completed");
+});
+
+// Issue 4 from the scan-lifecycle review: usePreparedRows trusts that
+// startManualOtodomScan already reserved a "pending" row for every source it
+// is about to run. If that assumption is ever violated -- the reservation
+// row was never created, was deleted, or belongs to a different run id --
+// the worker must report that source as a clean, terminal failure rather
+// than silently skipping it or crashing the whole run.
+test("a source missing its reserved row under usePreparedRows fails cleanly with SCAN_RESERVATION_MISSING, never silently skipped or crashing the run", async () => {
+  current = fakeAdmin();
+  const summary = await runManualOtodomScan(mixedFilter.id, { runId: "run-without-reservation", usePreparedRows: true, skipLock: true });
+  const otodomResult = summary.sourceResults.find((result) => result.source === "otodom");
+  assert.ok(otodomResult, "the otodom source must still appear in sourceResults, not be dropped");
+  assert.equal(otodomResult?.status, "failed");
+  assert.equal(otodomResult?.errorCode, "SCAN_RESERVATION_MISSING");
+  assert.equal(summary.status, "partial", "a missing reservation is a per-source failure, not a reason to crash or hang the whole run");
+  assert.equal(current.sourceScans.length, 0, "no source_scans row may be created or mutated for a source that was never actually reserved");
 });
 
 test("a mixed filter's active Watcher-owned facebook row never blocks Finder, even though the same filter also has otodom", async () => {

@@ -202,6 +202,8 @@ test("the real Finder scan button latches on click, reflects live progress, and 
   let runCounter = 0;
   /** @type {Record<string, any[]>} */
   const progressQueueByRun = {};
+  /** @type {Record<string, number>} */
+  const progressGetCountByRun = {};
 
   await page.route("**/api/flip-finder/**", async (route) => {
     const request = route.request();
@@ -234,9 +236,11 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     }
     const progressMatch = url.pathname.match(/^\/api\/flip-finder\/scans\/(run-\d+)$/);
     if (progressMatch) {
-      const queue = progressQueueByRun[progressMatch[1]] ?? [];
+      const runId = progressMatch[1];
+      progressGetCountByRun[runId] = (progressGetCountByRun[runId] ?? 0) + 1;
+      const queue = progressQueueByRun[runId] ?? [];
       const next = queue.length > 1 ? queue.shift() : queue[0];
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify(next ?? baseProgress(progressMatch[1], {})), status: 200 });
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify(next ?? baseProgress(runId, {})), status: 200 });
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
@@ -268,6 +272,17 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     assert.match(bodyText, /Skan zakończony/i, "a real completion notice must appear, not silence");
   });
 
+  await t.test("C2. once run-1 reaches its terminal (completed) status, the client's own polling loop stops issuing further GETs for it", async () => {
+    const countAtTerminal = progressGetCountByRun["run-1"];
+    assert.ok(countAtTerminal >= 3, "sanity check: all three scripted snapshots for run-1 must have actually been polled");
+    // The real polling interval is 1s; waiting several intervals past the
+    // terminal state must never see the count climb further -- this is the
+    // literal proof that reaching a terminal status stops the GET loop,
+    // not just that the UI happens to render a re-enabled button.
+    await page.waitForTimeout(3_500);
+    assert.equal(progressGetCountByRun["run-1"], countAtTerminal, "no further /api/flip-finder/scans/run-1 GET may fire once the run is terminal");
+  });
+
   await t.test("D. a failed run also releases the latch instead of leaving the button stuck disabled", async () => {
     await scanButton.click();
     await page.getByRole("button", { name: "Skanowanie…" }).first().waitFor({ state: "visible", timeout: 10_000 });
@@ -287,9 +302,16 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     assert.equal(await scanButton.isDisabled(), false, "a stalled-then-expired run must not leave the Finder page permanently showing 'Skanowanie…'");
     const bodyText = await page.locator("body").innerText();
     assert.doesNotMatch(bodyText, /Skan tego filtra już trwa/, "once the UI has released the latch, it must never itself claim a scan is still running");
+    const run3CountAtTerminal = progressGetCountByRun["run-3"];
+    assert.ok(run3CountAtTerminal >= 3, "sanity check: the stalled run's scripted snapshots must have actually been polled");
 
     await scanButton.click();
     await page.waitForTimeout(500);
     assert.equal(scanPostCount, 4, "an expired/released scan must never block the next click from starting a genuine new scan");
+    // run-3 is terminal and a fresh run-4 has started; polling the OLD run
+    // must never resume, proving the client keyed its polling loop on the
+    // specific run it started, not on "any active scan for this filter".
+    await page.waitForTimeout(3_500);
+    assert.equal(progressGetCountByRun["run-3"], run3CountAtTerminal, "no further GET for the old, already-terminal run-3 may fire once a new run has started");
   });
 });

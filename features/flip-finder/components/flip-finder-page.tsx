@@ -31,6 +31,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
 import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
 import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
+import { fetchScanProgress } from "@/features/flip-finder/scan-progress-client";
 import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 import { activeFilterSources } from "@/features/flip-finder/source-availability";
 
@@ -123,6 +124,13 @@ export function FlipFinderPage() {
   const [clearResultsError, setClearResultsError] = useState<string | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
   const clearingResultsRef = useRef(false);
+  // Cancels only the client's own progress polling on unmount -- the
+  // background worker this run id refers to keeps running server-side
+  // regardless, exactly as it must.
+  const pollingAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => pollingAbortRef.current?.abort();
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -210,7 +218,9 @@ export function FlipFinderPage() {
       if (payload.runId) {
         traceStage(requestId, "NEW_SCAN_RUN_ID", "PASS");
         setActiveScanRunId(payload.runId);
-        initialProgress = await fetchScanProgress(payload.runId).catch(() => null);
+        pollingAbortRef.current?.abort();
+        pollingAbortRef.current = new AbortController();
+        initialProgress = await fetchScanProgress(payload.runId, { signal: pollingAbortRef.current.signal }).catch(() => null);
         if (initialProgress) setScanProgress(initialProgress);
       }
 
@@ -373,13 +383,16 @@ export function FlipFinderPage() {
   };
 
   const monitorScanRun = async (filterId: string, runId: string) => {
+    const signal = pollingAbortRef.current?.signal;
     let consecutiveFailures = 0;
     let firstPoll = true;
     try {
-      while (scanningFilterIdsRef.current.has(filterId)) {
+      while (scanningFilterIdsRef.current.has(filterId) && !signal?.aborted) {
         if (!firstPoll) await new Promise((resolve) => window.setTimeout(resolve, 1_000));
         firstPoll = false;
-        const payload = await fetchScanProgress(runId).catch(() => null);
+        if (signal?.aborted) break;
+        const payload = await fetchScanProgress(runId, { signal }).catch(() => null);
+        if (signal?.aborted) break;
         if (!payload) {
           consecutiveFailures += 1;
           if (consecutiveFailures >= 3) {
@@ -1277,15 +1290,6 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
-  const response = await apiFetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
-  const payload = await readJson(response);
-  if (!response.ok || !isScanProgressResponse(payload)) {
-    throw new Error(readMessage(payload, "Nie udało się pobrać postępu skanu."));
-  }
-  return payload;
-}
-
 /** A start request must never leave the button latched when the platform or
  * network stops responding before it can return the run id. Once a 202 start
  * response arrives, progress is read from the backend run until terminal. */
@@ -1425,10 +1429,6 @@ function traceDiagnosis(stage?: string, errorCode?: string): string {
   if (stage === "POST_SCAN_RESPONSE") return "POST_SCAN_FAILED";
   if (stage === "SCAN_COMMAND_SENT" || stage === "PAGE_RECEIVED_SCAN_COMMAND") return "SCAN_COMMAND_NOT_RECEIVED";
   return "COLLECTOR_START_FAILED";
-}
-
-function isScanProgressResponse(value: unknown): value is ScanProgressResponse {
-  return Boolean(value && typeof value === "object" && "runId" in value && "status" in value && "overall" in value && "facebook" in value && "olx" in value && "openai" in value);
 }
 
 function readMessage(value: unknown, fallback: string): string {

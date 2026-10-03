@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import type { SearchFilterListItem, SearchFilterListResponse } from "@/features/flip-finder/search-filter-contract";
+import { waitUntilScanTerminal } from "@/features/flip-finder/scan-progress-client";
 
 export function SearchFiltersPage() {
   const searchParams = useSearchParams();
@@ -13,6 +14,12 @@ export function SearchFiltersPage() {
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Cancels only this page's own progress polling on unmount/navigation --
+  // the background worker the run id refers to keeps running server-side.
+  const pollingAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => pollingAbortRef.current?.abort();
+  }, []);
   const recalculationNotice = useMemo(() => {
     const created = searchParams.get("mode") === "created";
 
@@ -84,9 +91,11 @@ export function SearchFiltersPage() {
       };
       if (start.status === "running" && typeof start.runId === "string") {
         setNotice("Skan uruchomiony. Odczytuję postęp z backendu…");
-        const summary = await waitForScan(start.runId);
+        pollingAbortRef.current?.abort();
+        pollingAbortRef.current = new AbortController();
+        const progress = await waitUntilScanTerminal(start.runId, pollingAbortRef.current.signal);
         setNotice(
-          `Skan zakończony: ${summary.scannedCount} sprawdzone, ${summary.matchedCount} dopasowanych, ${summary.newCount} nowych, ${summary.updatedCount} zaktualizowanych, ${summary.priceDropCount} obniżek.`,
+          `Skan zakończony: ${progress.totals.scanned} sprawdzone, ${progress.totals.matched} dopasowanych, ${progress.totals.created} nowych, ${progress.totals.updated} zaktualizowanych, ${progress.totals.priceDrops} obniżek.`,
         );
         await load();
         return;
@@ -134,30 +143,6 @@ export function SearchFiltersPage() {
   );
 }
 
-type ScanTotals = { scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number };
-
-async function waitForScan(runId: string): Promise<ScanTotals> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-    const response = await fetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
-    const value: unknown = await response.json();
-    if (!response.ok) throw new Error(message(value));
-    if (!value || typeof value !== "object") continue;
-    const item = value as Record<string, unknown>;
-    const status = item.status;
-    if (status !== "completed" && status !== "partial" && status !== "failed") continue;
-    const totals = item.totals && typeof item.totals === "object" ? item.totals as Record<string, unknown> : {};
-    return {
-      scannedCount: number(totals.scanned),
-      matchedCount: number(totals.matched),
-      newCount: number(totals.created),
-      updatedCount: number(totals.updated),
-      priceDropCount: number(totals.priceDrops),
-    };
-  }
-  throw new Error("Skan nie zakończył się w oczekiwanym czasie. Sprawdź jego status przed ponowną próbą.");
-}
-
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -170,8 +155,6 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
     window.clearTimeout(timeout);
   }
 }
-
-function number(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0; }
 
 function message(value: unknown): string {
   return value && typeof value === "object" && "message" in value && typeof value.message === "string"
