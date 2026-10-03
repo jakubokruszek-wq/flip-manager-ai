@@ -25,7 +25,7 @@ test("a Facebook-enabled filter is reconciled from canonical listings only, neve
 });
 
 test("mixed-source filters keep their real Otodom/Morizon scan and OLX enqueue untouched", () => {
-  assert.match(source, /for \(const source of sources\.filter\(\(item\) => item\.id !== "olx"\)\) \{\s*sourceResults\.push\(await scanSource\(source, filterId, filter, supabase, runId, ownedScans\)\);\s*\}/, "the real (non-Facebook, non-OLX) source fetch loop must be unchanged");
+  assert.match(source, /for \(const source of sources\.filter\(\(item\) => item\.id !== "olx"\)\) \{[\s\S]*?scanSource\(source, filterId, filter, supabase, runId, ownedScans, prepared\)/, "the real (non-Facebook, non-OLX) source fetch loop must remain the worker path, with only the prepared-row handoff added");
   assert.match(source, /await enqueueOlxJob\(filter, runId\);/, "OLX's own separate async worker queue is unrelated to this mission and must remain");
 });
 

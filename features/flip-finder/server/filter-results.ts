@@ -13,8 +13,9 @@ import {
   type FilterResult,
 } from "@/features/flip-finder/results";
 import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
-import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
+import { isListingSource as isKnownListingSource, type SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
+import { isStaleScan, scanHeartbeatAt, STALE_SCAN_MESSAGE } from "@/features/flip-finder/server/scan-lifecycle";
 import type { PropertyListing } from "@/features/properties/types/property";
 import { safeFacebookDisplayLocation } from "@/features/facebook-watcher/facebook-location-quality";
 import { createClient } from "@/lib/supabase/server";
@@ -134,7 +135,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     supabase
       .from("source_scans")
       .select(
-        "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message",
+        "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message,filter_snapshot",
       )
       .eq("search_filter_id", filterId),
   ]);
@@ -167,8 +168,13 @@ export async function getFilterResults(filterId: string, includeArchived = false
   // exact canonical id by construction, never a raw pre-canonical source
   // record.
   const matches = dedupeByListingId(visibleMatches);
+  // Same backstop as the dashboard's listSearchFilters(): never keep showing
+  // "running" for a scan the platform has already abandoned, so viewing or
+  // refreshing this filter's results page can never display fabricated,
+  // perpetually-"in progress" activity for dead work.
+  const resultsNow = Date.now();
   const scans = asRows(scansResult.data)
-    .map(toSearchFilterScan)
+    .map((row) => toSearchFilterScan(row, resultsNow))
     .filter((scan): scan is SearchFilterScan => scan !== null);
   const lastScan = scans.reduce<SearchFilterScan | null>((current, scan) => {
     return !current || scan.startedAt > current.startedAt ? scan : current;
@@ -523,7 +529,7 @@ function isMatchOrigin(value: string): value is MatchRow["matchOrigin"] {
   return value === "scan" || value === "filter_recalculation" || value === "collector_import";
 }
 
-function toListingRow(row: Row): ListingRow | null {
+export function toListingRow(row: Row): ListingRow | null {
   const id = nullableString(row.id);
   const originalUrl = nullableString(row.original_url);
   const source = nullableString(row.source);
@@ -736,24 +742,30 @@ function toSnapshotRow(row: Row): SnapshotRow | null {
     : null;
 }
 
-function toSearchFilterScan(row: Row): SearchFilterScan | null {
+export function toSearchFilterScan(row: Row, now: number): SearchFilterScan | null {
   const id = nullableString(row.id);
   const searchFilterId = nullableString(row.search_filter_id);
   const source = nullableString(row.source);
-  const status = nullableString(row.status);
+  const rawStatus = nullableString(row.status);
   const startedAt = nullableString(row.started_at);
 
   if (
     !id ||
     !searchFilterId ||
     !isListingSource(source) ||
-    !isSearchFilterScanStatus(status) ||
+    !isSearchFilterScanStatus(rawStatus) ||
     !startedAt
   ) {
     return null;
   }
 
-  const errorMessage = nullableString(row.error_message);
+  // Facebook/OLX rows have their own dedicated watchdogs (the Watcher
+  // scheduler and the OLX lease recovery) that already run independently of
+  // this read -- reclassifying them here too would risk disagreeing with
+  // whichever one of those is currently mid-recovery for the same row.
+  const stale = source !== "facebook" && source !== "olx" && isStaleScan({ status: rawStatus, startedAt, heartbeatAt: scanHeartbeatAt(row.filter_snapshot) }, now);
+  const status = stale ? "failed" : rawStatus;
+  const errorMessage = stale ? STALE_SCAN_MESSAGE : nullableString(row.error_message);
 
   return {
     id,
@@ -843,14 +855,18 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
+// A bare re-export of the shared, exhaustively-checked LISTING_SOURCES list
+// (search-filter-contract.ts) adapted for this file's `string | null` call
+// sites. A hand-maintained local copy of this allowlist previously drifted
+// out of date and silently excluded every newer registered source (gratka,
+// nieruchomosci_online, domiporta, sprzedajemy, adresowo, oferty_net,
+// szybko, bezposrednio, domy, allegro_lokalnie) -- toListingRow() returning
+// null for any of those sources meant their active listings were silently
+// dropped from Finder's results for every filter, and toSearchFilterScan()
+// returning null meant their scan rows never appeared as a filter's last
+// scan either, regardless of how many real matches or scans existed.
 function isListingSource(value: string | null): value is FilterResult["source"] {
-  return value === "otodom"
-    || value === "olx"
-    || value === "morizon"
-    || value === "facebook"
-    || value === "official_cooperative"
-    || value === "official_uml"
-    || value === "official_auction";
+  return value !== null && isKnownListingSource(value);
 }
 
 function isListingStatus(value: string | null): value is FilterResult["listingStatus"] {

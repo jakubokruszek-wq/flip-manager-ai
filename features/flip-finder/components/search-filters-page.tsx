@@ -60,9 +60,9 @@ export function SearchFiltersPage() {
     setError(null);
 
     try {
-      const response = await fetch(`/api/flip-finder/search-filters/${filter.id}/scan`, {
+      const response = await fetchWithTimeout(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
-      });
+      }, 20_000);
       const responseData: unknown = await response.json();
 
       if (response.status === 429) {
@@ -73,15 +73,26 @@ export function SearchFiltersPage() {
         throw new Error(message(responseData));
       }
 
-      const summary = responseData as {
+      const start = responseData as {
+        runId?: string;
+        status?: string;
         scannedCount: number;
         matchedCount: number;
         newCount: number;
         updatedCount: number;
         priceDropCount: number;
       };
+      if (start.status === "running" && typeof start.runId === "string") {
+        setNotice("Skan uruchomiony. Odczytuję postęp z backendu…");
+        const summary = await waitForScan(start.runId);
+        setNotice(
+          `Skan zakończony: ${summary.scannedCount} sprawdzone, ${summary.matchedCount} dopasowanych, ${summary.newCount} nowych, ${summary.updatedCount} zaktualizowanych, ${summary.priceDropCount} obniżek.`,
+        );
+        await load();
+        return;
+      }
       setNotice(
-        `Skan zakończony: ${summary.scannedCount} sprawdzone, ${summary.matchedCount} dopasowanych, ${summary.newCount} nowych, ${summary.updatedCount} zaktualizowanych, ${summary.priceDropCount} obniżek.`,
+        `Skan zakończony: ${start.scannedCount} sprawdzone, ${start.matchedCount} dopasowanych, ${start.newCount} nowych, ${start.updatedCount} zaktualizowanych, ${start.priceDropCount} obniżek.`,
       );
       await load();
     } catch (reason) {
@@ -122,6 +133,45 @@ export function SearchFiltersPage() {
     </div>
   );
 }
+
+type ScanTotals = { scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number };
+
+async function waitForScan(runId: string): Promise<ScanTotals> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+    const response = await fetch(`/api/flip-finder/scans/${runId}`, { cache: "no-store" });
+    const value: unknown = await response.json();
+    if (!response.ok) throw new Error(message(value));
+    if (!value || typeof value !== "object") continue;
+    const item = value as Record<string, unknown>;
+    const status = item.status;
+    if (status !== "completed" && status !== "partial" && status !== "failed") continue;
+    const totals = item.totals && typeof item.totals === "object" ? item.totals as Record<string, unknown> : {};
+    return {
+      scannedCount: number(totals.scanned),
+      matchedCount: number(totals.matched),
+      newCount: number(totals.created),
+      updatedCount: number(totals.updated),
+      priceDropCount: number(totals.priceDrops),
+    };
+  }
+  throw new Error("Skan nie zakończył się w oczekiwanym czasie. Sprawdź jego status przed ponowną próbą.");
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw new Error("Uruchomienie skanu przekroczyło limit czasu. Odśwież status przed ponowną próbą.");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function number(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0; }
 
 function message(value: unknown): string {
   return value && typeof value === "object" && "message" in value && typeof value.message === "string"

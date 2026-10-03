@@ -26,16 +26,19 @@ import { isListingSource } from "@/features/flip-finder/search-filter-contract";
 import { summarizeHardRejects } from "@/features/flip-finder/funnel-summary";
 import { explainPartialFacebookScan } from "@/features/facebook-worker/scan-accounting";
 import { projectPersistedFacebookAccounting } from "./scan-accounting-projection";
+import { isStaleScan, scanHeartbeatAt, STALE_SCAN_MESSAGE } from "./scan-lifecycle";
 
 type Row = Record<string, unknown>;
 const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
 const OLX_UNCLAIMED_TIMEOUT_MS = 90_000;
+const SCAN_PROGRESS_DATABASE_TIMEOUT_MS = 12_000;
 
 export async function getScanProgress(runId: string): Promise<ScanProgressResponse> {
   if (!isUuid(runId)) throw new Error("INVALID_SCAN_RUN_ID");
   const supabase = createFacebookWatcherAdminClient();
   await expireUnclaimedFacebookJobs(supabase, runId);
   await expireUnclaimedOlxJobs(supabase, runId);
+  await expireStaleFinderSourceScans(supabase, runId);
   const monthStart = zonedPeriodStart("month");
   const todayStart = zonedPeriodStart("day");
   const [scansResult, facebookResult, olxResult, monthJobsResult, collectorBatchesResult] = await Promise.all([
@@ -150,6 +153,43 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
       balanceStatus: "UNAVAILABLE",
     },
   };
+}
+
+/**
+ * A Finder source scan can be left in `running` when the platform terminates
+ * the background invocation before JavaScript reaches its finally block. The
+ * progress endpoint is the durable watchdog: it only considers non-Facebook,
+ * non-OLX Finder rows (OLX has a lease watchdog of its own), and uses the
+ * last persisted progress heartbeat instead of treating a long but healthy
+ * adapter as dead. This write is idempotent and never touches Watcher rows.
+ */
+export async function expireStaleFinderSourceScans(
+  supabase: ReturnType<typeof createFacebookWatcherAdminClient>,
+  runId: string,
+  now = Date.now(),
+): Promise<void> {
+  const candidates = await supabase.from("source_scans")
+    .select("id,source,status,started_at,filter_snapshot")
+    .eq("scan_run_id", runId)
+    .neq("source", "facebook")
+    .neq("source", "olx")
+    .in("status", ["pending", "running"])
+    .abortSignal(AbortSignal.timeout(SCAN_PROGRESS_DATABASE_TIMEOUT_MS));
+  if (candidates.error) throw new Error(`FINDER_STALE_SCAN_READ_FAILED: ${candidates.error.message}`);
+  const staleIds = rows(candidates.data)
+    .filter((item) => {
+      const id = string(item.id);
+      const source = string(item.source);
+      return Boolean(id && source && isStaleScan({ status: string(item.status) ?? "", startedAt: string(item.started_at), heartbeatAt: scanHeartbeatAt(item.filter_snapshot) }, now));
+    })
+    .map((item) => String(item.id));
+  if (!staleIds.length) return;
+  const result = await supabase.from("source_scans")
+    .update({ status: "failed", finished_at: new Date(now).toISOString(), error_message: STALE_SCAN_MESSAGE })
+    .in("id", staleIds)
+    .in("status", ["pending", "running"])
+    .abortSignal(AbortSignal.timeout(SCAN_PROGRESS_DATABASE_TIMEOUT_MS));
+  if (result.error) throw new Error(`FINDER_STALE_SCAN_FINALIZE_FAILED: ${result.error.message}`);
 }
 
 async function expireUnclaimedFacebookJobs(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, runId: string): Promise<void> {

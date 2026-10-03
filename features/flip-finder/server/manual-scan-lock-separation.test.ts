@@ -41,10 +41,10 @@ function fakeAdmin(seedSourceScans: Row[] = []) {
     const filters: Array<{ op: "eq" | "in" | "lt"; column: string; value: unknown }> = [];
     let mode: "select" | "update" | "insert" = "select";
     let updatePatch: Row = {};
-    let insertPayload: Row | null = null;
+    let insertPayload: Row | Row[] | null = null;
     const builder = {
       select: (_cols?: string) => builder,
-      insert: (payload: Row) => { mode = "insert"; insertPayload = payload; return builder; },
+      insert: (payload: Row | Row[]) => { mode = "insert"; insertPayload = payload; return builder; },
       update: (patch: Row) => { mode = "update"; updatePatch = patch; return builder; },
       eq: (column: string, value: unknown) => { filters.push({ op: "eq", column, value }); return builder; },
       in: (column: string, value: unknown) => { filters.push({ op: "in", column, value }); return builder; },
@@ -54,9 +54,13 @@ function fakeAdmin(seedSourceScans: Row[] = []) {
       abortSignal: () => builder,
       async single() {
         if (mode === "insert" && insertPayload) {
-          const row: Row = { id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "running", ...insertPayload };
+          const row: Row = { id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "running", ...(Array.isArray(insertPayload) ? insertPayload[0] : insertPayload) };
           sourceScans.push(row);
           return { data: { id: row.id, started_at: row.started_at }, error: null };
+        }
+        if (mode === "update") {
+          const found = sourceScans.find((row) => matches(row, filters));
+          return { data: found ? { id: found.id, started_at: found.started_at } : null, error: null };
         }
         return { data: null, error: null };
       },
@@ -65,6 +69,11 @@ function fakeAdmin(seedSourceScans: Row[] = []) {
         return { data: found ?? null, error: null };
       },
       then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
+        if (mode === "insert" && insertPayload) {
+          const payloads = Array.isArray(insertPayload) ? insertPayload : [insertPayload];
+          for (const payload of payloads) sourceScans.push({ id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "pending", ...payload });
+          return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+        }
         if (mode === "update") {
           for (const row of sourceScans) if (matches(row, filters)) Object.assign(row, updatePatch);
           return Promise.resolve({ data: null, error: null }).then(resolve, reject);
@@ -131,7 +140,7 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
   },
 });
 
-const { runManualOtodomScan } = await import("./manual-scan.ts");
+const { runManualOtodomScan, startManualOtodomScan } = await import("./manual-scan.ts");
 
 function watcherOwnedFacebookScan(filterId: string, overrides: Row = {}): Row {
   return { id: "watcher-scan-1", search_filter_id: filterId, source: "facebook", status: "running", started_at: new Date().toISOString(), scan_run_id: "watcher-run-1", ...overrides };
@@ -160,6 +169,24 @@ test("a stale (long-abandoned) Watcher-owned facebook row is also left untouched
 test("a genuinely active FINDER-owned otodom scan still correctly blocks a second Finder click for the same mixed filter", async () => {
   current = fakeAdmin([{ id: "finder-scan-1", search_filter_id: mixedFilter.id, source: "otodom", status: "running", started_at: new Date().toISOString() }]);
   await assert.rejects(() => runManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/, "Finder's own in-flight otodom scan must still block a second click -- this protection is unrelated to the Watcher-isolation fix");
+});
+
+test("background start reserves the Finder row and a second start is rejected before the worker runs", async () => {
+  current = fakeAdmin();
+  const start = await startManualOtodomScan(mixedFilter.id);
+  assert.equal(start.status, "running");
+  assert.equal(start.background, true);
+  assert.equal(current.sourceScans.filter((row) => row.scan_run_id === start.runId && row.source === "otodom").length, 1);
+  await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/);
+});
+
+test("prepared background rows become running and finalize through the real scan runner", async () => {
+  current = fakeAdmin();
+  const start = await startManualOtodomScan(mixedFilter.id);
+  const summary = await runManualOtodomScan(mixedFilter.id, { runId: start.runId, usePreparedRows: true, skipLock: true });
+  assert.equal(summary.status, "completed");
+  const row = current.sourceScans.find((candidate) => candidate.scan_run_id === start.runId && candidate.source === "otodom");
+  assert.equal(row?.status, "completed");
 });
 
 test("a mixed filter's active Watcher-owned facebook row never blocks Finder, even though the same filter also has otodom", async () => {

@@ -10,7 +10,7 @@ import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
-import { RECOVERABLE_SCAN_STATUSES, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
+import { isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
 export { scanStatus } from "./scan-start-errors";
 
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
@@ -19,6 +19,8 @@ type SupabaseClient = DatabaseClient;
 type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
 type ScanClock = { startedAt: string; startedMs: number };
+type PreparedSourceScan = { id: string; source: string; started_at: string };
+type ManualScanOptions = { runId?: string; usePreparedRows?: boolean; skipLock?: boolean };
 
 const SOURCE_TIMEOUT_MS = 75_000;
 const DATABASE_TIMEOUT_MS = 12_000;
@@ -27,8 +29,39 @@ export function sourceScanMetrics(result: SourceFetchResult, matchedCount: numbe
   return { scannedCount: result.fetched, listingsFound: result.fetched, matchedCount };
 }
 
-export async function runManualOtodomScan(filterId: string): Promise<ScanSummary> {
+export type ManualScanStart = { runId: string; status: "running"; background: boolean; scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number };
+
+/**
+ * Reserves Finder-owned source rows before returning the HTTP response. The
+ * worker is then scheduled by the route through next/server's after(), so a
+ * slow adapter cannot leave the browser waiting on a request that never
+ * returns a run id. Facebook-only Finder recalculations deliberately do not
+ * use this reservation because their source_scans rows belong exclusively to
+ * the independent Watcher.
+ */
+export async function startManualOtodomScan(filterId: string): Promise<ManualScanStart> {
   const runId = crypto.randomUUID();
+  const filter = await getSearchFilter(filterId);
+  if (!filter) throw statusError(404, "Nie znaleziono filtra.");
+  if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
+  const sources = activeSources(filter);
+  const sourceIds = [...sources.map((source) => source.id), ...(filter.sources.includes("facebook") ? ["facebook"] : [])];
+  if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
+  const lockableSourceIds = sources.map((source) => source.id);
+  if (lockableSourceIds.length) {
+    const supabase = createAdminClient();
+    await failStaleScans(supabase, filterId, lockableSourceIds);
+    const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", lockableSourceIds).in("status", [...RECOVERABLE_SCAN_STATUSES]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+    if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
+    if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
+    const { error: reserveError } = await supabase.from("source_scans").insert(lockableSourceIds.map((source) => ({ search_filter_id: filterId, source, status: "pending", scan_run_id: runId, filter_snapshot: filter }))).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+    if (reserveError) throw statusError(500, "Nie udało się zarezerwować skanu.");
+  }
+  return { runId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
+}
+
+export async function runManualOtodomScan(filterId: string, options: ManualScanOptions = {}): Promise<ScanSummary> {
+  const runId = options.runId ?? crypto.randomUUID();
   const scanStarted = Date.now();
   const ownedScans = new Map<string, ScanClock>();
   const sourceResults: SourceScanResult[] = [];
@@ -66,17 +99,24 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
   // CANONICAL_RECONCILIATION_FAILED and silently failed every listing a
   // live scan tried to persist.
   const supabase = createAdminClient();
-  if (lockableSourceIds.length) {
+  if (lockableSourceIds.length && !options.skipLock) {
     await failStaleScans(supabase, filterId, lockableSourceIds);
     const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", lockableSourceIds).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
     if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
     if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
   }
 
+  const preparedScans = options.usePreparedRows && lockableSourceIds.length
+    ? await loadPreparedSourceScans(supabase, runId, lockableSourceIds)
+    : new Map<string, PreparedSourceScan>();
+
   scanLog("SCAN START", { scanId: runId, source: "all", checked: 0, new: 0, matched: 0, durationMs: 0 });
   try {
     for (const source of sources.filter((item) => item.id !== "olx")) {
-      sourceResults.push(await scanSource(source, filterId, filter, supabase, runId, ownedScans));
+      const prepared = preparedScans.get(source.id);
+      sourceResults.push(options.usePreparedRows && !prepared
+        ? failedResult(source.id, 0, "SCAN_RESERVATION_MISSING", "Nie znaleziono zarezerwowanego etapu skanu.")
+        : await scanSource(source, filterId, filter, supabase, runId, ownedScans, prepared));
     }
     if (sources.some((source) => source.id === "olx")) {
       try {
@@ -107,13 +147,16 @@ export async function runManualOtodomScan(filterId: string): Promise<ScanSummary
     return { runId, status: pending.length ? "running" : failed ? "partial" : "completed", sourcesRun: sourceIds.length, sourcesCompleted: completed.length, sourcesFailed: failed, fetched: sum("fetched"), normalized: sum("normalized"), listingsCreated: sum("listingsCreated"), newMatches: sum("newMatches"), updated: sum("updated"), priceDrops: sum("priceDrops"), rejected: sum("rejected"), actualErrors: failed, sourceResults, matchDiagnostics, scannedCount: sum("fetched"), matchedCount: sum("matched"), newCount: sum("newMatches"), updatedCount: sum("updated"), priceDropCount: sum("priceDrops"), warnings };
   } finally {
     await failOwnedRunningScans(supabase, ownedScans);
+    if (options.usePreparedRows) await failUnstartedPreparedScans(supabase, preparedScans);
     scanLog("SCAN FINALIZE", { scanId: runId, source: "all", checked: total(sourceResults, "fetched"), new: total(sourceResults, "newMatches"), matched: total(sourceResults, "matched"), durationMs: Date.now() - scanStarted });
   }
 }
 
-async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>): Promise<SourceScanResult> {
+async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>, prepared?: PreparedSourceScan): Promise<SourceScanResult> {
   const started = Date.now();
-  const { data: scan, error } = await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter }).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
+  const { data: scan, error } = prepared
+    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter }).eq("id", prepared.id).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single()
+    : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter }).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
   if (error || !scan || typeof scan.id !== "string" || typeof scan.started_at !== "string") return failedResult(source.id, Date.now() - started, "SCAN_CREATE_FAILED", "Nie udało się rozpocząć skanu źródła.");
   const scanClock = { startedAt: scan.started_at, startedMs: started };
   ownedScans.set(scan.id, scanClock);
@@ -164,8 +207,29 @@ async function scanSource(source: SearchSource, filterId: string, filter: Loaded
  * unclaimed job blocking that filter's scans permanently.
  */
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
-  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  if (readError) throw statusError(500, "Nie udało się sprawdzić wygasłej blokady skanu.");
+  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
+    .filter((candidate) => isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt: scanHeartbeatAt(candidate.filter_snapshot) }, Date.now()))
+    .map((candidate) => candidate.id);
+  if (!staleIds.length) return;
+  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).in("id", staleIds).in("status", RECOVERABLE_SCAN_STATUSES).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) throw statusError(500, "Nie udało się zwolnić wygasłej blokady skanu.");
+}
+
+async function loadPreparedSourceScans(supabase: SupabaseClient, runId: string, sourceIds: string[]): Promise<Map<string, PreparedSourceScan>> {
+  const { data, error } = await supabase.from("source_scans").select("id,source,started_at").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  if (error) throw statusError(500, "Nie udało się odczytać zarezerwowanego skanu.");
+  return new Map((Array.isArray(data) ? data : []).flatMap((row) => {
+    if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string" || typeof (row as { source?: unknown }).source !== "string" || typeof (row as { started_at?: unknown }).started_at !== "string") return [];
+    return [[(row as { source: string }).source, row as PreparedSourceScan]] as const;
+  }));
+}
+
+async function failUnstartedPreparedScans(supabase: SupabaseClient, preparedScans: Map<string, PreparedSourceScan>): Promise<void> {
+  if (!preparedScans.size) return;
+  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: "Scan interrupted before source execution" }).in("id", [...preparedScans.values()].map((scan) => scan.id)).eq("status", "pending").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  if (error) console.error("FLIP FINDER PREPARED SCAN CLEANUP ERROR:", { error });
 }
 
 async function updateSourceProgress(supabase: SupabaseClient, scanId: string, filter: LoadedFilter, progress: Progress, signal: AbortSignal): Promise<void> {

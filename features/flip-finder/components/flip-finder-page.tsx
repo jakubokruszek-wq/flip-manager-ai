@@ -191,9 +191,9 @@ export function FlipFinderPage() {
     let waitingForWorker = false;
     try {
       traceStage(requestId, "POST_SCAN_SENT", "PASS");
-      const response = await fetch(`/api/flip-finder/search-filters/${filter.id}/scan`, {
+      const response = await fetchWithTimeout(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
-      });
+      }, 20_000);
       traceStage(requestId, "POST_SCAN_RESPONSE", response.ok ? "PASS" : "FAIL", response.ok ? undefined : `HTTP_${response.status}`);
       const payload: unknown = await readJson(response);
 
@@ -1284,6 +1284,22 @@ async function fetchScanProgress(runId: string): Promise<ScanProgressResponse> {
     throw new Error(readMessage(payload, "Nie udało się pobrać postępu skanu."));
   }
   return payload;
+}
+
+/** A start request must never leave the button latched when the platform or
+ * network stops responding before it can return the run id. Once a 202 start
+ * response arrives, progress is read from the backend run until terminal. */
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw new Error("Uruchomienie skanu przekroczyło limit czasu. Odśwież status przed ponowną próbą.");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 type CollectorBridgeResult = { ok: boolean; accepted?: boolean; heartbeatUpdated?: boolean; validation?: CollectorValidation; status?: string; label?: string; error?: string };

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   isStaleScan,
+  scanHeartbeatAt,
   RECOVERABLE_SCAN_STATUSES,
   selectLatestCompletedScans,
   selectLatestScans,
@@ -35,6 +36,21 @@ test("C. a fresh running scan is preserved", () => {
 
 test("D. stale running behaviour is unchanged", () => {
   assert.equal(isStaleScan({ status: "running", startedAt: minutesAgo(16) }, now), true);
+});
+
+test("a recent persisted heartbeat keeps a long-running adapter alive", () => {
+  assert.equal(isStaleScan({ status: "running", startedAt: minutesAgo(60), heartbeatAt: minutesAgo(1) }, now), false);
+  assert.equal(isStaleScan({ status: "running", startedAt: minutesAgo(60), heartbeatAt: minutesAgo(16) }, now), true);
+});
+
+test("scanHeartbeatAt reads only the bounded progress timestamp", () => {
+  assert.equal(scanHeartbeatAt({ _scanProgress: { lastProgressAt: minutesAgo(2), checked: 12 } }), minutesAgo(2));
+  assert.equal(scanHeartbeatAt({ _scanProgress: { lastProgressAt: "not-a-date", token: "never returned" } }), null);
+  assert.equal(scanHeartbeatAt(null), null);
+});
+
+test("a malformed heartbeat never makes an otherwise unaged row stale", () => {
+  assert.equal(isStaleScan({ status: "running", startedAt: minutesAgo(10), heartbeatAt: "not-a-timestamp" }, now), false);
 });
 
 test("E. after stale pending cleanup the duplicate guard no longer blocks a new scan", () => {

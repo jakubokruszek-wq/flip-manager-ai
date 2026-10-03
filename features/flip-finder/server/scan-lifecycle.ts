@@ -28,11 +28,21 @@ export function staleScanCutoff(now: number, timeoutMs: number = STALE_SCAN_TIME
  * timeout. A row whose age cannot be established is never reaped, so a missing or
  * malformed timestamp can never cancel a scan that is genuinely in flight.
  */
-export function isStaleScan(scan: { status: string; startedAt: string | null }, now: number, timeoutMs: number = STALE_SCAN_TIMEOUT_MS): boolean {
+export function scanHeartbeatAt(snapshot: unknown): string | null {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+  const progress = (snapshot as Record<string, unknown>)._scanProgress;
+  if (!progress || typeof progress !== "object" || Array.isArray(progress)) return null;
+  const value = (progress as Record<string, unknown>).lastProgressAt;
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+export function isStaleScan(scan: { status: string; startedAt: string | null; heartbeatAt?: string | null }, now: number, timeoutMs: number = STALE_SCAN_TIMEOUT_MS): boolean {
   if (!(RECOVERABLE_SCAN_STATUSES as readonly string[]).includes(scan.status)) return false;
   const startedMs = scan.startedAt ? Date.parse(scan.startedAt) : Number.NaN;
   if (!Number.isFinite(startedMs)) return false;
-  return now - startedMs >= timeoutMs;
+  const heartbeatMs = scan.heartbeatAt ? Date.parse(scan.heartbeatAt) : Number.NaN;
+  const lastActivityMs = Number.isFinite(heartbeatMs) ? Math.max(startedMs, heartbeatMs) : startedMs;
+  return now - lastActivityMs >= timeoutMs;
 }
 
 type ScanLike = { searchFilterId: string; status: string; startedAt: string; finishedAt?: string | null };

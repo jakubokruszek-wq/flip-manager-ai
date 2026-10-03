@@ -255,7 +255,7 @@ test("real Finder page never renders Watcher group data or COLLECTOR_NOT_AVAILAB
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(watcherLeakProgress(watcherRunId)), status: 200 });
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/scan` && request.method() === "POST") {
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ runId: financeRunId, status: "completed", scannedCount: 4, matchedCount: 1, newCount: 0, updatedCount: 1, priceDropCount: 0 }), status: 200 });
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ runId: financeRunId, status: "running", background: true, scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 }), status: 202 });
     }
     if (url.pathname === `/api/flip-finder/scans/${financeRunId}`) {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(financeCompletedProgress(financeRunId)), status: 200 });

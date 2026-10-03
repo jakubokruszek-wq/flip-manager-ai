@@ -11,7 +11,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { isActiveFilterSource } from "@/features/flip-finder/source-availability";
-import { selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT } from "./scan-lifecycle";
+import { isStaleScan, scanHeartbeatAt, selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT, STALE_SCAN_MESSAGE } from "./scan-lifecycle";
 
 type Row = Record<string, unknown>;
 
@@ -53,7 +53,7 @@ export function searchFilterWriteFailureResponse(error: unknown, fallbackMessage
 }
 
 const SOURCE_SCAN_COLUMNS =
-  "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message";
+  "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message,filter_snapshot";
 
 export async function listSearchFilters(): Promise<SearchFilterListResponse> {
   const supabase = await createClient();
@@ -82,7 +82,16 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
     }
   }
 
-  const toScans = (data: unknown) => asRows(data).map(toSearchFilterScan).filter((scan): scan is SearchFilterScan => scan !== null);
+  // The dashboard must never keep showing "running"/"pending" for a scan the
+  // platform has already abandoned (killed the background invocation before
+  // it reached its finally block, with nothing left alive to ever write
+  // "failed"). This read-only, in-memory projection is the backstop for
+  // viewers who never start a new scan or poll this exact run's progress
+  // endpoint -- both of which durably heal the row elsewhere -- so simply
+  // loading or refreshing the dashboard can never show fabricated,
+  // perpetually-"in progress" activity for dead work.
+  const now = Date.now();
+  const toScans = (data: unknown) => asRows(data).map((row) => toSearchFilterScan(row, now)).filter((scan): scan is SearchFilterScan => scan !== null);
   const scans = toScans(scansResult.data);
   const latestScans = selectLatestScans(scans);
   const latestCompletedScans = selectLatestCompletedScans(toScans(completedScansResult.data));
@@ -370,11 +379,11 @@ function toSearchFilter(row: Row): SearchFilter {
   };
 }
 
-function toSearchFilterScan(row: Row): SearchFilterScan | null {
+export function toSearchFilterScan(row: Row, now: number): SearchFilterScan | null {
   const id = asString(row.id);
   const searchFilterId = asString(row.search_filter_id);
   const source = asString(row.source);
-  const status = asString(row.status);
+  const rawStatus = asString(row.status);
   const startedAt = asString(row.started_at);
 
   if (
@@ -382,13 +391,20 @@ function toSearchFilterScan(row: Row): SearchFilterScan | null {
     !searchFilterId ||
     !source ||
     !isListingSource(source) ||
-    !isSearchFilterScanStatus(status) ||
+    !isSearchFilterScanStatus(rawStatus) ||
     !startedAt
   ) {
     return null;
   }
 
-  const errorMessage = nullableString(row.error_message);
+  // Facebook/OLX rows have their own dedicated watchdogs (the Watcher
+  // scheduler and the OLX lease recovery respectively) that already run on
+  // their own schedules independent of this dashboard read -- reclassifying
+  // them here too would risk disagreeing with whichever one of those is
+  // currently mid-recovery for the exact same row.
+  const stale = source !== "facebook" && source !== "olx" && isStaleScan({ status: rawStatus, startedAt, heartbeatAt: scanHeartbeatAt(row.filter_snapshot) }, now);
+  const status = stale ? "failed" : rawStatus;
+  const errorMessage = stale ? STALE_SCAN_MESSAGE : nullableString(row.error_message);
 
   return {
     id,
