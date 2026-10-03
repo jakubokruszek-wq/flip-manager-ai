@@ -56,16 +56,19 @@ test("only complete schema-ready adapters are schedulable", () => {
   assert.deepEqual(
     activeSources({
       ...filter,
-      sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "szybko", "domy", "allegro_lokalnie", "gratka", "nieruchomosci_online"],
+      sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie", "gratka", "nieruchomosci_online"],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie"],
   );
-  assert.deepEqual(activeSources({ ...filter, sources: ["oferty_net", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
+  assert.deepEqual(activeSources({ ...filter, sources: ["bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), []);
 });
 
-test("Szybko remains registered but is disabled pending live access verification", () => {
-  assert.equal(EXTERNAL_SOURCE_STATUS.szybko, "path_requires_live_source_verification");
-  assert.deepEqual(activeSources({ ...filter, sources: ["szybko"] }).map((source) => source.id), []);
+test("Oferty.net, Szybko, Domy.pl and Allegro Lokalnie are active now that their real city-scoped URLs and parsers are verified", () => {
+  assert.equal(EXTERNAL_SOURCE_STATUS.oferty_net, "public_html_adapter");
+  assert.equal(EXTERNAL_SOURCE_STATUS.szybko, "public_html_adapter");
+  assert.equal(EXTERNAL_SOURCE_STATUS.domy, "public_html_adapter");
+  assert.equal(EXTERNAL_SOURCE_STATUS.allegro_lokalnie, "public_html_adapter");
+  assert.deepEqual(activeSources({ ...filter, sources: ["oferty_net", "szybko", "domy", "allegro_lokalnie"] }).map((source) => source.id), ["oferty_net", "szybko", "domy", "allegro_lokalnie"]);
 });
 
 test("a legacy filter cannot schedule unavailable sources while preserving active source IDs", () => {
@@ -78,7 +81,7 @@ test("a legacy filter cannot schedule unavailable sources while preserving activ
         "official_cooperative", "official_uml", "official_auction",
       ],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie"],
   );
 });
 

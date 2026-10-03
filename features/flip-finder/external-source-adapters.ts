@@ -159,15 +159,90 @@ function parseAdresowo(html: string, fallbackCity: string): ExternalPortalPage {
   return fromCandidates("adresowo", records.map(fromAdresowoRecord), fallbackCity, hasNextMarker(html));
 }
 
+// Real public structure, confirmed against oferty.net's own public search
+// page (read-only GET, 2026-10-03): the previous "zero price mentions"
+// conclusion was wrong -- it only checked for a literal "zł" substring, but
+// this page's prices are plain numbers with no currency suffix (e.g.
+// "425 000", not "425 000 zł"). The page is genuinely server-rendered: a
+// real <table> of listing rows (`tr.property`, cells cell_location/
+// cell_area/cell_rooms/cell_price/cell_added_at), not client-side AJAX.
+// Rental rows ("na wynajem") are mixed into the same table as sale rows;
+// the image `alt` text carries the real "na sprzedaż"/"na wynajem"/"do
+// wynajęcia" wording, which the existing RENTAL_SIGNAL check filters via
+// title/description. Pagination is a numbered ?page=N paginator with no
+// rel="next" marker, so hasNextPage is derived from the paginator's own
+// "current" page vs. the highest page number it lists.
 function parseOfertyNet(html: string, fallbackCity: string): ExternalPortalPage {
   const $ = load(html); const candidates: PortalCandidate[] = [];
-  $("article[data-offer-id], .offer[data-id], [data-listing-id]").each((_, element) => { const card = $(element); candidates.push({ id: card.attr("data-offer-id") ?? card.attr("data-id") ?? card.attr("data-listing-id"), url: card.attr("data-url") ?? card.find("a[href]").first().attr("href"), title: card.find("h2,h3,.title").first().text(), price: card.find(".price,[data-price]").first().text() || card.attr("data-price"), area: card.find(".area,[data-area]").first().text() || card.attr("data-area"), rooms: card.find(".rooms,[data-rooms]").first().text() || card.attr("data-rooms"), city: card.attr("data-city") ?? fallbackCity, district: card.attr("data-district"), images: card.find("img").map((__, image) => $(image).attr("src") ?? $(image).attr("data-src")).get() }); });
-  return fromCandidates("oferty_net", candidates, fallbackCity, Boolean($("a[rel='next'], [data-next-page='true']").length));
+  $("tr.property").each((_, element) => {
+    const row = $(element);
+    const link = row.find("td.cell_location a").first();
+    const url = link.attr("href");
+    const locationTitle = link.attr("title") ?? "";
+    const img = row.find("img").first();
+    candidates.push({
+      id: url ? ofertyNetIdFromUrl(url) : undefined,
+      url,
+      title: img.attr("alt"),
+      description: img.attr("alt"),
+      price: row.find("td.cell_price").first().text(),
+      area: areaFromText(row.find("td.cell_area").first().text()),
+      rooms: row.find("td.cell_rooms").first().text(),
+      city: fallbackCity,
+      district: locationTitle.match(/,\s*([^,]+)$/u)?.[1]?.trim(),
+      images: img.attr("data-original") ?? img.attr("src"),
+      publishedAt: row.find("td.cell_added_at").first().text().match(/\d{4}-\d{2}-\d{2}/u)?.[0],
+    });
+  });
+  const current = Number($(".paginator .current a").first().text().trim());
+  let maxPage = current;
+  $(".paginator .navigate a").each((_, element) => { const page = Number($(element).text().trim()); if (Number.isFinite(page)) maxPage = Math.max(maxPage, page); });
+  return fromCandidates("oferty_net", candidates, fallbackCity, Number.isFinite(current) && maxPage > current);
+}
+function ofertyNetIdFromUrl(url: string): string | null { try { return new URL(url).pathname.match(/,([^,/]+)$/u)?.[1] ?? lastPathSegmentId(url); } catch { return lastPathSegmentId(url); } }
+
+// Real public structure, confirmed against szybko.pl's own GET search form
+// (read-only, 2026-10-03): the previously registered <city>/mieszkania/sprzedaz
+// path 302-redirects to the homepage -- an outright wrong path, not just an
+// unfiltered one. The site's real form (id="formSearch", action="/form",
+// method="GET") reveals the working pattern once submitted:
+// /l/na-sprzedaz/lokal-mieszkalny/<city>, confirmed genuinely city-scoped
+// (465 ofert for "lodz"/"Łódź" vs 63622+ nationwide; a plain ASCII slug is
+// accepted, no diacritics required). That page has no JSON-LD or
+// __NEXT_DATA__ at all (the previous parser's ItemList assumption never
+// matched anything real) -- listings are schema.org Microdata
+// (itemscope/itemprop on the rendered HTML itself), a third, distinct shape
+// from every other portal in this file, so it needs its own cheerio-based
+// extraction rather than a JSON record mapper.
+function parseSzybko(html: string, fallbackCity: string): ExternalPortalPage {
+  const $ = load(html);
+  const candidates: PortalCandidate[] = [];
+  $("[data-assetid]").each((_, element) => {
+    const card = $(element);
+    const [city, district] = parseSzybkoAddress(card.find(".popup-gmaps").first().text());
+    candidates.push({
+      id: card.attr("data-assetid"),
+      url: card.find(".listing-title-heading[href]").first().attr("href"),
+      title: card.find("[itemprop='name']").first().text() || card.find(".listing-title-heading").first().text(),
+      description: card.find("[itemprop='description']").first().text(),
+      price: card.find("[itemprop='price']").first().attr("content"),
+      area: areaFromText(card.find(".asset-feature.area").first().text()),
+      rooms: card.find(".asset-feature.rooms").first().text(),
+      city: city ?? fallbackCity,
+      district,
+      images: card.find("[itemprop='image']").first().attr("href"),
+    });
+  });
+  return fromCandidates("szybko", candidates, fallbackCity, hasNextMarker(html));
 }
 
-function parseSzybko(html: string, fallbackCity: string): ExternalPortalPage {
-  const records = jsonLdRecords(html).flatMap((record) => Array.isArray(record.itemListElement) ? record.itemListElement.filter(isRecord).map((item) => isRecord(item.item) ? item.item : item) : [record]);
-  return fromCandidates("szybko", records.map(fromSzybkoRecord), fallbackCity, hasNextMarker(html));
+// "Łódź (Widzew) (Łódzkie, gm. Łódź)" -> city "Łódź", district "Widzew".
+// Sampled across a full result page: the city-plus-district prefix before
+// the first parenthesis is consistent even when the voivodeship/street
+// suffix that follows it varies ("(Łódzkie, gm. Łódź)" vs ", <street>").
+function parseSzybkoAddress(value: string): [string | null, string | null] {
+  const match = value.replace(/\s+/gu, " ").trim().match(/^([^(]+?)\s*\(([^)]+)\)/u);
+  return match ? [stringValue(match[1]), stringValue(match[2])] : [stringValue(value), null];
 }
 
 function parseBezposrednio(html: string, fallbackCity: string): ExternalPortalPage {
@@ -176,15 +251,94 @@ function parseBezposrednio(html: string, fallbackCity: string): ExternalPortalPa
   return fromCandidates("bezposrednio", candidates, fallbackCity, Boolean(atPath(data, ["props", "pageProps", "pagination", "hasNextPage"])));
 }
 
+// Real public structure, confirmed against domy.pl (read-only GET,
+// 2026-10-03): the registered /mieszkania/sprzedam/<city> path reaches a
+// genuine Łódź-titled page, but its <article> cards are an unrelated
+// "podobne inwestycje" (similar developments) widget showing other cities
+// entirely -- the real listing path is a completely different URL,
+// /mieszkania--<city>-pl, found via the search form's own "shortcuts"
+// sidebar links. That real page has no JSON-LD/__NEXT_DATA__ at all; it is
+// server-rendered <article class="propertyBox"> cards with a plain-numeric
+// price (no "zł" substring, which is why the previous investigation's "zero
+// price mentions" check never saw it). Room count is never a number -- it
+// is a Polish word prefix in the card's title attribute ("Dwupokojowe
+// mieszkanie...", "Kawalerka..."), parsed via a fixed lookup rather than a
+// numeric field. Pagination is a real ?page=N control whose own markup
+// already includes a literal rel="next" link, so the existing generic
+// hasNextMarker() check (originally written for the other portals) already
+// works here unmodified.
+const DOMY_ROOM_WORDS: Record<string, number> = { kawalerka: 1, jednopokojowe: 1, dwupokojowe: 2, trzypokojowe: 3, czteropokojowe: 4, pieciopokojowe: 5, szesciopokojowe: 6, siedmiopokojowe: 7, osmiopokojowe: 8 };
 function parseDomy(html: string, fallbackCity: string): ExternalPortalPage {
-  const records = jsonLdRecords(html).filter((record) => /product|offer|residence|apartment/iu.test(text(record, "@type") ?? ""));
-  return fromCandidates("domy", records.map(fromDomyRecord), fallbackCity, hasNextMarker(html));
+  const $ = load(html); const candidates: PortalCandidate[] = [];
+  $("article.propertyBox").each((_, element) => {
+    const card = $(element);
+    const link = card.find("a.property_link").first();
+    const url = link.attr("href");
+    const titleAttr = link.attr("title") ?? "";
+    const [city, ...districtParts] = link.text().split(",").map((part) => part.trim()).filter(Boolean);
+    candidates.push({
+      id: url ? lastPathSegmentId(url) : undefined,
+      url,
+      title: titleAttr,
+      description: titleAttr,
+      price: card.find(".price").first().text(),
+      area: areaFromText(card.find(".area").first().text()),
+      rooms: domyRoomsFromTitle(titleAttr),
+      city: city ?? fallbackCity,
+      district: districtParts.length ? districtParts.join(", ") : null,
+    });
+  });
+  return fromCandidates("domy", candidates, fallbackCity, hasNextMarker(html));
+}
+function domyRoomsFromTitle(title: string): number | null {
+  const word = title.toLocaleLowerCase("pl-PL").match(/^(\p{L}+)/u)?.[1];
+  if (!word) return null;
+  return DOMY_ROOM_WORDS[word.normalize("NFD").replace(/[̀-ͯ]/gu, "")] ?? null;
 }
 
+// Real public structure, confirmed against allegrolokalnie.pl (read-only
+// GET, 2026-10-03): the registered /oferty/nieruchomosci/mieszkania path
+// redirects away entirely (it drops the "mieszkania" filter and lands on
+// the generic nieruchomosci category). The real combined category+city path
+// is /oferty/nieruchomosci/mieszkania-na-sprzedaz-112739/<city> (confirmed
+// genuinely city-scoped: a page titled "Mieszkania na sprzedaż - Łódź" with
+// 60 items, every url/name actually naming "lodz"/a real Łódź district --
+// not the previously-seen byte-identical nationwide content). The page has
+// no __NEXT_DATA__ at all (the previous parser's assumption never matched
+// anything real); real data is a flat schema.org ItemList in JSON-LD, but
+// unlike every other ItemList-shaped portal in this file, items carry no
+// separate area/rooms/address fields -- only a free-text name ("Mieszkanie,
+// Łódź, <district>, <area> m²") to parse them from, and no room count
+// anywhere. Pagination is a numbered ?page=N control (confirmed genuinely
+// paginating -- unlike the ignored ?p=/?strona= guesses tried first) shown
+// via a disabled <input> with the current/total page count, not a
+// rel="next" link.
 function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPortalPage {
-  const data = nextData(html); const rows = arrayAt(data, ["props", "pageProps", "items"]) ?? arrayAt(data, ["props", "pageProps", "offers"]) ?? [];
-  const candidates = rows.filter(isRecord).map((row) => ({ id: row.id ?? row.offerId, url: row.url ?? row.href, title: row.title ?? row.name, description: row.description, price: isRecord(row.price) ? row.price.amount : row.price, area: row.area ?? row.size, rooms: row.rooms, city: row.city, district: row.district, images: row.images ?? row.photos, publishedAt: row.createdAt ?? row.publishedAt }));
-  return fromCandidates("allegro_lokalnie", candidates, fallbackCity, Boolean(atPath(data, ["props", "pageProps", "pagination", "hasNext"])));
+  const $ = load(html);
+  const candidates = jsonLdItemListCandidates(html).filter((record) => hasType(record, "Product")).map((record) => {
+    const url = text(record, "url");
+    const name = stringValue(record.name) ?? "";
+    // The area's own decimal separator is a comma ("53,2 m²"), so the area
+    // must be peeled off with its own end-anchored match BEFORE splitting
+    // the rest of the name on commas -- otherwise "53,2" is misread as two
+    // separate comma-joined parts ("53" and "2 m²").
+    const areaMatch = name.match(/\d+(?:,\d+)?\s*(?:m²|m2|mkw)\s*$/iu);
+    const withoutArea = areaMatch ? name.slice(0, areaMatch.index).replace(/,\s*$/u, "") : name;
+    const parts = withoutArea.split(",").map((part) => part.trim()).filter(Boolean);
+    return {
+      id: url ? lastPathSegmentId(url) : undefined,
+      url: record.url,
+      title: record.name,
+      price: atPath(record, ["offers", "price"]),
+      area: areaMatch ? areaFromText(areaMatch[0]) : null,
+      city: fallbackCity,
+      district: parts.length > 2 ? parts.slice(2).join(", ") || null : null,
+      images: atPath(record, ["image", "url"]) ?? atPath(record, ["image", "contentUrl"]),
+    };
+  });
+  const current = Number($(".ml-pagination__input").attr("value"));
+  const total = Number($(".ml-pagination__count").first().text().match(/\d+/u)?.[0]);
+  return fromCandidates("allegro_lokalnie", candidates, fallbackCity, Number.isFinite(current) && Number.isFinite(total) && current < total);
 }
 
 // Each nested Offer carries its own itemOffered/address -- but Gratka puts the
@@ -204,9 +358,6 @@ function fromNieruchomosciOnlineRecord(record: PortalRecord): PortalCandidate { 
 function fromDomiportaRecord(record: PortalRecord): PortalCandidate { const nestedOffer = atPath(record, ["offers", "itemOffered"]); const offered = isRecord(record.itemOffered) ? record.itemOffered : isRecord(nestedOffer) ? nestedOffer : record; return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
 function fromAdresowoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.identifier ?? record.sku, url: record.url ?? record.mainEntityOfPage, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
 function fromSprzedajemyRecord(record: PortalRecord): PortalCandidate { const title = stringValue(record.name) ?? stringValue(record.title); return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: record.area ?? areaFromText(title), rooms: record.numberOfRooms ?? record.rooms ?? roomsFromText(title), city: atPath(record, ["address", "addressLocality"]), district: atPath(record, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
-function fromSzybkoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.sku ?? record.productID ?? record.identifier, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
-function fromDomyRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.sku ?? record.productID, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
-
 function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[], fallbackCity: string, hasNextPage: boolean): ExternalPortalPage { const listings: PropertySourceListing[] = []; const seen = new Set<string>(); for (const candidate of candidates) { const listing = toListing(source, candidate, fallbackCity); if (!listing || seen.has(listing.externalListingId)) continue; seen.add(listing.externalListingId); listings.push(listing); } return { listings, hasNextPage }; }
 function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbackCity: string): PropertySourceListing | null { const url = absoluteUrl(candidate.url, source); const title = stringValue(candidate.title); const description = stringValue(candidate.description); if (!url || isSearchUrl(url) || RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`)) return null; const price = money(candidate.price); const area = decimal(candidate.area); if (price === null || price <= 0 || area === null || area <= 0) return null; const city = stringValue(candidate.city) ?? fallbackCity; const district = stringValue(candidate.district); const externalListingId = stringValue(candidate.id) ?? new URL(url).pathname.replace(/\/+$/u, ""); const images = imageValues(candidate.images); const rooms = decimal(candidate.rooms); const payload = { id: externalListingId, url: normalizeUrl(url), title, price, area, rooms, city, district }; return { source, externalListingId, originalUrl: url, normalizedUrl: payload.url, title, price, area, rooms, floor: stringValue(candidate.floor), pricePerSqm: price / area, city, district, locationText: [district, city].filter(Boolean).join(", ") || null, thumbnailUrl: images[0] ?? null, images, buildingType: null, description: description ? stripHtml(description) : null, publishedAt: stringValue(candidate.publishedAt), rawPayload: { source, candidate }, contentHash: calculateContentHash(payload) }; }
 

@@ -14,14 +14,35 @@
  * with each other. uml.lodz.pl's own registered sale page in particular
  * turned out to be a category MENU (linking to a separate "Mieszkania"
  * sub-page), not a listings page itself, zero price mentions anywhere.
- * Reaching genuine, parseable listing content for even one of these 14
- * sources would need its own dedicated exploration (follow the real
- * sub-navigation, then design a bespoke selector against its specific
- * markup) comparable to what each portal adapter in external-source-adapters.ts
- * already required individually -- realistically well beyond "a few
- * read-only GETs" for all 14 at once. Left exactly as implemented
- * (OFFICIAL_LODZ_SOURCES/OFFICIAL_LODZ_PARSERS unchanged, nothing removed),
- * genuinely unverified rather than silently assumed working.
+ *
+ * Re-investigated further (2026-10-03), following the same "find the real
+ * sub-navigation, not the registered guess" technique that activated
+ * oferty.net/szybko/domy/allegro_lokalnie in external-source-adapters.ts:
+ * smdabrowa.pl's own "Oferty, przetargi" nav link
+ * (/informacje/oferty-przetargi) IS a real, reachable notice list, and an
+ * individual notice
+ * (/informacje/oferty-przetargi/397-lokal-mieszkalny-na-przetarg) DOES
+ * contain genuine sale data -- "lokal mieszkalny nr 83 ... składa się z 2-ch
+ * pokoi ... o łącznej pow. użytkowej 36,74 m2" and "Cena wywoławcza wynosi
+ * 222 000,00 zł" -- proving a real end-to-end flow is reachable in
+ * principle for at least one of these 14 sources. The catch: this data is
+ * free-running prose inside a Joomla blog-article body, not a structured
+ * field anywhere, so extracting it needs per-notice regex heuristics (e.g.
+ * "(\d+)-ch pokoi", "Cena wywoławcza wynosi ([\d\s]+(?:,\d+)?) zł"), not a
+ * selector. Checked whether this Joomla template is shared by another
+ * cooperative in the catalogue (chojny.lodz.pl, the next one investigated):
+ * it is not -- that site runs WordPress + Elementor instead, a completely
+ * different platform with its own markup, confirming these 14 sites
+ * genuinely do not share a common CMS or notice-page convention with each
+ * other, not even pairwise. Reaching genuine, parseable listing content for
+ * all 14 would mean 14 separate bespoke investigations and parsers (one per
+ * site, since even the 2 sampled so far share nothing), each comparable in
+ * effort to a single portal adapter in external-source-adapters.ts --
+ * realistically a separate, dedicated effort beyond this round's scope.
+ * Left exactly as implemented (OFFICIAL_LODZ_SOURCES/OFFICIAL_LODZ_PARSERS
+ * unchanged, nothing removed), genuinely unverified rather than silently
+ * assumed working or forced active with fragile prose-regex guesses applied
+ * uniformly across sites that don't share a template.
  */
 export type OfficialLodzSourceKind = "cooperative" | "municipal" | "krk" | "syndic" | "rental_program";
 export type OfficialLodzSource = {

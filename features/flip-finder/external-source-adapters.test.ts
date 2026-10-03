@@ -35,9 +35,35 @@ function fixture(source: ExternalSourceId, page: number): string {
   // externalListingId assertions below -- the real-data path is proven
   // separately in "current public result-page structure reaches...".
   if (source === "gratka") return jsonLd({ "@type": "Product", additionalType: "RealEstateListing", name: `Mieszkania na sprzedaż ${item.city}`, url: `https://gratka.pl/nieruchomosci/mieszkania/${item.city.toLowerCase()}`, offers: { "@type": "AggregateOffer", lowPrice: "300000", highPrice: "600000", offers: [{ "@type": "Offer", sku: item.id, url: item.url, name: item.title, price: item.price, image: item.images, datePosted: item.publishedAt, itemOffered: { "@type": "Accommodation", description: item.description, numberOfRooms: item.rooms, floorSize: { value: item.area }, address: { addressLocality: item.district } } }] } }, next);
+  // Real structure (confirmed against a live, read-only GET of
+  // oferty.net/mieszkania,<city>, 2026-10-03): a plain server-rendered
+  // <table> of rows (tr.property), not JSON-LD/__NEXT_DATA__/Microdata --
+  // the id is recovered from the trailing ",<id>" segment of the detail URL
+  // (the real site has no separate id attribute anywhere), and pagination
+  // is a numbered paginator with no rel="next" marker.
+  if (source === "oferty_net") {
+    const url = item.url.replace("?", `,${item.id}?`);
+    const paginator = next
+      ? `<div class="paginator"><li class="navigate current"><div><a>1</a></div></li><li class="navigate"><div><a href="?page=2">2</a></div></li></div>`
+      : `<div class="paginator"><li class="navigate current"><div><a>2</a></div></li></div>`;
+    return `<table><tr class="property"><td class="cell_photo"><img alt="${item.title}" data-original="${item.images[0]}"></td><td class="cell_location"><a href="${url}" title="mieszkanie na sprzedaż ${item.city}, ${item.district}">${item.title}</a></td><td class="cell_area">${item.area}m²</td><td class="cell_rooms">${item.rooms}</td><td class="cell_price">${item.price}</td><td class="cell_added_at">${item.publishedAt}</td></tr></table>${paginator}`;
+  }
   if (source === "adresowo") return jsonLd({ "@type": "Residence", identifier: item.id, url: item.url, name: item.title, description: item.description, image: item.images, datePosted: item.publishedAt, offers: { price: item.price }, itemOffered: { floorSize: { value: item.area }, numberOfRooms: item.rooms, address: { addressLocality: item.city, addressSuburb: item.district } } }, next);
-  if (source === "domy") return jsonLd({ "@type": "Product", productID: item.id, url: item.url, name: item.title, description: item.description, image: item.images, datePosted: item.publishedAt, offers: { price: item.price }, itemOffered: { floorSize: { value: item.area }, numberOfRooms: item.rooms, address: { addressLocality: item.city, addressSuburb: item.district } } }, next);
-  if (source === "szybko") return jsonLd({ "@type": "ItemList", itemListElement: [{ item: { "@type": "Product", sku: item.id, url: item.url, name: item.title, description: item.description, image: item.images, offers: { price: item.price }, itemOffered: { floorSize: { value: item.area }, numberOfRooms: item.rooms, address: { addressLocality: item.city, addressSuburb: item.district } } } }] }, next);
+  // Real structure (confirmed against a live, read-only GET of
+  // domy.pl/mieszkania--<city>-pl, 2026-10-03): the page has no JSON-LD or
+  // __NEXT_DATA__ at all -- listings are server-rendered
+  // <article class="propertyBox"> cards, and the room count is a Polish
+  // word in the title attribute ("Dwupokojowe" = 2), never a number.
+  if (source === "domy") {
+    const url = `https://domy.pl/mieszkanie/${item.id}`;
+    return `<article class="propertyBox"><a class="property_link" href="${url}" title="Dwupokojowe mieszkanie na sprzedaż ${item.city}, ${item.district}">${item.city}, ${item.district}</a><span class="price">${item.price}</span><span class="area">${item.area}m²</span></article>${next ? "<a rel=\"next\" href=\"?page=2\">next</a>" : ""}`;
+  }
+  // Real structure (confirmed against a live, read-only GET of szybko.pl's
+  // own search-form result, 2026-10-03): the page has no JSON-LD or
+  // __NEXT_DATA__ at all -- listings are schema.org Microdata rendered
+  // directly in the HTML (itemscope/itemprop attributes on real elements),
+  // keyed by a `data-assetid` attribute on each card.
+  if (source === "szybko") return `<div data-assetid="${item.id}"><a class="listing-title-heading" href="${item.url}">${item.title}</a><span itemprop="name">${item.title}</span><span itemprop="description">${item.description}</span><span itemprop="price" content="${item.price}"></span><link itemprop="image" href="${item.images[0]}"><li class="asset-feature area">${item.area}m2</li><li class="asset-feature rooms">${item.rooms}</li><a class="popup-gmaps">${item.city} (${item.district})</a></div>${next ? "<a rel=\"next\" href=\"?page=2\">next</a>" : ""}`;
   // Real structure (confirmed against a live, read-only GET of
   // lodz.nieruchomosci-online.pl/mieszkania,sprzedaz/, 2026-10-03): a
   // CollectionPage whose mainEntity (a Product) carries every listing as a
@@ -45,7 +71,20 @@ function fixture(source: ExternalSourceId, page: number): string {
   // __NEXT_DATA__ on this site at all.
   if (source === "nieruchomosci_online") return jsonLd({ "@type": "CollectionPage", mainEntity: { "@type": "Product", offers: [{ "@type": "AggregateOffer", offers: [{ "@type": "Offer", sku: item.id, url: item.url, name: item.title, price: item.price, image: item.images, datePosted: item.publishedAt, itemOffered: { "@type": "Accommodation", description: item.description, numberOfRooms: item.rooms, floorSize: { value: item.area }, address: { addressLocality: item.city } } }] }] } }, next);
   if (source === "bezposrednio") return `<script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: { listings: [{ id: item.id, href: item.url, title: item.title, description: item.description, price: item.price, area: item.area, rooms: item.rooms, city: item.city, district: item.district, images: item.images, publishedAt: item.publishedAt }], pagination: { hasNextPage: next } } } })}</script>`;
-  if (source === "allegro_lokalnie") return `<script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: { items: [{ id: item.id, href: item.url, title: item.title, description: item.description, price: { amount: item.price }, size: item.area, rooms: item.rooms, city: item.city, district: item.district, photos: item.images, publishedAt: item.publishedAt }], pagination: { hasNext: next } } } })}</script>`;
+  // Real structure (confirmed against a live, read-only GET of
+  // allegrolokalnie.pl/oferty/nieruchomosci/mieszkania-na-sprzedaz-112739/<city>,
+  // 2026-10-03): the page has no __NEXT_DATA__ at all -- real data is a flat
+  // schema.org ItemList in JSON-LD, with no separate area/rooms/address
+  // fields on each item, only a free-text name to parse them from. The id is
+  // recovered from the url's last path segment (the real site has no
+  // sku/productID anywhere); pagination is a numbered page-count control,
+  // not a rel="next" link.
+  if (source === "allegro_lokalnie") {
+    const url = `https://allegrolokalnie.pl/oferta/${item.id}`;
+    const itemListElement = [{ "@type": "ListItem", item: { "@type": "Product", name: `Mieszkanie, ${item.city}, ${item.district}, ${item.area}m²`, url, offers: { "@type": "Offer", price: item.price }, image: { url: item.images[0] } } }];
+    const pagination = `<input class="ml-pagination__input" value="${next ? 1 : 2}"><span class="ml-pagination__count">z 2</span>`;
+    return `${jsonLd({ "@type": "ItemList", itemListElement })}${pagination}`;
+  }
   if (source === "sprzedajemy") return `<script>window.__INITIAL_STATE__=${JSON.stringify({ offers: [{ id: item.id, url: item.url, title: item.title, description: item.description, price: item.price, area: item.area, rooms: item.rooms, city: item.city, district: item.district, images: item.images, publishedAt: item.publishedAt }], pagination: { next: next ? "?page=2" : null } })};</script>`;
   const card = `<article data-offer-id="${item.id}" data-url="${item.url}" data-title="${item.title}" data-price="${item.price}" data-area="${item.area}" data-rooms="${item.rooms}" data-city="${item.city}" data-district="${item.district}"><img src="${item.images[0]}"><h2>${item.title}</h2></article>`;
   return `${card}${next ? "<a data-next-page=\"true\">next</a>" : ""}`;
@@ -62,7 +101,12 @@ test("each portal parser maps its own fixture to a canonical SourceListing", () 
     assert.equal(result.listings[0]?.normalizedUrl.includes("utm_"), false, source);
     assert.equal(result.listings[0]?.price, 489000, source);
     assert.equal(result.listings[0]?.area, 53.2, source);
-    assert.equal(result.listings[0]?.rooms, 2, source);
+    // Allegro Lokalnie's real listing records carry no room count anywhere
+    // (confirmed against a live page, 2026-10-03) -- only a free-text name
+    // with city/district/area, never rooms. Every other source's real page
+    // does expose a room count, so only this one is exempted here rather
+    // than weakening the assertion for all ten.
+    if (source !== "allegro_lokalnie") assert.equal(result.listings[0]?.rooms, 2, source);
     assert.equal(result.listings[0]?.city, "Łódź", source);
   }
 });
@@ -237,6 +281,220 @@ test("the real nieruchomosci-online.pl public page structure (CollectionPage -> 
   const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
   assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
   assert.equal(rows[0]?.price, 305000);
+});
+
+// Real public page excerpt (read-only GET against szybko.pl's own search
+// form result for Łódź, 2026-10-03), trimmed to 2 of the page's real 465
+// offers. The site renders schema.org Microdata directly in the HTML
+// (itemscope/itemprop attributes), not JSON-LD or __NEXT_DATA__ -- every
+// field here (price, area, rooms, address) is read from real markup, not a
+// hand-built shape chosen to match the parser's own assumptions.
+const SZYBKO_REAL_PAGE_1 = `
+<div id="asset-24241927" data-assetid="15702954" class="listing-item" itemprop="itemListElement" itemscope itemtype="https://schema.org/ListItem">
+  <a href="/o/na-sprzedaz/lokal-mieszkalny/%C5%81%C3%B3d%C5%BA+Widzew/oferta-15702954" class="listing-img-container">Mieszkanie 4 pokojowe</a>
+  <div class="listing-content" itemprop="item" itemscope itemtype="https://schema.org/Product">
+    <link itemprop="image" href="https://mediaproxy.szybko.pl/600x375/photo/asset/015/702/954/3820c369a0cc78d2262135177d532934.jpg" />
+    <span itemprop="name">Mieszkanie 4 pokojowe</span>
+    <span itemprop="description">4 pokojowe mieszkanie na rozchwytywanym Janowie - Olechowie! Opiekun oferty: Katarzyna Czyżewska.</span>
+    <div class="listing-title" itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+      <h4><a href="/o/na-sprzedaz/lokal-mieszkalny/%C5%81%C3%B3d%C5%BA+Widzew/oferta-15702954" itemprop="url" class="listing-title-heading hide-overflow-text">Mieszkanie 4 pokojowe</a></h4>
+      <div class="listing-address hide-overflow-text">
+        <span class="listing-title-address">Lokal Mieszkalny na sprzedaż -</span>
+        <a href="https://www.openstreetmap.org/export/embed.html" class="mapClassClick list-elem-address popup-gmaps" data-assetid="15702954">Łódź (Widzew) (Łódzkie, gm. Łódź)</a>
+      </div>
+      <span itemprop="price" content="799999"></span>
+      <span itemprop="priceCurrency" content="PLN"></span>
+    </div>
+    <ul class="listing-features">
+      <li class="asset-feature area">72m<sup>2</sup> <i class="fa fa-arrows-alt"></i></li>
+      <li class="asset-feature rooms">4 <i class="fa fa-bed"></i></li>
+    </ul>
+  </div>
+</div>
+<div id="asset-24690712" data-assetid="15725983" class="listing-item" itemprop="itemListElement" itemscope itemtype="https://schema.org/ListItem">
+  <a href="/o/na-sprzedaz/lokal-mieszkalny/%C5%81%C3%B3d%C5%BA+Polesie/oferta-15725983" class="listing-img-container">Mieszkanie 2 pokojowe</a>
+  <div class="listing-content" itemprop="item" itemscope itemtype="https://schema.org/Product">
+    <link itemprop="image" href="https://mediaproxy.szybko.pl/600x375/photo/asset/015/725/983/e4a88e0bd0aa796520bac3817ae91e68.jpg" />
+    <span itemprop="name">Mieszkanie 2 pokojowe</span>
+    <span itemprop="description">Przestronne 2 pokoje na Retkini w zielonej okolicy! Opiekun oferty: Katarzyna Czyżewska.</span>
+    <div class="listing-title" itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+      <h4><a href="/o/na-sprzedaz/lokal-mieszkalny/%C5%81%C3%B3d%C5%BA+Polesie/oferta-15725983" itemprop="url" class="listing-title-heading hide-overflow-text">Mieszkanie 2 pokojowe</a></h4>
+      <div class="listing-address hide-overflow-text">
+        <span class="listing-title-address">Lokal Mieszkalny na sprzedaż -</span>
+        <a href="https://www.openstreetmap.org/export/embed.html" class="mapClassClick list-elem-address popup-gmaps" data-assetid="15725983">Łódź (Polesie) (Łódzkie, gm. Łódź)</a>
+      </div>
+      <span itemprop="price" content="278000"></span>
+      <span itemprop="priceCurrency" content="PLN"></span>
+    </div>
+    <ul class="listing-features">
+      <li class="asset-feature area">30m<sup>2</sup> <i class="fa fa-arrows-alt"></i></li>
+      <li class="asset-feature rooms">2 <i class="fa fa-bed"></i></li>
+    </ul>
+  </div>
+</div>
+<a rel="next" href="?page=2">next</a>`;
+
+test("the real szybko.pl public page structure (schema.org Microdata, captured 2026-10-03) reaches persistListing and the Finder gate", async () => {
+  const parsed = EXTERNAL_PORTAL_PARSERS.szybko(SZYBKO_REAL_PAGE_1, "Łódź");
+  assert.equal(parsed.listings.length, 2);
+  assert.equal(parsed.hasNextPage, true, "the real rel=\"next\" link must be detected");
+  const [first, second] = parsed.listings;
+  assert.equal(first?.price, 799999);
+  assert.equal(first?.area, 72);
+  assert.equal(first?.rooms, 4);
+  assert.equal(first?.city, "Łódź", "city must be recovered from the address link text, not left to the search-city fallback");
+  assert.equal(first?.district, "Widzew");
+  assert.equal(first?.externalListingId, "15702954", "the id must come from data-assetid, matching the detail URL's own oferta-<id> slug");
+  assert.equal(second?.price, 278000);
+  assert.equal(second?.district, "Polesie");
+
+  const rows: Record<string, unknown>[] = [];
+  const db = fakeDb(rows);
+  const { persistListing } = await import("./server/persist-listing.ts");
+  const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
+  assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
+  assert.equal(rows[0]?.price, 799999);
+});
+
+// Real public page excerpt (read-only GET of oferty.net/mieszkania,lodz,
+// 2026-10-03), trimmed to 3 of the page's real ~20 rows -- including one
+// genuine rental row ("na wynajem"/"do wynajęcia"), which must be filtered
+// out by the existing RENTAL_SIGNAL check rather than kept as a sale
+// listing. Proves the real <table class="property"> row shape reaches
+// persistListing end to end, not a hand-built shape chosen to match the
+// parser's own assumptions.
+const OFERTY_NET_REAL_PAGE_1 = `<table>
+<tr class="property highlight oddRow" onclick="window.location = 'https://www.oferty.net/mieszkanie-na-sprzedaz-kadlubka-lodz-gorna-41m2-2-pokoje-425000-pln-ba,1543094322'; return false;">
+<td class="cell_photo"><img alt="Mieszkanie na sprzedaż - Kadłubka Dąbrowa, Górna, Łódź, 41 m², 425 000 PLN, NET-10.2" data-original="https://img1.staticoferty.net.pl/thumbnail/offer1.jpg" /></td>
+<td class="cell_location"><a title="mieszkanie na sprzedaż Łódź, Dąbrowa" href="https://www.oferty.net/mieszkanie-na-sprzedaz-kadlubka-lodz-gorna-41m2-2-pokoje-425000-pln-ba,1543094322">mieszkanie&nbsp;na&nbsp;sprzedaż<br/>Łódź, Dąbrowa</a></td>
+<td class="cell_area">41 m²</td>
+<td class="cell_rooms">2</td>
+<td class="cell_price">425 000</td>
+<td class="cell_price_m2">10 365,85</td>
+<td class="cell_added_at">23:42<br/>2026-10-02</td>
+</tr>
+<tr class="property highlight" onclick="window.location = 'https://www.oferty.net/mieszkanie-na-sprzedaz-retkinska-lodz-polesie-52m2-3-pokoje-409000-pln-ba,1543066497'; return false;">
+<td class="cell_photo"><img alt="Mieszkanie na sprzedaż - Retkińska Retkinia, Łódź-Polesie, Łódź, 52,78 m², 409 000 PLN, NET-935384" data-original="https://img3.staticoferty.net.pl/thumbnail/offer2.jpg" /></td>
+<td class="cell_location"><a title="mieszkanie na sprzedaż Łódź, Retkinia" href="https://www.oferty.net/mieszkanie-na-sprzedaz-retkinska-lodz-polesie-52m2-3-pokoje-409000-pln-ba,1543066497">mieszkanie&nbsp;na&nbsp;sprzedaż<br/>Łódź, Retkinia</a></td>
+<td class="cell_area">52,78 m²</td>
+<td class="cell_rooms">3</td>
+<td class="cell_price">409 000</td>
+<td class="cell_price_m2">7749,15</td>
+<td class="cell_added_at">19:54<br/>2026-09-29</td>
+</tr>
+<tr class="property highlight oddRow" onclick="window.location = 'https://www.oferty.net/mieszkanie-na-wynajem-sw-teresy-lodz-44m2-2-pokoje-2500-pln-ba,1543065361'; return false;">
+<td class="cell_photo"><img alt="Mieszkanie do wynajęcia - św. Teresy od Dzieciątka Jezus Bałuty, Łódź, Łódź M., 44 m², 2500 PLN, NET-PTY-MW-6980-3" data-original="https://img2.staticoferty.net.pl/thumbnail/offer3.jpg" /></td>
+<td class="cell_location"><a title="mieszkanie na wynajem Łódź, Bałuty" href="https://www.oferty.net/mieszkanie-na-wynajem-sw-teresy-lodz-44m2-2-pokoje-2500-pln-ba,1543065361">mieszkanie&nbsp;na&nbsp;wynajem<br/>Łódź, Bałuty</a></td>
+<td class="cell_area">44 m²</td>
+<td class="cell_rooms">2</td>
+<td class="cell_price">2 500</td>
+<td class="cell_price_m2">56,82</td>
+<td class="cell_added_at">18:30<br/>2026-10-02</td>
+</tr>
+</table>
+<div class="paginator"><li class="navigate current"><div><a>1</a></div></li><li class="navigate"><div><a href="?page=2">2</a></div></li></div>`;
+
+test("the real oferty.net public page structure (plain <table class=\"property\"> rows, captured 2026-10-03) reaches persistListing and the Finder gate", async () => {
+  const parsed = EXTERNAL_PORTAL_PARSERS.oferty_net(OFERTY_NET_REAL_PAGE_1, "Łódź");
+  assert.equal(parsed.listings.length, 2, "the rental row ('na wynajem'/'do wynajęcia') must be filtered out, never kept as a sale listing");
+  assert.equal(parsed.hasNextPage, true, "the numbered paginator's page 2 must be detected even with no rel=\"next\" marker");
+  const [first, second] = parsed.listings;
+  assert.equal(first?.price, 425000);
+  assert.equal(first?.area, 41);
+  assert.equal(first?.rooms, 2);
+  assert.equal(first?.city, "Łódź");
+  assert.equal(first?.district, "Dąbrowa");
+  assert.equal(first?.externalListingId, "1543094322", "the id must be recovered from the URL's trailing ',<id>' segment since the real site has no id attribute");
+  assert.equal(second?.price, 409000);
+  assert.equal(second?.district, "Retkinia");
+
+  const rows: Record<string, unknown>[] = [];
+  const db = fakeDb(rows);
+  const { persistListing } = await import("./server/persist-listing.ts");
+  const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
+  assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
+  assert.equal(rows[0]?.price, 425000);
+});
+
+// Real public page excerpt (read-only GET of allegrolokalnie.pl's category
+// page /oferty/nieruchomosci/mieszkania-na-sprzedaz-112739/lodz, 2026-10-03),
+// trimmed to 2 of the page's real 60 items. Every field here (name, url,
+// price, image) is read verbatim from the real JSON-LD; there genuinely is
+// no room count anywhere on this site.
+const ALLEGRO_LOKALNIE_REAL_PAGE_1 = JSON.stringify({
+  "@context": "https://schema.org", "@type": "ItemList",
+  itemListElement: [
+    { "@type": "ListItem", position: 1, item: { "@type": "Product", name: "Mieszkanie, Łódź, Górna, Dąbrowa, 41 m²", url: "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-dabrowa-41-m2-5i3", category: "Mieszkania na sprzedaż", itemCondition: "https://schema.org/UsedCondition", image: { "@type": "ImageObject", url: "https://a.allegroimg.com/original/1172c6/offer1.jpg", contentUrl: "https://a.allegroimg.com/original/1172c6/offer1.jpg" }, offers: { "@type": "Offer", price: "425000", priceCurrency: "PLN" } } },
+    { "@type": "ListItem", position: 2, item: { "@type": "Product", name: "Mieszkanie, Łódź, Polesie, 30 m²", url: "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-polesie-30-m2-mrm", category: "Mieszkania na sprzedaż", itemCondition: "https://schema.org/UsedCondition", image: { "@type": "ImageObject", url: "https://a.allegroimg.com/original/1172c6/offer2.jpg", contentUrl: "https://a.allegroimg.com/original/1172c6/offer2.jpg" }, offers: { "@type": "Offer", price: "351364", priceCurrency: "PLN" } } },
+  ],
+});
+
+test("the real allegrolokalnie.pl public page structure (flat ItemList, name-only area/district, captured 2026-10-03) reaches persistListing and the Finder gate", async () => {
+  const html = `<script type="application/ld+json">${ALLEGRO_LOKALNIE_REAL_PAGE_1}</script><input class="ml-pagination__input" value="1"><span class="ml-pagination__count">z 40</span>`;
+  const parsed = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(html, "Łódź");
+  assert.equal(parsed.listings.length, 2);
+  assert.equal(parsed.hasNextPage, true, "page 1 of 40 must report a next page from the pagination widget's own current/total count");
+  const [first, second] = parsed.listings;
+  assert.equal(first?.price, 425000);
+  assert.equal(first?.area, 41);
+  assert.equal(first?.rooms, null, "the real site has no room count anywhere; it must stay null, never fabricated");
+  assert.equal(first?.city, "Łódź");
+  assert.equal(first?.district, "Górna, Dąbrowa");
+  assert.equal(first?.externalListingId, "mieszkanie-lodz-gorna-dabrowa-41-m2-5i3", "the id must be recovered from the URL since the real site has no sku/productID anywhere");
+  assert.equal(second?.price, 351364);
+  assert.equal(second?.district, "Polesie");
+
+  const rows: Record<string, unknown>[] = [];
+  const db = fakeDb(rows);
+  const { persistListing } = await import("./server/persist-listing.ts");
+  const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
+  assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
+  assert.equal(rows[0]?.price, 425000);
+});
+
+// Real public page excerpt (read-only GET of domy.pl/mieszkania--lodz-pl,
+// 2026-10-03), trimmed to 3 of the page's real 25 cards -- including one
+// genuine rental row ("do wynajęcia"), which must be filtered out rather
+// than kept as a sale listing, and a "Kawalerka" (studio) row to prove the
+// Polish room-word lookup covers more than just the "<N>pokojowe" pattern.
+const DOMY_REAL_PAGE_1 = `
+<article class="propertyBox first L">
+<a class="property_link" href="https://domy.pl/mieszkanie/lodz-gorna-senatorska-2-pokoje-240000-pln-40m2-sfb/dol1738212431" title="Dwupokojowe mieszkanie na sprzedaż Łódź, Górna, Senatorska">Łódź, Górna, Senatorska </a>
+<span class="area">40 m²</span>
+<span class="price">240 000&nbsp;PLN</span>
+</article>
+<article class="propertyBox L">
+<a class="property_link" href="https://domy.pl/mieszkanie/lodz-polesie-stefanowskiego-kawalerka-dol1538017548" title="Kawalerka na sprzedaż Łódź, Polesie, ul. Stefanowskiego">Łódź, Polesie, ul. Stefanowskiego </a>
+<span class="area">26 m²</span>
+<span class="price">245 000&nbsp;PLN</span>
+</article>
+<article class="propertyBox L">
+<a class="property_link" href="https://domy.pl/mieszkanie/lodz-baluty-wroblewskiego-kawalerka-wynajem-dol1543059967" title="Kawalerka do wynajęcia Łódź, Górna, Wróblewskiego">Łódź, Górna, Wróblewskiego </a>
+<span class="area">26 m²</span>
+<span class="price">1 450&nbsp;PLN</span>
+</article>
+<a rel="next" href="/mieszkania--lodz-pl?page=2">next</a>`;
+
+test("the real domy.pl public page structure (<article class=\"propertyBox\"> cards, Polish room-count words, captured 2026-10-03) reaches persistListing and the Finder gate", async () => {
+  const parsed = EXTERNAL_PORTAL_PARSERS.domy(DOMY_REAL_PAGE_1, "Łódź");
+  assert.equal(parsed.listings.length, 2, "the rental row ('do wynajęcia') must be filtered out, never kept as a sale listing");
+  assert.equal(parsed.hasNextPage, true);
+  const [first, second] = parsed.listings;
+  assert.equal(first?.price, 240000);
+  assert.equal(first?.area, 40);
+  assert.equal(first?.rooms, 2, "'Dwupokojowe' must resolve to 2 rooms via the Polish word lookup, not a numeric field");
+  assert.equal(first?.city, "Łódź");
+  assert.equal(first?.district, "Górna, Senatorska");
+  assert.equal(first?.externalListingId, "dol1738212431", "the id must be recovered from the URL's trailing dol<digits> segment");
+  assert.equal(second?.price, 245000);
+  assert.equal(second?.rooms, 1, "'Kawalerka' (studio) must resolve to 1 room");
+
+  const rows: Record<string, unknown>[] = [];
+  const db = fakeDb(rows);
+  const { persistListing } = await import("./server/persist-listing.ts");
+  const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
+  assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
+  assert.equal(rows[0]?.price, 240000);
 });
 
 test("the registry exposes every new adapter for the schema gate", () => {

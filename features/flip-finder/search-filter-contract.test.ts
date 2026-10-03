@@ -27,15 +27,14 @@ test("the other sources keep their plain source-name labels — only Facebook ne
   assert.equal(labels.morizon, "Morizon");
 });
 
-test("Szybko is labeled as requiring live source verification, not a migration", () => {
+test("Szybko has a plain source-name label now that its real city-scoped URL and Microdata parser are verified", () => {
   const schnell = SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === "szybko");
-  assert.equal(schnell?.label, "Szybko.pl — wymaga weryfikacji źródła");
-  assert.doesNotMatch(schnell?.label ?? "", /migracj/i);
+  assert.equal(schnell?.label, "Szybko.pl");
 });
 
 test("legacy unavailable source options are disabled while active sources remain selectable", () => {
-  const unavailable = ["oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"];
-  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "gratka", "nieruchomosci_online"];
+  const unavailable = ["bezposrednio", "official_cooperative", "official_uml", "official_auction"];
+  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "gratka", "nieruchomosci_online", "oferty_net", "szybko", "domy", "allegro_lokalnie"];
   for (const source of unavailable) {
     assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === source)?.disabled, true, `${source} must be disabled`);
   }

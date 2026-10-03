@@ -73,9 +73,11 @@ test("the migration is schema-only and the runtime gate lists only locally compl
   const gateEnd = availability.indexOf("] as const", gateStart);
   assert.ok(gateStart >= 0 && gateEnd > gateStart, "missing schema-ready source gate");
   assert.doesNotMatch(availability.slice(gateStart, gateEnd), /official_uml/);
-  assert.doesNotMatch(availability.slice(gateStart, gateEnd), /"szybko"/);
+  assert.doesNotMatch(availability.slice(gateStart, gateEnd), /"bezposrednio"/);
   const registry = fs.readFileSync(path.join(root, "features/flip-finder/server/search-source-registry.ts"), "utf8");
-  assert.match(registry, /szybko:\s*"path_requires_live_source_verification"/);
+  assert.match(registry, /bezposrednio:\s*"access_limited_without_authentication"/);
+  assert.match(registry, /szybko:\s*"public_html_adapter"/);
+  assert.match(registry, /oferty_net:\s*"public_html_adapter"/);
   for (const source of REGISTERED_EXTERNAL_SOURCES) {
     assert.match(migration, new RegExp(`['"]${source}['"]`));
   }

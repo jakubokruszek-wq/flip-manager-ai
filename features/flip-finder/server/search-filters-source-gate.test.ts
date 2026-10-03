@@ -19,8 +19,8 @@ test("a legacy unavailable source never reaches the active-filter worker query",
   assert.equal(clientCalls, 0);
 });
 
-test("Szybko stays blocked by the same runtime gate", async () => {
+test("Bezposrednio stays blocked by the same runtime gate", async () => {
   clientCalls = 0;
-  assert.deepEqual(await getActiveSearchFiltersForSource("szybko"), []);
+  assert.deepEqual(await getActiveSearchFiltersForSource("bezposrednio"), []);
   assert.equal(clientCalls, 0);
 });
