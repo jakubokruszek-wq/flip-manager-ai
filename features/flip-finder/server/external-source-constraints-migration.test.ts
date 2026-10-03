@@ -58,6 +58,24 @@ test("the prepared migration preserves the exact existing source values and adds
   }
 });
 
+test("the migration adds exactly the three canonical official sources to every current constraint", () => {
+  const currentDefinitions = new Map([
+    ["listings_source_check", sourceValuesAfter(fs.readFileSync(morizonMigrationPath, "utf8"), "add constraint listings_source_check")],
+    ["source_scans_source_check", sourceValuesAfter(fs.readFileSync(morizonMigrationPath, "utf8"), "add constraint source_scans_source_check")],
+    ["resale_comps_source_check", sourceValuesAfter(fs.readFileSync(resaleCompsMigrationPath, "utf8"), "source text not null check", "),")],
+  ]);
+  const expectedOfficialSources = new Set(REGISTERED_OFFICIAL_SOURCES);
+
+  for (const [constraint, current] of currentDefinitions) {
+    const migrated = addedConstraintValues(constraint);
+    const officialSources = new Set([...migrated].filter((source) => source.startsWith("official_")));
+    assert.deepEqual(officialSources, expectedOfficialSources, `${constraint} must contain exactly the canonical official source IDs`);
+    for (const source of current) {
+      assert.ok(migrated.has(source), `${constraint} must preserve existing source ${source}`);
+    }
+  }
+});
+
 function expectedWithoutExternalSources(): Set<string> {
   return new Set(EXISTING_SOURCES);
 }
