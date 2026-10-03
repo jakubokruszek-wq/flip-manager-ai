@@ -35,11 +35,24 @@ type Row = Record<string, unknown>;
  * controlled reproduction of the race window, not a sequential test
  * dressed up as concurrent -- natural microtask ordering is not a reliable
  * way to prove or disprove a TOCTOU race.
+ *
+ * `rpcMode` controls how the fake's .rpc("reserve_source_scans", ...) call
+ * behaves, mirroring the two real-world states the draft migration
+ * (20261004020000_add_manual_scan_reservation_lock.sql, NOT applied) can be
+ * in: "missing" (default) simulates today's actual, unmigrated production --
+ * PostgREST's real error for an undefined function -- so every existing test
+ * below keeps exercising the exact same fallback path as before, unchanged.
+ * "atomic" simulates the function once that migration IS applied: a mutex
+ * chain stands in for Postgres's SELECT ... FOR UPDATE row lock, so
+ * concurrent callers are strictly serialized (one fully completes its
+ * check+insert before the next one's check can run) instead of merely being
+ * delayed -- a real guarantee, not a smaller race window.
  */
-function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number } = {}) {
+function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; rpcMode?: "missing" | "atomic" } = {}) {
   const sourceScans: Row[] = seedSourceScans.map((row) => ({ ...row }));
   let idSeq = 1;
   let waitingForRace: Array<() => void> = [];
+  let rpcLockQueue: Promise<void> = Promise.resolve();
 
   function matches(row: Row, filters: Array<{ op: "eq" | "in" | "lt"; column: string; value: unknown }>): boolean {
     return filters.every(({ op, column, value }) => {
@@ -111,6 +124,38 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number 
     return builder;
   }
 
+  async function reserveSourceScansRpc(args: Record<string, unknown>) {
+    const sources = Array.isArray(args.p_sources) ? (args.p_sources as string[]) : [];
+    const filterId = args.p_search_filter_id as string;
+    const runId = args.p_scan_run_id as string;
+    const snapshot = args.p_filter_snapshot;
+    if (options.rpcMode !== "atomic") {
+      return { data: null, error: { code: "PGRST202", message: `Could not find the function public.reserve_source_scans in the schema cache` } };
+    }
+    // Stands in for Postgres's SELECT ... FOR UPDATE: whoever is already
+    // queued here holds the "lock" until its own check+insert is done, so
+    // the next caller's check always sees the previous caller's committed
+    // insert -- real serialization, not a narrowed race window.
+    const prior = rpcLockQueue;
+    let release = () => {};
+    rpcLockQueue = new Promise((resolve) => { release = resolve; });
+    await prior;
+    try {
+      const existing = sourceScans.filter((row) => row.search_filter_id === filterId && sources.includes(row.source as string) && (row.status === "pending" || row.status === "running"));
+      if (existing.length > 0) {
+        return { data: null, error: { code: "P0001", message: "SCAN_ALREADY_RUNNING" } };
+      }
+      const inserted = sources.map((source) => {
+        const row: Row = { id: `scan-${idSeq++}`, search_filter_id: filterId, source, status: "pending", scan_run_id: runId, filter_snapshot: snapshot, started_at: new Date().toISOString() };
+        sourceScans.push(row);
+        return row;
+      });
+      return { data: inserted, error: null };
+    } finally {
+      release();
+    }
+  }
+
   const touchedTables: string[] = [];
   const client = {
     from(table: string) {
@@ -120,6 +165,10 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number 
         return { update: () => ({ eq: () => ({ abortSignal: async () => ({ error: null }) }) }) };
       }
       throw new Error(`fakeAdmin: unexpected table "${table}"`);
+    },
+    async rpc(fnName: string, args: Record<string, unknown>) {
+      if (fnName !== "reserve_source_scans") throw new Error(`fakeAdmin: unexpected rpc "${fnName}"`);
+      return reserveSourceScansRpc(args);
     },
   };
   return { client, sourceScans, touchedTables };
@@ -207,7 +256,7 @@ test("background start reserves the Finder row and a second start is rejected be
 });
 
 // Issue 1 from the scan-lifecycle review: startManualOtodomScan's reservation
-// is a plain SELECT-then-INSERT with no database-level mutual exclusion.
+// was a plain SELECT-then-INSERT with no database-level mutual exclusion.
 // Confirmed via supabase/migrations: source_scans has no unique constraint on
 // (search_filter_id, source) at all, scoped or not -- the table's own
 // creation migration (20260719113000) defines only a plain primary key on
@@ -216,28 +265,43 @@ test("background start reserves the Finder row and a second start is rejected be
 // exists purely because that migration added a dedicated unique column plus
 // a security-definer RPC wrapping an UPDATE...RETURNING. No equivalent
 // exists, or can be synthesized from the existing schema/RPCs, for
-// source_scans. A JS-level mutex here would not help either: it only
-// protects a single process/instance, while this guarantee must hold across
+// source_scans, and no generic SQL-execution RPC exists to reach e.g.
+// pg_advisory_lock without one either. A JS-level mutex would not help: it
+// only protects a single process, while this guarantee must hold across
 // separate requests/instances (separate Vercel invocations, separate
 // Postgres connections) -- exactly what this barrier-forced race simulates.
-// This is marked `todo` rather than deleted or silently left red: it proves
-// the gap, stays visible, and becomes the regression test for whichever
-// migration closes it (a partial unique index on
-// source_scans(search_filter_id, source) WHERE status IN
-// ('pending','running'), or a claim_olx_scan_job-style atomic RPC).
-test(
-  "two concurrent background-scan starts for the exact same filter+source must not both win the reservation",
-  { todo: "Requires a migration (partial unique index on source_scans(search_filter_id, source) WHERE status IN ('pending','running'), or an atomic claim RPC like claim_olx_scan_job) -- not addable here; see the comment above this test." },
-  async () => {
-    current = fakeAdmin([], { raceBarrier: 2 });
-    const [a, b] = await Promise.allSettled([startManualOtodomScan(mixedFilter.id), startManualOtodomScan(mixedFilter.id)]);
-    const succeeded = [a, b].filter((result) => result.status === "fulfilled");
-    const rejected = [a, b].filter((result) => result.status === "rejected");
-    assert.equal(succeeded.length, 1, "exactly one concurrent start must win the reservation for the same filter+source");
-    assert.equal(rejected.length, 1, "the other concurrent start must be rejected, never silently also reserve the same source");
-    assert.equal(current.sourceScans.filter((row) => row.source === "otodom" && row.search_filter_id === mixedFilter.id).length, 1, "only one otodom source_scans row may exist for this filter after the race");
-  },
-);
+//
+// reserve_source_scans (supabase/migrations/20261004020000_add_manual_scan_
+// reservation_lock.sql) closes this with a SELECT ... FOR UPDATE lock on the
+// parent search_filters row, mirroring enqueue_facebook_gallery_job's proven
+// pattern. It is a DRAFT, NOT applied by this change (no migrations were run
+// or executed) -- manual-scan.ts's reserveSourceScans() only ever calls it
+// optimistically and falls back to the pre-existing, unchanged check-then-
+// insert the moment Postgres reports the function missing, so today's actual
+// (unmigrated) production behavior is completely unaffected by this change.
+// The two tests below therefore each prove one half of the honest picture,
+// and neither is a `todo`: the first documents that the race genuinely still
+// exists today, as-is, until a human reviews and applies that migration; the
+// second proves the drafted mechanism itself is correct and ready the moment
+// it is.
+test("without the reservation migration applied, two concurrent background-scan starts for the same filter+source still both win -- the exact gap reserve_source_scans closes once applied", async () => {
+  current = fakeAdmin([], { raceBarrier: 2, rpcMode: "missing" });
+  const [a, b] = await Promise.allSettled([startManualOtodomScan(mixedFilter.id), startManualOtodomScan(mixedFilter.id)]);
+  const succeeded = [a, b].filter((result) => result.status === "fulfilled");
+  assert.equal(succeeded.length, 2, "documents today's actual, unmigrated behavior -- both concurrent starts currently win, which is exactly the gap the draft migration above closes");
+  assert.equal(current.sourceScans.filter((row) => row.source === "otodom" && row.search_filter_id === mixedFilter.id).length, 2, "two otodom source_scans rows currently end up active for the same filter after the race");
+});
+
+test("once reserve_source_scans exists (migration applied), two truly concurrent background-scan starts for the same filter+source serialize correctly: exactly one wins", async () => {
+  current = fakeAdmin([], { rpcMode: "atomic" });
+  const [a, b] = await Promise.allSettled([startManualOtodomScan(mixedFilter.id), startManualOtodomScan(mixedFilter.id)]);
+  const succeeded = [a, b].filter((result) => result.status === "fulfilled");
+  const rejected = [a, b].filter((result) => result.status === "rejected");
+  assert.equal(succeeded.length, 1, "exactly one concurrent start must win the reservation for the same filter+source");
+  assert.equal(rejected.length, 1, "the other concurrent start must be rejected, never silently also reserve the same source");
+  assert.match(String((rejected[0] as PromiseRejectedResult)?.reason?.message), /Skan tego filtra już trwa/);
+  assert.equal(current.sourceScans.filter((row) => row.source === "otodom" && row.search_filter_id === mixedFilter.id).length, 1, "only one otodom source_scans row may exist for this filter after the race");
+});
 
 test("prepared background rows become running and finalize through the real scan runner", async () => {
   current = fakeAdmin();

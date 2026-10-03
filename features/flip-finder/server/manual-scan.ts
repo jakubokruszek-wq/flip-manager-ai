@@ -78,13 +78,55 @@ export async function startManualOtodomScan(filterId: string): Promise<ManualSca
   if (lockableSourceIds.length) {
     const supabase = createAdminClient();
     await failStaleScans(supabase, filterId, lockableSourceIds);
-    const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", lockableSourceIds).in("status", [...RECOVERABLE_SCAN_STATUSES]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
-    if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
-    if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
-    const { error: reserveError } = await supabase.from("source_scans").insert(lockableSourceIds.map((source) => ({ search_filter_id: filterId, source, status: "pending", scan_run_id: runId, filter_snapshot: filter }))).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
-    if (reserveError) throw statusError(500, "Nie udało się zarezerwować skanu.");
+    await reserveSourceScans(supabase, filterId, lockableSourceIds, runId, filter);
   }
   return { runId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
+}
+
+/**
+ * Issue 1 from the scan-lifecycle review: a plain SELECT-then-INSERT has no
+ * database-level mutual exclusion, so two concurrent requests for the same
+ * filter can both pass the "already running" check before either commits,
+ * reserving two active source_scans rows for the same filter+source pair.
+ * reserve_source_scans (supabase/migrations/20261004020000_add_manual_scan_
+ * reservation_lock.sql -- a DRAFT, NOT applied) closes this by locking the
+ * parent search_filters row with SELECT ... FOR UPDATE, so a second
+ * concurrent call blocks until the first transaction commits and then
+ * correctly observes it. Until a human applies that migration the function
+ * does not exist in the real database, so this must never assume it is
+ * live -- calling a function Postgres does not have would break every scan
+ * start in production. The fallback below is the exact pre-existing
+ * behavior, unchanged, so today's deploys are unaffected either way; once
+ * the migration is applied, the very next call here starts getting the real
+ * guarantee with no further code change.
+ */
+async function reserveSourceScans(supabase: SupabaseClient, filterId: string, lockableSourceIds: string[], runId: string, filter: LoadedFilter): Promise<void> {
+  const { error: rpcError } = await supabase.rpc("reserve_source_scans", {
+    p_search_filter_id: filterId,
+    p_sources: lockableSourceIds,
+    p_scan_run_id: runId,
+    p_filter_snapshot: filter,
+  });
+  if (!rpcError) return;
+  if (!isMissingReservationFunction(rpcError)) {
+    if (isScanAlreadyRunningError(rpcError)) throw statusError(429, "Skan tego filtra już trwa.");
+    throw statusError(500, "Nie udało się zarezerwować skanu.");
+  }
+  const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", lockableSourceIds).in("status", [...RECOVERABLE_SCAN_STATUSES]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  if (runningError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
+  if (running?.length) throw statusError(429, "Skan tego filtra już trwa.");
+  const { error: reserveError } = await supabase.from("source_scans").insert(lockableSourceIds.map((source) => ({ search_filter_id: filterId, source, status: "pending", scan_run_id: runId, filter_snapshot: filter }))).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  if (reserveError) throw statusError(500, "Nie udało się zarezerwować skanu.");
+}
+
+function isMissingReservationFunction(error: { code?: unknown; message?: unknown }): boolean {
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return code === "42883" || code === "PGRST202" || /schema cache|does not exist/i.test(message);
+}
+
+function isScanAlreadyRunningError(error: { message?: unknown }): boolean {
+  return typeof error.message === "string" && /SCAN_ALREADY_RUNNING/.test(error.message);
 }
 
 export async function runManualOtodomScan(filterId: string, options: ManualScanOptions = {}): Promise<ScanSummary> {
