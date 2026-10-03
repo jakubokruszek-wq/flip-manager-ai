@@ -68,7 +68,7 @@ test("the migration is schema-only and the runtime gate lists only locally compl
   assert.doesNotMatch(migration, /\bdrop\s+(?:table|column)\b/i);
 
   const availability = fs.readFileSync(availabilityPath, "utf8");
-  assert.match(availability, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[[\s\S]*"otodom"[\s\S]*"olx"[\s\S]*"morizon"[\s\S]*"domiporta"[\s\S]*"sprzedajemy"[\s\S]*"adresowo"[\s\S]*"domy"[\s\S]*"allegro_lokalnie"[\s\S]*\]/);
+  assert.match(availability, /SCHEMA_READY_SOURCE_IDS\s*=\s*\[[\s\S]*"otodom"[\s\S]*"olx"[\s\S]*"morizon"[\s\S]*"domiporta"[\s\S]*"sprzedajemy"[\s\S]*"adresowo"[\s\S]*\]/);
   const gateStart = availability.indexOf("SCHEMA_READY_SOURCE_IDS");
   const gateEnd = availability.indexOf("] as const", gateStart);
   assert.ok(gateStart >= 0 && gateEnd > gateStart, "missing schema-ready source gate");

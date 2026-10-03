@@ -100,6 +100,10 @@ function parseNieruchomosciOnline(html: string, fallbackCity: string): ExternalP
 }
 
 function parseDomiporta(html: string, fallbackCity: string): ExternalPortalPage {
+  const jsonCandidates = jsonLdItemListCandidates(html)
+    .filter((record) => hasType(record, "Product", "RealEstateListing", "Residence", "Apartment"))
+    .map(fromDomiportaRecord);
+  if (jsonCandidates.length) return fromCandidates("domiporta", jsonCandidates, fallbackCity, hasNextMarker(html));
   const $ = load(html); const candidates: PortalCandidate[] = [];
   $("article[data-offer-id], [data-listing-id], [data-testid='listing-card']").each((_, element) => { const card = $(element); const image = card.find("img").first().attr("src") ?? card.find("img").first().attr("data-src"); candidates.push({ id: card.attr("data-offer-id") ?? card.attr("data-listing-id"), url: card.attr("data-url") ?? card.find("a[href]").first().attr("href"), title: card.attr("data-title") ?? card.find("h2,h3,[data-title]").first().text(), price: card.attr("data-price") ?? card.find("[data-price],.price").first().text(), area: card.attr("data-area") ?? card.find("[data-area],.area").first().text(), rooms: card.attr("data-rooms") ?? card.find("[data-rooms],.rooms").first().text(), city: card.attr("data-city") ?? fallbackCity, district: card.attr("data-district"), images: image ? [image] : [] }); });
   return fromCandidates("domiporta", candidates, fallbackCity, Boolean($("a[rel='next'], [data-next-page='true']").length));
@@ -107,11 +111,35 @@ function parseDomiporta(html: string, fallbackCity: string): ExternalPortalPage 
 
 function parseSprzedajemy(html: string, fallbackCity: string): ExternalPortalPage {
   const state = namedJson(html, "__INITIAL_STATE__"); const rows = arrayAt(state, ["offers"]) ?? arrayAt(state, ["search", "offers"]) ?? [];
-  const candidates = rows.filter(isRecord).map((row) => ({ id: row.id ?? row.offerId, url: row.url ?? row.link, title: row.title ?? row.name, description: row.description, price: row.price, area: row.area ?? row.m2, rooms: row.rooms, city: row.city, district: row.district, images: row.images ?? row.photos, publishedAt: row.createdAt ?? row.publishedAt }));
-  return fromCandidates("sprzedajemy", candidates, fallbackCity, Boolean(atPath(state, ["pagination", "next"])));
+  const stateCandidates = rows.filter(isRecord).map((row) => ({ id: row.id ?? row.offerId, url: row.url ?? row.link, title: row.title ?? row.name, description: row.description, price: row.price, area: row.area ?? row.m2, rooms: row.rooms, city: row.city, district: row.district, images: row.images ?? row.photos, publishedAt: row.createdAt ?? row.publishedAt }));
+  const jsonCandidates = jsonLdItemListCandidates(html)
+    .filter((record) => hasType(record, "Offer", "Product", "Residence", "Apartment") || Array.isArray(record["@type"]))
+    .map((record) => fromSprzedajemyRecord(record));
+  return fromCandidates("sprzedajemy", [...stateCandidates, ...jsonCandidates], fallbackCity, Boolean(atPath(state, ["pagination", "next"])) || hasNextMarker(html));
 }
 
 function parseAdresowo(html: string, fallbackCity: string): ExternalPortalPage {
+  const $ = load(html); const cardCandidates: PortalCandidate[] = [];
+  $("[data-offer-card]").each((_, element) => {
+    const card = $(element);
+    const cardText = card.text().replace(/\s+/gu, " ").trim();
+    const image = card.find("img").first();
+    const href = card.find("a[href]").filter((__, link) => ($(link).attr("href") ?? "").includes("/o/")).first().attr("href") ?? card.find("a[href]").first().attr("href");
+    const price = cardText.match(/([\d\s\u00a0.,]+)\s*(?:zł|pln)\b/iu)?.[1];
+    const area = cardText.match(/(\d+(?:[.,]\d+)?)\s*(?:m²|m2|mkw)(?![\p{L}])/iu)?.[1];
+    const rooms = cardText.match(/(\d+(?:[.,]\d+)?)\s*pok\./iu)?.[1];
+    cardCandidates.push({
+      id: card.attr("data-id"),
+      url: href,
+      title: card.find("h1,h2,h3").first().text() || image.attr("alt"),
+      price,
+      area,
+      rooms,
+      city: fallbackCity,
+      images: (image.attr("src") ?? image.attr("data-src")) ? [image.attr("src") ?? image.attr("data-src")] : [],
+    });
+  });
+  if (cardCandidates.length) return fromCandidates("adresowo", cardCandidates, fallbackCity, hasNextMarker(html));
   const records = jsonLdRecords(html).filter((record) => /residence|apartment|house|product/iu.test(text(record, "@type") ?? ""));
   return fromCandidates("adresowo", records.map(fromAdresowoRecord), fallbackCity, hasNextMarker(html));
 }
@@ -157,7 +185,9 @@ function fromGratkaOfferRecord(record: PortalRecord): PortalCandidate {
   return { id: record.sku ?? record.productID ?? record.identifier ?? (url ? gratkaIdFromUrl(url) : undefined), url: record.url, title: record.name, description: itemOffered.description, price: record.price, area: atPath(itemOffered, ["floorSize", "value"]) ?? itemOffered.area, rooms: itemOffered.numberOfRooms, floor: itemOffered.floorLevel, district: atPath(itemOffered, ["address", "addressLocality"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished };
 }
 function gratkaIdFromUrl(url: string): string | null { try { return new URL(url).pathname.split("/").filter(Boolean).pop() ?? null; } catch { return null; } }
+function fromDomiportaRecord(record: PortalRecord): PortalCandidate { const nestedOffer = atPath(record, ["offers", "itemOffered"]); const offered = isRecord(record.itemOffered) ? record.itemOffered : isRecord(nestedOffer) ? nestedOffer : record; return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
 function fromAdresowoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.identifier ?? record.sku, url: record.url ?? record.mainEntityOfPage, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
+function fromSprzedajemyRecord(record: PortalRecord): PortalCandidate { const title = stringValue(record.name) ?? stringValue(record.title); return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: record.area ?? areaFromText(title), rooms: record.numberOfRooms ?? record.rooms ?? roomsFromText(title), city: atPath(record, ["address", "addressLocality"]), district: atPath(record, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
 function fromSzybkoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.sku ?? record.productID ?? record.identifier, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
 function fromDomyRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.sku ?? record.productID, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
 
@@ -169,13 +199,17 @@ function isSearchUrl(value: string): boolean { const path = new URL(value).pathn
 function normalizeUrl(value: string): string { const url = new URL(value); url.hash = ""; url.hostname = url.hostname.toLowerCase(); for (const key of [...url.searchParams.keys()]) if (TRACKING_PARAM.test(key)) url.searchParams.delete(key); url.pathname = url.pathname.replace(/\/{2,}/gu, "/").replace(/\/$/u, "") || "/"; return url.toString(); }
 function jsonLdRecords(html: string): PortalRecord[] { const output: PortalRecord[] = []; for (const match of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/giu)) { try { collectJson(JSON.parse(decodeEntities(match[1])), output); } catch { /* malformed blocks are ignored */ } } return output; }
 function collectJson(value: unknown, output: PortalRecord[]): void { if (Array.isArray(value)) { value.filter(isRecord).forEach((item) => collectJson(item, output)); return; } if (!isRecord(value)) return; output.push(value); if (Array.isArray(value["@graph"])) value["@graph"].forEach((item) => collectJson(item, output)); }
+function jsonLdItemListCandidates(html: string): PortalRecord[] { return jsonLdRecords(html).flatMap((record) => { const items = record.itemListElement; if (!Array.isArray(items)) return []; return items.filter(isRecord).map((item) => isRecord(item.item) ? item.item : item).filter(isRecord); }); }
 function nextData(html: string): PortalRecord | null { const match = html.match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/iu); if (!match) return null; try { const value = JSON.parse(decodeEntities(match[1])); return isRecord(value) ? value : null; } catch { return null; } }
 function namedJson(html: string, name: string): PortalRecord | null { const match = html.match(new RegExp(`${name}\\s*=\\s*(\\{[\\s\\S]*?\\})\\s*;`, "u")); if (!match) return null; try { const value = JSON.parse(match[1]); return isRecord(value) ? value : null; } catch { return null; } }
 function hasNextMarker(html: string): boolean { return /(?:rel=["']next["']|data-next-page=["']true["']|["']hasNext(?:Page)?["']\s*:\s*true)/iu.test(html); }
 function arrayAt(value: unknown, path: string[]): unknown[] | null { const result = atPath(value, path); return Array.isArray(result) ? result : null; }
 function atPath(value: unknown, path: string[]): unknown { let current = value; for (const key of path) { if (!isRecord(current)) return null; current = current[key]; } return current; }
 function text(value: PortalRecord, key: string): string | null { return stringValue(value[key]); }
+function hasType(value: PortalRecord, ...types: string[]): boolean { const actual = value["@type"]; return typeof actual === "string" ? types.includes(actual) : Array.isArray(actual) && actual.some((item) => typeof item === "string" && types.includes(item)); }
 function stringValue(value: unknown): string | null { return typeof value === "string" && value.trim() ? value.trim() : null; }
+function areaFromText(value: unknown): string | null { return stringValue(value)?.match(/(\d+(?:[.,]\d+)?)\s*(?:m²|m2|mkw)(?![\p{L}])/iu)?.[1] ?? null; }
+function roomsFromText(value: unknown): string | null { return stringValue(value)?.match(/(\d+(?:[.,]\d+)?)\s*(?:pokoje?|pok\.)/iu)?.[1] ?? null; }
 function decimal(value: unknown): number | null { const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value.replace(/\s/gu, "").replace(",", ".").replace(/[^0-9.+-]/gu, "")) : null; return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : null; }
 function money(value: unknown): number | null { if (typeof value === "number") return Number.isFinite(value) ? value : null; if (typeof value !== "string") return null; const normalized = value.replace(/\s/gu, "").replace(/zł|pln/giu, ""); const parsed = /^\d{1,3}(?:\.\d{3})+$/.test(normalized) ? Number(normalized.replace(/\./gu, "")) : Number(normalized.replace(/,/gu, ".")); return Number.isFinite(parsed) ? parsed : null; }
 function imageValues(value: unknown): string[] { const values = Array.isArray(value) ? value : [value]; return values.flatMap((item) => typeof item === "string" ? [item] : isRecord(item) ? [stringValue(item.url) ?? stringValue(item.contentUrl)].filter((url): url is string => Boolean(url)) : []).filter((url) => /^https?:\/\//iu.test(url)).slice(0, 10); }

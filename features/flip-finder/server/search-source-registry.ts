@@ -54,8 +54,8 @@ export const EXTERNAL_SOURCE_STATUS = {
   oferty_net: "path_requires_live_source_verification",
   szybko: "path_requires_live_source_verification",
   bezposrednio: "access_limited_without_authentication",
-  domy: "public_html_adapter",
-  allegro_lokalnie: "public_html_adapter",
+  domy: "path_requires_live_source_verification",
+  allegro_lokalnie: "path_requires_live_source_verification",
 } as const satisfies Record<ExternalSourceId, string>;
 
 export const SOURCES: SearchSource[] = [
