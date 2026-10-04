@@ -9,6 +9,7 @@ import { staleListingFilterMatchKey, staleListingFilterMatchValues } from "./mat
 import type { DecisionBucket } from "../decision-model";
 import { syncResaleCompFromListing } from "@/features/market-intelligence/resale-comps-store";
 import { reconcileCanonicalListingDecision } from "./canonical-reconciliation";
+import { analyzeListingWithAiIfNeeded } from "./listing-ai-analysis";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -93,6 +94,22 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
       error: reason instanceof Error ? reason.message : "unknown",
     });
   });
+  // Advisory-only AI observations, cached per listing -- only attempted when
+  // this listing is brand new or its description/price actually changed
+  // (the exact same `current`/`changed` this function already computes for
+  // snapshot history below), never on an unchanged re-scan and never from a
+  // render/read path. Fire-and-forget like the resale-comp sync above: a
+  // failed or slow AI call must never fail or slow down persisting the
+  // listing itself.
+  if (current === null || changed) {
+    void analyzeListingWithAiIfNeeded(supabase, saved.id, { title: item.title, city: item.city, description: item.description, images }).catch((reason) => {
+      console.warn("LISTING_AI_ANALYSIS_DEFERRED", {
+        source: item.source,
+        externalListingId: item.externalListingId,
+        error: reason instanceof Error ? reason.message : "unknown",
+      });
+    });
+  }
   if (changed) { const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: item.rawPayload }).abortSignal(signal); if (snapshotError) throw new Error("Nie udało się zapisać historii oferty."); }
   const persistedDecision = decision ? {
     bucket: decision.bucket ?? bucket,
