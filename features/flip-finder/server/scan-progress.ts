@@ -66,7 +66,7 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
   const jobStatuses = [...facebookGroups.map((group) => group.status), ...(olxRow ? [jobStatus(olxRow.status)] : [])].filter((status): status is WorkerJobStatus => status !== null);
   const overall = buildOverallProgress(units, jobStatuses);
   const startedAt = units.map((unit) => unit.startedAt).sort()[0];
-  const finishedAt = isTerminal(overall.status) ? latestDate(units.map((unit) => unit.finishedAt)) : null;
+  const finishedAt = isTerminal(overall.status) ? overallFinishedAt(units) : null;
   const now = Date.now();
   const startedMs = Date.parse(startedAt);
   const endMs = finishedAt ? Date.parse(finishedAt) : now;
@@ -652,6 +652,36 @@ function zonedPeriodStart(period: "day" | "month", now = new Date()): string {
 }
 
 function latestDate(values: Array<string | null>): string | null { return values.filter((value): value is string => Boolean(value)).sort().at(-1) ?? null; }
+
+/**
+ * A naive MAX(finished_at) across units is only correct when each unit's
+ * own started_at is its own true wall-clock start. The real background-
+ * worker path (startManualOtodomScan's reservation) gives every prepared
+ * row the exact SAME started_at (one shared batch-insert timestamp), and
+ * scanSource's finished_at (see manual-scan.ts's scanTimestamp) is then
+ * that shared start plus only the ONE source's own duration -- never the
+ * cumulative time spent queued behind whichever earlier sequential sources
+ * ran first. Taking the max across rows that all share that one started_at
+ * would silently report only the single longest source's own duration as
+ * the whole run's elapsed time, discarding the other sources' durations
+ * entirely -- confirmed against a real run: 13 sequential sources that
+ * truly took ~190s end to end would report ~20s. Each row's own
+ * (finishedAt - startedAt) is still a reliable per-row duration either way,
+ * so summing them onto the shared start reconstructs the true finish. Units
+ * that do NOT share one started_at (the non-prepared/legacy insert path,
+ * where each row's own started_at already is its own true start) keep the
+ * original max-based logic, which is already correct there.
+ */
+export function overallFinishedAt(units: ScanWorkUnit[]): string | null {
+  const terminal = units.filter((unit): unit is ScanWorkUnit & { finishedAt: string } => typeof unit.finishedAt === "string");
+  if (!terminal.length) return null;
+  const sharedStartedAt = terminal[0].startedAt;
+  if (!terminal.every((unit) => unit.startedAt === sharedStartedAt)) {
+    return latestDate(terminal.map((unit) => unit.finishedAt));
+  }
+  const totalDurationMs = terminal.reduce((total, unit) => total + Math.max(0, Date.parse(unit.finishedAt) - Date.parse(unit.startedAt)), 0);
+  return new Date(Date.parse(sharedStartedAt) + totalDurationMs).toISOString();
+}
 function isTerminal(status: ScanProgressResponse["status"]): boolean { return status === "completed" || status === "partial" || status === "failed"; }
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 function rows(value: unknown): Row[] { return Array.isArray(value) ? value.filter((item): item is Row => Boolean(row(item))) : []; }

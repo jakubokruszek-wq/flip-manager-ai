@@ -54,7 +54,7 @@ type Row = Record<string, unknown>;
  * "function does not exist" signal, never on a permission or validation
  * error from a function that does exist.
  */
-function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; claimBarrier?: number; rpcMode?: "missing" | "atomic" | "permission-denied" | "filter-not-found" } = {}) {
+function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; claimBarrier?: number; claimError?: { code: string; message: string }; rpcMode?: "missing" | "atomic" | "permission-denied" | "filter-not-found" } = {}) {
   const sourceScans: Row[] = seedSourceScans.map((row) => ({ ...row }));
   let idSeq = 1;
   let waitingForRace: Array<() => void> = [];
@@ -132,6 +132,9 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number;
                 toRelease.forEach((fn) => fn());
               }
             });
+          }
+          if (isClaimUpdate && options.claimError) {
+            return { data: null, error: options.claimError };
           }
           if (mode === "update") {
             const matched = sourceScans.filter((row) => matches(row, filters));
@@ -414,6 +417,23 @@ test("two concurrent executions of the same background callback for the same pre
 
   const row = current.sourceScans.find((candidate) => candidate.source === "otodom" && candidate.search_filter_id === mixedFilter.id);
   assert.equal(row?.status, "completed", "the final row must reflect only the winner's finalize -- the loser never reached finalizeSourceScan, so it cannot have overwritten this");
+});
+
+// Independent review finding on the CAS commit (0aac7d9): the original code
+// relabeled ANY falsy-scan outcome from the claim update as
+// SCAN_ALREADY_CLAIMED for the prepared-row path, including a genuine
+// transport/DB error (which PostgREST never reports as zero rows + no
+// error -- only a lost CAS does that). A real outage or permissions problem
+// must surface as SCAN_CREATE_FAILED, the same code this path already used
+// before the CAS existed, never be silently reinterpreted as "someone else
+// won the race".
+test("a genuine database error on the claim update is reported as SCAN_CREATE_FAILED, never relabeled as SCAN_ALREADY_CLAIMED", async () => {
+  current = fakeAdmin([], { claimError: { code: "57014", message: "canceling statement due to statement timeout" } });
+  const start = await startManualOtodomScan(mixedFilter.id);
+  const summary = await runManualOtodomScan(mixedFilter.id, { runId: start.runId, usePreparedRows: true, skipLock: true });
+  const otodomResult = summary.sourceResults.find((result) => result.source === "otodom");
+  assert.equal(otodomResult?.errorCode, "SCAN_CREATE_FAILED", "a real database error must never be reported as SCAN_ALREADY_CLAIMED");
+  assert.notEqual(otodomResult?.errorCode, "SCAN_ALREADY_CLAIMED");
 });
 
 // Issue 4 from the scan-lifecycle review: usePreparedRows trusts that

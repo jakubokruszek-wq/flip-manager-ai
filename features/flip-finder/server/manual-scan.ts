@@ -254,9 +254,14 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   // error: a lost CAS (someone else already claimed this row) is zero rows,
   // not an error, from a plain .update().select() call -- unlike .single(),
   // which the unprepared insert path above still uses since an insert always
-  // produces exactly one row.
+  // produces exactly one row. A genuine transport/DB error (checked first,
+  // separately) is never relabeled as a lost claim: a real outage or a
+  // permissions problem must surface as SCAN_CREATE_FAILED, the same code
+  // this path already used before the CAS existed, not be masked as "someone
+  // else won the race" -- that would misdirect anyone debugging a real error.
+  if (error) return failedResult(source.id, Date.now() - started, "SCAN_CREATE_FAILED", "Nie udało się rozpocząć skanu źródła.");
   const scan = Array.isArray(claimed) ? claimed[0] : claimed;
-  if (error || !scan || typeof scan.id !== "string" || typeof scan.started_at !== "string") {
+  if (!scan || typeof scan.id !== "string" || typeof scan.started_at !== "string") {
     return prepared
       ? failedResult(source.id, Date.now() - started, "SCAN_ALREADY_CLAIMED", "Ten etap skanu już przejęło inne wykonanie tego samego przebiegu.")
       : failedResult(source.id, Date.now() - started, "SCAN_CREATE_FAILED", "Nie udało się rozpocząć skanu źródła.");
@@ -377,7 +382,8 @@ async function failOwnedRunningScans(supabase: SupabaseClient, scans: Map<string
  * `startedAt + timeoutMs` of each other, regardless of how far apart their
  * real wall-clock finish times were. A cluster of near-identical finished_at
  * values is therefore NOT by itself proof of overlap -- see
- * manual-scan-concurrent-claim.test.ts for what would actually prove it
+ * manual-scan-lock-separation.test.ts's "two concurrent executions of the
+ * same background callback" test for what would actually prove it
  * (source.fetch() call counts), and the CAS claim in scanSource below for
  * why overlap is now harmless either way.
  */
