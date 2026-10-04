@@ -17,11 +17,19 @@ export { scanStatus } from "./scan-start-errors";
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
 export type ScanSummary = { runId: string; status: "running" | "completed" | "partial"; sourcesRun: number; sourcesCompleted: number; sourcesFailed: number; fetched: number; normalized: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; actualErrors: number; sourceResults: SourceScanResult[]; matchDiagnostics: MatchDiagnosticSummary; scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number; warnings: string[] };
 type SupabaseClient = DatabaseClient;
-type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
+type LoadedFilter = NonNullable<Awaited<ReturnType<typeof getSearchFilter>>>;
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
 export type ScanClock = { startedAt: string; startedMs: number; continuationLeaseToken?: string | null };
 export type PreparedSourceScan = { id: string; source: string; status?: string; started_at: string; continuation_lease_token?: string | null };
-type ManualScanOptions = { runId?: string; usePreparedRows?: boolean; skipLock?: boolean };
+export type ManualScanOptions = {
+  runId?: string;
+  usePreparedRows?: boolean;
+  skipLock?: boolean;
+  /** Service scheduler override; user-facing routes keep loading by id. */
+  filter?: LoadedFilter;
+  /** Reuse the scheduler's already-created service client. */
+  supabase?: SupabaseClient;
+};
 
 // Vercel Hobby hard-stops functions after 60s. Keep the internal worker
 // window below that limit so cleanup and lease finalization still have time to
@@ -72,6 +80,16 @@ export async function startManualOtodomScan(filterId: string): Promise<ManualSca
   const runId = crypto.randomUUID();
   const filter = await getSearchFilter(filterId);
   if (!filter) throw statusError(404, "Nie znaleziono filtra.");
+  return startFinderScanForFilter(filter, runId);
+}
+
+/**
+ * Starts a Finder-owned run for a filter already loaded by a trusted server
+ * caller. The scheduler uses this to avoid a browser-session dependency while
+ * preserving the same source reservation and duplicate-scan lock as the
+ * operator-facing route.
+ */
+export async function startFinderScanForFilter(filter: LoadedFilter, runId = crypto.randomUUID(), supabase = createAdminClient()): Promise<ManualScanStart> {
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
   const sources = activeSources(filter);
   const sourceIds = [...sources.map((source) => source.id), ...(filter.sources.includes("facebook") ? ["facebook"] : [])];
@@ -80,9 +98,8 @@ export async function startManualOtodomScan(filterId: string): Promise<ManualSca
   // Finder source_scans row for it; enqueueOlxJob creates the one async row.
   const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
   if (lockableSourceIds.length) {
-    const supabase = createAdminClient();
-    await failStaleScans(supabase, filterId, lockableSourceIds);
-    await reserveSourceScans(supabase, filterId, lockableSourceIds, runId, filter);
+    await failStaleScans(supabase, filter.id, lockableSourceIds);
+    await reserveSourceScans(supabase, filter.id, lockableSourceIds, runId, filter);
   }
   return { runId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
 }
@@ -150,7 +167,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   const scanStarted = Date.now();
   const ownedScans = new Map<string, ScanClock>();
   const sourceResults: SourceScanResult[] = [];
-  const filter = await getSearchFilter(filterId);
+  const filter = options.filter ?? await getSearchFilter(filterId);
   if (!filter) throw statusError(404, "Nie znaleziono filtra.");
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
   const sources = activeSources(filter);
@@ -184,7 +201,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   // "permission denied", which previously surfaced as
   // CANONICAL_RECONCILIATION_FAILED and silently failed every listing a
   // live scan tried to persist.
-  const supabase = createAdminClient();
+  const supabase = options.supabase ?? createAdminClient();
   if (lockableSourceIds.length && !options.skipLock) {
     await failStaleScans(supabase, filterId, lockableSourceIds);
     const { data: running, error: runningError } = await supabase.from("source_scans").select("id").eq("search_filter_id", filterId).in("source", lockableSourceIds).in("status", ["pending", "running"]).limit(1).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));

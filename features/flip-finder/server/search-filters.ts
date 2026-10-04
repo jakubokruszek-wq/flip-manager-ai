@@ -139,6 +139,30 @@ export async function getSearchFilter(id: string): Promise<SearchFilter | null> 
   return data ? toSearchFilter(asRow(data)) : null;
 }
 
+/**
+ * Server scheduler read path. Unlike the operator-facing getSearchFilter,
+ * this deliberately uses the service-role client because a GitHub Actions
+ * invocation has no browser session. It is read-only and is used only to
+ * select active Finder filters before the existing scan reservation path
+ * creates a run.
+ */
+export async function listActiveSearchFiltersForScheduler(): Promise<SearchFilter[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("search_filters")
+    .select("*")
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false })
+    .limit(200);
+
+  if (error) {
+    console.error("FLIP FINDER SCHEDULER FILTER LIST ERROR:", error);
+    throw new Error("Nie udało się pobrać aktywnych filtrów Findera.");
+  }
+
+  return asRows(data).map(toSearchFilter);
+}
+
 export async function getActiveSearchFiltersForSource(
   source: ListingSource,
 ): Promise<SearchFilter[]> {
@@ -255,6 +279,7 @@ export function parseSearchFilterInput(value: unknown): SearchFilterInput {
       "Maksymalny koszt remontu",
     ),
     scanIntervalMinutes: positiveInteger(value.scanIntervalMinutes, "Częstotliwość skanowania"),
+    finderScanIntervalMinutes: positiveInteger(value.finderScanIntervalMinutes ?? 60, "Interwał automatycznego skanu Findera"),
     isActive: booleanValue(value.isActive, "Status"),
   };
 
@@ -308,17 +333,25 @@ async function writeSearchFilter(
     ? supabase.from("search_filters").update(payload).eq("id", id).select("*").maybeSingle()
     : supabase.from("search_filters").insert(payload).select("*").single());
 
-  // year_built_min's own migration (draft, not yet applied -- see
-  // supabase/migrations) may not exist on the real table yet. Until a human
-  // applies it, every other field in this same save must still go through;
-  // only the new criterion itself is silently not persisted for that one
-  // retried write, exactly like reserve_source_scans' RPC-missing fallback
-  // in manual-scan.ts -- never assume the migration is live.
-  if (isMissingYearBuiltMinColumn(error)) {
-    const { year_built_min: _yearBuiltMin, ...payloadWithoutYearBuiltMin } = payload;
+  // The year_built_min and Finder cadence migrations are drafts until a human
+  // applies them. Until then, every existing field in the same save must
+  // still go through; only the missing draft columns are omitted on a safe
+  // compatibility retry. Never assume either migration is live.
+  if (isMissingYearBuiltMinColumn(error) || isMissingFinderScanIntervalColumn(error)) {
+    const payloadWithoutDraftColumns = { ...payload } as Record<string, unknown>;
+    if (isMissingYearBuiltMinColumn(error)) delete payloadWithoutDraftColumns.year_built_min;
+    if (isMissingFinderScanIntervalColumn(error)) delete payloadWithoutDraftColumns.finder_scan_interval_minutes;
     ({ data, error } = await (id
-      ? supabase.from("search_filters").update(payloadWithoutYearBuiltMin).eq("id", id).select("*").maybeSingle()
-      : supabase.from("search_filters").insert(payloadWithoutYearBuiltMin).select("*").single()));
+      ? supabase.from("search_filters").update(payloadWithoutDraftColumns).eq("id", id).select("*").maybeSingle()
+      : supabase.from("search_filters").insert(payloadWithoutDraftColumns).select("*").single()));
+    if (isMissingYearBuiltMinColumn(error) || isMissingFinderScanIntervalColumn(error)) {
+      const payloadWithoutAnyDraftColumns = { ...payloadWithoutDraftColumns };
+      delete payloadWithoutAnyDraftColumns.year_built_min;
+      delete payloadWithoutAnyDraftColumns.finder_scan_interval_minutes;
+      ({ data, error } = await (id
+        ? supabase.from("search_filters").update(payloadWithoutAnyDraftColumns).eq("id", id).select("*").maybeSingle()
+        : supabase.from("search_filters").insert(payloadWithoutAnyDraftColumns).select("*").single()));
+    }
   }
 
   if (error) {
@@ -334,6 +367,13 @@ function isMissingYearBuiltMinColumn(error: { code?: unknown; message?: unknown 
   const code = typeof error.code === "string" ? error.code : "";
   const message = typeof error.message === "string" ? error.message : "";
   return (code === "42703" || code === "PGRST204") && /year_built_min/.test(message);
+}
+
+function isMissingFinderScanIntervalColumn(error: { code?: unknown; message?: unknown } | null): boolean {
+  if (!error) return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (code === "42703" || code === "PGRST204") && /finder_scan_interval_minutes/.test(message);
 }
 
 function toDatabasePayload(input: SearchFilterInput) {
@@ -363,6 +403,7 @@ function toDatabasePayload(input: SearchFilterInput) {
     min_estimated_profit: input.minEstimatedProfit,
     max_estimated_renovation_cost: input.maxEstimatedRenovationCost,
     scan_interval_minutes: input.scanIntervalMinutes,
+    finder_scan_interval_minutes: input.finderScanIntervalMinutes ?? 60,
     is_active: input.isActive,
   };
 }
@@ -402,6 +443,7 @@ function toSearchFilter(row: Row): SearchFilter {
       "max_estimated_renovation_cost",
     ),
     scanIntervalMinutes: positiveInteger(row.scan_interval_minutes, "scan_interval_minutes"),
+    finderScanIntervalMinutes: positiveIntegerOrDefault(row.finder_scan_interval_minutes, 60, "finder_scan_interval_minutes"),
     isActive: booleanValue(row.is_active, "is_active"),
     lastScannedAt: nullableString(row.last_scanned_at),
     createdAt: requiredString(row.created_at, "created_at"),
@@ -542,6 +584,11 @@ function positiveInteger(value: unknown, field: string): number {
   }
 
   return value;
+}
+
+function positiveIntegerOrDefault(value: unknown, fallback: number, field: string): number {
+  if (value === undefined || value === null) return fallback;
+  return positiveInteger(value, field);
 }
 
 function booleanValue(value: unknown, field: string): boolean {

@@ -106,6 +106,7 @@ export function createEmptySearchFilter(): SearchFilterInput {
     minEstimatedProfit: null,
     maxEstimatedRenovationCost: null,
     scanIntervalMinutes: 60,
+    finderScanIntervalMinutes: 60,
     isActive: true,
   };
 }

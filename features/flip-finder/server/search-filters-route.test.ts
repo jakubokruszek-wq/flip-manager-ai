@@ -157,6 +157,7 @@ const validPayload = {
   minEstimatedProfit: null,
   maxEstimatedRenovationCost: null,
   scanIntervalMinutes: 60,
+  finderScanIntervalMinutes: 45,
   isActive: true,
 };
 
@@ -186,6 +187,7 @@ const validRow = {
   min_estimated_profit: null,
   max_estimated_renovation_cost: null,
   scan_interval_minutes: 60,
+  finder_scan_interval_minutes: 45,
   is_active: true,
   last_scanned_at: null,
   created_at: now,

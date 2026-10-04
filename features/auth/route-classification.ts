@@ -55,6 +55,7 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
   ...routes("CRON_SECRET", [
     ["POST", "/api/jobs/facebook-watch", /^\/api\/jobs\/facebook-watch$/],
     ["POST", "/api/jobs/finder-scan-continuation", /^\/api\/jobs\/finder-scan-continuation$/],
+    ["POST", "/api/jobs/finder-scan-scheduler", /^\/api\/jobs\/finder-scan-scheduler$/],
     ["POST", "/api/jobs/listing-lifecycle", /^\/api\/jobs\/listing-lifecycle$/],
   ]),
   ...routes("OPERATOR_SECRET", [

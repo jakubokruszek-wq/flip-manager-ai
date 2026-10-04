@@ -99,6 +99,8 @@ export type SearchFilter = {
   minEstimatedProfit: number | null;
   maxEstimatedRenovationCost: number | null;
   scanIntervalMinutes: number;
+  /** Finder-only cadence; the legacy field remains the global Facebook Watcher setting. */
+  finderScanIntervalMinutes?: number;
   isActive: boolean;
   lastScannedAt: string | null;
   createdAt: string;

@@ -1,0 +1,47 @@
+name: Finder scan scheduler
+
+on:
+  schedule:
+    # Five-minute polling is the free trigger; each filter's persisted
+    # scan_interval_minutes decides whether a new run is due.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: finder-scan-scheduler
+  cancel-in-progress: false
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Start due Finder scans
+        shell: bash
+        env:
+          SCHEDULER_URL: https://flip-manager-ai.vercel.app/api/jobs/finder-scan-scheduler
+          OIDC_AUDIENCE: flip-manager-finder-scheduler
+        run: |
+          set -euo pipefail
+
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          oidc_token="$(jq -er '.value' <<<"${oidc_response}")"
+
+          response_file="$(mktemp)"
+          trap 'rm -f "${response_file}"' EXIT
+          http_status="$(curl --silent --show-error --location --request POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -o "${response_file}" -w '%{http_code}' \
+            "${SCHEDULER_URL}" || true)"
+
+          if [[ "${http_status}" != "200" ]]; then
+            echo "Finder scheduler request failed with HTTP ${http_status}."
+            exit 1
+          fi
+          jq -e '.status and (.started | type == "number")' "${response_file}" >/dev/null

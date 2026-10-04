@@ -4,11 +4,13 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 export const GITHUB_ACTIONS_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 export const GITHUB_ACTIONS_OIDC_AUDIENCE = "flip-manager-finder-continuation";
+export const GITHUB_ACTIONS_FINDER_SCHEDULER_AUDIENCE = "flip-manager-finder-scheduler";
 export const GITHUB_ACTIONS_FACEBOOK_WATCH_AUDIENCE = "flip-manager-facebook-watch";
 export const GITHUB_ACTIONS_REPOSITORY = "jakubokruszek-wq/flip-manager-ai";
 export const GITHUB_ACTIONS_REPOSITORY_ID = "1298495415";
 export const GITHUB_ACTIONS_REF = "refs/heads/main";
 export const GITHUB_ACTIONS_WORKFLOW_REF = `${GITHUB_ACTIONS_REPOSITORY}/.github/workflows/finder-scan-continuation.yml@${GITHUB_ACTIONS_REF}`;
+export const GITHUB_ACTIONS_FINDER_SCHEDULER_WORKFLOW_REF = `${GITHUB_ACTIONS_REPOSITORY}/.github/workflows/finder-scan-scheduler.yml@${GITHUB_ACTIONS_REF}`;
 export const GITHUB_ACTIONS_FACEBOOK_WATCH_WORKFLOW_REF = `${GITHUB_ACTIONS_REPOSITORY}/.github/workflows/facebook-watch-scheduler.yml@${GITHUB_ACTIONS_REF}`;
 
 const githubActionsJwks = createRemoteJWKSet(new URL(`${GITHUB_ACTIONS_OIDC_ISSUER}/.well-known/jwks`));
@@ -19,6 +21,10 @@ type OidcPolicy = { audience: string; workflowRef: string };
 const FINDER_CONTINUATION_POLICY: OidcPolicy = {
   audience: GITHUB_ACTIONS_OIDC_AUDIENCE,
   workflowRef: GITHUB_ACTIONS_WORKFLOW_REF,
+};
+const FINDER_SCHEDULER_POLICY: OidcPolicy = {
+  audience: GITHUB_ACTIONS_FINDER_SCHEDULER_AUDIENCE,
+  workflowRef: GITHUB_ACTIONS_FINDER_SCHEDULER_WORKFLOW_REF,
 };
 const FACEBOOK_WATCH_POLICY: OidcPolicy = {
   audience: GITHUB_ACTIONS_FACEBOOK_WATCH_AUDIENCE,
@@ -53,6 +59,10 @@ export async function verifyGitHubActionsOidc(token: string, keySet: Verificatio
   return verifyOidcWithPolicy(token, keySet, FINDER_CONTINUATION_POLICY);
 }
 
+export async function verifyFinderSchedulerOidc(token: string, keySet: VerificationKeySet = githubActionsJwks): Promise<JWTPayload> {
+  return verifyOidcWithPolicy(token, keySet, FINDER_SCHEDULER_POLICY);
+}
+
 export async function verifyFacebookWatchOidc(token: string, keySet: VerificationKeySet = githubActionsJwks): Promise<JWTPayload> {
   return verifyOidcWithPolicy(token, keySet, FACEBOOK_WATCH_POLICY);
 }
@@ -77,6 +87,10 @@ async function authorizeScheduledRequest(request: Request, verifyOidc: OidcVerif
 }
 
 export async function authorizeContinuationRequest(request: Request, verifyOidc: OidcVerifier = verifyGitHubActionsOidc): Promise<boolean> {
+  return authorizeScheduledRequest(request, verifyOidc);
+}
+
+export async function authorizeFinderSchedulerRequest(request: Request, verifyOidc: OidcVerifier = verifyFinderSchedulerOidc): Promise<boolean> {
   return authorizeScheduledRequest(request, verifyOidc);
 }
 

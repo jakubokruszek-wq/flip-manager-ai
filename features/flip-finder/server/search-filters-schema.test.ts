@@ -35,6 +35,7 @@ function extractBlock(sql: string, startMarker: string, endMarker: string): stri
 async function freshSearchFiltersDb(): Promise<PGlite> {
   const db = new PGlite();
   const foundation = fs.readFileSync(path.join(process.cwd(), "supabase/migrations/20260719113000_create_flip_finder_foundation.sql"), "utf8");
+  const finderIntervalDraft = fs.readFileSync(path.join(process.cwd(), "supabase/migrations/20261004123000_add_finder_scan_interval.sql"), "utf8");
 
   const createTable = extractBlock(
     foundation,
@@ -42,6 +43,7 @@ async function freshSearchFiltersDb(): Promise<PGlite> {
     "create index if not exists search_filters_active_last_scanned_at_idx\n  on public.search_filters (is_active, last_scanned_at);",
   );
   await db.exec(createTable);
+  await db.exec(finderIntervalDraft);
 
   const trigger = extractBlock(
     foundation,
@@ -79,6 +81,7 @@ function toDatabasePayload(overrides: Partial<Record<string, unknown>> = {}): Re
     min_estimated_profit: null,
     max_estimated_renovation_cost: null,
     scan_interval_minutes: 60,
+    finder_scan_interval_minutes: 60,
     is_active: true,
     ...overrides,
   };
@@ -101,6 +104,7 @@ test("the exact INSERT payload the application code sends is schema-compatible w
   assert.equal(row.city, "Łódź");
   assert.deepEqual(row.sources, ["otodom"]);
   assert.equal(row.scan_interval_minutes, 60);
+  assert.equal(row.finder_scan_interval_minutes, 60);
   assert.equal(row.is_active, true);
 });
 
