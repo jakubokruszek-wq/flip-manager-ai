@@ -255,8 +255,12 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
   const deadline = Date.now() + WORKER_MAX_DURATION_MS - WORKER_OVERHEAD_RESERVE_MS;
   let claimed = 0; let completed = 0; let deferred = 0; let failed = 0;
   const errors: string[] = [];
+  // Never claim a new row unless the worker still has room for the complete
+  // per-source timeout. The reserved 45s remains available for the claim,
+  // filter load, finalization and cleanup around that bounded source run.
+  const continuationTimeoutMs = sourceTimeoutBudgetMs(1);
 
-  while (Date.now() < deadline) {
+  while (Date.now() + continuationTimeoutMs <= deadline) {
     const { data, error } = await supabase.rpc("claim_finder_scan_source", {
       p_cycle_at: cycleAt,
       p_now: new Date().toISOString(),
@@ -296,9 +300,8 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
     // A continuation owns one source at a time. It no longer shares the
     // initial request's 19.615s slice across the whole filter, so a source
     // that legitimately needs the normal 75s ceiling can finish on retry.
-    const timeoutMs = sourceTimeoutBudgetMs(1);
     const prepared: PreparedSourceScan = { id: scanId, source: sourceId, started_at: startedAt, continuation_lease_token: leaseToken };
-    const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, timeoutMs, { preparedAlreadyRunning: true });
+    const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, continuationTimeoutMs, { preparedAlreadyRunning: true });
     if (result.status === "completed") completed += 1;
     else if (result.status === "pending") deferred += 1;
     else failed += 1;

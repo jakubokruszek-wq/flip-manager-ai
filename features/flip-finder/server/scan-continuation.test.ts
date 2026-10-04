@@ -38,6 +38,14 @@ test("one continuation cycle can claim multiple ready sources, while still de-du
   assert.deepEqual(claimed.map((row) => row.id), ["pending-1", "pending-2"], "the hourly worker must keep claiming ready rows until its deadline, not stop after the first source");
 });
 
+test("a ready row that cannot fit one complete source budget remains for the next hourly cycle", () => {
+  const ready = { id: "pending-late", source: "gratka", status: "pending" };
+  const timeoutMs = 75_000;
+  const deadline = NOW + timeoutMs - 1;
+  assert.equal(NOW + timeoutMs <= deadline, false, "the continuation worker must stop before claiming work it cannot finish inside its hard window");
+  assert.equal(continuationEligible(ready, NOW, CYCLE), true, "the row itself remains eligible for the next cron invocation");
+});
+
 test("a live continuation lease is not reclaimed, but an expired lease or orphan is", () => {
   const live = { id: "live", source: "domy", status: "running", continuationCycleAt: "2026-10-04T09:00:00.000Z", continuationLeaseUntil: "2026-10-04T10:40:00.000Z", startedAt: "2026-10-04T10:00:00.000Z" };
   const expired = { ...live, id: "expired", continuationLeaseUntil: "2026-10-04T10:30:00.000Z" };
