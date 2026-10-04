@@ -10,6 +10,7 @@ import type { DecisionBucket } from "../decision-model";
 import { syncResaleCompFromListing } from "@/features/market-intelligence/resale-comps-store";
 import { reconcileCanonicalListingDecision } from "./canonical-reconciliation";
 import { analyzeListingWithAiIfNeeded } from "./listing-ai-analysis";
+import { runAfterResponse } from "@/features/facebook-watcher/run-after-response";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -98,17 +99,25 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   // this listing is brand new or its description/price actually changed
   // (the exact same `current`/`changed` this function already computes for
   // snapshot history below), never on an unchanged re-scan and never from a
-  // render/read path. Fire-and-forget like the resale-comp sync above: a
-  // failed or slow AI call must never fail or slow down persisting the
-  // listing itself.
+  // render/read path. Deferred via runAfterResponse -- same as the scan
+  // route's own background continuation -- rather than a bare `void
+  // promise`: on Vercel, a plain detached promise can be frozen mid-flight
+  // the moment this request's response is sent, silently losing the call
+  // (and any partial cost already incurred) before it ever writes its
+  // result. runAfterResponse prefers next/server's after() (backed by the
+  // platform's waitUntil) and only falls back to the previous bare
+  // fire-and-forget behavior outside a request scope (e.g. the unit tests
+  // that call persistListing directly, with no Next.js request active).
   if (current === null || changed) {
-    void analyzeListingWithAiIfNeeded(supabase, saved.id, { title: item.title, city: item.city, description: item.description, images }).catch((reason) => {
-      console.warn("LISTING_AI_ANALYSIS_DEFERRED", {
-        source: item.source,
-        externalListingId: item.externalListingId,
-        error: reason instanceof Error ? reason.message : "unknown",
-      });
-    });
+    runAfterResponse(() =>
+      analyzeListingWithAiIfNeeded(supabase, saved.id, { title: item.title, city: item.city, description: item.description, images }).catch((reason) => {
+        console.warn("LISTING_AI_ANALYSIS_DEFERRED", {
+          source: item.source,
+          externalListingId: item.externalListingId,
+          error: reason instanceof Error ? reason.message : "unknown",
+        });
+      }),
+    );
   }
   if (changed) { const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: item.rawPayload }).abortSignal(signal); if (snapshotError) throw new Error("Nie udało się zapisać historii oferty."); }
   const persistedDecision = decision ? {

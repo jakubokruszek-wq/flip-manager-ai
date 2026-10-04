@@ -19,6 +19,15 @@ function withFetch<T>(stub: typeof fetch, run: () => Promise<T>): Promise<T> {
   });
 }
 
+function withConsoleWarn<T>(run: (calls: Array<[string, ...unknown[]]>) => Promise<T>): Promise<T> {
+  const calls: Array<[string, ...unknown[]]> = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { calls.push(args as [string, ...unknown[]]); };
+  return run(calls).finally(() => {
+    console.warn = original;
+  });
+}
+
 function withApiKey<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
   const original = process.env.OPENAI_API_KEY;
   if (value === undefined) delete process.env.OPENAI_API_KEY;
@@ -118,12 +127,39 @@ test("analyzeListingDescriptionWithAi: sends the request with a strict json_sche
   assert.equal((format.format as Record<string, unknown>).strict, true);
 });
 
-test("analyzeListingDescriptionWithAi: a non-OK HTTP response throws instead of silently returning null", async () => {
+test("analyzeListingDescriptionWithAi: a non-OK HTTP response throws instead of silently returning null (after exhausting retries)", async () => {
+  let calls = 0;
   await withApiKey("test-dummy-key", () =>
-    withFetch(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }), async () => {
-      await assert.rejects(() => analyzeListingDescriptionWithAi("Opis", { title: null, city: null }), /HTTP 500/);
+    withFetch(async () => { calls += 1; return new Response(JSON.stringify({ error: "boom" }), { status: 500 }); }, async () => {
+      await assert.rejects(() => analyzeListingDescriptionWithAi("Opis", { title: null, city: null }, { retryDelayMs: 0 }), /HTTP 500/);
     }),
   );
+  assert.equal(calls, 3, "a 500 is retryable -- all 3 attempts must be exhausted before giving up");
+});
+
+test("analyzeListingDescriptionWithAi: a non-retryable HTTP error (400) fails on the first attempt, no retry wasted", async () => {
+  let calls = 0;
+  await withApiKey("test-dummy-key", () =>
+    withFetch(async () => { calls += 1; return new Response(JSON.stringify({ error: "bad request" }), { status: 400 }); }, async () => {
+      await assert.rejects(() => analyzeListingDescriptionWithAi("Opis", { title: null, city: null }, { retryDelayMs: 0 }), /HTTP 400/);
+    }),
+  );
+  assert.equal(calls, 1, "a 400 will never succeed on retry -- it must not be retried");
+});
+
+test("analyzeListingDescriptionWithAi: a transient 500 followed by success is recovered via retry, not surfaced as a failure", async () => {
+  let calls = 0;
+  const findings = { buildingTypeHint: "blok", ownershipHint: null, yearBuiltHint: null, conditionSummary: null, renovationMentioned: null, confidence: 0.5, missingInfo: [] };
+  const result = await withApiKey("test-dummy-key", () =>
+    withFetch(async () => {
+      calls += 1;
+      if (calls < 3) return new Response(JSON.stringify({ error: "temporary" }), { status: 503 });
+      return responsesApiReply(findings);
+    }, () => analyzeListingDescriptionWithAi("Opis", { title: null, city: null }, { retryDelayMs: 0 })),
+  );
+  assert.equal(calls, 3, "it must have failed twice before succeeding on the 3rd attempt");
+  assert.ok(result);
+  assert.equal(result!.findings.buildingTypeHint, "blok");
 });
 
 test("analyzeListingDescriptionWithAi: an oversized response body is rejected rather than parsed", async () => {
@@ -249,25 +285,119 @@ test("analyzeListingWithAiIfNeeded: changed description triggers a fresh text ca
   assert.equal(((result as Record<string, unknown>).text_findings as Record<string, unknown>).buildingTypeHint, "blok");
 });
 
-test("analyzeListingWithAiIfNeeded: the draft migration's table not existing yet is a silent no-op, never an error that could fail the scan", async () => {
+test("analyzeListingWithAiIfNeeded: the draft migration's table missing on READ never throws, but is logged loudly, not silently", async () => {
   const admin = fakeAdmin(null);
   admin.setTableMissing(true);
-  await withApiKey("test-dummy-key", () =>
-    withFetch(async () => { throw new Error("must not be called"); }, () =>
-      analyzeListingWithAiIfNeeded(admin.client as never, "listing-3", { title: null, city: null, description: "Opis", images: [] }),
+  const warnings = await withConsoleWarn((calls) =>
+    withApiKey("test-dummy-key", () =>
+      withFetch(async () => { throw new Error("must not be called"); }, async () => {
+        await analyzeListingWithAiIfNeeded(admin.client as never, "listing-3", { title: null, city: null, description: "Opis", images: [] });
+        return calls;
+      }),
     ),
   );
-  // No assertion needed beyond "did not throw" -- the test itself failing
-  // via an uncaught rejection would be the signal of a regression here.
+  assert.equal(admin.upserts.length, 0, "a missing table means there is nothing to upsert");
+  const tableMissingWarning = warnings.find(([tag]) => tag === "LISTING_AI_ANALYSIS_TABLE_MISSING");
+  assert.ok(tableMissingWarning, "a missing table must be logged, never pass as silent success");
+  assert.equal((tableMissingWarning?.[1] as Record<string, unknown>).stage, "read");
 });
 
-test("analyzeListingWithAiIfNeeded: a real AI call failure never throws out of this function, and still caches the untouched half", async () => {
-  const admin = fakeAdmin(null);
-  await withApiKey("test-dummy-key", () =>
-    withFetch(async () => { throw new Error("simulated network failure"); }, () =>
-      analyzeListingWithAiIfNeeded(admin.client as never, "listing-4", { title: null, city: null, description: "Opis", images: [] }),
+test("analyzeListingWithAiIfNeeded: the draft migration's table missing on WRITE is also logged loudly, not silently", async () => {
+  // A dedicated fake: the read succeeds normally (as if the table exists),
+  // but the write/upsert fails with the real missing-table error code --
+  // the one combination fakeAdmin() cannot express, since there it is a
+  // single flag shared by both steps.
+  const client = {
+    from(table: string) {
+      assert.equal(table, "listing_ai_analysis");
+      return {
+        select: () => ({ eq: () => ({ async maybeSingle() { return { data: null, error: null }; } }) }),
+        upsert: () => ({
+          then: (resolve: (v: unknown) => unknown) =>
+            Promise.resolve({ error: { code: "42P01", message: 'relation "public.listing_ai_analysis" does not exist' } }).then(resolve),
+        }),
+      };
+    },
+  };
+  const warnings = await withConsoleWarn((calls) =>
+    withApiKey("test-dummy-key", () =>
+      withFetch(async () => responsesApiReply({ buildingTypeHint: null, ownershipHint: null, yearBuiltHint: null, conditionSummary: null, renovationMentioned: null, confidence: 0.5, missingInfo: [] }), async () => {
+        await analyzeListingWithAiIfNeeded(client as never, "listing-3b", { title: null, city: null, description: "Opis", images: [] });
+        return calls;
+      }),
     ),
   );
-  assert.equal(admin.upserts.length, 1, "a failed call still results in a cached 'attempted, found nothing' row so it is not retried on every scan");
-  assert.equal(admin.upserts[0]?.text_findings, null);
+  const tableMissingWarning = warnings.find(([tag]) => tag === "LISTING_AI_ANALYSIS_TABLE_MISSING");
+  assert.ok(tableMissingWarning, "a missing table on write must be logged, never pass as silent success");
+  assert.equal((tableMissingWarning?.[1] as Record<string, unknown>).stage, "write");
+});
+
+test("analyzeListingWithAiIfNeeded: a real AI call failure (even after exhausting retries) never throws, preserves the prior cache, and marks the half pending retry instead of caching it as success", async () => {
+  const admin = fakeAdmin(null);
+  let calls = 0;
+  await withApiKey("test-dummy-key", () =>
+    withFetch(async () => { calls += 1; throw new Error("simulated network failure"); }, () =>
+      analyzeListingWithAiIfNeeded(admin.client as never, "listing-4", { title: null, city: null, description: "Opis", images: [] }, { retryDelayMs: 0 }),
+    ),
+  );
+  assert.equal(calls, 3, "a thrown/network failure is retryable -- all 3 attempts must be exhausted");
+  assert.equal(admin.upserts.length, 1, "a failed call still writes a row, so the scan itself is never blocked");
+  assert.equal(admin.upserts[0]?.text_findings, null, "no prior cached findings existed, so there is nothing to fall back to");
+  assert.equal(admin.upserts[0]?.content_hash, "__pending_retry__", "a failure must never be cached under the real content hash -- that would make an unchanged re-scan skip retrying it forever");
+});
+
+test("analyzeListingWithAiIfNeeded: a failure on a listing that already had a successful cached analysis keeps that prior result instead of wiping it to null", async () => {
+  const admin = fakeAdmin({ content_hash: hashOf({ description: "Stary opis" }), images_hash: null, model: "gpt-6-luna", text_findings: { buildingTypeHint: "blok", stillGood: true }, photo_findings: null });
+  await withApiKey("test-dummy-key", () =>
+    withFetch(async () => { throw new Error("simulated network failure"); }, () =>
+      analyzeListingWithAiIfNeeded(admin.client as never, "listing-4b", { title: null, city: null, description: "Nowy opis, inny niz stary", images: [] }, { retryDelayMs: 0 }),
+    ),
+  );
+  assert.deepEqual(admin.upserts[0]?.text_findings, { buildingTypeHint: "blok", stillGood: true }, "a failed re-analysis must keep the last known-good findings, not wipe them to null");
+  assert.equal(admin.upserts[0]?.content_hash, hashOf({ description: "Stary opis" }), "the hash must stay at the last successfully-analyzed value, not advance to the new (unanalyzed) content, and never equal the pending sentinel when a real prior hash exists");
+});
+
+test("analyzeListingWithAiIfNeeded: a pending-retry hash from a prior failure is retried on the next scan even though the listing's own content did not change again", async () => {
+  const admin = fakeAdmin({ content_hash: "__pending_retry__", images_hash: null, model: "gpt-6-luna", text_findings: null, photo_findings: null });
+  let calls = 0;
+  const findings = { buildingTypeHint: "blok", ownershipHint: null, yearBuiltHint: null, conditionSummary: null, renovationMentioned: null, confidence: 0.9, missingInfo: [] };
+  await withApiKey("test-dummy-key", () =>
+    withFetch(async () => { calls += 1; return responsesApiReply(findings); }, () =>
+      // Same description as before -- a plain run-of-the-mill unchanged
+      // re-scan would normally be a cache hit, but __pending_retry__ can
+      // never equal a real hash, so this must still call the API.
+      analyzeListingWithAiIfNeeded(admin.client as never, "listing-4c", { title: null, city: null, description: "Opis", images: [] }, { retryDelayMs: 0 }),
+    ),
+  );
+  assert.equal(calls, 1, "a pending-retry row must trigger a fresh attempt, not be treated as a cache hit");
+  assert.equal((admin.upserts[0]?.text_findings as Record<string, unknown> | null)?.buildingTypeHint, "blok");
+  assert.notEqual(admin.upserts[0]?.content_hash, "__pending_retry__", "a successful retry must advance past the pending sentinel to the real hash");
+});
+
+// --- Cost calculation for the real gpt-6-luna rates ---------------------
+
+test("analyzeListingWithAiIfNeeded: a successful call reports a real, non-UNAVAILABLE cost for gpt-6-luna (not just token counts)", async () => {
+  const admin = fakeAdmin(null);
+  const infoCalls: Array<[string, Record<string, unknown>]> = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => { infoCalls.push(args as [string, Record<string, unknown>]); };
+  try {
+    await withApiKey("test-dummy-key", () =>
+      withFetch(
+        async () => responsesApiReply(
+          { buildingTypeHint: "blok", ownershipHint: null, yearBuiltHint: null, conditionSummary: null, renovationMentioned: null, confidence: 0.8, missingInfo: [] },
+          { input_tokens: 1_000_000, output_tokens: 1_000_000, total_tokens: 2_000_000 },
+        ),
+        () => analyzeListingWithAiIfNeeded(admin.client as never, "listing-5", { title: null, city: null, description: "Opis", images: [] }),
+      ),
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+  const usageLog = infoCalls.find(([tag]) => tag === "LISTING_AI_USAGE");
+  assert.ok(usageLog, "a successful call must log LISTING_AI_USAGE");
+  const usage = usageLog![1];
+  assert.equal(usage.dataQuality, "EXACT", "token counts and gpt-6-luna pricing are both available -- this must not be UNAVAILABLE");
+  // $0.10/M input * 1M + $0.50/M output * 1M = $0.10 + $0.50 = $0.60
+  assert.equal(usage.estimatedCostUsd, 0.6);
 });

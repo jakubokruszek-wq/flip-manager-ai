@@ -22,6 +22,9 @@ const TEXT_ANALYSIS_TIMEOUT_MS = 20_000;
 const PHOTO_ANALYSIS_TIMEOUT_MS = 30_000;
 /** Guards against treating a pathologically large or malformed response body as real data. */
 const MAX_RESPONSE_TEXT_LENGTH = 200_000;
+/** 1 initial attempt + 2 retries for a transient (network/429/5xx) failure. */
+const MAX_REQUEST_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 500;
 
 export type ListingAiTextFindings = {
   buildingTypeHint: string | null;
@@ -41,6 +44,17 @@ export type ListingAiPhotoFindings = {
   missingInfo: string[];
   photosAnalyzed: number;
 };
+
+/**
+ * Written as a half's content_hash/images_hash when that half was attempted
+ * but failed even after postToOpenAiWithRetry exhausted its retries (or
+ * there was no previous successful value to fall back to). It can never
+ * equal a real calculateContentHash() output, so the next scan retries that
+ * half even if the listing's own content/images are unchanged -- a failure
+ * must never be cached as if it were a legitimate "analyzed, found
+ * nothing" result.
+ */
+const ANALYSIS_PENDING_HASH = "__pending_retry__";
 
 export type ListingAiAnalysisRow = {
   listingId: string;
@@ -121,18 +135,16 @@ export function confirmedListingImages(images: readonly unknown[] | null | undef
 export async function analyzeListingDescriptionWithAi(
   description: string | null,
   context: { title: string | null; city: string | null },
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; retryDelayMs?: number } = {},
 ): Promise<{ findings: ListingAiTextFindings; usage: FacebookVisionUsage } | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   const trimmed = description?.trim() ?? "";
   if (!apiKey || !trimmed) return null;
   const requestedModel = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
   const truncated = trimmed.slice(0, MAX_DESCRIPTION_CHARS);
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(options.timeoutMs ?? TEXT_ANALYSIS_TIMEOUT_MS),
-    body: JSON.stringify({
+  const response = await postToOpenAiWithRetry(
+    apiKey,
+    {
       model: requestedModel,
       store: false,
       instructions:
@@ -149,8 +161,11 @@ export async function analyzeListingDescriptionWithAi(
         },
       ],
       text: { format: { type: "json_schema", name: "listing_description_findings", strict: true, schema: TEXT_SCHEMA } },
-    }),
-  });
+    },
+    options.timeoutMs ?? TEXT_ANALYSIS_TIMEOUT_MS,
+    options.retryDelayMs ?? RETRY_BASE_DELAY_MS,
+    "LISTING_AI_TEXT_REQUEST_RETRY",
+  );
   const { payload, text } = await readOpenAiResponse(response);
   if (!response.ok) throw new Error(`Analiza opisu oferty nie powiodła się (OpenAI HTTP ${response.status}).`);
   if (!text) throw new Error("OpenAI nie zwróciło treści analizy opisu.");
@@ -162,16 +177,14 @@ export async function analyzeListingDescriptionWithAi(
 export async function analyzeListingPhotosWithAi(
   confirmedImageUrls: readonly string[],
   context: { title: string | null },
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; retryDelayMs?: number } = {},
 ): Promise<{ findings: ListingAiPhotoFindings; usage: FacebookVisionUsage } | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || !confirmedImageUrls.length) return null;
   const requestedModel = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(options.timeoutMs ?? PHOTO_ANALYSIS_TIMEOUT_MS),
-    body: JSON.stringify({
+  const response = await postToOpenAiWithRetry(
+    apiKey,
+    {
       model: requestedModel,
       store: false,
       instructions:
@@ -186,8 +199,11 @@ export async function analyzeListingPhotosWithAi(
         },
       ],
       text: { format: { type: "json_schema", name: "listing_photo_findings", strict: true, schema: PHOTO_SCHEMA } },
-    }),
-  });
+    },
+    options.timeoutMs ?? PHOTO_ANALYSIS_TIMEOUT_MS,
+    options.retryDelayMs ?? RETRY_BASE_DELAY_MS,
+    "LISTING_AI_PHOTO_REQUEST_RETRY",
+  );
   const { payload, text } = await readOpenAiResponse(response);
   if (!response.ok) throw new Error(`Analiza zdjęć oferty nie powiodła się (OpenAI HTTP ${response.status}).`);
   if (!text) throw new Error("OpenAI nie zwróciło treści analizy zdjęć.");
@@ -202,16 +218,27 @@ export async function analyzeListingPhotosWithAi(
  * yet) -- never on an unchanged re-scan, and never on a Finder page render,
  * since nothing here is ever called from a read/render path. Caches via an
  * upsert keyed on listing_id; whichever half (text/photo) is unchanged
- * keeps its previous cached value instead of being cleared. Degrades
- * silently (no-op, never throws) if the draft migration for this table has
- * not been applied yet, or if OPENAI_API_KEY is not configured, or if a
- * real API call fails -- this is advisory-only data, so missing it must
- * never fail the scan that is persisting the listing itself.
+ * keeps its previous cached value instead of being cleared.
+ *
+ * Never throws -- this is advisory-only data, so it must never fail the
+ * scan that is persisting the listing itself -- but never pretends success
+ * either: if the draft migration for this table has not been applied yet,
+ * a real API call fails even after retrying, or a read/write error occurs,
+ * that is logged via a distinct console.warn tag (LISTING_AI_ANALYSIS_
+ * TABLE_MISSING / _READ_ERROR / _WRITE_ERROR / _TEXT_ANALYSIS_FAILED /
+ * _PHOTO_ANALYSIS_FAILED) rather than silently resolving. A failed attempt
+ * also never overwrites a previous successful cache value, and never
+ * advances its hash past ANALYSIS_PENDING_HASH -- so a genuine failure is
+ * retried on the next scan even if the listing's own content/images did
+ * not change, instead of being retried never again. If OPENAI_API_KEY is
+ * not configured, or the description/images are empty, the corresponding
+ * analyzer function returns null without logging anything (not a failure).
  */
 export async function analyzeListingWithAiIfNeeded(
   supabase: SupabaseClient,
   listingId: string,
   item: { title: string | null; city: string | null; description: string | null; images?: string[] | null },
+  options: { retryDelayMs?: number } = {},
 ): Promise<void> {
   const descriptionHash = calculateContentHash({ description: item.description ?? "" });
   const confirmedImages = confirmedListingImages(item.images);
@@ -222,7 +249,10 @@ export async function analyzeListingWithAiIfNeeded(
     .select("content_hash,images_hash,model,text_findings,photo_findings")
     .eq("listing_id", listingId)
     .maybeSingle();
-  if (isMissingListingAiAnalysisTable(existing.error)) return;
+  if (isMissingListingAiAnalysisTable(existing.error)) {
+    console.warn("LISTING_AI_ANALYSIS_TABLE_MISSING", { listingId, stage: "read" });
+    return;
+  }
   if (existing.error) {
     console.warn("LISTING_AI_ANALYSIS_READ_ERROR", { listingId, error: existing.error });
     return;
@@ -234,40 +264,52 @@ export async function analyzeListingWithAiIfNeeded(
   if (textUnchanged && photosUnchanged) return;
 
   const requestedModel = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
-  const [textOutcome, photoOutcome] = await Promise.all([
-    textUnchanged ? null : analyzeListingDescriptionWithAi(item.description, { title: item.title, city: item.city }).catch((reason) => {
-      console.warn("LISTING_AI_TEXT_ANALYSIS_FAILED", { listingId, error: reason instanceof Error ? reason.message : "unknown" });
-      return null;
-    }),
-    photosUnchanged ? null : analyzeListingPhotosWithAi(confirmedImages, { title: item.title }).catch((reason) => {
-      console.warn("LISTING_AI_PHOTO_ANALYSIS_FAILED", { listingId, error: reason instanceof Error ? reason.message : "unknown" });
-      return null;
-    }),
+  const [textAttempt, photoAttempt] = await Promise.all([
+    textUnchanged ? null : analyzeListingDescriptionWithAi(item.description, { title: item.title, city: item.city }, { retryDelayMs: options.retryDelayMs }).then(
+      (outcome) => ({ succeeded: true as const, outcome }),
+      (reason) => {
+        console.warn("LISTING_AI_TEXT_ANALYSIS_FAILED", { listingId, error: reason instanceof Error ? reason.message : "unknown" });
+        return { succeeded: false as const };
+      },
+    ),
+    photosUnchanged ? null : analyzeListingPhotosWithAi(confirmedImages, { title: item.title }, { retryDelayMs: options.retryDelayMs }).then(
+      (outcome) => ({ succeeded: true as const, outcome }),
+      (reason) => {
+        console.warn("LISTING_AI_PHOTO_ANALYSIS_FAILED", { listingId, error: reason instanceof Error ? reason.message : "unknown" });
+        return { succeeded: false as const };
+      },
+    ),
   ]);
+  const textFailed = textAttempt !== null && !textAttempt.succeeded;
+  const photoFailed = photoAttempt !== null && !photoAttempt.succeeded;
 
   // Whichever half is unchanged keeps its previously cached value (null if
-  // there was never a cached row); the half that changed gets its fresh
-  // outcome, or null if that call failed or had nothing to analyze (e.g. an
-  // empty description) -- still worth caching as "attempted, found
-  // nothing" against this exact content_hash/images_hash, so an
-  // unextractable description or a photo-less listing is never retried on
-  // every subsequent scan.
-  const textFindings = textUnchanged ? cached?.text_findings ?? null : textOutcome?.findings ?? null;
-  const photoFindings = photosUnchanged ? cached?.photo_findings ?? null : photoOutcome?.findings ?? null;
+  // there was never a cached row). A half that was attempted and SUCCEEDED
+  // (even by legitimately finding nothing, e.g. an empty description) gets
+  // its fresh outcome and fresh hash. A half that was attempted and FAILED
+  // -- even after postToOpenAiWithRetry exhausted its retries -- keeps
+  // whatever was cached before AND does not advance its hash past
+  // ANALYSIS_PENDING_HASH/the old value: a failure must never be cached as
+  // if it were a successful "found nothing" result, or the next scan of
+  // this same, unchanged listing would never retry it.
+  const textFindings = textAttempt?.succeeded ? textAttempt.outcome?.findings ?? null : cached?.text_findings ?? null;
+  const photoFindings = photoAttempt?.succeeded ? photoAttempt.outcome?.findings ?? null : cached?.photo_findings ?? null;
+  const contentHashToWrite = textFailed ? cached?.content_hash ?? ANALYSIS_PENDING_HASH : descriptionHash;
+  const imagesHashToWrite = photoFailed ? cached?.images_hash ?? ANALYSIS_PENDING_HASH : imagesHash;
 
   // A photo call's input necessarily includes the image(s) themselves, on
   // top of the same kind of text prompt a text-only call sends -- its own
   // reported input token count is therefore always higher for the same
   // listing, which this log line makes directly inspectable per call
   // rather than only implied by the two calls sharing one cost table.
-  if (textOutcome) logListingAiUsage("text", listingId, textOutcome.usage);
-  if (photoOutcome) logListingAiUsage("photo", listingId, photoOutcome.usage, confirmedImages.length);
+  if (textAttempt?.succeeded && textAttempt.outcome) logListingAiUsage("text", listingId, textAttempt.outcome.usage);
+  if (photoAttempt?.succeeded && photoAttempt.outcome) logListingAiUsage("photo", listingId, photoAttempt.outcome.usage, confirmedImages.length);
 
   const { error: writeError } = await supabase.from("listing_ai_analysis").upsert(
     {
       listing_id: listingId,
-      content_hash: descriptionHash,
-      images_hash: imagesHash,
+      content_hash: contentHashToWrite,
+      images_hash: imagesHashToWrite,
       model: requestedModel,
       text_findings: textFindings,
       photo_findings: photoFindings,
@@ -275,8 +317,12 @@ export async function analyzeListingWithAiIfNeeded(
     },
     { onConflict: "listing_id" },
   );
-  if (writeError && !isMissingListingAiAnalysisTable(writeError)) {
-    console.warn("LISTING_AI_ANALYSIS_WRITE_ERROR", { listingId, error: writeError });
+  if (writeError) {
+    if (isMissingListingAiAnalysisTable(writeError)) {
+      console.warn("LISTING_AI_ANALYSIS_TABLE_MISSING", { listingId, stage: "write" });
+    } else {
+      console.warn("LISTING_AI_ANALYSIS_WRITE_ERROR", { listingId, error: writeError });
+    }
   }
 }
 
@@ -292,6 +338,43 @@ function logListingAiUsage(kind: "text" | "photo", listingId: string, usage: Fac
     dataQuality: usage.dataQuality,
     ...(photosAnalyzed !== undefined ? { photosAnalyzed } : {}),
   });
+}
+
+/**
+ * Retries a POST to the OpenAI Responses API on a transient failure (a
+ * thrown network/timeout error, HTTP 429, or any HTTP 5xx) up to
+ * MAX_REQUEST_ATTEMPTS total attempts. A non-retryable HTTP error (e.g. 400
+ * bad request, 401 invalid key) is returned immediately on the first
+ * attempt -- retrying it would only waste time and quota, since it will
+ * never succeed without the request itself changing.
+ */
+async function postToOpenAiWithRetry(apiKey: string, body: Record<string, unknown>, timeoutMs: number, retryDelayMs: number, logTag: string): Promise<Response> {
+  for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt++) {
+    const isLastAttempt = attempt === MAX_REQUEST_ATTEMPTS;
+    try {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify(body),
+      });
+      if (response.ok || isLastAttempt || !isRetryableStatus(response.status)) return response;
+      console.warn(logTag, { attempt, status: response.status });
+    } catch (error) {
+      if (isLastAttempt) throw error;
+      console.warn(logTag, { attempt, error: error instanceof Error ? error.message : "unknown" });
+    }
+    if (retryDelayMs > 0) await delay(retryDelayMs * attempt);
+  }
+  throw new Error("Nieoczekiwany koniec pętli ponawiania żądania OpenAI.");
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isMissingListingAiAnalysisTable(error: { code?: unknown; message?: unknown } | null): boolean {

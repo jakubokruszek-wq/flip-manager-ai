@@ -27,6 +27,23 @@ mock.module("./listing-ai-analysis.ts", {
   },
 });
 
+// persistListing must defer the AI analyzer via runAfterResponse (next/
+// server's after(), backed by the platform's waitUntil) rather than a bare
+// `void promise` -- a plain detached promise can be frozen mid-flight the
+// moment this request's response is sent on Vercel, silently losing the
+// call before it ever runs. Tracking calls to the real runAfterResponse
+// module (NOT mocked away) proves the wiring actually goes through it.
+let runAfterResponseCalls = 0;
+const { runAfterResponse: realRunAfterResponse } = await import("@/features/facebook-watcher/run-after-response");
+mock.module("@/features/facebook-watcher/run-after-response", {
+  namedExports: {
+    runAfterResponse: (task: () => Promise<unknown>) => {
+      runAfterResponseCalls += 1;
+      realRunAfterResponse(task);
+    },
+  },
+});
+
 type Row = Record<string, unknown>;
 function fakeDb(rows: Row[]) {
   let sequence = 0;
@@ -90,10 +107,20 @@ function listing(externalListingId: string, overrides: Partial<Row> = {}) {
 
 test("a brand-new listing triggers the AI analyzer exactly once", async () => {
   analyzeCalls = [];
+  runAfterResponseCalls = 0;
   const rows: Row[] = [];
   await persistListing(fakeDb(rows) as never, "filter-1", listing("new-1"), true, [], "scan-1", "2026-10-04T10:00:00Z", AbortSignal.timeout(1000));
   assert.equal(analyzeCalls.length, 1);
   assert.equal(analyzeCalls[0]?.description, "Opis oferty");
+});
+
+test("the AI analyzer is deferred via runAfterResponse, not a bare fire-and-forget promise that a serverless invocation could freeze before it runs", async () => {
+  analyzeCalls = [];
+  runAfterResponseCalls = 0;
+  const rows: Row[] = [];
+  await persistListing(fakeDb(rows) as never, "filter-1", listing("safe-1"), true, [], "scan-1", "2026-10-04T10:00:00Z", AbortSignal.timeout(1000));
+  assert.equal(runAfterResponseCalls, 1, "the AI analysis call must go through runAfterResponse exactly once");
+  assert.equal(analyzeCalls.length, 1, "runAfterResponse's fallback (no request scope here) must still actually run the task");
 });
 
 test("re-scanning the exact same, unchanged listing a second time does NOT trigger the AI analyzer again", async () => {

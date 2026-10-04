@@ -1,6 +1,6 @@
 import type { FacebookOpenAIVisionSummary, FacebookVisionCostDataQuality, FacebookVisionExtraction, FacebookVisionUsage } from "./types.ts";
 
-export const OPENAI_PRICING_VERSION = "2026-08-23";
+export const OPENAI_PRICING_VERSION = "2026-10-04";
 export const OPENAI_PRICING_SOURCE_URL = "https://developers.openai.com/api/docs/models/gpt-4o-mini";
 
 type ModelPricing = {
@@ -15,6 +15,11 @@ const PRICING: Record<string, ModelPricing> = {
   "gpt-4o-mini-2024-07-18": { sourceModel: "gpt-4o-mini", inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 0.6 },
   "gpt-4o": { sourceModel: "gpt-4o", inputUsdPerMillion: 2.5, cachedInputUsdPerMillion: 1.25, outputUsdPerMillion: 10 },
   "gpt-4o-2024-08-06": { sourceModel: "gpt-4o", inputUsdPerMillion: 2.5, cachedInputUsdPerMillion: 1.25, outputUsdPerMillion: 10 },
+  // Standard-tier rates per https://developers.openai.com/api/docs/models/gpt-6-luna
+  // (confirmed 2026-10-04). Batch/Flex and the >272K-input long-context tier
+  // bill at different rates; this table only covers the Standard tier, same
+  // scope as every other entry above.
+  "gpt-6-luna": { sourceModel: "gpt-6-luna", inputUsdPerMillion: 0.1, cachedInputUsdPerMillion: 0.01, outputUsdPerMillion: 0.5 },
 };
 
 export type FacebookVisionCostSummary = {

@@ -82,6 +82,31 @@ test("cached input uses the lower official rate", () => {
   assert.equal(cost?.estimatedCostUsd, 0.00042);
 });
 
+test("gpt-6-luna has a real, non-null pricing entry at its current ($0.10/$0.01/$0.50 per 1M) rates", () => {
+  const cost = calculateOpenAIVisionCost({ model: "gpt-6-luna", inputTokens: 1_000_000, outputTokens: 1_000_000 });
+  assert.ok(cost, "gpt-6-luna must have a pricing table entry, not fall back to null/UNAVAILABLE");
+  assert.equal(cost.estimatedCostUsd, 0.6, "1M input ($0.10) + 1M output ($0.50) = $0.60");
+  assert.equal(cost.pricingSourceModel, "gpt-6-luna");
+});
+
+test("gpt-6-luna cached input bills at its own, lower rate ($0.01/M, not the $0.10/M uncached rate)", () => {
+  const cost = calculateOpenAIVisionCost({ model: "gpt-6-luna", inputTokens: 1_000_000, cachedInputTokens: 1_000_000, outputTokens: 0 });
+  assert.equal(cost?.estimatedCostUsd, 0.01);
+});
+
+test("captureOpenAIResponseUsage reports EXACT (not UNAVAILABLE) for gpt-6-luna once token counts are present", () => {
+  const captured = captureOpenAIResponseUsage(
+    { model: "gpt-6-luna", usage: { input_tokens: 2_000, output_tokens: 300, total_tokens: 2_300, input_tokens_details: { cached_tokens: 0 } } },
+    "gpt-6-luna",
+    "req_luna_1",
+  );
+  assert.equal(captured.dataQuality, "EXACT");
+  assert.ok(captured.estimatedCostUsd !== null, "a real rate and real token counts must never collapse to a null/UNAVAILABLE cost");
+  // 2000 input * $0.10/M + 300 output * $0.50/M, in USD
+  assert.equal(captured.estimatedCostUsd, (2_000 * 0.1 + 300 * 0.5) / 1_000_000);
+  assert.equal(captured.pricingSourceModel, "gpt-6-luna");
+});
+
 test("result summary remains JSON serializable with per-call usage metrics", () => {
   const summary = summarizeFacebookVisionUsage([vision(usage())], 1);
   const serialized = JSON.parse(JSON.stringify({ source: "facebook", ...summary, openaiVisionCalls: [{ postId: "post-1", usage: usage() }] })) as typeof summary & { source: string; openaiVisionCalls: Array<{ postId: string; usage: FacebookVisionUsage }> };
