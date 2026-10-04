@@ -1,0 +1,25 @@
+# TEMPORARY diagnostic workflow. Purpose: confirm GitHub Actions actually
+# delivers `schedule` events on this repository at all, after
+# finder-scan-continuation.yml and finder-scan-scheduler.yml showed zero
+# runs since being pushed to main. Logs only a UTC timestamp, run id, and
+# commit SHA -- no secrets, no OIDC, no checkout, no third-party actions, no
+# app/Supabase contact. Delete this file once the first schedule-triggered
+# run is confirmed.
+name: Schedule delivery probe (temporary)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Log timestamp, run id, and SHA
+        run: |
+          echo "UTC timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "SHA: ${{ github.sha }}"
