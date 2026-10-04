@@ -16,6 +16,7 @@ test("continuation draft adds durable lease state without changing OLX/Facebook 
   assert.match(sql, /source not in \('olx', 'facebook'\)/i);
   assert.match(sql, /for update skip locked/i);
   assert.match(sql, /started_at <= p_now - interval '5 minutes'/i);
+  assert.match(sql, /if p_lease_seconds is null or p_lease_seconds < 30 or p_lease_seconds > 900 then/i, "explicit NULL must fail before a row can be claimed");
   assert.match(sql, /grant execute .*to service_role/i);
   assert.doesNotMatch(sql, /insert into public\.olx_scan_jobs/i);
 });

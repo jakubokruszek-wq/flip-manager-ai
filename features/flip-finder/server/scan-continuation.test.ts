@@ -30,6 +30,14 @@ test("completed rows are never eligible and a row is eligible at most once per c
   assert.equal(claimContinuationRows([pending, pending, completed], NOW, CYCLE).length, 1);
 });
 
+test("one continuation cycle can claim multiple ready sources, while still de-duplicating each row", () => {
+  const pending = { id: "pending-1", source: "gratka", status: "pending", continuationNextAt: "2026-10-04T10:00:00.000Z", continuationCycleAt: "2026-10-04T09:00:00.000Z" };
+  const secondReady = { ...pending, id: "pending-2", source: "official_uml" };
+  const completed = { id: "done", source: "gratka", status: "completed" };
+  const claimed = claimContinuationRows([pending, secondReady, pending, completed], NOW, CYCLE);
+  assert.deepEqual(claimed.map((row) => row.id), ["pending-1", "pending-2"], "the hourly worker must keep claiming ready rows until its deadline, not stop after the first source");
+});
+
 test("a live continuation lease is not reclaimed, but an expired lease or orphan is", () => {
   const live = { id: "live", source: "domy", status: "running", continuationCycleAt: "2026-10-04T09:00:00.000Z", continuationLeaseUntil: "2026-10-04T10:40:00.000Z", startedAt: "2026-10-04T10:00:00.000Z" };
   const expired = { ...live, id: "expired", continuationLeaseUntil: "2026-10-04T10:30:00.000Z" };

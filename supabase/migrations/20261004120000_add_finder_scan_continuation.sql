@@ -38,7 +38,10 @@ begin
   if p_cycle_at is null or p_now is null then
     raise exception 'continuation timestamps are required';
   end if;
-  if p_lease_seconds < 30 or p_lease_seconds > 900 then
+  -- In PL/pgSQL an IF expression that evaluates to NULL is not true.  The
+  -- explicit NULL arm is therefore required: a caller must never be able to
+  -- bypass lease validation by passing a JSON/SQL NULL.
+  if p_lease_seconds is null or p_lease_seconds < 30 or p_lease_seconds > 900 then
     raise exception 'invalid continuation lease';
   end if;
 
