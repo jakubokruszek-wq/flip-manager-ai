@@ -119,10 +119,22 @@ async function reserveSourceScans(supabase: SupabaseClient, filterId: string, lo
   if (reserveError) throw statusError(500, "Nie udało się zarezerwować skanu.");
 }
 
-function isMissingReservationFunction(error: { code?: unknown; message?: unknown }): boolean {
-  const code = typeof error.code === "string" ? error.code : "";
-  const message = typeof error.message === "string" ? error.message : "";
-  return code === "42883" || code === "PGRST202" || /schema cache|does not exist/i.test(message);
+/**
+ * Deliberately code-only, not a message/regex heuristic: PostgREST always
+ * sets PGRST202 (and a direct Postgres call would set 42883) for exactly
+ * "this function does not exist", so these two codes are both necessary and
+ * sufficient. A message-pattern fallback (e.g. matching "does not exist")
+ * would also match unrelated errors -- a different missing table/column, a
+ * permission error's wording, anything -- and silently route them into the
+ * legacy fallback instead of surfacing them, which is precisely the
+ * "wyłącznie przy dokładnym błędzie braku funkcji" guarantee this must hold:
+ * a permission or validation error from reserve_source_scans itself (e.g.
+ * SEARCH_FILTER_NOT_FOUND, SCAN_ALREADY_RUNNING, or a 42501 if the grant is
+ * ever missing) must always be treated as a real error, never as "not
+ * deployed yet".
+ */
+function isMissingReservationFunction(error: { code?: unknown }): boolean {
+  return error.code === "42883" || error.code === "PGRST202";
 }
 
 function isScanAlreadyRunningError(error: { message?: unknown }): boolean {

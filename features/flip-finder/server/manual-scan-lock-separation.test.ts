@@ -46,9 +46,15 @@ type Row = Record<string, unknown>;
  * chain stands in for Postgres's SELECT ... FOR UPDATE row lock, so
  * concurrent callers are strictly serialized (one fully completes its
  * check+insert before the next one's check can run) instead of merely being
- * delayed -- a real guarantee, not a smaller race window.
+ * delayed -- a real guarantee, not a smaller race window. "permission-denied"
+ * and "filter-not-found" simulate the RPC existing but returning a real
+ * Postgres error of its own (42501 insufficient_privilege if the grant to
+ * service_role is ever missing, or the function's own SEARCH_FILTER_NOT_FOUND
+ * raise) -- proving the fallback below only ever triggers on the exact
+ * "function does not exist" signal, never on a permission or validation
+ * error from a function that does exist.
  */
-function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; rpcMode?: "missing" | "atomic" } = {}) {
+function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; rpcMode?: "missing" | "atomic" | "permission-denied" | "filter-not-found" } = {}) {
   const sourceScans: Row[] = seedSourceScans.map((row) => ({ ...row }));
   let idSeq = 1;
   let waitingForRace: Array<() => void> = [];
@@ -129,6 +135,12 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number;
     const filterId = args.p_search_filter_id as string;
     const runId = args.p_scan_run_id as string;
     const snapshot = args.p_filter_snapshot;
+    if (options.rpcMode === "permission-denied") {
+      return { data: null, error: { code: "42501", message: "permission denied for function reserve_source_scans" } };
+    }
+    if (options.rpcMode === "filter-not-found") {
+      return { data: null, error: { code: "P0001", message: "SEARCH_FILTER_NOT_FOUND" } };
+    }
     if (options.rpcMode !== "atomic") {
       return { data: null, error: { code: "PGRST202", message: `Could not find the function public.reserve_source_scans in the schema cache` } };
     }
@@ -301,6 +313,26 @@ test("once reserve_source_scans exists (migration applied), two truly concurrent
   assert.equal(rejected.length, 1, "the other concurrent start must be rejected, never silently also reserve the same source");
   assert.match(String((rejected[0] as PromiseRejectedResult)?.reason?.message), /Skan tego filtra już trwa/);
   assert.equal(current.sourceScans.filter((row) => row.source === "otodom" && row.search_filter_id === mixedFilter.id).length, 1, "only one otodom source_scans row may exist for this filter after the race");
+});
+
+// The fallback in reserveSourceScans must trigger on exactly one thing: the
+// RPC not existing yet (PGRST202/42883). A permission error (e.g. the grant
+// to service_role is ever missing or dropped) or a validation error raised
+// by the function itself (e.g. SEARCH_FILTER_NOT_FOUND, its own defensive
+// check before even reading source_scans) must surface as a real failure --
+// never be silently reinterpreted as "not deployed yet" and routed into the
+// legacy check-then-insert, which would both mask a real misconfiguration
+// and could still reserve rows under conditions the RPC explicitly rejected.
+test("a permission error from an existing reserve_source_scans (e.g. a missing grant) is a real failure, never silently treated as the function being absent", async () => {
+  current = fakeAdmin([], { rpcMode: "permission-denied" });
+  await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Nie udało się zarezerwować skanu/);
+  assert.equal(current.sourceScans.length, 0, "no fallback insert may run when the RPC exists but is denied by permissions");
+});
+
+test("reserve_source_scans' own SEARCH_FILTER_NOT_FOUND validation is a real failure, never silently treated as the function being absent", async () => {
+  current = fakeAdmin([], { rpcMode: "filter-not-found" });
+  await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Nie udało się zarezerwować skanu/);
+  assert.equal(current.sourceScans.length, 0, "no fallback insert may run when the RPC exists but rejects the call on its own validation");
 });
 
 test("prepared background rows become running and finalize through the real scan runner", async () => {
