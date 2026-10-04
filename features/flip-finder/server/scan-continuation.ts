@@ -11,6 +11,7 @@ import "server-only";
  */
 export const CONTINUATION_INTERVAL_MS = 60 * 60 * 1000;
 export const CONTINUATION_LEASE_MS = 4 * 60 * 1000;
+export const CONTINUATION_MAX_WAIT_MS = 2 * CONTINUATION_INTERVAL_MS;
 // A first invocation may be killed after changing a row to `running`, before
 // it can attach a continuation lease. Keep a short grace period so a healthy
 // adapter is not stolen while it is still inside its original timeout, then
@@ -40,6 +41,13 @@ export function nextContinuationAt(now: number | Date): string {
 
 export function isContinuationPending(errorMessage: string | null | undefined): boolean {
   return typeof errorMessage === "string" && errorMessage.startsWith("SOURCE_TIMEOUT:");
+}
+
+export function isContinuationExpired(errorMessage: string | null | undefined, continuationNextAt: string | null | undefined, now: number | Date): boolean {
+  if (!isContinuationPending(errorMessage) || !continuationNextAt) return false;
+  const nextAtMs = Date.parse(continuationNextAt);
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  return Number.isFinite(nextAtMs) && nextAtMs + CONTINUATION_MAX_WAIT_MS <= nowMs;
 }
 
 export function isPermanentSourceFailure(error: unknown): boolean {

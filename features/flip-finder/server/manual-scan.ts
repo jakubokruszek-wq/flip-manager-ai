@@ -11,7 +11,7 @@ import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-m
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
-import { CONTINUATION_LEASE_MS, classifySourceFailure, continuationCycleAt, isContinuationPending, nextContinuationAt } from "./scan-continuation";
+import { CONTINUATION_LEASE_MS, classifySourceFailure, continuationCycleAt, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
 export { scanStatus } from "./scan-start-errors";
 
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
@@ -393,10 +393,10 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * unclaimed job blocking that filter's scans permanently.
  */
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
-  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (readError) throw statusError(500, "Nie udało się sprawdzić wygasłej blokady skanu.");
-  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown; error_message: string | null } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
-    .filter((candidate) => !isContinuationPending(candidate.error_message))
+  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown; error_message: string | null; continuation_next_at: string | null } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
+    .filter((candidate) => !isContinuationPending(candidate.error_message) || isContinuationExpired(candidate.error_message, candidate.continuation_next_at, Date.now()))
     .filter((candidate) => isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt: scanHeartbeatAt(candidate.filter_snapshot) }, Date.now()))
     .map((candidate) => candidate.id);
   if (!staleIds.length) return;

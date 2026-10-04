@@ -60,3 +60,15 @@ test("progress watchdog queues orphaned Finder source rows and preserves heartbe
   assert.deepEqual(admin.updates.map((update) => update.ids), [["stale-official"]]);
   assert.equal(admin.updates[0]?.patch.continuation_next_at, "2026-10-03T13:00:00.000Z");
 });
+
+test("a continuation missing two hourly cycles becomes terminal and releases its lock", async () => {
+  const admin = fakeAdmin([
+    { id: "expired-continuation", scan_run_id: "run-expired", source: "official_uml", status: "pending", started_at: ago(180), continuation_next_at: ago(121), continuation_cycle_at: ago(180), error_message: "SOURCE_TIMEOUT: waiting for continuation", filter_snapshot: {} },
+  ]);
+
+  await expireStaleFinderSourceScans(admin as never, "run-expired", now);
+
+  const row = admin.rows[0];
+  assert.equal(row.status, "failed");
+  assert.match(String(row.error_message), /^SOURCE_CONTINUATION_EXPIRED:/);
+});

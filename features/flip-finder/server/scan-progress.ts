@@ -27,7 +27,7 @@ import { summarizeHardRejects } from "@/features/flip-finder/funnel-summary";
 import { explainPartialFacebookScan } from "@/features/facebook-worker/scan-accounting";
 import { projectPersistedFacebookAccounting } from "./scan-accounting-projection";
 import { scanHeartbeatAt } from "./scan-lifecycle";
-import { CONTINUATION_ORPHAN_GRACE_MS, isContinuationPending, nextContinuationAt } from "./scan-continuation";
+import { CONTINUATION_ORPHAN_GRACE_MS, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
 
 type Row = Record<string, unknown>;
 const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
@@ -171,7 +171,7 @@ export async function expireStaleFinderSourceScans(
   now = Date.now(),
 ): Promise<void> {
   const candidates = await supabase.from("source_scans")
-    .select("id,source,status,started_at,filter_snapshot,error_message,continuation_cycle_at,continuation_lease_until")
+    .select("id,source,status,started_at,filter_snapshot,error_message,continuation_next_at,continuation_cycle_at,continuation_lease_until")
     .eq("scan_run_id", runId)
     .neq("source", "facebook")
     .neq("source", "olx")
@@ -188,6 +188,10 @@ export async function expireStaleFinderSourceScans(
     const latestActivity = Math.max(Number.isFinite(startedMs) ? startedMs : 0, Number.isFinite(heartbeatMs) ? heartbeatMs : 0);
     return latestActivity > 0 && latestActivity + CONTINUATION_ORPHAN_GRACE_MS > now;
   });
+  const expiredIds = candidateRows
+    .filter((item) => isContinuationExpired(string(item.error_message), string(item.continuation_next_at), now) && !string(item.continuation_lease_until))
+    .map((item) => String(item.id))
+    .filter(Boolean);
   const continuationIds = candidateRows
     .filter((item) => {
       const id = string(item.id);
@@ -195,7 +199,8 @@ export async function expireStaleFinderSourceScans(
       const continuationCycle = string(item.continuation_cycle_at);
       const leaseUntil = string(item.continuation_lease_until);
       const leaseLive = leaseUntil ? Date.parse(leaseUntil) > now : false;
-      if (!id || !source || isContinuationPending(string(item.error_message)) || continuationCycle || leaseLive) return false;
+      const continuationExpired = isContinuationExpired(string(item.error_message), string(item.continuation_next_at), now);
+      if (!id || !source || expiredIds.includes(id) || (isContinuationPending(string(item.error_message)) && !continuationExpired) || (continuationCycle && !continuationExpired) || leaseLive) return false;
       const startedMs = Date.parse(string(item.started_at) ?? "");
       const heartbeatMs = Date.parse(scanHeartbeatAt(item.filter_snapshot) ?? "");
       const latestActivity = Math.max(Number.isFinite(startedMs) ? startedMs : 0, Number.isFinite(heartbeatMs) ? heartbeatMs : 0);
@@ -204,13 +209,22 @@ export async function expireStaleFinderSourceScans(
       return true;
     })
     .map((item) => String(item.id));
-  if (!continuationIds.length) return;
-  const result = await supabase.from("source_scans")
-    .update({ status: "pending", finished_at: null, error_message: "SOURCE_TIMEOUT: worker ended before continuation; waiting for continuation", continuation_next_at: nextContinuationAt(now), continuation_lease_until: null, continuation_lease_token: null })
-    .in("id", continuationIds)
-    .in("status", ["pending", "running"])
-    .abortSignal(AbortSignal.timeout(SCAN_PROGRESS_DATABASE_TIMEOUT_MS));
-  if (result.error) throw new Error(`FINDER_CONTINUATION_RECOVERY_FAILED: ${result.error.message}`);
+  if (continuationIds.length) {
+    const result = await supabase.from("source_scans")
+      .update({ status: "pending", finished_at: null, error_message: "SOURCE_TIMEOUT: worker ended before continuation; waiting for continuation", continuation_next_at: nextContinuationAt(now), continuation_lease_until: null, continuation_lease_token: null })
+      .in("id", continuationIds)
+      .in("status", ["pending", "running"])
+      .abortSignal(AbortSignal.timeout(SCAN_PROGRESS_DATABASE_TIMEOUT_MS));
+    if (result.error) throw new Error(`FINDER_CONTINUATION_RECOVERY_FAILED: ${result.error.message}`);
+  }
+  if (expiredIds.length) {
+    const result = await supabase.from("source_scans")
+      .update({ status: "failed", finished_at: new Date(now).toISOString(), error_message: "SOURCE_CONTINUATION_EXPIRED: no worker resumed this source within two hourly cycles", continuation_next_at: null, continuation_lease_until: null, continuation_lease_token: null })
+      .in("id", expiredIds)
+      .in("status", ["pending", "running"])
+      .abortSignal(AbortSignal.timeout(SCAN_PROGRESS_DATABASE_TIMEOUT_MS));
+    if (result.error) throw new Error(`FINDER_CONTINUATION_EXPIRY_FAILED: ${result.error.message}`);
+  }
 }
 
 async function expireUnclaimedFacebookJobs(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, runId: string): Promise<void> {

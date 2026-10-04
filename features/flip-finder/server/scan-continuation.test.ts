@@ -6,6 +6,7 @@ import {
   classifySourceFailure,
   continuationCycleAt,
   continuationEligible,
+  isContinuationExpired,
   isPermanentSourceFailure,
   nextContinuationAt,
 } from "./scan-continuation.ts";
@@ -44,6 +45,12 @@ test("HTTP 403 is terminal and cannot enter the continuation queue", () => {
   const disposition = classifySourceFailure({ timedOut: false, error: new Error("Szybko: HTTP 403."), now: NOW });
   assert.deepEqual(disposition, { status: "failed", errorCode: "SOURCE_FORBIDDEN", nextAttemptAt: null });
   assert.equal(isPermanentSourceFailure("forbidden"), true);
+});
+
+test("a continuation that missed two hourly cycles expires instead of blocking forever", () => {
+  assert.equal(isContinuationExpired("SOURCE_TIMEOUT: waiting", "2026-10-04T08:00:00.000Z", NOW), true);
+  assert.equal(isContinuationExpired("SOURCE_TIMEOUT: waiting", "2026-10-04T10:00:00.000Z", NOW), false);
+  assert.equal(isContinuationExpired("SOURCE_FAILED: permanent", "2026-10-04T08:00:00.000Z", NOW), false);
 });
 
 test("OLX and Facebook never enter Finder continuation claims", () => {
