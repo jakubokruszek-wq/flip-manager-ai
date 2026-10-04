@@ -54,6 +54,7 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
   ]),
   ...routes("CRON_SECRET", [
     ["POST", "/api/jobs/facebook-watch", /^\/api\/jobs\/facebook-watch$/],
+    ["POST", "/api/jobs/finder-scan-continuation", /^\/api\/jobs\/finder-scan-continuation$/],
     ["POST", "/api/jobs/listing-lifecycle", /^\/api\/jobs\/listing-lifecycle$/],
   ]),
   ...routes("OPERATOR_SECRET", [
@@ -72,6 +73,7 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
     ["PATCH", "/api/facebook-watcher/listings/[listingId]", /^\/api\/facebook-watcher\/listings\/[^/]+$/],
     ["POST", "/api/facebook-watcher/listings/[listingId]/gallery-repair", /^\/api\/facebook-watcher\/listings\/[^/]+\/gallery-repair$/],
     ["POST", "/api/facebook-watcher/listings/[listingId]/restore", /^\/api\/facebook-watcher\/listings\/[^/]+\/restore$/],
+    ["PUT", "/api/facebook-watcher/scheduler-settings", /^\/api\/facebook-watcher\/scheduler-settings$/],
     ["DELETE", "/api/flip-finder/history", /^\/api\/flip-finder\/history$/],
     ["POST", "/api/flip-finder/investment/market-assumptions", /^\/api\/flip-finder\/investment\/market-assumptions$/],
     ["PUT", "/api/flip-finder/investment/settings", /^\/api\/flip-finder\/investment\/settings$/],

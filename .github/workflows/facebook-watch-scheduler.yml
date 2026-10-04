@@ -1,0 +1,41 @@
+name: Facebook Watcher scheduler
+
+on:
+  schedule:
+    # Hobby Vercel cannot host a five-minute cron. GitHub Actions invokes the
+    # protected scheduler endpoint; the persisted filter interval decides
+    # whether a new Facebook cycle is actually due.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: facebook-watch-scheduler
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Run Facebook Watcher scheduler tick
+        shell: bash
+        env:
+          WATCHER_URL: https://flip-manager-ai.vercel.app/api/jobs/facebook-watch
+          OIDC_AUDIENCE: flip-manager-facebook-watch
+        run: |
+          set -euo pipefail
+
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          oidc_token="$(jq -er '.value' <<<"${oidc_response}")"
+
+          # The endpoint performs one bounded scheduler tick. It does not
+          # start a cycle unless the persisted scan_interval_minutes is due.
+          curl --fail --silent --show-error --location --request POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            "${WATCHER_URL}"

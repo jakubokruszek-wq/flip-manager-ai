@@ -52,6 +52,13 @@ test("completed cycle waits for cooldown and starts exactly when scheduled", () 
   assert.deepEqual(schedulerCycleDecision({ ...base, nowMs: Date.parse("2026-09-04T11:00:00Z") }), { type: "START_NEXT_CYCLE", nextCycleAt: Date.parse("2026-09-04T11:00:00Z") });
 });
 
+test("five-minute scheduler ticks do not bypass a persisted 30-minute Watcher interval", () => {
+  const plan = orderSchedulerSources(sources);
+  const base = { plan, terminalSourceIds: ["first", "second"], cycleStartedAt: "2026-09-04T10:00:00Z", cooldownMinutes: 30 };
+  assert.deepEqual(schedulerCycleDecision({ ...base, nowMs: Date.parse("2026-09-04T10:25:00Z") }), { type: "WAIT_COOLDOWN", nextCycleAt: Date.parse("2026-09-04T10:30:00Z") });
+  assert.deepEqual(schedulerCycleDecision({ ...base, nowMs: Date.parse("2026-09-04T10:30:00Z") }), { type: "START_NEXT_CYCLE", nextCycleAt: Date.parse("2026-09-04T10:30:00Z") });
+});
+
 test("scheduler enforces a bounded production cooldown", () => {
   assert.equal(schedulerCooldownMinutes(5), 5);
   assert.equal(schedulerCooldownMinutes(120), 120);

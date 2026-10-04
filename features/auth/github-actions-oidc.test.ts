@@ -8,12 +8,16 @@ mock.module("server-only", { defaultExport: {} });
 
 const {
   GITHUB_ACTIONS_OIDC_AUDIENCE,
+  GITHUB_ACTIONS_FACEBOOK_WATCH_AUDIENCE,
+  GITHUB_ACTIONS_FACEBOOK_WATCH_WORKFLOW_REF,
   GITHUB_ACTIONS_OIDC_ISSUER,
   GITHUB_ACTIONS_REF,
   GITHUB_ACTIONS_REPOSITORY,
   GITHUB_ACTIONS_REPOSITORY_ID,
   GITHUB_ACTIONS_WORKFLOW_REF,
   authorizeContinuationRequest,
+  authorizeFacebookWatchRequest,
+  verifyFacebookWatchOidc,
   verifyGitHubActionsOidc,
 } = await import("./github-actions-oidc.ts");
 
@@ -31,6 +35,10 @@ function claims(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function facebookClaims(overrides: Record<string, unknown> = {}) {
+  return claims({ workflow_ref: GITHUB_ACTIONS_FACEBOOK_WATCH_WORKFLOW_REF, ...overrides });
+}
+
 async function token(overrides: Record<string, unknown> = {}, options: { key?: CryptoKey; expiration?: string | number } = {}) {
   return new SignJWT(claims(overrides))
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
@@ -42,9 +50,43 @@ async function token(overrides: Record<string, unknown> = {}, options: { key?: C
     .sign(options.key ?? privateKey);
 }
 
+async function facebookToken(overrides: Record<string, unknown> = {}, options: { key?: CryptoKey; expiration?: string | number } = {}) {
+  return new SignJWT(facebookClaims(overrides))
+    .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+    .setIssuer(GITHUB_ACTIONS_OIDC_ISSUER)
+    .setAudience(GITHUB_ACTIONS_FACEBOOK_WATCH_AUDIENCE)
+    .setIssuedAt()
+    .setNotBefore("0s")
+    .setExpirationTime(options.expiration ?? "10m")
+    .sign(options.key ?? privateKey);
+}
+
 test("accepts a valid signed GitHub Actions token with the exact workflow claims", async () => {
   const signed = await token();
   await assert.doesNotReject(() => verifyGitHubActionsOidc(signed, localJwkSet));
+});
+
+test("accepts the separate Facebook Watcher workflow and rejects it for Finder continuation", async () => {
+  const signed = await facebookToken();
+  await assert.doesNotReject(() => verifyFacebookWatchOidc(signed, localJwkSet));
+  await assert.rejects(() => verifyGitHubActionsOidc(signed, localJwkSet));
+});
+
+test("Facebook Watcher OIDC rejects a token minted for another workflow", async () => {
+  const signed = await facebookToken({ workflow_ref: GITHUB_ACTIONS_WORKFLOW_REF });
+  await assert.rejects(() => verifyFacebookWatchOidc(signed, localJwkSet));
+});
+
+test("Facebook Watcher OIDC rejects a token with the Finder audience", async () => {
+  const signed = await new SignJWT(facebookClaims())
+    .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+    .setIssuer(GITHUB_ACTIONS_OIDC_ISSUER)
+    .setAudience(GITHUB_ACTIONS_OIDC_AUDIENCE)
+    .setIssuedAt()
+    .setNotBefore("0s")
+    .setExpirationTime("10m")
+    .sign(privateKey);
+  await assert.rejects(() => verifyFacebookWatchOidc(signed, localJwkSet));
 });
 
 test("rejects a token with an invalid signature", async () => {
@@ -117,6 +159,28 @@ test("anonymous continuation requests are denied while CRON_SECRET and verified 
   }
 });
 
+test("Facebook Watcher scheduler auth keeps CRON_SECRET and accepts only its verified OIDC path", async () => {
+  const previous = process.env.CRON_SECRET;
+  try {
+    process.env.CRON_SECRET = "local-test-secret";
+    assert.equal(await authorizeFacebookWatchRequest(new Request("https://example.test")), false);
+    assert.equal(await authorizeFacebookWatchRequest(new Request("https://example.test", { headers: { "x-cron-secret": "local-test-secret" } })), true);
+    const accepted = await authorizeFacebookWatchRequest(
+      new Request("https://example.test", { headers: { authorization: "Bearer facebook-oidc-token" } }),
+      async (value) => value === "facebook-oidc-token" ? {} as JWTPayload : Promise.reject(new Error("unexpected token")),
+    );
+    assert.equal(accepted, true);
+    const rejected = await authorizeFacebookWatchRequest(
+      new Request("https://example.test", { headers: { authorization: "Bearer finder-oidc-token" } }),
+      async () => { throw new Error("wrong workflow"); },
+    );
+    assert.equal(rejected, false);
+  } finally {
+    if (previous === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previous;
+  }
+});
+
 test("workflow is hourly, bounded, serialized, and only calls the continuation endpoint", () => {
   const workflow = readFileSync(join(process.cwd(), ".github", "workflows", "finder-scan-continuation.yml"), "utf8");
   assert.match(workflow, /cron:\s*["']7 \* \* \* \*["']/);
@@ -134,4 +198,31 @@ test("workflow is hourly, bounded, serialized, and only calls the continuation e
   const vercel = readFileSync(join(process.cwd(), "vercel.json"), "utf8");
   assert.match(vercel, /api\/jobs\/facebook-watch/);
   assert.doesNotMatch(vercel, /api\/jobs\/finder-scan-continuation/);
+});
+
+test("Facebook Watcher has a separate five-minute OIDC trigger and never uses Finder continuation", () => {
+  const watcherWorkflow = readFileSync(join(process.cwd(), ".github", "workflows", "facebook-watch-scheduler.yml"), "utf8");
+  assert.match(watcherWorkflow, /cron:\s*["']\*\/5 \* \* \* \*["']/);
+  assert.match(watcherWorkflow, /workflow_dispatch:/);
+  assert.match(watcherWorkflow, /concurrency:/);
+  assert.match(watcherWorkflow, /group: facebook-watch-scheduler/);
+  assert.match(watcherWorkflow, /id-token:\s*write/);
+  assert.match(watcherWorkflow, /api\/jobs\/facebook-watch/);
+  assert.match(watcherWorkflow, /flip-manager-facebook-watch/);
+  assert.match(watcherWorkflow, /--request POST/);
+  assert.doesNotMatch(watcherWorkflow, /finder-scan-continuation|facebook_scan_jobs|manual-scan/);
+
+  const finderWorkflow = readFileSync(join(process.cwd(), ".github", "workflows", "finder-scan-continuation.yml"), "utf8");
+  assert.match(finderWorkflow, /cron:\s*["']7 \* \* \* \*["']/);
+  assert.match(finderWorkflow, /api\/jobs\/finder-scan-continuation/);
+  assert.doesNotMatch(finderWorkflow, /api\/jobs\/facebook-watch|flip-manager-facebook-watch/);
+
+  const route = readFileSync(join(process.cwd(), "app", "api", "jobs", "facebook-watch", "route.ts"), "utf8");
+  assert.match(route, /authorizeFacebookWatchRequest/);
+  assert.match(route, /runFacebookWatchJob/);
+  assert.doesNotMatch(route, /runFinderScanContinuations/);
+
+  const scheduler = readFileSync(join(process.cwd(), "features", "facebook-worker", "scheduler.ts"), "utf8");
+  assert.match(scheduler, /scan_interval_minutes/);
+  assert.match(scheduler, /schedulerCooldownMinutes\(context\.filter\.scanIntervalMinutes\)/);
 });
