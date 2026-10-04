@@ -51,25 +51,42 @@ mock.module("@/features/flip-finder/match-diagnostics", { namedExports: {
   emptyMatchDiagnosticSummary: () => ({ total: 0, matched: 0, rejected: 0, unknown: 0, byReason: {} }),
   mergeMatchDiagnosticSummaries: () => ({ total: 0, matched: 0, rejected: 0, unknown: 0, byReason: {} }),
 } });
-mock.module("@/features/flip-finder/server/olx-jobs", { namedExports: { enqueueOlxJob: async () => undefined } });
+mock.module("@/features/flip-finder/server/olx-jobs", {
+  namedExports: {
+    enqueueOlxJob: async () => undefined,
+    existingOlxScanResult: async () => null,
+    resumableOlxRunId: async () => null,
+  },
+});
 mock.module("@/features/flip-finder/server/persist-listing", { namedExports: { persistListing: async () => ({ listingId: "none", listingCreated: false, matchCreated: false, updated: 0, priceDrop: 0 }) } });
 mock.module("@/features/flip-finder/server/filter-match-recalculation", { namedExports: { recalculateFilterMatches: async () => null } });
 
-function matches(row: Record<string, unknown>, filters: Array<{ column: string; value: unknown }>): boolean {
-  return filters.every(({ column, value }) => row[column] === value);
+function matches(row: Record<string, unknown>, filters: Array<{ column: string; value: unknown; operator?: "eq" | "gt" }>): boolean {
+  return filters.every(({ column, value, operator = "eq" }) => {
+    if (operator === "gt") {
+      // This fixture uses a fake clock for the worker budget. Treat a lease
+      // written by the claim as live; expiry behavior is covered by the
+      // dedicated continuation-lease tests with explicit timestamps.
+      return column === "continuation_lease_until"
+        ? typeof row[column] === "string"
+        : String(row[column] ?? "") > String(value);
+    }
+    return row[column] === value;
+  });
 }
 
 function builder(table: string) {
   let mode: "select" | "update" = "select";
   let patch: Record<string, unknown> = {};
-  const filters: Array<{ column: string; value: unknown }> = [];
+  const filters: Array<{ column: string; value: unknown; operator?: "eq" | "gt" }> = [];
   const chain: Record<string, unknown> = {
     select: () => chain,
     update: (value: Record<string, unknown>) => { mode = "update"; patch = value; return chain; },
     eq: (column: string, value: unknown) => { filters.push({ column, value }); return chain; },
+    gt: (column: string, value: unknown) => { filters.push({ column, value, operator: "gt" }); return chain; },
     in: () => chain,
     abortSignal: () => chain,
-    maybeSingle: async () => ({ data: null, error: null }),
+    maybeSingle: async () => ({ data: sourceRows.find((row) => matches(row, filters)) ?? null, error: null }),
     then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve().then(() => {
       if (table === "search_filters") return { data: null, error: null };
       const selected = sourceRows.filter((row) => matches(row, filters));
@@ -96,7 +113,7 @@ test("bounded initial scan leaves the fourth source pending in the same run for 
   sourceRows.forEach((row) => { row.status = "pending"; row.scan_run_id = "run-fixed"; row.error_message = null; row.continuation_next_at = null; });
   const originalNow = Date.now;
   Date.now = () => fakeNow;
-  fakeNow = 0;
+  fakeNow = originalNow();
   try {
     const summary = await runManualOtodomScan(filter.id, { runId: "run-fixed", usePreparedRows: true, skipLock: true });
     assert.deepEqual(sourceFetches, sourceIds.slice(0, 3));
@@ -119,7 +136,7 @@ test("a retry of the same run skips completed and terminal source rows", async (
   sourceRows[1].status = "failed";
   const originalNow = Date.now;
   Date.now = () => fakeNow;
-  fakeNow = 0;
+  fakeNow = originalNow();
   try {
     await runManualOtodomScan(filter.id, { runId: "run-fixed", usePreparedRows: true, skipLock: true });
     assert.deepEqual(sourceFetches, sourceIds.slice(2), "only pending sources may be fetched on a same-run retry");

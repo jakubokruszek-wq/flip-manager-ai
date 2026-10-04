@@ -5,6 +5,7 @@ import {
   isStaleScan,
   scanHeartbeatAt,
   RECOVERABLE_SCAN_STATUSES,
+  decideScanResumption,
   selectLatestCompletedScans,
   selectLatestScans,
   staleScanCutoff,
@@ -76,6 +77,17 @@ test("a scan whose age cannot be established is never reaped", () => {
 test("the recovery cutoff matches the documented timeout and covers both blocking statuses", () => {
   assert.equal(staleScanCutoff(now), new Date(now - STALE_SCAN_TIMEOUT_MS).toISOString());
   assert.deepEqual([...RECOVERABLE_SCAN_STATUSES], ["pending", "running"]);
+});
+
+test("resumption chooses one pending run, refuses active running work, and refuses mixed run ids", () => {
+  assert.deepEqual(decideScanResumption([]), { kind: "start_fresh" });
+  assert.deepEqual(decideScanResumption([{ id: "p1", source: "otodom", status: "pending", scanRunId: "run-a" }]), { kind: "resume", runId: "run-a" });
+  assert.deepEqual(decideScanResumption([{ id: "r1", source: "otodom", status: "running", scanRunId: "run-a" }]), { kind: "ambiguous_refuse", reason: "SOURCE_RUNNING" });
+  assert.deepEqual(decideScanResumption([
+    { id: "p1", source: "otodom", status: "pending", scanRunId: "run-a" },
+    { id: "p2", source: "morizon", status: "pending", scanRunId: "run-b" },
+  ]), { kind: "ambiguous_refuse", reason: "MULTIPLE_RUN_IDS" });
+  assert.deepEqual(decideScanResumption([{ id: "p1", source: "otodom", status: "pending", scanRunId: null }]), { kind: "ambiguous_refuse", reason: "MISSING_RUN_ID" });
 });
 
 // -----------------------------------------------------------------------------

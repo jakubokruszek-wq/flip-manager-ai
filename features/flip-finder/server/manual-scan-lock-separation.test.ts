@@ -218,6 +218,22 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number;
 let current = fakeAdmin();
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => current.client } });
 
+const olxResumableRuns = new Map<string, string>();
+const olxResults = new Map<string, { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings: string[]; matchDiagnostics: Record<string, number> }>();
+const olxEnqueueCalls: string[] = [];
+mock.module("@/features/flip-finder/server/olx-jobs", {
+  namedExports: {
+    resumableOlxRunId: async (filterId: string) => olxResumableRuns.get(filterId) ?? null,
+    existingOlxScanResult: async (runId: string) => olxResults.get(runId) ?? null,
+    enqueueOlxJob: async (filter: { id: string }, runId: string) => {
+      olxEnqueueCalls.push(`${filter.id}:${runId}`);
+      olxResumableRuns.set(filter.id, runId);
+      olxResults.set(runId, { source: "olx", status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage: "OLX: oczekuje na lokalny worker", warnings: [], matchDiagnostics: { rejectedByPrice: 0, rejectedByPricePerSqm: 0, rejectedByRooms: 0, rejectedByDistrict: 0, rejectedByArea: 0, rejectedByBuildingType: 0, matched: 0 } });
+      return { jobId: `job-${runId}`, sourceScanId: `scan-olx-${runId}`, runId, status: "queued" };
+    },
+  },
+});
+
 const facebookOnlyFilter = {
   id: "filter-fb", name: "Facebook only", sources: ["facebook"], city: "Łódź", districts: [],
   priceMin: null, priceMax: null, areaMin: null, areaMax: null, rooms: [], floorMin: null, floorMax: null,
@@ -251,12 +267,13 @@ mock.module("@/features/flip-finder/server/filter-match-recalculation", {
 // runManualOtodomScan calls sharing the same prepared row, without every
 // other test in this file needing to care.
 let otodomFetchCalls = 0;
+let otodomFetchGate: { entered: Promise<void>; notifyEntered: () => void; release: Promise<void>; open: () => void } | null = null;
 const realSourceRegistry = await import("@/features/flip-finder/server/search-source-registry");
 mock.module("@/features/flip-finder/server/search-source-registry", {
   namedExports: {
     ...realSourceRegistry,
     activeSources: (filter: { sources: string[] }) => [
-      ...(filter.sources.includes("otodom") ? [{ id: "otodom", label: "Otodom", fetch: async () => { otodomFetchCalls += 1; return { listings: [], warnings: [], fetched: 0 }; } }] : []),
+      ...(filter.sources.includes("otodom") ? [{ id: "otodom", label: "Otodom", fetch: async () => { otodomFetchCalls += 1; if (otodomFetchGate) { otodomFetchGate.notifyEntered(); await otodomFetchGate.release; } return { listings: [], warnings: [], fetched: 0 }; } }] : []),
       ...(filter.sources.includes("olx") ? [{ id: "olx", label: "OLX", fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) }] : []),
     ],
   },
@@ -293,20 +310,104 @@ test("a genuinely active FINDER-owned otodom scan still correctly blocks a secon
   await assert.rejects(() => runManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/, "Finder's own in-flight otodom scan must still block a second click -- this protection is unrelated to the Watcher-isolation fix");
 });
 
-test("background start reserves the Finder row and a second start is rejected before the worker runs", async () => {
+test("background start reserves the Finder row and a second start resumes the same run before the worker runs", async () => {
   current = fakeAdmin();
   const start = await startManualOtodomScan(mixedFilter.id);
   assert.equal(start.status, "running");
   assert.equal(start.background, true);
   assert.equal(current.sourceScans.filter((row) => row.scan_run_id === start.runId && row.source === "otodom").length, 1);
-  await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/);
+  const resumed = await startManualOtodomScan(mixedFilter.id);
+  assert.equal(resumed.runId, start.runId, "a safe pending run must be resumed, never replaced by a new run id");
+  assert.equal(current.sourceScans.filter((row) => row.scan_run_id === start.runId && row.source === "otodom").length, 1);
 });
 
-test("OLX-only Finder start creates no dead sequential reservation row", async () => {
+test("OLX-only Finder start creates exactly its async queue row and a second click resumes the same run", async () => {
+  olxResumableRuns.clear();
+  olxResults.clear();
+  olxEnqueueCalls.length = 0;
   current = fakeAdmin();
   const start = await startManualOtodomScan(olxOnlyFilter.id);
   assert.equal(start.background, true, "OLX still runs through its asynchronous local worker");
-  assert.equal(current.sourceScans.length, 0, "OLX must not be reserved by Finder before enqueueOlxJob creates its async row");
+  assert.equal(olxEnqueueCalls.length, 1, "OLX must be queued once before the fast ACK establishes the duplicate guard");
+  const resumed = await startManualOtodomScan(olxOnlyFilter.id);
+  assert.equal(resumed.runId, start.runId, "a queued OLX run must be resumed, never replaced by a new run id");
+  assert.equal(olxEnqueueCalls.length, 1, "a second click must not create a second OLX job");
+});
+
+test("two parallel manual starts over one safe pending run return one run id", async () => {
+  current = fakeAdmin([{ id: "pending-otodom", search_filter_id: mixedFilter.id, source: "otodom", status: "pending", started_at: new Date().toISOString(), scan_run_id: "run-pending" }]);
+  const [first, second] = await Promise.all([startManualOtodomScan(mixedFilter.id), startManualOtodomScan(mixedFilter.id)]);
+  assert.equal(first.runId, "run-pending");
+  assert.equal(second.runId, "run-pending");
+  assert.equal(current.sourceScans.length, 1, "parallel resumes must not reserve another source row");
+});
+
+test("resumption processes only pending sources and skips completed or terminally failed rows", async () => {
+  otodomFetchCalls = 0;
+  current = fakeAdmin([
+    { id: "completed-otodom", search_filter_id: mixedFilter.id, source: "otodom", status: "completed", started_at: new Date().toISOString(), scan_run_id: "run-terminal" },
+    { id: "failed-otodom", search_filter_id: mixedFilter.id, source: "morizon", status: "failed", started_at: new Date().toISOString(), scan_run_id: "run-terminal" },
+    { id: "pending-otodom", search_filter_id: mixedFilter.id, source: "otodom", status: "pending", started_at: new Date().toISOString(), scan_run_id: "run-terminal" },
+  ]);
+  const start = await startManualOtodomScan(mixedFilter.id);
+  const summary = await runManualOtodomScan(mixedFilter.id, { runId: start.runId, usePreparedRows: true, skipLock: true });
+  assert.equal(start.runId, "run-terminal");
+  assert.equal(otodomFetchCalls, 1, "only the pending Otodom reservation may be fetched");
+  assert.equal(summary.sourceResults.filter((result) => result.source === "otodom").length, 1);
+  assert.equal(current.sourceScans.find((row) => row.id === "completed-otodom")?.status, "completed");
+  assert.equal(current.sourceScans.find((row) => row.id === "failed-otodom")?.status, "failed");
+});
+
+test("manual resumption assigns a live lease before fetching an old pending row, so continuation cannot steal it", async () => {
+  otodomFetchCalls = 0;
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+  otodomFetchGate = { entered: enteredPromise, notifyEntered: entered, release: releasePromise, open: release };
+  const oldStartedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+  current = fakeAdmin([{ id: "old-pending", search_filter_id: mixedFilter.id, source: "otodom", status: "pending", started_at: oldStartedAt, scan_run_id: "run-old", error_message: "SOURCE_TIMEOUT: waiting", continuation_next_at: new Date(Date.now() - 60_000).toISOString() }]);
+  try {
+    const start = await startManualOtodomScan(mixedFilter.id);
+    const running = runManualOtodomScan(mixedFilter.id, { runId: start.runId, usePreparedRows: true, skipLock: true });
+    await enteredPromise;
+    const row = current.sourceScans.find((candidate) => candidate.id === "old-pending");
+    assert.equal(row?.status, "running");
+    assert.equal(typeof row?.continuation_lease_token, "string", "manual ownership must be visible to the continuation claim");
+    assert.ok(typeof row?.continuation_lease_until === "string" && Date.parse(String(row.continuation_lease_until)) > Date.now());
+    assert.equal(row?.status === "running" && (!row.continuation_lease_until || Date.parse(String(row.continuation_lease_until)) <= Date.now()), false, "the migration's orphan-running rule must not match the manual worker");
+    release();
+    const summary = await running;
+    assert.equal(summary.status, "completed");
+    assert.equal(otodomFetchCalls, 1);
+  } finally {
+    otodomFetchGate = null;
+  }
+});
+
+test("manual start refuses a row with an active worker lease instead of taking it over", async () => {
+  current = fakeAdmin([{
+    id: "active-lease",
+    search_filter_id: mixedFilter.id,
+    source: "otodom",
+    status: "running",
+    started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+    scan_run_id: "run-active",
+    continuation_lease_token: "lease-active",
+    continuation_lease_until: new Date(Date.now() + 60_000).toISOString(),
+  }]);
+  await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/);
+  assert.equal(current.sourceScans[0].scan_run_id, "run-active");
+  assert.equal(current.sourceScans[0].continuation_lease_token, "lease-active");
+});
+
+test("manual start refuses pending reservations split across multiple run ids", async () => {
+  current = fakeAdmin([
+    { id: "pending-a", search_filter_id: mixedFilter.id, source: "otodom", status: "pending", started_at: new Date().toISOString(), scan_run_id: "run-a" },
+    { id: "pending-b", search_filter_id: mixedFilter.id, source: "otodom", status: "pending", started_at: new Date().toISOString(), scan_run_id: "run-b" },
+  ]);
+  await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/);
+  assert.deepEqual(current.sourceScans.map((row) => row.scan_run_id), ["run-a", "run-b"]);
 });
 
 // Issue 1 from the scan-lifecycle review: startManualOtodomScan's reservation

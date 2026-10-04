@@ -69,6 +69,46 @@ export function selectLatestScans<T extends ScanLike>(scans: readonly T[]): Map<
   return latest;
 }
 
+export type ExistingSourceScanForResumption = { id: string; source: string; status: string; scanRunId: string | null };
+
+export type ScanResumptionDecision =
+  | { kind: "start_fresh" }
+  | { kind: "resume"; runId: string }
+  | { kind: "ambiguous_refuse"; reason: "SOURCE_RUNNING" | "MULTIPLE_RUN_IDS" | "MISSING_RUN_ID" };
+
+/**
+ * Decides whether a manual scan start can safely resume an existing,
+ * unfinished run instead of either (a) creating a second scan_run_id for
+ * the same filter, or (b) refusing with 429 forever while a dead
+ * continuation (e.g. a GitHub Actions schedule that never fired) leaves
+ * pending rows sitting there for hours.
+ *
+ * `nonTerminalRows` must already be filtered to RECOVERABLE_SCAN_STATUSES
+ * (pending/running) for this filter's lockable sources, AFTER failStaleScans
+ * has run -- so any row genuinely abandoned (no heartbeat for
+ * STALE_SCAN_TIMEOUT_MS) has already been reaped to "failed" and will not
+ * appear here. That ordering is what makes "any remaining running row ->
+ * refuse" safe: it is never stale by the time this function sees it, so it
+ * is either a live worker or an active, non-expired continuation lease --
+ * either way, something may genuinely be touching it right now, and taking
+ * it over would risk double-processing or clobbering that work. A "pending"
+ * row never holds a continuation lease (deferPreparedSource/
+ * failOwnedRunningScans both null it out when a row becomes pending), so
+ * there is no separate lease check needed for the resumable case: the
+ * per-row CAS in scanSource() is what actually prevents two resumers (or a
+ * resumer racing a continuation claim) from both processing the same row,
+ * regardless of how many callers independently reach a "resume" decision.
+ */
+export function decideScanResumption(nonTerminalRows: readonly ExistingSourceScanForResumption[]): ScanResumptionDecision {
+  if (!nonTerminalRows.length) return { kind: "start_fresh" };
+  if (nonTerminalRows.some((row) => row.status === "running")) return { kind: "ambiguous_refuse", reason: "SOURCE_RUNNING" };
+  const runIds = new Set(nonTerminalRows.map((row) => row.scanRunId));
+  if (runIds.size > 1) return { kind: "ambiguous_refuse", reason: "MULTIPLE_RUN_IDS" };
+  const [runId] = runIds;
+  if (!runId) return { kind: "ambiguous_refuse", reason: "MISSING_RUN_ID" };
+  return { kind: "resume", runId };
+}
+
 /** Each filter's most recently finished successful scan, which is where `newMatches` comes from. */
 export function selectLatestCompletedScans<T extends ScanLike>(scans: readonly T[]): Map<string, T> {
   const latest = new Map<string, T>();

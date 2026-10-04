@@ -27,7 +27,7 @@ test("a Facebook-enabled filter is reconciled from canonical listings only, neve
 test("mixed-source filters keep their real Otodom/Morizon scan and OLX enqueue untouched", () => {
   assert.match(source, /const lockableSourceIds = sources\.filter\(\(source\) => source\.id !== "olx"\)\.map\(\(source\) => source\.id\);/, "OLX must never be included in Finder's sequential reservation rows");
   assert.match(source, /const sequentialSources = sources\.filter\(\(item\) => item\.id !== "olx"\);[\s\S]*?for \(const source of sequentialSources\) \{[\s\S]*?scanSource\(source, filterId, filter, supabase, runId, ownedScans, prepared, perSourceTimeoutMs\)/, "the real (non-Facebook, non-OLX) source fetch loop must remain the worker path, with only the prepared-row handoff and the per-source time budget added");
-  assert.match(source, /await enqueueOlxJob\(filter, runId\);/, "OLX's own separate async worker queue is unrelated to this mission and must remain");
+  assert.match(source, /await enqueueOlxJob\(filter, runId, supabase\);/, "OLX's own separate async worker queue is unrelated to this mission and must remain");
 });
 
 test("the stored listing source value for Facebook listings is never renamed by this contract change", () => {

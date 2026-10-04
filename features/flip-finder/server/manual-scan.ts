@@ -4,13 +4,13 @@ import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-eval
 import { addMatchDiagnostic, createMatchDiagnostic, emptyMatchDiagnosticSummary, mergeMatchDiagnosticSummaries, type MatchDiagnosticSummary } from "@/features/flip-finder/match-diagnostics";
 import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/scan-counters";
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
-import { enqueueOlxJob } from "@/features/flip-finder/server/olx-jobs";
+import { enqueueOlxJob, existingOlxScanResult, resumableOlxRunId } from "@/features/flip-finder/server/olx-jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
-import { isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
+import { decideScanResumption, isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, staleScanCutoff, type ExistingSourceScanForResumption } from "./scan-lifecycle";
 import { CONTINUATION_LEASE_MS, classifySourceFailure, continuationCycleAt, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
 export { scanStatus } from "./scan-start-errors";
 
@@ -88,6 +88,13 @@ export async function startManualOtodomScan(filterId: string): Promise<ManualSca
  * caller. The scheduler uses this to avoid a browser-session dependency while
  * preserving the same source reservation and duplicate-scan lock as the
  * operator-facing route.
+ *
+ * The returned runId may differ from the one passed in: when an existing,
+ * unambiguous, unfinished run for this filter is found (see
+ * reserveOrResumeSourceScans), that run is resumed and ITS id is returned
+ * instead, so the caller's own runAfterResponse(() =>
+ * runManualOtodomScan(filterId, { runId: start.runId, usePreparedRows: true,
+ * ... })) naturally continues the right run without any further change.
  */
 export async function startFinderScanForFilter(filter: LoadedFilter, runId = crypto.randomUUID(), supabase = createAdminClient()): Promise<ManualScanStart> {
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
@@ -97,11 +104,77 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
   // OLX is owned by its separate local-worker queue. Do not reserve a
   // Finder source_scans row for it; enqueueOlxJob creates the one async row.
   const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
+  let olxRunId: string | null = null;
+  if (sources.some((source) => source.id === "olx")) {
+    try {
+      olxRunId = await resumableOlxRunId(filter.id, supabase);
+    } catch (error) {
+      if (error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS") throw statusError(429, "Kolejka OLX ma niespójne, równoległe przebiegi.");
+      throw statusError(500, error instanceof Error ? error.message : "Nie udało się sprawdzić kolejki OLX.");
+    }
+  }
+  let actualRunId = olxRunId ?? runId;
   if (lockableSourceIds.length) {
     await failStaleScans(supabase, filter.id, lockableSourceIds);
-    await reserveSourceScans(supabase, filter.id, lockableSourceIds, runId, filter);
+    actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter);
+    if (olxRunId && actualRunId !== olxRunId) throw statusError(429, "Filtr ma niezgodne, równoległe przebiegi skanu.");
   }
-  return { runId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
+  if (sources.some((source) => source.id === "olx") && !(await existingOlxScanResult(actualRunId, supabase))) {
+    await enqueueOlxJob(filter, actualRunId, supabase);
+  }
+  return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
+}
+
+/**
+ * Checks whether this filter already has an unambiguous, unfinished run
+ * (every non-terminal lockable-source row sharing one scan_run_id, none of
+ * them "running") before ever reserving a fresh one -- the fix for a
+ * dead/delayed continuation (e.g. a GitHub Actions schedule that never
+ * fires) otherwise leaving pending rows that block every later manual start
+ * with 429 for up to CONTINUATION_MAX_WAIT_MS (2h), even though no worker is
+ * actually touching them.
+ *
+ * Deliberately NOT a new atomic SQL claim: every write this can lead to is
+ * already individually race-safe without one. "resume" never writes
+ * anything itself -- it only returns an existing runId, and the real
+ * protection against two resumers (or a resumer racing a continuation
+ * claim) touching the same source is scanSource()'s own pending->running
+ * CAS and claim_finder_scan_source's FOR UPDATE SKIP LOCKED, both already
+ * proven elsewhere (manual-scan-lock-separation.test.ts, 20261004120000's
+ * own claim function). "start_fresh" still goes through
+ * reserveSourceScans()'s existing RPC-or-fallback reservation, unchanged.
+ * A genuinely ambiguous state (any running row, or non-terminal rows
+ * spanning more than one run_id) still safely refuses with the exact same
+ * message as before.
+ */
+async function reserveOrResumeSourceScans(supabase: SupabaseClient, filterId: string, lockableSourceIds: string[], runId: string, filter: LoadedFilter): Promise<string> {
+  const { data: existing, error: existingError } = await supabase
+    .from("source_scans")
+    .select("id,source,status,scan_run_id")
+    .eq("search_filter_id", filterId)
+    .in("source", lockableSourceIds)
+    .in("status", [...RECOVERABLE_SCAN_STATUSES])
+    .abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  if (existingError) throw statusError(500, "Nie udało się sprawdzić statusu skanu.");
+
+  const decision = decideScanResumption(toResumptionRows(existing));
+  if (decision.kind === "ambiguous_refuse") throw statusError(429, "Skan tego filtra już trwa.");
+  if (decision.kind === "resume") {
+    console.info("FLIP FINDER SCAN RESUMED", { filterId, runId: decision.runId });
+    return decision.runId;
+  }
+
+  await reserveSourceScans(supabase, filterId, lockableSourceIds, runId, filter);
+  return runId;
+}
+
+function toResumptionRows(data: unknown): ExistingSourceScanForResumption[] {
+  return (Array.isArray(data) ? data : []).flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const { id, source, status, scan_run_id: scanRunId } = row as Record<string, unknown>;
+    if (typeof id !== "string" || typeof source !== "string" || typeof status !== "string") return [];
+    return [{ id, source, status, scanRunId: typeof scanRunId === "string" ? scanRunId : null }];
+  });
 }
 
 /**
@@ -240,8 +313,13 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
     }
     if (sources.some((source) => source.id === "olx")) {
       try {
-        await enqueueOlxJob(filter, runId);
-        sourceResults.push(pendingResult("olx"));
+        const existing = await existingOlxScanResult(runId, supabase);
+        if (existing) {
+          sourceResults.push(existing);
+        } else {
+          await enqueueOlxJob(filter, runId, supabase);
+          sourceResults.push((await existingOlxScanResult(runId, supabase)) ?? pendingResult("olx"));
+        }
       } catch (error) {
         sourceResults.push(failedResult("olx", 0, "OLX_ENQUEUE_FAILED", error instanceof Error ? error.message : "Nie udało się dodać OLX do kolejki."));
       }
@@ -390,13 +468,17 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   // against the first execution. The WHERE id=... AND status='pending' makes
   // Postgres itself the referee: at most one concurrent UPDATE can match a
   // given row, so at most one caller ever proceeds past this point for it.
-  // The non-prepared insert path (tests, and the synchronous facebook-only
-  // route) has no such row to race over, so it is unchanged.
+  // The winner also gets a short continuation lease. Without that lease, an
+  // old pending reservation could be switched to running by a manual worker
+  // and then stolen by the hourly continuation's five-minute orphan rule
+  // before the worker had finalized it.
+  const manualLeaseToken = crypto.randomUUID();
+  const manualLeaseUntil = new Date(started + CONTINUATION_LEASE_MS).toISOString();
   const { data: claimed, error } = prepared && options.preparedAlreadyRunning
     ? { data: [{ id: prepared.id, started_at: prepared.started_at, continuation_lease_token: prepared.continuation_lease_token ?? null }], error: null }
     : prepared
-    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter }).eq("id", prepared.id).eq("status", "pending").select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
-    : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter }).select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
+    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).eq("id", prepared.id).eq("status", "pending").select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
+    : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
   // Never assume the API returns a row just because there was no transport
   // error: a lost CAS (someone else already claimed this row) is zero rows,
   // not an error, from a plain .update().select() call -- unlike .single(),
@@ -473,11 +555,16 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * unclaimed job blocking that filter's scans permanently.
  */
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
-  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const now = Date.now();
+  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at,continuation_lease_until").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(now)).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (readError) throw statusError(500, "Nie udało się sprawdzić wygasłej blokady skanu.");
-  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown; error_message: string | null; continuation_next_at: string | null } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
+  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown; error_message: string | null; continuation_next_at: string | null; continuation_lease_until: string | null } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
     .filter((candidate) => !isContinuationPending(candidate.error_message) || isContinuationExpired(candidate.error_message, candidate.continuation_next_at, Date.now()))
-    .filter((candidate) => isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt: scanHeartbeatAt(candidate.filter_snapshot) }, Date.now()))
+    // A live continuation/manual lease is stronger than the age heuristic.
+    // Never reap a row another worker still owns, even when its original
+    // reservation timestamp is old and no progress heartbeat has arrived yet.
+    .filter((candidate) => !(typeof candidate.continuation_lease_until === "string" && Number.isFinite(Date.parse(candidate.continuation_lease_until)) && Date.parse(candidate.continuation_lease_until) > now))
+    .filter((candidate) => isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt: scanHeartbeatAt(candidate.filter_snapshot) }, now))
     .map((candidate) => candidate.id);
   if (!staleIds.length) return;
   const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).in("id", staleIds).in("status", RECOVERABLE_SCAN_STATUSES).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));

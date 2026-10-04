@@ -10,6 +10,7 @@ import { createOlxWorkerAdminClient } from "@/features/flip-finder/server/olx-wo
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { slugifyCity, type SourceListing } from "@/features/flip-finder/server/search-source-registry";
+import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import type { SearchFilter } from "@/features/flip-finder";
 
 type Row = Record<string, unknown>;
@@ -26,19 +27,26 @@ export type ClaimedOlxJob = {
   attempts: number;
 };
 
-export async function enqueueOlxJob(filter: SearchFilter, runId: string): Promise<EnqueuedOlxJob> {
-  const supabase = createOlxWorkerAdminClient();
+export async function enqueueOlxJob(filter: SearchFilter, runId: string, client?: DatabaseClient): Promise<EnqueuedOlxJob> {
+  const supabase = client ?? createOlxWorkerAdminClient();
   const requestUrl = `https://www.olx.pl/nieruchomosci/mieszkania/sprzedaz/${slugifyCity(filter.city)}/`;
   assertAllowedOlxUrl(requestUrl);
-  const scan = await supabase.from("source_scans").insert({
-    search_filter_id: filter.id,
-    source: "olx",
-    status: "pending",
-    scan_run_id: runId,
-    filter_snapshot: filter,
-  }).select("id").single();
-  if (scan.error || !scan.data?.id) throw new Error(`Nie udało się utworzyć oczekującego skanu OLX: ${scan.error?.message ?? "brak ID"}`);
-  const sourceScanId = String(scan.data.id);
+  const existingScan = await supabase.from("source_scans").select("id").eq("search_filter_id", filter.id).eq("source", "olx").eq("scan_run_id", runId).in("status", ["pending", "running"]).order("started_at", { ascending: false }).limit(1);
+  if (existingScan.error) throw new Error(`Nie udało się odczytać oczekującego skanu OLX: ${existingScan.error.message}`);
+  let sourceScanId = Array.isArray(existingScan.data) && existingScan.data[0] && typeof existingScan.data[0].id === "string" ? existingScan.data[0].id : null;
+  let createdSourceScan = false;
+  if (!sourceScanId) {
+    const scan = await supabase.from("source_scans").insert({
+      search_filter_id: filter.id,
+      source: "olx",
+      status: "pending",
+      scan_run_id: runId,
+      filter_snapshot: filter,
+    }).select("id").single();
+    if (scan.error || !scan.data?.id) throw new Error(`Nie udało się utworzyć oczekującego skanu OLX: ${scan.error?.message ?? "brak ID"}`);
+    sourceScanId = String(scan.data.id);
+    createdSourceScan = true;
+  }
   const idempotencyKey = `${filter.id}:olx:${runId}`;
   const job = await supabase.from("olx_scan_jobs").insert({
     scan_run_id: runId,
@@ -49,10 +57,31 @@ export async function enqueueOlxJob(filter: SearchFilter, runId: string): Promis
     idempotency_key: idempotencyKey,
   }).select("id").single();
   if (job.error || !job.data?.id) {
-    await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: "Nie udało się dodać zadania OLX do kolejki." }).eq("id", sourceScanId);
+    if (job.error?.code === "23505") {
+      const existingJob = await supabase.from("olx_scan_jobs").select("id,source_scan_id").eq("idempotency_key", idempotencyKey).maybeSingle();
+      if (createdSourceScan) await supabase.from("source_scans").delete().eq("id", sourceScanId);
+      if (existingJob.data?.id && existingJob.data.source_scan_id) return { jobId: String(existingJob.data.id), sourceScanId: String(existingJob.data.source_scan_id), runId, status: "queued" };
+    }
+    if (createdSourceScan) await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: "Nie udało się dodać zadania OLX do kolejki." }).eq("id", sourceScanId);
     throw new Error(`Nie udało się dodać zadania OLX do kolejki: ${job.error?.message ?? "brak ID"}`);
   }
   return { jobId: String(job.data.id), sourceScanId, runId, status: "queued" };
+}
+
+/** Returns one unfinished OLX run for this filter, or refuses ambiguity. */
+export async function resumableOlxRunId(filterId: string, client?: DatabaseClient): Promise<string | null> {
+  const supabase = client ?? createOlxWorkerAdminClient();
+  const [jobs, scans] = await Promise.all([
+    supabase.from("olx_scan_jobs").select("scan_run_id").eq("search_filter_id", filterId).in("status", ["queued", "running"]).order("created_at", { ascending: false }).limit(50),
+    supabase.from("source_scans").select("scan_run_id").eq("search_filter_id", filterId).eq("source", "olx").in("status", ["pending", "running"]).limit(50),
+  ]);
+  if (jobs.error || scans.error) throw new Error(`Nie udało się sprawdzić stanu kolejki OLX: ${jobs.error?.message ?? scans.error?.message}`);
+  const runIds = new Set<string>();
+  for (const row of [...(jobs.data ?? []), ...(scans.data ?? [])]) {
+    if (row && typeof row.scan_run_id === "string" && row.scan_run_id.trim()) runIds.add(row.scan_run_id);
+  }
+  if (runIds.size > 1) throw new Error("OLX_MULTIPLE_RUN_IDS");
+  return [...runIds][0] ?? null;
 }
 
 export async function claimOlxJob(workerId: string): Promise<ClaimedOlxJob | null> {
@@ -142,6 +171,36 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
   if (completed.error) throw new Error(`OLX_JOB_FINALIZE_FAILED: ${completed.error.message}`);
   await supabase.from("search_filters").update({ last_scanned_at: now }).eq("id", filter.id);
   return result;
+}
+
+/**
+ * Checked by manual-scan.ts before enqueueOlxJob, specifically so a resumed
+ * run (startFinderScanForFilter deciding to reuse an existing scan_run_id
+ * instead of creating a second one) never calls enqueueOlxJob a second time
+ * for OLX. Without this, the unconditional source_scans insert inside
+ * enqueueOlxJob would create a second, orphaned source_scans row for the
+ * same (filter, "olx", runId) even though olx_scan_jobs' own idempotency_key
+ * unique constraint would separately reject the duplicate job row -- the
+ * source_scans row would already exist by the time that constraint fires.
+ * Reuses the same completed-result cache (olx_scan_jobs.result_summary) and
+ * isSourceScanResult check completeOlxJob itself already relies on for its
+ * own idempotency, so a second completion call and a resumed scan start
+ * agree on what "already done" looks like.
+ */
+export async function existingOlxScanResult(runId: string, client?: DatabaseClient): Promise<SourceScanResult | null> {
+  const supabase = client ?? createOlxWorkerAdminClient();
+  const { data, error } = await supabase.from("olx_scan_jobs").select("status,result_summary,error_message").eq("scan_run_id", runId).order("created_at", { ascending: false }).limit(1);
+  if (error) throw new Error(`Nie udało się odczytać stanu zadania OLX: ${error.message}`);
+  if (!data) return null;
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row || typeof row !== "object") return null;
+  const job = row as { status?: unknown; result_summary?: unknown; error_message?: unknown };
+  if (job.status === "completed" && isSourceScanResult(job.result_summary)) return job.result_summary;
+  if (job.status === "failed") {
+    return { source: "olx", status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: "OLX_JOB_FAILED", errorMessage: typeof job.error_message === "string" ? job.error_message : "OLX zakończyło się błędem.", warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() };
+  }
+  // queued or running: still in flight, nothing new to enqueue.
+  return { source: "olx", status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage: "OLX: oczekuje na lokalny worker", warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() };
 }
 
 export async function getOlxScanRunStatus(runId: string) {
