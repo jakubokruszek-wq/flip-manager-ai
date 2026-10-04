@@ -69,14 +69,18 @@ export async function verifyFacebookWatchOidc(token: string, keySet: Verificatio
 
 /**
  * Keeps the existing CRON_SECRET path and adds signed GitHub Actions OIDC as
- * a second, non-public path. The token itself is never logged or returned.
+ * a second, non-public path. `additionalSecret` is a third, narrower
+ * accepted credential for a specific caller (see FINDER_CRON_SECRET below)
+ * -- it is never required, only ever additive, and is checked the same way
+ * CRON_SECRET already is. The token itself is never logged or returned.
  */
-async function authorizeScheduledRequest(request: Request, verifyOidc: OidcVerifier): Promise<boolean> {
+async function authorizeScheduledRequest(request: Request, verifyOidc: OidcVerifier, additionalSecret?: string | null): Promise<boolean> {
   const authorization = request.headers.get("authorization");
   const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
   const suppliedSecret = bearer ?? request.headers.get("x-cron-secret");
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && suppliedSecret === cronSecret) return true;
+  if (additionalSecret && suppliedSecret === additionalSecret) return true;
   if (!bearer) return false;
   try {
     await verifyOidc(bearer);
@@ -86,12 +90,24 @@ async function authorizeScheduledRequest(request: Request, verifyOidc: OidcVerif
   }
 }
 
+/**
+ * FINDER_CRON_SECRET is a separate, narrowly-scoped shared secret accepted
+ * ONLY by the two Finder cron endpoints (this function and
+ * authorizeFinderSchedulerRequest below) -- never by Facebook Watch or any
+ * other CRON_SECRET-protected route. It exists so a free external trigger
+ * (e.g. cron-job.org) never needs the general CRON_SECRET, which also
+ * protects facebook-watch and listing-lifecycle: a leak of this one value
+ * can only ever reach Finder's own scheduler/continuation, nothing else.
+ * GitHub Actions' own signed OIDC path (verifyGitHubActionsOidc/
+ * verifyFinderSchedulerOidc) is unchanged and remains fully valid alongside
+ * it, so it keeps working the moment GitHub's schedule delivery does.
+ */
 export async function authorizeContinuationRequest(request: Request, verifyOidc: OidcVerifier = verifyGitHubActionsOidc): Promise<boolean> {
-  return authorizeScheduledRequest(request, verifyOidc);
+  return authorizeScheduledRequest(request, verifyOidc, process.env.FINDER_CRON_SECRET);
 }
 
 export async function authorizeFinderSchedulerRequest(request: Request, verifyOidc: OidcVerifier = verifyFinderSchedulerOidc): Promise<boolean> {
-  return authorizeScheduledRequest(request, verifyOidc);
+  return authorizeScheduledRequest(request, verifyOidc, process.env.FINDER_CRON_SECRET);
 }
 
 export async function authorizeFacebookWatchRequest(request: Request, verifyOidc: OidcVerifier = verifyFacebookWatchOidc): Promise<boolean> {

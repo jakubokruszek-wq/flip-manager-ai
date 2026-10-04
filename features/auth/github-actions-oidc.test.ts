@@ -230,13 +230,67 @@ test("Finder scheduler auth denies anonymous requests and accepts only its own v
   }
 });
 
+/**
+ * FINDER_CRON_SECRET exists so a free external trigger (e.g. cron-job.org)
+ * never needs the general CRON_SECRET, which also unlocks facebook-watch
+ * and listing-lifecycle. It must work for both Finder endpoints and must
+ * never work for Facebook Watch -- that's the entire point of scoping it
+ * narrowly rather than reusing CRON_SECRET.
+ */
+test("FINDER_CRON_SECRET authorizes both Finder scheduler and continuation requests", async () => {
+  const previousCron = process.env.CRON_SECRET;
+  const previousFinder = process.env.FINDER_CRON_SECRET;
+  try {
+    delete process.env.CRON_SECRET;
+    process.env.FINDER_CRON_SECRET = "finder-only-secret";
+    assert.equal(await authorizeFinderSchedulerRequest(new Request("https://example.test", { headers: { authorization: "Bearer finder-only-secret" } })), true);
+    assert.equal(await authorizeContinuationRequest(new Request("https://example.test", { headers: { authorization: "Bearer finder-only-secret" } })), true);
+    assert.equal(await authorizeFinderSchedulerRequest(new Request("https://example.test", { headers: { authorization: "Bearer wrong-secret" } })), false);
+  } finally {
+    if (previousCron === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = previousCron;
+    if (previousFinder === undefined) delete process.env.FINDER_CRON_SECRET; else process.env.FINDER_CRON_SECRET = previousFinder;
+  }
+});
+
+test("FINDER_CRON_SECRET must never authorize a Facebook Watch request -- a leak of it must not reach facebook-watch or listing-lifecycle", async () => {
+  const previousCron = process.env.CRON_SECRET;
+  const previousFinder = process.env.FINDER_CRON_SECRET;
+  try {
+    delete process.env.CRON_SECRET;
+    process.env.FINDER_CRON_SECRET = "finder-only-secret";
+    assert.equal(await authorizeFacebookWatchRequest(new Request("https://example.test", { headers: { authorization: "Bearer finder-only-secret" } })), false);
+  } finally {
+    if (previousCron === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = previousCron;
+    if (previousFinder === undefined) delete process.env.FINDER_CRON_SECRET; else process.env.FINDER_CRON_SECRET = previousFinder;
+  }
+});
+
+test("the general CRON_SECRET still authorizes Finder endpoints too -- FINDER_CRON_SECRET is additive, not a replacement", async () => {
+  const previousCron = process.env.CRON_SECRET;
+  const previousFinder = process.env.FINDER_CRON_SECRET;
+  try {
+    process.env.CRON_SECRET = "general-secret";
+    delete process.env.FINDER_CRON_SECRET;
+    assert.equal(await authorizeFinderSchedulerRequest(new Request("https://example.test", { headers: { authorization: "Bearer general-secret" } })), true);
+    assert.equal(await authorizeContinuationRequest(new Request("https://example.test", { headers: { authorization: "Bearer general-secret" } })), true);
+  } finally {
+    if (previousCron === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = previousCron;
+    if (previousFinder === undefined) delete process.env.FINDER_CRON_SECRET; else process.env.FINDER_CRON_SECRET = previousFinder;
+  }
+});
+
 test("workflow is hourly, bounded, serialized, and only calls the continuation endpoint", () => {
   const workflow = readFileSync(join(process.cwd(), ".github", "workflows", "finder-scan-continuation.yml"), "utf8");
   assert.match(workflow, /cron:\s*["']7 \* \* \* \*["']/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /concurrency:/);
   assert.match(workflow, /id-token:\s*write/);
-  assert.match(workflow, /max_requests=4/);
+  // The route defers the real claim-and-process loop to runAfterResponse and
+  // acknowledges fast, so this workflow no longer retries in a loop to drain
+  // multiple rows per job run -- one fast 202 "accepted" per invocation.
+  assert.match(workflow, /"\$\{http_status\}"\s*!=\s*"202"/);
+  assert.match(workflow, /status == "accepted"/);
+  assert.doesNotMatch(workflow, /max_requests=4/);
   assert.match(workflow, /api\/jobs\/finder-scan-continuation/);
   assert.match(workflow, /flip-manager-finder-continuation/);
   assert.doesNotMatch(workflow, /manual-scan|\/scan["'\s]|facebook_scan_jobs/);
@@ -284,12 +338,18 @@ test("Finder new-scan scheduler is separate from hourly continuation and Faceboo
   assert.match(workflow, /id-token:\s*write/);
   assert.match(workflow, /api\/jobs\/finder-scan-scheduler/);
   assert.match(workflow, /flip-manager-finder-scheduler/);
+  // The route defers the scheduler cycle to runAfterResponse and
+  // acknowledges fast; the workflow must check for that, not a synchronous
+  // "already finished" response.
+  assert.match(workflow, /"\$\{http_status\}"\s*!=\s*"202"/);
+  assert.match(workflow, /status == "accepted"/);
   assert.doesNotMatch(workflow, /finder-scan-continuation|facebook-watch|facebook_scan_jobs/);
 
   const route = readFileSync(join(process.cwd(), "app", "api", "jobs", "finder-scan-scheduler", "route.ts"), "utf8");
   assert.match(route, /authorizeFinderSchedulerRequest/);
   assert.match(route, /runFinderScanScheduler/);
   assert.match(route, /maxDuration = 60/);
+  assert.match(route, /runAfterResponse/);
   assert.doesNotMatch(route, /runFinderScanContinuations|runFacebookWatchJob/);
 
   const finderScheduler = readFileSync(join(process.cwd(), "features", "flip-finder", "server", "finder-scheduler.ts"), "utf8");

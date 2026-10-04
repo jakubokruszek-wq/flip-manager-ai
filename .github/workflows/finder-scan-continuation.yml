@@ -32,32 +32,22 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
           oidc_token="$(jq -er '.value' <<<"${oidc_response}")"
 
-          # One endpoint invocation is bounded below Vercel Hobby's 60-second
-          # ceiling. A small hard cap lets this hourly job drain several
-          # pending rows without creating an unbounded retry loop.
-          max_requests=4
-          for ((attempt = 1; attempt <= max_requests; attempt += 1)); do
-            response_file="$(mktemp)"
-            http_status="$(curl --silent --show-error --location \
-              -H "Authorization: Bearer ${oidc_token}" \
-              -o "${response_file}" -w '%{http_code}' \
-              "${CONTINUATION_URL}" || true)"
+          # The route acknowledges and defers the actual claim-and-process
+          # loop to the platform's background-task primitive (see route.ts),
+          # so a 202 here means this cycle was accepted, not that it already
+          # drained every pending row -- its real outcome is only in the
+          # function logs. Draining several pending rows no longer comes
+          # from retrying in one job run; it comes from how often this
+          # trigger (or a higher-frequency external one) fires.
+          response_file="$(mktemp)"
+          trap 'rm -f "${response_file}"' EXIT
+          http_status="$(curl --silent --show-error --location \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -o "${response_file}" -w '%{http_code}' \
+            "${CONTINUATION_URL}" || true)"
 
-            if [[ "${http_status}" != "200" ]]; then
-              rm -f "${response_file}"
-              echo "Finder continuation request failed with HTTP ${http_status}."
-              exit 1
-            fi
-
-            claimed="$(jq -er '.claimed // 0' "${response_file}")"
-            status="$(jq -er '.status // "unknown"' "${response_file}")"
-            rm -f "${response_file}"
-
-            if [[ "${status}" == "schema_unavailable" ]]; then
-              echo "Finder continuation schema is unavailable."
-              exit 1
-            fi
-            if [[ "${claimed}" == "0" ]]; then
-              break
-            fi
-          done
+          if [[ "${http_status}" != "202" ]]; then
+            echo "Finder continuation request failed with HTTP ${http_status}."
+            exit 1
+          fi
+          jq -e '.status == "accepted"' "${response_file}" >/dev/null

@@ -40,8 +40,12 @@ jobs:
             -o "${response_file}" -w '%{http_code}' \
             "${SCHEDULER_URL}" || true)"
 
-          if [[ "${http_status}" != "200" ]]; then
+          # The route acknowledges and defers the actual scan to the
+          # platform's background-task primitive (see route.ts), so a 202
+          # here means the cycle was accepted, not that it already
+          # completed -- its real outcome is only in the function logs.
+          if [[ "${http_status}" != "202" ]]; then
             echo "Finder scheduler request failed with HTTP ${http_status}."
             exit 1
           fi
-          jq -e '.status and (.started | type == "number")' "${response_file}" >/dev/null
+          jq -e '.status == "accepted"' "${response_file}" >/dev/null
