@@ -293,7 +293,10 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
       failed += 1;
       continue;
     }
-    const timeoutMs = sourceTimeoutBudgetMs(Math.max(1, activeSources(filter).filter((candidate) => candidate.id !== "olx").length));
+    // A continuation owns one source at a time. It no longer shares the
+    // initial request's 19.615s slice across the whole filter, so a source
+    // that legitimately needs the normal 75s ceiling can finish on retry.
+    const timeoutMs = sourceTimeoutBudgetMs(1);
     const prepared: PreparedSourceScan = { id: scanId, source: sourceId, started_at: startedAt, continuation_lease_token: leaseToken };
     const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, timeoutMs, { preparedAlreadyRunning: true });
     if (result.status === "completed") completed += 1;
