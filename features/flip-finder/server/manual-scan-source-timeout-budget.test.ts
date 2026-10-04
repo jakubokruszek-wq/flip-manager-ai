@@ -4,28 +4,17 @@ import test from "node:test";
 import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 
 /**
- * Issue 2 from the scan-lifecycle review: the worker's sequential per-source
- * loop used a fixed 75s timeout per source regardless of how many sources a
- * filter has active. SCHEMA_READY_SOURCE_IDS now has 14 entries (13 run
- * through this sequential loop; OLX is dispatched to its own async queue),
- * so a filter with most/all of them active could need up to 13 x 75s = 975s
- * -- more than three times the scan route's own `maxDuration = 300` -- and
- * the platform would kill the worker mid-run regardless of what the
- * heartbeat watchdog can recover afterwards. sourceTimeoutBudgetMs() shrinks
- * the per-source abort window as the active source count grows, so the
- * worst case can never exceed the worker's own lifetime. No source is
- * disabled or skipped -- every active source still runs, just with a
- * smaller fetch window when many share one invocation.
+ * The worker's sequential source loop keeps an internal deadline below
+ * Vercel Hobby's 60s function ceiling. It leaves reservations pending when
+ * there is not enough time for another complete source attempt, and the
+ * durable continuation claims those same rows later.
  */
-const { sourceTimeoutBudgetMs, scanSource, scanTimestamp } = await import("./manual-scan.ts");
+const { sourceTimeoutBudgetMs, scanSource, scanTimestamp, SOURCE_TIMEOUT_MS, WORKER_MAX_DURATION_MS, WORKER_OVERHEAD_RESERVE_MS, MIN_SOURCE_TIMEOUT_MS } = await import("./manual-scan.ts");
 
-const WORKER_MAX_DURATION_MS = 300_000;
-const WORKER_OVERHEAD_RESERVE_MS = 45_000;
-const SOURCE_TIMEOUT_CEILING_MS = 75_000;
-const MIN_SOURCE_TIMEOUT_MS = 10_000;
+const SOURCE_TIMEOUT_CEILING_MS = SOURCE_TIMEOUT_MS;
 const AVAILABLE_FOR_SOURCES_MS = WORKER_MAX_DURATION_MS - WORKER_OVERHEAD_RESERVE_MS;
 
-test("a single active source still gets the full 75s ceiling", () => {
+test("a single active source gets the bounded 30s ceiling", () => {
   assert.equal(sourceTimeoutBudgetMs(1), SOURCE_TIMEOUT_CEILING_MS);
 });
 
@@ -33,13 +22,16 @@ test("zero sources (defensive) falls back to the ceiling rather than dividing by
   assert.equal(sourceTimeoutBudgetMs(0), SOURCE_TIMEOUT_CEILING_MS);
 });
 
-test("the real current maximum number of sequential sources (SCHEMA_READY_SOURCE_IDS minus olx) fits inside the worker's lifetime with real margin", () => {
+test("the real current maximum is split across bounded invocations with a continuation margin", () => {
   const maxSequentialSources = SCHEMA_READY_SOURCE_IDS.filter((id) => id !== "olx").length;
   assert.equal(maxSequentialSources, 13, "this test's premise: today's real maximum is 13 -- update the budget math (not just this number) if that ever changes");
   const perSourceBudget = sourceTimeoutBudgetMs(maxSequentialSources);
-  const worstCaseTotalMs = perSourceBudget * maxSequentialSources;
-  assert.ok(worstCaseTotalMs <= AVAILABLE_FOR_SOURCES_MS, `worst case ${worstCaseTotalMs}ms must fit inside the ${AVAILABLE_FOR_SOURCES_MS}ms reserved for sequential source fetches`);
-  assert.ok(worstCaseTotalMs + WORKER_OVERHEAD_RESERVE_MS <= WORKER_MAX_DURATION_MS, "including worker overhead, the absolute worst case must still stay under maxDuration=300");
+  assert.equal(perSourceBudget, MIN_SOURCE_TIMEOUT_MS, "a large source set gets the floor and is split by the deadline");
+  const maxSourcesPerInvocation = Math.floor(AVAILABLE_FOR_SOURCES_MS / perSourceBudget);
+  assert.equal(maxSourcesPerInvocation, 3);
+  assert.ok(perSourceBudget * maxSourcesPerInvocation <= AVAILABLE_FOR_SOURCES_MS, "the bounded portion must fit the worker budget");
+  assert.ok(perSourceBudget * (maxSourcesPerInvocation + 1) > AVAILABLE_FOR_SOURCES_MS, "the next source must be deferred to continuation");
+  assert.ok(perSourceBudget * maxSourcesPerInvocation + WORKER_OVERHEAD_RESERVE_MS <= WORKER_MAX_DURATION_MS, "including overhead, the bounded portion stays under maxDuration=60");
   assert.ok(perSourceBudget >= MIN_SOURCE_TIMEOUT_MS, "every source must still get a meaningful fetch window, never reduced to zero");
 });
 
@@ -62,7 +54,7 @@ test("an extreme, currently-impossible source count is clamped at the floor rath
   assert.ok(perSourceBudget * extremeCount > AVAILABLE_FOR_SOURCES_MS, "sanity check on the documented scaling limit itself");
 });
 
-test("scanSource defers a timeout at the exact reduced per-source budget it is given, not the full 75s ceiling", async (t) => {
+test("scanSource defers a timeout at the exact reduced per-source budget it is given, not the hard ceiling", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const reducedBudget = sourceTimeoutBudgetMs(13);
   assert.ok(reducedBudget < SOURCE_TIMEOUT_CEILING_MS, "premise: with 13 sources the budget must actually be reduced below the ceiling");
@@ -115,7 +107,7 @@ test("scanSource defers a timeout at the exact reduced per-source budget it is g
 
   assert.equal(result.status, "pending", "a bounded source timeout is durable continuation work, not a terminal failure");
   assert.equal(result.errorCode, "SOURCE_TIMEOUT");
-  assert.match(result.errorMessage ?? "", new RegExp(`source timeout after ${reducedBudget / 1000}s`), "the reported timeout must reflect the actual reduced budget, not the hardcoded 75s ceiling");
+  assert.match(result.errorMessage ?? "", new RegExp(`source timeout after ${reducedBudget / 1000}s`), "the reported timeout must reflect the actual reduced budget");
 });
 
 /**

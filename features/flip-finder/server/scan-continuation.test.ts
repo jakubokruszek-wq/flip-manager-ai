@@ -40,7 +40,7 @@ test("one continuation cycle can claim multiple ready sources, while still de-du
 
 test("a ready row that cannot fit one complete source budget remains for the next hourly cycle", () => {
   const ready = { id: "pending-late", source: "gratka", status: "pending" };
-  const timeoutMs = 75_000;
+    const timeoutMs = 30_000;
   const deadline = NOW + timeoutMs - 1;
   assert.equal(NOW + timeoutMs <= deadline, false, "the continuation worker must stop before claiming work it cannot finish inside its hard window");
   assert.equal(continuationEligible(ready, NOW, CYCLE), true, "the row itself remains eligible for the next cron invocation");

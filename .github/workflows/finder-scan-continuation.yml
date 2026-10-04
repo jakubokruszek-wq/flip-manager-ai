@@ -1,0 +1,63 @@
+name: Finder scan continuation
+
+on:
+  schedule:
+    # Run shortly after the hour so the previous cycle has settled.
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: finder-scan-continuation
+  cancel-in-progress: false
+
+jobs:
+  continue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Continue pending Finder sources
+        shell: bash
+        env:
+          CONTINUATION_URL: https://flip-manager-ai.vercel.app/api/jobs/finder-scan-continuation
+          OIDC_AUDIENCE: flip-manager-finder-continuation
+        run: |
+          set -euo pipefail
+
+          oidc_response="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          oidc_token="$(jq -er '.value' <<<"${oidc_response}")"
+
+          # One endpoint invocation is bounded below Vercel Hobby's 60-second
+          # ceiling. A small hard cap lets this hourly job drain several
+          # pending rows without creating an unbounded retry loop.
+          max_requests=4
+          for ((attempt = 1; attempt <= max_requests; attempt += 1)); do
+            response_file="$(mktemp)"
+            http_status="$(curl --silent --show-error --location \
+              -H "Authorization: Bearer ${oidc_token}" \
+              -o "${response_file}" -w '%{http_code}' \
+              "${CONTINUATION_URL}" || true)"
+
+            if [[ "${http_status}" != "200" ]]; then
+              rm -f "${response_file}"
+              echo "Finder continuation request failed with HTTP ${http_status}."
+              exit 1
+            fi
+
+            claimed="$(jq -er '.claimed // 0' "${response_file}")"
+            status="$(jq -er '.status // "unknown"' "${response_file}")"
+            rm -f "${response_file}"
+
+            if [[ "${status}" == "schema_unavailable" ]]; then
+              echo "Finder continuation schema is unavailable."
+              exit 1
+            fi
+            if [[ "${claimed}" == "0" ]]; then
+              break
+            fi
+          done

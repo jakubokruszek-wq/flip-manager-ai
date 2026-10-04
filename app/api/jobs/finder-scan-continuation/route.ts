@@ -1,7 +1,8 @@
 import { runFinderScanContinuations } from "@/features/flip-finder/server/manual-scan";
+import { authorizeContinuationRequest } from "@/features/auth/github-actions-oidc";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 /**
  * Durable hourly trigger for Finder source rows left pending by a bounded
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
 }
 
 async function run(request: Request): Promise<Response> {
-  if (!authorized(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!await authorizeContinuationRequest(request)) return Response.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const result = await runFinderScanContinuations();
     return Response.json(result, { status: result.status === "schema_unavailable" ? 503 : 200 });
@@ -25,11 +26,4 @@ async function run(request: Request): Promise<Response> {
     console.error("FINDER SCAN CONTINUATION FAILED:", error);
     return Response.json({ error: "Continuation failed" }, { status: 500 });
   }
-}
-
-function authorized(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const supplied = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? request.headers.get("x-cron-secret");
-  return supplied === secret;
 }

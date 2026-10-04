@@ -20,32 +20,33 @@ type SupabaseClient = DatabaseClient;
 type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
 export type ScanClock = { startedAt: string; startedMs: number; continuationLeaseToken?: string | null };
-export type PreparedSourceScan = { id: string; source: string; started_at: string; continuation_lease_token?: string | null };
+export type PreparedSourceScan = { id: string; source: string; status?: string; started_at: string; continuation_lease_token?: string | null };
 type ManualScanOptions = { runId?: string; usePreparedRows?: boolean; skipLock?: boolean };
 
-const SOURCE_TIMEOUT_MS = 75_000;
+// Vercel Hobby hard-stops functions after 60s. Keep the internal worker
+// window below that limit so cleanup and lease finalization still have time to
+// run after the last source attempt.
+export const SOURCE_TIMEOUT_MS = 30_000;
 const DATABASE_TIMEOUT_MS = 12_000;
-// Mirrors the scan route's `export const maxDuration = 300` (app/api/flip-finder/
-// search-filters/[id]/scan/route.ts) -- keep these two numbers in sync.
-const WORKER_MAX_DURATION_MS = 300_000;
+// Mirrors the scan routes' `export const maxDuration = 60` -- keep this
+// internal deadline below the platform limit.
+export const WORKER_MAX_DURATION_MS = 50_000;
 // Reserves time for everything in runManualOtodomScan besides the sequential
-// per-source fetch loop itself: getSearchFilter, the lock/staleness check,
-// enqueueOlxJob, reconcileFacebookFromCanonicalListings, the final
-// search_filters update, and the finally block's cleanup writes.
-const WORKER_OVERHEAD_RESERVE_MS = 45_000;
+// per-source fetch loop itself: getSearchFilter, lock/staleness checks,
+// enqueueOlxJob, reconciliation, final updates, and cleanup writes.
+export const WORKER_OVERHEAD_RESERVE_MS = 15_000;
 // A scrape fetch cannot do meaningful work below this; if the number of
 // sequential sources ever grows enough to hit this floor, the per-source
 // budget below can no longer guarantee the worker stays inside
 // WORKER_MAX_DURATION_MS on its own -- that would need real parallel source
 // execution, not a smaller slice of a fixed budget.
-const MIN_SOURCE_TIMEOUT_MS = 10_000;
+export const MIN_SOURCE_TIMEOUT_MS = 10_000;
 
 /**
- * Bounds the per-source fetch timeout so that SOURCE_TIMEOUT_MS * sourceCount
- * can never collectively exceed the worker's own platform-enforced lifetime.
- * Every currently active source still runs -- nothing is disabled or skipped
- * -- it is only given a smaller abort window when many sources share one
- * worker invocation.
+ * Bounds the per-source fetch timeout for one bounded worker portion. When
+ * many sources are active the minimum timeout is intentional: the caller's
+ * deadline defers any rows that cannot fit to the durable continuation rather
+ * than starting work it cannot finish before the platform limit.
  */
 export function sourceTimeoutBudgetMs(sourceCount: number, ceilingMs: number = SOURCE_TIMEOUT_MS): number {
   if (sourceCount <= 0) return ceilingMs;
@@ -199,11 +200,26 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   try {
     const sequentialSources = sources.filter((item) => item.id !== "olx");
     const perSourceTimeoutMs = sourceTimeoutBudgetMs(sequentialSources.length);
+    const workerDeadline = scanStarted + WORKER_MAX_DURATION_MS - WORKER_OVERHEAD_RESERVE_MS;
+    let budgetExhausted = false;
     for (const source of sequentialSources) {
       const prepared = preparedScans.get(source.id);
-      sourceResults.push(options.usePreparedRows && !prepared
-        ? failedResult(source.id, 0, "SCAN_RESERVATION_MISSING", "Nie znaleziono zarezerwowanego etapu skanu.")
-        : await scanSource(source, filterId, filter, supabase, runId, ownedScans, prepared, perSourceTimeoutMs));
+      if (options.usePreparedRows && !prepared) {
+        sourceResults.push(failedResult(source.id, 0, "SCAN_RESERVATION_MISSING", "Nie znaleziono zarezerwowanego etapu skanu."));
+        continue;
+      }
+      if (prepared && (prepared.status === "completed" || prepared.status === "failed")) continue;
+      // Leave the reservation pending when this invocation no longer has
+      // enough time for a complete source attempt. The next durable hourly
+      // continuation claims the same row/run; no synthetic failure is
+      // written and no source is started after the worker budget expires.
+      if (budgetExhausted || Date.now() + perSourceTimeoutMs > workerDeadline) {
+        budgetExhausted = true;
+        if (prepared) await deferPreparedSource(supabase, prepared.id);
+        sourceResults.push(pendingResult(source.id, "SOURCE_BUDGET_EXHAUSTED: oczekuje na kontynuację", "SOURCE_BUDGET_EXHAUSTED"));
+        continue;
+      }
+      sourceResults.push(await scanSource(source, filterId, filter, supabase, runId, ownedScans, prepared, perSourceTimeoutMs));
     }
     if (sources.some((source) => source.id === "olx")) {
       try {
@@ -220,6 +236,10 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
     const pending = sourceResults.filter((result) => result.status === "pending");
     const failed = sourceResults.filter((result) => result.status === "failed").length;
     if (!completed.length && !pending.length) {
+      if (!sourceResults.length) {
+        const terminalFailures = [...preparedScans.values()].filter((scan) => scan.status === "failed").length;
+        return { runId, status: terminalFailures ? "partial" : "completed", sourcesRun: sourceIds.length, sourcesCompleted: sourceIds.length - terminalFailures, sourcesFailed: terminalFailures, fetched: 0, normalized: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, actualErrors: terminalFailures, sourceResults: [], matchDiagnostics: emptyMatchDiagnosticSummary(), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0, warnings: [] };
+      }
       throw statusError(500, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
     }
     const sum = (key: keyof Pick<SourceScanResult, "fetched" | "normalized" | "matched" | "listingsCreated" | "newMatches" | "updated" | "priceDrops" | "rejected">) => sourceResults.reduce((total, result) => total + result[key], 0);
@@ -256,16 +276,17 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
   let claimed = 0; let completed = 0; let deferred = 0; let failed = 0;
   const errors: string[] = [];
   // Never claim a new row unless the worker still has room for the complete
-  // per-source timeout. The reserved 45s remains available for the claim,
+  // per-source timeout. The reserved overhead remains available for the claim,
   // filter load, finalization and cleanup around that bounded source run.
   const continuationTimeoutMs = sourceTimeoutBudgetMs(1);
 
   while (Date.now() + continuationTimeoutMs <= deadline) {
-    const { data, error } = await supabase.rpc("claim_finder_scan_source", {
+    const claim = supabase.rpc("claim_finder_scan_source", {
       p_cycle_at: cycleAt,
       p_now: new Date().toISOString(),
       p_lease_seconds: Math.floor(CONTINUATION_LEASE_MS / 1_000),
-    });
+    }).abortSignal(AbortSignal.timeout(Math.min(DATABASE_TIMEOUT_MS, Math.max(1_000, deadline - Date.now()))));
+    const { data, error } = await claim;
     if (error) {
       if (error.code === "42883" || error.code === "PGRST202") return { status: "schema_unavailable", cycleAt, claimed, completed, deferred, failed, errors: ["CONTINUATION_SCHEMA_NOT_READY"] };
       errors.push(`CONTINUATION_CLAIM_FAILED: ${error.message}`);
@@ -298,9 +319,9 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
       continue;
     }
     // A continuation owns one source at a time. It no longer shares the
-    // initial request's 19.615s slice across the whole filter, so a source
-    // that legitimately needs the normal 75s ceiling can finish on retry.
-    const prepared: PreparedSourceScan = { id: scanId, source: sourceId, started_at: startedAt, continuation_lease_token: leaseToken };
+    // initial request's slice across the whole filter, so one source gets the
+    // full bounded retry window while the next source waits for another cycle.
+    const prepared: PreparedSourceScan = { id: scanId, source: sourceId, status: "running", started_at: startedAt, continuation_lease_token: leaseToken };
     const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, continuationTimeoutMs, { preparedAlreadyRunning: true });
     if (result.status === "completed") completed += 1;
     else if (result.status === "pending") deferred += 1;
@@ -447,12 +468,27 @@ async function failStaleScans(supabase: SupabaseClient, filterId: string, source
 }
 
 async function loadPreparedSourceScans(supabase: SupabaseClient, runId: string, sourceIds: string[]): Promise<Map<string, PreparedSourceScan>> {
-  const { data, error } = await supabase.from("source_scans").select("id,source,started_at,continuation_lease_token").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data, error } = await supabase.from("source_scans").select("id,source,status,started_at,continuation_lease_token").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running", "completed", "failed"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) throw statusError(500, "Nie udało się odczytać zarezerwowanego skanu.");
   return new Map((Array.isArray(data) ? data : []).flatMap((row) => {
-    if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string" || typeof (row as { source?: unknown }).source !== "string" || typeof (row as { started_at?: unknown }).started_at !== "string") return [];
+    if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string" || typeof (row as { source?: unknown }).source !== "string" || typeof (row as { status?: unknown }).status !== "string" || typeof (row as { started_at?: unknown }).started_at !== "string") return [];
     return [[(row as { source: string }).source, row as PreparedSourceScan]] as const;
   }));
+}
+
+async function deferPreparedSource(supabase: SupabaseClient, scanId: string): Promise<void> {
+  const { error } = await supabase
+    .from("source_scans")
+    .update({
+      status: "pending",
+      finished_at: null,
+      error_message: "SOURCE_TIMEOUT: scan budget exhausted; waiting for continuation",
+      continuation_next_at: nextContinuationAt(Date.now()),
+    })
+    .eq("id", scanId)
+    .eq("status", "pending")
+    .abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  if (error) console.error("FLIP FINDER SOURCE DEFER ERROR:", { scanId, error });
 }
 
 async function updateSourceProgress(supabase: SupabaseClient, scanId: string, filter: LoadedFilter, progress: Progress, signal: AbortSignal, continuationLeaseToken?: string | null): Promise<void> {
@@ -548,7 +584,7 @@ async function reconcileFacebookFromCanonicalListings(filterId: string, runId: s
 }
 
 function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
-function pendingResult(source: string, errorMessage = `${source === "olx" ? "OLX" : "Facebook"}: oczekuje na lokalny worker`): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
+function pendingResult(source: string, errorMessage = `${source === "olx" ? "OLX" : "Facebook"}: oczekuje na lokalny worker`, errorCode: string | null = null): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
 function total(results: SourceScanResult[], key: "fetched" | "newMatches" | "matched"): number { return results.reduce((sum, result) => sum + result[key], 0); }
 function scanLog(event: "SCAN START" | "SOURCE START" | "SOURCE DONE" | "SOURCE ERROR" | "SCAN FINALIZE", data: { scanId: string; source: string; checked: number; new: number; matched: number; durationMs: number }): void { if (process.env.NODE_ENV === "development") console.info(event, data); }
 

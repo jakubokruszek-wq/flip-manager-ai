@@ -4,9 +4,9 @@ import { runManualOtodomScan, scanStatus, startManualOtodomScan } from "@/featur
 import { scanStartErrorMessage } from "@/features/flip-finder/server/scan-start-errors";
 import { runAfterResponse } from "@/features/facebook-watcher/run-after-response";
 type Context = { params: Promise<{ id: string }> };
-// Adapter work is now scheduled after the 202 response. Keep the invocation
-// alive for the same bounded source timeout window used by manual-scan.ts.
-export const maxDuration = 300;
+// Adapter work is scheduled after the 202 response, but the worker itself
+// must finish inside Vercel Hobby's 60-second function ceiling.
+export const maxDuration = 60;
 export async function POST(_request: Request, { params }: Context) {
   try {
     await requireOperator();

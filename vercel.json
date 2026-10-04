@@ -1,6 +1,5 @@
 {
   "crons": [
-    { "path": "/api/jobs/facebook-watch", "schedule": "0 8 * * *" },
-    { "path": "/api/jobs/finder-scan-continuation", "schedule": "0 * * * *" }
+    { "path": "/api/jobs/facebook-watch", "schedule": "0 8 * * *" }
   ]
 }
