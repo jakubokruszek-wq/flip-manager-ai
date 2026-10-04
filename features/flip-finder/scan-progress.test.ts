@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, projectImagePersistenceDiagnostics, projectSearchResultDiagnostics, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
+import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isAwaitingContinuation, isTerminalScanStatus, projectImagePersistenceDiagnostics, projectSearchResultDiagnostics, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -29,6 +29,18 @@ test("all failed work produces failed terminal run", () => {
   const progress = buildOverallProgress([unit(0, "failed"), unit(1, "failed")], ["failed", "failed"]);
   assert.equal(progress.status, "failed");
   assert.equal(isTerminalScanStatus(progress.status), true);
+});
+
+test("a timed-out source is shown as partial/waiting, not as an actively scanning backend", () => {
+  const progress = buildOverallProgress([{ ...unit(0, "pending", "official_uml"), continuationPending: true }], []);
+  assert.equal(progress.status, "partial");
+  assert.equal(progress.waitingUnits, 1);
+  assert.equal(isAwaitingContinuation({ overall: progress }), true);
+  assert.equal(hasActiveBackendWork({
+    overall: progress,
+    facebook: { totalGroups: 0, completedGroups: 0, runningGroups: 0, queuedGroups: 0, failedGroups: 0, discovered: 0, processed: 0, groups: [] },
+    olx: { status: null, raw: 0, normalized: 0, processed: 0, errorMessage: null },
+  }), false);
 });
 
 test("inactive sources are excluded because only persisted run work units are counted", () => {

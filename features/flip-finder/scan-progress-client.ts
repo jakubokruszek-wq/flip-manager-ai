@@ -1,5 +1,5 @@
 import { apiFetch } from "@/lib/api-fetch";
-import { hasActiveBackendWork, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
+import { hasActiveBackendWork, isAwaitingContinuation, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 
 /**
  * The one client-side scan-progress fetcher/validator, shared by every page
@@ -44,7 +44,8 @@ export async function waitUntilScanTerminal(runId: string, signal: AbortSignal, 
       continue;
     }
     consecutiveFailures = 0;
-    if (hasActiveBackendWork(payload) && !isTerminalScanStatus(payload.status)) continue;
+    if (isAwaitingContinuation(payload)) return payload;
+    if (hasActiveBackendWork(payload)) continue;
     return payload;
   }
 }

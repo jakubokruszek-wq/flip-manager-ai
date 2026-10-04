@@ -62,7 +62,7 @@ test("an extreme, currently-impossible source count is clamped at the floor rath
   assert.ok(perSourceBudget * extremeCount > AVAILABLE_FOR_SOURCES_MS, "sanity check on the documented scaling limit itself");
 });
 
-test("scanSource aborts at the exact reduced per-source budget it is given, not the full 75s ceiling", async (t) => {
+test("scanSource defers a timeout at the exact reduced per-source budget it is given, not the full 75s ceiling", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const reducedBudget = sourceTimeoutBudgetMs(13);
   assert.ok(reducedBudget < SOURCE_TIMEOUT_CEILING_MS, "premise: with 13 sources the budget must actually be reduced below the ceiling");
@@ -113,7 +113,7 @@ test("scanSource aborts at the exact reduced per-source budget it is given, not 
   t.mock.timers.tick(reducedBudget);
   const result = await resultPromise;
 
-  assert.equal(result.status, "failed");
+  assert.equal(result.status, "pending", "a bounded source timeout is durable continuation work, not a terminal failure");
   assert.equal(result.errorCode, "SOURCE_TIMEOUT");
   assert.match(result.errorMessage ?? "", new RegExp(`source timeout after ${reducedBudget / 1000}s`), "the reported timeout must reflect the actual reduced budget, not the hardcoded 75s ceiling");
 });

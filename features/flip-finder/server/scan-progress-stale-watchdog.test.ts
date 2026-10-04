@@ -40,7 +40,7 @@ function fakeAdmin(seed: Row[]) {
 const now = Date.parse("2026-10-03T12:00:00.000Z");
 const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
 
-test("progress watchdog fails only stale Finder source rows and preserves heartbeat-active work", async () => {
+test("progress watchdog queues orphaned Finder source rows and preserves heartbeat-active work", async () => {
   const admin = fakeAdmin([
     { id: "stale-official", run_id: "run-1", scan_run_id: "run-1", source: "official_uml", status: "running", started_at: ago(30), filter_snapshot: {} },
     { id: "fresh-heartbeat", scan_run_id: "run-1", source: "official_cooperative", status: "running", started_at: ago(60), filter_snapshot: { _scanProgress: { lastProgressAt: ago(1) } } },
@@ -51,11 +51,12 @@ test("progress watchdog fails only stale Finder source rows and preserves heartb
 
   await expireStaleFinderSourceScans(admin as never, "run-1", now);
 
-  assert.equal(admin.rows.find((row) => row.id === "stale-official")?.status, "failed");
-  assert.equal(admin.rows.find((row) => row.id === "stale-official")?.error_message, "Scan timed out");
+  assert.equal(admin.rows.find((row) => row.id === "stale-official")?.status, "pending");
+  assert.match(String(admin.rows.find((row) => row.id === "stale-official")?.error_message), /^SOURCE_TIMEOUT:/);
   assert.equal(admin.rows.find((row) => row.id === "fresh-heartbeat")?.status, "running");
   assert.equal(admin.rows.find((row) => row.id === "watcher-facebook")?.status, "running");
   assert.equal(admin.rows.find((row) => row.id === "olx-worker")?.status, "running");
   assert.equal(admin.rows.find((row) => row.id === "other-run")?.status, "running");
   assert.deepEqual(admin.updates.map((update) => update.ids), [["stale-official"]]);
+  assert.equal(admin.updates[0]?.patch.continuation_next_at, "2026-10-03T13:00:00.000Z");
 });

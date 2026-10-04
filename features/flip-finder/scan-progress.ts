@@ -216,6 +216,7 @@ export type ScanWorkUnit = {
   matchedCount: number;
   normalizedCount: number;
   errorMessage: string | null;
+  continuationPending?: boolean;
 };
 
 export type FacebookGroupProgress = {
@@ -299,6 +300,7 @@ export type ScanProgressResponse = {
     percent: number;
     failedUnits: number;
     remainingUnits: number;
+    waitingUnits?: number;
   };
   current: { source: ListingSource; groupName: string | null } | null;
   facebook: {
@@ -460,12 +462,15 @@ export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJ
   // source row says completed/partial, so the run cannot be reported healthy.
   const failedUnits = Math.max(units.filter((unit) => unit.status === "failed").length, jobStatuses.filter((status) => status === "failed").length);
   const totalUnits = units.length;
-  const allQueued = totalUnits > 0 && terminalUnits === 0 && units.every((unit) => unit.status === "pending") && jobStatuses.length > 0 && jobStatuses.every((status) => status === "queued");
-  const hasActive = units.some((unit) => unit.status === "pending" || unit.status === "running");
+  const waitingUnits = units.filter((unit) => unit.status === "pending" && unit.continuationPending === true).length;
+  const allQueued = waitingUnits === 0 && totalUnits > 0 && terminalUnits === 0 && units.every((unit) => unit.status === "pending") && jobStatuses.length > 0 && jobStatuses.every((status) => status === "queued");
+  const hasActive = units.some((unit) => unit.status === "running" || (unit.status === "pending" && unit.continuationPending !== true));
   const status: ScanProgressStatus = allQueued
     ? "queued"
     : hasActive
       ? "running"
+      : waitingUnits > 0
+        ? "partial"
       : failedUnits === totalUnits && totalUnits > 0
         ? "failed"
         : failedUnits > 0 || units.some((unit) => unit.status === "partial")
@@ -479,6 +484,7 @@ export function buildOverallProgress(units: ScanWorkUnit[], jobStatuses: WorkerJ
     percent: totalUnits > 0 ? Math.round((terminalUnits / totalUnits) * 100) : 100,
     failedUnits,
     remainingUnits: Math.max(0, totalUnits - terminalUnits),
+    waitingUnits,
   };
 }
 
@@ -494,8 +500,13 @@ export function isTerminalScanStatus(status: ScanProgressStatus): boolean {
   return status === "completed" || status === "partial" || status === "failed";
 }
 
+export function isAwaitingContinuation(progress: Pick<ScanProgressResponse, "overall">): boolean {
+  return (progress.overall.waitingUnits ?? 0) > 0;
+}
+
 export function hasActiveBackendWork(progress: Pick<ScanProgressResponse, "overall" | "facebook" | "olx">): boolean {
-  return progress.overall.remainingUnits > 0
+  const waitingUnits = progress.overall.waitingUnits;
+  return progress.overall.remainingUnits > (typeof waitingUnits === "number" ? waitingUnits : 0)
     || progress.facebook.groups.some((group) => group.status === "queued" || group.status === "running")
     || progress.olx.status === "queued"
     || progress.olx.status === "running";

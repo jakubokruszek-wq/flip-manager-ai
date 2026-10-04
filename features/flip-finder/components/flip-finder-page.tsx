@@ -30,7 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
 import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
-import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
+import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isAwaitingContinuation, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 import { fetchScanProgress } from "@/features/flip-finder/scan-progress-client";
 import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 import { activeFilterSources } from "@/features/flip-finder/source-availability";
@@ -225,7 +225,7 @@ export function FlipFinderPage() {
       }
 
       if (payload.status === "running" && payload.runId) {
-        if (initialProgress && !hasActiveBackendWork(initialProgress)) {
+        if (initialProgress && !hasActiveBackendWork(initialProgress) && !isAwaitingContinuation(initialProgress)) {
           setNotice(`Skan zakończony. Znaleziono ${formatNumber(initialProgress.totals.matched)} dopasowań.`);
           await load();
           setResultsRevision((current) => current + 1);
@@ -403,13 +403,19 @@ export function FlipFinderPage() {
         }
         consecutiveFailures = 0;
         setScanProgress(payload);
-        if (!hasActiveBackendWork(payload)) {
+        if (isAwaitingContinuation(payload)) {
+          setNotice("Skan częściowo zakończony; pozostałe źródła oczekują na kontynuację.");
+          await load();
+          setResultsRevision((current) => current + 1);
+          break;
+        }
+        if (!hasActiveBackendWork(payload) && !isAwaitingContinuation(payload)) {
           setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
           await load();
           setResultsRevision((current) => current + 1);
           break;
         }
-        if (!isTerminalScanStatus(payload.status)) continue;
+        if (!isTerminalScanStatus(payload.status) || isAwaitingContinuation(payload)) continue;
         setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami. Oferty z poprawnie zakończonych etapów pozostały dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
         await load();
         setResultsRevision((current) => current + 1);
@@ -521,9 +527,9 @@ export function FlipFinderPage() {
               </details>
             </div>
           </div>
-          {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
+          {scanProgress && (!isTerminalScanStatus(scanProgress.status) || isAwaitingContinuation(scanProgress)) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
           <InlineFilterResults deepLinkListingId={deepLinkListingId} key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
-          {scanProgress && !isTerminalScanStatus(scanProgress.status) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
+          {scanProgress && (!isTerminalScanStatus(scanProgress.status) || isAwaitingContinuation(scanProgress)) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
           <Dialog onOpenChange={(open) => { if (!clearingResults) setClearResultsOpen(open); }} open={clearResultsOpen}>
             <DialogContent className="max-w-md">
               <DialogHeader>

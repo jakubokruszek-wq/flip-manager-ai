@@ -11,6 +11,7 @@ import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-m
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, staleScanCutoff } from "./scan-lifecycle";
+import { CONTINUATION_LEASE_MS, classifySourceFailure, continuationCycleAt, isContinuationPending, nextContinuationAt } from "./scan-continuation";
 export { scanStatus } from "./scan-start-errors";
 
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
@@ -18,8 +19,8 @@ export type ScanSummary = { runId: string; status: "running" | "completed" | "pa
 type SupabaseClient = DatabaseClient;
 type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
-export type ScanClock = { startedAt: string; startedMs: number };
-type PreparedSourceScan = { id: string; source: string; started_at: string };
+export type ScanClock = { startedAt: string; startedMs: number; continuationLeaseToken?: string | null };
+export type PreparedSourceScan = { id: string; source: string; started_at: string; continuation_lease_token?: string | null };
 type ManualScanOptions = { runId?: string; usePreparedRows?: boolean; skipLock?: boolean };
 
 const SOURCE_TIMEOUT_MS = 75_000;
@@ -74,7 +75,9 @@ export async function startManualOtodomScan(filterId: string): Promise<ManualSca
   const sources = activeSources(filter);
   const sourceIds = [...sources.map((source) => source.id), ...(filter.sources.includes("facebook") ? ["facebook"] : [])];
   if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
-  const lockableSourceIds = sources.map((source) => source.id);
+  // OLX is owned by its separate local-worker queue. Do not reserve a
+  // Finder source_scans row for it; enqueueOlxJob creates the one async row.
+  const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
   if (lockableSourceIds.length) {
     const supabase = createAdminClient();
     await failStaleScans(supabase, filterId, lockableSourceIds);
@@ -168,7 +171,8 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   // scans are already self-healing on the Watcher's own schedule
   // (scheduler.ts's repairOrphanedCycleScans/FAIL_NEVER_CLAIMED), so Finder
   // must never lock on, or "recover", a source_scans row it did not create.
-  const lockableSourceIds = sources.map((source) => source.id);
+  // OLX is dispatched exclusively to olx_scan_jobs/local worker below.
+  const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
   // The scan/persist/reconciliation pipeline below writes through
   // reconcile_canonical_listing_decision (a service_role-only RPC, by
   // design — see the grant migration), plus source_scans/listings rows.
@@ -230,12 +234,80 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
     return { runId, status: pending.length ? "running" : failed ? "partial" : "completed", sourcesRun: sourceIds.length, sourcesCompleted: completed.length, sourcesFailed: failed, fetched: sum("fetched"), normalized: sum("normalized"), listingsCreated: sum("listingsCreated"), newMatches: sum("newMatches"), updated: sum("updated"), priceDrops: sum("priceDrops"), rejected: sum("rejected"), actualErrors: failed, sourceResults, matchDiagnostics, scannedCount: sum("fetched"), matchedCount: sum("matched"), newCount: sum("newMatches"), updatedCount: sum("updated"), priceDropCount: sum("priceDrops"), warnings };
   } finally {
     await failOwnedRunningScans(supabase, ownedScans);
-    if (options.usePreparedRows) await failUnstartedPreparedScans(supabase, preparedScans);
     scanLog("SCAN FINALIZE", { scanId: runId, source: "all", checked: total(sourceResults, "fetched"), new: total(sourceResults, "newMatches"), matched: total(sourceResults, "matched"), durationMs: Date.now() - scanStarted });
   }
 }
 
-export async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>, prepared?: PreparedSourceScan, timeoutMs: number = SOURCE_TIMEOUT_MS): Promise<SourceScanResult> {
+export type FinderContinuationSummary = {
+  status: "completed" | "partial" | "schema_unavailable";
+  cycleAt: string;
+  claimed: number;
+  completed: number;
+  deferred: number;
+  failed: number;
+  errors: string[];
+};
+
+/** Durable hourly continuation backed by the claim_finder_scan_source RPC. */
+export async function runFinderScanContinuations(now = new Date()): Promise<FinderContinuationSummary> {
+  const cycleAt = continuationCycleAt(now);
+  const supabase = createAdminClient();
+  const deadline = Date.now() + WORKER_MAX_DURATION_MS - WORKER_OVERHEAD_RESERVE_MS;
+  let claimed = 0; let completed = 0; let deferred = 0; let failed = 0;
+  const errors: string[] = [];
+
+  while (Date.now() < deadline) {
+    const { data, error } = await supabase.rpc("claim_finder_scan_source", {
+      p_cycle_at: cycleAt,
+      p_now: new Date().toISOString(),
+      p_lease_seconds: Math.floor(CONTINUATION_LEASE_MS / 1_000),
+    });
+    if (error) {
+      if (error.code === "42883" || error.code === "PGRST202") return { status: "schema_unavailable", cycleAt, claimed, completed, deferred, failed, errors: ["CONTINUATION_SCHEMA_NOT_READY"] };
+      errors.push(`CONTINUATION_CLAIM_FAILED: ${error.message}`);
+      return { status: "partial", cycleAt, claimed, completed, deferred, failed, errors };
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row || typeof row !== "object") break;
+    const claimedRow = row as Record<string, unknown>;
+    const scanId = typeof claimedRow.id === "string" ? claimedRow.id : null;
+    const filterId = typeof claimedRow.search_filter_id === "string" ? claimedRow.search_filter_id : null;
+    const sourceId = typeof claimedRow.source === "string" ? claimedRow.source : null;
+    const runId = typeof claimedRow.scan_run_id === "string" ? claimedRow.scan_run_id : null;
+    const startedAt = typeof claimedRow.started_at === "string" ? claimedRow.started_at : null;
+    const leaseToken = typeof claimedRow.continuation_lease_token === "string" ? claimedRow.continuation_lease_token : null;
+    if (!scanId || !filterId || !sourceId || !runId || !startedAt || !leaseToken) { errors.push("CONTINUATION_CLAIM_INVALID"); break; }
+    claimed += 1;
+
+    let filter: LoadedFilter | null;
+    try {
+      filter = await getSearchFilter(filterId);
+    } catch (error) {
+      await failClaimedContinuation(supabase, scanId, leaseToken, `FILTER_LOAD_FAILED: ${error instanceof Error ? error.message : "Nie udało się odczytać filtra."}`);
+      failed += 1;
+      continue;
+    }
+    const source = filter ? activeSources(filter).find((candidate) => candidate.id === sourceId) : null;
+    if (!filter || !source || sourceId === "olx" || sourceId === "facebook") {
+      await failClaimedContinuation(supabase, scanId, leaseToken, "SOURCE_NOT_ACTIVE: continuation source is not Finder-owned");
+      failed += 1;
+      continue;
+    }
+    const timeoutMs = sourceTimeoutBudgetMs(Math.max(1, activeSources(filter).filter((candidate) => candidate.id !== "olx").length));
+    const prepared: PreparedSourceScan = { id: scanId, source: sourceId, started_at: startedAt, continuation_lease_token: leaseToken };
+    const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, timeoutMs, { preparedAlreadyRunning: true });
+    if (result.status === "completed") completed += 1;
+    else if (result.status === "pending") deferred += 1;
+    else failed += 1;
+  }
+  return { status: errors.length || deferred > 0 ? "partial" : "completed", cycleAt, claimed, completed, deferred, failed, errors };
+}
+
+async function failClaimedContinuation(supabase: SupabaseClient, scanId: string, leaseToken: string, errorMessage: string): Promise<void> {
+  await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: errorMessage, continuation_next_at: null, continuation_lease_until: null, continuation_lease_token: null }).eq("id", scanId).eq("status", "running").eq("continuation_lease_token", leaseToken);
+}
+
+export async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>, prepared?: PreparedSourceScan, timeoutMs: number = SOURCE_TIMEOUT_MS, options: { preparedAlreadyRunning?: boolean } = {}): Promise<SourceScanResult> {
   const started = Date.now();
   // Claims the prepared row with an atomic pending->running CAS, not a bare
   // update-by-id. The background callback that calls runManualOtodomScan
@@ -247,9 +319,11 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   // given row, so at most one caller ever proceeds past this point for it.
   // The non-prepared insert path (tests, and the synchronous facebook-only
   // route) has no such row to race over, so it is unchanged.
-  const { data: claimed, error } = prepared
-    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter }).eq("id", prepared.id).eq("status", "pending").select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
-    : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter }).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
+  const { data: claimed, error } = prepared && options.preparedAlreadyRunning
+    ? { data: [{ id: prepared.id, started_at: prepared.started_at, continuation_lease_token: prepared.continuation_lease_token ?? null }], error: null }
+    : prepared
+    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter }).eq("id", prepared.id).eq("status", "pending").select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
+    : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter }).select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
   // Never assume the API returns a row just because there was no transport
   // error: a lost CAS (someone else already claimed this row) is zero rows,
   // not an error, from a plain .update().select() call -- unlike .single(),
@@ -266,7 +340,7 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       ? failedResult(source.id, Date.now() - started, "SCAN_ALREADY_CLAIMED", "Ten etap skanu już przejęło inne wykonanie tego samego przebiegu.")
       : failedResult(source.id, Date.now() - started, "SCAN_CREATE_FAILED", "Nie udało się rozpocząć skanu źródła.");
   }
-  const scanClock = { startedAt: scan.started_at, startedMs: started };
+  const scanClock = { startedAt: scan.started_at, startedMs: started, continuationLeaseToken: typeof (scan as { continuation_lease_token?: unknown }).continuation_lease_token === "string" ? (scan as { continuation_lease_token: string }).continuation_lease_token : null };
   ownedScans.set(scan.id, scanClock);
   scanLog("SOURCE START", { scanId: runId, source: source.id, checked: 0, new: 0, matched: 0, durationMs: 0 });
 
@@ -280,7 +354,7 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   try {
     const result = await source.fetch(filter, controller.signal);
     fetched = result.fetched; normalized = result.listings.length; warnings = result.warnings;
-    await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal);
+    await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal, scanClock.continuationLeaseToken);
     for (const listing of result.listings) {
       controller.signal.throwIfAborted();
       const decision = evaluateListingAgainstFilter(listing, filter);
@@ -292,13 +366,14 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       if (decision.matches) matched += 1;
       counters = addScanItemCounts(counters, { listingCreated: saved.listingCreated, matchCreated: saved.matchCreated });
       updated += saved.updated; priceDrops += saved.priceDrop;
-      await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal);
+      await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal, scanClock.continuationLeaseToken);
     }
     if (source.id === "otodom") console.info("OTODOM FILTER SUMMARY:", otodomSummary);
   } catch (reason) {
-    status = "failed";
-    errorCode = controller.signal.aborted ? "SOURCE_TIMEOUT" : "SOURCE_FAILED";
-    errorMessage = controller.signal.aborted ? `${source.label}: source timeout after ${timeoutMs / 1000}s` : reason instanceof Error ? reason.message : "Błąd źródła.";
+    const disposition = classifySourceFailure({ timedOut: controller.signal.aborted, error: reason });
+    status = disposition.status;
+    errorCode = disposition.errorCode;
+    errorMessage = controller.signal.aborted ? `${source.label}: source timeout after ${timeoutMs / 1000}s` : disposition.errorCode === "SOURCE_FORBIDDEN" ? `${source.label}: access denied (HTTP 403); no retry` : reason instanceof Error ? reason.message : "Błąd źródła.";
   } finally {
     clearTimeout(timeoutId);
     await finalizeSourceScan(supabase, scan.id, scanClock, status, { fetched, matched, counters, updated, priceDrops, warnings, errorMessage });
@@ -315,9 +390,10 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * unclaimed job blocking that filter's scans permanently.
  */
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
-  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(Date.now())).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (readError) throw statusError(500, "Nie udało się sprawdzić wygasłej blokady skanu.");
-  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
+  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown; error_message: string | null } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
+    .filter((candidate) => !isContinuationPending(candidate.error_message))
     .filter((candidate) => isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt: scanHeartbeatAt(candidate.filter_snapshot) }, Date.now()))
     .map((candidate) => candidate.id);
   if (!staleIds.length) return;
@@ -326,7 +402,7 @@ async function failStaleScans(supabase: SupabaseClient, filterId: string, source
 }
 
 async function loadPreparedSourceScans(supabase: SupabaseClient, runId: string, sourceIds: string[]): Promise<Map<string, PreparedSourceScan>> {
-  const { data, error } = await supabase.from("source_scans").select("id,source,started_at").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data, error } = await supabase.from("source_scans").select("id,source,started_at,continuation_lease_token").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) throw statusError(500, "Nie udało się odczytać zarezerwowanego skanu.");
   return new Map((Array.isArray(data) ? data : []).flatMap((row) => {
     if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string" || typeof (row as { source?: unknown }).source !== "string" || typeof (row as { started_at?: unknown }).started_at !== "string") return [];
@@ -334,22 +410,20 @@ async function loadPreparedSourceScans(supabase: SupabaseClient, runId: string, 
   }));
 }
 
-async function failUnstartedPreparedScans(supabase: SupabaseClient, preparedScans: Map<string, PreparedSourceScan>): Promise<void> {
-  if (!preparedScans.size) return;
-  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: "Scan interrupted before source execution" }).in("id", [...preparedScans.values()].map((scan) => scan.id)).eq("status", "pending").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
-  if (error) console.error("FLIP FINDER PREPARED SCAN CLEANUP ERROR:", { error });
-}
-
-async function updateSourceProgress(supabase: SupabaseClient, scanId: string, filter: LoadedFilter, progress: Progress, signal: AbortSignal): Promise<void> {
+async function updateSourceProgress(supabase: SupabaseClient, scanId: string, filter: LoadedFilter, progress: Progress, signal: AbortSignal, continuationLeaseToken?: string | null): Promise<void> {
   const heartbeat = { lastProgressAt: new Date().toISOString(), checked: progress.fetched, matched: progress.matched, new: progress.counters.newMatchesCount };
-  const { error } = await supabase.from("source_scans").update({ scanned_count: progress.fetched, listings_found: progress.fetched, matched_count: progress.matched, listings_created: progress.counters.listingsCreatedCount, new_count: progress.counters.newMatchesCount, listings_updated: progress.updated, price_drop_count: progress.priceDrops, filter_snapshot: { ...filter, _scanProgress: heartbeat } }).eq("id", scanId).abortSignal(signal);
+  let query = supabase.from("source_scans").update({ scanned_count: progress.fetched, listings_found: progress.fetched, matched_count: progress.matched, listings_created: progress.counters.listingsCreatedCount, new_count: progress.counters.newMatchesCount, listings_updated: progress.updated, price_drop_count: progress.priceDrops, filter_snapshot: { ...filter, _scanProgress: heartbeat } }).eq("id", scanId);
+  if (continuationLeaseToken) query = query.eq("continuation_lease_token", continuationLeaseToken);
+  const { error } = await query.abortSignal(signal);
   if (error) throw new Error(`Nie udało się zapisać postępu skanu: ${error.message}`);
 }
 
 async function finalizeSourceScan(supabase: SupabaseClient, scanId: string, scanClock: ScanClock, status: SourceScanResult["status"], input: Progress & { warnings: string[]; errorMessage: string | null }): Promise<void> {
-  const payload = { status, finished_at: scanTimestamp(scanClock), error_message: input.errorMessage, scanned_count: input.fetched, listings_found: input.fetched, matched_count: input.matched, listings_created: input.counters.listingsCreatedCount, new_count: input.counters.newMatchesCount, listings_updated: input.updated, price_drop_count: input.priceDrops, warnings: input.warnings };
+  const payload = { status, finished_at: status === "pending" ? null : scanTimestamp(scanClock), error_message: input.errorMessage, scanned_count: input.fetched, listings_found: input.fetched, matched_count: input.matched, listings_created: input.counters.listingsCreatedCount, new_count: input.counters.newMatchesCount, listings_updated: input.updated, price_drop_count: input.priceDrops, warnings: input.warnings, continuation_next_at: status === "pending" ? nextContinuationAt(Date.now()) : null, continuation_lease_until: null, continuation_lease_token: null };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const { error } = await supabase.from("source_scans").update(payload).eq("id", scanId).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+    let query = supabase.from("source_scans").update(payload).eq("id", scanId);
+    if (scanClock.continuationLeaseToken) query = query.eq("continuation_lease_token", scanClock.continuationLeaseToken);
+    const { error } = await query.abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
     if (!error) return;
     console.error("FLIP FINDER SOURCE FINALIZE ERROR:", { scanId, status, attempt, error });
   }
@@ -358,7 +432,10 @@ async function finalizeSourceScan(supabase: SupabaseClient, scanId: string, scan
 
 async function failOwnedRunningScans(supabase: SupabaseClient, scans: Map<string, ScanClock>): Promise<void> {
   for (const [scanId, scanClock] of scans) {
-    const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: scanTimestamp(scanClock), error_message: "Scan interrupted before finalization" }).eq("id", scanId).eq("status", "running").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+    const payload = { status: "pending", finished_at: null, error_message: "SOURCE_TIMEOUT: scan interrupted before finalization; waiting for continuation", continuation_next_at: nextContinuationAt(Date.now()), continuation_lease_until: null, continuation_lease_token: null };
+    let query = supabase.from("source_scans").update(payload).eq("id", scanId).eq("status", "running");
+    if (scanClock.continuationLeaseToken) query = query.eq("continuation_lease_token", scanClock.continuationLeaseToken);
+    const { error } = await query.abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
     if (error) console.error("FLIP FINDER GLOBAL FINALIZE ERROR:", { scanId, error });
   }
 }

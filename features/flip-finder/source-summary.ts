@@ -29,6 +29,7 @@ export function latestActiveScansText(scans: SearchFilterScan[], sources: Listin
     const label = sourceLabel(scan.source);
     if (scan.status === "pending" && scan.source === "facebook") return "Facebook: oczekuje na production Collector";
     if (scan.status === "pending" && scan.source === "olx") return "OLX: oczekuje na lokalny worker";
+    if (scan.status === "pending" && scan.errorMessage?.startsWith("SOURCE_TIMEOUT:")) return `${label}: oczekuje na kontynuację`;
     if (scan.status === "failed") return `${label}: błąd${scan.errorMessage ? ` — ${scan.errorMessage}` : ""}`;
     return `${label}: sprawdzono ${scan.scannedCount}, dopasowano ${scan.matchedCount}`;
   }).join(" · ");

@@ -227,10 +227,11 @@ const facebookOnlyFilter = {
   lastScannedAt: null, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
 };
 const mixedFilter = { ...facebookOnlyFilter, id: "filter-mixed", name: "Otodom + Facebook", sources: ["otodom", "facebook"] };
+const olxOnlyFilter = { ...facebookOnlyFilter, id: "filter-olx", name: "OLX only", sources: ["olx"] };
 
 mock.module("@/features/flip-finder/server/search-filters", {
   namedExports: {
-    getSearchFilter: async (id: string) => [facebookOnlyFilter, mixedFilter].find((filter) => filter.id === id) ?? null,
+    getSearchFilter: async (id: string) => [facebookOnlyFilter, mixedFilter, olxOnlyFilter].find((filter) => filter.id === id) ?? null,
   },
 });
 
@@ -254,10 +255,10 @@ const realSourceRegistry = await import("@/features/flip-finder/server/search-so
 mock.module("@/features/flip-finder/server/search-source-registry", {
   namedExports: {
     ...realSourceRegistry,
-    activeSources: (filter: { sources: string[] }) =>
-      filter.sources.includes("otodom")
-        ? [{ id: "otodom", label: "Otodom", fetch: async () => { otodomFetchCalls += 1; return { listings: [], warnings: [], fetched: 0 }; } }]
-        : [],
+    activeSources: (filter: { sources: string[] }) => [
+      ...(filter.sources.includes("otodom") ? [{ id: "otodom", label: "Otodom", fetch: async () => { otodomFetchCalls += 1; return { listings: [], warnings: [], fetched: 0 }; } }] : []),
+      ...(filter.sources.includes("olx") ? [{ id: "olx", label: "OLX", fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) }] : []),
+    ],
   },
 });
 
@@ -299,6 +300,13 @@ test("background start reserves the Finder row and a second start is rejected be
   assert.equal(start.background, true);
   assert.equal(current.sourceScans.filter((row) => row.scan_run_id === start.runId && row.source === "otodom").length, 1);
   await assert.rejects(() => startManualOtodomScan(mixedFilter.id), /Skan tego filtra już trwa/);
+});
+
+test("OLX-only Finder start creates no dead sequential reservation row", async () => {
+  current = fakeAdmin();
+  const start = await startManualOtodomScan(olxOnlyFilter.id);
+  assert.equal(start.background, true, "OLX still runs through its asynchronous local worker");
+  assert.equal(current.sourceScans.length, 0, "OLX must not be reserved by Finder before enqueueOlxJob creates its async row");
 });
 
 // Issue 1 from the scan-lifecycle review: startManualOtodomScan's reservation
