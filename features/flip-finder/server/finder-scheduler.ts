@@ -38,6 +38,16 @@ export type FinderSchedulerDependencies = {
   hasRunningScan: (filter: SearchFilter) => Promise<boolean>;
   /** Atomic cadence claim; prevents two scheduler instances from starting one filter. */
   claimFilter: (filter: SearchFilter, now: Date) => Promise<boolean>;
+  /**
+   * Restores the cadence clock a successful claimFilter just advanced, for
+   * when the scan it claimed for never actually started. Without this, a
+   * single transient reservation failure (a DB timeout, a dropped
+   * connection -- anything other than "a scan is already running") would
+   * silently delay the next automatic attempt by a full
+   * finder_scan_interval_minutes, even though the five-minute scheduler
+   * trigger could have retried it on its very next tick.
+   */
+  revertClaim: (filter: SearchFilter, claimedAt: Date) => Promise<void>;
   startScan: (filter: SearchFilter) => Promise<ManualScanStart>;
   runScan: (filter: SearchFilter, start: ManualScanStart) => Promise<ScanSummary>;
 };
@@ -114,7 +124,26 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
         summary.skippedRunning += 1;
         continue;
       }
-      const start = await dependencies.startScan(filter);
+      let start: ManualScanStart;
+      try {
+        start = await dependencies.startScan(filter);
+      } catch (startError) {
+        if (isRunningScanError(startError)) {
+          summary.skippedRunning += 1;
+          continue;
+        }
+        // The claim already advanced last_scanned_at, but no scan actually
+        // started -- revert it so this filter is still due on the next
+        // (five-minute) scheduler tick instead of waiting out a full
+        // interval for nothing.
+        await dependencies.revertClaim(filter, now).catch((revertError) => {
+          console.error("FINDER_SCHEDULER_CLAIM_REVERT_FAILED", {
+            filterId: filter.id,
+            error: revertError instanceof Error ? revertError.message : "unknown",
+          });
+        });
+        throw startError;
+      }
       summary.started += 1;
       const result = await dependencies.runScan(filter, start);
       summary.runs.push({ filterId: filter.id, runId: result.runId, status: result.status });
@@ -140,6 +169,7 @@ function defaultDependencies(overrides: Partial<FinderSchedulerDependencies>): F
     listFilters: listActiveSearchFiltersForScheduler,
     hasRunningScan: (filter) => hasRunningFinderScan(supabase, filter),
     claimFilter: (filter, now) => claimFinderFilter(supabase, filter, now),
+    revertClaim: (filter, claimedAt) => revertFinderFilterClaim(supabase, filter, claimedAt),
     startScan: (filter) => startFinderScanForFilter(filter, undefined, supabase),
     runScan: (filter, start) => runManualOtodomScan(filter.id, {
       filter,
@@ -166,6 +196,22 @@ async function claimFinderFilter(supabase: DatabaseClient, filter: SearchFilter,
     .maybeSingle();
   if (error) throw new Error(`FINDER_SCHEDULER_CLAIM_FAILED: ${error.message}`);
   return Boolean(data && typeof data === "object" && "id" in data);
+}
+
+/**
+ * CAS'd on the exact value claimFinderFilter just wrote: if last_scanned_at
+ * has since moved again (e.g. a concurrently completed scan from a
+ * different trigger wrote a newer, more accurate timestamp), this must not
+ * clobber that newer value back to the filter's pre-claim state.
+ */
+async function revertFinderFilterClaim(supabase: DatabaseClient, filter: SearchFilter, claimedAt: Date): Promise<void> {
+  const { error } = await supabase
+    .from("search_filters")
+    .update({ last_scanned_at: filter.lastScannedAt ?? null })
+    .eq("id", filter.id)
+    .eq("last_scanned_at", claimedAt.toISOString())
+    .abortSignal(AbortSignal.timeout(FINDER_SCHEDULER_DB_TIMEOUT_MS));
+  if (error) throw new Error(`FINDER_SCHEDULER_CLAIM_REVERT_FAILED: ${error.message}`);
 }
 
 async function hasRunningFinderScan(supabase: DatabaseClient, filter: SearchFilter): Promise<boolean> {
