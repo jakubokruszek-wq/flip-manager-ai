@@ -18,7 +18,7 @@ export type ScanSummary = { runId: string; status: "running" | "completed" | "pa
 type SupabaseClient = DatabaseClient;
 type LoadedFilter = Awaited<ReturnType<typeof getSearchFilter>> & {};
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
-type ScanClock = { startedAt: string; startedMs: number };
+export type ScanClock = { startedAt: string; startedMs: number };
 type PreparedSourceScan = { id: string; source: string; started_at: string };
 type ManualScanOptions = { runId?: string; usePreparedRows?: boolean; skipLock?: boolean };
 
@@ -237,10 +237,30 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
 
 export async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>, prepared?: PreparedSourceScan, timeoutMs: number = SOURCE_TIMEOUT_MS): Promise<SourceScanResult> {
   const started = Date.now();
-  const { data: scan, error } = prepared
-    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter }).eq("id", prepared.id).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single()
+  // Claims the prepared row with an atomic pending->running CAS, not a bare
+  // update-by-id. The background callback that calls runManualOtodomScan
+  // (see route.ts's runAfterResponse) has no guarantee against ever running
+  // more than once for the same runId -- a platform-level retry or a second
+  // after() firing would otherwise re-run source.fetch() and race its writes
+  // against the first execution. The WHERE id=... AND status='pending' makes
+  // Postgres itself the referee: at most one concurrent UPDATE can match a
+  // given row, so at most one caller ever proceeds past this point for it.
+  // The non-prepared insert path (tests, and the synchronous facebook-only
+  // route) has no such row to race over, so it is unchanged.
+  const { data: claimed, error } = prepared
+    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter }).eq("id", prepared.id).eq("status", "pending").select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
     : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter }).select("id,started_at").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
-  if (error || !scan || typeof scan.id !== "string" || typeof scan.started_at !== "string") return failedResult(source.id, Date.now() - started, "SCAN_CREATE_FAILED", "Nie udało się rozpocząć skanu źródła.");
+  // Never assume the API returns a row just because there was no transport
+  // error: a lost CAS (someone else already claimed this row) is zero rows,
+  // not an error, from a plain .update().select() call -- unlike .single(),
+  // which the unprepared insert path above still uses since an insert always
+  // produces exactly one row.
+  const scan = Array.isArray(claimed) ? claimed[0] : claimed;
+  if (error || !scan || typeof scan.id !== "string" || typeof scan.started_at !== "string") {
+    return prepared
+      ? failedResult(source.id, Date.now() - started, "SCAN_ALREADY_CLAIMED", "Ten etap skanu już przejęło inne wykonanie tego samego przebiegu.")
+      : failedResult(source.id, Date.now() - started, "SCAN_CREATE_FAILED", "Nie udało się rozpocząć skanu źródła.");
+  }
   const scanClock = { startedAt: scan.started_at, startedMs: started };
   ownedScans.set(scan.id, scanClock);
   scanLog("SOURCE START", { scanId: runId, source: source.id, checked: 0, new: 0, matched: 0, durationMs: 0 });
@@ -338,7 +358,30 @@ async function failOwnedRunningScans(supabase: SupabaseClient, scans: Map<string
   }
 }
 
-function scanTimestamp({ startedAt, startedMs }: ScanClock): string {
+/**
+ * finished_at (and every intermediate progress timestamp persisted during a
+ * source's own fetch/persist loop) is deliberately NOT Date.now() at write
+ * time. It is `startedAt` (source_scans.started_at -- the shared RESERVATION
+ * timestamp every prepared row gets, stamped once by startManualOtodomScan,
+ * identical across all sources in a run) plus however much real time THIS
+ * scanSource call has itself been running. That means finished_at encodes
+ * "how long did this one source actually take", never "how much wall-clock
+ * time had elapsed since the scan as a whole began" -- the latter would be
+ * inflated by queueing behind however many earlier sequential sources ran
+ * first, which would misrepresent a source's own duration.
+ *
+ * Side effect worth documenting because it was already mistaken for evidence
+ * of concurrent/duplicate execution once: under the strictly sequential for
+ * loop in runManualOtodomScan, several sources that each hit the exact same
+ * timeoutMs ceiling will ALL compute a finished_at within a few ms of
+ * `startedAt + timeoutMs` of each other, regardless of how far apart their
+ * real wall-clock finish times were. A cluster of near-identical finished_at
+ * values is therefore NOT by itself proof of overlap -- see
+ * manual-scan-concurrent-claim.test.ts for what would actually prove it
+ * (source.fetch() call counts), and the CAS claim in scanSource below for
+ * why overlap is now harmless either way.
+ */
+export function scanTimestamp({ startedAt, startedMs }: ScanClock): string {
   return new Date(Date.parse(startedAt) + Math.max(1, Date.now() - startedMs)).toISOString();
 }
 

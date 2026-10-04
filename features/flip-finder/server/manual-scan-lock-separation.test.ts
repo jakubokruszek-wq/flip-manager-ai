@@ -54,10 +54,11 @@ type Row = Record<string, unknown>;
  * "function does not exist" signal, never on a permission or validation
  * error from a function that does exist.
  */
-function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; rpcMode?: "missing" | "atomic" | "permission-denied" | "filter-not-found" } = {}) {
+function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; claimBarrier?: number; rpcMode?: "missing" | "atomic" | "permission-denied" | "filter-not-found" } = {}) {
   const sourceScans: Row[] = seedSourceScans.map((row) => ({ ...row }));
   let idSeq = 1;
   let waitingForRace: Array<() => void> = [];
+  let waitingForClaim: Array<() => void> = [];
   let rpcLockQueue: Promise<void> = Promise.resolve();
 
   function matches(row: Row, filters: Array<{ op: "eq" | "in" | "lt"; column: string; value: unknown }>): boolean {
@@ -102,15 +103,40 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number;
         return { data: found ?? null, error: null };
       },
       then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
+        const isClaimUpdate = mode === "update" && filters.some((filter) => filter.op === "eq" && filter.column === "status" && filter.value === "pending");
         const run = async () => {
           if (mode === "insert" && insertPayload) {
             const payloads = Array.isArray(insertPayload) ? insertPayload : [insertPayload];
-            for (const payload of payloads) sourceScans.push({ id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "pending", ...payload });
-            return { data: null, error: null };
+            const inserted = payloads.map((payload) => {
+              const row: Row = { id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "pending", ...payload };
+              sourceScans.push(row);
+              return { id: row.id, started_at: row.started_at };
+            });
+            return { data: inserted, error: null };
+          }
+          // claimBarrier forces two (or more) concurrent claim attempts on the
+          // SAME prepared row to both reach this exact point -- the atomic
+          // pending->running CAS -- before either is allowed to actually
+          // check+mutate, so the race is genuinely forced rather than decided
+          // by incidental microtask ordering. Once released, the match+patch
+          // below runs with no further await in between, exactly like a
+          // single Postgres UPDATE ... WHERE status = 'pending' statement:
+          // whichever caller's synchronous turn runs first wins the row, and
+          // the loser's own filter (status = 'pending') then matches nothing.
+          if (isClaimUpdate && options.claimBarrier && options.claimBarrier > 1) {
+            await new Promise<void>((release) => {
+              waitingForClaim.push(release);
+              if (waitingForClaim.length >= (options.claimBarrier as number)) {
+                const toRelease = waitingForClaim;
+                waitingForClaim = [];
+                toRelease.forEach((fn) => fn());
+              }
+            });
           }
           if (mode === "update") {
-            for (const row of sourceScans) if (matches(row, filters)) Object.assign(row, updatePatch);
-            return { data: null, error: null };
+            const matched = sourceScans.filter((row) => matches(row, filters));
+            for (const row of matched) Object.assign(row, updatePatch);
+            return { data: matched.map((row) => ({ id: row.id, started_at: row.started_at })), error: null };
           }
           if (isLockCheckRead && options.raceBarrier && options.raceBarrier > 1) {
             await new Promise<void>((release) => {
@@ -216,13 +242,18 @@ mock.module("@/features/flip-finder/server/filter-match-recalculation", {
 // modules (e.g. olx-jobs.ts) that manual-scan.ts also imports, so the real
 // module is loaded first and everything except activeSources is passed
 // through unchanged.
+// Mutable, reset per-test: lets the duplicate-execution concurrency test
+// below count real source.fetch() invocations across two concurrent
+// runManualOtodomScan calls sharing the same prepared row, without every
+// other test in this file needing to care.
+let otodomFetchCalls = 0;
 const realSourceRegistry = await import("@/features/flip-finder/server/search-source-registry");
 mock.module("@/features/flip-finder/server/search-source-registry", {
   namedExports: {
     ...realSourceRegistry,
     activeSources: (filter: { sources: string[] }) =>
       filter.sources.includes("otodom")
-        ? [{ id: "otodom", label: "Otodom", fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) }]
+        ? [{ id: "otodom", label: "Otodom", fetch: async () => { otodomFetchCalls += 1; return { listings: [], warnings: [], fetched: 0 }; } }]
         : [],
   },
 });
@@ -342,6 +373,47 @@ test("prepared background rows become running and finalize through the real scan
   assert.equal(summary.status, "completed");
   const row = current.sourceScans.find((candidate) => candidate.scan_run_id === start.runId && candidate.source === "otodom");
   assert.equal(row?.status, "completed");
+});
+
+// Investigated after a Production scan showed 7 of 13 sources' finished_at
+// clustered within 17ms despite the sequential for-loop in manual-scan.ts
+// -- NOT, on inspection, proof of duplicate execution by itself (see
+// scanTimestamp's own doc comment: it encodes "started_at + this source's
+// own duration", not wall-clock time, so same-budget timeouts naturally
+// cluster near started_at+timeoutMs under purely sequential execution too).
+// But the underlying risk the clustering raised is real regardless of
+// whether it explains that specific run: route.ts's background callback
+// (runAfterResponse -> runManualOtodomScan(..., {usePreparedRows:true,
+// skipLock:true})) has no guarantee it is only ever invoked once for a
+// given runId -- a platform-level retry or a second after() firing would
+// previously have re-run source.fetch() and raced its writes against the
+// first execution, since scanSource's old update-by-id alone always
+// "succeeded" for both callers. This forces that exact overlap for real
+// (both executions reach the claim update before either is released, via
+// claimBarrier) rather than relying on incidental microtask ordering.
+test("two concurrent executions of the same background callback for the same prepared row: source.fetch() runs exactly once, and the loser never overwrites the winner's result", async () => {
+  otodomFetchCalls = 0;
+  current = fakeAdmin([], { claimBarrier: 2 });
+  const start = await startManualOtodomScan(mixedFilter.id);
+  const [a, b] = await Promise.allSettled([
+    runManualOtodomScan(mixedFilter.id, { runId: start.runId, usePreparedRows: true, skipLock: true }),
+    runManualOtodomScan(mixedFilter.id, { runId: start.runId, usePreparedRows: true, skipLock: true }),
+  ]);
+  assert.equal(otodomFetchCalls, 1, "source.fetch() must run exactly once across both concurrent executions of the same prepared row");
+
+  const summaries = [a, b].map((outcome) => {
+    assert.equal(outcome.status, "fulfilled", "neither execution may throw -- the loser must resolve with a clean per-source failure, not crash the whole run");
+    return (outcome as PromiseFulfilledResult<Awaited<ReturnType<typeof runManualOtodomScan>>>).value;
+  });
+  const otodomOutcomes = summaries.map((summary) => summary.sourceResults.find((result) => result.source === "otodom"));
+  const claimed = otodomOutcomes.filter((result) => result?.errorCode === "SCAN_ALREADY_CLAIMED");
+  const real = otodomOutcomes.filter((result) => result?.errorCode !== "SCAN_ALREADY_CLAIMED");
+  assert.equal(claimed.length, 1, "exactly one execution must find its row already claimed by the other");
+  assert.equal(real.length, 1, "exactly one execution must have actually won the claim and run the source");
+  assert.equal(real[0]?.status, "completed", "the winner's own result must be unaffected by the loser");
+
+  const row = current.sourceScans.find((candidate) => candidate.source === "otodom" && candidate.search_filter_id === mixedFilter.id);
+  assert.equal(row?.status, "completed", "the final row must reflect only the winner's finalize -- the loser never reached finalizeSourceScan, so it cannot have overwritten this");
 });
 
 // Issue 4 from the scan-lifecycle review: usePreparedRows trusts that

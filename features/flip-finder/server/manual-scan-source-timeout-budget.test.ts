@@ -17,7 +17,7 @@ import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availabil
  * disabled or skipped -- every active source still runs, just with a
  * smaller fetch window when many share one invocation.
  */
-const { sourceTimeoutBudgetMs, scanSource } = await import("./manual-scan.ts");
+const { sourceTimeoutBudgetMs, scanSource, scanTimestamp } = await import("./manual-scan.ts");
 
 const WORKER_MAX_DURATION_MS = 300_000;
 const WORKER_OVERHEAD_RESERVE_MS = 45_000;
@@ -116,4 +116,61 @@ test("scanSource aborts at the exact reduced per-source budget it is given, not 
   assert.equal(result.status, "failed");
   assert.equal(result.errorCode, "SOURCE_TIMEOUT");
   assert.match(result.errorMessage ?? "", new RegExp(`source timeout after ${reducedBudget / 1000}s`), "the reported timeout must reflect the actual reduced budget, not the hardcoded 75s ceiling");
+});
+
+/**
+ * Investigated after a real Production run showed 7 of 13 sources' finished_at
+ * clustered within 17ms of each other despite the sequential for loop in
+ * runManualOtodomScan. This proves why that clustering is explained by
+ * scanTimestamp's own semantics, not by overlap: it anchors every timestamp
+ * to the shared RESERVATION time (source_scans.started_at, identical across
+ * every prepared row in a run) plus only this one source's own elapsed
+ * duration -- never the cumulative wall-clock time spent queued behind
+ * however many earlier sequential sources already ran. Several sources
+ * hitting the exact same timeoutMs ceiling will therefore always compute a
+ * finished_at within a few ms of `startedAt + timeoutMs` of each other, no
+ * matter how far apart their real wall-clock finish times actually were --
+ * so a cluster of near-identical finished_at values is not, by itself,
+ * evidence of concurrent/duplicate execution (see
+ * manual-scan-concurrent-claim behavior covered in
+ * manual-scan-lock-separation.test.ts for what actually would be).
+ */
+test("scanTimestamp anchors to the shared reservation time plus this call's own elapsed duration, not cumulative wall-clock time since the scan began", () => {
+  const reservationTime = "2026-10-04T10:02:36.008081Z";
+  const fakeNow = Date.parse(reservationTime) + 500_000; // 500s of real time has passed since reservation, e.g. because many earlier sequential sources already ran
+  const originalNow = Date.now;
+  try {
+    Date.now = () => fakeNow;
+    // This source's OWN call only started 19_615ms before "now" -- it was
+    // simply queued behind other sources for a long time first.
+    const ownStartedMs = fakeNow - 19_615;
+    const result = scanTimestamp({ startedAt: reservationTime, startedMs: ownStartedMs });
+    const resultOffsetFromReservation = Date.parse(result) - Date.parse(reservationTime);
+    assert.equal(resultOffsetFromReservation, 19_615, "must reflect only this source's own ~19.615s duration, not the 500s of real time elapsed since the scan's reservation");
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("two sources with the same timeoutMs ceiling compute finished_at within milliseconds of each other even though they really ran at very different wall-clock times", () => {
+  const reservationTime = "2026-10-04T10:02:36.008081Z";
+  const reservationMs = Date.parse(reservationTime);
+  const budget = 19_615;
+  // Source A runs almost immediately. Source B is queued for two full real
+  // minutes behind other sources before it even starts, then also takes the
+  // full budget. Both are genuine, correctly sequential executions -- B
+  // really does finish two minutes later than A in wall-clock time.
+  const sourceAStartedMs = reservationMs + 100;
+  const sourceBStartedMs = reservationMs + 120_100;
+  const originalNow = Date.now;
+  try {
+    Date.now = () => sourceAStartedMs + budget;
+    const finishedA = scanTimestamp({ startedAt: reservationTime, startedMs: sourceAStartedMs });
+    Date.now = () => sourceBStartedMs + budget;
+    const finishedB = scanTimestamp({ startedAt: reservationTime, startedMs: sourceBStartedMs });
+    const driftMs = Math.abs(Date.parse(finishedB) - Date.parse(finishedA));
+    assert.ok(driftMs < 50, `two sequential sources really finishing two real minutes apart still compute finished_at only ${driftMs}ms apart -- clustering alone cannot distinguish this from overlap`);
+  } finally {
+    Date.now = originalNow;
+  }
 });
