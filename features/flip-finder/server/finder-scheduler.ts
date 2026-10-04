@@ -182,7 +182,14 @@ function defaultDependencies(overrides: Partial<FinderSchedulerDependencies>): F
   };
 }
 
-async function claimFinderFilter(supabase: DatabaseClient, filter: SearchFilter, now: Date): Promise<boolean> {
+/**
+ * Exported (beyond defaultDependencies' own use) so a test can drive this
+ * exact query -- the real CAS, not a stand-in for it -- against a real
+ * Postgres engine (see finder-scheduler-postgres-cas.test.ts), proving the
+ * UPDATE...WHERE pattern itself is a sound compare-and-swap, not just that
+ * finder-scheduler.test.ts's injected-dependency stubs behave as told.
+ */
+export async function claimFinderFilter(supabase: DatabaseClient, filter: SearchFilter, now: Date): Promise<boolean> {
   let query = supabase
     .from("search_filters")
     .update({ last_scanned_at: now.toISOString() })
@@ -204,7 +211,7 @@ async function claimFinderFilter(supabase: DatabaseClient, filter: SearchFilter,
  * different trigger wrote a newer, more accurate timestamp), this must not
  * clobber that newer value back to the filter's pre-claim state.
  */
-async function revertFinderFilterClaim(supabase: DatabaseClient, filter: SearchFilter, claimedAt: Date): Promise<void> {
+export async function revertFinderFilterClaim(supabase: DatabaseClient, filter: SearchFilter, claimedAt: Date): Promise<void> {
   const { error } = await supabase
     .from("search_filters")
     .update({ last_scanned_at: filter.lastScannedAt ?? null })
