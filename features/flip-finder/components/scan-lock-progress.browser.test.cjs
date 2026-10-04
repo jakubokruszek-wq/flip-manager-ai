@@ -226,6 +226,8 @@ test("the real Finder scan button latches on click, reflects live progress, and 
         ? [baseProgress(runId, { totals: { scanned: 100, matched: 2, created: 1, updated: 0, priceDrops: 0 } }), baseProgress(runId, { totals: { scanned: 300, matched: 5, created: 3, updated: 1, priceDrops: 0 } }), baseProgress(runId, { status: "completed", finishedAt: now, overall: { completedUnits: 1, totalUnits: 1, percent: 100, failedUnits: 0, remainingUnits: 0 }, totals: { scanned: 300, matched: 5, created: 3, updated: 1, priceDrops: 0 } })]
         : runCounter === 2
           ? [baseProgress(runId, { totals: { scanned: 50, matched: 0, created: 0, updated: 0, priceDrops: 0 } }), baseProgress(runId, { status: "failed", finishedAt: now, overall: { completedUnits: 1, totalUnits: 1, percent: 100, failedUnits: 1, remainingUnits: 0 }, errors: ["Allegro Lokalnie: SOURCE_FAILED"], totals: { scanned: 50, matched: 0, created: 0, updated: 0, priceDrops: 0 } })]
+          : runCounter === 4
+            ? [baseProgress(runId, { status: "partial", finishedAt: null, overall: { completedUnits: 1, totalUnits: 2, percent: 50, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 }, current: { source: "official_uml", groupName: null }, totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } })]
           // The third run simulates exactly the reported symptom: progress
           // genuinely stalls (same 300/22 numbers on every poll, never
           // moving), then the server-side heartbeat watchdog eventually
@@ -308,6 +310,12 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     await scanButton.click();
     await page.waitForTimeout(500);
     assert.equal(scanPostCount, 4, "an expired/released scan must never block the next click from starting a genuine new scan");
+    await page.getByText(/oczekuje na kontynuację/i).first().waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(await scanButton.isDisabled(), false, "a durable continuation is waiting, not an active client-side scan lock");
+    const run4CountAtWaiting = progressGetCountByRun["run-4"];
+    assert.ok(run4CountAtWaiting >= 1, "the continuation snapshot must come from the backend progress endpoint");
+    await page.waitForTimeout(1_500);
+    assert.equal(progressGetCountByRun["run-4"], run4CountAtWaiting, "waiting-for-continuation must stop the client polling loop until the hourly worker resumes it");
     // run-3 is terminal and a fresh run-4 has started; polling the OLD run
     // must never resume, proving the client keyed its polling loop on the
     // specific run it started, not on "any active scan for this filter".
