@@ -60,7 +60,7 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   const changed = needsSnapshot(current ? { price: current.price, contentHash: current.contentHash } : null, { price: item.price, contentHash: item.contentHash });
   const priceDrop = isPriceDrop(current?.price ?? null, item.price) ? 1 : 0;
   const images = resolveListingImages(current?.images ?? [], item.thumbnailUrl, item.images);
-  const listingValues = { source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", removed_at: null, last_seen_at: matchedAt, lifecycle_status: bucket === "MATCHED" ? "ACTIVE" : bucket, review_reason: bucket === "REVIEW" ? (reviewReasons.length ? reviewReasons.join(", ") : "Wymaga ręcznej oceny") : null, missing_fields: bucket === "REVIEW" ? reviewFields : [], archived_at: null, content_hash: item.contentHash };
+  const listingValues = { source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, year_built: item.yearBuilt ?? null, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", removed_at: null, last_seen_at: matchedAt, lifecycle_status: bucket === "MATCHED" ? "ACTIVE" : bucket, review_reason: bucket === "REVIEW" ? (reviewReasons.length ? reviewReasons.join(", ") : "Wymaga ręcznej oceny") : null, missing_fields: bucket === "REVIEW" ? reviewFields : [], archived_at: null, content_hash: item.contentHash };
   listingValues.external_listing_id = canonicalExternalListingId;
   if (manualRejected) {
     listingValues.lifecycle_status = "REJECTED";
@@ -69,6 +69,17 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
     (listingValues as { archived_at: string | null }).archived_at = archivedAt ?? matchedAt;
   }
   let { data: saved, error } = await supabase.from("listings").upsert(listingValues, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single();
+  // year_built's own migration (draft, not yet applied -- see
+  // supabase/migrations) may not exist on the real table yet. Probed and
+  // dropped on its own, independent of the review-lifecycle fallback below,
+  // so a scan is never broken by one missing optional column it doesn't
+  // need: today's deploys keep working exactly as before, and the moment a
+  // human applies that migration, this starts persisting with no further
+  // code change.
+  if (isMissingYearBuiltColumn(error)) {
+    const { year_built: _yearBuilt, ...listingValuesWithoutYearBuilt } = listingValues;
+    ({ data: saved, error } = await supabase.from("listings").upsert(listingValuesWithoutYearBuilt, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single());
+  }
   if (isMissingReviewLifecycleColumn(error)) {
     const legacyValues = { source: item.source, external_listing_id: item.externalListingId, original_url: item.originalUrl, normalized_url: item.normalizedUrl, title: item.title, price: item.price, area: item.area, price_per_sqm: item.pricePerSqm, rooms: item.rooms, floor: item.floor, building_type: item.buildingType, address: item.locationText, district: item.district, city: item.city, description: item.description, images, status: "active", removed_at: null, last_seen_at: matchedAt, content_hash: item.contentHash };
     legacyValues.external_listing_id = canonicalExternalListingId;
@@ -113,6 +124,13 @@ function isMissingReviewLifecycleColumn(error: { code?: unknown; message?: unkno
   const code = typeof error.code === "string" ? error.code : "";
   const message = typeof error.message === "string" ? error.message : "";
   return (code === "42703" || code === "PGRST204") && /lifecycle_status|review_reason|missing_fields|archived_at|manual_decision/.test(message);
+}
+
+function isMissingYearBuiltColumn(error: { code?: unknown; message?: unknown } | null): boolean {
+  if (!error) return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (code === "42703" || code === "PGRST204") && /year_built/.test(message);
 }
 
 function normalizedUrlCandidates(source: string, normalizedUrl: string): string[] {

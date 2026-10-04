@@ -452,6 +452,61 @@ test("the real allegrolokalnie.pl public page structure (flat ItemList, name-onl
   assert.equal(rows[0]?.price, 425000);
 });
 
+// Real markup shape (read-only GET of allegrolokalnie.pl's Łódź category
+// page, 2026-10-03): each card's own <ul class="mlc-itembox__params"> lists
+// explicit labeled parameters ("Rynek:", "Rok budowy:", "Typ budynku:") as
+// separate <li> entries, entirely outside the JSON-LD block used above for
+// price/area/title -- this is the ONLY place a construction year ever
+// appears on this source. The two blocks describe the same offer via
+// different URL forms (a relative card href vs. an absolute JSON-LD url),
+// which is why the parser correlates them by pathname.
+test("Allegro Lokalnie: a 1897 building with no stated building type is read from the explicit 'Rok budowy' label, never guessed from age or the word 'cegła' elsewhere in the title", () => {
+  const path = "/oferta/mieszkanie-lodz-pilsudskiego-32-5-m2-xyz";
+  const jsonLdBlock = jsonLd({
+    "@context": "https://schema.org", "@type": "ItemList",
+    itemListElement: [
+      {
+        "@type": "ListItem", position: 1,
+        item: {
+          "@type": "Product",
+          name: "Mieszkanie, Łódź, ul. Piłsudskiego, cegła, 32,5 m²",
+          url: `https://allegrolokalnie.pl${path}`,
+          offers: { "@type": "Offer", price: "250000", priceCurrency: "PLN" },
+          image: { "@type": "ImageObject", url: "https://a.allegroimg.com/original/offer.jpg" },
+        },
+      },
+    ],
+  });
+  // Deliberately has NO "Typ budynku" <li> at all -- the task's own test
+  // premise ("typ budynku nie jest podany wprost") -- only "Rynek" and "Rok
+  // budowy" are present, exactly like a real card that lacks that one field.
+  const card = `<article class="mlc-itembox__container" itemscope itemtype="http://schema.org/Offer"><a href="${path}?navCategoryId=" itemprop="url" class="mlc-card mlc-itembox"><div class="mlc-itembox__offer-container"><div class="mlc-itembox__offer-info-container"><ul class="mlc-itembox__params" itemprop="description"><li class="mlc-itembox__params__param"><div class="ml-text-small">Rynek: <span class="mlc-itembox__params__param__name"> wtórny</span></div></li><li class="mlc-itembox__params__param"><div class="ml-text-small">Rok budowy: <span class="mlc-itembox__params__param__name"> 1897</span></div></li></ul></div></div></a></article>`;
+  const html = `${jsonLdBlock}${card}<input class="ml-pagination__input" value="1"><span class="ml-pagination__count">z 1</span>`;
+
+  const parsed = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(html, "Łódź");
+  assert.equal(parsed.listings.length, 1);
+  const listing = parsed.listings[0]!;
+  assert.equal(listing.area, 32.5);
+  assert.equal(listing.yearBuilt, 1897, "the explicit 'Rok budowy' label must be read as a real number");
+  assert.equal(listing.buildingType, null, "buildingType must stay null -- never inferred from the 1897 age or the word 'cegła' in the title");
+});
+
+test("Allegro Lokalnie: a card with no 'Rok budowy' parameter at all leaves yearBuilt null, never a guess from the free-text name", () => {
+  const path = "/oferta/mieszkanie-lodz-no-year-abc";
+  const jsonLdBlock = jsonLd({
+    "@context": "https://schema.org", "@type": "ItemList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, item: { "@type": "Product", name: "Mieszkanie, Łódź, 40 m²", url: `https://allegrolokalnie.pl${path}`, offers: { "@type": "Offer", price: "300000", priceCurrency: "PLN" }, image: { "@type": "ImageObject", url: "https://a.allegroimg.com/original/offer2.jpg" } } },
+    ],
+  });
+  const card = `<article class="mlc-itembox__container" itemscope itemtype="http://schema.org/Offer"><a href="${path}" itemprop="url" class="mlc-card mlc-itembox"><div class="mlc-itembox__offer-container"><div class="mlc-itembox__offer-info-container"><ul class="mlc-itembox__params" itemprop="description"><li class="mlc-itembox__params__param"><div class="ml-text-small">Rynek: <span class="mlc-itembox__params__param__name"> wtórny</span></div></li></ul></div></div></a></article>`;
+  const html = `${jsonLdBlock}${card}<input class="ml-pagination__input" value="1"><span class="ml-pagination__count">z 1</span>`;
+
+  const parsed = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(html, "Łódź");
+  assert.equal(parsed.listings.length, 1);
+  assert.equal(parsed.listings[0]?.yearBuilt, null);
+});
+
 // Real public page excerpt (read-only GET of domy.pl/mieszkania--lodz-pl,
 // 2026-10-03), trimmed to 3 of the page's real 25 cards -- including one
 // genuine rental row ("do wynajęcia"), which must be filtered out rather

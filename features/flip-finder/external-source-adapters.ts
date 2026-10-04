@@ -5,7 +5,7 @@ import type { ExternalSourceConfig, ExternalSourceId } from "./external-source-p
 
 export type ExternalPortalPage = { listings: PropertySourceListing[]; hasNextPage: boolean };
 type PortalRecord = Record<string, unknown>;
-type PortalCandidate = { id?: unknown; url?: unknown; title?: unknown; description?: unknown; price?: unknown; area?: unknown; rooms?: unknown; floor?: unknown; city?: unknown; district?: unknown; images?: unknown; publishedAt?: unknown };
+type PortalCandidate = { id?: unknown; url?: unknown; title?: unknown; description?: unknown; price?: unknown; area?: unknown; rooms?: unknown; floor?: unknown; city?: unknown; district?: unknown; images?: unknown; publishedAt?: unknown; yearBuilt?: unknown };
 type PortalParser = (html: string, fallbackCity: string) => ExternalPortalPage;
 
 const MAX_PAGES = 5;
@@ -315,6 +315,7 @@ function domyRoomsFromTitle(title: string): number | null {
 // rel="next" link.
 function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPortalPage {
   const $ = load(html);
+  const yearBuiltByPath = allegroLokalnieYearBuiltByPath($);
   const candidates = jsonLdItemListCandidates(html).filter((record) => hasType(record, "Product")).map((record) => {
     const url = text(record, "url");
     const name = stringValue(record.name) ?? "";
@@ -325,6 +326,11 @@ function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPorta
     const areaMatch = name.match(/\d+(?:,\d+)?\s*(?:m²|m2|mkw)\s*$/iu);
     const withoutArea = areaMatch ? name.slice(0, areaMatch.index).replace(/,\s*$/u, "") : name;
     const parts = withoutArea.split(",").map((part) => part.trim()).filter(Boolean);
+    let yearBuilt: number | null = null;
+    const urlPath = url !== null ? pathnameOf(url) : null;
+    if (urlPath !== null) {
+      yearBuilt = yearBuiltByPath.get(urlPath) ?? null;
+    }
     return {
       id: url ? lastPathSegmentId(url) : undefined,
       url: record.url,
@@ -334,11 +340,47 @@ function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPorta
       city: fallbackCity,
       district: parts.length > 2 ? parts.slice(2).join(", ") || null : null,
       images: atPath(record, ["image", "url"]) ?? atPath(record, ["image", "contentUrl"]),
+      yearBuilt,
     };
   });
   const current = Number($(".ml-pagination__input").attr("value"));
   const total = Number($(".ml-pagination__count").first().text().match(/\d+/u)?.[0]);
   return fromCandidates("allegro_lokalnie", candidates, fallbackCity, Number.isFinite(current) && Number.isFinite(total) && current < total);
+}
+
+/**
+ * The JSON-LD ItemList (one <script> block, used for price/area/title above)
+ * never carries a construction year -- Allegro Lokalnie only states it as a
+ * plain-text, explicitly labeled parameter ("Rok budowy: 1897") inside each
+ * card's own HTML, alongside siblings like "Rynek:"/"Typ budynku:" in the
+ * exact same list. Reading it from there, scoped to one <li> per labeled
+ * parameter, is what keeps this an explicit-field read rather than a guess
+ * from age/material -- it never looks at the free-text title/description.
+ * Each HTML card and its JSON-LD counterpart describe the same offer but use
+ * different URL forms (a relative href vs. an absolute https://allegrolokalnie.pl/...
+ * URL), so cards are keyed by pathname, the one part guaranteed to match.
+ */
+function allegroLokalnieYearBuiltByPath($: ReturnType<typeof load>): Map<string, number> {
+  const yearBuiltByPath = new Map<string, number>();
+  $("a.mlc-itembox[itemprop='url']").each((_index, anchor) => {
+    const href = $(anchor).attr("href");
+    const path = href ? pathnameOf(href, "https://allegrolokalnie.pl") : null;
+    if (!path) return;
+    $(anchor).find("li.mlc-itembox__params__param").each((_paramIndex, parameter) => {
+      const match = $(parameter).text().match(/Rok budowy:\s*([12]\d{3})/u);
+      const year = match ? Number(match[1]) : null;
+      if (year !== null && year >= 1700 && year <= 2100) yearBuiltByPath.set(path, year);
+    });
+  });
+  return yearBuiltByPath;
+}
+
+function pathnameOf(value: string, base?: string): string | null {
+  try {
+    return new URL(value, base).pathname;
+  } catch {
+    return null;
+  }
 }
 
 // Each nested Offer carries its own itemOffered/address -- but Gratka puts the
@@ -359,7 +401,7 @@ function fromDomiportaRecord(record: PortalRecord): PortalCandidate { const nest
 function fromAdresowoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.identifier ?? record.sku, url: record.url ?? record.mainEntityOfPage, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted }; }
 function fromSprzedajemyRecord(record: PortalRecord): PortalCandidate { const title = stringValue(record.name) ?? stringValue(record.title); return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: record.area ?? areaFromText(title), rooms: record.numberOfRooms ?? record.rooms ?? roomsFromText(title), city: atPath(record, ["address", "addressLocality"]), district: atPath(record, ["address", "addressSuburb"]), images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
 function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[], fallbackCity: string, hasNextPage: boolean): ExternalPortalPage { const listings: PropertySourceListing[] = []; const seen = new Set<string>(); for (const candidate of candidates) { const listing = toListing(source, candidate, fallbackCity); if (!listing || seen.has(listing.externalListingId)) continue; seen.add(listing.externalListingId); listings.push(listing); } return { listings, hasNextPage }; }
-function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbackCity: string): PropertySourceListing | null { const url = absoluteUrl(candidate.url, source); const title = stringValue(candidate.title); const description = stringValue(candidate.description); if (!url || isSearchUrl(url) || RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`)) return null; const price = money(candidate.price); const area = decimal(candidate.area); if (price === null || price <= 0 || area === null || area <= 0) return null; const city = stringValue(candidate.city) ?? fallbackCity; const district = stringValue(candidate.district); const externalListingId = stringValue(candidate.id) ?? new URL(url).pathname.replace(/\/+$/u, ""); const images = imageValues(candidate.images); const rooms = decimal(candidate.rooms); const payload = { id: externalListingId, url: normalizeUrl(url), title, price, area, rooms, city, district }; return { source, externalListingId, originalUrl: url, normalizedUrl: payload.url, title, price, area, rooms, floor: stringValue(candidate.floor), pricePerSqm: price / area, city, district, locationText: [district, city].filter(Boolean).join(", ") || null, thumbnailUrl: images[0] ?? null, images, buildingType: null, description: description ? stripHtml(description) : null, publishedAt: stringValue(candidate.publishedAt), rawPayload: { source, candidate }, contentHash: calculateContentHash(payload) }; }
+function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbackCity: string): PropertySourceListing | null { const url = absoluteUrl(candidate.url, source); const title = stringValue(candidate.title); const description = stringValue(candidate.description); if (!url || isSearchUrl(url) || RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`)) return null; const price = money(candidate.price); const area = decimal(candidate.area); if (price === null || price <= 0 || area === null || area <= 0) return null; const city = stringValue(candidate.city) ?? fallbackCity; const district = stringValue(candidate.district); const externalListingId = stringValue(candidate.id) ?? new URL(url).pathname.replace(/\/+$/u, ""); const images = imageValues(candidate.images); const rooms = decimal(candidate.rooms); const payload = { id: externalListingId, url: normalizeUrl(url), title, price, area, rooms, city, district }; return { source, externalListingId, originalUrl: url, normalizedUrl: payload.url, title, price, area, rooms, floor: stringValue(candidate.floor), pricePerSqm: price / area, city, district, locationText: [district, city].filter(Boolean).join(", ") || null, thumbnailUrl: images[0] ?? null, images, buildingType: null, yearBuilt: yearBuiltValue(candidate.yearBuilt), description: description ? stripHtml(description) : null, publishedAt: stringValue(candidate.publishedAt), rawPayload: { source, candidate }, contentHash: calculateContentHash(payload) }; }
 
 function absoluteUrl(value: unknown, source: ExternalSourceId): string | null { const raw = stringValue(value); if (!raw) return null; const host = SOURCE_HOSTS[source]; try { const url = new URL(raw, `https://${host}`); if (url.protocol !== "https:" || (url.hostname !== host && !url.hostname.endsWith(`.${host}`))) return null; return url.toString(); } catch { return null; } }
 function isSearchUrl(value: string): boolean { const path = new URL(value).pathname.toLocaleLowerCase("pl-PL"); return /\/(wyniki|search|szukaj|mieszkania\/sprzedam|nieruchomosci\/mieszkania\/sprzedam|oferty\/nieruchomosci\/mieszkania|nieruchomosci\/mieszkania\/[a-z-]+)\/?$/u.test(path); }
@@ -378,6 +420,13 @@ function stringValue(value: unknown): string | null { return typeof value === "s
 function areaFromText(value: unknown): string | null { return stringValue(value)?.match(/(\d+(?:[.,]\d+)?)\s*(?:m²|m2|mkw)(?![\p{L}])/iu)?.[1] ?? null; }
 function roomsFromText(value: unknown): string | null { return stringValue(value)?.match(/(\d+(?:[.,]\d+)?)\s*(?:pokoje?|pok\.)/iu)?.[1] ?? null; }
 function decimal(value: unknown): number | null { const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value.replace(/\s/gu, "").replace(",", ".").replace(/[^0-9.+-]/gu, "")) : null; return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : null; }
+// Deliberately narrow: only a plausible construction year (not e.g. a stray
+// 4-digit price or area fragment) survives this far, since it is already
+// pre-validated against the same bounds at extraction time (see
+// allegroLokalnieYearBuiltByPath below) -- this is strictly a defensive
+// re-check at the one shared boundary every parser's candidate passes
+// through, not a second, looser extraction path of its own.
+function yearBuiltValue(value: unknown): number | null { return typeof value === "number" && Number.isInteger(value) && value >= 1700 && value <= 2100 ? value : null; }
 function money(value: unknown): number | null { if (typeof value === "number") return Number.isFinite(value) ? value : null; if (typeof value !== "string") return null; const normalized = value.replace(/\s/gu, "").replace(/zł|pln/giu, ""); const parsed = /^\d{1,3}(?:\.\d{3})+$/.test(normalized) ? Number(normalized.replace(/\./gu, "")) : Number(normalized.replace(/,/gu, ".")); return Number.isFinite(parsed) ? parsed : null; }
 function imageValues(value: unknown): string[] { const values = Array.isArray(value) ? value : [value]; return values.flatMap((item) => typeof item === "string" ? [item] : isRecord(item) ? [stringValue(item.url) ?? stringValue(item.contentUrl)].filter((url): url is string => Boolean(url)) : []).filter((url) => /^https?:\/\//iu.test(url)).slice(0, 10); }
 function stripHtml(value: string): string { return value.replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ").trim(); }

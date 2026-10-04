@@ -145,6 +145,7 @@ const validPayload = {
   floorMax: null,
   excludeGroundFloor: false,
   excludeTopFloor: false,
+  yearBuiltMin: null,
   buildingTypes: [],
   ownershipTypes: [],
   marketType: null,

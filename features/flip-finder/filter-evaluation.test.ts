@@ -190,3 +190,57 @@ test("rent intent is never treated as a sale price", () => {
   assert.deepEqual(result.reasons, ["non_sale_intent"]);
   assert.ok(!result.reasons.includes("min_total_sale_price"));
 });
+
+// "Rok budowy od" criterion: a saved filter sets yearBuiltMin (e.g. 1950) so
+// old tenement buildings never reach active results. Test point from the
+// scan review: an Allegro Lokalnie listing (Łódź, ul. Piłsudskiego, 32.5 m²,
+// 1 room, brick, "Rok budowy: 1897") with no stated building type.
+test("a known year below yearBuiltMin is an outright rejection, even with an unknown building type (the exact Allegro Lokalnie 1897 test case)", () => {
+  const yearFilter = { ...filter, yearBuiltMin: 1950 };
+  const result = evaluateListingAgainstFilter({ ...candidate, area: 32.5, rooms: 1, yearBuilt: 1897, buildingType: null }, yearFilter);
+  assert.equal(result.bucket, "REJECTED");
+  assert.ok(result.reasons.includes("year_built_min"), "a known year below the minimum must be a hard rejection, not merely a review signal");
+  assert.equal(result.matches, false);
+});
+
+test("the 1949/1950 boundary: 1949 rejects, 1950 passes, with yearBuiltMin = 1950", () => {
+  const yearFilter = { ...filter, yearBuiltMin: 1950 };
+  const below = evaluateListingAgainstFilter({ ...candidate, yearBuilt: 1949 }, yearFilter);
+  assert.equal(below.bucket, "REJECTED");
+  assert.ok(below.reasons.includes("year_built_min"));
+  const atBoundary = evaluateListingAgainstFilter({ ...candidate, yearBuilt: 1950 }, yearFilter);
+  assert.equal(atBoundary.bucket, "MATCHED");
+  assert.ok(!atBoundary.reasons.includes("year_built_min"));
+});
+
+test("a missing year with yearBuiltMin set routes to REVIEW, never MATCHED and never REJECTED outright", () => {
+  const yearFilter = { ...filter, yearBuiltMin: 1950 };
+  const result = evaluateListingAgainstFilter({ ...candidate, yearBuilt: null }, yearFilter);
+  assert.equal(result.bucket, "REVIEW");
+  assert.deepEqual(result.unknownFields, ["yearBuilt"]);
+  assert.equal(result.matches, false);
+  assert.ok(!result.reasons.includes("year_built_min"), "an unknown year is a softer review signal, never the same hard rejection as a known-too-old year");
+});
+
+test("a candidate that never sets yearBuilt at all (the field is optional) is treated exactly like an explicit null, never like a pass", () => {
+  const yearFilter = { ...filter, yearBuiltMin: 1950 };
+  const candidateWithoutYearBuilt = { ...candidate };
+  const result = evaluateListingAgainstFilter(candidateWithoutYearBuilt, yearFilter);
+  assert.equal(result.bucket, "REVIEW");
+  assert.deepEqual(result.unknownFields, ["yearBuilt"]);
+});
+
+test("without yearBuiltMin set, any year (known, unknown, or very old) is accepted and never marked unknown", () => {
+  for (const yearBuilt of [1897, 1950, 2026, null]) {
+    const result = evaluateListingAgainstFilter({ ...candidate, yearBuilt }, filter);
+    assert.equal(result.bucket, "MATCHED", `yearBuilt=${yearBuilt} must not affect matching when the filter has no yearBuiltMin`);
+    assert.ok(!result.unknownFields.includes("yearBuilt"));
+  }
+});
+
+test("a filter's own yearBuiltMin being absent (not just null) behaves identically to null -- never silently treated as a constraint", () => {
+  const legacyFilter = { ...filter } as SearchFilter;
+  delete (legacyFilter as { yearBuiltMin?: number | null }).yearBuiltMin;
+  const result = evaluateListingAgainstFilter({ ...candidate, yearBuilt: null }, legacyFilter);
+  assert.equal(result.bucket, "MATCHED");
+});

@@ -2,7 +2,7 @@ export const DECISION_BUCKETS = ["MATCHED", "REVIEW", "REJECTED"] as const;
 export type DecisionBucket = (typeof DECISION_BUCKETS)[number];
 export type LifecycleStatus = "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED";
 
-const REVIEWABLE_MISSING_FIELDS = new Set(["price", "area", "rooms", "buildingType", "district", "city", "floor", "topFloor", "ownership", "sellerType", "marketType"]);
+const REVIEWABLE_MISSING_FIELDS = new Set(["price", "area", "rooms", "buildingType", "district", "city", "floor", "topFloor", "ownership", "sellerType", "marketType", "yearBuilt"]);
 
 export function decisionBucket(input: { reasons: string[]; unknownFields: string[] }): DecisionBucket {
   if (input.reasons.length > 0) return "REJECTED";

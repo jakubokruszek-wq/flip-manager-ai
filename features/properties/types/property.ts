@@ -38,6 +38,8 @@ export type PropertyFields = {
   floor: string | null;
   totalFloors: string | null;
   buildingType: string | null;
+  /** Construction year read from an explicit source label (e.g. "Rok budowy: 1897"), never guessed from age or material. */
+  yearBuilt: number | null;
   ownership: string | null;
   rent: number | null;
   address: string | null;
@@ -100,6 +102,8 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
   /** Optional to keep existing source adapters compatible while allowing gallery persistence. */
   images?: string[];
   publishedAt?: string | null;
+  /** Optional: only the few adapters with an explicit source label (e.g. Allegro Lokalnie's "Rok budowy") ever set this. */
+  yearBuilt?: PropertyFields["yearBuilt"];
   source: PropertySource;
   externalListingId: string;
   originalUrl: string;

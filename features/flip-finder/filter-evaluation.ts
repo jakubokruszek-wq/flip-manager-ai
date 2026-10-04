@@ -24,6 +24,8 @@ export type FilterCandidate = Pick<
   marketType?: SearchFilter["marketType"] | null;
   /** Source intent is present for Facebook; absent means a normal sale listing. */
   listingIntent?: string | null;
+  /** Only sources with an explicit construction-year label ever set this (see external-source-adapters.ts's Allegro Lokalnie parser); absent is treated the same as null -- unknown. */
+  yearBuilt?: PropertyFields["yearBuilt"];
 };
 
 export type FilterDecision = {
@@ -148,6 +150,25 @@ export function evaluateListingAgainstFilter(
     markUnknown,
     reject,
   );
+
+  // A known year below the filter's minimum is an outright rejection (old
+  // tenement buildings must never reach active results), never merely a
+  // review signal -- decisionBucket already gives any non-empty reason list
+  // priority over unknownFields, so this holds regardless of whether other
+  // fields (e.g. buildingType) are simultaneously unknown. An unmarked or
+  // unknown year is a separate, softer case: it cannot be confirmed as
+  // matching, so it is routed to REVIEW via markUnknown exactly like floor/
+  // buildingType/ownership above, never silently treated as a pass.
+  const yearBuiltMin = filter.yearBuiltMin ?? null;
+  if (yearBuiltMin !== null) {
+    const yearBuilt = candidate.yearBuilt ?? null;
+    if (yearBuilt === null) {
+      markUnknown("yearBuilt");
+    } else {
+      reject(yearBuilt < yearBuiltMin, "year_built_min");
+    }
+  }
+
   evaluateKnownChoice(
     candidate.ownership ?? null,
     filter.ownershipTypes,

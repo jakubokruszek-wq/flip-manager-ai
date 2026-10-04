@@ -86,6 +86,8 @@ export type SearchFilter = {
   floorMax: number | null;
   excludeGroundFloor: boolean;
   excludeTopFloor: boolean;
+  /** Only a known construction year >= this satisfies the criterion; a known year below it excludes the listing, an unknown year routes it to review. Optional (absent means the same as null/unset) so every existing SearchFilter literal across the codebase -- most of them Facebook Watcher test/production fixtures unrelated to this criterion -- stays valid without being touched. */
+  yearBuiltMin?: number | null;
   buildingTypes: string[];
   ownershipTypes: string[];
   marketType: MarketType | null;

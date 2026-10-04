@@ -240,6 +240,7 @@ export function parseSearchFilterInput(value: unknown): SearchFilterInput {
     floorMax: nullableNumber(value.floorMax, "Piętro maksymalne"),
     excludeGroundFloor: booleanValue(value.excludeGroundFloor, "Wykluczenie parteru"),
     excludeTopFloor: booleanValue(value.excludeTopFloor, "Wykluczenie ostatniego piętra"),
+    yearBuiltMin: nullableNumber(value.yearBuiltMin, "Rok budowy od"),
     buildingTypes: stringArray(value.buildingTypes, "Typy budynków"),
     ownershipTypes: stringArray(value.ownershipTypes, "Formy własności"),
     marketType: nullableMarketType(value.marketType),
@@ -290,6 +291,10 @@ export function parseSearchFilterInput(value: unknown): SearchFilterInput {
     throw new Error("Minimalny Flip Score musi być w zakresie 0–100.");
   }
 
+  if (input.yearBuiltMin != null && (input.yearBuiltMin < 1700 || input.yearBuiltMin > 2100)) {
+    throw new Error("Rok budowy od musi być w rozsądnym zakresie (1700–2100).");
+  }
+
   return input;
 }
 
@@ -299,10 +304,22 @@ async function writeSearchFilter(
 ): Promise<SearchFilter | null> {
   const payload = toDatabasePayload(input);
   const supabase = createAdminClient();
-  const query = id
+  let { data, error } = await (id
     ? supabase.from("search_filters").update(payload).eq("id", id).select("*").maybeSingle()
-    : supabase.from("search_filters").insert(payload).select("*").single();
-  const { data, error } = await query;
+    : supabase.from("search_filters").insert(payload).select("*").single());
+
+  // year_built_min's own migration (draft, not yet applied -- see
+  // supabase/migrations) may not exist on the real table yet. Until a human
+  // applies it, every other field in this same save must still go through;
+  // only the new criterion itself is silently not persisted for that one
+  // retried write, exactly like reserve_source_scans' RPC-missing fallback
+  // in manual-scan.ts -- never assume the migration is live.
+  if (isMissingYearBuiltMinColumn(error)) {
+    const { year_built_min: _yearBuiltMin, ...payloadWithoutYearBuiltMin } = payload;
+    ({ data, error } = await (id
+      ? supabase.from("search_filters").update(payloadWithoutYearBuiltMin).eq("id", id).select("*").maybeSingle()
+      : supabase.from("search_filters").insert(payloadWithoutYearBuiltMin).select("*").single()));
+  }
 
   if (error) {
     console.error("FLIP FINDER WRITE ERROR:", error);
@@ -310,6 +327,13 @@ async function writeSearchFilter(
   }
 
   return data ? toSearchFilter(asRow(data)) : null;
+}
+
+function isMissingYearBuiltMinColumn(error: { code?: unknown; message?: unknown } | null): boolean {
+  if (!error) return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (code === "42703" || code === "PGRST204") && /year_built_min/.test(message);
 }
 
 function toDatabasePayload(input: SearchFilterInput) {
@@ -327,6 +351,7 @@ function toDatabasePayload(input: SearchFilterInput) {
     floor_max: input.floorMax,
     exclude_ground_floor: input.excludeGroundFloor,
     exclude_top_floor: input.excludeTopFloor,
+    year_built_min: input.yearBuiltMin,
     building_types: input.buildingTypes,
     ownership_types: input.ownershipTypes,
     market_type: input.marketType,
@@ -358,6 +383,11 @@ function toSearchFilter(row: Row): SearchFilter {
     floorMax: nullableNumber(row.floor_max, "floor_max"),
     excludeGroundFloor: booleanValue(row.exclude_ground_floor, "exclude_ground_floor"),
     excludeTopFloor: booleanValue(row.exclude_top_floor, "exclude_top_floor"),
+    // Tolerates the column being entirely absent (undefined), not just a SQL
+    // NULL -- year_built_min's own migration (draft, not yet applied) may
+    // not exist on this row's table yet, and "not applied" must read the
+    // same as "never set" (null), never throw and break every filter read.
+    yearBuiltMin: nullableNumberOrMissingColumn(row.year_built_min),
     buildingTypes: stringArray(row.building_types, "Typy budynków"),
     ownershipTypes: stringArray(row.ownership_types, "Formy własności"),
     marketType: nullableMarketType(row.market_type),
@@ -487,6 +517,19 @@ function nullableNumber(value: unknown, field: string): number | null {
   }
 
   return value;
+}
+
+/**
+ * Like nullableNumber, but for mapping a DB row's own column rather than
+ * validating request input: `undefined` (the column does not exist on this
+ * row at all) is treated exactly like `null` (the column exists but was
+ * never set) instead of throwing. Only year_built_min uses this today --
+ * every other column here has existed since the foundation migration, so
+ * `undefined` for them would be a genuine bug worth nullableNumber's throw,
+ * not a column that is still only a draft migration away from existing.
+ */
+function nullableNumberOrMissingColumn(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function nonnegativeNumber(value: unknown): number {
