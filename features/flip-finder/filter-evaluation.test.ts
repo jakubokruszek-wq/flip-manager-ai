@@ -67,6 +67,15 @@ test("a Łódź filter excludes Rzeszów inferred from the title when the struct
   assert.deepEqual(result.reasons, ["city_mismatch"]);
 });
 
+test("a Łódź filter excludes Żychlin inferred from the title when the structured city is empty", () => {
+  const result = evaluateListingAgainstFilter(
+    { ...candidate, city: null, title: "SPRZEDAM: Rozkładowe 3 pokoje w Żychlinie", locationText: null },
+    filter,
+  );
+  assert.equal(result.bucket, "REJECTED");
+  assert.deepEqual(result.reasons, ["city_mismatch"]);
+});
+
 // "Piotrków Trybunalski" must be excluded, but bare "piotrkow\w*" would also
 // match "Piotrkowska" -- Łódź's own best-known street -- so this specifically
 // proves the compound match works and never fires on the Łódź street alone.

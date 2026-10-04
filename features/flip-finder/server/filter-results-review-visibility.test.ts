@@ -119,6 +119,39 @@ mock.module("@/features/auth/operator", {
 });
 const { GET: getFilterResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/results/route.ts");
 
+test("endpoint E2E: Finder displays Żychlin from the Facebook post text instead of the stale Łódź row", async () => {
+  const db = freshDb();
+  db.seed("search_filters", [{ ...CHORALNA_FILTER_ROW, city: "Żychlin" }]);
+  db.seed("listings", [listingRow({
+    id: "listing-zychlin",
+    title: "SPRZEDAM: Rozkładowe 3 pokoje w Żychlinie",
+    description: "270 000 zł, 58 m2",
+    price: 270000,
+    area: 58,
+    rooms: 3,
+    price_per_sqm: 270000 / 58,
+    city: "Łódź",
+    district: "Bałuty",
+    building_type: "blok",
+    ownership: CHORALNA_FILTER_ROW.ownership_types[1],
+    lifecycle_status: "ACTIVE",
+    review_reason: null,
+    missing_fields: [],
+  })]);
+  db.seed("listing_filter_matches", [membershipRow("listing-zychlin", {
+    is_current_match: true,
+    match_reasons: [],
+  })]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  assert.ok(payload);
+  assert.equal(payload.results.length, 1);
+  assert.equal(payload.results[0]?.id, "listing-zychlin");
+  assert.equal(payload.results[0]?.city, "Żychlin");
+  assert.equal(payload.results[0]?.district, null);
+});
+
 
 test("endpoint E2E: an official canonical listing survives the real Finder results route", async () => {
   const db = freshDb();

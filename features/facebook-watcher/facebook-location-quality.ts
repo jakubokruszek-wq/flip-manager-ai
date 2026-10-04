@@ -96,6 +96,7 @@ export function explicitPolishCity(value: string | null | undefined): string | n
   if (!normalized) return null;
   if (/\blodz(?:i)?\b/u.test(normalized)) return "Łódź";
   if (/\bwarszaw(?:a|ie|y)\b/u.test(normalized)) return "Warszawa";
+  if (/\bzychlin\w*\b/u.test(normalized)) return "Żychlin";
   return null;
 }
 

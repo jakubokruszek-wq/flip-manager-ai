@@ -38,6 +38,33 @@ test("authoritative Łódź wins over conflicting Warsaw Vision location", () =>
   assert.equal(result.provenance.conflictReason, "AUTHORITATIVE_CITY_CONFLICT");
 });
 
+test("authoritative Żychlin wins over the Łódź group fallback and clears stale city components", () => {
+  const result = reconcileFacebookLocation(
+    { ...base, city: "Łódź", district: "Bałuty", neighborhood: "Teofilów" },
+    { authoritativeText: "Sprzedam mieszkanie w Żychlinie", groupName: "Łódź sprzedaż" },
+  );
+  assert.equal(result.property.city, "Żychlin");
+  assert.equal(result.property.district, null);
+  assert.equal(result.property.neighborhood, null);
+  assert.equal(result.provenance.conflict, true);
+  assert.equal(result.provenance.citySource, "AUTHORITATIVE_TEXT");
+});
+
+test("Finder display location corrects a legacy Facebook row that was stored as Łódź", () => {
+  assert.deepEqual(safeFacebookDisplayLocation({
+    source: "facebook",
+    title: "Sprzedam mieszkanie w Żychlinie",
+    description: "3 pokoje, 58 m2, 270 000 zł",
+    address: null,
+    district: "Bałuty",
+    city: "Łódź",
+  }), {
+    address: null,
+    district: null,
+    city: "Żychlin",
+  });
+});
+
 test("display location removes a conflicting Warsaw district from a Łódź Facebook listing", () => {
   assert.deepEqual(safeFacebookDisplayLocation({ source: "facebook", title: base.title, description: base.description, address: "Marysińska, Saska Kępa, Praga Południe, Warszawa", district: base.district, city: base.city }), {
     address: "Marysińska",

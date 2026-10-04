@@ -7,6 +7,13 @@ test("Teofilów M3", async()=>{ const value=await extractFacebookProperty({postT
 test("Radogoszcz Zachód", async()=>{ const value=await extractFacebookProperty({postText:"Radogoszcz Zachód, 3 pokoje, 58 m2, do generalnego remontu"}); assert.equal(value.neighborhood,"Radogoszcz Zachód"); assert.equal(value.rooms,3); assert.equal(value.condition,"renovation"); });
 test("brak ceny", async()=>assert.equal((await extractFacebookProperty({postText:"Mieszkanie na Teofilowie 46 m2"})).price,null));
 test("brak lokalizacji", async()=>assert.equal((await extractFacebookProperty({postText:"Sprzedam 2 pokoje, 42 m2"})).city,null));
+test("Żychlin is parsed as the authoritative city instead of inheriting Łódź from the group", async () => {
+  const value = await extractFacebookProperty({ postText: "SPRZEDAM: Rozkładowe 3 pokoje w Żychlinie, 270 000 zł, 58 m2" });
+  assert.equal(value.city, "Żychlin");
+  assert.equal(value.district, null);
+  assert.equal(value.price, 270_000);
+  assert.equal(value.area, 58);
+});
 test("flagi nie zmieniają danych finansowych", async()=>{ const value=await extractFacebookProperty({postText:"Pilnie, okazja, prywatnie, 40 m2"}); assert.deepEqual(value.flags,["pilnie","okazja","prywatnie"]); assert.equal(value.price,null); });
 test("dzielnica nie staje się osiedlem", async()=>{ const value=await extractFacebookProperty({postText:"Mieszkanie Bałuty, 45 m2"}); assert.equal(value.district,"Bałuty"); assert.equal(value.neighborhood,null); });
 
