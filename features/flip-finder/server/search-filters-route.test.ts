@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
+import { readFileSync } from "node:fs";
 
 // Reimplemented locally rather than imported from the real module: the real
 // "@/features/auth/operator" transitively imports next/headers via
@@ -248,6 +249,21 @@ test("creating a filter recalculates matches against public.listings immediately
   assert.equal(recalculateCalls.length, 1);
   assert.equal(recalculateCalls[0].filterId, validRow.id);
   assert.deepEqual(recalculateCalls[0].options, { allowWithoutScan: true });
+});
+
+test("saving a Facebook Watcher source selection only persists and recalculates saved listings; it never starts a scan or creates facebook_scan_jobs", async () => {
+  operatorOutcome = "authorized";
+  insertResult = { data: { ...validRow, sources: ["facebook"] }, error: null };
+  recalculateCalls.length = 0;
+  const response = await collectionRoute.POST(postRequest({ ...validPayload, sources: ["facebook"] }));
+  assert.equal(response.status, 201);
+  assert.equal(recalculateCalls.length, 1, "saving the source selection must perform the existing saved-listing reconciliation exactly once");
+  assert.deepEqual(recalculateCalls[0].options, { allowWithoutScan: true }, "the save path must use reconciliation, never a scan start");
+
+  const formSource = readFileSync(new URL("../components/search-filter-form.tsx", import.meta.url), "utf8");
+  const submitBody = formSource.match(/const submit = async \(event: React\.FormEvent\) => \{[\s\S]*?\};/)?.[0];
+  assert.ok(submitBody, "the source-selection save handler must exist");
+  assert.doesNotMatch(submitBody, /\/scan|facebook_scan_jobs|runManualOtodomScan|facebook-worker|chrome\./, "checking/saving Facebook in a Finder filter must never start Watcher acquisition or touch its job/extension path");
 });
 
 test("if recalculation fails right after creating a filter, the filter is still saved and the response says so — never a false plain success", async () => {

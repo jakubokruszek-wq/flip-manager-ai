@@ -50,9 +50,9 @@ function finderMembershipRow(listingId: string, overrides: Record<string, unknow
   return { listing_id: listingId, search_filter_id: FILTER_ID, first_matched_at: "2026-09-27T10:00:00.000Z", last_matched_at: "2026-09-27T10:00:00.000Z", is_current_match: true, match_origin: "scan", match_reasons: [], ...overrides };
 }
 
-function finderDb(): FakeFacebookSupabase {
+function finderDb(filterOverrides: Record<string, unknown> = {}): FakeFacebookSupabase {
   const db = new FakeFacebookSupabase();
-  db.seed("search_filters", [FILTER_ROW]);
+  db.seed("search_filters", [{ ...FILTER_ROW, ...filterOverrides }]);
   return db;
 }
 
@@ -171,4 +171,81 @@ test("scenario 3: the same listingId with multiple listing_source_metadata rows 
   const watcherResult = await listFacebookWatcher();
   assert.equal(watcherResult.length, 1, "one canonical listing with two metadata rows must never render twice on Watcher");
   assert.equal(watcherResult[0]?.listingId, "listing-e");
+});
+
+test("reported Żychlin cards: one confirmed post is one card, while different confirmed posts with identical 270000/58m²/3-room content stay separate on both surfaces", async () => {
+  const title = "SPRZEDAM: Rozkładowe 3 pokoje";
+  const description = "Mieszkanie 3 pokoje, 58 m², Żychlin.";
+  const sharedFingerprint = "reported-zychlin-270k-58m2";
+  const firstPostId = "270000000000058";
+  const secondPostId = "270000000000059";
+  const thirdPostId = "270000000000060";
+  const canonicalUrl = `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${firstPostId}`;
+  const trackedUrl = `${canonicalUrl}/?utm_source=feed&fbclid=tracking`;
+  const secondUrl = `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${secondPostId}`;
+  const thirdUrl = `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/${thirdPostId}`;
+
+  const listing = (id: string, sourceUrl: string, externalListingId: string, lastSeenAt: string) => finderListingRow({
+    id,
+    title,
+    description,
+    price: 270_000,
+    area: 58,
+    rooms: 3,
+    city: "Żychlin",
+    district: null,
+    original_url: sourceUrl,
+    external_listing_id: externalListingId,
+    content_hash: sharedFingerprint,
+    first_seen_at: "2026-10-05T10:00:00.000Z",
+    last_seen_at: lastSeenAt,
+  });
+  const metadata = (listingId: string, sourceUrl: string, postId: string, collectedAt: string) => ({
+    listing_id: listingId,
+    source: "facebook",
+    source_post_url: sourceUrl,
+    collected_at: collectedAt,
+    metadata: { listingIntent: "SELL_PROPERTY", postId },
+  });
+
+  const finder = finderDb({ city: "Żychlin" });
+  finder.seed("listings", [
+    listing("zychlin-duplicate-old", trackedUrl, firstPostId, "2026-10-05T10:01:00.000Z"),
+    listing("zychlin-duplicate-new", canonicalUrl, firstPostId, "2026-10-05T10:02:00.000Z"),
+    listing("zychlin-second-post", secondUrl, secondPostId, "2026-10-05T10:01:00.000Z"),
+    listing("zychlin-third-post", thirdUrl, thirdPostId, "2026-10-05T10:01:00.000Z"),
+  ]);
+  finder.seed("listing_filter_matches", [
+    finderMembershipRow("zychlin-duplicate-old"),
+    finderMembershipRow("zychlin-duplicate-new"),
+    finderMembershipRow("zychlin-second-post"),
+    finderMembershipRow("zychlin-third-post"),
+  ]);
+  finder.seed("listing_source_metadata", [
+    metadata("zychlin-duplicate-old", trackedUrl, firstPostId, "2026-10-05T10:01:00.000Z"),
+    metadata("zychlin-duplicate-new", canonicalUrl, firstPostId, "2026-10-05T10:02:00.000Z"),
+    metadata("zychlin-second-post", secondUrl, secondPostId, "2026-10-05T10:01:00.000Z"),
+    metadata("zychlin-third-post", thirdUrl, thirdPostId, "2026-10-05T10:01:00.000Z"),
+  ]);
+  currentFinderDb = finder;
+  const finderPayload = await getFilterResults(FILTER_ID);
+  const finderResults = [...(finderPayload?.results ?? []), ...(finderPayload?.reviewResults ?? [])];
+  assert.equal(finderResults.length, 3, "Finder must collapse only the duplicate first post and keep both different confirmed posts");
+  assert.deepEqual(new Set(finderResults.map((result) => result.id)), new Set(["zychlin-duplicate-new", "zychlin-second-post", "zychlin-third-post"]));
+  assert.ok(finderResults.every((result) => result.locationText?.includes("Żychlin")), "every visible card must show Żychlin, never the stale Łódź fallback");
+  assert.equal(finderResults.filter((result) => result.sourcePostUrl === canonicalUrl).length, 1, "the same canonical post URL must produce one Finder card");
+
+  watcherRows = [
+    watcherMetadataRow("zychlin-duplicate-old", trackedUrl, "2026-10-05T10:01:00.000Z", { metadata: { listingIntent: "SELL_PROPERTY", postId: firstPostId }, listings: watcherListing("zychlin-duplicate-old", listing("zychlin-duplicate-old", trackedUrl, firstPostId, "2026-10-05T10:01:00.000Z")) }),
+    watcherMetadataRow("zychlin-duplicate-new", canonicalUrl, "2026-10-05T10:02:00.000Z", { metadata: { listingIntent: "SELL_PROPERTY", postId: firstPostId }, listings: watcherListing("zychlin-duplicate-new", listing("zychlin-duplicate-new", canonicalUrl, firstPostId, "2026-10-05T10:02:00.000Z")) }),
+    watcherMetadataRow("zychlin-second-post", secondUrl, "2026-10-05T10:01:00.000Z", { metadata: { listingIntent: "SELL_PROPERTY", postId: secondPostId }, listings: watcherListing("zychlin-second-post", listing("zychlin-second-post", secondUrl, secondPostId, "2026-10-05T10:01:00.000Z")) }),
+    watcherMetadataRow("zychlin-third-post", thirdUrl, "2026-10-05T10:01:00.000Z", { metadata: { listingIntent: "SELL_PROPERTY", postId: thirdPostId }, listings: watcherListing("zychlin-third-post", listing("zychlin-third-post", thirdUrl, thirdPostId, "2026-10-05T10:01:00.000Z")) }),
+  ];
+  const watcherResult = await listFacebookWatcher();
+  assert.equal(watcherResult.length, 3, "Watcher must collapse only the duplicate first post and keep both different confirmed posts");
+  assert.deepEqual(new Set(watcherResult.map((item) => item.listingId)), new Set(["zychlin-duplicate-new", "zychlin-second-post", "zychlin-third-post"]));
+  assert.equal(watcherResult.filter((item) => item.facebookPostId === firstPostId).length, 1, "one confirmed post ID must produce one Watcher card");
+  assert.deepEqual(new Set(watcherResult.map((item) => item.facebookPostId)), new Set([firstPostId, secondPostId, thirdPostId]));
+  assert.ok(watcherResult.every((item) => item.city === "Żychlin"), "Watcher cards must retain the canonical Żychlin location");
+  assert.equal(watcherResult.find((item) => item.facebookPostId === firstPostId)?.externalListingId, firstPostId, "the surviving duplicate must retain the confirmed external listing ID");
 });
