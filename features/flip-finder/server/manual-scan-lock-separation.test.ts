@@ -244,10 +244,16 @@ const facebookOnlyFilter = {
 };
 const mixedFilter = { ...facebookOnlyFilter, id: "filter-mixed", name: "Otodom + Facebook", sources: ["otodom", "facebook"] };
 const olxOnlyFilter = { ...facebookOnlyFilter, id: "filter-olx", name: "OLX only", sources: ["olx"] };
+// A second lockable source alongside otodom, needed only to prove that a
+// RESERVED-BUT-NEVER-ATTEMPTED sibling source survives alongside a source
+// that was actually attempted and deferred (see the "never attempted"
+// regression test below) -- a single-source filter cannot distinguish "never
+// attempted" from "the only source, which is also the deferred one".
+const twoSourceFilter = { ...facebookOnlyFilter, id: "filter-two-source", name: "Otodom + Morizon", sources: ["otodom", "morizon"] };
 
 mock.module("@/features/flip-finder/server/search-filters", {
   namedExports: {
-    getSearchFilter: async (id: string) => [facebookOnlyFilter, mixedFilter, olxOnlyFilter].find((filter) => filter.id === id) ?? null,
+    getSearchFilter: async (id: string) => [facebookOnlyFilter, mixedFilter, olxOnlyFilter, twoSourceFilter].find((filter) => filter.id === id) ?? null,
   },
 });
 
@@ -274,6 +280,7 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
     ...realSourceRegistry,
     activeSources: (filter: { sources: string[] }) => [
       ...(filter.sources.includes("otodom") ? [{ id: "otodom", label: "Otodom", fetch: async () => { otodomFetchCalls += 1; if (otodomFetchGate) { otodomFetchGate.notifyEntered(); await otodomFetchGate.release; } return { listings: [], warnings: [], fetched: 0 }; } }] : []),
+      ...(filter.sources.includes("morizon") ? [{ id: "morizon", label: "Morizon", fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) }] : []),
       ...(filter.sources.includes("olx") ? [{ id: "olx", label: "OLX", fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) }] : []),
     ],
   },
@@ -560,6 +567,53 @@ test("a source missing its reserved row under usePreparedRows fails cleanly with
   assert.equal(otodomResult?.errorCode, "SCAN_RESERVATION_MISSING");
   assert.equal(summary.status, "partial", "a missing reservation is a per-source failure, not a reason to crash or hang the whole run");
   assert.equal(current.sourceScans.length, 0, "no source_scans row may be created or mutated for a source that was never actually reserved");
+});
+
+// Exact reported production shape: a run stuck for ~1h because its GitHub
+// Actions continuation schedule never fired (the bug the cron-job.org
+// fallback above exists to fix). One source (Domiporta-equivalent) was
+// actually attempted once and deferred with the SOURCE_TIMEOUT: marker
+// failStaleScans explicitly protects; several OTHER sources in the same run
+// were reserved up front by reserveSourceScans's bulk insert but never
+// reached at all before the worker's own budget ran out, so they carry no
+// error_message and no heartbeat. failStaleScans' age check (isStaleScan)
+// has no way to tell "reserved but legitimately still queued behind a dead
+// continuation" apart from "a worker genuinely crashed/abandoned this row",
+// so it reaped these never-attempted rows to "failed" purely for having sat
+// pending longer than STALE_SCAN_TIMEOUT_MS (15min) -- which is virtually
+// guaranteed for every source queued behind a first SOURCE_TIMEOUT defer,
+// since the whole point of a defer is that the run has already exhausted its
+// per-invocation budget. The resume fix then silently skips every "failed"
+// prepared row (manual-scan.ts's `if (prepared.status === "failed") continue`),
+// so clicking "Skanuj oferty" again would resume the run id correctly but
+// permanently give up on every source that was merely waiting its turn --
+// exactly defeating the point of a resumable run.
+test("resuming a long-stuck run must not silently fail sources that were reserved but never actually attempted", async () => {
+  const runStartedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+  current = fakeAdmin([
+    {
+      id: "deferred-otodom",
+      search_filter_id: twoSourceFilter.id,
+      source: "otodom",
+      status: "pending",
+      started_at: runStartedAt,
+      scan_run_id: "run-stuck",
+      error_message: "SOURCE_TIMEOUT: scan budget exhausted; waiting for continuation",
+      continuation_next_at: new Date(Date.now() + 40 * 60_000).toISOString(),
+    },
+    {
+      id: "never-attempted-morizon",
+      search_filter_id: twoSourceFilter.id,
+      source: "morizon",
+      status: "pending",
+      started_at: runStartedAt,
+      scan_run_id: "run-stuck",
+    },
+  ]);
+  const start = await startManualOtodomScan(twoSourceFilter.id);
+  assert.equal(start.runId, "run-stuck", "the existing stuck run must be resumed, not replaced by a new run id");
+  const neverAttempted = current.sourceScans.find((row) => row.id === "never-attempted-morizon");
+  assert.equal(neverAttempted?.status, "pending", "a source that was reserved but never actually attempted must remain resumable -- it must not be silently marked failed just because it has been queued for >15 minutes behind a dead/delayed continuation");
 });
 
 test("a mixed filter's active Watcher-owned facebook row never blocks Finder, even though the same filter also has otodom", async () => {

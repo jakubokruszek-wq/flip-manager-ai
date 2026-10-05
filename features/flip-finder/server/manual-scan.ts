@@ -10,8 +10,8 @@ import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
-import { decideScanResumption, isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, staleScanCutoff, type ExistingSourceScanForResumption } from "./scan-lifecycle";
-import { CONTINUATION_LEASE_MS, classifySourceFailure, continuationCycleAt, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
+import { decideScanResumption, isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, STALE_SCAN_TIMEOUT_MS, staleScanCutoff, type ExistingSourceScanForResumption } from "./scan-lifecycle";
+import { CONTINUATION_LEASE_MS, CONTINUATION_MAX_WAIT_MS, classifySourceFailure, continuationCycleAt, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
 export { scanStatus } from "./scan-start-errors";
 
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
@@ -553,6 +553,25 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * state. It must cover every status the lock blocks on: a Facebook row stays
  * "pending" until a collector claims it, so reaping only "running" left an
  * unclaimed job blocking that filter's scans permanently.
+ *
+ * A "pending" row that was reserved up front (reserveSourceScans' own bulk
+ * insert creates one row per lockable source at run start) but never actually
+ * reached by a worker carries no error_message and no heartbeat at all -- it
+ * is indistinguishable in shape from a row whose worker genuinely
+ * crashed/abandoned it. But it is NOT abandoned: it is still exactly where
+ * the hourly continuation (or a manual resume) is supposed to find it,
+ * exactly like a row that already got one attempt and a SOURCE_TIMEOUT:
+ * defer. The only thing distinguishing "merely queued" from "worker died
+ * immediately after reserving" is time, so it gets the same
+ * CONTINUATION_MAX_WAIT_MS grace period a deferred row already gets via
+ * isContinuationPending/isContinuationExpired above, not the much shorter
+ * STALE_SCAN_TIMEOUT_MS meant to catch a crash mid-fetch. Without this, every
+ * source queued behind the first SOURCE_TIMEOUT defer in a run stuck on a
+ * dead/delayed continuation (e.g. the GitHub Actions schedule outage this
+ * session's cron-job.org fallback addresses) gets silently, permanently
+ * marked "failed" -- and the resume fix in reserveOrResumeSourceScans then
+ * skips every "failed" prepared row -- defeating the entire point of
+ * resuming instead of refusing.
  */
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
   const now = Date.now();
@@ -564,7 +583,11 @@ async function failStaleScans(supabase: SupabaseClient, filterId: string, source
     // Never reap a row another worker still owns, even when its original
     // reservation timestamp is old and no progress heartbeat has arrived yet.
     .filter((candidate) => !(typeof candidate.continuation_lease_until === "string" && Number.isFinite(Date.parse(candidate.continuation_lease_until)) && Date.parse(candidate.continuation_lease_until) > now))
-    .filter((candidate) => isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt: scanHeartbeatAt(candidate.filter_snapshot) }, now))
+    .filter((candidate) => {
+      const heartbeatAt = scanHeartbeatAt(candidate.filter_snapshot);
+      const neverAttempted = candidate.status === "pending" && !candidate.error_message && !heartbeatAt;
+      return isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt }, now, neverAttempted ? CONTINUATION_MAX_WAIT_MS : STALE_SCAN_TIMEOUT_MS);
+    })
     .map((candidate) => candidate.id);
   if (!staleIds.length) return;
   const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).in("id", staleIds).in("status", RECOVERABLE_SCAN_STATUSES).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
