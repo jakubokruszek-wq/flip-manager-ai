@@ -96,6 +96,16 @@ SQL
     > "$WORKDIR/02-source-scans.sql"
   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -q -f "$WORKDIR/02-source-scans.sql"
 
+  # The foundation migration's own status check constraint does not yet
+  # allow 'pending' -- that widening is applied by a later, separate
+  # migration (the local OLX worker queue schema) which this script does
+  # not otherwise need. Mirrors reserve-source-scans.rpc.test.ts's own
+  # freshDb() exactly (same comment, same statement), which is why that
+  # file's PGlite test already passes without this error -- this script
+  # had omitted it, which is what actually failed run 37366968074.
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -qAtc \
+    "alter table public.source_scans drop constraint if exists source_scans_status_check; alter table public.source_scans add constraint source_scans_status_check check (status in ('pending', 'running', 'completed', 'failed', 'partial'));"
+
   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -q -f "$MIGRATIONS_DIR/20260719131000_add_source_scan_diagnostics.sql"
   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -q -f "$MIGRATIONS_DIR/20261004020000_add_manual_scan_reservation_lock.sql"
 
