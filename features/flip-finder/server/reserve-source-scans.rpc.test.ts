@@ -73,25 +73,34 @@ test("the real reserve_source_scans SQL creates one reservation and rejects a la
   }
 });
 
-// NOT resolved by this change -- left exactly as it was. The real,
-// two-independent-connection proof now exists as
-// scripts/reserve-source-scans-race.sh, run by
+// RESOLVED -- the gap this test.todo() used to mark is closed. The test
+// directly above proves reserve_source_scans' SQL logic is correct, but
+// PGlite runs every query through one exclusive embedded connection, so it
+// was never able to prove -- and still cannot prove -- that the function's
+// `select ... for update` row lock actually blocks a second, genuinely
+// independent session. Do not read that test as concurrency proof.
+//
+// The real proof is scripts/reserve-source-scans-race.sh, run by
 // .github/workflows/reserve-source-scans-concurrency.yml against a
-// disposable `services: postgres:` container (never Production/Supabase).
-// That CI job has not actually been executed yet (no push/dispatch was
-// made from this session), so this todo must stay exactly as it is -- a
-// PGlite test, or any other single-embedded-connection harness, is still
-// not acceptable proof of real concurrent-connection locking, and this line
-// must only be removed once that CI job has actually been seen to pass.
-test.todo("true overlapping reserve_source_scans calls require two independent PostgreSQL connections; PGlite's transaction/query APIs run through one exclusive embedded connection");
+// disposable `services: postgres:` container (never Production/Supabase):
+// two real, independent psql connections, released from a shared barrier so
+// neither can submit its call before both are ready, raced against the
+// same search_filter_id. Confirmed green:
+// https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/37368504544
+// (run attempt 2; attempt 1 was cancelled mid-queue by a GitHub Actions
+// platform incident before any step ran, unrelated to this code). Its log
+// shows exactly one of the two concurrent calls winning, the other
+// genuinely blocking on the row lock and then receiving the real
+// SCAN_ALREADY_RUNNING error from Postgres itself, and exactly one
+// source_scans row/scan_run_id surviving for the filter afterward.
 
 // Local, always-runnable check that the CI artifacts above actually exist
 // and are wired together correctly (right script, right migration paths,
 // a real postgres service, two genuinely separate psql processes) --
 // this is NOT the concurrency proof itself (it asserts file content, not
 // database behavior), only a guard against the CI wiring silently rotting
-// (a renamed script, a workflow that stops calling it, a typo'd path) while
-// the todo above waits for an actual CI run to resolve it.
+// (a renamed script, a workflow that stops calling it, a typo'd path) now
+// that the real proof above depends on it staying correct.
 test("the real-Postgres concurrency CI workflow and script are present and correctly wired", () => {
   const workflow = fs.readFileSync(path.join(process.cwd(), ".github", "workflows", "reserve-source-scans-concurrency.yml"), "utf8");
   assert.match(workflow, /image:\s*postgres:17/);
