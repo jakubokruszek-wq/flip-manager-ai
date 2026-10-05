@@ -19,12 +19,14 @@ type Row = Record<string, unknown>;
 type RpcResult = { data: unknown; error: { message: string } | null };
 type RpcHandler = (params: Row) => RpcResult;
 type FailureRule = { op: "insert" | "update" | "upsert" | "select"; message: string; remaining: number };
+export type FakeDatabaseAccess = { kind: "table" | "rpc"; name: string };
 
 export class FakeFacebookSupabase {
   private tables = new Map<string, Row[]>();
   private rpcHandlers = new Map<string, RpcHandler>();
   private rpcFailures = new Map<string, { message: string; remaining: number }[]>();
   private failures = new Map<string, FailureRule[]>();
+  private accessLogEntries: FakeDatabaseAccess[] = [];
   private idSeq = 1;
 
   seed(table: string, rows: Row[]): this {
@@ -34,6 +36,15 @@ export class FakeFacebookSupabase {
 
   rows(table: string): Row[] {
     return this.tables.get(table) ?? [];
+  }
+
+  /** Records only application-facing Supabase calls; internal fake-table reads are not logged. */
+  accessLog(): FakeDatabaseAccess[] {
+    return [...this.accessLogEntries];
+  }
+
+  clearAccessLog(): void {
+    this.accessLogEntries = [];
   }
 
   setRpc(name: string, handler: RpcHandler): this {
@@ -70,10 +81,12 @@ export class FakeFacebookSupabase {
   }
 
   from(table: string): FakeQueryBuilder {
+    this.accessLogEntries.push({ kind: "table", name: table });
     return new FakeQueryBuilder(this, table);
   }
 
   rpc(name: string, params: Row = {}): FakeRpcCall {
+    this.accessLogEntries.push({ kind: "rpc", name });
     return new FakeRpcCall(this, name, params);
   }
 
