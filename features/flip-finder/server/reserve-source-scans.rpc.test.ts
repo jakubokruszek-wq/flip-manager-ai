@@ -73,4 +73,43 @@ test("the real reserve_source_scans SQL creates one reservation and rejects a la
   }
 });
 
+// NOT resolved by this change -- left exactly as it was. The real,
+// two-independent-connection proof now exists as
+// scripts/reserve-source-scans-race.sh, run by
+// .github/workflows/reserve-source-scans-concurrency.yml against a
+// disposable `services: postgres:` container (never Production/Supabase).
+// That CI job has not actually been executed yet (no push/dispatch was
+// made from this session), so this todo must stay exactly as it is -- a
+// PGlite test, or any other single-embedded-connection harness, is still
+// not acceptable proof of real concurrent-connection locking, and this line
+// must only be removed once that CI job has actually been seen to pass.
 test.todo("true overlapping reserve_source_scans calls require two independent PostgreSQL connections; PGlite's transaction/query APIs run through one exclusive embedded connection");
+
+// Local, always-runnable check that the CI artifacts above actually exist
+// and are wired together correctly (right script, right migration paths,
+// a real postgres service, two genuinely separate psql processes) --
+// this is NOT the concurrency proof itself (it asserts file content, not
+// database behavior), only a guard against the CI wiring silently rotting
+// (a renamed script, a workflow that stops calling it, a typo'd path) while
+// the todo above waits for an actual CI run to resolve it.
+test("the real-Postgres concurrency CI workflow and script are present and correctly wired", () => {
+  const workflow = fs.readFileSync(path.join(process.cwd(), ".github", "workflows", "reserve-source-scans-concurrency.yml"), "utf8");
+  assert.match(workflow, /image:\s*postgres:17/);
+  assert.match(workflow, /POSTGRES_HOST_AUTH_METHOD:\s*trust/);
+  assert.match(workflow, /pg_isready/);
+  assert.match(workflow, /DATABASE_URL:\s*postgresql:\/\/postgres@127\.0\.0\.1:5432/);
+  assert.match(workflow, /bash scripts\/reserve-source-scans-race\.sh/);
+  assert.doesNotMatch(workflow, /supabase\.co|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_URL/i);
+
+  const script = fs.readFileSync(path.join(process.cwd(), "scripts", "reserve-source-scans-race.sh"), "utf8");
+  assert.match(script, /DATABASE_URL is required/);
+  assert.match(script, /20261004020000_add_manual_scan_reservation_lock\.sql/);
+  // Two independently backgrounded psql processes released from one shared
+  // file barrier -- not a single sequential call, and not a JS mutex.
+  assert.match(script, /&\s*\n\s*local pid_a=\$!/);
+  assert.match(script, /&\s*\n\s*local pid_b=\$!/);
+  assert.match(script, /wait "\$pid_a"/);
+  assert.match(script, /wait "\$pid_b"/);
+  assert.match(script, /SCAN_ALREADY_RUNNING/);
+  assert.doesNotMatch(script, /supabase\.co|SUPABASE_SERVICE_ROLE_KEY/i);
+});

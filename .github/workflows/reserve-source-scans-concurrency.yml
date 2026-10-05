@@ -1,0 +1,61 @@
+name: reserve_source_scans concurrency proof
+
+# Real, two-connection proof that reserve_source_scans' row lock
+# (supabase/migrations/20261004020000_add_manual_scan_reservation_lock.sql)
+# actually serializes two genuinely concurrent reservation attempts for the
+# same filter. Closes the test.todo() in
+# features/flip-finder/server/reserve-source-scans.rpc.test.ts, which that
+# file's own comment explains PGlite cannot resolve on its own (a single
+# embedded connection can't demonstrate a second, independent session
+# blocking on a real lock). Runs against a disposable services: postgres
+# container -- never Production or Supabase.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/20261004020000_add_manual_scan_reservation_lock.sql"
+      - "supabase/migrations/20260719113000_create_flip_finder_foundation.sql"
+      - "supabase/migrations/20260719131000_add_source_scan_diagnostics.sql"
+      - "scripts/reserve-source-scans-race.sh"
+      - ".github/workflows/reserve-source-scans-concurrency.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reserve-source-scans-concurrency-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-postgresql-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: reserve_source_scans_race
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d reserve_source_scans_race"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/reserve_source_scans_race
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Run the real two-connection concurrency race
+        run: bash scripts/reserve-source-scans-race.sh
