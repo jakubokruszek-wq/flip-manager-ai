@@ -14,6 +14,7 @@ on:
   push:
     branches:
       - main
+      - ci/investment-os-reserve-source-scans-race
     paths:
       - "supabase/migrations/20261004020000_add_manual_scan_reservation_lock.sql"
       - "supabase/migrations/20260719113000_create_flip_finder_foundation.sql"
