@@ -3,6 +3,8 @@ import test, { mock } from "node:test";
 
 mock.module("server-only", { defaultExport: {} });
 
+const { CONTINUATION_RETRY_INTERVAL_MS, nextContinuationAt } = await import("./scan-continuation.ts");
+
 const sourceFetches: string[] = [];
 const sourceIds = ["official_cooperative", "official_uml", "official_auction", "gratka"];
 const sources = sourceIds.map((id) => ({
@@ -123,7 +125,14 @@ test("bounded initial scan leaves the fourth source pending in the same run for 
     assert.equal(sourceRows[3].status, "pending");
     assert.equal(sourceRows[3].scan_run_id, "run-fixed");
     assert.match(String(sourceRows[3].error_message), /^SOURCE_TIMEOUT:/);
-    assert.equal(typeof sourceRows[3].continuation_next_at, "string");
+    // Regression lock for the real value deferPreparedSource (manual-scan.ts)
+    // writes: must be the real CONTINUATION_RETRY_INTERVAL_MS-based next
+    // cycle boundary (5 minutes), never the old hourly one. Date.now is
+    // mocked throughout this test, so nextContinuationAt(Date.now()) here is
+    // the exact same oracle the production code just called.
+    assert.equal(sourceRows[3].continuation_next_at, nextContinuationAt(Date.now()));
+    const deferredInMs = Date.parse(String(sourceRows[3].continuation_next_at)) - fakeNow;
+    assert.ok(deferredInMs > 0 && deferredInMs <= CONTINUATION_RETRY_INTERVAL_MS, `expected the next retry within one ${CONTINUATION_RETRY_INTERVAL_MS}ms cycle, got ${deferredInMs}ms`);
   } finally {
     Date.now = originalNow;
   }
