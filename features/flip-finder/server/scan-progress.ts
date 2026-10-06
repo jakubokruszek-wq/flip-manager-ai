@@ -27,7 +27,7 @@ import { summarizeHardRejects } from "@/features/flip-finder/funnel-summary";
 import { explainPartialFacebookScan } from "@/features/facebook-worker/scan-accounting";
 import { projectPersistedFacebookAccounting } from "./scan-accounting-projection";
 import { scanHeartbeatAt } from "./scan-lifecycle";
-import { CONTINUATION_ORPHAN_GRACE_MS, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
+import { CONTINUATION_ORPHAN_GRACE_MS, SOURCE_INVOCATION_CEILING_MS, isContinuationExpired, isContinuationPending, isGenuinelyAwaitingContinuation, nextContinuationAt } from "./scan-continuation";
 
 type Row = Record<string, unknown>;
 const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
@@ -62,15 +62,23 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
     .filter((item) => item.source === "facebook" && typeof item.id === "string" && !jobSourceScanIds.has(String(item.id)))
     .map(toCollectorGroup);
   const olxRow = row(olxResult.data);
-  const units = scanRows.map(toWorkUnit).filter((value): value is ScanWorkUnit => value !== null);
+  const now = Date.now();
+  const units = scanRows.map((item) => toWorkUnit(item, now)).filter((value): value is ScanWorkUnit => value !== null);
   const facebookGroups = [...facebookRows.map((item) => toFacebookGroup(item, sourceScansById.get(string(item.source_scan_id) ?? "") ?? null)), ...collectorSourceScans];
   const jobStatuses = [...facebookGroups.map((group) => group.status), ...(olxRow ? [jobStatus(olxRow.status)] : [])].filter((status): status is WorkerJobStatus => status !== null);
   const overall = buildOverallProgress(units, jobStatuses);
   const startedAt = units.map((unit) => unit.startedAt).sort()[0];
   const finishedAt = isTerminal(overall.status) ? overallFinishedAt(units) : null;
-  const now = Date.now();
   const startedMs = Date.parse(startedAt);
   const endMs = finishedAt ? Date.parse(finishedAt) : now;
+  // Separates "has real fetch work possibly still been happening" from pure
+  // wall-clock run age: a single invocation can never exceed
+  // SOURCE_INVOCATION_CEILING_MS (the platform's own hard function-kill
+  // ceiling), so any time beyond that, while sources remain genuinely
+  // waiting, is provably idle time, not work. Lets the UI show "oczekuje od"
+  // separately from "uruchomiono" instead of one conflated duration that
+  // reads as continuous active scanning.
+  const waitingAgeMs = (overall.waitingUnits ?? 0) > 0 ? Math.max(0, now - startedMs - SOURCE_INVOCATION_CEILING_MS) : 0;
 
   const monthRows = rows(monthJobsResult.data);
   const monthlyBudgetUsd = configuredBudget();
@@ -102,6 +110,7 @@ export async function getScanProgress(runId: string): Promise<ScanProgressRespon
     startedAt,
     finishedAt,
     elapsedMs: Number.isFinite(startedMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startedMs) : 0,
+    waitingAgeMs,
     overall: {
       completedUnits: overall.completedUnits,
       totalUnits: overall.totalUnits,
@@ -219,7 +228,7 @@ export async function expireStaleFinderSourceScans(
   }
   if (expiredIds.length) {
     const result = await supabase.from("source_scans")
-      .update({ status: "failed", finished_at: new Date(now).toISOString(), error_message: "SOURCE_CONTINUATION_EXPIRED: no worker resumed this source within two hourly cycles", continuation_next_at: null, continuation_lease_until: null, continuation_lease_token: null })
+      .update({ status: "failed", finished_at: new Date(now).toISOString(), error_message: "SOURCE_CONTINUATION_EXPIRED: no worker resumed this source within the continuation abandonment window", continuation_next_at: null, continuation_lease_until: null, continuation_lease_token: null })
       .in("id", expiredIds)
       .in("status", ["pending", "running"])
       .abortSignal(AbortSignal.timeout(SCAN_PROGRESS_DATABASE_TIMEOUT_MS));
@@ -309,17 +318,25 @@ export async function expireUnclaimedOlxJobs(supabase: ReturnType<typeof createF
   await finalizeWatchdogSourceScans(supabase, staleRunning.data, "OLX_WORKER_CLAIM_TIMEOUT: OLX worker lease expired and was never renewed or recovered");
 }
 
-function toWorkUnit(value: Row): ScanWorkUnit | null {
+function toWorkUnit(value: Row, now: number): ScanWorkUnit | null {
   const id = string(value.id);
   const source = listingSource(value.source);
   const status = sourceStatus(value.status);
   const startedAt = string(value.started_at);
   if (!id || !source || !status || !startedAt) return null;
+  const errorMessage = string(value.error_message);
   return {
     id, source, status, startedAt, finishedAt: string(value.finished_at),
     scannedCount: number(value.scanned_count), matchedCount: number(value.matched_count),
-    normalizedCount: number(value.listings_found), errorMessage: string(value.error_message),
-    continuationPending: isContinuationPending(string(value.error_message)),
+    normalizedCount: number(value.listings_found), errorMessage,
+    // Not just isContinuationPending(errorMessage): a prepared row the
+    // sequential worker loop never reached before the platform's hard 60s
+    // kill landed mid-loop has no error_message at all, but it cannot
+    // possibly still be inside that invocation once
+    // SOURCE_INVOCATION_CEILING_MS has passed -- see
+    // isGenuinelyAwaitingContinuation's own doc comment for why this must not
+    // depend on expireStaleFinderSourceScans having already run once.
+    continuationPending: isGenuinelyAwaitingContinuation(status, errorMessage, startedAt, now),
   };
 }
 

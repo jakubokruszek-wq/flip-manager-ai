@@ -58,10 +58,11 @@ test("progress watchdog queues orphaned Finder source rows and preserves heartbe
   assert.equal(admin.rows.find((row) => row.id === "olx-worker")?.status, "running");
   assert.equal(admin.rows.find((row) => row.id === "other-run")?.status, "running");
   assert.deepEqual(admin.updates.map((update) => update.ids), [["stale-official"]]);
-  assert.equal(admin.updates[0]?.patch.continuation_next_at, "2026-10-03T13:00:00.000Z");
+  // Next 5-minute boundary after now (12:00:00) -- CONTINUATION_RETRY_INTERVAL_MS.
+  assert.equal(admin.updates[0]?.patch.continuation_next_at, "2026-10-03T12:05:00.000Z");
 });
 
-test("a continuation missing two hourly cycles becomes terminal and releases its lock", async () => {
+test("a continuation missing its 2-hour abandonment window becomes terminal and releases its lock", async () => {
   const admin = fakeAdmin([
     { id: "expired-continuation", scan_run_id: "run-expired", source: "official_uml", status: "pending", started_at: ago(180), continuation_next_at: ago(121), continuation_cycle_at: ago(180), error_message: "SOURCE_TIMEOUT: waiting for continuation", filter_snapshot: {} },
   ]);

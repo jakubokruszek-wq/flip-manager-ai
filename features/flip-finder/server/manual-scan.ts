@@ -20,7 +20,7 @@ type SupabaseClient = DatabaseClient;
 type LoadedFilter = NonNullable<Awaited<ReturnType<typeof getSearchFilter>>>;
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
 export type ScanClock = { startedAt: string; startedMs: number; continuationLeaseToken?: string | null };
-export type PreparedSourceScan = { id: string; source: string; status?: string; started_at: string; continuation_lease_token?: string | null };
+export type PreparedSourceScan = { id: string; source: string; status?: string; started_at: string; continuation_lease_token?: string | null; continuation_attempt?: number | null };
 export type ManualScanOptions = {
   runId?: string;
   usePreparedRows?: boolean;
@@ -300,8 +300,8 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
       }
       if (prepared && (prepared.status === "completed" || prepared.status === "failed")) continue;
       // Leave the reservation pending when this invocation no longer has
-      // enough time for a complete source attempt. The next durable hourly
-      // continuation claims the same row/run; no synthetic failure is
+      // enough time for a complete source attempt. The next durable
+      // continuation cycle claims the same row/run; no synthetic failure is
       // written and no source is started after the worker budget expires.
       if (budgetExhausted || Date.now() + perSourceTimeoutMs > workerDeadline) {
         budgetExhausted = true;
@@ -363,7 +363,7 @@ export type FinderContinuationSummary = {
   errors: string[];
 };
 
-/** Durable hourly continuation backed by the claim_finder_scan_source RPC. */
+/** Durable periodic continuation backed by the claim_finder_scan_source RPC. */
 export async function runFinderScanContinuations(now = new Date()): Promise<FinderContinuationSummary> {
   const cycleAt = continuationCycleAt(now);
   const supabase = createAdminClient();
@@ -396,6 +396,7 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
     const runId = typeof claimedRow.scan_run_id === "string" ? claimedRow.scan_run_id : null;
     const startedAt = typeof claimedRow.started_at === "string" ? claimedRow.started_at : null;
     const leaseToken = typeof claimedRow.continuation_lease_token === "string" ? claimedRow.continuation_lease_token : null;
+    const continuationAttempt = typeof claimedRow.continuation_attempt === "number" ? claimedRow.continuation_attempt : null;
     if (!scanId || !filterId || !sourceId || !runId || !startedAt || !leaseToken) { errors.push("CONTINUATION_CLAIM_INVALID"); break; }
     claimed += 1;
 
@@ -416,7 +417,7 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
     // A continuation owns one source at a time. It no longer shares the
     // initial request's slice across the whole filter, so one source gets the
     // full bounded retry window while the next source waits for another cycle.
-    const prepared: PreparedSourceScan = { id: scanId, source: sourceId, status: "running", started_at: startedAt, continuation_lease_token: leaseToken };
+    const prepared: PreparedSourceScan = { id: scanId, source: sourceId, status: "running", started_at: startedAt, continuation_lease_token: leaseToken, continuation_attempt: continuationAttempt };
     const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, continuationTimeoutMs, { preparedAlreadyRunning: true });
     if (result.status === "completed") completed += 1;
     else if (result.status === "pending") deferred += 1;
@@ -470,8 +471,8 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   // given row, so at most one caller ever proceeds past this point for it.
   // The winner also gets a short continuation lease. Without that lease, an
   // old pending reservation could be switched to running by a manual worker
-  // and then stolen by the hourly continuation's five-minute orphan rule
-  // before the worker had finalized it.
+  // and then stolen by continuation's five-minute orphan rule before the
+  // worker had finalized it.
   const manualLeaseToken = crypto.randomUUID();
   const manualLeaseUntil = new Date(started + CONTINUATION_LEASE_MS).toISOString();
   const { data: claimed, error } = prepared && options.preparedAlreadyRunning
@@ -501,7 +502,7 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
 
   let counters: ScanItemCounts = { listingsCreatedCount: 0, newMatchesCount: 0 };
   let updated = 0; let priceDrops = 0; let fetched = 0; let normalized = 0; let matched = 0; let warnings: string[] = [];
-  let status: SourceScanResult["status"] = "completed"; let errorCode: string | null = null; let errorMessage: string | null = null;
+  let status: SourceScanResult["status"] = "completed"; let errorCode: string | null = null; let errorMessage: string | null = null; let continuationNextAtOverride: string | null = null;
   const otodomSummary = createOtodomFilterSummary();
   const matchDiagnostics = emptyMatchDiagnosticSummary();
   const controller = new AbortController();
@@ -534,14 +535,26 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       errorCode = "CONTINUATION_LEASE_LOST";
       errorMessage = `${source.label}: continuation lease lost; stale result discarded`;
     } else {
-      const disposition = classifySourceFailure({ timedOut: controller.signal.aborted, error: reason });
+      // "attempt" is how many times THIS source has now timed out, including
+      // this one. preparedAlreadyRunning means the row came from the
+      // continuation claim RPC, which already incremented continuation_attempt
+      // before returning it -- that value already represents this attempt.
+      // Otherwise (a fresh reservation or a manual resume) it represents only
+      // PRIOR attempts, so this one adds 1.
+      const attemptNumber = (prepared?.continuation_attempt ?? 0) + (options.preparedAlreadyRunning ? 0 : 1);
+      const disposition = classifySourceFailure({ timedOut: controller.signal.aborted, error: reason, attempt: attemptNumber });
       status = disposition.status;
       errorCode = disposition.errorCode;
-      errorMessage = controller.signal.aborted ? `${source.label}: source timeout after ${timeoutMs / 1000}s` : disposition.errorCode === "SOURCE_FORBIDDEN" ? `${source.label}: access denied (HTTP 403); no retry` : reason instanceof Error ? reason.message : "Błąd źródła.";
+      continuationNextAtOverride = disposition.nextAttemptAt;
+      errorMessage = controller.signal.aborted
+        ? disposition.errorCode === "SOURCE_CONTINUATION_EXHAUSTED"
+          ? `${source.label}: gave up after ${attemptNumber} timed-out attempts`
+          : `${source.label}: source timeout after ${timeoutMs / 1000}s`
+        : disposition.errorCode === "SOURCE_FORBIDDEN" ? `${source.label}: access denied (HTTP 403); no retry` : reason instanceof Error ? reason.message : "Błąd źródła.";
     }
   } finally {
     clearTimeout(timeoutId);
-    await finalizeSourceScan(supabase, scan.id, scanClock, status, { fetched, matched, counters, updated, priceDrops, warnings, errorMessage });
+    await finalizeSourceScan(supabase, scan.id, scanClock, status, { fetched, matched, counters, updated, priceDrops, warnings, errorMessage, continuationNextAt: continuationNextAtOverride });
   }
   const result = { source: source.id, status, fetched, normalized, matched, listingsCreated: counters.listingsCreatedCount, newMatches: counters.newMatchesCount, updated, priceDrops, rejected: Math.max(0, fetched - normalized), durationMs: Date.now() - started, errorCode, errorMessage, warnings, matchDiagnostics };
   scanLog(status === "completed" ? "SOURCE DONE" : "SOURCE ERROR", { scanId: runId, source: source.id, checked: fetched, new: counters.newMatchesCount, matched, durationMs: result.durationMs });
@@ -559,7 +572,7 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * reached by a worker carries no error_message and no heartbeat at all -- it
  * is indistinguishable in shape from a row whose worker genuinely
  * crashed/abandoned it. But it is NOT abandoned: it is still exactly where
- * the hourly continuation (or a manual resume) is supposed to find it,
+ * the periodic continuation (or a manual resume) is supposed to find it,
  * exactly like a row that already got one attempt and a SOURCE_TIMEOUT:
  * defer. The only thing distinguishing "merely queued" from "worker died
  * immediately after reserving" is time, so it gets the same
@@ -595,7 +608,7 @@ async function failStaleScans(supabase: SupabaseClient, filterId: string, source
 }
 
 async function loadPreparedSourceScans(supabase: SupabaseClient, runId: string, sourceIds: string[]): Promise<Map<string, PreparedSourceScan>> {
-  const { data, error } = await supabase.from("source_scans").select("id,source,status,started_at,continuation_lease_token").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running", "completed", "failed"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data, error } = await supabase.from("source_scans").select("id,source,status,started_at,continuation_lease_token,continuation_attempt").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running", "completed", "failed"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) throw statusError(500, "Nie udało się odczytać zarezerwowanego skanu.");
   return new Map((Array.isArray(data) ? data : []).flatMap((row) => {
     if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string" || typeof (row as { source?: unknown }).source !== "string" || typeof (row as { status?: unknown }).status !== "string" || typeof (row as { started_at?: unknown }).started_at !== "string") return [];
@@ -626,8 +639,13 @@ async function updateSourceProgress(supabase: SupabaseClient, scanId: string, fi
   if (error) throw new Error(`Nie udało się zapisać postępu skanu: ${error.message}`);
 }
 
-async function finalizeSourceScan(supabase: SupabaseClient, scanId: string, scanClock: ScanClock, status: SourceScanResult["status"], input: Progress & { warnings: string[]; errorMessage: string | null }): Promise<void> {
-  const payload = { status, finished_at: status === "pending" ? null : scanTimestamp(scanClock), error_message: input.errorMessage, scanned_count: input.fetched, listings_found: input.fetched, matched_count: input.matched, listings_created: input.counters.listingsCreatedCount, new_count: input.counters.newMatchesCount, listings_updated: input.updated, price_drop_count: input.priceDrops, warnings: input.warnings, continuation_next_at: status === "pending" ? nextContinuationAt(Date.now()) : null, continuation_lease_until: null, continuation_lease_token: null };
+async function finalizeSourceScan(supabase: SupabaseClient, scanId: string, scanClock: ScanClock, status: SourceScanResult["status"], input: Progress & { warnings: string[]; errorMessage: string | null; continuationNextAt?: string | null }): Promise<void> {
+  // continuationNextAt lets a timed-out fetch apply its own backoff
+  // (classifySourceFailure's nextAttemptAt) instead of always retrying at the
+  // very next cycle boundary; every other "pending" path (budget-exhausted
+  // defer, lease-lost discard) keeps the plain immediate-next-cycle behavior.
+  const continuationNextAt = status === "pending" ? (input.continuationNextAt ?? nextContinuationAt(Date.now())) : null;
+  const payload = { status, finished_at: status === "pending" ? null : scanTimestamp(scanClock), error_message: input.errorMessage, scanned_count: input.fetched, listings_found: input.fetched, matched_count: input.matched, listings_created: input.counters.listingsCreatedCount, new_count: input.counters.newMatchesCount, listings_updated: input.updated, price_drop_count: input.priceDrops, warnings: input.warnings, continuation_next_at: continuationNextAt, continuation_lease_until: null, continuation_lease_token: null };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     let query = supabase.from("source_scans").update(payload).eq("id", scanId);
     if (scanClock.continuationLeaseToken) query = query.eq("continuation_lease_token", scanClock.continuationLeaseToken).gt("continuation_lease_until", new Date().toISOString());

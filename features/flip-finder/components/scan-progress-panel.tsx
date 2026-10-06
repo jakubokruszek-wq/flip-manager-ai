@@ -3,8 +3,14 @@
 import { budgetTone, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 
 export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse }) {
-  const active = progress.status === "queued" || progress.status === "running";
-  const waitingForContinuation = progress.status === "partial" && (progress.overall.waitingUnits ?? 0) > 0;
+  const waitingForContinuation = (progress.overall.waitingUnits ?? 0) > 0;
+  // A run can still compute status "running" while some units genuinely wait
+  // for continuation (any non-waiting pending/running unit outranks the
+  // waiting ones in buildOverallProgress). The label must reflect waiting
+  // whenever it's real, not only when it happens to be the sole reason the
+  // run isn't yet terminal -- otherwise a disabled, unclickable "Skanowanie…"
+  // button sits there for no active work at all.
+  const active = (progress.status === "queued" || progress.status === "running") && !waitingForContinuation;
   // Finder's own scan never has a Facebook group name of its own -- it only
   // reconciles already-collected canonical listings (see
   // reconcileFacebookFromCanonicalListings) and always completes that step
@@ -23,13 +29,29 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
     : progress.status === "failed"
       ? "Zakończony błędem"
       : "Wszystkie etapy zakończone";
+  // A waiting run is never "Skanowanie…" (nothing is actively running) and
+  // never a plain statusLabel(status) either (which would say "W toku" while
+  // the aggregate status is still "running" -- see the `active` comment
+  // above). This must read unambiguously as "nothing is happening right now,
+  // on purpose" everywhere the panel shows a status word.
+  const topLabel = waitingForContinuation ? "Oczekuje na kontynuację" : active ? "Skanowanie…" : statusLabel(progress.status);
+  const badgeClass = waitingForContinuation ? "rounded-full px-2.5 py-1 text-xs font-medium bg-amber-500/10 text-amber-800 dark:text-amber-300" : statusClass(progress.status);
+  // elapsedMs is total age since the run's shared reservation timestamp --
+  // includes whatever real work happened first, so showing it alone while
+  // waiting reads as "this many minutes of active scanning". waitingAgeMs
+  // (provably idle time; see getScanProgress) is shown as its own figure
+  // instead, and the real work portion separately.
+  const workTimeMs = Math.max(0, progress.elapsedMs - progress.waitingAgeMs);
+  const durationLabel = waitingForContinuation
+    ? `${progress.overall.completedUnits}/${progress.overall.totalUnits} etapów · praca: ${formatDuration(workTimeMs)} · oczekuje: ${formatDuration(progress.waitingAgeMs)}`
+    : `${progress.overall.completedUnits}/${progress.overall.totalUnits} etapów · ${formatDuration(progress.elapsedMs)}`;
 
   return (
     <section aria-label="Postęp skanowania" className="rounded-2xl border border-border/70 bg-muted/20 p-4">
       <div className="min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><p className="text-sm font-semibold">{active ? "Skanowanie…" : statusLabel(progress.status)}</p><p className="mt-1 text-xs text-muted-foreground">{progress.overall.completedUnits}/{progress.overall.totalUnits} etapów · {formatDuration(progress.elapsedMs)}</p></div>
-          <span className={statusClass(progress.status)}>{statusLabel(progress.status)}</span>
+          <div><p className="text-sm font-semibold">{topLabel}</p><p className="mt-1 text-xs text-muted-foreground">{durationLabel}</p></div>
+          <span className={badgeClass}>{waitingForContinuation ? "Oczekuje na kontynuację" : statusLabel(progress.status)}</span>
         </div>
         <div aria-label={`Postęp ${progress.overall.percent}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progress.overall.percent} className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-muted" role="progressbar"><div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progress.overall.percent}%` }} /></div>
         <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
@@ -37,7 +59,7 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
           <ProgressDetail label="Pozostało" value={`${progress.overall.remainingUnits} etapów`} />
           {progress.olx.status ? <ProgressDetail label="OLX" value={`${jobStatusLabel(progress.olx.status)} · raw ${progress.olx.raw} · normalized ${progress.olx.normalized}`} /> : null}
         </div>
-        {progress.status === "partial" ? <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-800 dark:text-amber-300">Częściowo zakończony</p><p className="mt-1 text-muted-foreground">{waitingForContinuation ? "Część źródeł oczekuje na zaplanowaną kontynuację w następnym cyklu godzinowym." : progress.partialReason ?? "Collector zakończył pracę, ale część SEARCH została pominięta lub ograniczona."}</p></div> : null}
+        {progress.status === "partial" || waitingForContinuation ? <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-800 dark:text-amber-300">{waitingForContinuation ? "Oczekuje na kontynuację" : "Częściowo zakończony"}</p><p className="mt-1 text-muted-foreground">{waitingForContinuation ? "Część źródeł oczekuje na kolejny cykl kontynuacji (co ok. 5 minut, gdy zewnętrzny wyzwalacz działa). Kliknięcie \"Skanuj oferty\" wznowi dokładnie ten sam skan." : progress.partialReason ?? "Collector zakończył pracę, ale część SEARCH została pominięta lub ograniczona."}</p></div> : null}
         {/*
           Deliberately no Facebook per-group (or even aggregate group-count)
           breakdown here. That data -- group names, per-group post counts,

@@ -250,10 +250,16 @@ const olxOnlyFilter = { ...facebookOnlyFilter, id: "filter-olx", name: "OLX only
 // regression test below) -- a single-source filter cannot distinguish "never
 // attempted" from "the only source, which is also the deferred one".
 const twoSourceFilter = { ...facebookOnlyFilter, id: "filter-two-source", name: "Otodom + Morizon", sources: ["otodom", "morizon"] };
+// Mirrors the read-only Production diagnosis this fix was built from
+// exactly: 14 lockable sources (the real "14 etapów" shown on the Flip
+// filter), where 2 are completed, 11 are pending/waiting, and 1 (szybko) is
+// a terminal 403.
+const FOURTEEN_SOURCES = ["otodom", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"];
+const diagnosedShapeFilter = { ...facebookOnlyFilter, id: "filter-diagnosed-shape", name: "Flip", sources: FOURTEEN_SOURCES };
 
 mock.module("@/features/flip-finder/server/search-filters", {
   namedExports: {
-    getSearchFilter: async (id: string) => [facebookOnlyFilter, mixedFilter, olxOnlyFilter, twoSourceFilter].find((filter) => filter.id === id) ?? null,
+    getSearchFilter: async (id: string) => [facebookOnlyFilter, mixedFilter, olxOnlyFilter, twoSourceFilter, diagnosedShapeFilter].find((filter) => filter.id === id) ?? null,
   },
 });
 
@@ -282,6 +288,11 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
       ...(filter.sources.includes("otodom") ? [{ id: "otodom", label: "Otodom", fetch: async () => { otodomFetchCalls += 1; if (otodomFetchGate) { otodomFetchGate.notifyEntered(); await otodomFetchGate.release; } return { listings: [], warnings: [], fetched: 0 }; } }] : []),
       ...(filter.sources.includes("morizon") ? [{ id: "morizon", label: "Morizon", fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) }] : []),
       ...(filter.sources.includes("olx") ? [{ id: "olx", label: "OLX", fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) }] : []),
+      // Generic stub for any other real portal name a fixture lists (e.g. the
+      // 14-source diagnosed-shape fixture below) -- never actually invoked by
+      // tests that only call startManualOtodomScan (the reservation/resume
+      // decision), since those never reach runManualOtodomScan's fetch loop.
+      ...filter.sources.filter((source) => !["otodom", "morizon", "olx", "facebook"].includes(source)).map((source) => ({ id: source, label: source, fetch: async () => ({ listings: [], warnings: [], fetched: 0 }) })),
     ],
   },
 });
@@ -614,6 +625,44 @@ test("resuming a long-stuck run must not silently fail sources that were reserve
   assert.equal(start.runId, "run-stuck", "the existing stuck run must be resumed, not replaced by a new run id");
   const neverAttempted = current.sourceScans.find((row) => row.id === "never-attempted-morizon");
   assert.equal(neverAttempted?.status, "pending", "a source that was reserved but never actually attempted must remain resumable -- it must not be silently marked failed just because it has been queued for >15 minutes behind a dead/delayed continuation");
+});
+
+// The exact shape from a real read-only Production diagnosis: filter id
+// 6ebf3a9c-5418-4ae6-a0bf-1989b6603367, scan_run_id
+// 421dd220-e645-4970-8890-ca105095e737, finder_scan_interval_minutes=5,
+// scan_interval_minutes=30, 2 sources completed, 11 pending, 1 terminal
+// (szybko, HTTP 403), 0 running, no active leases, continuation deadlines
+// already passed. Clicking "Skanuj oferty" must resume this exact run_id,
+// never create a second one, never touch the completed or terminally-failed
+// rows, and never enqueue an OLX job (this filter has no OLX source at all).
+test("manual resume reproduces the diagnosed Production shape: 2 completed + 11 pending + 1 terminal 403, same run_id, no duplicate reservation", async () => {
+  const RUN_ID = "421dd220-e645-4970-8890-ca105095e737";
+  const oldStartedAt = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+  const completedSources = ["otodom", "morizon"];
+  const terminalSource = "szybko";
+  const pendingSources = FOURTEEN_SOURCES.filter((source) => !completedSources.includes(source) && source !== terminalSource);
+  assert.equal(pendingSources.length, 11, "fixture sanity check: 14 total - 2 completed - 1 terminal = 11 pending");
+
+  current = fakeAdmin([
+    ...completedSources.map((source, index) => ({ id: `completed-${index}`, search_filter_id: diagnosedShapeFilter.id, source, status: "completed", started_at: oldStartedAt, scan_run_id: RUN_ID })),
+    { id: "terminal-szybko", search_filter_id: diagnosedShapeFilter.id, source: terminalSource, status: "failed", started_at: oldStartedAt, scan_run_id: RUN_ID, error_message: "Szybko: access denied (HTTP 403); no retry" },
+    // Mirrors the diagnosis exactly: continuation deadlines already passed
+    // (continuation_next_at well in the past), no active lease.
+    ...pendingSources.map((source, index) => ({ id: `pending-${index}`, search_filter_id: diagnosedShapeFilter.id, source, status: "pending", started_at: oldStartedAt, scan_run_id: RUN_ID, error_message: "SOURCE_TIMEOUT: scan budget exhausted; waiting for continuation", continuation_next_at: new Date(Date.now() - 60_000).toISOString(), continuation_lease_until: null })),
+  ]);
+  const olxEnqueueCallsBefore = olxEnqueueCalls.length;
+
+  const start = await startManualOtodomScan(diagnosedShapeFilter.id);
+  assert.equal(start.runId, RUN_ID, "resume must return the exact existing scan_run_id from the diagnosis, never a new one");
+
+  const rowsForRun = current.sourceScans.filter((row) => row.scan_run_id === RUN_ID);
+  assert.equal(rowsForRun.length, 14, "no extra row may be reserved -- resuming must not duplicate any of the 14 existing rows");
+  assert.equal(current.sourceScans.some((row) => row.scan_run_id !== RUN_ID), false, "no second scan_run_id may be created for this filter");
+  assert.equal(current.sourceScans.find((row) => row.id === "terminal-szybko")?.status, "failed", "the terminal 403 row must be left exactly as-is, never retried");
+  completedSources.forEach((_, index) => {
+    assert.equal(current.sourceScans.find((row) => row.id === `completed-${index}`)?.status, "completed", "completed rows must never be touched by a resume");
+  });
+  assert.equal(olxEnqueueCalls.length, olxEnqueueCallsBefore, "this filter has no OLX source at all -- resuming it must never enqueue an OLX job");
 });
 
 test("a mixed filter's active Watcher-owned facebook row never blocks Finder, even though the same filter also has otodom", async () => {

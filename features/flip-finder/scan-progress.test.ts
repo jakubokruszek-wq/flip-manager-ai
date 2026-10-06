@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { budgetTone, buildOverallProgress, calculateBudget, collectorProgressGroupFromJobAndSourceScan, collectorProgressGroupFromSourceScan, hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isAwaitingContinuation, isTerminalScanStatus, projectImagePersistenceDiagnostics, projectSearchResultDiagnostics, projectSearchTileDiagnostics, type ScanWorkUnit } from "./scan-progress.ts";
+import { isGenuinelyAwaitingContinuation, SOURCE_INVOCATION_CEILING_MS } from "./server/scan-continuation.ts";
 
 const completed = (index: number): ScanWorkUnit => unit(index, "completed");
 const pending = (index: number): ScanWorkUnit => unit(index, "pending");
@@ -41,6 +42,40 @@ test("a timed-out source is shown as partial/waiting, not as an actively scannin
     facebook: { totalGroups: 0, completedGroups: 0, runningGroups: 0, queuedGroups: 0, failedGroups: 0, discovered: 0, processed: 0, groups: [] },
     olx: { status: null, raw: 0, normalized: 0, processed: 0, errorMessage: null },
   }), false);
+});
+
+// Read-only Production diagnosis this fix was built from: 2 completed, 11
+// pending, 1 terminal 403, 0 running. The 11 pending rows were reserved at
+// the same moment a single invocation can never exceed
+// (SOURCE_INVOCATION_CEILING_MS); server/scan-progress.ts's toWorkUnit uses
+// isGenuinelyAwaitingContinuation (not a bare error_message prefix check) to
+// decide continuationPending, which is what this integrates end to end: once
+// that much real time has passed, EVERY one of the 11 must read as waiting,
+// collapsing the run to "partial"/"Oczekuje na kontynuację" -- never stuck
+// showing "running"/"Skanowanie…" just because none of them individually
+// happened to get a SOURCE_TIMEOUT: marker written yet.
+test("UI distinguishes real waiting from possibly-still-active work: 11 old pending sources with no marker still collapse the run to partial", () => {
+  const oldReservation = new Date(Date.now() - SOURCE_INVOCATION_CEILING_MS - 1_000).toISOString();
+  const completedUnits = [0, 1].map((index) => completed(index));
+  const terminal403 = { ...unit(2, "failed", "szybko"), errorMessage: "Szybko: access denied (HTTP 403); no retry" };
+  const lockableSources: ScanWorkUnit["source"][] = ["morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative"];
+  const elevenPending = lockableSources.map((source, index) => {
+    const u = unit(3 + index, "pending", source);
+    return { ...u, startedAt: oldReservation, continuationPending: isGenuinelyAwaitingContinuation("pending", null, oldReservation, Date.now()) };
+  });
+
+  const progress = buildOverallProgress([...completedUnits, terminal403, ...elevenPending], []);
+  assert.equal(progress.waitingUnits, 11, "every old, markerless pending row must still be recognized as genuinely waiting");
+  assert.equal(progress.status, "partial", "the run must read as waiting, not as an indefinitely active 'running' scan");
+  assert.equal(isAwaitingContinuation({ overall: progress }), true);
+});
+
+test("UI distinguishes real waiting from possibly-still-active work: a freshly reserved, markerless pending row is NOT yet treated as waiting", () => {
+  const freshReservation = new Date(Date.now() - 1_000).toISOString();
+  const stillPossiblyActive = { ...unit(0, "pending", "official_uml"), startedAt: freshReservation, continuationPending: isGenuinelyAwaitingContinuation("pending", null, freshReservation, Date.now()) };
+  const progress = buildOverallProgress([stillPossiblyActive], ["running"]);
+  assert.equal(progress.waitingUnits, 0);
+  assert.equal(progress.status, "running", "a source reserved under a minute ago with no marker could still genuinely be mid-fetch");
 });
 
 test("inactive sources are excluded because only persisted run work units are counted", () => {

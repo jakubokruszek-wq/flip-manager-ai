@@ -294,6 +294,13 @@ export type ScanProgressResponse = {
   startedAt: string;
   finishedAt: string | null;
   elapsedMs: number;
+  /**
+   * Time a waiting source has provably spent idle, separate from elapsedMs
+   * (total run age, which includes whatever real work happened first). Zero
+   * whenever nothing is waiting. See getScanProgress in server/scan-progress.ts
+   * for the derivation.
+   */
+  waitingAgeMs: number;
   overall: {
     completedUnits: number;
     totalUnits: number;

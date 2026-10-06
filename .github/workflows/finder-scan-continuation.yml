@@ -2,8 +2,15 @@ name: Finder scan continuation
 
 on:
   schedule:
-    # Run shortly after the hour so the previous cycle has settled.
-    - cron: "7 * * * *"
+    # Every 5 minutes, matching CONTINUATION_RETRY_INTERVAL_MS
+    # (scan-continuation.ts). GitHub Actions' own `schedule` trigger has been
+    # observed, via this repo's own read-only diagnosis, firing only every
+    # 6-9h in practice regardless of the cron expression -- this change alone
+    # does not fix that platform-level unreliability. A faster, more reliable
+    # external trigger (e.g. cron-job.org hitting the same endpoint) is what
+    # actually delivers the 5-minute cadence; this schedule is a free,
+    # best-effort second path, not the primary one.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
