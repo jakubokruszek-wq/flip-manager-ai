@@ -5,7 +5,7 @@ import { expireStaleFinderSourceScans } from "./scan-progress.ts";
 
 type Row = Record<string, unknown>;
 
-function fakeAdmin(seed: Row[]) {
+function fakeAdmin(seed: Row[], afterRead?: (rows: Row[]) => void) {
   const rows = seed.map((row) => ({ ...row }));
   const updates: Array<{ ids: string[]; patch: Row }> = [];
   return {
@@ -13,19 +13,24 @@ function fakeAdmin(seed: Row[]) {
     updates,
     from(table: string) {
       assert.equal(table, "source_scans");
-      const filters: Array<{ op: "eq" | "neq" | "in"; column: string; value: unknown }> = [];
+      const filters: Array<{ op: "eq" | "neq" | "in" | "is"; column: string; value: unknown }> = [];
       let mode: "select" | "update" = "select";
       let patch: Row = {};
-      const matches = (row: Row) => filters.every(({ op, column, value }) => op === "eq" ? row[column] === value : op === "neq" ? row[column] !== value : Array.isArray(value) && value.includes(row[column]));
+      const matches = (row: Row) => filters.every(({ op, column, value }) => op === "is" ? row[column] == null && value === null : op === "eq" ? row[column] === value : op === "neq" ? row[column] !== value : Array.isArray(value) && value.includes(row[column]));
       const builder = {
         select: () => builder,
         update: (value: Row) => { mode = "update"; patch = value; return builder; },
         eq: (column: string, value: unknown) => { filters.push({ op: "eq", column, value }); return builder; },
+        is: (column: string, value: unknown) => { filters.push({ op: "is", column, value }); return builder; },
         neq: (column: string, value: unknown) => { filters.push({ op: "neq", column, value }); return builder; },
         in: (column: string, value: unknown) => { filters.push({ op: "in", column, value }); return builder; },
         abortSignal: () => builder,
         then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
-          if (mode === "select") return Promise.resolve({ data: rows.filter(matches), error: null }).then(resolve, reject);
+          if (mode === "select") {
+            const data = structuredClone(rows.filter(matches));
+            afterRead?.(rows);
+            return Promise.resolve({ data, error: null }).then(resolve, reject);
+          }
           const selected = rows.filter(matches);
           selected.forEach((row) => Object.assign(row, patch));
           updates.push({ ids: selected.map((row) => String(row.id)), patch });
@@ -52,14 +57,14 @@ test("progress watchdog queues orphaned Finder source rows and preserves heartbe
   await expireStaleFinderSourceScans(admin as never, "run-1", now);
 
   assert.equal(admin.rows.find((row) => row.id === "stale-official")?.status, "pending");
-  assert.match(String(admin.rows.find((row) => row.id === "stale-official")?.error_message), /^SOURCE_TIMEOUT:/);
+  assert.match(String(admin.rows.find((row) => row.id === "stale-official")?.error_message), /^SOURCE_BUDGET_EXHAUSTED:/);
   assert.equal(admin.rows.find((row) => row.id === "fresh-heartbeat")?.status, "running");
   assert.equal(admin.rows.find((row) => row.id === "watcher-facebook")?.status, "running");
   assert.equal(admin.rows.find((row) => row.id === "olx-worker")?.status, "running");
   assert.equal(admin.rows.find((row) => row.id === "other-run")?.status, "running");
   assert.deepEqual(admin.updates.map((update) => update.ids), [["stale-official"]]);
-  // Next 5-minute boundary after now (12:00:00) -- CONTINUATION_RETRY_INTERVAL_MS.
-  assert.equal(admin.updates[0]?.patch.continuation_next_at, "2026-10-03T12:05:00.000Z");
+  // An orphan is immediately eligible; this is not a fetch-timeout backoff.
+  assert.equal(admin.updates[0]?.patch.continuation_next_at, "2026-10-03T12:00:00.000Z");
 });
 
 test("a continuation missing its 2-hour abandonment window becomes terminal and releases its lock", async () => {
@@ -72,4 +77,15 @@ test("a continuation missing its 2-hour abandonment window becomes terminal and 
   const row = admin.rows[0];
   assert.equal(row.status, "failed");
   assert.match(String(row.error_message), /^SOURCE_CONTINUATION_EXPIRED:/);
+});
+
+test("watchdog's stale read cannot clear the lease acquired by a replacement owner", async () => {
+  let replacement: Row | undefined;
+  const admin = fakeAdmin([{ id: "race", scan_run_id: "run-1", source: "domy", status: "running", started_at: ago(60), continuation_lease_token: null, continuation_lease_until: null, continuation_next_at: null }], (rows) => {
+    Object.assign(rows[0], { continuation_lease_token: "new-owner", continuation_lease_until: new Date(now + 60_000).toISOString(), filter_snapshot: { _finderCheckpoint: "winner" } });
+    replacement = structuredClone(rows[0]);
+  });
+  await expireStaleFinderSourceScans(admin as never, "run-1", now);
+  assert.deepEqual(admin.rows, [replacement]);
+  assert.deepEqual(admin.updates[0]?.ids, [], "the stale token CAS must match zero rows");
 });

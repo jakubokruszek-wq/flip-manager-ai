@@ -127,6 +127,11 @@ test("HTTP 403 is terminal and cannot enter the continuation queue", () => {
   assert.equal(isPermanentSourceFailure("forbidden"), true);
 });
 
+test("HTTP 403 remains terminal when the source deadline also expires", () => {
+  assert.deepEqual(classifySourceFailure({ timedOut: true, error: new Error("HTTP 403"), now: NOW }),
+    { status: "failed", errorCode: "SOURCE_FORBIDDEN", nextAttemptAt: null });
+});
+
 test("a 403 never re-enters the continuation claim queue, even though it carries no next_at of its own", () => {
   const terminal403 = { id: "szybko", source: "szybko", status: "failed" };
   assert.equal(continuationEligible(terminal403, NOW, CYCLE), false, "a terminal (failed) row can never be re-claimed -- its own HTTP 403 never gets a retry");

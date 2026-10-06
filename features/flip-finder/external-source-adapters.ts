@@ -2,6 +2,7 @@ import { load } from "cheerio";
 import type { PropertySourceListing } from "@/features/properties/types/property";
 import { calculateContentHash } from "./otodom-search";
 import type { ExternalSourceConfig, ExternalSourceId } from "./external-source-parser";
+import type { SourceBatchContext } from "./source-batches";
 
 export type ExternalPortalPage = { listings: PropertySourceListing[]; hasNextPage: boolean };
 type PortalRecord = Record<string, unknown>;
@@ -26,18 +27,21 @@ export const EXTERNAL_PORTAL_PARSERS: Record<ExternalSourceId, PortalParser> = {
   allegro_lokalnie: parseAllegroLokalnie,
 };
 
-export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: { city: string | null }, signal?: AbortSignal): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: { city: string | null }, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();
   let fetched = 0;
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
+  for (let page = batches?.cursor || 1; page <= MAX_PAGES; page += 1) {
     if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
     const url = pageUrl(config, criteria.city ?? "", page);
     const response = await fetchExternalPage(url, signal);
     if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status}.`);
     const parsed = parser(await response.text(), criteria.city ?? "");
+    if (batches) {
+      await batches.onBatch({ listings: parsed.listings, warnings: [], fetched: parsed.listings.length }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
+    }
     fetched += parsed.listings.length;
     for (const listing of parsed.listings) {
       const identity = `${listing.source}:${listing.externalListingId}:${listing.normalizedUrl}`;

@@ -7,9 +7,9 @@ on:
     # observed, via this repo's own read-only diagnosis, firing only every
     # 6-9h in practice regardless of the cron expression -- this change alone
     # does not fix that platform-level unreliability. A faster, more reliable
-    # external trigger (e.g. cron-job.org hitting the same endpoint) is what
-    # actually delivers the 5-minute cadence; this schedule is a free,
-    # best-effort second path, not the primary one.
+    # Supabase Cron is the preferred trigger after its configuration and
+    # delivery are confirmed. The driver variable below then disables this
+    # best-effort schedule while preserving manual OIDC diagnostics.
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   continue:
+    if: github.event_name == 'workflow_dispatch' || vars.FINDER_SCHEDULER_DRIVER != 'supabase-cron'
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:

@@ -279,9 +279,9 @@ test("the general CRON_SECRET still authorizes Finder endpoints too -- FINDER_CR
   }
 });
 
-test("workflow is hourly, bounded, serialized, and only calls the continuation endpoint", () => {
+test("fallback workflow is five-minute, bounded, serialized, and only calls the continuation endpoint", () => {
   const workflow = readFileSync(join(process.cwd(), ".github", "workflows", "finder-scan-continuation.yml"), "utf8");
-  assert.match(workflow, /cron:\s*["']7 \* \* \* \*["']/);
+  assert.match(workflow, /cron:\s*["']\*\/5 \* \* \* \*["']/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /concurrency:/);
   assert.match(workflow, /id-token:\s*write/);
@@ -316,7 +316,7 @@ test("Facebook Watcher has a separate five-minute OIDC trigger and never uses Fi
   assert.doesNotMatch(watcherWorkflow, /finder-scan-continuation|facebook_scan_jobs|manual-scan/);
 
   const finderWorkflow = readFileSync(join(process.cwd(), ".github", "workflows", "finder-scan-continuation.yml"), "utf8");
-  assert.match(finderWorkflow, /cron:\s*["']7 \* \* \* \*["']/);
+  assert.match(finderWorkflow, /cron:\s*["']\*\/5 \* \* \* \*["']/);
   assert.match(finderWorkflow, /api\/jobs\/finder-scan-continuation/);
   assert.doesNotMatch(finderWorkflow, /api\/jobs\/facebook-watch|flip-manager-facebook-watch/);
 
@@ -330,7 +330,7 @@ test("Facebook Watcher has a separate five-minute OIDC trigger and never uses Fi
   assert.match(scheduler, /schedulerCooldownMinutes\(context\.filter\.scanIntervalMinutes\)/);
 });
 
-test("Finder new-scan scheduler is separate from hourly continuation and Facebook Watcher", () => {
+test("Finder new-scan scheduler is separate from continuation and Facebook Watcher", () => {
   const workflow = readFileSync(join(process.cwd(), ".github", "workflows", "finder-scan-scheduler.yml"), "utf8");
   assert.match(workflow, /cron:\s*["']\*\/5 \* \* \* \*["']/);
   assert.match(workflow, /workflow_dispatch:/);

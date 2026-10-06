@@ -39,14 +39,15 @@ type Row = Record<string, unknown>;
  * `rpcMode` controls how the fake's .rpc("reserve_source_scans", ...) call
  * behaves, mirroring the two real-world states the draft migration
  * (20261004020000_add_manual_scan_reservation_lock.sql, NOT applied) can be
- * in: "missing" (default) simulates today's actual, unmigrated production --
+ * in: "missing" (default) simulates an installation without the RPC --
  * PostgREST's real error for an undefined function -- so every existing test
  * below keeps exercising the exact same fallback path as before, unchanged.
  * "atomic" simulates the function once that migration IS applied: a mutex
  * chain stands in for Postgres's SELECT ... FOR UPDATE row lock, so
  * concurrent callers are strictly serialized (one fully completes its
  * check+insert before the next one's check can run) instead of merely being
- * delayed -- a real guarantee, not a smaller race window. "permission-denied"
+ * delayed. This is an application simulator, not proof of PostgreSQL's
+ * concurrent transaction behavior. "permission-denied"
  * and "filter-not-found" simulate the RPC existing but returning a real
  * Postgres error of its own (42501 insufficient_privilege if the grant to
  * service_role is ever missing, or the function's own SEARCH_FILTER_NOT_FOUND
@@ -54,16 +55,18 @@ type Row = Record<string, unknown>;
  * "function does not exist" signal, never on a permission or validation
  * error from a function that does exist.
  */
-function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number; claimBarrier?: number; claimError?: { code: string; message: string }; rpcMode?: "missing" | "atomic" | "permission-denied" | "filter-not-found" } = {}) {
+function fakeAdmin(seedSourceScans: Row[] = [], options: { afterStaleRead?: (rows: Row[]) => void; raceBarrier?: number; claimBarrier?: number; claimError?: { code: string; message: string }; rpcMode?: "missing" | "atomic" | "permission-denied" | "filter-not-found" } = {}) {
   const sourceScans: Row[] = seedSourceScans.map((row) => ({ ...row }));
   let idSeq = 1;
   let waitingForRace: Array<() => void> = [];
   let waitingForClaim: Array<() => void> = [];
   let rpcLockQueue: Promise<void> = Promise.resolve();
 
-  function matches(row: Row, filters: Array<{ op: "eq" | "in" | "lt"; column: string; value: unknown }>): boolean {
+  function matches(row: Row, filters: Array<{ op: "eq" | "in" | "lt" | "is" | "gt"; column: string; value: unknown }>): boolean {
     return filters.every(({ op, column, value }) => {
       if (op === "eq") return row[column] === value;
+      if (op === "is") return value === null ? row[column] == null : row[column] === value;
+      if (op === "gt") return typeof row[column] === "string" && typeof value === "string" && (row[column] as string) > value;
       if (op === "in") return Array.isArray(value) && value.includes(row[column]);
       if (op === "lt") return typeof row[column] === "string" && typeof value === "string" && (row[column] as string) < value;
       return false;
@@ -71,26 +74,28 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number;
   }
 
   function sourceScansTable() {
-    const filters: Array<{ op: "eq" | "in" | "lt"; column: string; value: unknown }> = [];
+    const filters: Array<{ op: "eq" | "in" | "lt" | "is" | "gt"; column: string; value: unknown }> = [];
     let mode: "select" | "update" | "insert" = "select";
     let updatePatch: Row = {};
     let insertPayload: Row | Row[] | null = null;
     let isLockCheckRead = false;
     const builder = {
-      select: (_cols?: string) => builder,
+      select: (...args: unknown[]) => { void args; return builder; },
       insert: (payload: Row | Row[]) => { mode = "insert"; insertPayload = payload; return builder; },
       update: (patch: Row) => { mode = "update"; updatePatch = patch; return builder; },
       eq: (column: string, value: unknown) => { filters.push({ op: "eq", column, value }); return builder; },
+      is: (column: string, value: unknown) => { filters.push({ op: "is", column, value }); return builder; },
+      gt: (column: string, value: unknown) => { filters.push({ op: "gt", column, value }); return builder; },
       in: (column: string, value: unknown) => { filters.push({ op: "in", column, value }); return builder; },
       lt: (column: string, value: unknown) => { filters.push({ op: "lt", column, value }); return builder; },
-      limit: (_n: number) => { isLockCheckRead = true; return builder; },
+      limit: (...args: unknown[]) => { void args; isLockCheckRead = true; return builder; },
       order: () => builder,
       abortSignal: () => builder,
       async single() {
         if (mode === "insert" && insertPayload) {
           const row: Row = { id: `scan-${idSeq++}`, started_at: new Date().toISOString(), status: "running", ...(Array.isArray(insertPayload) ? insertPayload[0] : insertPayload) };
           sourceScans.push(row);
-          return { data: { id: row.id, started_at: row.started_at }, error: null };
+          return { data: structuredClone(row), error: null };
         }
         if (mode === "update") {
           const found = sourceScans.find((row) => matches(row, filters));
@@ -138,8 +143,8 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number;
           }
           if (mode === "update") {
             const matched = sourceScans.filter((row) => matches(row, filters));
-            for (const row of matched) Object.assign(row, updatePatch);
-            return { data: matched.map((row) => ({ id: row.id, started_at: row.started_at })), error: null };
+            for (const row of matched) Object.assign(row, structuredClone(updatePatch));
+            return { data: structuredClone(matched), error: null };
           }
           if (isLockCheckRead && options.raceBarrier && options.raceBarrier > 1) {
             await new Promise<void>((release) => {
@@ -151,7 +156,9 @@ function fakeAdmin(seedSourceScans: Row[] = [], options: { raceBarrier?: number;
               }
             });
           }
-          return { data: sourceScans.filter((row) => matches(row, filters)), error: null };
+          const data = structuredClone(sourceScans.filter((row) => matches(row, filters)));
+          if (filters.some((filter) => filter.op === "lt" && filter.column === "started_at")) options.afterStaleRead?.(sourceScans);
+          return { data, error: null };
         };
         return run().then(resolve, reject);
       },
@@ -465,7 +472,7 @@ test("without the reservation migration applied, two concurrent background-scan 
   assert.equal(current.sourceScans.filter((row) => row.source === "otodom" && row.search_filter_id === mixedFilter.id).length, 2, "two otodom source_scans rows currently end up active for the same filter after the race");
 });
 
-test("once reserve_source_scans exists (migration applied), two truly concurrent background-scan starts for the same filter+source serialize correctly: exactly one wins", async () => {
+test("the atomic reservation simulator admits one of two overlapping starts; PostgreSQL concurrency is a separate boundary", async () => {
   current = fakeAdmin([], { rpcMode: "atomic" });
   const [a, b] = await Promise.allSettled([startManualOtodomScan(mixedFilter.id), startManualOtodomScan(mixedFilter.id)]);
   const succeeded = [a, b].filter((result) => result.status === "fulfilled");
@@ -680,6 +687,19 @@ test("a stale (>15min) FINDER-owned otodom scan is recovered exactly as before, 
   assert.equal(summary.status, "completed", "a stale Finder-owned row must be recovered, not treated as a genuine lock");
   const recovered = current.sourceScans.find((row) => row.id === "finder-scan-stale");
   assert.equal(recovered?.status, "failed", "the stale Finder-owned row must be marked failed by failStaleScans");
+});
+
+test("stale-lock cleanup cannot fail a row claimed by continuation after its read", async () => {
+  let replacement: Row | undefined;
+  current = fakeAdmin([{ id: "stale-race", search_filter_id: mixedFilter.id, scan_run_id: "one-run", source: "otodom", status: "running", started_at: new Date(Date.now() - 60 * 60_000).toISOString(), continuation_lease_token: null, continuation_lease_until: null, continuation_next_at: null }], {
+    afterStaleRead: (rows) => {
+      Object.assign(rows[0], { continuation_lease_token: "cron-winner", continuation_lease_until: new Date(Date.now() + 60_000).toISOString(), filter_snapshot: { _scanProgress: { lastProgressAt: new Date().toISOString() } } });
+      replacement = structuredClone(rows[0]);
+    },
+  });
+  await assert.rejects(startManualOtodomScan(mixedFilter.id));
+  assert.ok(replacement);
+  assert.deepEqual(current.sourceScans, [replacement], "cleanup must compare the observed token and leave the new owner byte-for-byte unchanged");
 });
 
 // Exact reported production shape: the Watcher's last facebook source_scan

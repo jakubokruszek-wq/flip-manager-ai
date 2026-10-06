@@ -301,6 +301,8 @@ export type ScanProgressResponse = {
    * for the derivation.
    */
   waitingAgeMs: number;
+  /** Eligibility of existing Finder source rows, never permission to start a new run. */
+  continuation?: { ready: boolean; nextAt: string | null };
   overall: {
     completedUnits: number;
     totalUnits: number;

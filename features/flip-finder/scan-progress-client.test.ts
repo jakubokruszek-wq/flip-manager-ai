@@ -45,17 +45,17 @@ function completedSnapshot(runId: string): Row {
   };
 }
 
-let respond: () => Row | null = () => null;
+let respond: (input?: unknown, init?: RequestInit) => Row | null = () => null;
 
 mock.module("@/lib/api-fetch", {
   namedExports: {
-    apiFetch: async (_input: unknown, init: RequestInit = {}) => {
+    apiFetch: async (input: unknown, init: RequestInit = {}) => {
       const signal = init.signal as AbortSignal | undefined;
       if (signal?.aborted) {
         const reason = (signal as AbortSignal & { reason?: unknown }).reason;
         throw reason instanceof Error ? reason : new DOMException("Aborted", "AbortError");
       }
-      const body = respond();
+      const body = respond(input, init);
       if (body === null) return new Response(JSON.stringify({ message: "Nie udało się pobrać postępu skanu." }), { status: 500 });
       return new Response(JSON.stringify(body), { status: 200 });
     },
@@ -127,4 +127,54 @@ test("three consecutive read failures stop polling with a clear error, never spi
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   await assert.rejects(resultPromise, /Nie udało się odczytać postępu skanu/);
+});
+
+test("waiting after one click automatically continues the exact run and stops every request at terminal state", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const runId = "run-one-click";
+  const requests: string[] = [];
+  let completed = false;
+  respond = (input, init) => {
+    requests.push(`${init?.method ?? "GET"} ${input}`);
+    if (init?.method === "POST") { completed = true; return { runId, status: "completed", claimed: 1 }; }
+    if (completed) return completedSnapshot(runId);
+    return { ...runningSnapshot(runId), status: "partial", continuation: { ready: true, nextAt: null }, overall: { completedUnits: 1, totalUnits: 2, percent: 50, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 } };
+  };
+  const observed: string[] = [];
+  const result = waitUntilScanTerminal(runId, new AbortController().signal, 1_000, (progress) => observed.push(progress.status));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1_000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal((await result).status, "completed");
+  assert.deepEqual(requests, [`GET /api/flip-finder/scans/${runId}`, `POST /api/flip-finder/scans/${runId}/continue`, `GET /api/flip-finder/scans/${runId}`]);
+  assert.deepEqual(observed, ["partial", "completed"]);
+  t.mock.timers.tick(60_000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 3);
+});
+
+test("a waiting source in retry backoff is monitored but not continued; cancelling sends no later requests", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const requests: string[] = [];
+  const runId = "run-backoff";
+  const controller = new AbortController();
+  respond = (input, init) => {
+    requests.push(`${init?.method ?? "GET"} ${input}`);
+    return { ...runningSnapshot(runId), continuation: { ready: false, nextAt: "2099-10-06T12:00:00Z" }, overall: { completedUnits: 0, totalUnits: 1, percent: 0, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 } };
+  };
+  const result = waitUntilScanTerminal(runId, controller.signal);
+  result.catch(() => undefined);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1_000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  assert.equal(requests.some((request) => request.startsWith("POST")), false);
+  controller.abort(); t.mock.timers.tick(60_000);
+  await assert.rejects(result, /cancelled|AbortError/i);
+  assert.equal(requests.length, 2);
+});
+
+test("a mismatched progress run cannot cause a continuation or a new start", async () => {
+  respond = () => completedSnapshot("wrong-run");
+  await assert.rejects(waitUntilScanTerminal("expected-run", new AbortController().signal), /SCAN_RUN_ID_MISMATCH/);
 });

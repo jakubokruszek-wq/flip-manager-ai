@@ -31,7 +31,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
 import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
 import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isAwaitingContinuation, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
-import { fetchScanProgress } from "@/features/flip-finder/scan-progress-client";
+import { fetchScanProgress, waitUntilScanTerminal } from "@/features/flip-finder/scan-progress-client";
 import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 import { activeFilterSources } from "@/features/flip-finder/source-availability";
 
@@ -193,6 +193,9 @@ export function FlipFinderPage() {
     setRetryFilterId(null);
     setActiveScanRunId(null);
     setScanProgress(null);
+    pollingAbortRef.current?.abort();
+    pollingAbortRef.current = new AbortController();
+    const scanSignal = pollingAbortRef.current.signal;
     const requestId = crypto.randomUUID();
     traceStage(requestId, "BUTTON_CLICKED", "PASS");
 
@@ -201,9 +204,11 @@ export function FlipFinderPage() {
       traceStage(requestId, "POST_SCAN_SENT", "PASS");
       const response = await fetchWithTimeout(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
+        signal: scanSignal,
       }, 20_000);
       traceStage(requestId, "POST_SCAN_RESPONSE", response.ok ? "PASS" : "FAIL", response.ok ? undefined : `HTTP_${response.status}`);
       const payload: unknown = await readJson(response);
+      scanSignal.throwIfAborted();
 
       if (response.status === 429) {
         throw new Error("Skan tego filtra już trwa.");
@@ -218,9 +223,8 @@ export function FlipFinderPage() {
       if (payload.runId) {
         traceStage(requestId, "NEW_SCAN_RUN_ID", "PASS");
         setActiveScanRunId(payload.runId);
-        pollingAbortRef.current?.abort();
-        pollingAbortRef.current = new AbortController();
-        initialProgress = await fetchScanProgress(payload.runId, { signal: pollingAbortRef.current.signal }).catch(() => null);
+        initialProgress = await fetchScanProgress(payload.runId, { signal: scanSignal }).catch(() => null);
+        scanSignal.throwIfAborted();
         if (initialProgress) setScanProgress(initialProgress);
       }
 
@@ -260,6 +264,7 @@ export function FlipFinderPage() {
       await load();
       setResultsRevision((current) => current + 1);
     } catch (reason) {
+      if (scanSignal.aborted) return;
       const scanMessage = reason instanceof Error ? reason.message : "";
       traceStage(requestId, "START_FAILED", "FAIL", safeTraceError(scanMessage));
       setStartTrace(readStartTrace());
@@ -334,6 +339,7 @@ export function FlipFinderPage() {
   const stopScan = async (filter: SearchFilterListItem) => {
     const runId = activeScanRunId;
     if (!runId || !scanningFilterIdsRef.current.has(filter.id)) return;
+    pollingAbortRef.current?.abort();
     setNotice("Zatrzymywanie…");
     try {
       const response = await fetch(`/api/flip-finder/scans/${runId}/cancel`, { method: "POST" });
@@ -384,43 +390,18 @@ export function FlipFinderPage() {
 
   const monitorScanRun = async (filterId: string, runId: string) => {
     const signal = pollingAbortRef.current?.signal;
-    let consecutiveFailures = 0;
-    let firstPoll = true;
+    if (!signal) return;
     try {
-      while (scanningFilterIdsRef.current.has(filterId) && !signal?.aborted) {
-        if (!firstPoll) await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-        firstPoll = false;
-        if (signal?.aborted) break;
-        const payload = await fetchScanProgress(runId, { signal }).catch(() => null);
-        if (signal?.aborted) break;
-        if (!payload) {
-          consecutiveFailures += 1;
-          if (consecutiveFailures >= 3) {
-            setError("Nie udało się odczytać postępu skanu. Stan skanowania został zakończony.");
-            break;
-          }
-          continue;
-        }
-        consecutiveFailures = 0;
-        setScanProgress(payload);
-        if (isAwaitingContinuation(payload)) {
-          setNotice("Skan częściowo zakończony; pozostałe źródła oczekują na kontynuację.");
-          await load();
-          setResultsRevision((current) => current + 1);
-          break;
-        }
-        if (!hasActiveBackendWork(payload) && !isAwaitingContinuation(payload)) {
-          setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
-          await load();
-          setResultsRevision((current) => current + 1);
-          break;
-        }
-        if (!isTerminalScanStatus(payload.status) || isAwaitingContinuation(payload)) continue;
-        setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami. Oferty z poprawnie zakończonych etapów pozostały dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
-        await load();
-        setResultsRevision((current) => current + 1);
-        break;
-      }
+      const payload = await waitUntilScanTerminal(runId, signal, 1_000, (progress) => {
+        setScanProgress(progress);
+        if (isAwaitingContinuation(progress)) setNotice(progress.continuation?.ready ? "Wznawianie pozostałych źródeł tego samego skanu…" : "Skan oczekuje na kontynuację lub upłynięcie retry/backoff.");
+      });
+      if (signal.aborted) return;
+      setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami. Zapisane oferty pozostają dostępne." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
+      await load();
+      setResultsRevision((current) => current + 1);
+    } catch (reason) {
+      if (!signal.aborted) setError(reason instanceof Error ? reason.message : "Nie udało się odczytać postępu skanu.");
     } finally {
       finishScanning(filterId);
     }
@@ -1303,7 +1284,7 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    return await fetch(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw new Error("Uruchomienie skanu przekroczyło limit czasu. Odśwież status przed ponowną próbą.");
     throw error;

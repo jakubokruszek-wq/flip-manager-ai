@@ -317,8 +317,8 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
 
 function assertNoUnexpectedNoise(handle, { expectedPatchFailures = 0 } = {}) {
   const unexpectedNonPatchConsoleErrors = handle.unexpectedConsoleErrors.filter((message) => !message.includes("status of 500"));
-  assert.deepEqual(unexpectedNonPatchConsoleErrors, [], `browser page must not emit unexpected console errors: ${unexpectedNonPatchConsoleErrors.join(" | ")}`);
-  assert.equal(handle.unexpectedConsoleErrors.length, expectedPatchFailures, "the only browser console error may be an intentionally mocked failed PATCH");
+  assert.deepEqual(unexpectedNonPatchConsoleErrors, [], `browser page must not emit unexpected console errors: ${unexpectedNonPatchConsoleErrors.join(" | ")}; HTTP responses: ${JSON.stringify(handle.responseErrors)}`);
+  assert.equal(handle.unexpectedConsoleErrors.length, expectedPatchFailures, `the only browser console error may be an intentionally mocked failed PATCH; HTTP responses: ${JSON.stringify(handle.responseErrors)}; console: ${JSON.stringify(handle.unexpectedConsoleErrors)}`);
   const unexpectedFailedRequests = handle.failedRequests.filter((entry) => !(
     entry.includes("/api/alerts: net::ERR_ABORTED") ||
     entry.includes(".woff2: net::ERR_ABORTED") ||

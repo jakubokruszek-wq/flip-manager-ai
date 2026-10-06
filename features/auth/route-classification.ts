@@ -84,6 +84,7 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
     ["PUT", "/api/flip-finder/listings/[id]/investment", /^\/api\/flip-finder\/listings\/[^/]+\/investment$/],
     ["POST", "/api/flip-finder/listings/[id]/review", /^\/api\/flip-finder\/listings\/[^/]+\/review$/],
     ["POST", "/api/flip-finder/scans/[runId]/cancel", /^\/api\/flip-finder\/scans\/[^/]+\/cancel$/],
+    ["POST", "/api/flip-finder/scans/[runId]/continue", /^\/api\/flip-finder\/scans\/[^/]+\/continue$/],
     ["POST", "/api/flip-finder/search-filters", /^\/api\/flip-finder\/search-filters$/],
     ["PATCH", "/api/flip-finder/search-filters/[id]", /^\/api\/flip-finder\/search-filters\/[^/]+$/],
     ["DELETE", "/api/flip-finder/search-filters/[id]", /^\/api\/flip-finder\/search-filters\/[^/]+$/],

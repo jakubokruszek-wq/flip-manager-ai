@@ -3,7 +3,7 @@ name: Finder scan scheduler
 on:
   schedule:
     # Five-minute polling is the free trigger; each filter's persisted
-    # scan_interval_minutes decides whether a new run is due.
+    # finder_scan_interval_minutes decides whether a new run is due.
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   start:
+    if: github.event_name == 'workflow_dispatch' || vars.FINDER_SCHEDULER_DRIVER != 'supabase-cron'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

@@ -65,12 +65,17 @@ export function SearchFiltersPage() {
   const scan = async (filter: SearchFilterListItem) => {
     setScanning(filter.id);
     setError(null);
+    pollingAbortRef.current?.abort();
+    pollingAbortRef.current = new AbortController();
+    const scanSignal = pollingAbortRef.current.signal;
 
     try {
       const response = await fetchWithTimeout(`/api/flip-finder/search-filters/${filter.id}/scan`, {
         method: "POST",
+        signal: scanSignal,
       }, 20_000);
       const responseData: unknown = await response.json();
+      scanSignal.throwIfAborted();
 
       if (response.status === 429) {
         throw new Error("Skan tego filtra już trwa.");
@@ -91,9 +96,7 @@ export function SearchFiltersPage() {
       };
       if (start.status === "running" && typeof start.runId === "string") {
         setNotice("Skan uruchomiony. Odczytuję postęp z backendu…");
-        pollingAbortRef.current?.abort();
-        pollingAbortRef.current = new AbortController();
-        const progress = await waitUntilScanTerminal(start.runId, pollingAbortRef.current.signal);
+        const progress = await waitUntilScanTerminal(start.runId, scanSignal);
         setNotice(
           `Skan zakończony: ${progress.totals.scanned} sprawdzone, ${progress.totals.matched} dopasowanych, ${progress.totals.created} nowych, ${progress.totals.updated} zaktualizowanych, ${progress.totals.priceDrops} obniżek.`,
         );
@@ -105,6 +108,7 @@ export function SearchFiltersPage() {
       );
       await load();
     } catch (reason) {
+      if (scanSignal.aborted) return;
       setError(reason instanceof Error ? reason.message : "Nie udało się wykonać skanu.");
     } finally {
       setScanning(null);
@@ -147,7 +151,7 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    return await fetch(input, { ...init, signal: init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw new Error("Uruchomienie skanu przekroczyło limit czasu. Odśwież status przed ponowną próbą.");
     throw error;

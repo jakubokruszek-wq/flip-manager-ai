@@ -3,8 +3,6 @@ import test, { mock } from "node:test";
 
 mock.module("server-only", { defaultExport: {} });
 
-const { CONTINUATION_RETRY_INTERVAL_MS, nextContinuationAt } = await import("./scan-continuation.ts");
-
 const sourceFetches: string[] = [];
 const sourceIds = ["official_cooperative", "official_uml", "official_auction", "gratka"];
 const sources = sourceIds.map((id) => ({
@@ -63,8 +61,9 @@ mock.module("@/features/flip-finder/server/olx-jobs", {
 mock.module("@/features/flip-finder/server/persist-listing", { namedExports: { persistListing: async () => ({ listingId: "none", listingCreated: false, matchCreated: false, updated: 0, priceDrop: 0 }) } });
 mock.module("@/features/flip-finder/server/filter-match-recalculation", { namedExports: { recalculateFilterMatches: async () => null } });
 
-function matches(row: Record<string, unknown>, filters: Array<{ column: string; value: unknown; operator?: "eq" | "gt" }>): boolean {
+function matches(row: Record<string, unknown>, filters: Array<{ column: string; value: unknown; operator?: "eq" | "gt" | "is" }>): boolean {
   return filters.every(({ column, value, operator = "eq" }) => {
+    if (operator === "is") return value === null ? row[column] == null : row[column] === value;
     if (operator === "gt") {
       // This fixture uses a fake clock for the worker budget. Treat a lease
       // written by the claim as live; expiry behavior is covered by the
@@ -80,11 +79,12 @@ function matches(row: Record<string, unknown>, filters: Array<{ column: string; 
 function builder(table: string) {
   let mode: "select" | "update" = "select";
   let patch: Record<string, unknown> = {};
-  const filters: Array<{ column: string; value: unknown; operator?: "eq" | "gt" }> = [];
+  const filters: Array<{ column: string; value: unknown; operator?: "eq" | "gt" | "is" }> = [];
   const chain: Record<string, unknown> = {
     select: () => chain,
     update: (value: Record<string, unknown>) => { mode = "update"; patch = value; return chain; },
     eq: (column: string, value: unknown) => { filters.push({ column, value }); return chain; },
+    is: (column: string, value: unknown) => { filters.push({ column, value, operator: "is" }); return chain; },
     gt: (column: string, value: unknown) => { filters.push({ column, value, operator: "gt" }); return chain; },
     in: () => chain,
     abortSignal: () => chain,
@@ -93,14 +93,14 @@ function builder(table: string) {
       if (table === "search_filters") return { data: null, error: null };
       const selected = sourceRows.filter((row) => matches(row, filters));
       if (mode === "update") {
-        selected.forEach((row) => Object.assign(row, patch));
+        selected.forEach((row) => Object.assign(row, structuredClone(patch)));
         // CAS claim uses select() and expects an array; progress/finalization
         // updates only inspect the error property.
         if (Object.prototype.hasOwnProperty.call(patch, "status") && patch.status === "running") {
-          return { data: selected.map((row) => ({ id: row.id, started_at: row.started_at, continuation_lease_token: row.continuation_lease_token })), error: null };
+          return { data: structuredClone(selected), error: null };
         }
       }
-      return { data: mode === "select" ? selected : null, error: null };
+      return { data: structuredClone(selected), error: null };
     }).then(resolve, reject),
   };
   return chain;
@@ -110,7 +110,7 @@ mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => (
 
 const { runManualOtodomScan } = await import("./manual-scan.ts");
 
-test("bounded initial scan leaves the fourth source pending in the same run for continuation", async () => {
+test("bounded initial scan gives one source its full budget and defers the others in the same run", async () => {
   sourceFetches.length = 0;
   sourceRows.forEach((row) => { row.status = "pending"; row.scan_run_id = "run-fixed"; row.error_message = null; row.continuation_next_at = null; });
   const originalNow = Date.now;
@@ -118,21 +118,17 @@ test("bounded initial scan leaves the fourth source pending in the same run for 
   fakeNow = originalNow();
   try {
     const summary = await runManualOtodomScan(filter.id, { runId: "run-fixed", usePreparedRows: true, skipLock: true });
-    assert.deepEqual(sourceFetches, sourceIds.slice(0, 3));
+    assert.deepEqual(sourceFetches, sourceIds.slice(0, 1), "one source gets the full timeout; the next cannot fit in the remaining 25s");
     assert.equal(summary.status, "running");
     assert.equal(summary.sourceResults.at(-1)?.status, "pending");
     assert.equal(summary.sourceResults.at(-1)?.errorCode, "SOURCE_BUDGET_EXHAUSTED");
     assert.equal(sourceRows[3].status, "pending");
     assert.equal(sourceRows[3].scan_run_id, "run-fixed");
-    assert.match(String(sourceRows[3].error_message), /^SOURCE_TIMEOUT:/);
-    // Regression lock for the real value deferPreparedSource (manual-scan.ts)
-    // writes: must be the real CONTINUATION_RETRY_INTERVAL_MS-based next
-    // cycle boundary (5 minutes), never the old hourly one. Date.now is
-    // mocked throughout this test, so nextContinuationAt(Date.now()) here is
-    // the exact same oracle the production code just called.
-    assert.equal(sourceRows[3].continuation_next_at, nextContinuationAt(Date.now()));
+    assert.match(String(sourceRows[3].error_message), /^SOURCE_BUDGET_EXHAUSTED:/);
+    // An unstarted source gets no network-timeout backoff.
+    assert.equal(sourceRows[3].continuation_next_at, new Date(Date.now()).toISOString());
     const deferredInMs = Date.parse(String(sourceRows[3].continuation_next_at)) - fakeNow;
-    assert.ok(deferredInMs > 0 && deferredInMs <= CONTINUATION_RETRY_INTERVAL_MS, `expected the next retry within one ${CONTINUATION_RETRY_INTERVAL_MS}ms cycle, got ${deferredInMs}ms`);
+    assert.equal(deferredInMs, 0, "an unstarted source must be eligible immediately, with no timeout backoff");
   } finally {
     Date.now = originalNow;
   }
@@ -148,7 +144,7 @@ test("a retry of the same run skips completed and terminal source rows", async (
   fakeNow = originalNow();
   try {
     await runManualOtodomScan(filter.id, { runId: "run-fixed", usePreparedRows: true, skipLock: true });
-    assert.deepEqual(sourceFetches, sourceIds.slice(2), "only pending sources may be fetched on a same-run retry");
+    assert.deepEqual(sourceFetches, sourceIds.slice(2, 3), "only pending sources that fit the portion may be fetched");
   } finally {
     Date.now = originalNow;
   }

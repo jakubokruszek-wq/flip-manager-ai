@@ -18,16 +18,16 @@ export async function fetchScanProgress(runId: string, init: RequestInit = {}): 
 }
 
 /**
- * Polls for as long as the backend itself reports active work -- never on a
- * fixed attempt cap. The server's own staleness watchdog (15 minutes of no
- * heartbeat; see scan-lifecycle.ts) is what eventually ends a genuinely
- * abandoned run; a fixed client-side cap shorter than that previously made
- * SearchFiltersPage falsely report a timeout for a legitimately slow but
- * healthy scan. Cancelled via `signal` (e.g. on unmount) -- the background
- * worker the run id refers to is unaffected either way.
+ * Monitors the backend until terminal and executes ready portions of the
+ * same run. Backend leases and watchdogs decide whether work is live or
+ * recoverable; a fixed client polling cap would abandon legitimate progress.
+ * Cancelling `signal` stops client requests; persisted work remains available
+ * to the service continuation.
  */
-export async function waitUntilScanTerminal(runId: string, signal: AbortSignal, pollIntervalMs = 1_000): Promise<ScanProgressResponse> {
+export async function waitUntilScanTerminal(runId: string, signal: AbortSignal, pollIntervalMs = 1_000, onProgress?: (progress: ScanProgressResponse) => void): Promise<ScanProgressResponse> {
   let consecutiveFailures = 0;
+  let continuationFailures = 0;
+  let nextContinuationRequestAt = 0;
   let firstPoll = true;
   for (;;) {
     if (signal.aborted) throw new DOMException("Polling cancelled", "AbortError");
@@ -44,7 +44,32 @@ export async function waitUntilScanTerminal(runId: string, signal: AbortSignal, 
       continue;
     }
     consecutiveFailures = 0;
-    if (isAwaitingContinuation(payload)) return payload;
+    if (payload.runId !== runId) throw new Error("SCAN_RUN_ID_MISMATCH");
+    if (signal.aborted) throw new DOMException("Polling cancelled", "AbortError");
+    onProgress?.(payload);
+    if (signal.aborted) throw new DOMException("Polling cancelled", "AbortError");
+    if (isAwaitingContinuation(payload)) {
+      const ready = payload.continuation?.ready ?? !hasActiveBackendWork(payload);
+      if (ready && Date.now() >= nextContinuationRequestAt) {
+        // Only this exact existing run; never replay a filter's start URL.
+        // Awaiting each bounded portion also prevents concurrent POSTs from
+        // this tab. DB CAS protects against other tabs and the cron.
+        nextContinuationRequestAt = Date.now() + Math.max(pollIntervalMs, 2_000);
+        try {
+          const response = await apiFetch(`/api/flip-finder/scans/${runId}/continue`, { method: "POST", signal });
+          const result = await readJson(response);
+          if (!response.ok) throw new Error(readMessage(result, "Nie udało się wznowić skanu."));
+          if (!result || typeof result !== "object" || !("runId" in result) || result.runId !== runId) throw new Error("SCAN_RUN_ID_MISMATCH");
+          continuationFailures = 0;
+        } catch (reason) {
+          if (signal.aborted) throw new DOMException("Polling cancelled", "AbortError");
+          continuationFailures += 1;
+          if (continuationFailures >= 3) throw reason;
+          nextContinuationRequestAt = Date.now() + 10_000;
+        }
+      }
+      continue;
+    }
     if (hasActiveBackendWork(payload)) continue;
     return payload;
   }

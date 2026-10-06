@@ -12,6 +12,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { decideScanResumption, isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeartbeatAt, STALE_SCAN_MESSAGE, STALE_SCAN_TIMEOUT_MS, staleScanCutoff, type ExistingSourceScanForResumption } from "./scan-lifecycle";
 import { CONTINUATION_LEASE_MS, CONTINUATION_MAX_WAIT_MS, classifySourceFailure, continuationCycleAt, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
+import { assertCheckpointSize, emptySourceCheckpoint, readSourceCheckpoint, SourceSliceYield, type SourceCheckpoint } from "./source-checkpoint";
+import type { SourceBatch } from "../source-batches";
 export { scanStatus } from "./scan-start-errors";
 
 export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
@@ -20,7 +22,7 @@ type SupabaseClient = DatabaseClient;
 type LoadedFilter = NonNullable<Awaited<ReturnType<typeof getSearchFilter>>>;
 type Progress = { fetched: number; matched: number; counters: ScanItemCounts; updated: number; priceDrops: number };
 export type ScanClock = { startedAt: string; startedMs: number; continuationLeaseToken?: string | null };
-export type PreparedSourceScan = { id: string; source: string; status?: string; started_at: string; continuation_lease_token?: string | null; continuation_attempt?: number | null };
+export type PreparedSourceScan = { id: string; source: string; status?: string; started_at: string; continuation_lease_token?: string | null; continuation_attempt?: number | null; continuation_next_at?: string | null; continuation_lease_until?: string | null; filter_snapshot?: unknown };
 export type ManualScanOptions = {
   runId?: string;
   usePreparedRows?: boolean;
@@ -31,9 +33,8 @@ export type ManualScanOptions = {
   supabase?: SupabaseClient;
 };
 
-// Vercel Hobby hard-stops functions after 60s. Keep the internal worker
-// window below that limit so cleanup and lease finalization still have time to
-// run after the last source attempt.
+// The current routes explicitly cap execution at 60s. The actual project's
+// Fluid Compute configuration is unverified, so keep a finalization margin.
 export const SOURCE_TIMEOUT_MS = 30_000;
 const DATABASE_TIMEOUT_MS = 12_000;
 // Mirrors the scan routes' `export const maxDuration = 60` -- keep this
@@ -43,11 +44,9 @@ export const WORKER_MAX_DURATION_MS = 50_000;
 // per-source fetch loop itself: getSearchFilter, lock/staleness checks,
 // enqueueOlxJob, reconciliation, final updates, and cleanup writes.
 export const WORKER_OVERHEAD_RESERVE_MS = 15_000;
-// A scrape fetch cannot do meaningful work below this; if the number of
-// sequential sources ever grows enough to hit this floor, the per-source
-// budget below can no longer guarantee the worker stays inside
-// WORKER_MAX_DURATION_MS on its own -- that would need real parallel source
-// execution, not a smaller slice of a fixed budget.
+// A meaningful lower bound when a caller supplies a shorter remaining slice.
+// The worker's deadline defers sources rather than dividing 35s among all
+// configured sources. Normal attempts use sourceTimeoutBudgetMs(1).
 export const MIN_SOURCE_TIMEOUT_MS = 10_000;
 
 /**
@@ -289,7 +288,9 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   scanLog("SCAN START", { scanId: runId, source: "all", checked: 0, new: 0, matched: 0, durationMs: 0 });
   try {
     const sequentialSources = sources.filter((item) => item.id !== "olx");
-    const perSourceTimeoutMs = sourceTimeoutBudgetMs(sequentialSources.length);
+    // One source gets a useful portion; untouched reservations remain ready
+    // immediately, rather than splitting 35s across every portal in a filter.
+    const perSourceTimeoutMs = sourceTimeoutBudgetMs(1);
     const workerDeadline = scanStarted + WORKER_MAX_DURATION_MS - WORKER_OVERHEAD_RESERVE_MS;
     let budgetExhausted = false;
     for (const source of sequentialSources) {
@@ -299,6 +300,10 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
         continue;
       }
       if (prepared && (prepared.status === "completed" || prepared.status === "failed")) continue;
+      if (prepared && (prepared.status !== "pending" || (prepared.continuation_next_at && Date.parse(prepared.continuation_next_at) > Date.now()) || (prepared.continuation_lease_until && Date.parse(prepared.continuation_lease_until) > Date.now()))) {
+        sourceResults.push(pendingResult(source.id, "Etap oczekuje na zwolnienie lease lub upłynięcie retry/backoff."));
+        continue;
+      }
       // Leave the reservation pending when this invocation no longer has
       // enough time for a complete source attempt. The next durable
       // continuation cycle claims the same row/run; no synthetic failure is
@@ -363,6 +368,82 @@ export type FinderContinuationSummary = {
   errors: string[];
 };
 
+export type FinderRunPortionResult = { runId: string; status: "running" | "completed" | "partial"; claimed: number; completed: number; failed: number };
+
+/** Operator continuation: only existing rows of the explicitly requested run. */
+export async function runFinderScanPortion(runId: string, options: {
+  supabase?: SupabaseClient;
+  loadFilter?: typeof getSearchFilter;
+  timeoutMs?: number;
+} = {}): Promise<FinderRunPortionResult> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) throw statusError(400, "INVALID_SCAN_RUN_ID");
+  const supabase = options.supabase ?? createAdminClient();
+  const deadline = Date.now() + WORKER_MAX_DURATION_MS - WORKER_OVERHEAD_RESERVE_MS;
+  const readRows = async () => {
+    const { data, error } = await supabase.from("source_scans").select("id,source,status,search_filter_id,started_at,filter_snapshot,continuation_next_at,continuation_lease_until,continuation_lease_token,continuation_attempt").eq("scan_run_id", runId).abortSignal(AbortSignal.timeout(5_000));
+    if (error) throw statusError(502, "SCAN_PROGRESS_READ_FAILED");
+    return (Array.isArray(data) ? data : []) as (PreparedSourceScan & { search_filter_id: string })[];
+  };
+  const rows = await readRows();
+  if (!rows.length) throw statusError(404, "SCAN_RUN_NOT_FOUND");
+  if (rows.some((row) => row.source === "facebook")) throw statusError(409, "NOT_FINDER_RUN");
+  if (new Set(rows.map((row) => row.search_filter_id)).size !== 1 || new Set(rows.map((row) => row.source)).size !== rows.length) throw statusError(409, "SCAN_RUN_INCONSISTENT");
+  const summarize = (current: typeof rows, claimed: number): FinderRunPortionResult => ({
+    runId, claimed,
+    status: current.some((row) => row.status === "pending" || row.status === "running") ? "running" : current.some((row) => row.status === "failed") ? "partial" : "completed",
+    completed: current.filter((row) => row.status === "completed").length,
+    failed: current.filter((row) => row.status === "failed").length,
+  });
+  if (!rows.some((row) => row.source !== "olx" && (row.status === "pending" || row.status === "running"))) return summarize(rows, 0);
+  const filter = await (options.loadFilter ?? getSearchFilter)(rows[0].search_filter_id, { supabase, signal: AbortSignal.timeout(5_000) });
+  if (!filter) throw statusError(404, "FILTER_NOT_FOUND");
+  if (!filter.isActive) throw statusError(409, "FILTER_PAUSED");
+  const sources = activeSources(filter);
+  const owned = new Map<string, ScanClock>();
+  let claimed = 0;
+  try {
+    for (const initial of rows) {
+      const source = sources.find((item) => item.id === initial.source && item.id !== "olx");
+      if (initial.source === "olx" || initial.status === "completed" || initial.status === "failed") continue;
+      const now = Date.now();
+      const timeoutMs = Math.min(options.timeoutMs ?? SOURCE_TIMEOUT_MS, deadline - now);
+      if (timeoutMs < (options.timeoutMs ?? MIN_SOURCE_TIMEOUT_MS)) break;
+      if (initial.continuation_next_at && Date.parse(initial.continuation_next_at) > now) continue;
+      if (initial.continuation_lease_until && Date.parse(initial.continuation_lease_until) > now) continue;
+      let prepared = initial;
+      if (initial.status === "running") {
+        // Recover a crashed owner only after its observed lease expired (or
+        // the legacy five-minute orphan grace). Compare its token and lease,
+        // so this cannot release a replacement owner's lock.
+        if (!initial.continuation_lease_until && now - Date.parse(initial.started_at) < 5 * 60_000) continue;
+        let recovery = supabase.from("source_scans").update({ status: "pending", continuation_lease_until: null, continuation_lease_token: null, continuation_next_at: new Date(now).toISOString(), error_message: "SOURCE_BUDGET_EXHAUSTED: expired worker; ready for continuation" }).eq("id", initial.id).eq("status", "running");
+        recovery = initial.continuation_lease_token ? recovery.eq("continuation_lease_token", initial.continuation_lease_token) : recovery.is("continuation_lease_token", null);
+        recovery = initial.continuation_lease_until ? recovery.eq("continuation_lease_until", initial.continuation_lease_until) : recovery.is("continuation_lease_until", null);
+        const { data, error } = await recovery.select("*").abortSignal(AbortSignal.timeout(4_000));
+        if (error) throw statusError(502, "SCAN_RECOVERY_FAILED");
+        if (!Array.isArray(data) || !data.length) continue;
+        prepared = data[0];
+      }
+      if (!source) {
+        // An unavailable source cannot be fetched, but leaving its pending
+        // row forever would keep the exact-run client continuation spinning.
+        let inactive = supabase.from("source_scans").update({ status: "failed", finished_at: new Date(now).toISOString(), error_message: "SOURCE_NOT_ACTIVE: source no longer eligible", continuation_next_at: null, continuation_lease_until: null, continuation_lease_token: null }).eq("id", prepared.id).eq("status", "pending");
+        inactive = prepared.continuation_lease_token ? inactive.eq("continuation_lease_token", prepared.continuation_lease_token) : inactive.is("continuation_lease_token", null);
+        inactive = prepared.continuation_lease_until ? inactive.eq("continuation_lease_until", prepared.continuation_lease_until) : inactive.is("continuation_lease_until", null);
+        inactive = prepared.continuation_next_at ? inactive.eq("continuation_next_at", prepared.continuation_next_at) : inactive.is("continuation_next_at", null);
+        const result = await inactive.abortSignal(AbortSignal.timeout(4_000));
+        if (result.error) throw statusError(502, "SCAN_FINALIZE_FAILED");
+        continue;
+      }
+      const result = await scanSource(source, filter.id, filter, supabase, runId, owned, prepared, timeoutMs);
+      if (!["SCAN_ALREADY_CLAIMED", "SCAN_CREATE_FAILED", "SOURCE_NOT_READY"].includes(result.errorCode ?? "")) claimed += 1;
+    }
+  } finally {
+    await failOwnedRunningScans(supabase, owned);
+  }
+  return summarize(await readRows(), claimed);
+}
+
 /** Durable periodic continuation backed by the claim_finder_scan_source RPC. */
 export async function runFinderScanContinuations(now = new Date()): Promise<FinderContinuationSummary> {
   const cycleAt = continuationCycleAt(now);
@@ -402,7 +483,7 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
 
     let filter: LoadedFilter | null;
     try {
-      filter = await getSearchFilter(filterId);
+      filter = await getSearchFilter(filterId, { supabase, signal: AbortSignal.timeout(5_000) });
     } catch (error) {
       await failClaimedContinuation(supabase, scanId, leaseToken, `FILTER_LOAD_FAILED: ${error instanceof Error ? error.message : "Nie udało się odczytać filtra."}`);
       failed += 1;
@@ -417,8 +498,15 @@ export async function runFinderScanContinuations(now = new Date()): Promise<Find
     // A continuation owns one source at a time. It no longer shares the
     // initial request's slice across the whole filter, so one source gets the
     // full bounded retry window while the next source waits for another cycle.
-    const prepared: PreparedSourceScan = { id: scanId, source: sourceId, status: "running", started_at: startedAt, continuation_lease_token: leaseToken, continuation_attempt: continuationAttempt };
-    const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, continuationTimeoutMs, { preparedAlreadyRunning: true });
+    const prepared: PreparedSourceScan = { id: scanId, source: sourceId, status: "running", started_at: startedAt, continuation_lease_token: leaseToken, continuation_attempt: continuationAttempt, filter_snapshot: claimedRow.filter_snapshot };
+    const remainingMs = Math.min(continuationTimeoutMs, deadline - Date.now());
+    if (remainingMs < MIN_SOURCE_TIMEOUT_MS) {
+      const { error } = await supabase.from("source_scans").update({ status: "pending", finished_at: null, error_message: "SOURCE_BUDGET_EXHAUSTED: ready for next portion", continuation_next_at: new Date().toISOString(), continuation_lease_until: null, continuation_lease_token: null }).eq("id", scanId).eq("status", "running").eq("continuation_lease_token", leaseToken).gt("continuation_lease_until", new Date().toISOString()).abortSignal(AbortSignal.timeout(4_000));
+      if (error) errors.push(`SOURCE_RELEASE_FAILED: ${error.message}`);
+      deferred += 1;
+      break;
+    }
+    const result = await scanSource(source, filterId, filter, supabase, runId, new Map(), prepared, remainingMs, { preparedAlreadyRunning: true });
     if (result.status === "completed") completed += 1;
     else if (result.status === "pending") deferred += 1;
     else failed += 1;
@@ -461,6 +549,9 @@ async function assertContinuationLease(supabase: SupabaseClient, scanId: string,
 
 export async function scanSource(source: SearchSource, filterId: string, filter: LoadedFilter, supabase: SupabaseClient, runId: string, ownedScans: Map<string, ScanClock>, prepared?: PreparedSourceScan, timeoutMs: number = SOURCE_TIMEOUT_MS, options: { preparedAlreadyRunning?: boolean } = {}): Promise<SourceScanResult> {
   const started = Date.now();
+  if (prepared && !options.preparedAlreadyRunning && (prepared.status !== "pending" || (prepared.continuation_next_at && Date.parse(prepared.continuation_next_at) > started) || (prepared.continuation_lease_until && Date.parse(prepared.continuation_lease_until) > started))) {
+    return pendingResult(source.id, "SOURCE_NOT_READY: live owner or retry/backoff", "SOURCE_NOT_READY");
+  }
   // Claims the prepared row with an atomic pending->running CAS, not a bare
   // update-by-id. The background callback that calls runManualOtodomScan
   // (see route.ts's runAfterResponse) has no guarantee against ever running
@@ -475,11 +566,19 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   // worker had finalized it.
   const manualLeaseToken = crypto.randomUUID();
   const manualLeaseUntil = new Date(started + CONTINUATION_LEASE_MS).toISOString();
+  let claimQuery = prepared && !options.preparedAlreadyRunning ? supabase.from("source_scans").update({ status: "running", continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).eq("id", prepared.id).eq("status", "pending") : null;
+  if (claimQuery && prepared) {
+    // The returned snapshot, not the caller's earlier read, is authoritative.
+    // Comparing retry/lease state also prevents claiming a newly deferred row
+    // based on an obsolete ready-state read.
+    claimQuery = prepared.continuation_next_at ? claimQuery.eq("continuation_next_at", prepared.continuation_next_at) : claimQuery.is("continuation_next_at", null);
+    claimQuery = prepared.continuation_lease_until ? claimQuery.eq("continuation_lease_until", prepared.continuation_lease_until) : claimQuery.is("continuation_lease_until", null);
+  }
   const { data: claimed, error } = prepared && options.preparedAlreadyRunning
-    ? { data: [{ id: prepared.id, started_at: prepared.started_at, continuation_lease_token: prepared.continuation_lease_token ?? null }], error: null }
-    : prepared
-    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).eq("id", prepared.id).eq("status", "pending").select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
-    : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
+    ? { data: [{ id: prepared.id, started_at: prepared.started_at, continuation_lease_token: prepared.continuation_lease_token ?? null, filter_snapshot: prepared.filter_snapshot }], error: null }
+    : claimQuery
+    ? await claimQuery.select("id,started_at,continuation_lease_token,filter_snapshot").abortSignal(AbortSignal.timeout(Math.min(DATABASE_TIMEOUT_MS, 5_000)))
+    : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).select("id,started_at,continuation_lease_token,filter_snapshot").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
   // Never assume the API returns a row just because there was no transport
   // error: a lost CAS (someone else already claimed this row) is zero rows,
   // not an error, from a plain .update().select() call -- unlike .single(),
@@ -500,31 +599,73 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   ownedScans.set(scan.id, scanClock);
   scanLog("SOURCE START", { scanId: runId, source: source.id, checked: 0, new: 0, matched: 0, durationMs: 0 });
 
+  let checkpoint = emptySourceCheckpoint();
   let counters: ScanItemCounts = { listingsCreatedCount: 0, newMatchesCount: 0 };
   let updated = 0; let priceDrops = 0; let fetched = 0; let normalized = 0; let matched = 0; let warnings: string[] = [];
   let status: SourceScanResult["status"] = "completed"; let errorCode: string | null = null; let errorMessage: string | null = null; let continuationNextAtOverride: string | null = null;
   const otodomSummary = createOtodomFilterSummary();
   const matchDiagnostics = emptyMatchDiagnosticSummary();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  // Include the claim's DB time in the stage budget, not just its fetch.
+  const timeoutId = setTimeout(() => controller.abort(), Math.max(1, started + timeoutMs - Date.now()));
   try {
     await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);
-    const result = await source.fetch(filter, controller.signal);
-    fetched = result.fetched; normalized = result.listings.length; warnings = result.warnings;
-    await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal, scanClock.continuationLeaseToken);
-    for (const listing of result.listings) {
+    checkpoint = readSourceCheckpoint(scan.filter_snapshot ?? prepared?.filter_snapshot);
+    if (!checkpoint.timeoutAttempts && !(scan.filter_snapshot && typeof scan.filter_snapshot === "object" && "_finderCheckpoint" in scan.filter_snapshot)) checkpoint.timeoutAttempts = Math.max(0, (prepared?.continuation_attempt ?? 0) - (options.preparedAlreadyRunning ? 1 : 0));
+    ({ fetched, normalized, matched, counters, updated, priceDrops, warnings } = checkpoint);
+    const saveCheckpoint = async () => {
+      Object.assign(checkpoint, { fetched, normalized, matched, counters, updated, priceDrops, warnings });
+      assertCheckpointSize(checkpoint);
+      await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal, scanClock.continuationLeaseToken, checkpoint);
+    };
+    const requireTime = () => {
       controller.signal.throwIfAborted();
-      const decision = evaluateListingAgainstFilter(listing, filter);
-      if (source.id === "otodom") addOtodomFilterDecision(otodomSummary, listing, decision);
+      // Leave time for a final guarded checkpoint and lease release. Yielding
+      // after committed work is not a network timeout and needs no backoff.
+      if (Date.now() >= started + timeoutMs - Math.min(5_000, Math.floor(timeoutMs / 6))) throw new SourceSliceYield();
+    };
+    const drainBuffer = async () => {
+      while (checkpoint.offset < checkpoint.buffer.length) {
+        requireTime();
+        const listing = checkpoint.buffer[checkpoint.offset];
+        const decision = evaluateListingAgainstFilter(listing, filter);
+        if (source.id === "otodom") addOtodomFilterDecision(otodomSummary, listing, decision);
+        await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);
+        const saved = await persistListing(supabase, filterId, listing, decision.matches, decision.unknownFields, scan.id, scanTimestamp(scanClock), controller.signal);
+        const diagnostic = createMatchDiagnostic(saved.listingId, listing, filter, decision);
+        addMatchDiagnostic(matchDiagnostics, diagnostic);
+        console.info("MATCH DIAGNOSTIC", JSON.stringify(diagnostic));
+        if (decision.matches) matched += 1;
+        counters = addScanItemCounts(counters, { listingCreated: saved.listingCreated, matchCreated: saved.matchCreated });
+        updated += saved.updated; priceDrops += saved.priceDrop;
+        checkpoint.offset += 1;
+        await saveCheckpoint();
+      }
+      checkpoint.buffer = []; checkpoint.offset = 0;
+      await saveCheckpoint();
+    };
+    // A page fetched by the previous owner survives in JSONB. Finish its
+    // uncommitted listings first, then advance to the next page/site.
+    await drainBuffer();
+    if (!checkpoint.complete) {
+      requireTime();
       await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);
-      const saved = await persistListing(supabase, filterId, listing, decision.matches, decision.unknownFields, scan.id, scanTimestamp(scanClock), controller.signal);
-      const diagnostic = createMatchDiagnostic(saved.listingId, listing, filter, decision);
-      addMatchDiagnostic(matchDiagnostics, diagnostic);
-      console.info("MATCH DIAGNOSTIC", JSON.stringify(diagnostic));
-      if (decision.matches) matched += 1;
-      counters = addScanItemCounts(counters, { listingCreated: saved.listingCreated, matchCreated: saved.matchCreated });
-      updated += saved.updated; priceDrops += saved.priceDrop;
-      await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal, scanClock.continuationLeaseToken);
+      let emitted = false;
+      const onBatch = async (batch: SourceBatch, nextCursor: number | null) => {
+        await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);
+        emitted = true;
+        fetched += batch.fetched; normalized += batch.listings.length;
+        warnings = [...new Set([...warnings, ...batch.warnings])].slice(0, 100);
+        checkpoint.buffer = batch.listings; checkpoint.offset = 0;
+        checkpoint.cursor = nextCursor; checkpoint.complete = nextCursor === null;
+        await saveCheckpoint();
+        await drainBuffer();
+        if (!checkpoint.complete) requireTime();
+      };
+      const result = await source.fetch(filter, controller.signal, { cursor: checkpoint.cursor ?? 0, onBatch });
+      // Existing single-response adapters keep their contract. Cache their
+      // parsed payload too, so a persistence timeout never refetches it.
+      if (!emitted) await onBatch(result, null);
     }
     if (source.id === "otodom") console.info("OTODOM FILTER SUMMARY:", otodomSummary);
   } catch (reason) {
@@ -534,6 +675,9 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       status = "pending";
       errorCode = "CONTINUATION_LEASE_LOST";
       errorMessage = `${source.label}: continuation lease lost; stale result discarded`;
+    } else if (reason instanceof SourceSliceYield) {
+      status = "pending"; errorCode = "SOURCE_SLICE_YIELD";
+      errorMessage = reason.message; continuationNextAtOverride = new Date(Date.now()).toISOString();
     } else {
       // "attempt" is how many times THIS source has now timed out, including
       // this one. preparedAlreadyRunning means the row came from the
@@ -541,20 +685,29 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       // before returning it -- that value already represents this attempt.
       // Otherwise (a fresh reservation or a manual resume) it represents only
       // PRIOR attempts, so this one adds 1.
-      const attemptNumber = (prepared?.continuation_attempt ?? 0) + (options.preparedAlreadyRunning ? 0 : 1);
+      const attemptNumber = checkpoint.timeoutAttempts + 1;
+      if (controller.signal.aborted) checkpoint.timeoutAttempts = attemptNumber;
       const disposition = classifySourceFailure({ timedOut: controller.signal.aborted, error: reason, attempt: attemptNumber });
       status = disposition.status;
       errorCode = disposition.errorCode;
       continuationNextAtOverride = disposition.nextAttemptAt;
-      errorMessage = controller.signal.aborted
+      errorMessage = disposition.errorCode === "SOURCE_FORBIDDEN"
+        ? `${source.label}: access denied (HTTP 403); no retry`
+        : controller.signal.aborted
         ? disposition.errorCode === "SOURCE_CONTINUATION_EXHAUSTED"
           ? `${source.label}: gave up after ${attemptNumber} timed-out attempts`
-          : `${source.label}: source timeout after ${timeoutMs / 1000}s`
-        : disposition.errorCode === "SOURCE_FORBIDDEN" ? `${source.label}: access denied (HTTP 403); no retry` : reason instanceof Error ? reason.message : "Błąd źródła.";
+          : `SOURCE_TIMEOUT: ${source.label}: source timeout after ${timeoutMs / 1000}s`
+        : reason instanceof Error ? reason.message : "Błąd źródła.";
     }
   } finally {
     clearTimeout(timeoutId);
-    await finalizeSourceScan(supabase, scan.id, scanClock, status, { fetched, matched, counters, updated, priceDrops, warnings, errorMessage, continuationNextAt: continuationNextAtOverride });
+    Object.assign(checkpoint, { fetched, normalized, matched, counters, updated, priceDrops, warnings });
+    let checkpointFits = true;
+    try { assertCheckpointSize(checkpoint); } catch { checkpointFits = false; }
+    await finalizeSourceScan(supabase, scan.id, scanClock, status, { fetched, matched, counters, updated, priceDrops, warnings, errorMessage, continuationNextAt: continuationNextAtOverride, filterSnapshot: { ...filter, ...(checkpointFits ? { _finderCheckpoint: checkpoint } : {}), _scanProgress: { lastProgressAt: new Date().toISOString(), checked: fetched, matched, new: counters.newMatchesCount } } });
+    // Successful guarded finalization already released our token. Do not
+    // spend another DB round trip on every completed source in cleanup.
+    ownedScans.delete(scan.id);
   }
   const result = { source: source.id, status, fetched, normalized, matched, listingsCreated: counters.listingsCreatedCount, newMatches: counters.newMatchesCount, updated, priceDrops, rejected: Math.max(0, fetched - normalized), durationMs: Date.now() - started, errorCode, errorMessage, warnings, matchDiagnostics };
   scanLog(status === "completed" ? "SOURCE DONE" : "SOURCE ERROR", { scanId: runId, source: source.id, checked: fetched, new: counters.newMatchesCount, matched, durationMs: result.durationMs });
@@ -588,9 +741,9 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  */
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
   const now = Date.now();
-  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at,continuation_lease_until").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(now)).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at,continuation_lease_until,continuation_lease_token").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(now)).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (readError) throw statusError(500, "Nie udało się sprawdzić wygasłej blokady skanu.");
-  const staleIds = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown; error_message: string | null; continuation_next_at: string | null; continuation_lease_until: string | null } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
+  const staleRows = (Array.isArray(candidates) ? candidates : []).filter((candidate): candidate is { id: string; status: string; started_at: string | null; filter_snapshot: unknown; error_message: string | null; continuation_next_at: string | null; continuation_lease_until: string | null; continuation_lease_token: string | null } => Boolean(candidate && typeof candidate === "object" && typeof (candidate as { id?: unknown }).id === "string"))
     .filter((candidate) => !isContinuationPending(candidate.error_message) || isContinuationExpired(candidate.error_message, candidate.continuation_next_at, Date.now()))
     // A live continuation/manual lease is stronger than the age heuristic.
     // Never reap a row another worker still owns, even when its original
@@ -600,15 +753,19 @@ async function failStaleScans(supabase: SupabaseClient, filterId: string, source
       const heartbeatAt = scanHeartbeatAt(candidate.filter_snapshot);
       const neverAttempted = candidate.status === "pending" && !candidate.error_message && !heartbeatAt;
       return isStaleScan({ status: candidate.status, startedAt: candidate.started_at, heartbeatAt }, now, neverAttempted ? CONTINUATION_MAX_WAIT_MS : STALE_SCAN_TIMEOUT_MS);
-    })
-    .map((candidate) => candidate.id);
-  if (!staleIds.length) return;
-  const { error } = await supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).in("id", staleIds).in("status", RECOVERABLE_SCAN_STATUSES).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
-  if (error) throw statusError(500, "Nie udało się zwolnić wygasłej blokady skanu.");
+    });
+  for (const candidate of staleRows) {
+    let cleanup = supabase.from("source_scans").update({ status: "failed", finished_at: new Date().toISOString(), error_message: STALE_SCAN_MESSAGE }).eq("id", candidate.id).eq("status", candidate.status);
+    cleanup = candidate.continuation_lease_token ? cleanup.eq("continuation_lease_token", candidate.continuation_lease_token) : cleanup.is("continuation_lease_token", null);
+    cleanup = candidate.continuation_lease_until ? cleanup.eq("continuation_lease_until", candidate.continuation_lease_until) : cleanup.is("continuation_lease_until", null);
+    cleanup = candidate.continuation_next_at ? cleanup.eq("continuation_next_at", candidate.continuation_next_at) : cleanup.is("continuation_next_at", null);
+    const { error } = await cleanup.abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+    if (error) throw statusError(500, "Nie udało się zwolnić wygasłej blokady skanu.");
+  }
 }
 
 async function loadPreparedSourceScans(supabase: SupabaseClient, runId: string, sourceIds: string[]): Promise<Map<string, PreparedSourceScan>> {
-  const { data, error } = await supabase.from("source_scans").select("id,source,status,started_at,continuation_lease_token,continuation_attempt").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running", "completed", "failed"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+  const { data, error } = await supabase.from("source_scans").select("id,source,status,started_at,continuation_lease_token,continuation_attempt,continuation_next_at,continuation_lease_until,filter_snapshot").eq("scan_run_id", runId).in("source", sourceIds).in("status", ["pending", "running", "completed", "failed"]).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) throw statusError(500, "Nie udało się odczytać zarezerwowanego skanu.");
   return new Map((Array.isArray(data) ? data : []).flatMap((row) => {
     if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string" || typeof (row as { source?: unknown }).source !== "string" || typeof (row as { status?: unknown }).status !== "string" || typeof (row as { started_at?: unknown }).started_at !== "string") return [];
@@ -622,34 +779,37 @@ async function deferPreparedSource(supabase: SupabaseClient, scanId: string): Pr
     .update({
       status: "pending",
       finished_at: null,
-      error_message: "SOURCE_TIMEOUT: scan budget exhausted; waiting for continuation",
-      continuation_next_at: nextContinuationAt(Date.now()),
+      error_message: "SOURCE_BUDGET_EXHAUSTED: ready for next portion",
+      continuation_next_at: new Date(Date.now()).toISOString(),
     })
     .eq("id", scanId)
     .eq("status", "pending")
+    .is("error_message", null)
+    .is("continuation_lease_until", null)
     .abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
   if (error) console.error("FLIP FINDER SOURCE DEFER ERROR:", { scanId, error });
 }
 
-async function updateSourceProgress(supabase: SupabaseClient, scanId: string, filter: LoadedFilter, progress: Progress, signal: AbortSignal, continuationLeaseToken?: string | null): Promise<void> {
+async function updateSourceProgress(supabase: SupabaseClient, scanId: string, filter: LoadedFilter, progress: Progress, signal: AbortSignal, continuationLeaseToken?: string | null, checkpoint?: SourceCheckpoint): Promise<void> {
   const heartbeat = { lastProgressAt: new Date().toISOString(), checked: progress.fetched, matched: progress.matched, new: progress.counters.newMatchesCount };
-  let query = supabase.from("source_scans").update({ scanned_count: progress.fetched, listings_found: progress.fetched, matched_count: progress.matched, listings_created: progress.counters.listingsCreatedCount, new_count: progress.counters.newMatchesCount, listings_updated: progress.updated, price_drop_count: progress.priceDrops, filter_snapshot: { ...filter, _scanProgress: heartbeat } }).eq("id", scanId);
+  let query = supabase.from("source_scans").update({ scanned_count: progress.fetched, listings_found: progress.fetched, matched_count: progress.matched, listings_created: progress.counters.listingsCreatedCount, new_count: progress.counters.newMatchesCount, listings_updated: progress.updated, price_drop_count: progress.priceDrops, filter_snapshot: { ...filter, ...(checkpoint ? { _finderCheckpoint: checkpoint } : {}), _scanProgress: heartbeat } }).eq("id", scanId).eq("status", "running");
   if (continuationLeaseToken) query = query.eq("continuation_lease_token", continuationLeaseToken).gt("continuation_lease_until", new Date().toISOString());
-  const { error } = await query.abortSignal(signal);
+  const { data, error } = await query.select("id").abortSignal(signal);
   if (error) throw new Error(`Nie udało się zapisać postępu skanu: ${error.message}`);
+  if (!Array.isArray(data) || !data.length) throw new ContinuationLeaseLostError();
 }
 
-async function finalizeSourceScan(supabase: SupabaseClient, scanId: string, scanClock: ScanClock, status: SourceScanResult["status"], input: Progress & { warnings: string[]; errorMessage: string | null; continuationNextAt?: string | null }): Promise<void> {
+async function finalizeSourceScan(supabase: SupabaseClient, scanId: string, scanClock: ScanClock, status: SourceScanResult["status"], input: Progress & { warnings: string[]; errorMessage: string | null; continuationNextAt?: string | null; filterSnapshot?: unknown }): Promise<void> {
   // continuationNextAt lets a timed-out fetch apply its own backoff
   // (classifySourceFailure's nextAttemptAt) instead of always retrying at the
   // very next cycle boundary; every other "pending" path (budget-exhausted
   // defer, lease-lost discard) keeps the plain immediate-next-cycle behavior.
   const continuationNextAt = status === "pending" ? (input.continuationNextAt ?? nextContinuationAt(Date.now())) : null;
-  const payload = { status, finished_at: status === "pending" ? null : scanTimestamp(scanClock), error_message: input.errorMessage, scanned_count: input.fetched, listings_found: input.fetched, matched_count: input.matched, listings_created: input.counters.listingsCreatedCount, new_count: input.counters.newMatchesCount, listings_updated: input.updated, price_drop_count: input.priceDrops, warnings: input.warnings, continuation_next_at: continuationNextAt, continuation_lease_until: null, continuation_lease_token: null };
+  const payload = { status, finished_at: status === "pending" ? null : scanTimestamp(scanClock), error_message: input.errorMessage, scanned_count: input.fetched, listings_found: input.fetched, matched_count: input.matched, listings_created: input.counters.listingsCreatedCount, new_count: input.counters.newMatchesCount, listings_updated: input.updated, price_drop_count: input.priceDrops, warnings: input.warnings, continuation_next_at: continuationNextAt, continuation_lease_until: null, continuation_lease_token: null, ...(input.filterSnapshot ? { filter_snapshot: input.filterSnapshot } : {}) };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    let query = supabase.from("source_scans").update(payload).eq("id", scanId);
+    let query = supabase.from("source_scans").update(payload).eq("id", scanId).eq("status", "running");
     if (scanClock.continuationLeaseToken) query = query.eq("continuation_lease_token", scanClock.continuationLeaseToken).gt("continuation_lease_until", new Date().toISOString());
-    const { error } = await query.abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
+    const { error } = await query.abortSignal(AbortSignal.timeout(4_000));
     if (!error) return;
     console.error("FLIP FINDER SOURCE FINALIZE ERROR:", { scanId, status, attempt, error });
   }

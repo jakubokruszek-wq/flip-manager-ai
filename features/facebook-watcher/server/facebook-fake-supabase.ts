@@ -170,6 +170,18 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     this.filters.push((row) => row[column] !== value);
     return this;
   }
+  gt(column: string, value: string): this {
+    this.filters.push((row) => typeof row[column] === "string" && String(row[column]) > value);
+    return this;
+  }
+  lt(column: string, value: string): this {
+    this.filters.push((row) => typeof row[column] === "string" && String(row[column]) < value);
+    return this;
+  }
+  gte(column: string, value: string): this {
+    this.filters.push((row) => typeof row[column] === "string" && String(row[column]) >= value);
+    return this;
+  }
   in(column: string, values: unknown[]): this {
     this.filters.push((row) => values.includes(row[column]));
     return this;
@@ -183,7 +195,7 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     return this;
   }
   is(column: string, value: unknown): this {
-    this.filters.push((row) => row[column] === value);
+    this.filters.push((row) => value === null ? row[column] == null : row[column] === value);
     return this;
   }
   /**
@@ -222,7 +234,9 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
   }
   update(payload: Row): this {
     this.op = "update";
-    this.payload = payload;
+    // JSONB is serialized at request time; callers cannot mutate a stored
+    // checkpoint later merely by changing their in-memory object.
+    this.payload = structuredClone(payload);
     return this;
   }
   delete(): this {

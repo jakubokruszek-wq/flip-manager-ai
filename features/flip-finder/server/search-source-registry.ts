@@ -11,6 +11,7 @@ import {
 } from "@/features/flip-finder/external-source-parser";
 import { fetchExternalPortal } from "@/features/flip-finder/external-source-adapters";
 import { fetchOfficialLodzGroup } from "@/features/flip-finder/official-lodz-adapters";
+import type { SourceBatchContext } from "@/features/flip-finder/source-batches";
 import { SCHEMA_READY_SOURCE_IDS as SHARED_SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 export { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 
@@ -25,7 +26,7 @@ export type SourceFetchResult = { listings: SourceListing[]; warnings: string[];
 export type SearchSource = {
   id: Exclude<ListingSource, "facebook">;
   label: string;
-  fetch(criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult>;
+  fetch(criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext): Promise<SourceFetchResult>;
 };
 
 export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
@@ -108,10 +109,10 @@ export const SOURCES: SearchSource[] = [
   { id: "otodom", label: "Otodom", fetch: fetchOtodom },
   { id: "olx", label: "OLX", fetch: fetchOlx },
   { id: "morizon", label: "Morizon", fetch: fetchMorizon },
-  ...EXTERNAL_SOURCE_CONFIGS.map((config) => ({ id: config.id, label: config.label, fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchExternal(config, criteria, signal) })),
-  { id: "official_cooperative", label: "Spółdzielnie Łódź", fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchOfficialLodzGroup("official_cooperative", criteria, signal) },
-  { id: "official_uml", label: "UMŁ/BIP Łódź", fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchOfficialLodzGroup("official_uml", criteria, signal) },
-  { id: "official_auction", label: "Licytacje i syndycy", fetch: (criteria: SearchFilter, signal?: AbortSignal) => fetchOfficialLodzGroup("official_auction", criteria, signal) },
+  ...EXTERNAL_SOURCE_CONFIGS.map((config) => ({ id: config.id, label: config.label, fetch: (criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext) => fetchExternal(config, criteria, signal, batches) })),
+  { id: "official_cooperative", label: "Spółdzielnie Łódź", fetch: (criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext) => fetchOfficialLodzGroup("official_cooperative", criteria, signal, batches) },
+  { id: "official_uml", label: "UMŁ/BIP Łódź", fetch: (criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext) => fetchOfficialLodzGroup("official_uml", criteria, signal, batches) },
+  { id: "official_auction", label: "Licytacje i syndycy", fetch: (criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext) => fetchOfficialLodzGroup("official_auction", criteria, signal, batches) },
 ];
 
 export function activeSources(criteria: SearchFilter): SearchSource[] {
@@ -170,8 +171,8 @@ async function fetchMorizon(criteria: SearchFilter, signal?: AbortSignal): Promi
   return { listings, fetched: offers.length, warnings: offers.length ? [] : ["Morizon zwrócił pustą listę ofert."] };
 }
 
-async function fetchExternal(config: ExternalSourceConfig, criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult> {
-  return fetchExternalPortal(config, criteria, signal);
+async function fetchExternal(config: ExternalSourceConfig, criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext): Promise<SourceFetchResult> {
+  return fetchExternalPortal(config, criteria, signal, batches);
 }
 async function fetchHtml(url: string, source: string, signal?: AbortSignal): Promise<string> {
   const headers: Record<string, string> = source === "OLX"

@@ -79,7 +79,7 @@ export function nextContinuationAt(now: number | Date): string {
 }
 
 export function isContinuationPending(errorMessage: string | null | undefined): boolean {
-  return typeof errorMessage === "string" && errorMessage.startsWith("SOURCE_TIMEOUT:");
+  return typeof errorMessage === "string" && /^(SOURCE_TIMEOUT|SOURCE_BUDGET_EXHAUSTED|SOURCE_SLICE_YIELD):/.test(errorMessage);
 }
 
 export function isContinuationExpired(errorMessage: string | null | undefined, continuationNextAt: string | null | undefined, now: number | Date): boolean {
@@ -100,12 +100,12 @@ export function continuationEligible(state: ContinuationSourceState, now: number
   const nowMs = now instanceof Date ? now.getTime() : now;
   const nextAtMs = state.continuationNextAt ? Date.parse(state.continuationNextAt) : Number.NaN;
   if (Number.isFinite(nextAtMs) && nextAtMs > nowMs) return false;
+  const leaseUntilMs = state.continuationLeaseUntil ? Date.parse(state.continuationLeaseUntil) : Number.NaN;
+  if (Number.isFinite(leaseUntilMs) && leaseUntilMs > nowMs) return false;
   const lastCycleMs = state.continuationCycleAt ? Date.parse(state.continuationCycleAt) : Number.NaN;
   const cycleMs = Date.parse(cycleAt);
   if (Number.isFinite(lastCycleMs) && lastCycleMs >= cycleMs) return false;
   if (state.status === "running") {
-    const leaseUntilMs = state.continuationLeaseUntil ? Date.parse(state.continuationLeaseUntil) : Number.NaN;
-    if (Number.isFinite(leaseUntilMs) && leaseUntilMs > nowMs) return false;
     if (!Number.isFinite(leaseUntilMs)) {
       const startedAtMs = state.startedAt ? Date.parse(state.startedAt) : Number.NaN;
       if (!Number.isFinite(startedAtMs) || startedAtMs + CONTINUATION_ORPHAN_GRACE_MS > nowMs) return false;
@@ -153,6 +153,9 @@ export function continuationBackoffMs(attempt: number): number {
  */
 export function classifySourceFailure(input: { timedOut: boolean; error: unknown; attempt?: number; now?: number | Date }): SourceFailureDisposition {
   const now = input.now ?? Date.now();
+  // A returned access denial remains terminal even if the deadline fired
+  // while its response was being handled.
+  if (isPermanentSourceFailure(input.error)) return { status: "failed", errorCode: "SOURCE_FORBIDDEN", nextAttemptAt: null };
   if (input.timedOut) {
     const attempt = input.attempt && input.attempt > 0 ? input.attempt : 1;
     if (attempt >= MAX_CONTINUATION_ATTEMPTS) {
@@ -161,7 +164,6 @@ export function classifySourceFailure(input: { timedOut: boolean; error: unknown
     const nowMs = now instanceof Date ? now.getTime() : now;
     return { status: "pending", errorCode: "SOURCE_TIMEOUT", nextAttemptAt: new Date(nowMs + continuationBackoffMs(attempt)).toISOString() };
   }
-  if (isPermanentSourceFailure(input.error)) return { status: "failed", errorCode: "SOURCE_FORBIDDEN", nextAttemptAt: null };
   return { status: "failed", errorCode: "SOURCE_FAILED", nextAttemptAt: null };
 }
 

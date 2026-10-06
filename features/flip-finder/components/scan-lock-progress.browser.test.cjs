@@ -199,11 +199,22 @@ test("the real Finder scan button latches on click, reflects live progress, and 
   await page.context().addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
 
   let scanPostCount = 0;
+  let notifyStart;
+  const firstStartReceived = new Promise((resolve) => { notifyStart = resolve; });
   let runCounter = 0;
   /** @type {Record<string, any[]>} */
   const progressQueueByRun = {};
   /** @type {Record<string, number>} */
   const progressGetCountByRun = {};
+  /** @type {Record<string, boolean>} */
+  const runTerminalByRun = {};
+  // A second start is rejected in this fixture: only exact-run continuation
+  // can advance waiting work. This detects accidental replay of the start URL.
+  let activeRunId = null;
+  let delayStart = false;
+  let releaseStart;
+  /** @type {Record<string, number>} */
+  const resumePostCountByRun = {};
 
   await page.route("**/api/flip-finder/**", async (route) => {
     const request = route.request();
@@ -216,8 +227,14 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/scan` && request.method() === "POST") {
       scanPostCount += 1;
+      notifyStart();
+      if (delayStart) await new Promise((resolve) => { releaseStart = resolve; });
+      if (activeRunId && !runTerminalByRun[activeRunId]) {
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: "Unexpected second start" }), status: 409 });
+      }
       runCounter += 1;
       const runId = `run-${runCounter}`;
+      activeRunId = runId;
       // Each new run gets its own scripted sequence of progress snapshots,
       // popped one per poll -- the real client polls on a 1s interval, so
       // the LAST queued entry is held once exhausted (as the real server
@@ -226,8 +243,14 @@ test("the real Finder scan button latches on click, reflects live progress, and 
         ? [baseProgress(runId, { totals: { scanned: 100, matched: 2, created: 1, updated: 0, priceDrops: 0 } }), baseProgress(runId, { totals: { scanned: 300, matched: 5, created: 3, updated: 1, priceDrops: 0 } }), baseProgress(runId, { status: "completed", finishedAt: now, overall: { completedUnits: 1, totalUnits: 1, percent: 100, failedUnits: 0, remainingUnits: 0 }, totals: { scanned: 300, matched: 5, created: 3, updated: 1, priceDrops: 0 } })]
         : runCounter === 2
           ? [baseProgress(runId, { totals: { scanned: 50, matched: 0, created: 0, updated: 0, priceDrops: 0 } }), baseProgress(runId, { status: "failed", finishedAt: now, overall: { completedUnits: 1, totalUnits: 1, percent: 100, failedUnits: 1, remainingUnits: 0 }, errors: ["Allegro Lokalnie: SOURCE_FAILED"], totals: { scanned: 50, matched: 0, created: 0, updated: 0, priceDrops: 0 } })]
-          : runCounter === 4
-            ? [baseProgress(runId, { status: "partial", finishedAt: null, overall: { completedUnits: 1, totalUnits: 2, percent: 50, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 }, current: { source: "official_uml", groupName: null }, totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } })]
+          : runCounter >= 4
+            // Models two sources, both initially waiting on continuation --
+            // the queue only ever advances past a "waiting" entry once a
+            // resume POST for this exact run has actually been observed
+            // (spliced in below), so this run reaching "completed" is only
+            // reachable through the client's own auto-resume loop, never
+            // through GET polling alone.
+            ? [baseProgress(runId, { status: "partial", finishedAt: null, overall: { completedUnits: 0, totalUnits: 2, percent: 0, failedUnits: 0, remainingUnits: 2, waitingUnits: 2 }, current: { source: "official_uml", groupName: null }, totals: { scanned: 0, matched: 0, created: 0, updated: 0, priceDrops: 0 } })]
           // The third run simulates exactly the reported symptom: progress
           // genuinely stalls (same 300/22 numbers on every poll, never
           // moving), then the server-side heartbeat watchdog eventually
@@ -236,19 +259,32 @@ test("the real Finder scan button latches on click, reflects live progress, and 
           : [baseProgress(runId, { totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } }), baseProgress(runId, { totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } }), baseProgress(runId, { status: "failed", finishedAt: now, overall: { completedUnits: 1, totalUnits: 1, percent: 100, failedUnits: 1, remainingUnits: 0 }, errors: ["Scan timed out"], totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } })];
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ runId, status: "running", background: true, scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 }), status: 202 });
     }
+    const continueMatch = url.pathname.match(/^\/api\/flip-finder\/scans\/(run-\d+)\/continue$/);
+    if (continueMatch && request.method() === "POST") {
+      const runId = continueMatch[1];
+      assert.equal(runId, activeRunId, "only the expected run can be continued");
+      resumePostCountByRun[runId] = (resumePostCountByRun[runId] ?? 0) + 1;
+      await page.waitForTimeout(500);
+      const terminal = resumePostCountByRun[runId] === 2;
+      progressQueueByRun[runId] = [baseProgress(runId, { status: terminal ? "completed" : "partial", finishedAt: terminal ? now : null,
+        overall: { completedUnits: terminal ? 2 : 1, totalUnits: 2, percent: terminal ? 100 : 50, failedUnits: 0, remainingUnits: terminal ? 0 : 1, waitingUnits: terminal ? 0 : 1 },
+        continuation: { ready: !terminal, nextAt: null }, totals: { scanned: terminal ? 300 : 150, matched: terminal ? 22 : 10, created: terminal ? 22 : 10, updated: 0, priceDrops: 0 } })];
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId, claimed: 1, status: terminal ? "completed" : "running" }) });
+    }
     const progressMatch = url.pathname.match(/^\/api\/flip-finder\/scans\/(run-\d+)$/);
     if (progressMatch) {
       const runId = progressMatch[1];
       progressGetCountByRun[runId] = (progressGetCountByRun[runId] ?? 0) + 1;
       const queue = progressQueueByRun[runId] ?? [];
       const next = queue.length > 1 ? queue.shift() : queue[0];
+      if (next && (next.status === "completed" || next.status === "failed")) runTerminalByRun[runId] = true;
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(next ?? baseProgress(runId, {})), status: 200 });
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
 
   await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
-  const scanButton = page.getByRole("button", { name: /Skanuj teraz|Skanowanie…/i }).first();
+  const scanButton = page.getByRole("button", { name: /Skanuj oferty|Skanowanie…/i }).first();
   await scanButton.waitFor({ state: "visible", timeout: 60_000 });
 
   await t.test("A. clicking the button latches it immediately, so a rapid second click never fires a duplicate POST", async () => {
@@ -257,7 +293,7 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     await page.getByRole("button", { name: "Skanowanie…" }).first().waitFor({ state: "visible", timeout: 10_000 });
     assert.equal(await scanButton.isDisabled(), true, "the button must be disabled the instant scanning starts, before any further click can land");
     await scanButton.click({ force: true }).catch(() => {});
-    await page.waitForTimeout(300);
+    await Promise.race([firstStartReceived, new Promise((_, reject) => setTimeout(() => reject(new Error("Initial scan POST was not received")), 10_000))]);
     assert.equal(scanPostCount, 1, "a disabled button must never allow a second POST for the same filter while one is already in flight");
   });
 
@@ -310,16 +346,53 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     await scanButton.click();
     await page.waitForTimeout(500);
     assert.equal(scanPostCount, 4, "an expired/released scan must never block the next click from starting a genuine new scan");
-    await page.getByText(/oczekuje na kontynuację/i).first().waitFor({ state: "visible", timeout: 10_000 });
-    assert.equal(await scanButton.isDisabled(), false, "a durable continuation is waiting, not an active client-side scan lock");
-    const run4CountAtWaiting = progressGetCountByRun["run-4"];
-    assert.ok(run4CountAtWaiting >= 1, "the continuation snapshot must come from the backend progress endpoint");
-    await page.waitForTimeout(1_500);
-    assert.equal(progressGetCountByRun["run-4"], run4CountAtWaiting, "waiting-for-continuation must stop the client polling loop until the hourly worker resumes it");
+    await page.getByRole("button", { name: "Skanuj teraz" }).first().waitFor({ state: "visible", timeout: 20_000 });
+    assert.equal(await scanButton.isDisabled(), false, "one click must finish both pending portions without a cron");
+    assert.equal(resumePostCountByRun["run-4"], 2);
+    assert.equal(scanPostCount, 4, "continuation must not replay the filter start URL");
+    const run4CountAtTerminal = progressGetCountByRun["run-4"];
     // run-3 is terminal and a fresh run-4 has started; polling the OLD run
     // must never resume, proving the client keyed its polling loop on the
     // specific run it started, not on "any active scan for this filter".
     await page.waitForTimeout(3_500);
     assert.equal(progressGetCountByRun["run-3"], run3CountAtTerminal, "no further GET for the old, already-terminal run-3 may fire once a new run has started");
+    assert.equal(progressGetCountByRun["run-4"], run4CountAtTerminal);
+    assert.equal(resumePostCountByRun["run-4"], 2, "terminal completion stops all continuation POSTs too");
+  });
+
+  await t.test("F. mobile also finishes the same run automatically and unmount stops subsequent requests", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await scanButton.click();
+    await page.getByRole("button", { name: "Skanuj teraz" }).first().waitFor({ state: "visible", timeout: 20_000 });
+    assert.equal(scanPostCount, 5);
+    assert.equal(resumePostCountByRun["run-5"], 2);
+    assert.equal(runTerminalByRun["run-5"], true);
+    await scanButton.click();
+    await page.waitForTimeout(250);
+    await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
+    const getAtUnmount = progressGetCountByRun["run-6"];
+    const postAtUnmount = resumePostCountByRun["run-6"] ?? 0;
+    await page.waitForTimeout(3_500);
+    assert.equal(progressGetCountByRun["run-6"], getAtUnmount);
+    assert.equal(resumePostCountByRun["run-6"] ?? 0, postAtUnmount);
+  });
+
+  await t.test("G. client navigation while the initial ACK is delayed cannot resurrect polling after unmount", async () => {
+    runTerminalByRun["run-6"] = true;
+    await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
+    await scanButton.waitFor({ state: "visible", timeout: 20_000 });
+    delayStart = true;
+    await scanButton.click();
+    // The request is received, but its response stays blocked across a real
+    // Next Link navigation, without destroying the browser document.
+    for (let attempt = 0; !releaseStart && attempt < 40; attempt += 1) await page.waitForTimeout(50);
+    assert.equal(scanPostCount, 7);
+    assert.equal(typeof releaseStart, "function");
+    await page.locator('a[href="/flip-finder/filters/new"]').first().click();
+    await page.waitForURL("**/flip-finder/filters/new");
+    releaseStart();
+    await page.waitForTimeout(3_500);
+    assert.equal(progressGetCountByRun["run-7"] ?? 0, 0);
+    assert.equal(resumePostCountByRun["run-7"] ?? 0, 0);
   });
 });

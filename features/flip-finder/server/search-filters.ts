@@ -123,13 +123,14 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
   };
 }
 
-export async function getSearchFilter(id: string): Promise<SearchFilter | null> {
-  const supabase = await createClient();
-  const { data, error } = await supabase
+export async function getSearchFilter(id: string, options: { supabase?: ReturnType<typeof createAdminClient>; signal?: AbortSignal } = {}): Promise<SearchFilter | null> {
+  const supabase = options.supabase ?? await createClient();
+  let query = supabase
     .from("search_filters")
     .select("*")
-    .eq("id", id)
-    .maybeSingle();
+    .eq("id", id);
+  if (options.signal) query = query.abortSignal(options.signal);
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     console.error("FLIP FINDER GET ERROR:", error);

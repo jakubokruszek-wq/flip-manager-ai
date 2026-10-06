@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
+import { FakeFacebookSupabase } from "../../facebook-watcher/server/facebook-fake-supabase.ts";
 
 /**
  * The worker's sequential source loop keeps an internal deadline below
@@ -22,13 +23,14 @@ test("zero sources (defensive) falls back to the ceiling rather than dividing by
   assert.equal(sourceTimeoutBudgetMs(0), SOURCE_TIMEOUT_CEILING_MS);
 });
 
-test("the real current maximum is split across bounded invocations with a continuation margin", () => {
+test("the legacy divisor helper retains its floor; actual workers give each source a full bounded portion", () => {
   const maxSequentialSources = SCHEMA_READY_SOURCE_IDS.filter((id) => id !== "olx").length;
   assert.equal(maxSequentialSources, 13, "this test's premise: today's real maximum is 13 -- update the budget math (not just this number) if that ever changes");
-  const perSourceBudget = sourceTimeoutBudgetMs(maxSequentialSources);
-  assert.equal(perSourceBudget, MIN_SOURCE_TIMEOUT_MS, "a large source set gets the floor and is split by the deadline");
+  assert.equal(sourceTimeoutBudgetMs(maxSequentialSources), MIN_SOURCE_TIMEOUT_MS);
+  const perSourceBudget = sourceTimeoutBudgetMs(1);
+  assert.equal(perSourceBudget, SOURCE_TIMEOUT_CEILING_MS, "the runtime passes one source, regardless of the filter's source count");
   const maxSourcesPerInvocation = Math.floor(AVAILABLE_FOR_SOURCES_MS / perSourceBudget);
-  assert.equal(maxSourcesPerInvocation, 3);
+  assert.equal(maxSourcesPerInvocation, 1);
   assert.ok(perSourceBudget * maxSourcesPerInvocation <= AVAILABLE_FOR_SOURCES_MS, "the bounded portion must fit the worker budget");
   assert.ok(perSourceBudget * (maxSourcesPerInvocation + 1) > AVAILABLE_FOR_SOURCES_MS, "the next source must be deferred to continuation");
   assert.ok(perSourceBudget * maxSourcesPerInvocation + WORKER_OVERHEAD_RESERVE_MS <= WORKER_MAX_DURATION_MS, "including overhead, the bounded portion stays under maxDuration=60");
@@ -46,11 +48,8 @@ test("an extreme, currently-impossible source count is clamped at the floor rath
   const extremeCount = 100;
   const perSourceBudget = sourceTimeoutBudgetMs(extremeCount);
   assert.equal(perSourceBudget, MIN_SOURCE_TIMEOUT_MS);
-  // Documents the known limit rather than hiding it: past ~27 simultaneous
-  // sequential sources (270000ms / 10000ms floor), this formula alone can no
-  // longer guarantee the total stays under the worker's lifetime -- real
-  // parallel source execution would be required at that scale. Today's real
-  // maximum is 13, well inside the safe range proven above.
+  // This helper alone cannot schedule all sources in one request. The
+  // deadline and continuation, not that multiplication, bound actual work.
   assert.ok(perSourceBudget * extremeCount > AVAILABLE_FOR_SOURCES_MS, "sanity check on the documented scaling limit itself");
 });
 
@@ -59,32 +58,8 @@ test("scanSource defers a timeout at the exact reduced per-source budget it is g
   const reducedBudget = sourceTimeoutBudgetMs(13);
   assert.ok(reducedBudget < SOURCE_TIMEOUT_CEILING_MS, "premise: with 13 sources the budget must actually be reduced below the ceiling");
 
-  const sourceScans: Record<string, unknown>[] = [];
-  let idSeq = 1;
-  const fakeSupabase = {
-    from(table: string) {
-      assert.equal(table, "source_scans");
-      let mode: "insert" | "update" = "insert";
-      let payload: Record<string, unknown> = {};
-      const builder = {
-        insert: (p: Record<string, unknown>) => { mode = "insert"; payload = p; return builder; },
-        update: (p: Record<string, unknown>) => { mode = "update"; payload = p; return builder; },
-        eq: () => builder,
-        select: () => builder,
-        abortSignal: () => builder,
-        async single() {
-          if (mode === "insert") {
-            const row = { id: `scan-${idSeq++}`, started_at: new Date().toISOString(), ...payload };
-            sourceScans.push(row);
-            return { data: { id: row.id, started_at: row.started_at }, error: null };
-          }
-          Object.assign(sourceScans[sourceScans.length - 1], payload);
-          return { data: null, error: null };
-        },
-      };
-      return builder;
-    },
-  };
+  const prepared = { id: "scan-timeout", source: "otodom", status: "pending", started_at: new Date().toISOString() };
+  const fakeSupabase = new FakeFacebookSupabase().seed("source_scans", [{ ...prepared, scan_run_id: "run-1", continuation_next_at: null, continuation_lease_until: null }]);
 
   const hangingSource = {
     id: "otodom",
@@ -96,7 +71,7 @@ test("scanSource defers a timeout at the exact reduced per-source budget it is g
   };
   const filterFixture = { id: "filter-1" } as never;
 
-  const resultPromise = scanSource(hangingSource as never, "filter-1", filterFixture, fakeSupabase as never, "run-1", new Map(), undefined, reducedBudget);
+  const resultPromise = scanSource(hangingSource as never, "filter-1", filterFixture, fakeSupabase as never, "run-1", new Map(), prepared, reducedBudget);
   // Let scanSource's pending microtasks (the reservation insert, which
   // resolves before the setTimeout for the abort window is even
   // registered) flush before advancing the mocked clock -- setImmediate is
@@ -108,6 +83,10 @@ test("scanSource defers a timeout at the exact reduced per-source budget it is g
   assert.equal(result.status, "pending", "a bounded source timeout is durable continuation work, not a terminal failure");
   assert.equal(result.errorCode, "SOURCE_TIMEOUT");
   assert.match(result.errorMessage ?? "", new RegExp(`source timeout after ${reducedBudget / 1000}s`), "the reported timeout must reflect the actual reduced budget");
+  const row = fakeSupabase.rows("source_scans")[0];
+  assert.equal(row.status, "pending");
+  assert.equal(row.continuation_lease_token, null);
+  assert.ok(Date.parse(String(row.continuation_next_at)) > Date.now(), "a real timeout retains retry backoff");
 });
 
 /**

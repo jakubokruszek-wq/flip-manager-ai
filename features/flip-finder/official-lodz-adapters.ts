@@ -2,6 +2,7 @@ import { load } from "cheerio";
 import type { PropertySource, PropertySourceListing } from "@/features/properties/types/property";
 import { calculateContentHash } from "./otodom-search";
 import { classifyOfficialNotice, OFFICIAL_LODZ_SOURCES, type OfficialLodzSource } from "./official-lodz-sources";
+import type { SourceBatchContext } from "./source-batches";
 
 export type OfficialCanonicalSource = "official_cooperative" | "official_uml" | "official_auction";
 export type OfficialNoticeType = "cooperative_sale" | "municipal_sale" | "auction" | "syndic_sale";
@@ -21,7 +22,7 @@ export type OfficialSourceListing = PropertySourceListing & {
 export type OfficialSourcePage = { listings: OfficialSourceListing[]; hasNextPage: boolean; warnings: string[] };
 type RawNotice = { id?: string | null; url?: string | null; title?: string | null; text?: string | null; price?: unknown; deposit?: unknown; deadline?: string | null; eventDate?: string | null; area?: unknown; rooms?: unknown; city?: string | null; district?: string | null; image?: string | null; criteria?: string[] };
 type FetchText = (url: string, signal?: AbortSignal) => Promise<string>;
-type OfficialParser = (html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal) => Promise<OfficialSourcePage>;
+type OfficialParser = (html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal, batches?: SourceBatchContext) => Promise<OfficialSourcePage>;
 
 // Two independent whitespace pitfalls in plain cheerio .text() across these
 // hand-written notice pages:
@@ -89,35 +90,58 @@ export const OFFICIAL_LODZ_PARSERS: Record<string, OfficialParser> = {
 
 export const OFFICIAL_LODZ_SOURCE_IDS = SOURCE_IDS as readonly string[];
 
-export async function fetchOfficialLodzGroup(group: OfficialCanonicalSource, criteria: { city: string | null }, signal?: AbortSignal): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+export async function fetchOfficialLodzGroup(group: OfficialCanonicalSource, criteria: { city: string | null }, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
   const sources = OFFICIAL_LODZ_SOURCES.filter((source) => isOfficialSourceRuntimeEligible(source) && SOURCE_KIND[source.kind] === group);
   const all: OfficialSourceListing[] = [];
   const warnings: string[] = [];
   let fetched = 0;
-  for (const source of sources) {
+  // Low two digits are the next detail within a site (at most 20); the
+  // remaining digits select the next verified catalog entry.
+  const cursor = batches?.cursor ?? 0;
+  for (let index = Math.floor(cursor / 100); index < sources.length; index += 1) {
+    const source = sources[index];
+    let batch: { listings: PropertySourceListing[]; warnings: string[]; fetched: number };
+    let emitted = false;
+    let callbackFailed = false;
     // One independently-run site failing (TLS error, timeout, HTTP error,
     // a malformed page) must never take down every other source in the
     // group -- each is isolated so the rest still report their real data.
     try {
-      const result = await fetchOfficialSource(source.id, criteria, signal);
+      const result = await fetchOfficialSource(source.id, criteria, signal, batches ? {
+        cursor: index === Math.floor(cursor / 100) ? cursor % 100 : 0,
+        onBatch: async (part, nextDetail) => {
+          emitted = true;
+          const next = nextDetail === null ? (index + 1 < sources.length ? (index + 1) * 100 : null) : index * 100 + nextDetail;
+          try { await batches.onBatch(part, next); } catch (error) { callbackFailed = true; throw error; }
+        },
+      } : undefined);
+      batch = result;
       fetched += result.fetched;
       warnings.push(...result.warnings);
       all.push(...result.listings);
     } catch (error) {
-      warnings.push(`${source.label}: ${error instanceof Error ? error.message : "nieznany błąd połączenia"}.`);
+      if (signal?.aborted || callbackFailed) throw error;
+      const warning = `${source.label}: ${error instanceof Error ? error.message : "nieznany błąd połączenia"}.`;
+      warnings.push(warning);
+      batch = { listings: [], warnings: [warning], fetched: 0 };
     }
+    // Callback failures (lease lost / budget yield) must escape the group.
+    if (batches && !emitted) await batches.onBatch(batch, index + 1 < sources.length ? (index + 1) * 100 : null);
   }
   const seen = new Set<string>();
   return { listings: all.filter((listing) => { const key = `${listing.source}:${listing.normalizedUrl}`; if (seen.has(key)) return false; seen.add(key); return true; }), warnings, fetched };
 }
 
-export async function fetchOfficialSource(sourceId: string, criteria: { city: string | null }, signal?: AbortSignal): Promise<{ listings: OfficialSourceListing[]; warnings: string[]; fetched: number }> {
+export async function fetchOfficialSource(sourceId: string, criteria: { city: string | null }, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: OfficialSourceListing[]; warnings: string[]; fetched: number }> {
   const source = SOURCE_BY_ID.get(sourceId);
   const parser = OFFICIAL_LODZ_PARSERS[sourceId];
   if (!source || !parser) throw new Error(`OFFICIAL_SOURCE_UNSUPPORTED: ${sourceId}`);
   const html = await fetchOfficialHtml(source.url, source.charset, signal);
   const fetchDetail: FetchText = (url) => fetchOfficialHtml(url, source.charset, signal);
-  const page = await parser(html, source, fetchDetail, signal);
+  const page = await parser(html, source, fetchDetail, signal, batches ? {
+    ...batches,
+    onBatch: (batch, next) => batches.onBatch({ ...batch, listings: batch.listings.filter((listing) => !criteria.city || listing.city?.toLocaleLowerCase("pl-PL") === criteria.city.toLocaleLowerCase("pl-PL")) }, next),
+  } : undefined);
   const listings = page.listings.filter((listing) => !criteria.city || listing.city?.toLocaleLowerCase("pl-PL") === criteria.city.toLocaleLowerCase("pl-PL"));
   return { listings, warnings: page.warnings, fetched: page.listings.length };
 }
@@ -187,7 +211,7 @@ function proseEventDate(text: string): string | null {
 // mieszkalny nr 83 ... składa się z 2-ch pokoi ... o łącznej pow. użytkowej
 // 36,74 m2" and "Cena wywoławcza wynosi 222 000,00 zł".
 // ---------------------------------------------------------------------------
-async function parseSmDabrowa(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal): Promise<OfficialSourcePage> {
+async function parseSmDabrowa(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal, batches?: SourceBatchContext): Promise<OfficialSourcePage> {
   const $ = load(html);
   const summaries: NoticeSummary[] = [];
   $("h2 a[href*='/informacje/oferty-przetargi/']").each((_, element) => {
@@ -200,7 +224,7 @@ async function parseSmDabrowa(html: string, source: OfficialLodzSource, fetchDet
     const body = $(".com-content-article__body").first();
     const text = (body.length ? body.text() : $("body").text()).replace(/\s+/gu, " ").trim();
     return { url: summary.url, title: summary.title, text, price: prosePrice(text), area: proseArea(text), rooms: proseRooms(text), deposit: proseDeposit(text), eventDate: $("time[datetime]").first().attr("datetime") ?? null };
-  });
+  }, batches);
   return normalizeNotices(source, "cooperative_sale", notices, false);
 }
 
@@ -282,7 +306,7 @@ async function parseSmKarolew(html: string, source: OfficialLodzSource): Promise
 // list ("przetarg dotyczący wyboru wykonawców", "Wyniki przetargu"); each
 // links to its own sub-page with the real body text.
 // ---------------------------------------------------------------------------
-async function parseSmRetkiniaPolnoc(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal): Promise<OfficialSourcePage> {
+async function parseSmRetkiniaPolnoc(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal, batches?: SourceBatchContext): Promise<OfficialSourcePage> {
   const $ = load(html);
   const summaries: NoticeSummary[] = [];
   $("#c_text a[href]").each((_, element) => {
@@ -294,7 +318,7 @@ async function parseSmRetkiniaPolnoc(html: string, source: OfficialLodzSource, f
     const $ = loadNormalized(detailHtml);
     const text = $("#c_text").first().text().replace(/\s+/gu, " ").trim() || $("body").text().replace(/\s+/gu, " ").trim();
     return { url: summary.url, title: summary.title, text, price: prosePrice(text), area: proseArea(text), rooms: proseRooms(text), deposit: proseDeposit(text) };
-  });
+  }, batches);
   return normalizeNotices(source, "cooperative_sale", notices, false);
 }
 
@@ -338,7 +362,7 @@ async function parseSmRetkiniaPoludnie(html: string, source: OfficialLodzSource)
 // Cena wywoławcza wynosi: 259 000,00 zł", plus eligibility criteria and a
 // real auction date.
 // ---------------------------------------------------------------------------
-async function parseSmRadogoszcz(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal): Promise<OfficialSourcePage> {
+async function parseSmRadogoszcz(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal, batches?: SourceBatchContext): Promise<OfficialSourcePage> {
   const $ = load(html);
   const summaries: NoticeSummary[] = [];
   $("article a[href*='smrw.pl/']").each((_, element) => {
@@ -351,7 +375,7 @@ async function parseSmRadogoszcz(html: string, source: OfficialLodzSource, fetch
     const $ = loadNormalized(detailHtml);
     const text = $(".entry-content").first().text().replace(/\s+/gu, " ").trim() || $("article").first().text().replace(/\s+/gu, " ").trim();
     return { url: summary.url, title: summary.title, text, price: prosePrice(text), area: proseArea(text), rooms: proseRooms(text), deposit: proseDeposit(text), deadline: proseDeadline(text), eventDate: proseEventDate(text), criteria: proseEligibility(text) };
-  });
+  }, batches);
   return normalizeNotices(source, "cooperative_sale", notices, false);
 }
 
@@ -364,7 +388,7 @@ async function parseSmRadogoszcz(html: string, source: OfficialLodzSource, fetch
 // parser would fetch and extract the moment a residential-sale title
 // appears, same selector, same page.
 // ---------------------------------------------------------------------------
-async function parseSmDolyMarysinska(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal): Promise<OfficialSourcePage> {
+async function parseSmDolyMarysinska(html: string, source: OfficialLodzSource, fetchDetail: FetchText, signal?: AbortSignal, batches?: SourceBatchContext): Promise<OfficialSourcePage> {
   const $ = load(html);
   const summaries: NoticeSummary[] = [];
   $("article a[href*='smdmlodz.pl/20']").each((_, element) => {
@@ -377,7 +401,7 @@ async function parseSmDolyMarysinska(html: string, source: OfficialLodzSource, f
     const $ = loadNormalized(detailHtml);
     const text = $(".entry-content").first().text().replace(/\s+/gu, " ").trim() || $("article").first().text().replace(/\s+/gu, " ").trim();
     return { url: summary.url, title: summary.title, text, price: prosePrice(text), area: proseArea(text), rooms: proseRooms(text), deposit: proseDeposit(text) };
-  });
+  }, batches);
   const hasNextPage = Boolean($("a[href*='/category/przetargi/page/']").length);
   return normalizeNotices(source, "cooperative_sale", notices, hasNextPage);
 }
@@ -444,17 +468,28 @@ function parseBlocked(reason: string): OfficialParser {
 type NoticeSummary = { title: string; url: string };
 const MAX_DETAIL_FETCHES = 20;
 
-async function fetchNoticeDetails(source: OfficialLodzSource, summaries: NoticeSummary[], fetchDetail: FetchText, signal: AbortSignal | undefined, extract: (detailHtml: string, summary: NoticeSummary & { url: string }) => RawNotice | null): Promise<RawNotice[]> {
+async function fetchNoticeDetails(source: OfficialLodzSource, summaries: NoticeSummary[], fetchDetail: FetchText, signal: AbortSignal | undefined, extract: (detailHtml: string, summary: NoticeSummary & { url: string }) => RawNotice | null, batches?: SourceBatchContext): Promise<RawNotice[]> {
   const notices: RawNotice[] = [];
-  for (const summary of summaries.slice(0, MAX_DETAIL_FETCHES)) {
-    if (classifyOfficialNotice(summary.title, source) === "excluded") continue;
+  const bounded = summaries.slice(0, MAX_DETAIL_FETCHES);
+  for (let index = batches?.cursor ?? 0; index < bounded.length; index += 1) {
+    const summary = bounded[index];
     const absolute = absoluteNoticeUrl(summary.url, source.url);
-    if (!absolute) continue;
-    try {
+    let notice: RawNotice | null = null;
+    const warnings: string[] = [];
+    if (absolute && classifyOfficialNotice(summary.title, source) !== "excluded") try {
       const detailHtml = await fetchDetail(absolute, signal);
-      const notice = extract(detailHtml, { ...summary, url: absolute });
+      notice = extract(detailHtml, { ...summary, url: absolute });
       if (notice) notices.push(notice);
-    } catch { continue; }
+    } catch (error) {
+      // Parent timeout/yield is not evidence that a notice has no listings.
+      // Keep this detail available for continuation rather than swallowing it.
+      if (signal?.aborted) throw error;
+      warnings.push(`${source.label}: ${error instanceof Error ? error.message : "detail unavailable"}`);
+    }
+    if (batches) {
+      const parsed = notice ? normalizeNotices(source, "cooperative_sale", [notice], false) : { listings: [], warnings: [] };
+      await batches.onBatch({ listings: parsed.listings, warnings: [...warnings, ...parsed.warnings], fetched: parsed.listings.length }, index + 1 < bounded.length ? index + 1 : null);
+    }
   }
   return notices;
 }

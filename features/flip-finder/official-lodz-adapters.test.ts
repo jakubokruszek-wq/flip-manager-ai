@@ -12,6 +12,27 @@ async function parse(id: string, html: string, fetchDetail: (url: string) => Pro
   return OFFICIAL_LODZ_PARSERS[id]!(html, source(id), fetchDetail);
 }
 
+test("official detail checkpoints resume at the next notice and propagate budget/lease callback failures", async () => {
+  const list = [501, 502].map((id) => `<h2><a href="/informacje/oferty-przetargi/${id}-lokal-mieszkalny-na-przetarg">Lokal mieszkalny na sprzedaż Łódź</a></h2>`).join("");
+  const detail = `<div class="com-content-article__body"><p>Lokal mieszkalny na sprzedaż w Łodzi, o powierzchni użytkowej 40 m2 (2 pokoje). Cena wywoławcza wynosi 200 000 zł.</p></div>`;
+  const requests: string[] = [];
+  const fetchDetail = async (url: string) => { requests.push(url); return detail; };
+  let next: number | null = null;
+  const parser = OFFICIAL_LODZ_PARSERS["sm-dabrowa"];
+  await assert.rejects(parser(list, source("sm-dabrowa"), fetchDetail, undefined, {
+    onBatch: async (batch, cursor) => { assert.equal(batch.listings.length, 1); next = cursor; throw new Error("SOURCE_SLICE_YIELD"); },
+  }), /SOURCE_SLICE_YIELD/);
+  assert.equal(next, 1);
+  assert.equal(requests.length, 1);
+  const saved: string[] = [];
+  await parser(list, source("sm-dabrowa"), fetchDetail, undefined, { cursor: next!, onBatch: async (batch, cursor) => { saved.push(...batch.listings.map((listing) => listing.originalUrl!)); next = cursor; } });
+  assert.equal(next, null);
+  assert.equal(requests.length, 2);
+  assert.match(requests[0], /501-/);
+  assert.match(requests[1], /502-/);
+  assert.equal(saved.length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // sm-dabrowa: Joomla list -> detail. The list page only teases a title; the
 // detail page's prose carries the real price/area/rooms.
