@@ -219,6 +219,7 @@ test("the real Finder scan button latches on click, reflects live progress, and 
   await page.route("**/api/flip-finder/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname.endsWith("/latest-run")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: null }) });
     if (url.pathname === "/api/flip-finder/search-filters") {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload()), status: 200 });
     }

@@ -328,10 +328,9 @@ test("the Finder scan-result card never labels a facebook source result as Faceb
 // (see features/facebook-worker/scheduler.ts). That let a concurrent
 // Watcher run "leak" into Finder's UI with zero clicks: real group names,
 // real post counts, real collector-queue timeouts, exactly what the
-// production screenshot showed. The fix removes that effect entirely and
-// proves scanProgress/activeScanRunId can only ever be set from a runId a
-// Finder-initiated POST to /scan itself returned.
-test("scanProgress and activeScanRunId are only ever set from a Finder-initiated scan's own runId, never from activeFilter.lastScan", () => {
+// production screenshot showed. Automatic observation now uses a dedicated
+// Finder-only GET discovery, alongside the explicit manual start ACK.
+test("scanProgress uses explicit Finder discovery or a manual ACK, never activeFilter.lastScan", () => {
   // Strip `//` line comments first: the removed effect's own explanatory
   // comment names "lastScan.scanRunId" in prose, which must not itself trip
   // this check meant to catch live CODE reading that value.
@@ -340,10 +339,12 @@ test("scanProgress and activeScanRunId are only ever set from a Finder-initiated
   assert.doesNotMatch(codeOnly, /activeFilter(?:\??)\.lastScan/, "activeFilter.lastScan may only feed a static, non-live display (e.g. an 'Ostatni skan' timestamp), never scanProgress/activeScanRunId state");
 
   const setActiveScanRunIdCalls = [...page.matchAll(/setActiveScanRunId\(([^)]*)\)/g)].map((match) => match[1].trim());
-  assert.deepEqual(setActiveScanRunIdCalls.sort(), ["null", "payload.runId"].sort(), "setActiveScanRunId must only ever be cleared or set from a scan response's own runId");
+  assert.deepEqual(setActiveScanRunIdCalls.sort(), ["null", "payload.runId"].sort(), "manual monitoring follows only its own ACK");
+  assert.match(codeOnly, /setObservedRun\(\{ filterId: selectedFilterId, progress \}\)/, "observation state must be isolated from a manual run for another filter");
+  assert.match(codeOnly, /observeFinderRuns\(selectedFilterId, controller.signal/);
+  assert.doesNotMatch(codeOnly, /data.latestScan/);
 
-  // The one automatic effect left on mount only triggers the initial data
-  // load (`load()`); it must never touch scanProgress or activeScanRunId.
+  // The catalogue loader stays independent of lightweight observation.
   const mountEffectBody = page.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[load\]\);/)?.[0];
   assert.ok(mountEffectBody, "the mount-time load effect must exist");
   assert.doesNotMatch(mountEffectBody, /setScanProgress|setActiveScanRunId/, "the mount-time effect may only call load(), never touch live scan state");

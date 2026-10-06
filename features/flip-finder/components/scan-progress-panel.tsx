@@ -55,11 +55,11 @@ export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse
         </div>
         <div aria-label={`Postęp ${progress.overall.percent}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progress.overall.percent} className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-muted" role="progressbar"><div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progress.overall.percent}%` }} /></div>
         <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-          <ProgressDetail label="Bieżący etap" value={waitingForContinuation ? `${currentLabel ?? "Źródła"} — oczekuje na kontynuację` : currentLabel ?? (active ? "Oczekiwanie na Collector" : terminalStage)} />
+          <ProgressDetail label="Bieżący etap" value={waitingForContinuation ? `${currentLabel ?? "Źródła"} — oczekuje na kontynuację` : currentLabel ?? (active ? "Oczekiwanie na źródła" : terminalStage)} />
           <ProgressDetail label="Pozostało" value={`${progress.overall.remainingUnits} etapów`} />
           {progress.olx.status ? <ProgressDetail label="OLX" value={`${jobStatusLabel(progress.olx.status)} · raw ${progress.olx.raw} · normalized ${progress.olx.normalized}`} /> : null}
         </div>
-        {progress.status === "partial" || waitingForContinuation ? <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-800 dark:text-amber-300">{waitingForContinuation ? "Oczekuje na kontynuację" : "Częściowo zakończony"}</p><p className="mt-1 text-muted-foreground">{waitingForContinuation ? "Część źródeł oczekuje na kolejny cykl kontynuacji (co ok. 5 minut, gdy zewnętrzny wyzwalacz działa). Kliknięcie \"Skanuj oferty\" wznowi dokładnie ten sam skan." : progress.partialReason ?? "Collector zakończył pracę, ale część SEARCH została pominięta lub ograniczona."}</p></div> : null}
+        {progress.status === "partial" || waitingForContinuation ? <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-800 dark:text-amber-300">{waitingForContinuation ? "Oczekuje na kontynuację" : "Częściowo zakończony"}</p><p className="mt-1 text-muted-foreground">{waitingForContinuation ? "Część źródeł oczekuje na kolejny cykl kontynuacji (co ok. 5 minut, gdy zewnętrzny wyzwalacz działa). Kliknięcie \"Skanuj oferty\" wznowi dokładnie ten sam skan." : progress.partialReason ?? "Część źródeł zakończyła się błędem. Zapisane oferty pozostają dostępne."}</p></div> : null}
         {/*
           Deliberately no Facebook per-group (or even aggregate group-count)
           breakdown here. That data -- group names, per-group post counts,

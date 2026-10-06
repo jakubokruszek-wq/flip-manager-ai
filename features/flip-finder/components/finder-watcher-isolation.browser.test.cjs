@@ -78,8 +78,11 @@ const filter = {
   lastScan: { id: "scan-row-1", scanRunId: watcherRunId, searchFilterId: filterId, source: "facebook", status: "running", startedAt: now, finishedAt: null, scannedCount: 110, matchedCount: 12, listingsCreated: 3, newCount: 3, listingsUpdated: 2, priceDropCount: 0 },
 };
 
+const secondFilterId = "55555555-5555-4555-8555-555555555555";
+const secondFilter = { ...filter, id: secondFilterId, name: "Second filter", isActive: false };
+
 const listPayload = {
-  filters: [filter],
+  filters: [filter, secondFilter],
   latestScan: null,
   summary: { activeFilters: 1, pausedFilters: 0, listingsCount: 0, activeListings: 0, removedListings: 0, newMatches: 0 },
 };
@@ -191,7 +194,7 @@ async function waitForServer(url, timeoutMs = 60_000) {
   throw new Error("Local Next server did not become ready within 60 seconds");
 }
 
-test("real Finder page never renders Watcher group data or COLLECTOR_NOT_AVAILABLE, on load or after clicking Skanuj", { timeout: 600_000 }, async (t) => {
+test("real Finder observes automatic runs using GET, preserves manual monitoring and isolates Watcher", { timeout: 600_000 }, async (t) => {
   const port = await freePort();
   const authPort = await freePort();
   const root = path.resolve(__dirname, "../../..");
@@ -234,6 +237,9 @@ test("real Finder page never renders Watcher group data or COLLECTOR_NOT_AVAILAB
   const baseUrl = `http://127.0.0.1:${port}`;
 
   const facebookRequests = [];
+  const observationRequests = [];
+  const latestByFilter = new Map();
+  const progressByRun = new Map();
 
   const page = await browser.newPage();
   await page.context().addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
@@ -243,12 +249,17 @@ test("real Finder page never renders Watcher group data or COLLECTOR_NOT_AVAILAB
   await page.route("**/api/flip-finder/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    observationRequests.push({ path: url.pathname, method: request.method(), query: url.search });
+    if (url.pathname.endsWith("/latest-run")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: latestByFilter.get(url.pathname.split("/").at(-2)) ?? null }) });
     if (url.pathname === "/api/flip-finder/search-filters") {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(listPayload), status: 200 });
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/results`) {
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(resultsPayload), status: 200 });
     }
+    if (url.pathname === `/api/flip-finder/search-filters/${secondFilterId}/results`) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...resultsPayload, filter: secondFilter }) });
+    const observedRun = url.pathname.split("/").at(-1);
+    if (progressByRun.has(observedRun)) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(progressByRun.get(observedRun)) });
     // If a leaked-poll bug ever reintroduced polling of the filter's own
     // (Watcher-owned) lastScan.runId, this is the exact URL it would hit.
     if (url.pathname === `/api/flip-finder/scans/${watcherRunId}`) {
@@ -275,6 +286,74 @@ test("real Finder page never renders Watcher group data or COLLECTOR_NOT_AVAILAB
     assert.equal(facebookRequests.length, 0, "the page must never issue a request to facebook.com on load");
   });
 
+  const autoRunId = "66666666-6666-4666-8666-666666666666";
+  const laterRunId = "77777777-7777-4777-8777-777777777777";
+  const otherRunId = "88888888-8888-4888-8888-888888888888";
+  const activeProgress = (id) => ({ ...financeCompletedProgress(id), status: "running", finishedAt: null,
+    overall: { completedUnits: 0, totalUnits: 2, percent: 0, failedUnits: 0, remainingUnits: 2, waitingUnits: 0 }, current: { source: "otodom", groupName: null },
+    totals: { scanned: 7, matched: 2, created: 1, updated: 0, priceDrops: 0 } });
+  const panel = page.getByRole("region", { name: "Postęp skanowania" });
+
+  await t.test("automatic run appears without a click and is restored on page refresh, despite a newer Watcher run", async () => {
+    latestByFilter.set(filterId, autoRunId);
+    progressByRun.set(autoRunId, activeProgress(autoRunId));
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await panel.waitFor({ state: "visible" });
+    assert.equal(await panel.getByRole("progressbar").getAttribute("aria-valuenow"), "0");
+    assert.match(await panel.innerText(), /Otodom/);
+    assert.ok(observationRequests.some((r) => r.path.endsWith(autoRunId) && r.query.includes("observe=1")));
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await panel.waitFor({ state: "visible" });
+    assert.equal(observationRequests.filter((r) => r.path.endsWith(watcherRunId)).length, 0);
+    assert.doesNotMatch(await page.locator("body").innerText(), /Dawid Trojanowski|COLLECTOR_NOT_AVAILABLE/);
+    assert.equal(observationRequests.filter((r) => r.method !== "GET").length, 0);
+  });
+
+  await t.test("GET updates counters and displays waiting continuation without resuming it", async () => {
+    progressByRun.set(autoRunId, { ...activeProgress(autoRunId), status: "partial",
+      overall: { completedUnits: 1, totalUnits: 2, percent: 50, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 },
+      continuation: { ready: true, nextAt: null }, totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } });
+    await panel.getByText("Oczekuje na kontynuację", { exact: true }).first().waitFor({ state: "visible" });
+    assert.equal(await panel.getByRole("progressbar").getAttribute("aria-valuenow"), "50");
+    assert.match(await page.locator("body").innerText(), /300/);
+    assert.equal(observationRequests.filter((r) => r.method !== "GET").length, 0, "viewing a ready run must NOT POST /continue");
+  });
+
+  await t.test("terminal partial remains visible with errors and stops progress polling", async () => {
+    progressByRun.set(autoRunId, { ...financeCompletedProgress(autoRunId), status: "partial",
+      overall: { completedUnits: 2, totalUnits: 2, percent: 100, failedUnits: 1, remainingUnits: 0, waitingUnits: 0 }, errors: ["SOURCE_FORBIDDEN: HTTP 403"] });
+    await panel.getByText("SOURCE_FORBIDDEN: HTTP 403", { exact: true }).waitFor({ state: "visible" });
+    assert.match(await panel.innerText(), /Częściowo zakończony/);
+    assert.doesNotMatch(await panel.innerText(), /Skanowanie…|Oczekuje na kontynuację/);
+    const count = observationRequests.filter((r) => r.path.endsWith(autoRunId)).length;
+    await page.waitForTimeout(2_500);
+    assert.equal(observationRequests.filter((r) => r.path.endsWith(autoRunId)).length, count);
+  });
+
+  await t.test("a later automatic run is discovered on mobile without reloading the listings catalogue", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const catalogueReads = observationRequests.filter((r) => r.path === "/api/flip-finder/search-filters" || r.path.endsWith("/results")).length;
+    latestByFilter.set(filterId, laterRunId);
+    progressByRun.set(laterRunId, { ...activeProgress(laterRunId), overall: { completedUnits: 1, totalUnits: 4, percent: 25, failedUnits: 0, remainingUnits: 3, waitingUnits: 0 } });
+    await page.waitForFunction(() => document.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") === "25", null, { timeout: 25_000 });
+    assert.equal(observationRequests.filter((r) => r.path === "/api/flip-finder/search-filters" || r.path.endsWith("/results")).length, catalogueReads);
+    assert.equal(observationRequests.filter((r) => r.method !== "GET").length, 0);
+  });
+
+  await t.test("changing the selected filter aborts old progress and follows only the new filter", async () => {
+    latestByFilter.set(secondFilterId, otherRunId);
+    progressByRun.set(otherRunId, { ...activeProgress(otherRunId), current: { source: "morizon", groupName: null } });
+    await page.evaluate((id) => window.history.pushState({}, "", `/flip-finder?activeFilter=${id}`), secondFilterId);
+    await panel.getByText("Morizon", { exact: true }).waitFor({ state: "visible" });
+    const oldCount = observationRequests.filter((r) => r.path.endsWith(laterRunId)).length;
+    await page.waitForTimeout(2_500);
+    assert.equal(observationRequests.filter((r) => r.path.endsWith(laterRunId)).length, oldCount);
+    assert.ok(observationRequests.some((r) => r.path.endsWith(otherRunId) && r.query.includes(secondFilterId)));
+    await page.evaluate(() => window.history.pushState({}, "", "/flip-finder"));
+    await panel.getByText("Otodom", { exact: true }).waitFor({ state: "visible" });
+    latestByFilter.delete(filterId);
+  });
+
   await t.test("after clicking Skanuj, only Finder's own completed recalculation is shown -- still no Watcher group data", async () => {
     const scanButton = page.getByRole("button", { name: /Skanuj/i }).first();
     await scanButton.click();
@@ -284,5 +363,19 @@ test("real Finder page never renders Watcher group data or COLLECTOR_NOT_AVAILAB
     assert.doesNotMatch(bodyText, /Łódź Mieszkania Sprzedaż|Nieruchomości Łódzkie/, "clicking Skanuj must never surface a per-group Watcher breakdown");
     assert.doesNotMatch(bodyText, /COLLECTOR_NOT_AVAILABLE/, "clicking Skanuj must never surface the Watcher's collector-timeout error");
     assert.equal(facebookRequests.length, 0, "clicking Skanuj must never cause a request to facebook.com");
+  });
+
+  await t.test("unmount stops observation requests, including lightweight discovery", async () => {
+    // Start a genuinely active observation, then leave via a client-side Link.
+    latestByFilter.set(filterId, laterRunId);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await panel.waitFor({ state: "visible" });
+    // Base UI renders this navigation anchor with role=button.
+    await page.locator('a[href="/flip-finder/filters/new"]').first().click();
+    await page.waitForURL("**/flip-finder/filters/new");
+    await page.waitForTimeout(500);
+    const before = observationRequests.filter((r) => r.path.endsWith("/latest-run") || r.path.includes("/scans/")).length;
+    await page.waitForTimeout(16_000);
+    assert.equal(observationRequests.filter((r) => r.path.endsWith("/latest-run") || r.path.includes("/scans/")).length, before);
   });
 });

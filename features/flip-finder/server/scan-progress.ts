@@ -34,15 +34,22 @@ const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
 const OLX_UNCLAIMED_TIMEOUT_MS = 90_000;
 const SCAN_PROGRESS_DATABASE_TIMEOUT_MS = 12_000;
 
-export async function getScanProgress(runId: string): Promise<ScanProgressResponse> {
+// Supplying a Finder filter selects the strictly read-only observation path.
+// Manual monitoring retains the existing watchdog/recovery behavior.
+export async function getScanProgress(runId: string, options: { finderFilterId?: string } = {}): Promise<ScanProgressResponse> {
   if (!isUuid(runId)) throw new Error("INVALID_SCAN_RUN_ID");
+  if (options.finderFilterId !== undefined && !isUuid(options.finderFilterId)) throw new Error("INVALID_FILTER_ID");
   const supabase = createFacebookWatcherAdminClient();
-  const initial = await supabase.from("source_scans").select("source").eq("scan_run_id", runId);
+  const initial = await supabase.from("source_scans").select("source,search_filter_id").eq("scan_run_id", runId);
   if (initial.error) throw new Error(`SCAN_PROGRESS_READ_FAILED: ${initial.error.message}`);
   const isFacebookRun = rows(initial.data).some((item) => item.source === "facebook");
-  if (isFacebookRun) await expireUnclaimedFacebookJobs(supabase, runId);
-  await expireUnclaimedOlxJobs(supabase, runId);
-  await expireStaleFinderSourceScans(supabase, runId);
+  if (options.finderFilterId !== undefined) {
+    if (!rows(initial.data).length || isFacebookRun || rows(initial.data).some((item) => item.search_filter_id !== options.finderFilterId)) throw new Error("SCAN_RUN_NOT_FOUND");
+  } else {
+    if (isFacebookRun) await expireUnclaimedFacebookJobs(supabase, runId);
+    await expireUnclaimedOlxJobs(supabase, runId);
+    await expireStaleFinderSourceScans(supabase, runId);
+  }
   const monthStart = zonedPeriodStart("month");
   const todayStart = zonedPeriodStart("day");
   const [scansResult, facebookResult, olxResult, monthJobsResult, collectorBatchesResult] = await Promise.all([

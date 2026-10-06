@@ -10,11 +10,12 @@ export async function GET(request: Request, { params }: Context) {
   } catch (error) {
     return operatorAuthorizationResponse(error);
   }
-  void request;
   try {
-    return Response.json(await getScanProgress((await params).runId));
+    const url = new URL(request.url);
+    const options = url.searchParams.get("observe") === "1" ? { finderFilterId: url.searchParams.get("filterId") ?? "" } : {};
+    return Response.json(await getScanProgress((await params).runId, options), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "SCAN_STATUS_FAILED";
-    return Response.json({ error: message }, { status: message === "SCAN_RUN_NOT_FOUND" ? 404 : message === "INVALID_SCAN_RUN_ID" ? 400 : 500 });
+    return Response.json({ error: message }, { status: message === "SCAN_RUN_NOT_FOUND" ? 404 : message === "INVALID_SCAN_RUN_ID" || message === "INVALID_FILTER_ID" ? 400 : 500 });
   }
 }

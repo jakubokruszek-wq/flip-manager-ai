@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
@@ -11,8 +12,6 @@ import {
   summarizeStartTrace,
   dashboardCount,
   filterResultsHref,
-  hasLatestScan,
-  latestScanCounters,
   NO_SCANS_MESSAGE,
   scanNoOffersMessage,
   scanStatusLabel,
@@ -30,8 +29,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
 import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
-import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isAwaitingContinuation, isTerminalScanStatus, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
+import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isAwaitingContinuation, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 import { fetchScanProgress, waitUntilScanTerminal } from "@/features/flip-finder/scan-progress-client";
+import { observeFinderRuns } from "@/features/flip-finder/finder-run-observer";
 import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 import { activeFilterSources } from "@/features/flip-finder/source-availability";
 
@@ -104,8 +104,9 @@ type CollectorValidation = {
 };
 
 export function FlipFinderPage() {
-  const [requestedFilterId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("activeFilter"));
-  const [deepLinkListingId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("listing"));
+  const searchParams = useSearchParams();
+  const requestedFilterId = searchParams.get("activeFilter");
+  const deepLinkListingId = searchParams.get("listing");
   const [data, setData] = useState<SearchFilterListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -115,6 +116,9 @@ export function FlipFinderPage() {
   const [lastScanDiagnostics, setLastScanDiagnostics] = useState<{ filter: SearchFilterListItem; response: ScanResponse } | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgressResponse | null>(null);
   const [activeScanRunId, setActiveScanRunId] = useState<string | null>(null);
+  const [progressFilterId, setProgressFilterId] = useState<string | null>(null);
+  const [observedRun, setObservedRun] = useState<{ filterId: string; progress: ScanProgressResponse | null } | null>(null);
+  const [observationError, setObservationError] = useState<{ filterId: string; message: string } | null>(null);
   const [startTrace, setStartTrace] = useState<StartTrace | null>(null);
   const [validatingCollector, setValidatingCollector] = useState(false);
   const [collectorValidation, setCollectorValidation] = useState<{ requestId: string; pageBootstrap: boolean; bootstrapBackground: boolean; result: CollectorValidation | null; error: string | null } | null>(null);
@@ -158,25 +162,25 @@ export function FlipFinderPage() {
     return () => window.clearTimeout(timeoutId);
   }, [load]);
 
-  // REMOVED: an auto-resume effect used to poll filter.lastScan.scanRunId on
-  // every page load/data refresh, entirely independent of any "Skanuj"
-  // click. filter.lastScan is the most recent source_scans row for the
-  // filter from ANY origin -- including the Facebook Watcher's own
-  // independent scheduler cycle, which creates its own source_scans/
-  // facebook_scan_jobs rows for any active filter whose sources include
-  // "facebook" (see features/facebook-worker/scheduler.ts). That made
-  // simply viewing the Finder page (no click required) start rendering the
-  // Watcher's live, in-progress, per-group Facebook scan under the Finder
-  // scan panel -- real group names, real post counts, real collector queue
-  // timeouts -- creating the exact appearance of "Finder is scanning
-  // Facebook groups" a real production screenshot confirmed. Finder's own
-  // scan (runManualOtodomScan) never creates a facebook_scan_jobs row and
-  // always completes its facebook step synchronously (status "completed",
-  // never "running"), so a "running" lastScan for a facebook-enabled filter
-  // can only ever be a run Finder did not start. The live "Skanuj" click
-  // flow below is unaffected: it already polls activeScanRunId, the exact
-  // run id runManualOtodomScan itself just returned, never the filter's
-  // general lastScan.
+  const activeFilter = data?.filters.find((filter) => filter.id === requestedFilterId) ?? data?.filters.find((filter) => filter.isActive) ?? data?.filters[0] ?? null;
+  const selectedFilterId = activeFilter?.id ?? null;
+  const manualMonitoring = selectedFilterId !== null && scanningFilterIds.has(selectedFilterId);
+  useEffect(() => {
+    if (!selectedFilterId || manualMonitoring) return;
+    const controller = new AbortController();
+    void observeFinderRuns(selectedFilterId, controller.signal, {
+      onProgress: (progress) => {
+        // A manual click may happen while an observation GET is in flight,
+        // before React runs the effect cleanup. Never overwrite that run.
+        if (scanningFilterIdsRef.current.has(selectedFilterId)) return;
+        setObservedRun({ filterId: selectedFilterId, progress });
+      },
+      onError: (message) => {
+        if (!scanningFilterIdsRef.current.has(selectedFilterId)) setObservationError(message ? { filterId: selectedFilterId, message } : null);
+      },
+    });
+    return () => controller.abort();
+  }, [selectedFilterId, manualMonitoring]);
 
   const scanFilter = async (filter: SearchFilterListItem) => {
     if (
@@ -192,6 +196,8 @@ export function FlipFinderPage() {
     setNotice(null);
     setRetryFilterId(null);
     setActiveScanRunId(null);
+    setProgressFilterId(filter.id);
+    setObservedRun(null);
     setScanProgress(null);
     pollingAbortRef.current?.abort();
     pollingAbortRef.current = new AbortController();
@@ -440,18 +446,16 @@ export function FlipFinderPage() {
     return <DashboardErrorState message={error ?? "Nie udało się pobrać danych Flip Findera."} onRetry={load} />;
   }
 
-  const activeFilter = data.filters.find((filter) => filter.id === requestedFilterId) ?? data.filters.find((filter) => filter.isActive) ?? data.filters[0] ?? null;
-  // Deliberately keyed on activeScanRunId (the run Finder itself started and
-  // is tracking), never activeFilter.lastScan?.scanRunId -- the filter's
-  // last scan can belong to the Facebook Watcher's own independent
-  // scheduler cycle, which Finder must never read into its own progress/
-  // diagnostics display (see the removed auto-resume effect above).
-  const latestProgressResponse = activeFilter && scanProgress && scanProgress.runId === activeScanRunId
-    ? scanResponseFromProgress(scanProgress)
+  // Both manual ACKs and GET discovery identify Finder-owned runs explicitly.
+  // The legacy lastScan row can belong to Watcher and is never followed.
+  const manualProgress = progressFilterId === selectedFilterId && scanProgress?.runId === activeScanRunId ? scanProgress : null;
+  const visibleScanProgress = manualMonitoring ? manualProgress : observedRun?.filterId === selectedFilterId ? observedRun.progress : manualProgress;
+  const latestProgressResponse = activeFilter && visibleScanProgress
+    ? scanResponseFromProgress(visibleScanProgress)
     : null;
   const displayedScanResult = latestProgressResponse && activeFilter
     ? { filter: activeFilter, response: latestProgressResponse }
-    : lastScanDiagnostics;
+    : lastScanDiagnostics?.filter.id === selectedFilterId ? lastScanDiagnostics : null;
   void collectorValidation;
   void externalPingResult;
 
@@ -508,9 +512,10 @@ export function FlipFinderPage() {
               </details>
             </div>
           </div>
-          {scanProgress && (!isTerminalScanStatus(scanProgress.status) || isAwaitingContinuation(scanProgress)) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <ScanProgressPanel progress={scanProgress} /> : null}
+          {observationError?.filterId === activeFilter.id ? <p role="alert" className="text-sm text-destructive">{observationError.message} Ostatni odczyt może być nieaktualny.</p> : null}
+          {visibleScanProgress ? <ScanProgressPanel progress={visibleScanProgress} /> : null}
           <InlineFilterResults deepLinkListingId={deepLinkListingId} key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
-          {scanProgress && (!isTerminalScanStatus(scanProgress.status) || isAwaitingContinuation(scanProgress)) && (scanProgress.runId === activeScanRunId || scanningFilterIds.has(activeFilter.id)) ? <VisionCostPanel progress={scanProgress} /> : null}
+          {visibleScanProgress ? <VisionCostPanel progress={visibleScanProgress} /> : null}
           <Dialog onOpenChange={(open) => { if (!clearingResults) setClearResultsOpen(open); }} open={clearResultsOpen}>
             <DialogContent className="max-w-md">
               <DialogHeader>
@@ -594,7 +599,7 @@ export function FlipFinderPage() {
         <StatisticCard label="Nowe w ostatnim skanie" value={data.summary.newMatches ?? 0} />
       </section>
 
-      <LatestScanPanel scan={data.latestScan} filters={data.filters} />
+      <LatestScanPanel progress={visibleScanProgress} filter={activeFilter} />
 
       <Card className="p-5 sm:p-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1050,61 +1055,25 @@ function StatisticCard({ label, value }: { label: string; value: number | null |
   );
 }
 
-function LatestScanPanel({
-  scan,
-  filters,
-}: {
-  scan: SearchFilterScan | null;
-  filters: SearchFilterListItem[];
-}) {
-  if (!hasLatestScan(scan)) {
-    return (
-      <section className="rounded-xl border border-dashed bg-card p-5">
-        <h2 className="type-section-title">Skanowanie ofert</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {NO_SCANS_MESSAGE}
-        </p>
-      </section>
-    );
-  }
-
-  const filterName = filters.find((filter) => filter.id === scan.searchFilterId)?.name;
-  const counters = latestScanCounters(scan);
-
+function LatestScanPanel({ progress, filter }: { progress: ScanProgressResponse | null; filter: SearchFilterListItem | null }) {
+  if (!progress) return <section className="rounded-xl border border-dashed bg-card p-5"><h2 className="type-section-title">Skanowanie ofert</h2><p className="mt-2 text-sm text-muted-foreground">{NO_SCANS_MESSAGE}</p></section>;
   return (
     <Card className="p-5 sm:p-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="type-section-title">Ostatni skan</h2>
-          {filterName ? <p className="mt-1 text-sm text-muted-foreground">Filtr: {filterName}</p> : null}
-        </div>
-        <ScanStatusBadge status={scan.status} />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 className="type-section-title">Ostatni skan Findera</h2><p className="mt-1 text-sm text-muted-foreground">Filtr: {filter?.name}</p></div>
+        {isAwaitingContinuation(progress) ? <span>Oczekuje na kontynuację</span> : <ScanStatusBadge status={progress.status === "queued" ? "pending" : progress.status} />}
       </div>
-
       <dl className="mt-5 grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
-        <ScanDetail label="Źródło" value={sourceLabel(scan.source)} />
-        <ScanDetail label="Rozpoczęcie" value={formatDateTime(scan.startedAt)} />
-        {scan.finishedAt ? <ScanDetail label="Zakończenie" value={formatDateTime(scan.finishedAt)} /> : null}
-        <ScanDetail label="Sprawdzone oferty" value={formatNumber(scan.scannedCount ?? 0)} />
-        <ScanDetail label="Globalnie nowe oferty" value={formatNumber(scan.listingsCreated ?? 0)} />
-        <ScanDetail label="Nowe dopasowania" value={formatNumber(scan.newCount ?? 0)} />
-        <ScanDetail label="Aktualizacje" value={formatNumber(counters.updatedCount)} />
-        <ScanDetail label="Obniżki cen" value={formatNumber(counters.priceDropCount)} />
-        <ScanDetail label="Błędy" value={formatNumber(scan.errorsCount ?? 0)} />
+        <ScanDetail label="Rozpoczęcie" value={formatDateTime(progress.startedAt)} />
+        {progress.finishedAt ? <ScanDetail label="Zakończenie" value={formatDateTime(progress.finishedAt)} /> : null}
+        <ScanDetail label="Etapy" value={`${progress.overall.completedUnits}/${progress.overall.totalUnits}`} />
+        <ScanDetail label="Sprawdzone oferty" value={formatNumber(progress.totals.scanned)} />
+        <ScanDetail label="Dopasowania" value={formatNumber(progress.totals.matched)} />
+        <ScanDetail label="Globalnie nowe oferty" value={formatNumber(progress.totals.created)} />
+        <ScanDetail label="Aktualizacje" value={formatNumber(progress.totals.updated)} />
+        <ScanDetail label="Obniżki cen" value={formatNumber(progress.totals.priceDrops)} />
+        <ScanDetail label="Błędy etapów" value={formatNumber(progress.overall.failedUnits)} />
       </dl>
-
-      {scan.status === "pending" && (scan.source === "olx" || scan.source === "facebook") ? (
-        <p className="mt-5 text-sm text-muted-foreground" role="status">{scan.source === "facebook" ? "Facebook: oczekuje na production Collector" : "OLX: oczekuje na lokalny worker"}</p>
-      ) : null}
-      {scan.status === "running" ? (
-        <p className="mt-5 flex items-center gap-2 text-sm text-muted-foreground" role="status">
-          <span className="size-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          Trwa pobieranie i zapisywanie ofert.
-        </p>
-      ) : null}
-      {scan.errorMessage ? (
-        <p className="mt-5 text-sm text-destructive">{scan.errorMessage}</p>
-      ) : null}
     </Card>
   );
 }
