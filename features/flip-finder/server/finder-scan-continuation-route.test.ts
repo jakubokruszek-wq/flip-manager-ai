@@ -63,6 +63,27 @@ test("the Finder-scoped secret authorizes the request and returns a fast 202 'ac
   continuationBehavior = "resolve";
 });
 
+// IMPORTANT, independently verified limit of this test: next/server's
+// after() throws synchronously ("`after` was called outside a request
+// scope") when invoked outside a real Next.js request -- confirmed directly:
+// `node -e "require('next/server').after(() => {})"` throws exactly that
+// error. node --test invoking route.POST() directly, as every test in this
+// file does, is NOT a real Next.js request scope, so runAfterResponse's own
+// catch branch (see run-after-response.ts) is what actually runs
+// continuationCalls += 1 here -- its documented fallback path (plain
+// `void task()`), not after() itself. This test proves the route's own
+// logic (auth gate, then defer, then fast 202) is wired correctly and that
+// the deferred callback is a real, well-formed function that executes when
+// invoked -- it does NOT, and cannot, prove after() itself delivers inside a
+// real Vercel-hosted request. That half is proven only by production
+// evidence outside any test's reach: a live Production resume of
+// scan_run_id fc86af86-437c-4606-9ba1-b17aeece389c (2026-10-06) through
+// /api/flip-finder/search-filters/[id]/scan -- which defers its own
+// background work via this exact same runAfterResponse helper -- visibly
+// advanced from 2/14 to 5/14 completed sources, confirmed live in the UI.
+// Since both routes call the identical helper the identical way (see
+// run-after-response.ts), there is no code-level reason after() would
+// behave differently for this route inside a real request.
 test("the deferred continuation cycle actually runs (fire-and-forget, not dropped)", async () => {
   continuationCalls = 0;
   continuationBehavior = "resolve";
