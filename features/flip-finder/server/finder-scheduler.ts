@@ -11,13 +11,15 @@ import {
 } from "@/features/flip-finder/server/manual-scan";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
+import { FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, finderScanIntervalMinutes, isFinderScanDue } from "@/features/flip-finder/finder-schedule";
+
+export { FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, finderScanIntervalMinutes, isFinderScanDue };
 
 // A Finder run itself can spend nearly the full 50-second worker window.
 // Starting one filter per HTTP invocation keeps the endpoint safely below
 // Vercel Hobby's 60-second hard limit; the five-minute trigger picks up the
 // next due filter on its next invocation.
 export const FINDER_SCHEDULER_MAX_FILTERS_PER_RUN = 1;
-export const FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES = 60;
 const FINDER_SCHEDULER_DB_TIMEOUT_MS = 8_000;
 
 export type FinderSchedulerSummary = {
@@ -51,36 +53,6 @@ export type FinderSchedulerDependencies = {
   startScan: (filter: SearchFilter) => Promise<ManualScanStart>;
   runScan: (filter: SearchFilter, start: ManualScanStart) => Promise<ScanSummary>;
 };
-
-/**
- * Finder's finder_scan_interval_minutes is its durable per-filter cadence.
- * The legacy scan_interval_minutes column remains the global Facebook
- * Watcher setting and is deliberately not read here.
- */
-export function finderScanIntervalMinutes(value: unknown): number {
-  const numeric = typeof value === "number"
-    ? value
-    : typeof value === "string" && /^\d+$/.test(value.trim())
-      ? Number(value.trim())
-      : Number.NaN;
-  return Number.isInteger(numeric) && numeric > 0
-    ? numeric
-    : FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES;
-}
-
-export function isFinderScanDue(input: {
-  isActive: boolean;
-  lastScannedAt: string | null | undefined;
-  scanIntervalMinutes: unknown;
-  now?: Date | number;
-}): boolean {
-  if (!input.isActive) return false;
-  if (!input.lastScannedAt) return true;
-  const last = Date.parse(input.lastScannedAt);
-  if (!Number.isFinite(last)) return true;
-  const now = input.now instanceof Date ? input.now.getTime() : input.now ?? Date.now();
-  return now - last >= finderScanIntervalMinutes(input.scanIntervalMinutes) * 60_000;
-}
 
 /** A filter with only unavailable source IDs is never handed to a worker. */
 export function finderFilterCanRun(filter: SearchFilter): boolean {

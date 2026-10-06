@@ -18,6 +18,7 @@ import {
   scanStatusLabel,
 } from "@/features/flip-finder/dashboard";
 import { OTODOM_AUTOMATION_BLOCKED_MESSAGE } from "@/features/flip-finder/otodom-search-response";
+import { FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, isFinderScanDue } from "@/features/flip-finder/finder-schedule";
 import type {
   SearchFilterListItem,
   SearchFilterListResponse,
@@ -386,6 +387,7 @@ export function FlipFinderPage() {
     const signal = pollingAbortRef.current?.signal;
     let consecutiveFailures = 0;
     let firstPoll = true;
+    let autoContinueAttempts = 0;
     try {
       while (scanningFilterIdsRef.current.has(filterId) && !signal?.aborted) {
         if (!firstPoll) await new Promise((resolve) => window.setTimeout(resolve, 1_000));
@@ -404,10 +406,34 @@ export function FlipFinderPage() {
         consecutiveFailures = 0;
         setScanProgress(payload);
         if (isAwaitingContinuation(payload)) {
-          setNotice("Skan częściowo zakończony; pozostałe źródła oczekują na kontynuację.");
-          await load();
-          setResultsRevision((current) => current + 1);
-          break;
+          // No external trigger (GitHub Actions' own `schedule` event has
+          // been confirmed, via a read-only Production diagnosis, to not
+          // reliably fire at all for this repo) can be relied on to resume a
+          // waiting run. As long as this tab stays open, it drives the same
+          // resume the "Skanuj oferty" button itself performs
+          // (reserveOrResumeSourceScans resumes the exact existing
+          // scan_run_id -- proven never to start a second run or duplicate
+          // the OLX job), so one click walks through every remaining source
+          // without the operator re-clicking. Bounded so a genuinely stuck
+          // run (e.g. a network outage) cannot spin this tab forever; a
+          // chronically failing source is independently bounded server-side
+          // by MAX_CONTINUATION_ATTEMPTS and eventually turns terminal,
+          // which also ends this loop.
+          if (autoContinueAttempts >= MAX_AUTO_CONTINUE_ATTEMPTS) {
+            setNotice("Skan częściowo zakończony; część źródeł nadal oczekuje po wielu automatycznych próbach wznowienia.");
+            await load();
+            setResultsRevision((current) => current + 1);
+            break;
+          }
+          autoContinueAttempts += 1;
+          const resumed = await triggerScanResume(filterId);
+          if (!resumed || signal?.aborted) {
+            setNotice("Skan częściowo zakończony; pozostałe źródła oczekują na kontynuację.");
+            await load();
+            setResultsRevision((current) => current + 1);
+            break;
+          }
+          continue;
         }
         if (!hasActiveBackendWork(payload) && !isAwaitingContinuation(payload)) {
           setNotice(payload.status === "partial" || payload.status === "failed" ? "Skan zakończył się z błędami." : `Skan zakończony. Znaleziono ${formatNumber(payload.totals.matched)} dopasowań.`);
@@ -425,6 +451,38 @@ export function FlipFinderPage() {
       finishScanning(filterId);
     }
   };
+
+  // Client-side auto-pilot: starts an active filter's scan automatically once
+  // its own finder_scan_interval_minutes has elapsed, using the exact same
+  // cadence math the server-side scheduler uses (isFinderScanDue, shared via
+  // finder-schedule.ts). This exists because GitHub Actions' own `schedule`
+  // event has been confirmed, via a read-only Production diagnosis, not to
+  // reliably fire for this repo at all -- a browser tab left open on this
+  // page is the one trigger genuinely under this app's own control. It calls
+  // the same scanFilter the "Skanuj oferty" button itself calls, so a filter
+  // that already has an unfinished run is resumed (reserveOrResumeSourceScans,
+  // same scan_run_id, no duplicate OLX job), never double-started; OLX and
+  // Facebook Watcher's own independent schedules are entirely untouched by
+  // this -- it only ever starts/resumes Finder's own lockable sources.
+  useEffect(() => {
+    if (!data) return;
+    const checkDueFilters = () => {
+      const now = Date.now();
+      for (const filter of data.filters) {
+        if (scanningFilterIdsRef.current.has(filter.id)) continue;
+        if (!isFinderScanDue({ isActive: filter.isActive, lastScannedAt: filter.lastScannedAt, scanIntervalMinutes: filter.finderScanIntervalMinutes ?? FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, now })) continue;
+        void scanFilter(filter);
+      }
+    };
+    checkDueFilters();
+    const intervalId = window.setInterval(checkDueFilters, AUTO_PILOT_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(intervalId);
+    // scanFilter is intentionally not a dependency: it closes over
+    // scanningFilterIdsRef (a ref, always current) rather than state, and
+    // re-running this effect on every scanFilter identity change (every
+    // render) would thrash the interval.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   const manageFilter = async (filter: SearchFilterListItem, action: "toggle" | "duplicate" | "delete") => {
     setError(null);
@@ -1309,6 +1367,40 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
     throw error;
   } finally {
     window.clearTimeout(timeout);
+  }
+}
+
+// Generous, not tight: a 14-source filter typically needs only a handful of
+// rounds (each round processes a few sources within its own bounded
+// invocation -- see sourceTimeoutBudgetMs in manual-scan.ts), and a source
+// that keeps genuinely timing out is independently capped server-side by
+// MAX_CONTINUATION_ATTEMPTS and eventually turns terminal on its own. This
+// cap exists only to stop monitorScanRun's auto-resume loop from spinning
+// forever if something unrelated (a network outage, a server outage) keeps
+// every resume attempt failing to even report real pending-vs-waiting state.
+const MAX_AUTO_CONTINUE_ATTEMPTS = 40;
+
+// Granularity for the client-side auto-pilot's due-filter check. A minute is
+// generous relative to the minutes-based finder_scan_interval_minutes this
+// checks against -- it does not need second-level precision, only to notice
+// "due" within about a minute of actually becoming due.
+const AUTO_PILOT_CHECK_INTERVAL_MS = 60_000;
+
+/**
+ * Fires the same POST the "Skanuj oferty" button itself sends. Used by
+ * monitorScanRun to drive a waiting run's remaining sources forward without
+ * the operator re-clicking -- reserveOrResumeSourceScans (server-side)
+ * resumes the exact existing scan_run_id, so this can never start a second
+ * run or duplicate the OLX job. Deliberately ignores the response body: the
+ * caller's own next progress poll is what actually observes whether it
+ * helped, exactly like a real click would.
+ */
+async function triggerScanResume(filterId: string): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(`/api/flip-finder/search-filters/${filterId}/scan`, { method: "POST" }, 20_000);
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 

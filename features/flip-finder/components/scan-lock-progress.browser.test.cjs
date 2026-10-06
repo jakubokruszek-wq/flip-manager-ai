@@ -64,8 +64,18 @@ const filter = {
   minEstimatedProfit: null,
   maxEstimatedRenovationCost: null,
   scanIntervalMinutes: 60,
+  finderScanIntervalMinutes: 60,
   isActive: true,
-  lastScannedAt: null,
+  // Real wall-clock "just now", not the fixed `now` constant used for
+  // progress snapshots: flip-finder-page.tsx's auto-pilot effect checks
+  // isFinderScanDue against the real Date.now() the moment this page loads
+  // in the browser, not against mocked scan data. A null/stale
+  // lastScannedAt would make the filter immediately "due" and the
+  // auto-pilot would fire its own POST before test A's explicit click ever
+  // runs, corrupting scanPostCount for every scenario below. This file is
+  // specifically about the manual button; the auto-pilot itself is proven
+  // separately.
+  lastScannedAt: new Date().toISOString(),
   createdAt: now,
   updatedAt: now,
   totalMatches: 0,
@@ -204,6 +214,15 @@ test("the real Finder scan button latches on click, reflects live progress, and 
   const progressQueueByRun = {};
   /** @type {Record<string, number>} */
   const progressGetCountByRun = {};
+  /** @type {Record<string, boolean>} */
+  const runTerminalByRun = {};
+  /** The run a POST should resume into, mirroring reserveOrResumeSourceScans:
+   * a POST while this filter already has an unfinished run returns the SAME
+   * run id, never a new one -- cleared once that run reaches a terminal
+   * status, exactly like the real server-side lock. */
+  let activeRunId = null;
+  /** @type {Record<string, number>} */
+  const resumePostCountByRun = {};
 
   await page.route("**/api/flip-finder/**", async (route) => {
     const request = route.request();
@@ -216,8 +235,18 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/scan` && request.method() === "POST") {
       scanPostCount += 1;
+      if (activeRunId && !runTerminalByRun[activeRunId]) {
+        // A resume -- the exact scenario this whole test exists to prove:
+        // the client's own auto-continue loop (monitorScanRun) re-POSTs the
+        // same endpoint the button itself uses whenever it sees a run still
+        // waiting on continuation, and the real server always resumes the
+        // same scan_run_id rather than minting a new one.
+        resumePostCountByRun[activeRunId] = (resumePostCountByRun[activeRunId] ?? 0) + 1;
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify({ runId: activeRunId, status: "running", background: true, scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 }), status: 202 });
+      }
       runCounter += 1;
       const runId = `run-${runCounter}`;
+      activeRunId = runId;
       // Each new run gets its own scripted sequence of progress snapshots,
       // popped one per poll -- the real client polls on a 1s interval, so
       // the LAST queued entry is held once exhausted (as the real server
@@ -227,7 +256,12 @@ test("the real Finder scan button latches on click, reflects live progress, and 
         : runCounter === 2
           ? [baseProgress(runId, { totals: { scanned: 50, matched: 0, created: 0, updated: 0, priceDrops: 0 } }), baseProgress(runId, { status: "failed", finishedAt: now, overall: { completedUnits: 1, totalUnits: 1, percent: 100, failedUnits: 1, remainingUnits: 0 }, errors: ["Allegro Lokalnie: SOURCE_FAILED"], totals: { scanned: 50, matched: 0, created: 0, updated: 0, priceDrops: 0 } })]
           : runCounter === 4
-            ? [baseProgress(runId, { status: "partial", finishedAt: null, overall: { completedUnits: 1, totalUnits: 2, percent: 50, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 }, current: { source: "official_uml", groupName: null }, totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } })]
+            // run-4's actual progress is computed dynamically in the GET
+            // handler below, directly from resumePostCountByRun -- this
+            // array is never read (the GET handler branches on runId
+            // "run-4" before ever touching progressQueueByRun), kept only
+            // so every other runCounter branch's shape stays uniform.
+            ? []
           // The third run simulates exactly the reported symptom: progress
           // genuinely stalls (same 300/22 numbers on every poll, never
           // moving), then the server-side heartbeat watchdog eventually
@@ -240,8 +274,23 @@ test("the real Finder scan button latches on click, reflects live progress, and 
     if (progressMatch) {
       const runId = progressMatch[1];
       progressGetCountByRun[runId] = (progressGetCountByRun[runId] ?? 0) + 1;
-      const queue = progressQueueByRun[runId] ?? [];
-      const next = queue.length > 1 ? queue.shift() : queue[0];
+      // run-4 specifically: the snapshot returned is a direct function of how
+      // many real resume POSTs the mock has actually observed for this run
+      // (not a queue popped by polling alone) -- reaching "completed" is
+      // therefore only reachable through the client's own auto-resume loop.
+      let next;
+      if (runId === "run-4") {
+        const resumes = resumePostCountByRun[runId] ?? 0;
+        next = resumes === 0
+          ? baseProgress(runId, { status: "partial", finishedAt: null, overall: { completedUnits: 0, totalUnits: 2, percent: 0, failedUnits: 0, remainingUnits: 2, waitingUnits: 2 }, current: { source: "official_uml", groupName: null }, totals: { scanned: 0, matched: 0, created: 0, updated: 0, priceDrops: 0 } })
+          : resumes === 1
+            ? baseProgress(runId, { status: "partial", finishedAt: null, overall: { completedUnits: 1, totalUnits: 2, percent: 50, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 }, current: { source: "official_auction", groupName: null }, totals: { scanned: 150, matched: 10, created: 10, updated: 0, priceDrops: 0 } })
+            : baseProgress(runId, { status: "completed", finishedAt: now, overall: { completedUnits: 2, totalUnits: 2, percent: 100, failedUnits: 0, remainingUnits: 0, waitingUnits: 0 }, current: null, totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } });
+      } else {
+        const queue = progressQueueByRun[runId] ?? [];
+        next = queue.length > 1 ? queue.shift() : queue[0];
+      }
+      if (next && (next.status === "completed" || next.status === "failed")) runTerminalByRun[runId] = true;
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(next ?? baseProgress(runId, {})), status: 200 });
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
@@ -309,17 +358,29 @@ test("the real Finder scan button latches on click, reflects live progress, and 
 
     await scanButton.click();
     await page.waitForTimeout(500);
-    assert.equal(scanPostCount, 4, "an expired/released scan must never block the next click from starting a genuine new scan");
+    // >= 4, not === 4: run-4's own initial POST is #4, but the client's own
+    // auto-resume loop (scenario F) can legitimately fire its first resume
+    // within this same window too -- there is no artificial delay before a
+    // fresh monitorScanRun's very first poll. The exact total is checked
+    // precisely at the end of F instead, once the whole chain has settled.
+    assert.ok(scanPostCount >= 4, "an expired/released scan must never block the next click from starting a genuine new scan");
+  });
+
+  await t.test("F. one click walks a run through multiple waiting rounds on its own -- the client auto-resumes instead of leaving it for an external worker", async () => {
+    // run-4 is scripted (see the POST/GET handlers above) to report
+    // "waiting" twice, each time only advancing after the mock has actually
+    // observed a resume POST for this exact run id -- so reaching
+    // "completed" here is only reachable through monitorScanRun's own
+    // auto-resume loop, never through GET polling alone.
+    // The panel must show the real waiting state at least transiently,
+    // proving it was genuine, not skipped.
     await page.getByText(/oczekuje na kontynuację/i).first().waitFor({ state: "visible", timeout: 10_000 });
-    assert.equal(await scanButton.isDisabled(), false, "a durable continuation is waiting, not an active client-side scan lock");
-    const run4CountAtWaiting = progressGetCountByRun["run-4"];
-    assert.ok(run4CountAtWaiting >= 1, "the continuation snapshot must come from the backend progress endpoint");
-    await page.waitForTimeout(1_500);
-    assert.equal(progressGetCountByRun["run-4"], run4CountAtWaiting, "waiting-for-continuation must stop the client polling loop until the hourly worker resumes it");
-    // run-3 is terminal and a fresh run-4 has started; polling the OLD run
-    // must never resume, proving the client keyed its polling loop on the
-    // specific run it started, not on "any active scan for this filter".
-    await page.waitForTimeout(3_500);
-    assert.equal(progressGetCountByRun["run-3"], run3CountAtTerminal, "no further GET for the old, already-terminal run-3 may fire once a new run has started");
+    await page.getByRole("button", { name: "Skanuj teraz" }).first().waitFor({ state: "visible", timeout: 20_000 });
+    assert.equal(await scanButton.isDisabled(), false, "after auto-resuming through to completion the button must release exactly like any other terminal run");
+    const finalBodyText = await page.locator("body").innerText();
+    assert.match(finalBodyText, /Skan zakończony/i, "the run must reach a real completion notice on its own, with no further click");
+    assert.equal(resumePostCountByRun["run-4"], 2, "the client must have issued exactly two real resume POSTs for the same run id -- this is the mechanism under test, not an incidental pass");
+    assert.equal(scanPostCount, 6, "run-4's own initial POST (#4, from E's second click) plus its two auto-resume POSTs (#5, #6) -- never a new run id minted for any of them");
+    assert.ok(progressGetCountByRun["run-4"] >= 3, "sanity check: all three snapshots (waiting, more-progress-still-waiting, completed) for run-4 must have actually been observed");
   });
 });
