@@ -17,6 +17,7 @@ import {
 } from "@/features/flip-finder/membership-reconciliation";
 import { canonicalMatchReasons, reconcileCanonicalListingDecision } from "./canonical-reconciliation";
 import { MIN_TOTAL_SALE_PRICE_PLN } from "@/features/flip-finder/sale-price-policy";
+import { isListingSource as isKnownListingSource } from "@/features/flip-finder/search-filter-contract";
 
 type Row = Record<string, unknown>;
 
@@ -353,7 +354,9 @@ async function hydrateFacebookListingIntents(
     : listing);
 }
 
-function toListing(row: Row): RecalculationListing | null {
+// Exported for the allowlist regression test (mirrors filter-results.ts's
+// own toListingRow export, used for the exact same purpose there).
+export function toListing(row: Row): RecalculationListing | null {
   const id = nullableString(row.id);
   const source = nullableString(row.source);
   const originalUrl = nullableString(row.original_url);
@@ -429,6 +432,20 @@ function isMissingAuditTable(error: { code?: unknown; message?: unknown }): bool
   return code === "42P01" || code === "PGRST205" || /listing_filter_match_audit/i.test(message);
 }
 
+// A bare re-export of the shared, exhaustively-checked LISTING_SOURCES
+// allowlist (search-filter-contract.ts) adapted for this file's
+// `string | null` call site. This file's own hand-maintained local copy
+// previously only recognized otodom/olx/morizon/facebook and silently
+// dropped every newer registered source (gratka, nieruchomosci_online,
+// domiporta, sprzedajemy, adresowo, oferty_net, szybko, bezposrednio, domy,
+// allegro_lokalnie, official_cooperative, official_uml, official_auction) --
+// toListing() returning null for any of those sources made their real,
+// already-saved listings invisible to this recalculation pass, so
+// planFilterMatchRecalculation (which compares "listings visible now"
+// against "matches that currently exist") reported them as listing_missing
+// and removed them from the filter's matches even though nothing about the
+// listing itself had changed. The exact same bug, in filter-results.ts, was
+// already found and fixed this same way; this file was missed.
 function isListingSource(value: string | null): value is RecalculationListing["source"] {
-  return value === "otodom" || value === "olx" || value === "morizon" || value === "facebook";
+  return value !== null && isKnownListingSource(value);
 }
