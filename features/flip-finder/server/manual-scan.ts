@@ -475,10 +475,18 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
   // worker had finalized it.
   const manualLeaseToken = crypto.randomUUID();
   const manualLeaseUntil = new Date(started + CONTINUATION_LEASE_MS).toISOString();
+  // continuation_attempt must advance on EVERY real attempt, not only ones
+  // claimed through claim_finder_scan_source's RPC. Before this fix, a
+  // manually/auto-resumed source (this branch) never wrote it at all, so
+  // MAX_CONTINUATION_ATTEMPTS below could never trigger for the exact path
+  // monitorScanRun's client-side auto-resume loop actually drives -- a
+  // chronically timing-out source (confirmed live: Domiporta restarting
+  // from checked:0 and re-hitting the same ~10s timeout every round) would
+  // retry forever instead of eventually turning terminal.
   const { data: claimed, error } = prepared && options.preparedAlreadyRunning
     ? { data: [{ id: prepared.id, started_at: prepared.started_at, continuation_lease_token: prepared.continuation_lease_token ?? null }], error: null }
     : prepared
-    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).eq("id", prepared.id).eq("status", "pending").select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
+    ? await supabase.from("source_scans").update({ status: "running", filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil, continuation_attempt: (prepared.continuation_attempt ?? 0) + 1 }).eq("id", prepared.id).eq("status", "pending").select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS))
     : await supabase.from("source_scans").insert({ search_filter_id: filterId, source: source.id, status: "running", scan_run_id: runId, filter_snapshot: filter, continuation_lease_token: manualLeaseToken, continuation_lease_until: manualLeaseUntil }).select("id,started_at,continuation_lease_token").abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS)).single();
   // Never assume the API returns a row just because there was no transport
   // error: a lost CAS (someone else already claimed this row) is zero rows,
