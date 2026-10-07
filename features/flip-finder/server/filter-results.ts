@@ -216,13 +216,13 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const lifecycleStatuses = includeArchived
     ? ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]
     : ["ACTIVE", "REVIEW"];
-  const buildListingQuery = () =>
+  const buildListingQuery = (idChunk: string[]) =>
     supabase
       .from("listings")
       .select(
         "id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
       )
-      .in("id", listingIds)
+      .in("id", idChunk)
       .eq("status", "active")
       .in("lifecycle_status", lifecycleStatuses)
       // id is this table's primary key -- a deterministic total order so
@@ -230,12 +230,12 @@ export async function getFilterResults(filterId: string, includeArchived = false
       // unspecified LIMIT/OFFSET row order.
       .order("id", { ascending: true });
   const [listingsResultRaw, snapshotsResult, priceQualityResult] = await Promise.all([
-    fetchAllRows(buildListingQuery),
-    fetchAllRows(() =>
+    fetchAllRowsForIds(listingIds, buildListingQuery),
+    fetchAllRowsForIds(listingIds, (idChunk) =>
       supabase
         .from("listing_snapshots")
         .select("listing_id,price,captured_at,raw_data")
-        .in("listing_id", listingIds)
+        .in("listing_id", idChunk)
         // captured_at alone is not guaranteed unique across listings (a
         // bulk-inserted batch can share one timestamp) -- listing_id as a
         // secondary key makes the total order deterministic across pages.
@@ -245,11 +245,11 @@ export async function getFilterResults(filterId: string, includeArchived = false
     // One extra batched query (never per-listing) for Facebook's own price-quality
     // signal. Filtered server-side to source=facebook, since only Facebook writes
     // this metadata today; OLX/Otodom simply have no rows here and are unaffected.
-    fetchAllRows(() =>
+    fetchAllRowsForIds(listingIds, (idChunk) =>
       supabase
         .from("listing_source_metadata")
         .select("listing_id,source_post_url,collected_at,metadata")
-        .in("listing_id", listingIds)
+        .in("listing_id", idChunk)
         .eq("source", "facebook")
         // id is this table's own primary key -- deterministic total order,
         // same reasoning as the listings query above.
@@ -292,8 +292,8 @@ export async function getFilterResults(filterId: string, includeArchived = false
 
   let listingsResult: typeof listingsResultRaw = listingsResultRaw;
   if (listingsResult.error?.code === "42703") {
-    listingsResult = await fetchAllRows(() =>
-      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", listingIds).eq("status", "active").order("id", { ascending: true }),
+    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) =>
+      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", idChunk).eq("status", "active").order("id", { ascending: true }),
     ) as typeof listingsResultRaw;
   }
 
@@ -874,6 +874,37 @@ async function fetchAllRows<E>(
     if (pageRows.length < SUPABASE_SELECT_PAGE_SIZE) {
       break;
     }
+  }
+  return { data: rows, error: null };
+}
+
+/**
+ * Confirmed empirically against this project's own Supabase instance: an
+ * .in("id", [...]) filter with ~400+ UUIDs produces a GET request whose
+ * query string exceeds the ~16KB HTTP header limit, failing outright with
+ * HeadersOverflowError (undici) for both the anon and the service-role key
+ * -- not a truncation, a hard failure. Filter "Flip" has 2158
+ * listing_filter_matches rows once fetchAllRows (above) correctly reads all
+ * of them, so every .in("id"/"listing_id", listingIds) lookup below needs
+ * this just as much as the match query itself needed pagination. Batches
+ * the id list into requests small enough to stay well under that limit
+ * (Supabase's own error hint recommends under 200) and merges the results;
+ * each batch is itself paged via fetchAllRows in case one id chunk's own
+ * response is large (e.g. many snapshots per listing).
+ */
+const ID_FILTER_CHUNK_SIZE = 200;
+async function fetchAllRowsForIds<E>(
+  ids: string[],
+  buildQuery: (idChunk: string[]) => { range(from: number, to: number): PromiseLike<{ data: unknown; error: E | null }> },
+): Promise<{ data: Row[]; error: E | null }> {
+  const rows: Row[] = [];
+  for (let start = 0; start < ids.length; start += ID_FILTER_CHUNK_SIZE) {
+    const idChunk = ids.slice(start, start + ID_FILTER_CHUNK_SIZE);
+    const page = await fetchAllRows(() => buildQuery(idChunk));
+    if (page.error) {
+      return { data: rows, error: page.error };
+    }
+    rows.push(...page.data);
   }
   return { data: rows, error: null };
 }

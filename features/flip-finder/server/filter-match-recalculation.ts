@@ -367,25 +367,36 @@ async function fetchListingsByIds(
 
   // Same unranged-select truncation risk as fetchMatches above -- id is this
   // table's own primary key, a stable, unique total order for .range().
+  // Also chunks the id list itself: confirmed empirically that an .in("id",
+  // [...]) filter with ~400+ UUIDs produces a GET request whose query
+  // string exceeds PostgREST's ~16KB HTTP header limit and fails outright
+  // (HeadersOverflowError), not a truncation -- a hard failure regardless of
+  // key. ids here is normally small (only listings matched under a source
+  // this pass's sourcesOverride excludes), but must not silently break if it
+  // ever grows past that boundary.
+  const idChunkSize = 200;
   const rows: Row[] = [];
-  const pageSize = 1000;
-  for (let start = 0; ; start += pageSize) {
-    const { data, error } = await supabase
-      .from("listings")
-      .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
-      .in("id", ids)
-      .order("id", { ascending: true })
-      .range(start, start + pageSize - 1);
+  for (let idStart = 0; idStart < ids.length; idStart += idChunkSize) {
+    const idChunk = ids.slice(idStart, idStart + idChunkSize);
+    const pageSize = 1000;
+    for (let start = 0; ; start += pageSize) {
+      const { data, error } = await supabase
+        .from("listings")
+        .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
+        .in("id", idChunk)
+        .order("id", { ascending: true })
+        .range(start, start + pageSize - 1);
 
-    if (error) {
-      throw new Error("Nie udało się pobrać obecnych wyników do przeliczenia.");
-    }
+      if (error) {
+        throw new Error("Nie udało się pobrać obecnych wyników do przeliczenia.");
+      }
 
-    const page = asRows(data);
-    rows.push(...page);
+      const page = asRows(data);
+      rows.push(...page);
 
-    if (page.length < pageSize) {
-      break;
+      if (page.length < pageSize) {
+        break;
+      }
     }
   }
 
@@ -404,15 +415,33 @@ async function hydrateFacebookListingIntents(
     .map((listing) => listing.id))];
   if (facebookIds.length === 0) return listings;
 
-  const { data, error } = await supabase
-    .from("listing_source_metadata")
-    .select("listing_id,metadata,collected_at")
-    .in("listing_id", facebookIds)
-    .eq("source", "facebook");
-  if (error) throw new Error("Nie udało się pobrać intencji ofert Facebooka do przeliczenia.");
+  // Same pagination/id-chunking as fetchListingsByIds above: an unranged
+  // select silently truncates past ~1000 rows, and an .in("listing_id",
+  // [...]) filter with ~400+ UUIDs fails outright past PostgREST's ~16KB
+  // header limit. facebookIds is usually small, but a filter with many
+  // ambiguous-priced Facebook listings must not silently break either way.
+  const idChunkSize = 200;
+  const pageSize = 1000;
+  const rows: Row[] = [];
+  for (let idStart = 0; idStart < facebookIds.length; idStart += idChunkSize) {
+    const idChunk = facebookIds.slice(idStart, idStart + idChunkSize);
+    for (let start = 0; ; start += pageSize) {
+      const { data, error } = await supabase
+        .from("listing_source_metadata")
+        .select("listing_id,metadata,collected_at")
+        .in("listing_id", idChunk)
+        .eq("source", "facebook")
+        .order("listing_id", { ascending: true })
+        .range(start, start + pageSize - 1);
+      if (error) throw new Error("Nie udało się pobrać intencji ofert Facebooka do przeliczenia.");
+      const page = asRows(data);
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+  }
 
   const latestByListingId = new Map<string, { intent: string | null; collectedAt: string | null }>();
-  for (const row of asRows(data)) {
+  for (const row of rows) {
     const listingId = nullableString(row.listing_id);
     if (!listingId) continue;
     const collectedAt = nullableString(row.collected_at);
