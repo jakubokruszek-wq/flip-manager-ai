@@ -318,16 +318,38 @@ async function fetchMatches(
   supabase: Awaited<ReturnType<typeof createAdminClient>>,
   filterId: string,
 ): Promise<RecalculationMatch[]> {
-  const { data, error } = await supabase
-    .from("listing_filter_matches")
-    .select("listing_id,is_current_match,match_reasons")
-    .eq("search_filter_id", filterId);
+  // Same silent-truncation risk as getFilterResults (filter-results.ts): an
+  // unranged select caps at Supabase/PostgREST's default row limit (confirmed
+  // empirically: exactly 1000). A filter this size has 2000+
+  // listing_filter_matches rows -- without pagination, planFilterMatchRecalculation
+  // only ever sees whichever ~1000 happened to come back, understating
+  // existingIds/matchesBefore and skipping real recovery/reconciliation for
+  // every match outside that slice. search_filter_id is already fixed by the
+  // .eq() below, so listing_id alone is a stable, unique total order for
+  // .range() to page across.
+  const rows: Row[] = [];
+  const pageSize = 1000;
+  for (let start = 0; ; start += pageSize) {
+    const { data, error } = await supabase
+      .from("listing_filter_matches")
+      .select("listing_id,is_current_match,match_reasons")
+      .eq("search_filter_id", filterId)
+      .order("listing_id", { ascending: true })
+      .range(start, start + pageSize - 1);
 
-  if (error) {
-    throw new Error("Nie udało się pobrać istniejących dopasowań.");
+    if (error) {
+      throw new Error("Nie udało się pobrać istniejących dopasowań.");
+    }
+
+    const page = asRows(data);
+    rows.push(...page);
+
+    if (page.length < pageSize) {
+      break;
+    }
   }
 
-  return asRows(data).flatMap((row) => {
+  return rows.flatMap((row) => {
     const listingId = nullableString(row.listing_id);
     return listingId
       ? [{ listingId, isCurrentMatch: row.is_current_match !== false, matchReasons: stringArray(row.match_reasons) }]
@@ -343,16 +365,31 @@ async function fetchListingsByIds(
     return [];
   }
 
-  const { data, error } = await supabase
-    .from("listings")
-    .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
-    .in("id", ids);
+  // Same unranged-select truncation risk as fetchMatches above -- id is this
+  // table's own primary key, a stable, unique total order for .range().
+  const rows: Row[] = [];
+  const pageSize = 1000;
+  for (let start = 0; ; start += pageSize) {
+    const { data, error } = await supabase
+      .from("listings")
+      .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
+      .in("id", ids)
+      .order("id", { ascending: true })
+      .range(start, start + pageSize - 1);
 
-  if (error) {
-    throw new Error("Nie udało się pobrać obecnych wyników do przeliczenia.");
+    if (error) {
+      throw new Error("Nie udało się pobrać obecnych wyników do przeliczenia.");
+    }
+
+    const page = asRows(data);
+    rows.push(...page);
+
+    if (page.length < pageSize) {
+      break;
+    }
   }
 
-  return asRows(data).map(toListing).filter((listing): listing is RecalculationListing => listing !== null);
+  return rows.map(toListing).filter((listing): listing is RecalculationListing => listing !== null);
 }
 
 async function hydrateFacebookListingIntents(
