@@ -142,7 +142,7 @@ function defaultDependencies(overrides: Partial<FinderSchedulerDependencies>): F
     hasRunningScan: (filter) => hasRunningFinderScan(supabase, filter),
     claimFilter: (filter, now) => claimFinderFilter(supabase, filter, now),
     revertClaim: (filter, claimedAt) => revertFinderFilterClaim(supabase, filter, claimedAt),
-    startScan: (filter) => startFinderScanForFilter(filter, undefined, supabase),
+    startScan: (filter) => startFinderScanForFilter(filter, undefined, supabase, "scheduler"),
     runScan: (filter, start) => runManualOtodomScan(filter.id, {
       filter,
       runId: start.runId,

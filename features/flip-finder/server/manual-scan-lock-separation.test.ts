@@ -304,11 +304,35 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
   },
 });
 
-const { runManualOtodomScan, startManualOtodomScan } = await import("./manual-scan.ts");
+const { runManualOtodomScan, startFinderScanForFilter, startManualOtodomScan } = await import("./manual-scan.ts");
 
 function watcherOwnedFacebookScan(filterId: string, overrides: Row = {}): Row {
   return { id: "watcher-scan-1", search_filter_id: filterId, source: "facebook", status: "running", started_at: new Date().toISOString(), scan_run_id: "watcher-run-1", ...overrides };
 }
+
+test("new Finder runs record their manual-versus-scheduler origin, while resume keeps the original run and origin", async () => {
+  current = fakeAdmin([], { rpcMode: "atomic" });
+  const diagnostics: Array<{ event: unknown; fields: unknown }> = [];
+  const originalInfo = console.info;
+  console.info = (event?: unknown, fields?: unknown) => { diagnostics.push({ event, fields }); };
+  try {
+    const first = await startFinderScanForFilter(mixedFilter as never, "scheduler-run", current.client as never, "scheduler");
+    assert.equal(first.runId, "scheduler-run");
+    assert.deepEqual(current.sourceScans.map((row) => row.source), ["otodom"], "Finder reserves its portal source and never reserves Facebook Watcher work");
+    assert.equal((current.sourceScans[0]?.filter_snapshot as Record<string, unknown>)._finderRunOrigin, "scheduler");
+
+    const resumed = await startFinderScanForFilter(mixedFilter as never, "manual-request-run", current.client as never, "manual");
+    assert.equal(resumed.runId, "scheduler-run", "the manual request resumes the existing scan_run_id");
+    assert.equal(current.sourceScans.length, 1, "resume must not create another source_scans run");
+    assert.equal((current.sourceScans[0]?.filter_snapshot as Record<string, unknown>)._finderRunOrigin, "scheduler", "resuming must not overwrite the origin recorded by the original run");
+    assert.deepEqual(diagnostics.filter((entry) => entry.event === "FINDER_SCAN_START_REQUEST"), [
+      { event: "FINDER_SCAN_START_REQUEST", fields: { filterId: mixedFilter.id, runId: "scheduler-run", requestedBy: "scheduler", resumed: false } },
+      { event: "FINDER_SCAN_START_REQUEST", fields: { filterId: mixedFilter.id, runId: "scheduler-run", requestedBy: "manual", resumed: true } },
+    ]);
+  } finally {
+    console.info = originalInfo;
+  }
+});
 
 test("a genuinely active Watcher-owned facebook source_scans row never blocks Finder's own scan of the same filter", async () => {
   current = fakeAdmin([watcherOwnedFacebookScan(facebookOnlyFilter.id)]);

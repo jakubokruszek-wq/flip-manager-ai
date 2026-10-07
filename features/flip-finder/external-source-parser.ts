@@ -1,5 +1,6 @@
 import type { PropertySourceListing } from "@/features/properties/types/property";
 import { calculateContentHash } from "./otodom-search";
+import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
 
 export type ExternalSourceId =
   | "gratka"
@@ -87,7 +88,13 @@ function toListing(candidate: JsonRecord, config: ExternalSourceConfig, fallback
   const district = text(address, "addressSuburb", "streetAddress") && city && text(address, "addressSuburb") ? text(address, "addressSuburb") : null;
   const images = imageValues(firstDefined(candidate, "image", "images") ?? firstDefined(offered, "image", "images"));
   const externalListingId = stableExternalId(candidate, offered, url);
+  // propertyType often means "apartment" (the type of unit), not the
+  // building form. Do not let that generic label suppress a confirmed
+  // building type in the title/description.
+  const explicitBuildingType = firstDefined(candidate, "buildingType", "building_type") ?? firstDefined(offered, "buildingType", "building_type");
+  const explicitOwnership = firstDefined(candidate, "ownership", "ownershipType", "tenure") ?? firstDefined(offered, "ownership", "ownershipType", "tenure");
   const payload = { id: externalListingId, url, title, price, area, rooms: number(firstDefined(offered, "numberOfRooms", "rooms")), city, district };
+  const cleanDescription = description ? stripHtml(description) : null;
   return {
     source: config.id,
     externalListingId,
@@ -104,8 +111,9 @@ function toListing(candidate: JsonRecord, config: ExternalSourceConfig, fallback
     locationText: [district, city].filter(Boolean).join(", ") || null,
     thumbnailUrl: images[0] ?? null,
     images,
-    buildingType: null,
-    description: description ? stripHtml(description) : null,
+    buildingType: resolveBuildingType(explicitBuildingType, title, cleanDescription),
+    ownership: resolveOwnership(explicitOwnership, title, cleanDescription),
+    description: cleanDescription,
     publishedAt: text(candidate, "datePosted", "datePublished", "dateCreated"),
     rawPayload: { source: config.id, candidate },
     contentHash: calculateContentHash(payload),

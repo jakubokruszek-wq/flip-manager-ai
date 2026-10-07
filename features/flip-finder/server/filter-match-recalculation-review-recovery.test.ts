@@ -163,6 +163,27 @@ test("a manual_decision=REJECTED listing stuck in the same broken prior state st
   assert.equal(rpcCalls.length, 0, "no canonical write for a listing that stays manually rejected");
 });
 
+test("a historical listing_missing row is replaced with a fresh concrete rejection when the listing now fails the filter", async () => {
+  reset();
+  currentFilter = { ...currentFilter, maxPricePerSqm: 7_000 };
+  listingsTable = [listingRow({ building_type: "blok", ownership: "pe\u0142na w\u0142asno\u015b\u0107" })];
+  matchesTable.set(RECOVERABLE_ID, { isCurrentMatch: false, matchReasons: ["listing_missing"] });
+
+  const first = await recalculateFilterMatches(FILTER_ID, { allowWithoutScan: true });
+  assert.equal(first?.recoveredRejectedMatches, 1);
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0]?.params.p_bucket, "REJECTED");
+  assert.ok((rpcCalls[0]?.params.p_reasons as string[]).includes("max_price_per_sqm"));
+  assert.deepEqual(matchesTable.get(RECOVERABLE_ID), { isCurrentMatch: false, matchReasons: ["max_price_per_sqm"] });
+
+  rpcCalls = [];
+  auditRows = [];
+  const second = await recalculateFilterMatches(FILTER_ID, { allowWithoutScan: true });
+  assert.equal(second?.recoveredRejectedMatches, 0);
+  assert.equal(rpcCalls.length, 0, "the repaired rejection is idempotent on the next recalculation");
+  assert.equal(auditRows.length, 0);
+});
+
 test("an ARCHIVED listing stuck in the same broken prior state stays excluded — archived listings are never recovered", async () => {
   reset();
   listingsTable = [listingRow({ id: ARCHIVED_ID, lifecycle_status: "ARCHIVED" })];

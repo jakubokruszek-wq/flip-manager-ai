@@ -104,6 +104,8 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
   publishedAt?: string | null;
   /** Optional: only the few adapters with an explicit source label (e.g. Allegro Lokalnie's "Rok budowy") ever set this. */
   yearBuilt?: PropertyFields["yearBuilt"];
+  /** Optional: no source has a structured ownership field; only set via a confirmed, unambiguous declaration extracted from the listing's own title/description (see listing-attribute-extraction.ts). Absent/null means genuinely unknown, never guessed. */
+  ownership?: PropertyFields["ownership"];
   source: PropertySource;
   externalListingId: string;
   originalUrl: string;
@@ -124,7 +126,7 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
 };
 
 /** Listing returned by a source-specific search before it is matched or persisted. */
-export type PropertySearchListing = Omit<Pick<PropertyFields, "title" | "price" | "area" | "rooms" | "floor" | "pricePerSqm" | "city" | "district" | "locationText" | "thumbnailUrl" | "sellerType" | "marketType" | "publishedAt">, "marketType"> & {
+export type PropertySearchListing = Omit<Pick<PropertyFields, "title" | "description" | "price" | "area" | "rooms" | "floor" | "buildingType" | "ownership" | "pricePerSqm" | "city" | "district" | "locationText" | "thumbnailUrl" | "sellerType" | "marketType" | "publishedAt">, "marketType"> & {
   source: "otodom";
   externalListingId: string;
   originalUrl: string;

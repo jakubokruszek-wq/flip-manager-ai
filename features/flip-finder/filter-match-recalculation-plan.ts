@@ -37,6 +37,8 @@ export type RecoveredReviewDecision = {
   missingFields: string[];
 };
 
+export type RecoveredRejectedDecision = RemovedListingDecision;
+
 export type FilterRecalculationPlan = {
   evaluated: number;
   matchesBefore: number;
@@ -59,6 +61,9 @@ export type FilterRecalculationPlan = {
    */
   recoveredReviewListingIds: string[];
   recoveredReviewDecisions: RecoveredReviewDecision[];
+  /** Prior inactive rows marked listing_missing whose present listing now fails a concrete rule. */
+  recoveredRejectedListingIds: string[];
+  recoveredRejectedDecisions: RecoveredRejectedDecision[];
   matchesAfter: number;
   rejectedByPricePerSqm: number;
   rejectedByOtherCriteria: number;
@@ -84,6 +89,11 @@ export function planFilterMatchRecalculation(
   const unchangedListingIds: string[] = [];
   const recoveredReviewListingIds: string[] = [];
   const recoveredReviewDecisions: RecoveredReviewDecision[] = [];
+  const recoveredRejectedListingIds: string[] = [];
+  const recoveredRejectedDecisions: RecoveredRejectedDecision[] = [];
+  const historicalMissingIds = new Set(matches
+    .filter((match) => match.isCurrentMatch === false && (match.matchReasons ?? []).includes("listing_missing"))
+    .map((match) => match.listingId));
   const keptListings: RecalculationListing[] = [];
   let evaluated = 0;
   let rejectedByPricePerSqm = 0;
@@ -97,6 +107,9 @@ export function planFilterMatchRecalculation(
     if (!filter.sources.includes(listing.source)) {
       if (existingIds.has(listing.id)) {
         markRemoved(listing.id, { listingId: listing.id, bucket: "REJECTED", reasons: ["source_not_in_filter"], missingFields: [] });
+      } else if (historicalMissingIds.has(listing.id) && !isPermanentlyExcluded(listing)) {
+        recoveredRejectedListingIds.push(listing.id);
+        recoveredRejectedDecisions.push({ listingId: listing.id, bucket: "REJECTED", reasons: ["source_not_in_filter"], missingFields: [] });
       }
       continue;
     }
@@ -116,7 +129,7 @@ export function planFilterMatchRecalculation(
     // Facebook listings stayed stuck REJECTED with
     // match_reasons=["reconciled_out","complete_scan_filter_mismatch"]
     // forever, including offers well under the new cap.
-    const permanentlyExcluded = listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "ARCHIVED";
+    const permanentlyExcluded = isPermanentlyExcluded(listing);
     if (permanentlyExcluded) {
       if (existingIds.has(listing.id)) {
         markRemoved(listing.id, {
@@ -170,6 +183,14 @@ export function planFilterMatchRecalculation(
       // here.
       recoveredReviewListingIds.push(listing.id);
       recoveredReviewDecisions.push({ listingId: listing.id, reasons: decision.reasons, missingFields: decision.unknownFields });
+    } else if (historicalMissingIds.has(listing.id) && (categoryPage || decision.bucket === "REJECTED")) {
+      // A listing_missing membership is an old read-path failure marker, not
+      // a terminal decision. Once the canonical listing exists again, replace
+      // it with the fresh concrete rejection. Manual rejection and ARCHIVED
+      // were excluded above and remain untouched.
+      const reasons = categoryPage && decision.reasons.length === 0 ? ["category_page"] : decision.reasons;
+      recoveredRejectedListingIds.push(listing.id);
+      recoveredRejectedDecisions.push({ listingId: listing.id, bucket: "REJECTED", reasons, missingFields: decision.unknownFields });
     }
   }
 
@@ -188,6 +209,8 @@ export function planFilterMatchRecalculation(
     unchangedListingIds,
     recoveredReviewListingIds,
     recoveredReviewDecisions,
+    recoveredRejectedListingIds,
+    recoveredRejectedDecisions,
     matchesAfter: existingIds.size - removedIds.size + addedListingIds.length + recoveredReviewListingIds.length,
     rejectedByPricePerSqm,
     rejectedByOtherCriteria,
@@ -198,6 +221,10 @@ export function planFilterMatchRecalculation(
     ),
     maxPricePerSqmAfter: maximumPricePerSqm(keptListings),
   };
+}
+
+function isPermanentlyExcluded(listing: RecalculationListing): boolean {
+  return listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "ARCHIVED";
 }
 
 function isMorizonCategoryPage(listing: RecalculationListing): boolean {

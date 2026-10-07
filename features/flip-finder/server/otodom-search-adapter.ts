@@ -22,6 +22,7 @@ import {
   type OtodomRejectionReason,
 } from "@/features/flip-finder/otodom-normalization";
 import type { PropertySearchListing } from "@/features/properties/types/property";
+import { resolveBuildingType, resolveOwnership } from "@/features/flip-finder/listing-attribute-extraction";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_LISTINGS = 30;
@@ -271,6 +272,9 @@ function toListing(row: Record<string, unknown>): PropertySearchListing | null {
   const district = locationName(row, "district");
   const address = locationName(row, "address") ?? text(row, "locationLabel", "address");
   const title = text(row, "title", "name");
+  const description = text(row, "description", "descriptionText", "advertDescription");
+  const structuredBuildingType = row.buildingType ?? row.building_type;
+  const structuredOwnership = row.ownership ?? row.ownershipType ?? row.tenure;
   const rooms = mapRoomsNumber(row.roomsNumber ?? row.rooms);
   const floor = mapFloorNumber(row.floorNumber ?? row.floor);
   const rawPayload = {
@@ -298,6 +302,9 @@ function toListing(row: Record<string, unknown>): PropertySearchListing | null {
     locationText: address,
     city,
     district,
+    description,
+    buildingType: resolveBuildingType(structuredBuildingType, title, description),
+    ownership: resolveOwnership(structuredOwnership, title, description),
     thumbnailUrl: thumbnailUrl(row),
     sellerType: text(row, "sellerType", "advertiserType"),
     marketType: text(row, "marketType"),

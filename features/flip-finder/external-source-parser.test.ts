@@ -61,6 +61,16 @@ test("tracking parameters are removed from normalized external URLs", () => {
   assert.equal(listings[0]?.normalizedUrl, "https://portal.example/oferta/lodz-123");
 });
 
+test("generic unit propertyType does not mask confirmed building and ownership text", () => {
+  const html = fixture("domy")
+    .replace("Mieszkanie Łódź Bałuty 2 pokoje", "Mieszkanie w bloku Łódź Bałuty 2 pokoje")
+    .replace("Sprzedaż mieszkania, czynsz administracyjny 615 zł.", "Pełna własność, czynsz administracyjny 615 zł.")
+    .replace('"@type":"Apartment"', '"@type":"Apartment","propertyType":"apartment"');
+  const listing = parseExternalSourceJsonLd(html, config("domy"), "Łódź")[0];
+  assert.equal(listing?.buildingType, "blok");
+  assert.equal(listing?.ownership, "pełna własność");
+});
+
 test("European thousands separators are parsed as a sale price, while admin fee text is ignored", () => {
   const html = fixture("domy").replace("489000", "489.000 zł").replace("czynsz administracyjny 615 zł.", "czynsz administracyjny 615 zł.");
   const listing = parseExternalSourceJsonLd(html, config("domy"), "Łódź")[0];

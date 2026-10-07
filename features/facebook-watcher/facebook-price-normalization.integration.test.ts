@@ -66,6 +66,7 @@ const watcherAdminUrl = pathToFileURL(path.resolve(import.meta.dirname, "supabas
 // database and a handful of genuinely external side effects are faked.
 mock.module(watcherAdminUrl, { namedExports: { createFacebookWatcherAdminClient: () => currentDb } });
 mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => currentDb } });
+mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => currentDb } });
 mock.module("@/features/flip-finder/server/search-filters", { namedExports: { getActiveSearchFiltersForSource: async () => [PRICE_BUG_FILTER], getSearchFilter: async () => PRICE_BUG_FILTER } });
 mock.module("@/features/market-intelligence/resale-comps-store", { namedExports: { syncResaleCompFromListing: async () => undefined } });
 mock.module("@/features/facebook-groups/server", { namedExports: { recordFacebookGroupImport: async () => undefined } });

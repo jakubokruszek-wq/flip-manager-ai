@@ -6,6 +6,7 @@ import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/s
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
 import { enqueueOlxJob, existingOlxScanResult, resumableOlxRunId } from "@/features/flip-finder/server/olx-jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
+import { reuseExistingListingAttributes } from "@/features/flip-finder/server/listing-attribute-reuse";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -32,6 +33,7 @@ export type ManualScanOptions = {
   /** Reuse the scheduler's already-created service client. */
   supabase?: SupabaseClient;
 };
+export type FinderScanOrigin = "manual" | "scheduler";
 
 // The current routes explicitly cap execution at 60s. The actual project's
 // Fluid Compute configuration is unverified, so keep a finalization margin.
@@ -95,7 +97,7 @@ export async function startManualOtodomScan(filterId: string): Promise<ManualSca
  * runManualOtodomScan(filterId, { runId: start.runId, usePreparedRows: true,
  * ... })) naturally continues the right run without any further change.
  */
-export async function startFinderScanForFilter(filter: LoadedFilter, runId = crypto.randomUUID(), supabase = createAdminClient()): Promise<ManualScanStart> {
+export async function startFinderScanForFilter(filter: LoadedFilter, runId = crypto.randomUUID(), supabase = createAdminClient(), origin: FinderScanOrigin = "manual"): Promise<ManualScanStart> {
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
   const sources = activeSources(filter);
   const sourceIds = [...sources.map((source) => source.id), ...(filter.sources.includes("facebook") ? ["facebook"] : [])];
@@ -115,12 +117,13 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
   let actualRunId = olxRunId ?? runId;
   if (lockableSourceIds.length) {
     await failStaleScans(supabase, filter.id, lockableSourceIds);
-    actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter);
+    actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter, origin);
     if (olxRunId && actualRunId !== olxRunId) throw statusError(429, "Filtr ma niezgodne, równoległe przebiegi skanu.");
   }
   if (sources.some((source) => source.id === "olx") && !(await existingOlxScanResult(actualRunId, supabase))) {
     await enqueueOlxJob(filter, actualRunId, supabase);
   }
+  console.info("FINDER_SCAN_START_REQUEST", { filterId: filter.id, runId: actualRunId, requestedBy: origin, resumed: actualRunId !== runId });
   return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
 }
 
@@ -146,7 +149,7 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
  * spanning more than one run_id) still safely refuses with the exact same
  * message as before.
  */
-async function reserveOrResumeSourceScans(supabase: SupabaseClient, filterId: string, lockableSourceIds: string[], runId: string, filter: LoadedFilter): Promise<string> {
+async function reserveOrResumeSourceScans(supabase: SupabaseClient, filterId: string, lockableSourceIds: string[], runId: string, filter: LoadedFilter, origin: FinderScanOrigin): Promise<string> {
   const { data: existing, error: existingError } = await supabase
     .from("source_scans")
     .select("id,source,status,scan_run_id")
@@ -163,7 +166,7 @@ async function reserveOrResumeSourceScans(supabase: SupabaseClient, filterId: st
     return decision.runId;
   }
 
-  await reserveSourceScans(supabase, filterId, lockableSourceIds, runId, filter);
+  await reserveSourceScans(supabase, filterId, lockableSourceIds, runId, { ...filter, _finderRunOrigin: origin });
   return runId;
 }
 
@@ -193,7 +196,7 @@ function toResumptionRows(data: unknown): ExistingSourceScanForResumption[] {
  * the migration is applied, the very next call here starts getting the real
  * guarantee with no further code change.
  */
-async function reserveSourceScans(supabase: SupabaseClient, filterId: string, lockableSourceIds: string[], runId: string, filter: LoadedFilter): Promise<void> {
+async function reserveSourceScans(supabase: SupabaseClient, filterId: string, lockableSourceIds: string[], runId: string, filter: LoadedFilter & { _finderRunOrigin?: FinderScanOrigin }): Promise<void> {
   const { error: rpcError } = await supabase.rpc("reserve_source_scans", {
     p_search_filter_id: filterId,
     p_sources: lockableSourceIds,
@@ -625,13 +628,19 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       if (Date.now() >= started + timeoutMs - Math.min(5_000, Math.floor(timeoutMs / 6))) throw new SourceSliceYield();
     };
     const drainBuffer = async () => {
+      if (checkpoint.offset < checkpoint.buffer.length) {
+        await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);
+        const alreadyProcessed = checkpoint.buffer.slice(0, checkpoint.offset);
+        const notYetProcessed = await reuseExistingListingAttributes(supabase, checkpoint.buffer.slice(checkpoint.offset));
+        checkpoint.buffer = [...alreadyProcessed, ...notYetProcessed];
+      }
       while (checkpoint.offset < checkpoint.buffer.length) {
         requireTime();
         const listing = checkpoint.buffer[checkpoint.offset];
         const decision = evaluateListingAgainstFilter(listing, filter);
         if (source.id === "otodom") addOtodomFilterDecision(otodomSummary, listing, decision);
         await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);
-        const saved = await persistListing(supabase, filterId, listing, decision.matches, decision.unknownFields, scan.id, scanTimestamp(scanClock), controller.signal);
+        const saved = await persistListing(supabase, filterId, listing, decision.matches, decision.unknownFields, scan.id, scanTimestamp(scanClock), controller.signal, { bucket: decision.bucket, reasons: decision.reasons, unknownFields: decision.unknownFields });
         const diagnostic = createMatchDiagnostic(saved.listingId, listing, filter, decision);
         addMatchDiagnostic(matchDiagnostics, diagnostic);
         console.info("MATCH DIAGNOSTIC", JSON.stringify(diagnostic));

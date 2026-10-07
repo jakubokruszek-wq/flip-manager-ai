@@ -3,6 +3,7 @@ import type { PropertySource, PropertySourceListing } from "@/features/propertie
 import { calculateContentHash } from "./otodom-search";
 import { classifyOfficialNotice, OFFICIAL_LODZ_SOURCES, type OfficialLodzSource } from "./official-lodz-sources";
 import type { SourceBatchContext } from "./source-batches";
+import { extractBuildingType, extractOwnership } from "./listing-attribute-extraction";
 
 export type OfficialCanonicalSource = "official_cooperative" | "official_uml" | "official_auction";
 export type OfficialNoticeType = "cooperative_sale" | "municipal_sale" | "auction" | "syndic_sale";
@@ -511,7 +512,9 @@ function normalizeNotices(source: OfficialLodzSource, noticeType: OfficialNotice
     const normalizedUrl = `${normalizeUrl(url)}#${id}`;
     const metadata: OfficialOfferMetadata = { sourceId: source.id, noticeType, priceKind: noticeType === "auction" || noticeType === "syndic_sale" ? "starting_bid" : "asking_price", price, deposit: money(notice.deposit), deadline: cleanDate(notice.deadline), eventDate: cleanDate(notice.eventDate), eligibilityCriteria: notice.criteria ?? [] };
     const payload = { source: canonicalSource, sourceId: source.id, noticeType, id, normalizedUrl, title: notice.title ?? null, price, area, rooms: decimal(notice.rooms), city: notice.city ?? "Łódź", district: notice.district ?? null, officialOffer: metadata };
-    listings.push({ source: canonicalSource as PropertySource, externalListingId: `${source.id}:${id}`, originalUrl: url, normalizedUrl, title: notice.title?.trim() || `${source.label} — oferta mieszkaniowa`, price, area, rooms: decimal(notice.rooms), floor: null, pricePerSqm: price / area, city: notice.city ?? "Łódź", district: notice.district ?? null, locationText: [notice.district, notice.city ?? "Łódź"].filter(Boolean).join(", "), thumbnailUrl: validImage(notice.image), images: validImage(notice.image) ? [validImage(notice.image)!] : [], buildingType: null, description: notice.text?.trim() || null, publishedAt: metadata.eventDate, rawPayload: payload, contentHash: calculateContentHash(payload), officialOffer: metadata });
+    const noticeTitle = notice.title?.trim() || `${source.label} — oferta mieszkaniowa`;
+    const noticeDescription = notice.text?.trim() || null;
+    listings.push({ source: canonicalSource as PropertySource, externalListingId: `${source.id}:${id}`, originalUrl: url, normalizedUrl, title: noticeTitle, price, area, rooms: decimal(notice.rooms), floor: null, pricePerSqm: price / area, city: notice.city ?? "Łódź", district: notice.district ?? null, locationText: [notice.district, notice.city ?? "Łódź"].filter(Boolean).join(", "), thumbnailUrl: validImage(notice.image), images: validImage(notice.image) ? [validImage(notice.image)!] : [], buildingType: extractBuildingType(noticeTitle, noticeDescription), ownership: extractOwnership(noticeTitle, noticeDescription), description: noticeDescription, publishedAt: metadata.eventDate, rawPayload: payload, contentHash: calculateContentHash(payload), officialOffer: metadata });
   }
   if (!listings.length) warnings.push(`${source.label}: brak zweryfikowanych ofert mieszkaniowych.`);
   return { listings, hasNextPage, warnings };

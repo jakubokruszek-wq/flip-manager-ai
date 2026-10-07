@@ -29,6 +29,8 @@ export type FilterRecalculationResult = {
   unchangedMatches: number;
   /** Listings recovered from a non-visible prior state (e.g. wrongly marked listing_missing) back into REVIEW. See planFilterMatchRecalculation's recoveredReviewListingIds doc comment. */
   recoveredReviewMatches: number;
+  /** Stale listing_missing rows replaced with a current, concrete rejection. */
+  recoveredRejectedMatches: number;
   matchesAfter: number;
   rejectedByPricePerSqm: number;
   rejectedByOtherCriteria: number;
@@ -89,8 +91,12 @@ export async function recalculateFilterMatches(
   const combinedListings = await hydrateFacebookListingIntents(supabase, [...listings, ...missingMatchedListings]);
   const plan = planFilterMatchRecalculation(filter, combinedListings, matches);
 
-  if (plan.removedListingIds.length > 0) {
-    const removedDecisions = new Map(plan.removedListingDecisions.map((entry) => [entry.listingId, entry]));
+  const inactiveDecisionIds = [...plan.removedListingIds, ...plan.recoveredRejectedListingIds];
+  if (inactiveDecisionIds.length > 0) {
+    const removedDecisions = new Map([
+      ...plan.removedListingDecisions,
+      ...plan.recoveredRejectedDecisions,
+    ].map((entry) => [entry.listingId, entry]));
     // The real, fresh reason this listing no longer matches -- never the old
     // generic "reconciled_out"/"complete_scan_filter_mismatch" pair, which
     // told an operator nothing and, worse, collapsed a genuine REVIEW
@@ -113,7 +119,7 @@ export async function recalculateFilterMatches(
     // a real write would produce is what makes a repeated save genuinely
     // idempotent (no audit row, no canonical RPC call) rather than merely
     // "producing the same end state via a redundant write every time".
-    const listingsNeedingWrite = plan.removedListingIds.filter((listingId) => {
+    const listingsNeedingWrite = inactiveDecisionIds.filter((listingId) => {
       const { bucket, reasons, missingFields } = resolveDecision(listingId);
       const prospectiveReasons = canonicalMatchReasons({ bucket, reasons, missingFields, hardRejectReasons: bucket === "REJECTED" ? reasons : [] });
       const previous = matches.find((match) => match.listingId === listingId);
@@ -211,6 +217,7 @@ export async function recalculateFilterMatches(
     removedMatches: plan.removedListingIds.length,
     unchangedMatches: plan.unchangedListingIds.length,
     recoveredReviewMatches: plan.recoveredReviewListingIds.length,
+    recoveredRejectedMatches: plan.recoveredRejectedListingIds.length,
     matchesAfter: plan.matchesAfter,
     rejectedByPricePerSqm: plan.rejectedByPricePerSqm,
     rejectedByOtherCriteria: plan.rejectedByOtherCriteria,
@@ -250,6 +257,7 @@ function blockedResult(matchesBefore: number, reason: string): FilterRecalculati
     removedMatches: 0,
     unchangedMatches: matchesBefore,
     recoveredReviewMatches: 0,
+    recoveredRejectedMatches: 0,
     matchesAfter: matchesBefore,
     rejectedByPricePerSqm: 0,
     rejectedByOtherCriteria: 0,

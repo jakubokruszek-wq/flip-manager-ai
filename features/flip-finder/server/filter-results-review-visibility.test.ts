@@ -109,15 +109,88 @@ function freshDb(): FakeFacebookSupabase {
 }
 
 let currentDb = freshDb();
-mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => currentDb } });
+let sessionTableReads: string[] = [];
+let adminTableReads: string[] = [];
+let adminClientCreations = 0;
+let operatorAuthorizationFails = false;
+mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => ({ from: (table: string) => { sessionTableReads.push(table); return currentDb.from(table); } }) } });
+mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { adminClientCreations += 1; return { from: (table: string) => { adminTableReads.push(table); return currentDb.from(table); } }; } } });
 const { getFilterResults } = await import("./filter-results.ts");
 mock.module("@/features/auth/operator", {
   namedExports: {
-    requireOperator: async () => ({ id: "operator-test", email: "operator@example.test" }),
+    requireOperator: async () => {
+      if (operatorAuthorizationFails) throw new Error("operator required");
+      return { id: "operator-test", email: "operator@example.test" };
+    },
     operatorAuthorizationResponse: () => Response.json({ ok: false }, { status: 401 }),
   },
 });
 const { GET: getFilterResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/results/route.ts");
+
+function assertNoFacebookScanContact(db: FakeFacebookSupabase) {
+  const accesses = db.accessLog();
+  assert.ok(!sessionTableReads.includes("facebook_scan_jobs"), "Finder must not read the Facebook scan queue through the session client");
+  assert.ok(!adminTableReads.includes("facebook_scan_jobs"), "Finder must not read the Facebook scan queue through the service client");
+  assert.ok(!accesses.some((entry) => entry.kind === "table" && entry.name === "facebook_scan_jobs"), "Finder must make no table access to facebook_scan_jobs");
+  assert.ok(!accesses.some((entry) => entry.kind === "rpc" && /facebook.*(?:scan|enqueue)|(?:scan|enqueue).*facebook/iu.test(entry.name)), "Finder must not call a Facebook scan enqueue RPC");
+}
+
+test("authorized portal-only Finder results never initialize the service client or query private Facebook metadata", async () => {
+  const db = freshDb();
+  db.seed("search_filters", [{ ...CHORALNA_FILTER_ROW, sources: ["domiporta"] }]);
+  db.seed("listings", [listingRow({ id: "portal-only", source: "domiporta", original_url: "https://domiporta.pl/oferta/portal-only", building_type: "blok", ownership: "pełna własność", lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [] })]);
+  db.seed("listing_filter_matches", [membershipRow("portal-only", { is_current_match: true, match_reasons: [] })]);
+  currentDb = db;
+  sessionTableReads = [];
+  adminTableReads = [];
+  adminClientCreations = 0;
+
+  const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
+  assert.equal(response.status, 200);
+  assert.equal(adminClientCreations, 0, "portal-only read does not create a privileged Supabase client");
+  assert.ok(!sessionTableReads.includes("listing_source_metadata"), "publishable/session client must not read private metadata");
+  assert.ok(!adminTableReads.includes("listing_source_metadata"));
+  assertNoFacebookScanContact(db);
+});
+
+test("authorized Facebook Finder results read private source metadata only through the service client", async () => {
+  const db = freshDb();
+  db.seed("listings", [listingRow({ id: "facebook-private", lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [] })]);
+  db.seed("listing_filter_matches", [membershipRow("facebook-private", { is_current_match: true, match_reasons: [] })]);
+  db.seed("listing_source_metadata", [{ id: "metadata-1", listing_id: "facebook-private", source: "facebook", source_post_url: "https://www.facebook.com/groups/test/posts/123", collected_at: "2026-10-07T10:00:00.000Z", metadata: { postId: "123", priceQuality: { status: "VERIFIED" } } }]);
+  currentDb = db;
+  sessionTableReads = [];
+  adminTableReads = [];
+  adminClientCreations = 0;
+
+  const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
+  assert.equal(response.status, 200);
+  assert.equal(adminClientCreations, 1);
+  assert.ok(adminTableReads.includes("listing_source_metadata"), "the privileged server client must perform the batched metadata read");
+  assert.ok(!sessionTableReads.includes("listing_source_metadata"), "the user/session client must never access the private metadata table");
+  assertNoFacebookScanContact(db);
+});
+
+test("anonymous Finder results requests stop at operator authorization before any database or private-metadata access", async () => {
+  const db = freshDb();
+  db.seed("listings", [listingRow({ id: "facebook-anonymous", lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [] })]);
+  db.seed("listing_filter_matches", [membershipRow("facebook-anonymous", { is_current_match: true, match_reasons: [] })]);
+  currentDb = db;
+  sessionTableReads = [];
+  adminTableReads = [];
+  adminClientCreations = 0;
+  operatorAuthorizationFails = true;
+  try {
+    const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
+    assert.equal(response.status, 401);
+    assert.equal(adminClientCreations, 0, "an unauthorized request must never initialize the service client");
+    assert.deepEqual(sessionTableReads, [], "authorization must run before any session database read");
+    assert.deepEqual(adminTableReads, []);
+    assert.equal(db.accessLog().length, 0);
+  } finally {
+    operatorAuthorizationFails = false;
+  }
+});
 
 test("endpoint E2E: Finder displays Żychlin from the Facebook post text instead of the stale Łódź row", async () => {
   const db = freshDb();

@@ -58,6 +58,7 @@ const watcherAdminUrl = pathToFileURL(path.resolve(import.meta.dirname, "supabas
 
 mock.module(watcherAdminUrl, { namedExports: { createFacebookWatcherAdminClient: () => currentDb } });
 mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => currentDb } });
+mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => currentDb } });
 mock.module("@/features/flip-finder/server/search-filters", {
   namedExports: {
     getActiveSearchFiltersForSource: async () => [FILTER],

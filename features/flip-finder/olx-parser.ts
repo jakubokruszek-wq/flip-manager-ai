@@ -1,6 +1,7 @@
 import { calculateContentHash, normalizeOtodomUrl } from "./otodom-search.ts";
 import { extractOlxImages } from "./server/olx-images.ts";
 import type { PropertySourceListing } from "../properties/types/property.ts";
+import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction.ts";
 
 export type OlxParseResult = {
   rawItems: number;
@@ -92,16 +93,20 @@ function toOlxListing(ad: Record<string, unknown>): PropertySourceListing | null
   const city = text(isRecord(ad.location) ? ad.location : {}, "cityName");
   const district = text(isRecord(ad.location) ? ad.location : {}, "districtName");
   const images = extractOlxImages(ad.photos);
+  const title = text(ad, "title");
+  const description = text(ad, "description");
   const normalizedUrl = normalizeOtodomUrl(url);
   const roomCount = rooms(param("rooms"));
   const locationText = [district, city].filter(Boolean).join(", ") || null;
-  const payload = { id, url: normalizedUrl, title: text(ad, "title"), price, area, roomCount, floor: param("floor_select"), city, district };
+  const buildingType = resolveBuildingType(param("builttype"), title, description);
+  const ownership = resolveOwnership(param("ownership"), title, description);
+  const payload = { id, url: normalizedUrl, title, price, area, roomCount, floor: param("floor_select"), city, district };
   return {
     source: "olx",
     externalListingId: id,
     originalUrl: url,
     normalizedUrl,
-    title: text(ad, "title"),
+    title,
     price,
     area,
     rooms: roomCount,
@@ -112,8 +117,9 @@ function toOlxListing(ad: Record<string, unknown>): PropertySourceListing | null
     locationText,
     images,
     thumbnailUrl: images[0] ?? null,
-    buildingType: param("builttype"),
-    description: text(ad, "description"),
+    buildingType,
+    ownership,
+    description,
     publishedAt: dateValue(ad.createdTime ?? ad.createdAt ?? ad.created_at ?? ad.publishedAt ?? ad.creation_time),
     rawPayload: ad,
     contentHash: calculateContentHash(payload),

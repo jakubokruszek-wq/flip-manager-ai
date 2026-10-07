@@ -8,6 +8,7 @@ import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/s
 import type { SourceScanResult } from "@/features/flip-finder/server/manual-scan";
 import { createOlxWorkerAdminClient } from "@/features/flip-finder/server/olx-worker-admin";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
+import { reuseExistingListingAttributes } from "@/features/flip-finder/server/listing-attribute-reuse";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { slugifyCity, type SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
@@ -140,10 +141,11 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
   let priceDrops = 0;
   const diagnostics = emptyMatchDiagnosticSummary();
   try {
-    for (const listing of input.listings) {
+    const effectiveListings = await reuseExistingListingAttributes(supabase, input.listings);
+    for (const listing of effectiveListings) {
       controller.signal.throwIfAborted();
       const decision = evaluateListingAgainstFilter(listing, filter);
-      const saved = await persistListing(supabase, filter.id, listing, decision.matches, decision.unknownFields, sourceScanId, matchedAt, controller.signal);
+      const saved = await persistListing(supabase, filter.id, listing, decision.matches, decision.unknownFields, sourceScanId, matchedAt, controller.signal, { bucket: decision.bucket, reasons: decision.reasons, unknownFields: decision.unknownFields });
       addMatchDiagnostic(diagnostics, createMatchDiagnostic(saved.listingId, listing, filter, decision));
       if (decision.matches) matched += 1;
       counters = addScanItemCounts(counters, { listingCreated: saved.listingCreated, matchCreated: saved.matchCreated });
@@ -249,7 +251,7 @@ function parseSourceListing(value: unknown): SourceListing {
     source: "olx", externalListingId: requiredString(row.externalListingId, "externalListingId"), originalUrl, normalizedUrl,
     title: nullableString(row.title), price: nullableNumber(row.price), area: nullableNumber(row.area), rooms: nullableNumber(row.rooms), floor: nullableString(row.floor),
     pricePerSqm: nullableNumber(row.pricePerSqm), city: nullableString(row.city), district: nullableString(row.district), locationText: nullableString(row.locationText),
-    images: stringArray(row.images).slice(0, 20), thumbnailUrl: nullableString(row.thumbnailUrl), buildingType: nullableString(row.buildingType), description: nullableString(row.description), publishedAt: nullableString(row.publishedAt),
+    images: stringArray(row.images).slice(0, 20), thumbnailUrl: nullableString(row.thumbnailUrl), buildingType: nullableString(row.buildingType), ownership: nullableString(row.ownership), description: nullableString(row.description), publishedAt: nullableString(row.publishedAt),
     rawPayload: requireRow(row.rawPayload), contentHash: requiredString(row.contentHash, "contentHash"),
   };
 }

@@ -13,6 +13,7 @@ import { fetchExternalPortal } from "@/features/flip-finder/external-source-adap
 import { fetchOfficialLodzGroup } from "@/features/flip-finder/official-lodz-adapters";
 import type { SourceBatchContext } from "@/features/flip-finder/source-batches";
 import { SCHEMA_READY_SOURCE_IDS as SHARED_SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
+import { resolveBuildingType, resolveOwnership } from "@/features/flip-finder/listing-attribute-extraction";
 export { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 
 const USER_AGENT =
@@ -137,11 +138,10 @@ async function fetchOtodom(criteria: SearchFilter, signal?: AbortSignal): Promis
     throw new Error("OTODOM_ADAPTER_CONTRACT_MISMATCH: Adapter Otodom znormalizował oferty, ale nie przekazał ich do orkiestratora.");
   }
   return {
-    listings: result.listings.map((listing) => ({
-      ...listing,
-      buildingType: null,
-      description: null,
-    })),
+    // The adapter has already normalized real source attributes. Keep them
+    // intact: clearing these fields here made the persisted canonical row,
+    // filter decision, and Finder card disagree with the parser.
+    listings: result.listings,
     warnings: result.warnings,
     // Keep the raw count here. A page with 26 rows and zero normalized
     // listings must still show operators "26 found" plus the concrete
@@ -236,13 +236,17 @@ function toMorizonListing(offer: Record<string, unknown>, fallbackCity: string |
   const price = number(offer.price); const area = number(atPath(item, ["floorSize", "value"]));
   if (price === null || price <= 0 || area === null || area <= 0 || /\/mieszkania\/[^/]+\/?$/i.test(new URL(url).pathname)) return null;
   const locality = text(address, "addressLocality"); const district = locality && ["bałuty", "górna", "polesie", "śródmieście", "widzew"].includes(normalize(locality)) ? locality : null;
-  return listing("morizon", idFromUrl(url) ?? hash(url), url, text(offer, "name"), price, area, number(item.numberOfRooms), text(item, "floorLevel"), district ? fallbackCity : locality ?? fallbackCity, district, text(item, "description"), imageValues(offer.image), null, offer, text(offer, "datePosted", "datePublished", "dateCreated"));
+  const title = text(offer, "name");
+  const description = text(item, "description") ?? text(offer, "description");
+  const buildingType = resolveBuildingType(item.buildingType ?? item.building_type, title, description);
+  const ownership = resolveOwnership(item.ownership ?? item.ownershipType ?? item.tenure, title, description);
+  return listing("morizon", idFromUrl(url) ?? hash(url), url, title, price, area, number(item.numberOfRooms), text(item, "floorLevel"), district ? fallbackCity : locality ?? fallbackCity, district, description, imageValues(offer.image), buildingType, ownership, offer, text(offer, "datePosted", "datePublished", "dateCreated"));
 }
 
-function listing(source: SourceListing["source"], id: string, url: string, title: string | null, price: number | null, area: number | null, roomCount: number | null, floor: string | null, city: string | null, district: string | null, description: string | null, images: string[], buildingType: string | null, rawPayload: Record<string, unknown>, publishedAt: string | null = null): SourceListing {
+function listing(source: SourceListing["source"], id: string, url: string, title: string | null, price: number | null, area: number | null, roomCount: number | null, floor: string | null, city: string | null, district: string | null, description: string | null, images: string[], buildingType: string | null, ownership: string | null, rawPayload: Record<string, unknown>, publishedAt: string | null = null): SourceListing {
   const locationText = [district, city].filter(Boolean).join(", ") || null; const normalizedUrl = normalizeOtodomUrl(url);
   const payload = { id, url: normalizedUrl, title, price, area, roomCount, floor, city, district };
-  return { source, externalListingId: id, originalUrl: url, normalizedUrl, title, price, area, rooms: roomCount, floor, pricePerSqm: price !== null && area ? price / area : null, city, district, locationText, images, thumbnailUrl: images[0] ?? null, buildingType, description, publishedAt, rawPayload, contentHash: calculateContentHash(payload) };
+  return { source, externalListingId: id, originalUrl: url, normalizedUrl, title, price, area, rooms: roomCount, floor, pricePerSqm: price !== null && area ? price / area : null, city, district, locationText, images, thumbnailUrl: images[0] ?? null, buildingType, ownership, description, publishedAt, rawPayload, contentHash: calculateContentHash(payload) };
 }
 
 function absoluteUrl(value: string | null, base: string, host: string): string | null { if (!value) return null; try { const url = new URL(value, base); return url.hostname === host || url.hostname.endsWith(`.${host}`) ? url.toString() : null; } catch { return null; } }

@@ -58,6 +58,7 @@ function finderDb(filterOverrides: Record<string, unknown> = {}): FakeFacebookSu
 
 let currentFinderDb = finderDb();
 mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => currentFinderDb } });
+mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => currentFinderDb } });
 const { getFilterResults } = await import("./flip-finder/server/filter-results.ts");
 
 type WatcherRow = Record<string, unknown>;

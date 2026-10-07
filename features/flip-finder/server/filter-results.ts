@@ -19,6 +19,7 @@ import { isStaleScan, scanHeartbeatAt, STALE_SCAN_MESSAGE } from "@/features/fli
 import type { PropertyListing } from "@/features/properties/types/property";
 import { safeFacebookDisplayLocation } from "@/features/facebook-watcher/facebook-location-quality";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { calculateOpportunityAssessment } from "@/features/flip-finder/opportunity-score";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
 import { visibleMembership } from "@/features/flip-finder/membership-reconciliation";
@@ -229,7 +230,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       // .range() pages across a stable sequence, never PostgREST's otherwise
       // unspecified LIMIT/OFFSET row order.
       .order("id", { ascending: true });
-  const [listingsResultRaw, snapshotsResult, priceQualityResult] = await Promise.all([
+  const [listingsResultRaw, snapshotsResult] = await Promise.all([
     fetchAllRowsForIds(listingIds, buildListingQuery),
     fetchAllRowsForIds(listingIds, (idChunk) =>
       supabase
@@ -242,20 +243,40 @@ export async function getFilterResults(filterId: string, includeArchived = false
         .order("captured_at", { ascending: false })
         .order("listing_id", { ascending: true }),
     ),
-    // One extra batched query (never per-listing) for Facebook's own price-quality
-    // signal. Filtered server-side to source=facebook, since only Facebook writes
-    // this metadata today; OLX/Otodom simply have no rows here and are unaffected.
-    fetchAllRowsForIds(listingIds, (idChunk) =>
-      supabase
-        .from("listing_source_metadata")
-        .select("listing_id,source_post_url,collected_at,metadata")
-        .in("listing_id", idChunk)
-        .eq("source", "facebook")
-        // id is this table's own primary key -- deterministic total order,
-        // same reasoning as the listings query above.
-        .order("id", { ascending: true }),
-    ),
   ]);
+  let listingsResult: typeof listingsResultRaw = listingsResultRaw;
+  if (listingsResult.error?.code === "42703") {
+    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) =>
+      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", idChunk).eq("status", "active").order("id", { ascending: true }),
+    ) as typeof listingsResultRaw;
+  }
+  if (listingsResult.error || snapshotsResult.error) {
+    console.error("FLIP FINDER RESULTS LISTINGS ERROR:", listingsResult.error ?? snapshotsResult.error);
+    throw new Error("Nie udało się pobrać ofert dla filtra.");
+  }
+
+  // listing_source_metadata contains private source-post material. The
+  // protected results route authorizes the operator before this function is
+  // called; use the service-role client and avoid initializing it entirely
+  // for portal-only result sets.
+  const facebookListingIds = [...new Set(asRows(listingsResult.data)
+    .filter((row) => row.source === "facebook" && typeof row.id === "string")
+    .map((row) => String(row.id)))];
+  let priceQualityResult: { data: unknown; error: { message?: string; code?: string } | null } = { data: [], error: null };
+  if (facebookListingIds.length > 0) {
+    try {
+      const admin = createAdminClient();
+      priceQualityResult = await fetchAllRowsForIds(facebookListingIds, (idChunk) =>
+        admin.from("listing_source_metadata")
+          .select("listing_id,source_post_url,collected_at,metadata")
+          .in("listing_id", idChunk)
+          .eq("source", "facebook")
+          .order("id", { ascending: true }),
+      );
+    } catch (error) {
+      priceQualityResult = { data: [], error: { message: error instanceof Error ? error.message : "service client unavailable" } };
+    }
+  }
   const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
   const sourcePostUrlByListingId = new Map<string, string | null>();
   const sourcePostIdByListingId = new Map<string, string | null>();
@@ -288,21 +309,6 @@ export async function getFilterResults(filterId: string, includeArchived = false
       const status = parseFacebookPriceReliability(row.metadata);
       if (listingId && status) priceReliabilityByListingId.set(listingId, status);
     }
-  }
-
-  let listingsResult: typeof listingsResultRaw = listingsResultRaw;
-  if (listingsResult.error?.code === "42703") {
-    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) =>
-      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", idChunk).eq("status", "active").order("id", { ascending: true }),
-    ) as typeof listingsResultRaw;
-  }
-
-  if (listingsResult.error || snapshotsResult.error) {
-    console.error(
-      "FLIP FINDER RESULTS LISTINGS ERROR:",
-      listingsResult.error ?? snapshotsResult.error,
-    );
-    throw new Error("Nie udało się pobrać ofert dla filtra.");
   }
 
   const compsResult = await supabase
