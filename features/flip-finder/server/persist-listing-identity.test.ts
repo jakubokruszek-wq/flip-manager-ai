@@ -9,6 +9,7 @@ mock.module("@/features/flip-finder/server/canonical-reconciliation", { namedExp
 type Row = Record<string, unknown>;
 function fakeDb(rows: Row[]) {
   let sequence = 0;
+  const snapshots: Row[] = [];
   return {
     from(table: string) {
       const filters: Record<string, unknown> = {};
@@ -19,6 +20,7 @@ function fakeDb(rows: Row[]) {
         eq: (key: string, value: unknown) => { filters[key] = value; return builder; },
         order: () => builder,
         limit: () => builder,
+        filter: () => builder,
         abortSignal: () => builder,
         insert: (value: Row) => { operation = "insert"; payload = value; return builder; },
         upsert: (value: Row) => { operation = "upsert"; payload = value; return builder; },
@@ -35,10 +37,14 @@ function fakeDb(rows: Row[]) {
           }
           return { data: { id: `row-${++sequence}` }, error: null };
         },
-        then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve, reject),
+        then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => {
+          if (table === "listing_snapshots" && operation === "insert" && payload) snapshots.push({ ...payload });
+          return Promise.resolve({ data: [], error: null }).then(resolve, reject);
+        },
       };
       return builder;
     },
+    snapshots,
   };
 }
 
@@ -129,4 +135,24 @@ test("persistListing treats Otodom .html and extensionless URLs as one canonical
   assert.equal(rows.length, 1);
   assert.equal(rows[0].external_listing_id, "old-otodom-id");
   assert.equal(rows[0].normalized_url, "https://otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS");
+});
+
+test("persistListing stores the adapter's confirmed publication date in snapshot raw_data", async () => {
+  const rows: Row[] = [];
+  const db = fakeDb(rows);
+  await persistListing(db as never, "filter-1", { ...listing("published-1", "Oferta z datą"), publishedAt: "2026-10-04T21:55:00.000Z" }, true, [], "scan-1", "2026-10-07T10:00:00.000Z", AbortSignal.timeout(1000));
+  assert.equal(rows.length, 1);
+  assert.equal(db.snapshots.length, 1);
+  assert.equal((db.snapshots[0].raw_data as Row).sourcePublishedAt, "2026-10-04T21:55:00.000Z");
+});
+
+test("a non-Facebook reimport without a valid total sale price is rejected before any row or existing price can be changed", async () => {
+  const rows: Row[] = [{ id: "canonical-2", source: "domiporta", external_listing_id: "known-id", price: 489000, content_hash: "known", images: [] }];
+  const db = fakeDb(rows);
+  await assert.rejects(
+    persistListing(db as never, "filter-1", { ...listing("known-id", "Existing listing"), price: Number.NaN }, true, [], "scan-2", "2026-10-07T10:00:00.000Z", AbortSignal.timeout(1000)),
+    /INVALID_SALE_PRICE/,
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].price, 489000);
 });

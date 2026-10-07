@@ -28,6 +28,8 @@ import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visib
 import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
 import { resolveListingUrl } from "@/features/listing-url";
 import { canonicalFacebookContentFingerprint, canonicalFacebookParameterFingerprint, dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
+import { earliestPublicationDate, isWithinFinderPublicationWindow, normalizePublicationDate } from "@/features/flip-finder/publication-date";
+import { isValidSalePrice } from "@/features/flip-finder/sale-price";
 
 type Row = Record<string, unknown>;
 
@@ -121,7 +123,7 @@ type SnapshotRow = {
   rawData: Row;
 };
 
-export async function getFilterResults(filterId: string, includeArchived = false): Promise<FilterResultsPayload | null> {
+export async function getFilterResults(filterId: string, includeArchived = false, now = Date.now()): Promise<FilterResultsPayload | null> {
   const filter = await getSearchFilter(filterId);
   if (isFilterMissing(filter)) {
     return null;
@@ -268,7 +270,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       const admin = createAdminClient();
       priceQualityResult = await fetchAllRowsForIds(facebookListingIds, (idChunk) =>
         admin.from("listing_source_metadata")
-          .select("listing_id,source_post_url,collected_at,metadata")
+          .select("listing_id,source_post_url,collected_at,published_at,metadata")
           .in("listing_id", idChunk)
           .eq("source", "facebook")
           .order("id", { ascending: true }),
@@ -282,6 +284,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const sourcePostIdByListingId = new Map<string, string | null>();
   const listingIntentByListingId = new Map<string, string | null>();
   const sourceMetadataCollectedAtByListingId = new Map<string, string>();
+  const sourcePublishedAtByListingId = new Map<string, string>();
   // Distinguish "the query ran and this Facebook listing simply has no
   // priceQuality yet" (backward-compatible: trusted, same as before this
   // feature existed) from "the query itself failed" (must not silently
@@ -297,6 +300,11 @@ export async function getFilterResults(filterId: string, includeArchived = false
       const sourcePostUrl = nullableString(row.source_post_url);
       const collectedAt = nullableString(row.collected_at);
       const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Row : {};
+      const publishedAt = normalizePublicationDate(row.published_at, now);
+      if (listingId && publishedAt) {
+        const currentPublishedAt = sourcePublishedAtByListingId.get(listingId);
+        sourcePublishedAtByListingId.set(listingId, currentPublishedAt ? earliestPublicationDate([currentPublishedAt, publishedAt])! : publishedAt);
+      }
       const previousCollectedAt = listingId ? sourceMetadataCollectedAtByListingId.get(listingId) : null;
       const isNewer = !previousCollectedAt || !collectedAt || collectedAt > previousCollectedAt;
       if (listingId && isNewer) {
@@ -403,22 +411,25 @@ export async function getFilterResults(filterId: string, includeArchived = false
         ? "REJECTED"
         : filterDecision.bucket;
     const expectedLifecycle = decisionBucket === "MATCHED" ? "ACTIVE" : decisionBucket === "REVIEW" ? "REVIEW" : "REJECTED";
+    const finderCleared = match.matchReasons.includes("finder_cleared");
     const persistedReview = match.matchReasons.some((reason) => reason === "review" || reason.startsWith("unknown_"));
-    const consistencyMismatch = listing.lifecycleStatus !== expectedLifecycle
+    const consistencyMismatch = !finderCleared && (listing.lifecycleStatus !== expectedLifecycle
       || match.isCurrentMatch !== (decisionBucket === "MATCHED")
-      || (decisionBucket === "REVIEW" && !persistedReview);
+      || (decisionBucket === "REVIEW" && !persistedReview));
     const canonicalDebug = canonicalVisibilityDebug({
       listingId: listing.id,
       canonicalBucket: decisionBucket,
       lifecycleStatus: listing.lifecycleStatus ?? null,
       isCurrentMatch: match.isCurrentMatch,
       matchReasons: [...filterDecision.reasons, ...(decisionBucket === "REVIEW" ? ["review", ...filterDecision.missingFields.map((field) => `unknown_${field}`)] : [])],
-      visibilityInFinder: (decisionBucket === "MATCHED" || decisionBucket === "REVIEW") && listing.status === "active" && (listing.lifecycleStatus === "ACTIVE" || listing.lifecycleStatus === "REVIEW"),
+      visibilityInFinder: !finderCleared && (decisionBucket === "MATCHED" || decisionBucket === "REVIEW") && listing.status === "active" && (listing.lifecycleStatus === "ACTIVE" || listing.lifecycleStatus === "REVIEW"),
       visibilityInWatcher: listing.source === "facebook",
-      reason: sourceConflict ? "source_conflict" : decisionBucket === "REJECTED" ? filterDecision.hardRejectReasons.join(",") || "rejected_by_policy" : decisionBucket === "REVIEW" ? "review_uncertainty" : "current_filter_match",
+      reason: finderCleared ? "cleared_by_operator" : sourceConflict ? "source_conflict" : decisionBucket === "REJECTED" ? filterDecision.hardRejectReasons.join(",") || "rejected_by_policy" : decisionBucket === "REVIEW" ? "review_uncertainty" : "current_filter_match",
       consistencyMismatch,
     });
-    const publishedAt = publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? []);
+    const publishedAt = listing.source === "facebook"
+      ? sourcePublishedAtByListingId.get(listing.id) ?? publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? [], now)
+      : publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? [], now);
 
     return [
       {
@@ -460,7 +471,10 @@ export async function getFilterResults(filterId: string, includeArchived = false
         finderStatus: canonicalDebug.finderStatus,
         canonicalDecisionDebug: canonicalDebug,
         canonicalConsistencyMismatch: consistencyMismatch,
-        lifecycleStatus: listing.lifecycleStatus,
+        // A Finder clear is scoped to this filter's membership. Project it as
+        // archived in this filter's history view without mutating the shared
+        // canonical listing or another filter's membership.
+        lifecycleStatus: finderCleared ? "ARCHIVED" : listing.lifecycleStatus,
         reviewReason: listing.reviewReason,
         missingFields: listing.missingFields,
         manualDecision: listing.manualDecision,
@@ -514,9 +528,11 @@ export async function getFilterResults(filterId: string, includeArchived = false
   // exclusive by construction: every listing lands in exactly one.
   const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
   const isArchivedLifecycle = (result: FilterResult) => archivedLifecycle.has(result.lifecycleStatus ?? "");
-  const sortedResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result)), "newest");
-  const reviewResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result)), "newest");
-  const archivedResults = includeArchived ? sortResults(dedupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true), "newest") : [];
+  const mainVisible = (result: FilterResult) =>
+    (result.source === "facebook" || isValidSalePrice(result.price)) && isWithinFinderPublicationWindow(result.publishedAt, now);
+  const sortedResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
+  const reviewResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
+  const archivedResults = includeArchived ? sortResults(dedupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true || ((result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW") && !mainVisible(result))), "newest") : [];
 
   return {
     filter,
@@ -834,19 +850,17 @@ function previousDifferentPrice(snapshots: SnapshotRow[], currentPrice: number |
   return null;
 }
 
-function publishedAtFromSnapshots(snapshots: SnapshotRow[]): string | null {
-  for (const snapshot of snapshots) {
-    const publishedAt = rawPublishedAt(snapshot.rawData);
-    if (publishedAt) return publishedAt;
-  }
-  return null;
+function publishedAtFromSnapshots(snapshots: SnapshotRow[], now = Date.now()): string | null {
+  return earliestPublicationDate(snapshots.map((snapshot) => rawPublishedAt(snapshot.rawData, now)), now);
 }
 
-function rawPublishedAt(raw: Row): string | null {
-  for (const key of ["publishedAt", "published_at", "createdAt", "created_at", "createdTime", "creation_time", "postedAt", "posted_at"]) {
-    const parsed = validIsoDate(raw[key]);
+function rawPublishedAt(raw: Row, now = Date.now()): string | null {
+  for (const key of ["sourcePublishedAt", "publishedAt", "published_at", "datePosted", "datePostedAt", "datePublished", "date_published", "postedAt", "posted_at"]) {
+    const parsed = normalizePublicationDate(raw[key], now);
     if (parsed) return parsed;
   }
+  const candidate = isRow(raw.candidate) ? raw.candidate : null;
+  if (candidate) return rawPublishedAt(candidate, now);
   return null;
 }
 
@@ -924,16 +938,6 @@ function nullableString(value: unknown): string | null {
 }
 
 
-
-function validIsoDate(value: unknown): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const milliseconds = value < 10_000_000_000 ? value * 1_000 : value;
-    return Number.isFinite(new Date(milliseconds).getTime()) ? new Date(milliseconds).toISOString() : null;
-  }
-  if (typeof value !== "string" || !value.trim()) return null;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
-}
 
 function nullableNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;

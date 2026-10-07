@@ -6,6 +6,15 @@ const test = require("node:test");
 
 const page = fs.readFileSync(path.join(__dirname, "filter-results-page.tsx"), "utf8");
 
+test("per-filter cards wrap badges, long titles, locations, and dates instead of clamping or truncating", () => {
+  assert.match(page, /mb-2 flex min-w-0 flex-wrap items-center gap-2/);
+  assert.match(page, /<h2 className="min-w-0 whitespace-normal break-words font-semibold \[overflow-wrap:anywhere\]">/);
+  assert.doesNotMatch(page, /line-clamp-2/);
+  assert.match(page, /className="min-w-0 whitespace-normal break-words text-right \[overflow-wrap:anywhere\]">\{publicationLabel\(result\.publishedAt\)\}/);
+  assert.match(page, /publicationLabel\(result\.publishedAt\)/);
+  assert.match(page, /firstSeenLabel\(result\.firstSeenAt\)/);
+});
+
 // The per-filter "Otwórz wyniki" page (features/flip-finder/components/search-filters-page.tsx
 // links to it) used to type its API response without reviewResults at all, so a
 // canonical REVIEW listing — correctly returned by the real getFilterResults()

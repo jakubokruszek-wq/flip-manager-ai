@@ -3,6 +3,7 @@ import { dedupeLocationText } from "./display-format.ts";
 import type { OpportunityPriority, OpportunityConfidence } from "./opportunity-score";
 import type { UnderwritingResult } from "./underwriting";
 import type { CanonicalVisibilityDebug, FinderStatus } from "./canonical-visibility";
+import { formatPublicationLabel } from "./publication-date";
 
 export type ResultSort =
   | "newest"
@@ -238,8 +239,7 @@ export function sortResults<T extends SortableResult>(items: T[], sort: ResultSo
 }
 
 export function publicationLabel(value: string | null | undefined): string {
-  if (!value || !Number.isFinite(Date.parse(value))) return "Data publikacji: nieznana";
-  return `Opublikowano: ${new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))}`;
+  return formatPublicationLabel(value);
 }
 
 export function firstSeenLabel(value: string | null | undefined): string {

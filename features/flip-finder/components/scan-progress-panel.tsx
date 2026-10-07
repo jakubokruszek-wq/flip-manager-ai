@@ -3,89 +3,55 @@
 import { budgetTone, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
 
 export function ScanProgressPanel({ progress }: { progress: ScanProgressResponse }) {
-  const waitingForContinuation = (progress.overall.waitingUnits ?? 0) > 0;
-  // A run can still compute status "running" while some units genuinely wait
-  // for continuation (any non-waiting pending/running unit outranks the
-  // waiting ones in buildOverallProgress). The label must reflect waiting
-  // whenever it's real, not only when it happens to be the sole reason the
-  // run isn't yet terminal -- otherwise a disabled, unclickable "Skanowanie…"
-  // button sits there for no active work at all.
-  const active = (progress.status === "queued" || progress.status === "running") && !waitingForContinuation;
-  // Finder's own scan never has a Facebook group name of its own -- it only
-  // reconciles already-collected canonical listings (see
-  // reconcileFacebookFromCanonicalListings) and always completes that step
-  // synchronously. A groupName here can only originate from the Facebook
-  // Watcher's own, separate scan cycle; this panel must never name a
-  // specific Facebook group, matching Finder's read-only relationship to
-  // Facebook data everywhere else in this codebase.
-  const currentLabel = progress.current
+  const waiting = (progress.overall.waitingUnits ?? 0) > 0;
+  const active = (progress.status === "queued" || progress.status === "running") && !waiting;
+  const workTimeMs = Math.max(0, progress.elapsedMs - progress.waitingAgeMs);
+  const currentSource = progress.current
     ? progress.current.source === "facebook"
       ? "Facebook — przeliczono z zapisanych ofert"
       : sourceLabel(progress.current.source)
     : null;
-  const tone = budgetTone(progress.openai.budgetUsedPercent);
-  const terminalStage = progress.status === "partial"
-    ? "Częściowo zakończony"
-    : progress.status === "failed"
-      ? "Zakończony błędem"
-      : "Wszystkie etapy zakończone";
-  // A waiting run is never "Skanowanie…" (nothing is actively running) and
-  // never a plain statusLabel(status) either (which would say "W toku" while
-  // the aggregate status is still "running" -- see the `active` comment
-  // above). This must read unambiguously as "nothing is happening right now,
-  // on purpose" everywhere the panel shows a status word.
-  const topLabel = waitingForContinuation ? "Oczekuje na kontynuację" : active ? "Skanowanie…" : statusLabel(progress.status);
-  const badgeClass = waitingForContinuation ? "rounded-full px-2.5 py-1 text-xs font-medium bg-amber-500/10 text-amber-800 dark:text-amber-300" : statusClass(progress.status);
-  // elapsedMs is total age since the run's shared reservation timestamp --
-  // includes whatever real work happened first, so showing it alone while
-  // waiting reads as "this many minutes of active scanning". waitingAgeMs
-  // (provably idle time; see getScanProgress) is shown as its own figure
-  // instead, and the real work portion separately.
-  const workTimeMs = Math.max(0, progress.elapsedMs - progress.waitingAgeMs);
-  const durationLabel = waitingForContinuation
-    ? `${progress.overall.completedUnits}/${progress.overall.totalUnits} etapów · praca: ${formatDuration(workTimeMs)} · oczekuje: ${formatDuration(progress.waitingAgeMs)}`
-    : `${progress.overall.completedUnits}/${progress.overall.totalUnits} etapów · ${formatDuration(progress.elapsedMs)}`;
+  const currentText = waiting
+    ? currentSource ?? "Kolejne źródło"
+    : currentSource ?? (active ? "Oczekiwanie na źródło" : progress.status === "partial" ? "Zakończono częściowo" : progress.status === "failed" ? "Zakończono błędem" : "Wszystkie etapy zakończone");
+  const technicalMessages = [...new Set([...progress.errors, ...(progress.partialReason ? [progress.partialReason] : [])])]
+    .filter((message) => !isNormalYield(message));
+  const statusText = waiting ? "Oczekuje" : active ? "W toku" : statusLabel(progress.status);
 
   return (
-    <section aria-label="Postęp skanowania" className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+    <section aria-label="Postęp skanowania" className="min-w-0 rounded-2xl border border-border/70 bg-muted/20 p-4">
       <div className="min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><p className="text-sm font-semibold">{topLabel}</p><p className="mt-1 text-xs text-muted-foreground">{durationLabel}</p></div>
-          <span className={badgeClass}>{waitingForContinuation ? "Oczekuje na kontynuację" : statusLabel(progress.status)}</span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">Postęp skanu</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{progress.overall.completedUnits}/{progress.overall.totalUnits} etapów · czas pracy {formatDuration(workTimeMs)}</p>
+          </div>
+          <span className={statusClass(progress.status)}>{statusText}</span>
         </div>
-        <div aria-label={`Postęp ${progress.overall.percent}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progress.overall.percent} className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-muted" role="progressbar"><div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progress.overall.percent}%` }} /></div>
-        <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-          <ProgressDetail label="Bieżący etap" value={waitingForContinuation ? `${currentLabel ?? "Źródła"} — oczekuje na kontynuację` : currentLabel ?? (active ? "Oczekiwanie na źródła" : terminalStage)} />
-          <ProgressDetail label="Pozostało" value={`${progress.overall.remainingUnits} etapów`} />
-          {progress.olx.status ? <ProgressDetail label="OLX" value={`${jobStatusLabel(progress.olx.status)} · raw ${progress.olx.raw} · normalized ${progress.olx.normalized}`} /> : null}
+        <div aria-label={"Postęp " + progress.overall.percent + "%"} aria-valuemax={100} aria-valuemin={0} aria-valuenow={progress.overall.percent} className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-muted" role="progressbar">
+          <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: progress.overall.percent + "%" }} />
         </div>
-        {progress.status === "partial" || waitingForContinuation ? <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-800 dark:text-amber-300">{waitingForContinuation ? "Oczekuje na kontynuację" : "Częściowo zakończony"}</p><p className="mt-1 text-muted-foreground">{waitingForContinuation ? "Część źródeł oczekuje na kolejny cykl kontynuacji (co ok. 5 minut, gdy zewnętrzny wyzwalacz działa). Kliknięcie \"Skanuj oferty\" wznowi dokładnie ten sam skan." : progress.partialReason ?? "Część źródeł zakończyła się błędem. Zapisane oferty pozostają dostępne."}</p></div> : null}
-        {/*
-          Deliberately no Facebook per-group (or even aggregate group-count)
-          breakdown here. That data -- group names, per-group post counts,
-          collector queue status -- can only ever describe the Facebook
-          Watcher's own, separately scheduled scan cycle: Finder's own scan
-          never creates facebook_scan_jobs or per-group source_scans rows at
-          all (see reconcileFacebookFromCanonicalListings in manual-scan.ts).
-          Rendering it here previously made Finder's page look like it was
-          scanning Facebook groups itself, confirmed live in production.
-        */}
-        {progress.errors.length > 0 ? <div className="mt-4 rounded-xl border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive">{progress.errors.slice(0, 3).map((message) => <p key={message}>{message}</p>)}</div> : null}
-      </div>
-
-      {/* Vision cost telemetry is rendered below the results by VisionCostPanel. */}
-      <div className="hidden" aria-hidden="true">
-        <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">OpenAI Vision</h3><span className="text-xs text-muted-foreground">{qualityLabel(progress.openai.lastRun.dataQuality)}</span></div>
-        <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
-          <CostMetric label="Ostatni skan" value={formatUsd(progress.openai.lastRun.costUsd)} />
-          <CostMetric label="Wywołania" value={formatNumber(progress.openai.lastRun.calls)} />
-          <CostMetric label="Tokeny" value={formatNumber(progress.openai.lastRun.totalTokens)} />
-          <CostMetric label="Dzisiaj" value={formatUsd(progress.openai.today.costUsd)} />
-          <CostMetric label="Ten miesiąc" value={formatUsd(progress.openai.month.costUsd)} />
-          <CostMetric label="Budżet miesięczny" value={progress.openai.monthlyBudgetUsd === null ? "Nie ustawiono" : formatUsd(progress.openai.monthlyBudgetUsd)} />
-          {progress.openai.remainingBudgetUsd !== null ? <CostMetric label="Pozostały budżet Flip Manager" value={formatUsd(progress.openai.remainingBudgetUsd)} /> : null}
-        </dl>
-        {progress.openai.monthlyBudgetUsd !== null && progress.openai.budgetUsedPercent !== null ? <div className="mt-4"><div className="mb-1.5 flex justify-between gap-3 text-xs text-muted-foreground"><span>Budżet miesięczny {formatUsd(progress.openai.monthlyBudgetUsd)}</span><span>{progress.openai.budgetUsedPercent.toLocaleString("pl-PL", { maximumFractionDigits: 1 })}%</span></div><div className="h-2 overflow-hidden rounded-full bg-surface-muted"><div className={`h-full rounded-full ${budgetToneClass(tone)}`} style={{ width: `${Math.min(100, progress.openai.budgetUsedPercent)}%` }} /></div></div> : null}
+        <div className="mt-4 grid min-w-0 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          <ProgressDetail label={waiting ? "Oczekujące źródło" : "Aktualne źródło"} value={currentText} />
+          <ProgressDetail label="Etapy pozostałe" value={String(progress.overall.remainingUnits)} />
+          <ProgressDetail label="Sprawdzone oferty" value={String(progress.totals.scanned)} />
+          <ProgressDetail label="Dopasowania" value={String(progress.totals.matched)} />
+          <ProgressDetail label="Nowe / aktualizacje" value={progress.totals.created + " / " + progress.totals.updated} />
+          {progress.olx.status ? <ProgressDetail label="OLX · surowe / poprawne" value={jobStatusLabel(progress.olx.status) + " · " + progress.olx.raw + " / " + progress.olx.normalized} /> : null}
+        </div>
+        {progress.status === "partial" && !waiting && technicalMessages.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">Część etapów zakończyła się błędem lub niepełnym wynikiem.</p> : null}
+        {technicalMessages.length > 0 ? (
+          <div className="mt-4 rounded-xl border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive">
+            <p>{polishErrorSummary(technicalMessages[0])}</p>
+            <details className="mt-2 text-xs">
+              <summary className="cursor-pointer font-medium">Szczegóły techniczne</summary>
+              <ul className="mt-2 list-disc space-y-1 break-words pl-5">
+                {technicalMessages.slice(0, 10).map((message) => <li key={message}>{message}</li>)}
+              </ul>
+            </details>
+          </div>
+        ) : null}
+        {/* Finder never renders Facebook Watcher per-group progress here. */}
       </div>
     </section>
   );
@@ -110,12 +76,21 @@ export function VisionCostPanel({ progress }: { progress: ScanProgressResponse }
   );
 }
 
-function ProgressDetail({ label, value }: { label: string; value: string }) { return <div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 truncate font-medium" title={value}>{value}</p></div>; }
+function ProgressDetail({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 whitespace-normal break-words font-medium [overflow-wrap:anywhere]">{value}</p></div>; }
 function CostMetric({ label, value }: { label: string; value: string }) { return <div><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-0.5 tabular-nums font-semibold">{value}</dd></div>; }
 function sourceLabel(source: string): string { return ({ otodom: "Otodom", olx: "OLX", morizon: "Morizon", facebook: "Facebook Watcher", gratka: "Gratka", nieruchomosci_online: "Nieruchomosci-online.pl", domiporta: "Domiporta", sprzedajemy: "Sprzedajemy.pl", adresowo: "Adresowo.pl", oferty_net: "Oferty.net", szybko: "Szybko.pl", bezposrednio: "Bezposrednio.net.pl", domy: "Domy.pl", allegro_lokalnie: "Allegro Lokalnie", official_cooperative: "Spółdzielnie Łódź", official_uml: "UMŁ/BIP Łódź", official_auction: "Licytacje i syndycy" } as Record<string, string>)[source] ?? source; }
 function jobStatusLabel(status: string): string { return status === "queued" ? "oczekuje" : status === "running" ? "w toku" : status === "failed" ? "błąd" : "zakończony"; }
 function statusLabel(status: ScanProgressResponse["status"]): string { return status === "queued" ? "W kolejce" : status === "running" ? "W toku" : status === "completed" ? "Zakończony" : status === "partial" ? "Częściowo zakończony" : "Błąd"; }
-function statusClass(status: ScanProgressResponse["status"]): string { const tone = status === "failed" ? "bg-destructive/10 text-destructive" : status === "partial" ? "bg-amber-500/10 text-amber-800 dark:text-amber-300" : status === "completed" ? "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300" : "bg-blue-500/10 text-blue-800 dark:text-blue-300"; return `rounded-full px-2.5 py-1 text-xs font-medium ${tone}`; }
+function statusClass(status: ScanProgressResponse["status"]): string { const tone = status === "failed" ? "bg-destructive/10 text-destructive" : "bg-muted text-foreground"; return "rounded-full px-2.5 py-1 text-xs font-medium " + tone; }
+function isNormalYield(message: string): boolean { return /^(SOURCE_BUDGET_EXHAUSTED|SOURCE_SLICE_YIELD):/u.test(message); }
+function polishErrorSummary(message: string): string {
+  if (/HTTP\s*403|FORBIDDEN/iu.test(message)) return "Źródło odmówiło dostępu (HTTP 403).";
+  if (/AUTH|UNAUTHORIZED|JWT/iu.test(message)) return "Nie udało się potwierdzić uprawnień do wykonania etapu.";
+  if (/RPC|DATABASE|SUPABASE|POSTGREST|PGRST/iu.test(message)) return "Wystąpił błąd zapisu lub odczytu danych.";
+  if (/LEASE|CAS|OWNERSHIP/iu.test(message)) return "Utracono prawo do kontynuowania etapu.";
+  if (/TIMEOUT|TIMED OUT/iu.test(message)) return "Etap przekroczył limit czasu.";
+  return "Nie udało się zakończyć jednego z etapów skanu.";
+}
 function budgetToneClass(tone: ReturnType<typeof budgetTone>): string { return tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-amber-500" : tone === "info" ? "bg-blue-500" : "bg-emerald-500"; }
 function qualityLabel(value: ScanProgressResponse["openai"]["lastRun"]["dataQuality"]): string { return value === "EXACT" ? "Dokładne usage" : value === "PARTIAL" ? "Częściowe usage" : "Usage niedostępne"; }
 function formatNumber(value: number): string { return new Intl.NumberFormat("pl-PL").format(value); }

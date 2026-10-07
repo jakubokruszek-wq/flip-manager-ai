@@ -6,6 +6,17 @@ const test = require("node:test");
 
 const page = fs.readFileSync(path.join(__dirname, "inline-filter-results.tsx"), "utf8");
 
+test("shared Finder and Watcher cards put badges in a separate wrapping row and preserve full title/location/date text", () => {
+  assert.match(page, /mb-3 flex min-w-0 flex-wrap items-center gap-2/);
+  assert.match(page, /<h2 className="min-w-0 whitespace-normal break-words[^>]*\[overflow-wrap:anywhere\]/);
+  assert.doesNotMatch(page, /<h2 className="line-clamp|pr-24/);
+  assert.match(page, /<span className="min-w-0 whitespace-normal break-words \[overflow-wrap:anywhere\]">\{location\}<\/span>/);
+  assert.match(page, /publicationLabel\(result\.publishedAt\)/);
+  assert.match(page, /firstSeenLabel\(result\.firstSeenAt\)/);
+  assert.doesNotMatch(page, /className="truncate">\{publicationLabel/);
+  assert.doesNotMatch(page, /className="truncate">\{firstSeenLabel/);
+});
+
 // Task 4: price/m² must be one of the first values visible, using the
 // existing Premium V3 gold accent — not a new color, not a redesign.
 test("price per m² is styled with the existing Premium V3 gold accent, directly under the price", () => {

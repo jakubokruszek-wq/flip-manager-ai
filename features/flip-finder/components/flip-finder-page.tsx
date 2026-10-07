@@ -14,7 +14,6 @@ import {
   filterResultsHref,
   NO_SCANS_MESSAGE,
   scanNoOffersMessage,
-  scanStatusLabel,
 } from "@/features/flip-finder/dashboard";
 import { OTODOM_AUTOMATION_BLOCKED_MESSAGE } from "@/features/flip-finder/otodom-search-response";
 import type {
@@ -372,7 +371,7 @@ export function FlipFinderPage() {
       const payload: unknown = await readJson(response);
       if (!response.ok) throw new Error(readMessage(payload, "Nie udało się wyczyścić wyników."));
       const archivedCount = isRecordWithArchivedCount(payload) ? payload.archivedCount : 0;
-      setNotice(archivedCount > 0 ? "Wyniki przeniesiono do historii." : "Brak ofert do wyczyszczenia.");
+      setNotice(archivedCount > 0 ? "Wyniki ukryto. Historia i CRM pozostają zachowane." : "Brak ofert do wyczyszczenia.");
       setClearResultsOpen(false);
       setResultsRevision((current) => current + 1);
       // Deliberately NOT reset here (unlike the catch branch below): resetting
@@ -521,7 +520,7 @@ export function FlipFinderPage() {
               <DialogHeader>
                 <DialogTitle>Wyczyścić aktualne wyniki?</DialogTitle>
                 <DialogDescription>
-                  Oferty zostaną przeniesione do historii. Nie zostaną trwale usunięte. Historia, zdjęcia, ceny i dopasowania rynkowe pozostają dostępne w zakładce &quot;Historia ofert&quot;.
+                  Oferty zostaną ukryte w aktywnych wynikach tego filtra. Nie zostaną trwale usunięte; historia cen, zdjęcia i dane CRM pozostaną zachowane.
                 </DialogDescription>
               </DialogHeader>
               {clearResultsError ? <p className="text-sm text-destructive">{clearResultsError}</p> : null}
@@ -1061,7 +1060,6 @@ function LatestScanPanel({ progress, filter }: { progress: ScanProgressResponse 
     <Card className="p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h2 className="type-section-title">Ostatni skan Findera</h2><p className="mt-1 text-sm text-muted-foreground">Filtr: {filter?.name}</p></div>
-        {isAwaitingContinuation(progress) ? <span>Oczekuje na kontynuację</span> : <ScanStatusBadge status={progress.status === "queued" ? "pending" : progress.status} />}
       </div>
       <dl className="mt-5 grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <ScanDetail label="Rozpoczęcie" value={formatDateTime(progress.startedAt)} />
@@ -1085,19 +1083,6 @@ function ScanDetail({ label, value }: { label: string; value: string }) {
       <dd className="mt-1 font-medium">{value}</dd>
     </div>
   );
-}
-
-function ScanStatusBadge({ status }: { status: SearchFilterScan["status"] }) {
-  const className =
-    status === "failed"
-      ? "bg-destructive/10 text-destructive"
-      : status === "completed"
-        ? "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
-        : status === "partial"
-          ? "bg-amber-500/10 text-amber-800 dark:text-amber-300"
-          : "bg-blue-500/10 text-blue-800 dark:text-blue-300";
-
-  return <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${className}`}>{scanStatusLabel(status)}</span>;
 }
 
 function FilterStatusBadge({ isActive }: { isActive: boolean }) {

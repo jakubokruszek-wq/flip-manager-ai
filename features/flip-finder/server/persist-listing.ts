@@ -11,6 +11,8 @@ import { syncResaleCompFromListing } from "@/features/market-intelligence/resale
 import { reconcileCanonicalListingDecision } from "./canonical-reconciliation";
 import { analyzeListingWithAiIfNeeded } from "./listing-ai-analysis";
 import { runAfterResponse } from "@/features/facebook-watcher/run-after-response";
+import { isValidSalePrice } from "@/features/flip-finder/sale-price";
+import { normalizePublicationDate } from "@/features/flip-finder/publication-date";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -29,6 +31,9 @@ export async function deactivateListingFilterMatch(supabase: SupabaseClient, lis
 }
 
 export async function persistListing(supabase: SupabaseClient, filterId: string, item: SourceListing, createMatch: boolean, unknownFields: string[], sourceScanId: string, matchedAt: string, signal: AbortSignal, decision?: { bucket?: DecisionBucket; reasons?: string[]; unknownFields?: string[] }): Promise<{ listingId: string; listingCreated: boolean; matchCreated: boolean; updated: number; priceDrop: number }> {
+  if (item.source !== "facebook" && !isValidSalePrice(item.price)) {
+    throw new Error("INVALID_SALE_PRICE: an external listing without a positive finite total sale price cannot be persisted.");
+  }
   const bucket = decision?.bucket ?? (createMatch ? "MATCHED" : unknownFields.length ? "REVIEW" : "REJECTED");
   const reviewFields = decision?.unknownFields ?? unknownFields;
   const reviewReasons = decision?.reasons ?? [];
@@ -128,7 +133,27 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
       }),
     );
   }
-  if (changed) { const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: item.rawPayload }).abortSignal(signal); if (snapshotError) throw new Error("Nie udało się zapisać historii oferty."); }
+  const publishedAt = normalizePublicationDate(item.publishedAt);
+  let shouldSaveSnapshot = changed;
+  if (!shouldSaveSnapshot && publishedAt) {
+    // A source may begin exposing its genuine publication date after the
+    // listing was first imported. Save that first confirmed date even when
+    // the price/content hash is unchanged. The exact value query makes
+    // repeated scans idempotent and never substitutes an import timestamp.
+    const existingPublicationSnapshot = await supabase.from("listing_snapshots")
+      .select("id")
+      .eq("listing_id", saved.id)
+      .filter("raw_data->>sourcePublishedAt", "eq", publishedAt)
+      .limit(1)
+      .abortSignal(signal)
+      .maybeSingle();
+    shouldSaveSnapshot = Boolean(existingPublicationSnapshot.error || !existingPublicationSnapshot.data);
+  }
+  if (shouldSaveSnapshot) {
+    const rawData = { ...item.rawPayload, ...(publishedAt ? { sourcePublishedAt: publishedAt } : {}) };
+    const { error: snapshotError } = await supabase.from("listing_snapshots").insert({ listing_id: saved.id, price: item.price, title: item.title, description: item.description, images, status: "active", raw_data: rawData }).abortSignal(signal);
+    if (snapshotError) throw new Error("Nie udało się zapisać historii oferty.");
+  }
   const persistedDecision = decision ? {
     bucket: decision.bucket ?? bucket,
     reasons: decision.reasons ?? reviewReasons,

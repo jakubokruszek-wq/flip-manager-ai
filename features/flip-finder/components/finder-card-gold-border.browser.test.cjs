@@ -86,7 +86,7 @@ function baseResult(overrides) {
     ownership: "pełna własność",
     images: [],
     pricePerSqm: 6_818,
-    locationText: "Łódź",
+    locationText: "Łódź, Bałuty, długa ulica z bardzo rozbudowanym opisem lokalizacji i dodatkowymi szczegółami do zawinięcia bez obcinania tekstu",
     address: null,
     city: "Łódź",
     district: null,
@@ -98,6 +98,7 @@ function baseResult(overrides) {
     listingStatus: "active",
     isActive: true,
     firstSeenAt: now,
+    publishedAt: "2026-10-04T21:55:00.000Z",
     lastSeenAt: now,
     firstMatchedAt: now,
     lastMatchedAt: now,
@@ -122,7 +123,7 @@ function baseResult(overrides) {
   };
 }
 
-const activeResult = baseResult({ id: activeId, title: "Aktualna oferta" });
+const activeResult = baseResult({ id: activeId, title: "Aktualna oferta mieszkania z bardzo długim tytułem opisującym rozkładowe pokoje, jasny salon, balkon, świetną lokalizację i pełne wyposażenie bez skracania tekstu", isNew: true });
 const sameContentDifferentPost = baseResult({
   id: sameContentDifferentPostId,
   title: "Aktualna oferta",
@@ -146,7 +147,7 @@ const archivedResult = baseResult({
 // ReviewListingCard only to add the accept/reject decision actions.
 const reviewResult = baseResult({
   id: reviewId,
-  title: "Oferta do oceny",
+  title: "Oferta do oceny mieszkania z długim opisem cech, lokalizacji, wyposażenia oraz parametrów inwestycyjnych, który ma się naturalnie zawijać",
   buildingType: null,
   ownership: null,
   decisionBucket: "REVIEW",
@@ -314,10 +315,11 @@ test("Flip Finder card border: real browser comparison of a current (active) car
   const baseUrl = `http://127.0.0.1:${port}`;
 
   const viewports = [
-    { width: 1440, height: 900 },
-    { width: 1280, height: 900 },
+    { width: 320, height: 844 },
+    { width: 375, height: 844 },
     { width: 768, height: 1024 },
-    { width: 390, height: 844 },
+    { width: 1280, height: 900 },
+    { width: 1440, height: 900 },
   ];
 
   for (const viewport of viewports) {
@@ -343,6 +345,32 @@ test("Flip Finder card border: real browser comparison of a current (active) car
 
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.ok(overflow <= 1, `no horizontal overflow expected at ${viewport.width}px, found ${overflow}px`);
+      const layout = await page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`).evaluate((card) => {
+        const title = card.querySelector("h2");
+        const content = card.querySelector("article");
+        const location = [...card.querySelectorAll("p")].find((element) => element.textContent?.includes("długa ulica"));
+        const publication = [...card.querySelectorAll("p")].find((element) => element.textContent?.includes("Opublikowano:"));
+        return {
+          cardWidth: card.clientWidth, cardScrollWidth: card.scrollWidth,
+          titleText: title?.textContent ?? "", titleHeight: title?.clientHeight ?? 0,
+          titleLineClamp: title ? getComputedStyle(title).webkitLineClamp : "missing",
+          titleWhiteSpace: title ? getComputedStyle(title).whiteSpace : "missing",
+          titleScrollWidth: title?.scrollWidth ?? 0, titleClientWidth: title?.clientWidth ?? 0,
+          contentWidth: content?.clientWidth ?? 0,
+          locationText: location?.textContent ?? "", locationScrollWidth: location?.scrollWidth ?? 0, locationClientWidth: location?.clientWidth ?? 0,
+          publicationText: publication?.textContent ?? "", publicationScrollWidth: publication?.scrollWidth ?? 0, publicationClientWidth: publication?.clientWidth ?? 0,
+        };
+      });
+      assert.ok(layout.titleText.length > 100, "the complete long title must remain in the card");
+      assert.equal(layout.titleLineClamp, "none", "the card title must not use line-clamp");
+      assert.equal(layout.titleWhiteSpace, "normal", "the card title must wrap naturally");
+      assert.ok(layout.titleHeight > 40, `the long title must occupy multiple visible lines at ${viewport.width}px`);
+      assert.ok(layout.titleScrollWidth <= layout.titleClientWidth + 1, `title must not clip horizontally at ${viewport.width}px`);
+      assert.ok(layout.locationText.includes("długa ulica"), "the full location must remain in the rendered card");
+      assert.ok(layout.locationScrollWidth <= layout.locationClientWidth + 1, `location must not clip horizontally at ${viewport.width}px`);
+      assert.ok(layout.publicationText.includes("Opublikowano:"), "the source publication label must render");
+      assert.ok(layout.publicationScrollWidth <= layout.publicationClientWidth + 1, `publication date must not clip horizontally at ${viewport.width}px`);
+      assert.ok(layout.cardScrollWidth <= layout.cardWidth + 1, `card must not overflow horizontally at ${viewport.width}px`);
 
       const openButton = page.getByRole("link", { name: "Otwórz Deal Room" }).first();
       await openButton.waitFor({ state: "visible" });

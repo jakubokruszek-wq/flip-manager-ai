@@ -6,6 +6,33 @@ const test = require("node:test");
 
 const page = fs.readFileSync(path.join(__dirname, "scan-progress-panel.tsx"), "utf8");
 
+test("routine continuation yields stay out of the user-facing error panel and no fixed interval is promised", () => {
+  assert.match(page, /function isNormalYield\(message: string\): boolean/);
+  assert.match(page, /\.filter\(\(message\) => !isNormalYield\(message\)\)/);
+  assert.doesNotMatch(page, /SOURCE_BUDGET_EXHAUSTED: ready for next portion|SOURCE_SLICE_YIELD: saved progress/);
+  assert.doesNotMatch(page, /co.{0,5}5 minut/i);
+  assert.doesNotMatch(page, /border-amber-500\/25 bg-amber-500\/10/);
+  assert.doesNotMatch(page, /currentSource \?\? "Kolejne źródło"\) \+ " — oczekuje"/);
+  assert.match(page, /progress\.status === "partial" && !waiting && technicalMessages\.length === 0/);
+});
+
+test("real errors remain visible in Polish and raw diagnostics are behind details", () => {
+  assert.match(page, /polishErrorSummary\(technicalMessages\[0\]\)/);
+  assert.match(page, /<details className="mt-2 text-xs">/);
+  assert.match(page, /Szczeg.*techniczne/);
+  assert.match(page, /HTTP\\s\*403\|FORBIDDEN/);
+  assert.match(page, /SOURCE_BUDGET_EXHAUSTED\|SOURCE_SLICE_YIELD/);
+});
+
+test("the panel shows real stage counts, current source, progress bar, and active work time", () => {
+  assert.match(page, /aria-label="Post.*skanowania"/);
+  assert.match(page, /czas pracy \{formatDuration\(workTimeMs\)\}/);
+  assert.match(page, /completedUnits\}\/\{progress\.overall\.totalUnits/);
+  assert.match(page, /role="progressbar"/);
+  assert.match(page, /Aktualne.*r.*d.*o/);
+  assert.match(page, /progress\.totals\.scanned/);
+});
+
 // Production proof (screenshot, 2026-09-27): naming the label "Facebook
 // Watcher" instead of bare "Facebook" was NOT enough -- Finder's own scan
 // panel was still rendering real per-group Watcher data (group names, post

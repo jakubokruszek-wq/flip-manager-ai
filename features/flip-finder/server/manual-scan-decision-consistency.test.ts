@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { FakeFacebookSupabase, installCanonicalReconciliationRpc } from "../../facebook-watcher/server/facebook-fake-supabase.ts";
-import { fetchExternalPortal } from "../external-source-adapters.ts";
+import { EXTERNAL_PORTAL_PARSERS, fetchExternalPortal } from "../external-source-adapters.ts";
 import type { SearchFilter } from "../index.ts";
 
 /**
@@ -155,4 +155,24 @@ test("confirmed building and ownership survive a later source response that omit
     const finder = await getFilterResults(currentFilter.id);
     assert.equal(finder?.results.filter((result) => result.id === first.id).length, 1);
   } finally { domy.fetch = originalFetch; globalThis.fetch = originalHttp; }
+});
+
+test("manual scan continues past an invalid external sale price, persists only the valid listing, and records a diagnostic without inflating created count", async () => {
+  const originalFetch = domy.fetch;
+  initialize();
+  const valid = EXTERNAL_PORTAL_PARSERS.domy(card(203), filter.city ?? "Łódź").listings[0]!;
+  const invalid = { ...valid, externalListingId: "invalid-no-sale-price", originalUrl: "https://domy.pl/mieszkanie/invalid-no-sale-price", normalizedUrl: "https://domy.pl/mieszkanie/invalid-no-sale-price", price: Number.NaN, pricePerSqm: null, contentHash: "invalid-no-sale-price" };
+  domy.fetch = async () => ({ listings: [invalid, valid], warnings: [], fetched: 2 });
+  try {
+    const result = await runFinderScanPortion(runId);
+    assert.equal(result.status, "completed", "one malformed offer must not fail the whole scan");
+    assert.equal(db.rows("listings").length, 1);
+    assert.equal(db.rows("listings")[0]?.external_listing_id, valid.externalListingId);
+    assert.equal(db.rows("listing_snapshots").length, 1, "the invalid offer must not create a price snapshot");
+    assert.equal(db.rows("listing_filter_matches").length, 1, "only the valid candidate reaches canonical reconciliation");
+    const scan = db.rows("source_scans").find((row) => row.source === "domy");
+    assert.equal(scan?.scanned_count, 2, "raw candidates remain visible in diagnostics");
+    assert.equal(scan?.listings_created, 1, "invalid candidate is not counted as created");
+    assert.ok((scan?.warnings as string[]).some((warning) => warning.startsWith("INVALID_SALE_PRICE:")));
+  } finally { domy.fetch = originalFetch; }
 });

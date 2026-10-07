@@ -822,17 +822,15 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           ) : <Placeholder />}
           {result.images.length > 1 ? <span className="absolute right-3 top-3 rounded-full bg-black/75 px-2.5 py-1 text-xs font-semibold text-white">{result.images.length} zdjęć</span> : null}
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
-          <div className="absolute inset-x-3 bottom-3 flex items-center justify-between gap-2">
+        </div>
+        <div className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-4 sm:px-5 sm:py-3">
+          <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2">
+            {hideLifecycleBadge ? null : <LifecycleBadge status={result.lifecycleStatus} />}
+            <SourceBadge source={result.source} />
             {shouldShowGenericStatusBadge(variant) ? <StatusBadge status={result.listingStatus} /> : null}
             {variant === "watcher" ? null : result.isNew ? <Badge label="Nowa" /> : result.hasPriceDrop ? <Badge label="Obniżka" /> : null}
           </div>
-        </div>
-        <div className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-4 sm:px-5 sm:py-3">
-          <div className="absolute right-3 top-4 flex items-center gap-2 sm:right-5 sm:top-3">
-            {hideLifecycleBadge ? null : <LifecycleBadge status={result.lifecycleStatus} />}
-            <SourceBadge source={result.source} />
-          </div>
-          <div className="min-w-0 pr-24"><h2 className="line-clamp-2 text-base font-semibold leading-snug tracking-tight sm:text-lg">{title}</h2></div>
+          <div className="min-w-0"><h2 className="min-w-0 whitespace-normal break-words text-base font-semibold leading-snug tracking-tight [overflow-wrap:anywhere] sm:text-lg">{title}</h2></div>
           <div className="mt-3">
             <p className="text-2xl font-bold leading-none tracking-tight text-foreground sm:text-3xl">{currency(result.price)}</p>
             <p className="mt-1 text-sm font-semibold text-gold">{currencyPerSqm(result.pricePerSqm)}</p>
@@ -840,10 +838,10 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           </div>
           <OpportunitySummary result={result} />
           <div className="mt-4 space-y-2.5 text-sm text-muted-foreground">
-            <p className="flex items-center gap-2 truncate"><MapPin aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span className="truncate">{location}</span></p>
+            <p className="flex min-w-0 items-start gap-2"><MapPin aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{location}</span></p>
             <p className="flex items-center gap-2"><BedDouble aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span>{measure(result.rooms, "pok.")} <span className="mx-1.5 text-border">•</span> {measure(result.area, "m²")}</span></p>
-            <p className="flex items-center gap-2"><Clock3 aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span className="truncate">{publicationLabel(result.publishedAt)}</span></p>
-            <p className="flex items-center gap-2"><Clock3 aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span className="truncate">{firstSeenLabel(result.firstSeenAt)}</span></p>
+            <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{publicationLabel(result.publishedAt)}</span></p>
+            <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{firstSeenLabel(result.firstSeenAt)}</span></p>
           </div>
           <p className="mt-auto pt-4 text-xs font-medium text-muted-foreground/80">Kliknij kartę, aby zobaczyć szczegóły</p>
         </div>

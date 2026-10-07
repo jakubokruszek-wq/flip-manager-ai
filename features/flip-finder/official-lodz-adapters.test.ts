@@ -51,6 +51,7 @@ test("sm-dabrowa: a Joomla list teaser is followed to its detail page for the re
   assert.equal(listing.area, 40);
   assert.equal(listing.rooms, 2);
   assert.equal(listing.officialOffer.eventDate, "2026-09-29T08:00:00+02:00");
+  assert.equal(listing.publishedAt, null, "the notice's event date is not its publication date");
   assert.equal(listing.officialOffer.sourceId, "sm-dabrowa");
   assert.equal(listing.officialOffer.noticeType, "cooperative_sale");
   assert.equal(listing.officialOffer.priceKind, "asking_price");
@@ -203,6 +204,7 @@ test("sm-radogoszcz-wschod: the real detail-page prose preserves price, area, ro
   assert.equal(listing.area, 42.36);
   assert.equal(listing.rooms, 2);
   assert.equal(listing.officialOffer.eventDate, "27.05.2026r.");
+  assert.equal(listing.publishedAt, null, "the tender date is not the publication date");
   assert.ok(listing.officialOffer.eligibilityCriteria[0]?.includes("pełnoletnie dzieci"), "eligibility criteria must be preserved when present");
 });
 

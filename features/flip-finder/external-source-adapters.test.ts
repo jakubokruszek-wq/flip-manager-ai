@@ -111,6 +111,36 @@ test("each portal parser maps its own fixture to a canonical SourceListing", () 
   }
 });
 
+test("the real external-source dispatch skips a missing/zero sale price, warns, and still returns valid offers", async () => {
+  const originalFetch = globalThis.fetch;
+  const invalid = listingValues("invalid", "gratka", 1);
+  invalid.price = "0 zł";
+  const valid = listingValues("valid", "gratka", 1);
+  const html = jsonLd({
+    "@type": "Product",
+    additionalType: "RealEstateListing",
+    name: "Mieszkania na sprzedaż Łódź",
+    url: "https://gratka.pl/nieruchomosci/mieszkania/lodz",
+    offers: {
+      "@type": "AggregateOffer",
+      offers: [invalid, valid].map((item) => ({
+        "@type": "Offer", sku: item.id, url: item.url, name: item.title, price: item.price, datePosted: item.publishedAt,
+        itemOffered: { "@type": "Accommodation", description: item.description, numberOfRooms: item.rooms, floorSize: { value: item.area }, address: { addressLocality: item.city } },
+      })),
+    },
+  });
+  globalThis.fetch = async () => new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+  try {
+    const result = await fetchExternalPortal(config("gratka"), filter);
+    assert.equal(result.fetched, 2, "the raw candidate count includes the rejected row for diagnostics");
+    assert.equal(result.listings.length, 1);
+    assert.equal(result.listings[0]?.externalListingId, "valid-1");
+    assert.ok(result.warnings.some((warning) => warning.startsWith("INVALID_SALE_PRICE:")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("every portal adapter paginates, keeps IDs stable, and deduplicates a repeated page", async () => {
   const previousFetch = globalThis.fetch;
   try {
@@ -186,7 +216,7 @@ test("current public result-page structures reach persistListing and the Finder 
 
 function fakeDb(rows: Record<string, unknown>[]) {
   let sequence = 0;
-  return { from(table: string) { const filters: Record<string, unknown> = {}; let operation = "select"; let payload: Record<string, unknown> | null = null; const builder: Record<string, unknown> = { select: () => builder, eq: (key: string, value: unknown) => { filters[key] = value; return builder; }, order: () => builder, limit: () => builder, abortSignal: () => builder, insert: (value: Record<string, unknown>) => { operation = "insert"; payload = value; return builder; }, upsert: (value: Record<string, unknown>) => { operation = "upsert"; payload = value; return builder; }, maybeSingle: async () => ({ data: rows.find((row) => Object.entries(filters).every(([key, value]) => row[key] === value)) ?? null, error: null }), single: async () => { if (table === "listings" && operation === "upsert" && payload) { const existing = rows.find((row) => row.source === payload?.source && row.external_listing_id === payload?.external_listing_id); if (existing) Object.assign(existing, payload); else rows.push({ ...payload, id: `listing-${++sequence}` }); return { data: { id: existing?.id ?? rows.at(-1)?.id }, error: null }; } return { data: { id: `row-${++sequence}` }, error: null }; }, then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve, reject) }; return builder; } };
+  return { from(table: string) { const filters: Record<string, unknown> = {}; let operation = "select"; let payload: Record<string, unknown> | null = null; const builder: Record<string, unknown> = { select: () => builder, eq: (key: string, value: unknown) => { filters[key] = value; return builder; }, filter: (key: string, operator: string, value: unknown) => { if (operator === "eq") filters[key] = value; return builder; }, order: () => builder, limit: () => builder, abortSignal: () => builder, insert: (value: Record<string, unknown>) => { operation = "insert"; payload = value; return builder; }, upsert: (value: Record<string, unknown>) => { operation = "upsert"; payload = value; return builder; }, maybeSingle: async () => ({ data: table === "listings" ? rows.find((row) => Object.entries(filters).every(([key, value]) => row[key] === value)) ?? null : null, error: null }), single: async () => { if (table === "listings" && operation === "upsert" && payload) { const existing = rows.find((row) => row.source === payload?.source && row.external_listing_id === payload?.external_listing_id); if (existing) Object.assign(existing, payload); else rows.push({ ...payload, id: `listing-${++sequence}` }); return { data: { id: existing?.id ?? rows.at(-1)?.id }, error: null }; } return { data: { id: `row-${++sequence}` }, error: null }; }, then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve, reject) }; return builder; } };
 }
 
 // Real public page excerpt (read-only GET of gratka.pl/nieruchomosci/mieszkania/lodz,

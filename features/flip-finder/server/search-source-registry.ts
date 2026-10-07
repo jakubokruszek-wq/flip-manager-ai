@@ -240,7 +240,7 @@ function toMorizonListing(offer: Record<string, unknown>, fallbackCity: string |
   const description = text(item, "description") ?? text(offer, "description");
   const buildingType = resolveBuildingType(item.buildingType ?? item.building_type, title, description);
   const ownership = resolveOwnership(item.ownership ?? item.ownershipType ?? item.tenure, title, description);
-  return listing("morizon", idFromUrl(url) ?? hash(url), url, title, price, area, number(item.numberOfRooms), text(item, "floorLevel"), district ? fallbackCity : locality ?? fallbackCity, district, description, imageValues(offer.image), buildingType, ownership, offer, text(offer, "datePosted", "datePublished", "dateCreated"));
+  return listing("morizon", idFromUrl(url) ?? hash(url), url, title, price, area, number(item.numberOfRooms), text(item, "floorLevel"), district ? fallbackCity : locality ?? fallbackCity, district, description, imageValues(offer.image), buildingType, ownership, offer, text(offer, "datePosted", "datePublished"));
 }
 
 function listing(source: SourceListing["source"], id: string, url: string, title: string | null, price: number | null, area: number | null, roomCount: number | null, floor: string | null, city: string | null, district: string | null, description: string | null, images: string[], buildingType: string | null, ownership: string | null, rawPayload: Record<string, unknown>, publishedAt: string | null = null): SourceListing {

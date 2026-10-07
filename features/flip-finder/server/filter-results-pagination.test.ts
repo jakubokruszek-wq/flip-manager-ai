@@ -36,6 +36,7 @@ const FILTER_ROW = {
 // example.test URL would be flagged as a source conflict and silently
 // rejected, hiding the exact rows this regression needs visible.
 const SOURCE_DOMAIN: Record<string, string> = { otodom: "otodom.pl", olx: "olx.pl", official_uml: "bip.uml.lodz.pl" };
+SOURCE_DOMAIN.facebook = "facebook.com";
 
 function listingRow(id: string, source: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -63,6 +64,7 @@ function membershipRow(listingId: string): Record<string, unknown> {
 
 let currentDb = new FakeFacebookSupabase().seed("search_filters", [FILTER_ROW]);
 mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => currentDb } });
+mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => currentDb } });
 const { getFilterResults } = await import("./filter-results.ts");
 
 test("over 1000 listing_filter_matches rows: OLX and the official UMŁ catalog, seeded past row 1000, are still returned — never silently truncated", async () => {
@@ -114,4 +116,74 @@ test("exactly 1000 matches (the old cap's exact boundary) are all returned, none
 
   const payload = await getFilterResults(FILTER_ID);
   assert.equal(payload?.total, 1000);
+});
+
+test("Finder counts include only priced, fresh MATCHED/REVIEW rows; exact 21 days and unknown dates stay visible, including Facebook unknown price", async () => {
+  const db = new FakeFacebookSupabase();
+  db.seed("search_filters", [{ ...FILTER_ROW, area_min: 30, sources: ["otodom", "olx", "official_uml", "facebook"] }]);
+  const now = Date.parse("2026-10-07T12:00:00.000Z");
+  const rows = [
+    listingRow("fresh-cutoff", "otodom"),
+    listingRow("old-matched", "otodom"),
+    listingRow("unknown-date", "otodom"),
+    listingRow("future-date", "otodom"),
+    listingRow("fresh-review", "otodom", { area: null, lifecycle_status: "REVIEW", missing_fields: ["area"] }),
+    listingRow("old-review", "otodom", { area: null, lifecycle_status: "REVIEW", missing_fields: ["area"] }),
+    listingRow("missing-price-review", "otodom", { price: null, area: null, lifecycle_status: "REVIEW", missing_fields: ["price", "area"] }),
+    listingRow("facebook-unknown-price", "facebook", { original_url: "https://www.facebook.com/groups/example/posts/1000000000000001/", price: null, price_per_sqm: null, area: null, lifecycle_status: "REVIEW", missing_fields: ["price", "area"] }),
+  ];
+  db.seed("listings", rows);
+  db.seed("listing_filter_matches", rows.map((row) => row.lifecycle_status === "REVIEW"
+    ? { ...membershipRow(row.id as string), is_current_match: false, match_reasons: ["review", "unknown_area"] }
+    : membershipRow(row.id as string)));
+  const exactCutoff = new Date(now - 21 * 86_400_000).toISOString();
+  const tooOld = new Date(now - 21 * 86_400_000 - 1).toISOString();
+  db.seed("listing_snapshots", [
+    { listing_id: "fresh-cutoff", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: exactCutoff } },
+    { listing_id: "old-matched", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: tooOld } },
+    { listing_id: "unknown-date", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { createdAt: "2026-10-07T11:00:00Z" } },
+    { listing_id: "future-date", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: new Date(now + 60_000).toISOString() } },
+    { listing_id: "fresh-review", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: "2026-10-06T11:00:00Z" } },
+    { listing_id: "old-review", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: tooOld } },
+    { listing_id: "missing-price-review", price: null, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: "2026-10-06T11:00:00Z" } },
+  ]);
+  db.seed("listing_source_metadata", [{ id: "fb-meta-1", listing_id: "facebook-unknown-price", source: "facebook", source_post_url: "https://www.facebook.com/groups/example/posts/1000000000000001/", published_at: null, collected_at: "2026-10-07T11:00:00Z", metadata: { postId: "1000000000000001" } }]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID, false, now);
+  assert.ok(payload);
+  assert.deepEqual(new Set(payload.results.map((result) => result.id)), new Set(["fresh-cutoff", "unknown-date", "future-date"]));
+  assert.deepEqual(new Set(payload.reviewResults.map((result) => result.id)), new Set(["fresh-review", "facebook-unknown-price"]));
+  assert.equal(payload.counts.active, 3);
+  assert.equal(payload.counts.review, 2);
+  assert.equal(payload.total, 3);
+  assert.equal(payload.newMatches, 0);
+  assert.equal(payload.results.find((result) => result.id === "unknown-date")?.publishedAt, null, "created/import timestamps must not be presented as publication dates");
+
+  const history = await getFilterResults(FILTER_ID, true, now);
+  assert.ok(history);
+  assert.ok(history.archivedResults.some((result) => result.id === "old-matched"));
+  assert.ok(history.archivedResults.some((result) => result.id === "old-review"));
+  assert.ok(history.archivedResults.some((result) => result.id === "missing-price-review"));
+});
+
+test("a filter-cleared membership stays out of both current sections after reload and remains in that filter's history", async () => {
+  const db = new FakeFacebookSupabase();
+  db.seed("search_filters", [FILTER_ROW]);
+  db.seed("listings", [listingRow("cleared-listing", "otodom")]);
+  db.seed("listing_filter_matches", [{ ...membershipRow("cleared-listing"), is_current_match: false, match_reasons: ["finder_cleared"], last_matched_at: "2026-10-07T11:00:00Z" }]);
+  currentDb = db;
+
+  const current = await getFilterResults(FILTER_ID);
+  assert.equal(current?.results.length, 0);
+  assert.equal(current?.reviewResults.length, 0);
+  assert.deepEqual(current?.counts, { active: 0, review: 0, archived: 0 });
+
+  const history = await getFilterResults(FILTER_ID, true);
+  assert.equal(history?.results.length, 0);
+  assert.equal(history?.reviewResults.length, 0);
+  assert.equal(history?.archivedResults.length, 1);
+  assert.equal(history?.archivedResults[0]?.id, "cleared-listing");
+  assert.equal(history?.archivedResults[0]?.lifecycleStatus, "ARCHIVED", "archive state is only a per-filter read projection");
+  assert.equal(db.rows("listings")[0]?.lifecycle_status, "ACTIVE", "the canonical listing must not be globally archived or mutated");
 });

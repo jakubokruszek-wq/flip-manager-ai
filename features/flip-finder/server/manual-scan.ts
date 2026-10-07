@@ -6,6 +6,7 @@ import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/s
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
 import { enqueueOlxJob, existingOlxScanResult, resumableOlxRunId } from "@/features/flip-finder/server/olx-jobs";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
+import { invalidSalePriceWarning, validSaleListings } from "@/features/flip-finder/sale-price";
 import { reuseExistingListingAttributes } from "@/features/flip-finder/server/listing-attribute-reuse";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
@@ -616,6 +617,16 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
     checkpoint = readSourceCheckpoint(scan.filter_snapshot ?? prepared?.filter_snapshot);
     if (!checkpoint.timeoutAttempts && !(scan.filter_snapshot && typeof scan.filter_snapshot === "object" && "_finderCheckpoint" in scan.filter_snapshot)) checkpoint.timeoutAttempts = Math.max(0, (prepared?.continuation_attempt ?? 0) - (options.preparedAlreadyRunning ? 1 : 0));
     ({ fetched, normalized, matched, counters, updated, priceDrops, warnings } = checkpoint);
+    if (checkpoint.offset < checkpoint.buffer.length) {
+      const processed = checkpoint.buffer.slice(0, checkpoint.offset);
+      const pending = validSaleListings(checkpoint.buffer.slice(checkpoint.offset));
+      if (pending.skipped) {
+        normalized = Math.max(0, normalized - pending.skipped);
+        const warning = invalidSalePriceWarning(pending.skipped);
+        if (warning) warnings = [...new Set([...warnings, warning])].slice(0, 100);
+        checkpoint.buffer = [...processed, ...pending.listings];
+      }
+    }
     const saveCheckpoint = async () => {
       Object.assign(checkpoint, { fetched, normalized, matched, counters, updated, priceDrops, warnings });
       assertCheckpointSize(checkpoint);
@@ -663,9 +674,12 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       const onBatch = async (batch: SourceBatch, nextCursor: number | null) => {
         await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);
         emitted = true;
-        fetched += batch.fetched; normalized += batch.listings.length;
-        warnings = [...new Set([...warnings, ...batch.warnings])].slice(0, 100);
-        checkpoint.buffer = batch.listings; checkpoint.offset = 0;
+        const validBatch = validSaleListings(batch.listings);
+        fetched += Math.max(batch.fetched, batch.listings.length);
+        normalized += validBatch.listings.length;
+        const priceWarning = invalidSalePriceWarning(validBatch.skipped);
+        warnings = [...new Set([...warnings, ...batch.warnings, ...(priceWarning ? [priceWarning] : [])])].slice(0, 100);
+        checkpoint.buffer = validBatch.listings; checkpoint.offset = 0;
         checkpoint.cursor = nextCursor; checkpoint.complete = nextCursor === null;
         await saveCheckpoint();
         await drainBuffer();

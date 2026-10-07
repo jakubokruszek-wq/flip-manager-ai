@@ -4,8 +4,9 @@ import { calculateContentHash } from "./otodom-search";
 import type { ExternalSourceConfig, ExternalSourceId } from "./external-source-parser";
 import type { SourceBatchContext } from "./source-batches";
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
+import { invalidSalePriceWarning } from "./sale-price";
 
-export type ExternalPortalPage = { listings: PropertySourceListing[]; hasNextPage: boolean };
+export type ExternalPortalPage = { listings: PropertySourceListing[]; hasNextPage: boolean; invalidSalePriceCount?: number };
 type PortalRecord = Record<string, unknown>;
 type PortalCandidate = { id?: unknown; url?: unknown; title?: unknown; description?: unknown; price?: unknown; area?: unknown; rooms?: unknown; floor?: unknown; city?: unknown; district?: unknown; images?: unknown; publishedAt?: unknown; yearBuilt?: unknown; buildingType?: unknown; ownership?: unknown };
 type PortalParser = (html: string, fallbackCity: string) => ExternalPortalPage;
@@ -40,10 +41,12 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
     const response = await fetchExternalPage(url, signal);
     if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status}.`);
     const parsed = parser(await response.text(), criteria.city ?? "");
+    const pageWarnings = [invalidSalePriceWarning(parsed.invalidSalePriceCount ?? 0)].filter((warning): warning is string => Boolean(warning));
     if (batches) {
-      await batches.onBatch({ listings: parsed.listings, warnings: [], fetched: parsed.listings.length }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
+      await batches.onBatch({ listings: parsed.listings, warnings: pageWarnings, fetched: parsed.listings.length + (parsed.invalidSalePriceCount ?? 0) }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
     }
-    fetched += parsed.listings.length;
+    fetched += parsed.listings.length + (parsed.invalidSalePriceCount ?? 0);
+    warnings.push(...pageWarnings);
     for (const listing of parsed.listings) {
       const identity = `${listing.source}:${listing.externalListingId}:${listing.normalizedUrl}`;
       if (!seen.has(identity)) { seen.add(identity); listings.push(listing); }
@@ -51,7 +54,7 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
     if (!parsed.hasNextPage) break;
   }
   if (!listings.length) warnings.push(`${config.label}: odpowiedź nie zawiera zweryfikowanych ofert sprzedaży.`);
-  return { listings, warnings, fetched };
+  return { listings, warnings: [...new Set(warnings)], fetched };
 }
 
 async function fetchExternalPage(url: string, signal?: AbortSignal): Promise<Response> {
@@ -131,7 +134,7 @@ function parseDomiporta(html: string, fallbackCity: string): ExternalPortalPage 
 
 function parseSprzedajemy(html: string, fallbackCity: string): ExternalPortalPage {
   const state = namedJson(html, "__INITIAL_STATE__"); const rows = arrayAt(state, ["offers"]) ?? arrayAt(state, ["search", "offers"]) ?? [];
-  const stateCandidates = rows.filter(isRecord).map((row) => ({ id: row.id ?? row.offerId, url: row.url ?? row.link, title: row.title ?? row.name, description: row.description, price: row.price, area: row.area ?? row.m2, rooms: row.rooms, city: row.city, district: row.district, buildingType: row.buildingType ?? row.building_type, ownership: row.ownership ?? row.ownershipType, images: row.images ?? row.photos, publishedAt: row.createdAt ?? row.publishedAt }));
+  const stateCandidates = rows.filter(isRecord).map((row) => ({ id: row.id ?? row.offerId, url: row.url ?? row.link, title: row.title ?? row.name, description: row.description, price: row.price, area: row.area ?? row.m2, rooms: row.rooms, city: row.city, district: row.district, buildingType: row.buildingType ?? row.building_type, ownership: row.ownership ?? row.ownershipType, images: row.images ?? row.photos, publishedAt: row.datePosted ?? row.datePublished ?? row.publishedAt }));
   const jsonCandidates = jsonLdItemListCandidates(html)
     .filter((record) => hasType(record, "Offer", "Product", "Residence", "Apartment") || Array.isArray(record["@type"]))
     .map((record) => fromSprzedajemyRecord(record));
@@ -405,7 +408,7 @@ function fromNieruchomosciOnlineRecord(record: PortalRecord): PortalCandidate { 
 function fromDomiportaRecord(record: PortalRecord): PortalCandidate { const nestedOffer = atPath(record, ["offers", "itemOffered"]); const offered = isRecord(record.itemOffered) ? record.itemOffered : isRecord(nestedOffer) ? nestedOffer : record; return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), buildingType: record.buildingType ?? offered.buildingType ?? offered.building_type, ownership: record.ownership ?? offered.ownership ?? offered.ownershipType, images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
 function fromAdresowoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.identifier ?? record.sku, url: record.url ?? record.mainEntityOfPage, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), buildingType: record.buildingType ?? offered.buildingType ?? offered.building_type, ownership: record.ownership ?? offered.ownership ?? offered.ownershipType, images: record.image, publishedAt: record.datePosted }; }
 function fromSprzedajemyRecord(record: PortalRecord): PortalCandidate { const title = stringValue(record.name) ?? stringValue(record.title); return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: record.area ?? areaFromText(title), rooms: record.numberOfRooms ?? record.rooms ?? roomsFromText(title), city: atPath(record, ["address", "addressLocality"]), district: atPath(record, ["address", "addressSuburb"]), buildingType: record.buildingType ?? record.building_type, ownership: record.ownership ?? record.ownershipType, images: record.image, publishedAt: record.datePosted ?? record.datePublished }; }
-function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[], fallbackCity: string, hasNextPage: boolean): ExternalPortalPage { const listings: PropertySourceListing[] = []; const seen = new Set<string>(); for (const candidate of candidates) { const listing = toListing(source, candidate, fallbackCity); if (!listing || seen.has(listing.externalListingId)) continue; seen.add(listing.externalListingId); listings.push(listing); } return { listings, hasNextPage }; }
+function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[], fallbackCity: string, hasNextPage: boolean): ExternalPortalPage { const listings: PropertySourceListing[] = []; const seen = new Set<string>(); let invalidSalePriceCount = 0; for (const candidate of candidates) { const url = absoluteUrl(candidate.url, source); const title = stringValue(candidate.title); const description = stringValue(candidate.description); if (url && !isSearchUrl(url) && !RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`) && (money(candidate.price) === null || money(candidate.price)! <= 0)) invalidSalePriceCount += 1; const listing = toListing(source, candidate, fallbackCity); if (!listing || seen.has(listing.externalListingId)) continue; seen.add(listing.externalListingId); listings.push(listing); } return { listings, hasNextPage, invalidSalePriceCount }; }
 function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbackCity: string): PropertySourceListing | null { const url = absoluteUrl(candidate.url, source); const title = stringValue(candidate.title); const description = stringValue(candidate.description); if (!url || isSearchUrl(url) || RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`)) return null; const price = money(candidate.price); const area = decimal(candidate.area); if (price === null || price <= 0 || area === null || area <= 0) return null; const city = stringValue(candidate.city) ?? fallbackCity; const district = stringValue(candidate.district); const externalListingId = stringValue(candidate.id) ?? new URL(url).pathname.replace(/\/+$/u, ""); const images = imageValues(candidate.images); const rooms = decimal(candidate.rooms); const cleanDescription = description ? stripHtml(description) : null; const payload = { id: externalListingId, url: normalizeUrl(url), title, price, area, rooms, city, district }; return { source, externalListingId, originalUrl: url, normalizedUrl: payload.url, title, price, area, rooms, floor: stringValue(candidate.floor), pricePerSqm: price / area, city, district, locationText: [district, city].filter(Boolean).join(", ") || null, thumbnailUrl: images[0] ?? null, images, buildingType: resolveBuildingType(candidate.buildingType, title, cleanDescription), ownership: resolveOwnership(candidate.ownership, title, cleanDescription), yearBuilt: yearBuiltValue(candidate.yearBuilt), description: cleanDescription, publishedAt: stringValue(candidate.publishedAt), rawPayload: { source, candidate }, contentHash: calculateContentHash(payload) }; }
 
 function absoluteUrl(value: unknown, source: ExternalSourceId): string | null { const raw = stringValue(value); if (!raw) return null; const host = SOURCE_HOSTS[source]; try { const url = new URL(raw, `https://${host}`); if (url.protocol !== "https:" || (url.hostname !== host && !url.hostname.endsWith(`.${host}`))) return null; return url.toString(); } catch { return null; } }

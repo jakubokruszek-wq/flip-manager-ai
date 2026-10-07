@@ -1,69 +1,73 @@
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { selectClearResultsTargets, selectVisibleListingIds, type ClearResultsScope } from "@/features/flip-finder/clear-results-targeting";
-import type { ListingSource } from "@/features/flip-finder";
+import { getFilterResults } from "./filter-results";
+import type { ClearResultsScope } from "@/features/flip-finder/clear-results-targeting";
 
 export type { ClearResultsScope };
 export type ClearResultsSummary = { archivedCount: number };
 
+const WRITE_CHUNK_SIZE = 200;
+export const FINDER_CLEARED_MATCH_REASON = "finder_cleared";
+
+export class ClearResultsConflictError extends Error {
+  readonly status = 409;
+  constructor() {
+    super("Trwa skan lub przeliczanie wyników. Zakończ je i ponów czyszczenie.");
+    this.name = "ClearResultsConflictError";
+  }
+}
+
 /**
- * "Wyczyść wyniki" hides current Finder results without destroying any
- * history: it only sets `lifecycle_status = 'ARCHIVED'` (the same soft-hide
- * state the visibility-lifecycle cron already uses for stale listings) and
- * deactivates this filter's membership row. It never deletes rows in
- * `listings`, `listing_snapshots`, `listing_source_metadata`, `properties`,
- * `deals`, or any other table — every one of those keeps every row it had.
- * A cleared listing can be restored by resetting `lifecycle_status`/
- * `archived_at` directly; nothing about the clear is destructive.
+ * Hides only current MATCHED + REVIEW memberships for this filter. The actual
+ * candidates come from the exact Finder read path, so price, publication age,
+ * lifecycle, current decision and source validation cannot drift from the UI.
+ * Listings, snapshots, CRM/deals and other filters are never modified.
  */
 export async function clearFilterResults(filterId: string, scope: ClearResultsScope = {}): Promise<ClearResultsSummary> {
   const supabase = createAdminClient();
-  const matches = await supabase
-    .from("listing_filter_matches")
-    .select("listing_id,is_current_match,match_reasons")
-    .eq("search_filter_id", filterId);
-  if (matches.error) throw new Error("Nie udało się odczytać wyników filtra.");
-  const listingIds = selectVisibleListingIds(
-    (matches.data ?? []).map((row) => ({
-      listingId: String(row.listing_id),
-      isCurrentMatch: row.is_current_match === true,
-      matchReasons: Array.isArray(row.match_reasons) ? row.match_reasons.filter((reason): reason is string => typeof reason === "string") : [],
-    })),
-  );
-  if (!listingIds.length) return { archivedCount: 0 };
+  await assertNoActiveFinderWork(supabase, filterId);
+  const payload = await getFilterResults(filterId, false);
+  if (!payload) throw new Error("Nie znaleziono filtra.");
+  const cutoff = typeof scope.olderThanDays === "number" && scope.olderThanDays > 0
+    ? Date.now() - scope.olderThanDays * 86_400_000
+    : null;
+  const targets = [...new Set([...payload.results, ...payload.reviewResults]
+    .filter((result) => !scope.source || result.source === scope.source)
+    .filter((result) => {
+      if (cutoff === null) return true;
+      const lastSeen = Date.parse(result.lastSeenAt);
+      return Number.isFinite(lastSeen) && lastSeen < cutoff;
+    })
+    .map((result) => result.id))];
+  if (!targets.length) return { archivedCount: 0 };
 
-  const candidates = await supabase
-    .from("listings")
-    .select("id,source,lifecycle_status,last_seen_at")
-    .in("id", listingIds);
-  if (candidates.error) throw new Error("Nie udało się wyznaczyć ofert do wyczyszczenia.");
-  const targetIds = selectClearResultsTargets(
-    (candidates.data ?? []).map((row) => ({
-      id: String(row.id),
-      source: row.source as ListingSource,
-      lifecycleStatus: typeof row.lifecycle_status === "string" ? row.lifecycle_status : null,
-      lastSeenAt: typeof row.last_seen_at === "string" ? row.last_seen_at : null,
-    })),
-    scope,
-    Date.now(),
-  );
-  if (!targetIds.length) return { archivedCount: 0 };
+  // Recheck after the read/target computation. The SQL canonical RPC also
+  // recognizes the per-membership tombstone below and rejects any older scan
+  // observation that races this mutation.
+  await assertNoActiveFinderWork(supabase, filterId);
+  const clearedAt = new Date().toISOString();
+  let affected = 0;
+  for (let offset = 0; offset < targets.length; offset += WRITE_CHUNK_SIZE) {
+    const chunk = targets.slice(offset, offset + WRITE_CHUNK_SIZE);
+    const update = await supabase.from("listing_filter_matches")
+      .update({ is_current_match: false, match_reasons: [FINDER_CLEARED_MATCH_REASON], last_matched_at: clearedAt })
+      .eq("search_filter_id", filterId)
+      .in("listing_id", chunk)
+      .select("listing_id");
+    if (update.error) throw new Error("Nie udało się wyczyścić wyników filtra.");
+    affected += Array.isArray(update.data) ? update.data.length : chunk.length;
+  }
+  return { archivedCount: affected };
+}
 
-  const now = new Date().toISOString();
-  const archived = await supabase
-    .from("listings")
-    .update({ lifecycle_status: "ARCHIVED", archived_at: now })
-    .in("id", targetIds)
-    .select("id");
-  if (archived.error) throw new Error("Nie udało się wyczyścić wyników.");
-
-  const deactivated = await supabase
-    .from("listing_filter_matches")
-    .update({ is_current_match: false })
+async function assertNoActiveFinderWork(supabase: ReturnType<typeof createAdminClient>, filterId: string): Promise<void> {
+  const active = await supabase.from("source_scans")
+    .select("id")
     .eq("search_filter_id", filterId)
-    .in("listing_id", targetIds);
-  if (deactivated.error) throw new Error("Nie udało się zaktualizować dopasowań filtra.");
-
-  return { archivedCount: archived.data?.length ?? targetIds.length };
+    .neq("source", "facebook")
+    .in("status", ["pending", "running"])
+    .limit(1);
+  if (active.error) throw new Error("Nie udało się sprawdzić, czy skan filtra nadal trwa.");
+  if (Array.isArray(active.data) && active.data.length > 0) throw new ClearResultsConflictError();
 }

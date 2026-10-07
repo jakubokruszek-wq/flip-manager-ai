@@ -12,7 +12,7 @@ const watcherServer = fs.readFileSync(path.join(root, "facebook-watcher/server.t
 const watcherPanel = fs.readFileSync(path.join(root, "facebook-watcher/components/facebook-watcher-panel.tsx"), "utf8");
 
 test("Finder reads source_post_url in one batched metadata query and keeps the canonical listing id", () => {
-  assert.match(finderServer, /select\("listing_id,source_post_url,(?:collected_at,)?metadata"\)/);
+  assert.match(finderServer, /select\("listing_id,source_post_url,(?:collected_at,)?published_at,metadata"\)/);
   assert.match(finderServer, /sourcePostUrlByListingId/);
   assert.match(finderServer, /resolveListingUrl\(\{ source: listing\.source/);
   assert.match(finderServer, /id: listing\.id/);

@@ -9,6 +9,7 @@ import type { SourceScanResult } from "@/features/flip-finder/server/manual-scan
 import { createOlxWorkerAdminClient } from "@/features/flip-finder/server/olx-worker-admin";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { reuseExistingListingAttributes } from "@/features/flip-finder/server/listing-attribute-reuse";
+import { invalidSalePriceWarning, validSaleListings } from "@/features/flip-finder/sale-price";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { slugifyCity, type SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
@@ -132,7 +133,14 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
   const filter = await getSearchFilter(String(jobResult.data.search_filter_id));
   if (!filter) throw new Error("OLX_FILTER_NOT_FOUND");
   const sourceScanId = String(jobResult.data.source_scan_id);
-  const matchedAt = new Date().toISOString();
+  const sourceScan = await supabase.from("source_scans").select("started_at").eq("id", sourceScanId).maybeSingle();
+  if (sourceScan.error || typeof sourceScan.data?.started_at !== "string" || !Number.isFinite(Date.parse(sourceScan.data.started_at))) {
+    throw new Error(`OLX_SOURCE_SCAN_START_READ_FAILED: ${sourceScan.error?.message ?? "missing started_at"}`);
+  }
+  // The source scan's reservation time is the observation time. Completion
+  // time can be minutes later and must not let a worker that began before
+  // "clear results" restore its old membership afterward.
+  const matchedAt = new Date(Date.parse(sourceScan.data.started_at)).toISOString();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 75_000);
   let counters: ScanItemCounts = { listingsCreatedCount: 0, newMatchesCount: 0 };
@@ -140,8 +148,11 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
   let updated = 0;
   let priceDrops = 0;
   const diagnostics = emptyMatchDiagnosticSummary();
+  const validInput = validSaleListings(input.listings);
+  const priceWarning = invalidSalePriceWarning(validInput.skipped);
+  const warnings = [...new Set([...input.warnings, ...(priceWarning ? [priceWarning] : [])])];
   try {
-    const effectiveListings = await reuseExistingListingAttributes(supabase, input.listings);
+    const effectiveListings = await reuseExistingListingAttributes(supabase, validInput.listings);
     for (const listing of effectiveListings) {
       controller.signal.throwIfAborted();
       const decision = evaluateListingAgainstFilter(listing, filter);
@@ -156,16 +167,16 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
     clearTimeout(timeout);
   }
   const result: SourceScanResult = {
-    source: "olx", status: "completed", fetched: input.fetched, normalized: input.listings.length, matched,
+    source: "olx", status: "completed", fetched: input.fetched, normalized: validInput.listings.length, matched,
     listingsCreated: counters.listingsCreatedCount, newMatches: counters.newMatchesCount, updated, priceDrops,
-    rejected: Math.max(0, input.fetched - input.listings.length), durationMs: input.durationMs,
-    errorCode: null, errorMessage: null, warnings: input.warnings, matchDiagnostics: diagnostics,
+    rejected: Math.max(0, input.fetched - validInput.listings.length), durationMs: input.durationMs,
+    errorCode: null, errorMessage: null, warnings, matchDiagnostics: diagnostics,
   };
   const now = new Date().toISOString();
   const scanUpdate = await supabase.from("source_scans").update({
     status: "completed", finished_at: now, scanned_count: input.fetched, listings_found: input.fetched,
     matched_count: matched, listings_created: counters.listingsCreatedCount, new_count: counters.newMatchesCount,
-    listings_updated: updated, price_drop_count: priceDrops, warnings: input.warnings, error_message: null,
+    listings_updated: updated, price_drop_count: priceDrops, warnings, error_message: null,
   }).eq("id", sourceScanId);
   if (scanUpdate.error) throw new Error(`OLX_SOURCE_SCAN_FINALIZE_FAILED: ${scanUpdate.error.message}`);
   const completed = await supabase.from("olx_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: result, error_code: null, error_message: null })

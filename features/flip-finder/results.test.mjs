@@ -39,7 +39,7 @@ test("filters by city and normalizes equivalent Unicode forms", () => {
 
 test("publication label uses the source publication date", () => {
   assert.match(publicationLabel("2026-08-22T18:42:12.000Z"), /^Opublikowano:/);
-  assert.equal(publicationLabel(null), "Data publikacji: nieznana");
+  assert.equal(publicationLabel(null), "Data publikacji nieznana");
 });
 
 test("first seen label uses the first collector observation date", () => {

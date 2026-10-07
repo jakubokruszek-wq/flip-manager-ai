@@ -189,13 +189,9 @@ function ListingResultCard({ result }: { result: FilterResult }) {
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col p-4">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0">
-              <h2 className="line-clamp-2 font-semibold">{result.title ?? "Oferta bez tytułu"}</h2>
-              {location ? <p className="mt-1 text-sm text-muted-foreground">{location}</p> : null}
-            </div>
-            <SourceBadge source={result.source} />
-          </div>
+          <div className="mb-2 flex min-w-0 flex-wrap items-center gap-2"><SourceBadge source={result.source} /></div>
+          <h2 className="min-w-0 whitespace-normal break-words font-semibold [overflow-wrap:anywhere]">{result.title ?? "Oferta bez tytułu"}</h2>
+          {location ? <p className="mt-1 min-w-0 whitespace-normal break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">{location}</p> : null}
 
           <div className="mt-3 flex flex-wrap gap-2">
             {result.isNew ? <ResultBadge label="Nowe" variant="new" /> : null}
@@ -215,16 +211,16 @@ function ListingResultCard({ result }: { result: FilterResult }) {
 
           <dl className="mt-4 grid gap-1 text-xs text-muted-foreground">
             <div className="flex flex-wrap justify-between gap-x-3">
-              <dt>Data publikacji</dt>
-              <dd>{publicationLabel(result.publishedAt).replace("Opublikowano: ", "")}</dd>
+              <dt className="sr-only">Data publikacji</dt>
+              <dd className="min-w-0 whitespace-normal break-words text-right [overflow-wrap:anywhere]">{publicationLabel(result.publishedAt)}</dd>
             </div>
             <div className="flex flex-wrap justify-between gap-x-3">
               <dt>Data znalezienia</dt>
-              <dd>{firstSeenLabel(result.firstSeenAt).replace("Znaleziono: ", "")}</dd>
+              <dd className="min-w-0 whitespace-normal break-words text-right [overflow-wrap:anywhere]">{firstSeenLabel(result.firstSeenAt).replace("Znaleziono: ", "")}</dd>
             </div>
             <div className="flex flex-wrap justify-between gap-x-3">
               <dt>Ostatnie sprawdzenie</dt>
-              <dd>{formatDateTime(result.lastSeenAt)}</dd>
+              <dd className="min-w-0 whitespace-normal break-words text-right [overflow-wrap:anywhere]">{formatDateTime(result.lastSeenAt)}</dd>
             </div>
           </dl>
 

@@ -313,7 +313,7 @@ test("real Finder observes automatic runs using GET, preserves manual monitoring
     progressByRun.set(autoRunId, { ...activeProgress(autoRunId), status: "partial",
       overall: { completedUnits: 1, totalUnits: 2, percent: 50, failedUnits: 0, remainingUnits: 1, waitingUnits: 1 },
       continuation: { ready: true, nextAt: null }, totals: { scanned: 300, matched: 22, created: 22, updated: 0, priceDrops: 0 } });
-    await panel.getByText("Oczekuje na kontynuację", { exact: true }).first().waitFor({ state: "visible" });
+    await panel.getByText("Oczekuje", { exact: true }).first().waitFor({ state: "visible" });
     assert.equal(await panel.getByRole("progressbar").getAttribute("aria-valuenow"), "50");
     assert.match(await page.locator("body").innerText(), /300/);
     assert.equal(observationRequests.filter((r) => r.method !== "GET").length, 0, "viewing a ready run must NOT POST /continue");
@@ -322,6 +322,8 @@ test("real Finder observes automatic runs using GET, preserves manual monitoring
   await t.test("terminal partial remains visible with errors and stops progress polling", async () => {
     progressByRun.set(autoRunId, { ...financeCompletedProgress(autoRunId), status: "partial",
       overall: { completedUnits: 2, totalUnits: 2, percent: 100, failedUnits: 1, remainingUnits: 0, waitingUnits: 0 }, errors: ["SOURCE_FORBIDDEN: HTTP 403"] });
+    await panel.getByText("Źródło odmówiło dostępu (HTTP 403).", { exact: true }).waitFor({ state: "visible" });
+    await panel.getByText("Szczegóły techniczne", { exact: true }).click();
     await panel.getByText("SOURCE_FORBIDDEN: HTTP 403", { exact: true }).waitFor({ state: "visible" });
     assert.match(await panel.innerText(), /Częściowo zakończony/);
     assert.doesNotMatch(await panel.innerText(), /Skanowanie…|Oczekuje na kontynuację/);

@@ -182,6 +182,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   let scanRequests = 0;
   let resultsRequests = 0;
   let clearResultsRequests = 0;
+  let resultsCleared = false;
   const pageResultsPayload = makeScanStressResults(activeCardCount);
   if (throwTraceFetch) {
     await page.addInitScript(() => {
@@ -224,6 +225,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
       if (clearResultsFailure) {
         return route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: clearResultsFailure.message }), status: clearResultsFailure.status });
       }
+      resultsCleared = true;
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, archivedCount: clearResultsArchivedCount }), status: 200 });
     }
     if (url.pathname === "/api/flip-finder/search-filters") {
@@ -231,6 +233,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
     }
     if (url.pathname === `/api/flip-finder/search-filters/${filterId}/results`) {
       resultsRequests += 1;
+      if (resultsCleared) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...pageResultsPayload, results: [], reviewResults: [], archivedResults: [], counts: { active: 0, review: 0, archived: 0 }, total: 0, newMatches: 0 }), status: 200 });
       const terminalRefresh = resultsRequests > 1 && (galleryStatusResponse === "PARTIAL" || galleryStatusResponse === "COMPLETE" || galleryStatusResponse === "FAILED");
       const payload = initialGalleryStatus === result.galleryStatus && !terminalRefresh ? pageResultsPayload : { ...pageResultsPayload, reviewResults: [{ ...result, galleryStatus: terminalRefresh ? galleryStatusResponse : initialGalleryStatus, galleryPersistedCount: terminalRefresh ? 2 : 0, galleryTotal: terminalRefresh ? 2 : 0, images: terminalRefresh ? ["https://example.com/stored-1.jpg", "https://example.com/stored-2.jpg"] : [], thumbnailUrl: terminalRefresh ? "https://example.com/stored-1.jpg" : null }] };
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(payload), status: 200 });
@@ -420,7 +423,7 @@ test("real Flip Finder gallery button keeps business click independent from trac
     await dialog.waitFor({ state: "visible", timeout: 5_000 });
     const dialogText = await dialog.innerText();
     assert.match(dialogText, /Wyczyścić aktualne wyniki\?/);
-    assert.match(dialogText, /przeniesione do historii/);
+    assert.match(dialogText, /Oferty zostan\u0105 ukryte w aktywnych wynikach tego filtra/);
     assert.ok(await dialog.getByRole("button", { name: "Anuluj" }).isVisible());
     assert.ok(await dialog.getByRole("button", { name: "Wyczyść", exact: true }).isVisible());
     assert.equal(testPage.clearResultsRequestCount(), 0, "opening the dialog must not itself send a request");
@@ -441,7 +444,7 @@ test("real Flip Finder gallery button keeps business click independent from trac
     await testPage.page.close();
   });
 
-  await t.test("C/D/G/J. confirming sends exactly one mutation, archives visible results, and cannot be double-submitted", async () => {
+  await t.test("C/D/G/J. confirming hides both result sections, refreshes counts, and cannot be double-submitted", async () => {
     const cardCount = 5;
     const testPage = await preparePage(browser, baseUrl, { activeCardCount: cardCount });
     const clearButton = testPage.page.getByRole("button", { name: "Wyczyść wyniki" });
@@ -454,8 +457,13 @@ test("real Flip Finder gallery button keeps business click independent from trac
     const confirmButton = dialog.getByRole("button", { name: "Wyczyść", exact: true });
     await Promise.all([confirmButton.click(), confirmButton.click().catch(() => {})]);
 
-    await testPage.page.waitForFunction(() => document.body.textContent?.includes("Wyniki przeniesiono do historii."), null, { timeout: 10_000 });
+    await testPage.page.waitForFunction(() => document.body.textContent?.includes("Wyniki ukryto."), null, { timeout: 10_000 });
     assert.equal(testPage.clearResultsRequestCount(), 1, "a rapid double-click must still send exactly one clear-results request");
+    await testPage.page.waitForFunction(() => document.querySelectorAll('[data-testid="finder-card"]').length === 0, null, { timeout: 10_000 });
+    assert.match(await testPage.page.locator("body").innerText(), /Historia i CRM pozostają zachowane/);
+    await testPage.page.reload({ waitUntil: "domcontentloaded" });
+    await testPage.page.waitForFunction(() => document.querySelectorAll('[data-testid="finder-card"]').length === 0, null, { timeout: 10_000 });
+    assert.equal(testPage.clearResultsRequestCount(), 1, "reload must not clear again or recreate hidden results");
 
     await confirmButton.click().catch(() => {});
     assert.equal(testPage.clearResultsRequestCount(), 1, "the dialog closes after success and cannot be double-submitted");

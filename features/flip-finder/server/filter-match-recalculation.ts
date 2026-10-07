@@ -58,6 +58,7 @@ export async function recalculateFilterMatches(
   searchFilterId: string,
   options: FilterRecalculationOptions = {},
 ): Promise<FilterRecalculationResult | null> {
+  const reconciliationStartedAt = new Date().toISOString();
   const filter = await getSearchFilter(searchFilterId);
 
   if (!filter) {
@@ -148,6 +149,7 @@ export async function recalculateFilterMatches(
           filterId: searchFilterId,
           decision: { bucket, reasons, missingFields, hardRejectReasons: bucket === "REJECTED" ? reasons : [] },
           matchOrigin: "filter_recalculation",
+          matchedAt: reconciliationStartedAt,
         });
       }
     }
@@ -174,6 +176,7 @@ export async function recalculateFilterMatches(
         decision: { bucket: "MATCHED", reasons: ["filter_recalculation"], missingFields: [], hardRejectReasons: [] },
         lifecycleStatus: "ACTIVE",
         matchOrigin: "filter_recalculation",
+        matchedAt: reconciliationStartedAt,
       });
     }
   }
@@ -206,6 +209,7 @@ export async function recalculateFilterMatches(
         filterId: searchFilterId,
         decision: { bucket: "REVIEW", reasons: decision?.reasons ?? [], missingFields: decision?.missingFields ?? [], hardRejectReasons: [] },
         matchOrigin: "filter_recalculation",
+        matchedAt: reconciliationStartedAt,
       });
     }
   }

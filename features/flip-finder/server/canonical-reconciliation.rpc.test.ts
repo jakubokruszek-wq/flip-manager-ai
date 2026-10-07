@@ -16,6 +16,7 @@ import type { SearchFilter } from "../index.ts";
  */
 const FIXED_MIGRATION_PATH = path.join(process.cwd(), "supabase/migrations/20260920180000_fix_canonical_reconciliation_ambiguous_column.sql");
 const PRE_FIX_MIGRATION_PATH = path.join(process.cwd(), "supabase/migrations/20260920160000_facebook_quality_v1_3_2_safety_closure.sql");
+const CLEAR_GUARD_DRAFT_PATH = path.join(process.cwd(), "supabase/migrations/20261007100000_prevent_stale_clear_results_restore.sql");
 
 function extractFunctionSql(migrationPath: string): string {
   const migrationSql = fs.readFileSync(migrationPath, "utf8");
@@ -67,10 +68,10 @@ async function seed(db: PGlite, listingId: string, filterId: string): Promise<vo
 
 type ReconcileRow = { listing_id: string; search_filter_id: string; bucket: string; lifecycle_status: string; is_current_match: boolean; match_reasons: string[] };
 
-async function reconcile(db: PGlite, args: { listingId: string; filterId: string; bucket: string; reasons: string[]; missingFields: string[]; lifecycleStatus: string; matchOrigin?: string }): Promise<ReconcileRow> {
+async function reconcile(db: PGlite, args: { listingId: string; filterId: string; bucket: string; reasons: string[]; missingFields: string[]; lifecycleStatus: string; matchOrigin?: string; matchedAt?: string }): Promise<ReconcileRow> {
   const result = await db.query<ReconcileRow>(
     `select * from reconcile_canonical_listing_decision($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [args.listingId, args.filterId, args.bucket, JSON.stringify(args.reasons), JSON.stringify(args.missingFields), args.lifecycleStatus, args.matchOrigin ?? "scan", null, new Date().toISOString()],
+    [args.listingId, args.filterId, args.bucket, JSON.stringify(args.reasons), JSON.stringify(args.missingFields), args.lifecycleStatus, args.matchOrigin ?? "scan", null, args.matchedAt ?? new Date().toISOString()],
   );
   return result.rows[0];
 }
@@ -209,6 +210,47 @@ test("C: post 1595799948904815's known incomplete source evidence (missing price
   // match state and the same SET of reasons, not the same array order.
   assert.deepEqual({ ...row, match_reasons: row.match_reasons.sort() }, { ...second, match_reasons: second.match_reasons.sort() }, "retry is idempotent");
   assert.equal((await membershipRows(db, listingId)).length, 1, "still exactly one membership row after retry — no duplicate, no reconciliation failure");
+});
+
+test("the local clear-guard SQL preserves a per-filter tombstone against an older scan and allows a genuinely later scan", async () => {
+  const db = new PGlite();
+  await db.exec(`create role anon; create role authenticated; create role service_role;`);
+  await db.exec(SCHEMA_SQL);
+  const migration = fs.readFileSync(CLEAR_GUARD_DRAFT_PATH, "utf8");
+  assert.match(migration, /m\.match_reasons \? 'finder_cleared'/);
+  assert.match(migration, /for update;/i);
+  await db.exec(migration);
+
+  const listingId = "24aad2a9-86e7-48a8-b3c1-0a470ed466e3";
+  const filterId = "6ebf3a9c-5418-4ae6-a0bf-1989b6603367";
+  const clearedAt = "2026-10-07T11:00:00.000Z";
+  await seed(db, listingId, filterId);
+  await db.query(
+    `insert into listing_filter_matches (listing_id, search_filter_id, last_matched_at, is_current_match, match_reasons, match_origin) values ($1,$2,$3,false,'["finder_cleared"]'::jsonb,'scan')`,
+    [listingId, filterId, clearedAt],
+  );
+
+  const stale = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchedAt: "2026-10-07T10:00:00.000Z" });
+  assert.equal(stale.bucket, "REJECTED", "the stale observation must be reported as non-current rather than restoring MATCHED");
+  assert.equal(stale.is_current_match, false);
+  assert.deepEqual(stale.match_reasons, ["finder_cleared"]);
+  const persistedAfterStale = await db.query<{ last_matched_at: string; is_current_match: boolean; match_reasons: string[] }>(
+    `select last_matched_at, is_current_match, match_reasons from listing_filter_matches where listing_id=$1 and search_filter_id=$2`,
+    [listingId, filterId],
+  );
+  assert.equal(new Date(persistedAfterStale.rows[0].last_matched_at).toISOString(), clearedAt);
+  assert.equal(persistedAfterStale.rows[0].is_current_match, false);
+  assert.deepEqual(persistedAfterStale.rows[0].match_reasons, ["finder_cleared"]);
+
+  const nextScan = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchedAt: "2026-10-07T12:00:00.000Z" });
+  assert.equal(nextScan.bucket, "MATCHED");
+  assert.equal(nextScan.is_current_match, true, "a new actual scan after the clear can publish its result");
+  const persistedAfterNextScan = await db.query<{ is_current_match: boolean; match_reasons: string[] }>(
+    `select is_current_match, match_reasons from listing_filter_matches where listing_id=$1 and search_filter_id=$2`,
+    [listingId, filterId],
+  );
+  assert.equal(persistedAfterNextScan.rows[0].is_current_match, true);
+  assert.deepEqual(persistedAfterNextScan.rows[0].match_reasons, []);
 });
 
 test("D: a high price/m2 apartment is correctly rejected by the real filter-evaluation logic, and the RPC persists REJECTED without a reconciliation failure", async () => {
