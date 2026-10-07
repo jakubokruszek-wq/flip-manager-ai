@@ -132,7 +132,14 @@ export async function getFilterResults(filterId: string, includeArchived = false
       supabase
         .from("listing_filter_matches")
         .select("listing_id,search_filter_id,first_matched_at,last_matched_at,is_current_match,match_origin,match_reasons")
-        .eq("search_filter_id", filterId),
+        .eq("search_filter_id", filterId)
+        // search_filter_id is already fixed by the .eq() above, so listing_id
+        // alone is unique within this result set -- a deterministic total
+        // order .range() can safely page across. Without this, PostgREST's
+        // LIMIT/OFFSET has no guaranteed stable row order between separate
+        // page requests, which can silently skip or duplicate rows exactly
+        // like the truncation bug this pagination fix exists to close.
+        .order("listing_id", { ascending: true }),
     ),
     supabase
       .from("source_scans")
@@ -217,7 +224,11 @@ export async function getFilterResults(filterId: string, includeArchived = false
       )
       .in("id", listingIds)
       .eq("status", "active")
-      .in("lifecycle_status", lifecycleStatuses);
+      .in("lifecycle_status", lifecycleStatuses)
+      // id is this table's primary key -- a deterministic total order so
+      // .range() pages across a stable sequence, never PostgREST's otherwise
+      // unspecified LIMIT/OFFSET row order.
+      .order("id", { ascending: true });
   const [listingsResultRaw, snapshotsResult, priceQualityResult] = await Promise.all([
     fetchAllRows(buildListingQuery),
     fetchAllRows(() =>
@@ -225,7 +236,11 @@ export async function getFilterResults(filterId: string, includeArchived = false
         .from("listing_snapshots")
         .select("listing_id,price,captured_at,raw_data")
         .in("listing_id", listingIds)
-        .order("captured_at", { ascending: false }),
+        // captured_at alone is not guaranteed unique across listings (a
+        // bulk-inserted batch can share one timestamp) -- listing_id as a
+        // secondary key makes the total order deterministic across pages.
+        .order("captured_at", { ascending: false })
+        .order("listing_id", { ascending: true }),
     ),
     // One extra batched query (never per-listing) for Facebook's own price-quality
     // signal. Filtered server-side to source=facebook, since only Facebook writes
@@ -235,7 +250,10 @@ export async function getFilterResults(filterId: string, includeArchived = false
         .from("listing_source_metadata")
         .select("listing_id,source_post_url,collected_at,metadata")
         .in("listing_id", listingIds)
-        .eq("source", "facebook"),
+        .eq("source", "facebook")
+        // id is this table's own primary key -- deterministic total order,
+        // same reasoning as the listings query above.
+        .order("id", { ascending: true }),
     ),
   ]);
   const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
@@ -275,7 +293,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
   let listingsResult: typeof listingsResultRaw = listingsResultRaw;
   if (listingsResult.error?.code === "42703") {
     listingsResult = await fetchAllRows(() =>
-      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", listingIds).eq("status", "active"),
+      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", listingIds).eq("status", "active").order("id", { ascending: true }),
     ) as typeof listingsResultRaw;
   }
 
