@@ -166,6 +166,17 @@ function finiteNumber(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+// Official collective/catalog sources (UMŁ/BIP notices, housing co-op and
+// syndic sale pages) legitimately publish many distinct units under one
+// shared listing page -- official-lodz-adapters.ts falls back to that same
+// page URL for every notice when the site gives individual notices no URL of
+// their own. A shared catalog URL must never be treated as proof two records
+// are the same unit; only the confirmed, per-unit externalListingId
+// (`${sourceId}:${id}`, always set for these sources) may merge them. Every
+// other source keeps its existing URL-based identity untouched (Otodom,
+// OLX, ...), where one URL really does mean one listing.
+const OFFICIAL_CATALOG_SOURCES = new Set(["official_cooperative", "official_uml", "official_auction"]);
+
 export function dedupeByListingIdentity<T>(records: T[], identityOf: (record: T) => ListingIdentity): T[] {
   const seenListingIds = new Set<string>();
   /**
@@ -186,12 +197,13 @@ export function dedupeByListingIdentity<T>(records: T[], identityOf: (record: T)
 
   return ordered.filter(({ identity, canonical }) => {
     if (seenListingIds.has(identity.listingId)) return false;
+    const isOfficialCatalogSource = OFFICIAL_CATALOG_SOURCES.has(identity.source);
     const keys = identity.source === "facebook"
       ? canonical.keys
       : [
         identity.externalListingId?.trim() ? `${identity.source}:${identity.externalListingId.trim()}` : null,
-        normalizeListingIdentityUrl(identity.source, identity.originalUrl) ? `${identity.source}:url:${normalizeListingIdentityUrl(identity.source, identity.originalUrl)}` : null,
-        normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl) ? `${identity.source}:url:${normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl)}` : null,
+        !isOfficialCatalogSource && normalizeListingIdentityUrl(identity.source, identity.originalUrl) ? `${identity.source}:url:${normalizeListingIdentityUrl(identity.source, identity.originalUrl)}` : null,
+        !isOfficialCatalogSource && normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl) ? `${identity.source}:url:${normalizeListingIdentityUrl(identity.source, identity.sourcePostUrl)}` : null,
       ].filter((key): key is string => Boolean(key));
     // Parameter identity is a last-resort key only. If either record has a
     // stronger Facebook identity (post id, URL, external id or full content),

@@ -27,6 +27,8 @@ export type FilterRecalculationResult = {
   addedMatches: number;
   removedMatches: number;
   unchangedMatches: number;
+  /** Listings recovered from a non-visible prior state (e.g. wrongly marked listing_missing) back into REVIEW. See planFilterMatchRecalculation's recoveredReviewListingIds doc comment. */
+  recoveredReviewMatches: number;
   matchesAfter: number;
   rejectedByPricePerSqm: number;
   rejectedByOtherCriteria: number;
@@ -170,12 +172,45 @@ export async function recalculateFilterMatches(
     }
   }
 
+  // A listing stuck in a non-visible prior state (e.g. wrongly marked
+  // listing_missing by a since-fixed source-allowlist bug) whose fresh
+  // evaluation is genuinely REVIEW-eligible: recover it the same way a live
+  // scan would, instead of leaving it invisible forever. See
+  // planFilterMatchRecalculation's recoveredReviewListingIds doc comment for
+  // why this never fabricates a brand-new match from nothing.
+  if (plan.recoveredReviewListingIds.length > 0) {
+    const decisionsById = new Map(plan.recoveredReviewDecisions.map((entry) => [entry.listingId, entry]));
+    const auditRows = plan.recoveredReviewListingIds.map((listingId) => {
+      const previous = matches.find((match) => match.listingId === listingId);
+      return membershipAuditEntry({
+        filterId: searchFilterId,
+        listingId,
+        previousState: previous ? reconciliationMembershipState(previous.isCurrentMatch === true, previous.matchReasons ?? []) : "NONE",
+        newState: "REVIEW",
+        reason: "COMPLETE_SCAN_FILTER_REVIEW_RECOVERED",
+        scanRunId: options.scanRunId ?? null,
+      });
+    });
+    await writeMembershipAudit(supabase, auditRows);
+    for (const listingId of plan.recoveredReviewListingIds) {
+      const decision = decisionsById.get(listingId);
+      await reconcileCanonicalListingDecision({
+        supabase,
+        listingId,
+        filterId: searchFilterId,
+        decision: { bucket: "REVIEW", reasons: decision?.reasons ?? [], missingFields: decision?.missingFields ?? [], hardRejectReasons: [] },
+        matchOrigin: "filter_recalculation",
+      });
+    }
+  }
+
   return {
     evaluated: plan.evaluated,
     matchesBefore: plan.matchesBefore,
     addedMatches: plan.addedListingIds.length,
     removedMatches: plan.removedListingIds.length,
     unchangedMatches: plan.unchangedListingIds.length,
+    recoveredReviewMatches: plan.recoveredReviewListingIds.length,
     matchesAfter: plan.matchesAfter,
     rejectedByPricePerSqm: plan.rejectedByPricePerSqm,
     rejectedByOtherCriteria: plan.rejectedByOtherCriteria,
@@ -214,6 +249,7 @@ function blockedResult(matchesBefore: number, reason: string): FilterRecalculati
     addedMatches: 0,
     removedMatches: 0,
     unchangedMatches: matchesBefore,
+    recoveredReviewMatches: 0,
     matchesAfter: matchesBefore,
     rejectedByPricePerSqm: 0,
     rejectedByOtherCriteria: 0,

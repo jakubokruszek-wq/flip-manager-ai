@@ -16,6 +16,8 @@
  */
 
 type Row = Record<string, unknown>;
+/** Mirrors real Supabase/PostgREST's default max-rows response cap. */
+const DEFAULT_SELECT_ROW_CAP = 1000;
 type RpcResult = { data: unknown; error: { message: string } | null };
 type RpcHandler = (params: Row) => RpcResult;
 type FailureRule = { op: "insert" | "update" | "upsert" | "select"; message: string; remaining: number };
@@ -151,6 +153,7 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
   private onConflictColumns: string[] | null = null;
   private ignoreDuplicates = false;
   private limitCount: number | null = null;
+  private rangeWindow: [number, number] | null = null;
   private wantsSelectBack = false;
 
   constructor(db: FakeFacebookSupabase, table: string) {
@@ -224,6 +227,10 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     this.limitCount = count;
     return this;
   }
+  range(from: number, to: number): this {
+    this.rangeWindow = [from, to];
+    return this;
+  }
   abortSignal(): this {
     return this;
   }
@@ -271,7 +278,22 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
   private matchingRows(): Row[] {
     const all = this.db._table(this.table);
     const matched = all.filter((row) => this.filters.every((filter) => filter(row)) && this.matchesOr(row));
-    return this.limitCount !== null ? matched.slice(0, this.limitCount) : matched;
+    if (this.rangeWindow) {
+      const [from, to] = this.rangeWindow;
+      return matched.slice(from, to + 1);
+    }
+    if (this.limitCount !== null) return matched.slice(0, this.limitCount);
+    // Real PostgREST silently caps a response at its configured default row
+    // limit (commonly 1000) whenever a query issues neither .range() nor
+    // .limit() -- confirmed empirically against this project's own Supabase
+    // instance. This fake must reproduce that silent truncation for a real
+    // SELECT, or a missing-pagination bug (a query that can return more than
+    // the default cap but never requests a page) can never be caught by a
+    // test. Only applies to a genuine data-returning select -- matchingRows()
+    // is also called internally to find which rows an update/delete targets,
+    // where this.op is already "update" by the time it runs, and that must
+    // never be silently capped.
+    return this.op === "select" ? matched.slice(0, DEFAULT_SELECT_ROW_CAP) : matched;
   }
 
   private execute(): { data: unknown; error: { message: string } | null } {

@@ -173,6 +173,55 @@ test("scenario 3: the same listingId with multiple listing_source_metadata rows 
   assert.equal(watcherResult[0]?.listingId, "listing-e");
 });
 
+test("UMŁ regression: two confirmed units sharing one catalog page URL render as two Finder cards, while re-importing the same unit stays one card", async () => {
+  const catalogUrl = "https://bip.uml.lodz.pl/ogloszenia/lokale-mieszkalne";
+  const officialRow = (id: string, externalListingId: string, overrides: Record<string, unknown> = {}) => finderListingRow({
+    id,
+    source: "official_uml",
+    external_listing_id: externalListingId,
+    original_url: catalogUrl,
+    title: "Lokal mieszkalny — oferta",
+    building_type: "blok",
+    ownership: "pełna własność",
+    lifecycle_status: "ACTIVE",
+    review_reason: null,
+    missing_fields: [],
+    ...overrides,
+  });
+
+  const finder = finderDb({ sources: ["official_uml"] });
+  finder.seed("listings", [
+    officialRow("uml-unit-1", "uml-source:unit-1", { price: 180_000, area: 36, price_per_sqm: 180_000 / 36 }),
+    officialRow("uml-unit-2", "uml-source:unit-2", { price: 210_000, area: 42, price_per_sqm: 210_000 / 42 }),
+  ]);
+  finder.seed("listing_filter_matches", [
+    finderMembershipRow("uml-unit-1"),
+    finderMembershipRow("uml-unit-2"),
+  ]);
+  currentFinderDb = finder;
+
+  const payload = await getFilterResults(FILTER_ID);
+  assert.equal(payload?.results.length, 2, "two confirmed units sharing one catalog URL must render as two Finder cards, never collapsed into one");
+  assert.deepEqual(new Set(payload?.results.map((result) => result.id)), new Set(["uml-unit-1", "uml-unit-2"]));
+
+  // Re-importing the same unit (same externalListingId, a fresh listings row
+  // as a real re-scan would produce) must still collapse to exactly one card.
+  const reimported = finderDb({ sources: ["official_uml"] });
+  reimported.seed("listings", [
+    officialRow("uml-unit-1-old", "uml-source:unit-1", { price: 180_000, area: 36, price_per_sqm: 180_000 / 36, last_seen_at: "2026-09-27T09:00:00.000Z" }),
+    officialRow("uml-unit-1-new", "uml-source:unit-1", { price: 180_000, area: 36, price_per_sqm: 180_000 / 36, last_seen_at: "2026-09-27T11:00:00.000Z" }),
+  ]);
+  reimported.seed("listing_filter_matches", [
+    finderMembershipRow("uml-unit-1-old"),
+    finderMembershipRow("uml-unit-1-new"),
+  ]);
+  currentFinderDb = reimported;
+
+  const reimportedPayload = await getFilterResults(FILTER_ID);
+  assert.equal(reimportedPayload?.results.length, 1, "re-importing the same unit (same externalListingId) must render as one Finder card, not two");
+  assert.equal(reimportedPayload?.results[0]?.id, "uml-unit-1-new", "the more recently observed row must win, per the existing preference ordering");
+});
+
 test("reported Żychlin cards: one confirmed post is one card, while different confirmed posts with identical 270000/58m²/3-room content stay separate on both surfaces", async () => {
   const title = "SPRZEDAM: Rozkładowe 3 pokoje";
   const description = "Mieszkanie 3 pokoje, 58 m², Żychlin.";

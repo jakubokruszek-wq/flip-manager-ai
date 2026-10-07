@@ -158,6 +158,38 @@ test("different confirmed Otodom offer ids remain separate", () => {
   assert.deepEqual(dedupeByListingIdentity(records, (record) => record).map((record) => record.listingId), ["otodom-a", "otodom-b"]);
 });
 
+// Confirmed Production bug: official-lodz-adapters.ts's normalizeNotices()
+// falls back to the shared catalog page URL (source.url) whenever a single
+// UMŁ/BIP notice has no individual URL of its own -- 65 distinct listings
+// and externalListingIds shared one original_url, and the URL-based key
+// collapsed them all into one. externalListingId (`${sourceId}:${id}`) is
+// always set and genuinely unique per unit for these adapters.
+test("official catalog sources: a shared catalog URL never merges different confirmed unit identifiers", () => {
+  const records = [
+    { listingId: "uml-1", source: "official_uml", externalListingId: "uml-source:unit-1", originalUrl: "https://bip.uml.lodz.pl/ogloszenia/lokale-mieszkalne" },
+    { listingId: "uml-2", source: "official_uml", externalListingId: "uml-source:unit-2", originalUrl: "https://bip.uml.lodz.pl/ogloszenia/lokale-mieszkalne" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record).map((record) => record.listingId), ["uml-1", "uml-2"]);
+});
+
+test("official catalog sources: re-importing the same unit (same externalListingId) still collapses to one card", () => {
+  const records = [
+    { listingId: "uml-1-new", source: "official_uml", externalListingId: "uml-source:unit-1", originalUrl: "https://bip.uml.lodz.pl/ogloszenia/lokale-mieszkalne" },
+    { listingId: "uml-1-old", source: "official_uml", externalListingId: "uml-source:unit-1", originalUrl: "https://bip.uml.lodz.pl/ogloszenia/lokale-mieszkalne" },
+  ];
+  assert.deepEqual(dedupeByListingIdentity(records, (record) => record), [records[0]]);
+});
+
+test("official catalog sources: the rule applies identically to official_cooperative and official_auction", () => {
+  for (const source of ["official_cooperative", "official_auction"]) {
+    const records = [
+      { listingId: `${source}-1`, source, externalListingId: `${source}:unit-1`, originalUrl: "https://example.test/shared-catalog-page" },
+      { listingId: `${source}-2`, source, externalListingId: `${source}:unit-2`, originalUrl: "https://example.test/shared-catalog-page" },
+    ];
+    assert.equal(dedupeByListingIdentity(records, (record) => record).length, 2, `${source}: two confirmed units sharing one catalog URL must render as two cards`);
+  }
+});
+
 test("same normalized URL deduplication never crosses source boundaries", () => {
   const records = [
     { listingId: "olx-1", source: "olx", externalListingId: "shared", originalUrl: "https://example.test/listing/1?utm_campaign=x" },

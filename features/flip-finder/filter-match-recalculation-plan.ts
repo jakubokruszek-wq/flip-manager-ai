@@ -31,6 +31,12 @@ export type RemovedListingDecision = {
   missingFields: string[];
 };
 
+export type RecoveredReviewDecision = {
+  listingId: string;
+  reasons: string[];
+  missingFields: string[];
+};
+
 export type FilterRecalculationPlan = {
   evaluated: number;
   matchesBefore: number;
@@ -38,6 +44,21 @@ export type FilterRecalculationPlan = {
   removedListingIds: string[];
   removedListingDecisions: RemovedListingDecision[];
   unchangedListingIds: string[];
+  /**
+   * Listings with a prior listing_filter_matches row that is currently
+   * invisible (e.g. wrongly marked listing_missing by a since-fixed bug, or
+   * any other non-MATCHED/non-REVIEW prior state) whose fresh evaluation is
+   * REVIEW-eligible (missing required data, not a hard rejection). These are
+   * NOT in existingIds (only MATCHED/REVIEW rows are), so the main loop's
+   * added/removed branches never touch them -- without this bucket such a
+   * listing stays stuck in its stale state forever, no matter how many times
+   * recalculation runs. A listing with NO prior row at all (genuinely never
+   * seen by this filter before) is deliberately excluded here: discovering
+   * brand-new REVIEW candidates from scratch remains the live scan's job,
+   * not this reconciliation pass's.
+   */
+  recoveredReviewListingIds: string[];
+  recoveredReviewDecisions: RecoveredReviewDecision[];
   matchesAfter: number;
   rejectedByPricePerSqm: number;
   rejectedByOtherCriteria: number;
@@ -51,6 +72,7 @@ export function planFilterMatchRecalculation(
   matches: RecalculationMatch[],
 ): FilterRecalculationPlan {
   const listingsById = new Map(listings.map((listing) => [listing.id, listing]));
+  const matchedIds = new Set(matches.map((match) => match.listingId));
   const existingIds = new Set(
     matches
       .filter((match) => match.isCurrentMatch !== false || (match.matchReasons ?? []).some((reason) => reason === "review" || reason.startsWith("unknown_")))
@@ -60,6 +82,8 @@ export function planFilterMatchRecalculation(
   const removedIds = new Set<string>();
   const removedDecisions = new Map<string, RemovedListingDecision>();
   const unchangedListingIds: string[] = [];
+  const recoveredReviewListingIds: string[] = [];
+  const recoveredReviewDecisions: RecoveredReviewDecision[] = [];
   const keptListings: RecalculationListing[] = [];
   let evaluated = 0;
   let rejectedByPricePerSqm = 0;
@@ -135,6 +159,17 @@ export function planFilterMatchRecalculation(
       const bucket: RemovedListingDecision["bucket"] = categoryPage || decision.bucket === "REJECTED" ? "REJECTED" : "REVIEW";
       const reasons = categoryPage && decision.reasons.length === 0 ? ["category_page"] : decision.reasons;
       markRemoved(listing.id, { listingId: listing.id, bucket, reasons, missingFields: decision.unknownFields });
+    } else if (!categoryPage && decision.bucket === "REVIEW" && matchedIds.has(listing.id)) {
+      // existingIds only contains currently-visible (MATCHED/REVIEW) rows, so
+      // a listing stuck in any other persisted state (e.g. wrongly marked
+      // listing_missing) never reaches either branch above -- it would stay
+      // invisible forever no matter how many times recalculation runs.
+      // matchedIds.has() requires a prior row to exist at all: a genuinely
+      // brand-new listing (never matched by this filter before) is still
+      // left for the live scan's own matching to discover, not fabricated
+      // here.
+      recoveredReviewListingIds.push(listing.id);
+      recoveredReviewDecisions.push({ listingId: listing.id, reasons: decision.reasons, missingFields: decision.unknownFields });
     }
   }
 
@@ -151,7 +186,9 @@ export function planFilterMatchRecalculation(
     removedListingIds: [...removedIds],
     removedListingDecisions: [...removedDecisions.values()],
     unchangedListingIds,
-    matchesAfter: existingIds.size - removedIds.size + addedListingIds.length,
+    recoveredReviewListingIds,
+    recoveredReviewDecisions,
+    matchesAfter: existingIds.size - removedIds.size + addedListingIds.length + recoveredReviewListingIds.length,
     rejectedByPricePerSqm,
     rejectedByOtherCriteria,
     maxPricePerSqmBefore: maximumPricePerSqm(

@@ -128,10 +128,12 @@ export async function getFilterResults(filterId: string, includeArchived = false
 
   const supabase = await createClient();
   const [matchesResult, scansResult] = await Promise.all([
-    supabase
-      .from("listing_filter_matches")
-      .select("listing_id,search_filter_id,first_matched_at,last_matched_at,is_current_match,match_origin,match_reasons")
-      .eq("search_filter_id", filterId),
+    fetchAllRows(() =>
+      supabase
+        .from("listing_filter_matches")
+        .select("listing_id,search_filter_id,first_matched_at,last_matched_at,is_current_match,match_origin,match_reasons")
+        .eq("search_filter_id", filterId),
+    ),
     supabase
       .from("source_scans")
       .select(
@@ -207,29 +209,34 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const lifecycleStatuses = includeArchived
     ? ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]
     : ["ACTIVE", "REVIEW"];
-  const listingQuery = supabase
-    .from("listings")
-    .select(
-      "id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
-    )
-    .in("id", listingIds)
-    .eq("status", "active")
-    .in("lifecycle_status", lifecycleStatuses);
-  const [listingsResultRaw, snapshotsResult, priceQualityResult] = await Promise.all([
-    listingQuery,
+  const buildListingQuery = () =>
     supabase
-      .from("listing_snapshots")
-      .select("listing_id,price,captured_at,raw_data")
-      .in("listing_id", listingIds)
-      .order("captured_at", { ascending: false }),
+      .from("listings")
+      .select(
+        "id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
+      )
+      .in("id", listingIds)
+      .eq("status", "active")
+      .in("lifecycle_status", lifecycleStatuses);
+  const [listingsResultRaw, snapshotsResult, priceQualityResult] = await Promise.all([
+    fetchAllRows(buildListingQuery),
+    fetchAllRows(() =>
+      supabase
+        .from("listing_snapshots")
+        .select("listing_id,price,captured_at,raw_data")
+        .in("listing_id", listingIds)
+        .order("captured_at", { ascending: false }),
+    ),
     // One extra batched query (never per-listing) for Facebook's own price-quality
     // signal. Filtered server-side to source=facebook, since only Facebook writes
     // this metadata today; OLX/Otodom simply have no rows here and are unaffected.
-    supabase
-      .from("listing_source_metadata")
-      .select("listing_id,source_post_url,collected_at,metadata")
-      .in("listing_id", listingIds)
-      .eq("source", "facebook"),
+    fetchAllRows(() =>
+      supabase
+        .from("listing_source_metadata")
+        .select("listing_id,source_post_url,collected_at,metadata")
+        .in("listing_id", listingIds)
+        .eq("source", "facebook"),
+    ),
   ]);
   const priceReliabilityByListingId = new Map<string, FacebookPriceStatus>();
   const sourcePostUrlByListingId = new Map<string, string | null>();
@@ -267,7 +274,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
 
   let listingsResult: typeof listingsResultRaw = listingsResultRaw;
   if (listingsResult.error?.code === "42703") {
-    listingsResult = await supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at") .in("id", listingIds).eq("status", "active") as typeof listingsResultRaw;
+    listingsResult = await fetchAllRows(() =>
+      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", listingIds).eq("status", "active"),
+    ) as typeof listingsResultRaw;
   }
 
   if (listingsResult.error || snapshotsResult.error) {
@@ -819,6 +828,36 @@ function rawPublishedAt(raw: Row): string | null {
 
 function asRows(value: unknown): Row[] {
   return Array.isArray(value) ? value.filter(isRow) : [];
+}
+
+/**
+ * Supabase/PostgREST caps a response to its configured default row limit
+ * (confirmed empirically against this project's own instance: exactly 1000)
+ * whenever a query issues neither .range() nor .limit() -- silently, with no
+ * error. A filter the size of "Flip" has 2000+ listing_filter_matches rows;
+ * reading it with a bare .select().eq() truncated to the first 1000 by
+ * whatever order Postgres happened to return them in, permanently hiding
+ * every source whose rows landed past that cut (OLX and the official UMŁ
+ * catalog among them, confirmed live in Production). Pages through the full
+ * result instead of trusting a single unranged response to be complete.
+ */
+const SUPABASE_SELECT_PAGE_SIZE = 1000;
+async function fetchAllRows<E>(
+  buildQuery: () => { range(from: number, to: number): PromiseLike<{ data: unknown; error: E | null }> },
+): Promise<{ data: Row[]; error: E | null }> {
+  const rows: Row[] = [];
+  for (let start = 0; ; start += SUPABASE_SELECT_PAGE_SIZE) {
+    const page = await buildQuery().range(start, start + SUPABASE_SELECT_PAGE_SIZE - 1);
+    if (page.error) {
+      return { data: rows, error: page.error };
+    }
+    const pageRows = asRows(page.data);
+    rows.push(...pageRows);
+    if (pageRows.length < SUPABASE_SELECT_PAGE_SIZE) {
+      break;
+    }
+  }
+  return { data: rows, error: null };
 }
 
 function isRow(value: unknown): value is Row {
