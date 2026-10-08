@@ -24,12 +24,19 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
 
   const reason = typeof body?.reason === "string" ? body.reason.trim().slice(0, 500) : null;
   const supabase = createAdminClient();
-  const { data, error } = await supabase.rpc("apply_listing_review_decision", {
+  const args = {
     p_listing_id: listingId,
     p_decision: decision,
     p_reason: reason || null,
     p_now: new Date().toISOString(),
-  });
+  };
+  let { data, error } = await supabase.rpc("apply_confirmed_property_group_review_decision", args);
+  // Roll forward safely: the new grouped RPC is installed by the identity
+  // draft migration. Until it is applied, retain the existing single-listing
+  // behavior instead of making review actions unavailable.
+  if (error?.code === "42883" || error?.code === "PGRST202") {
+    ({ data, error } = await supabase.rpc("apply_listing_review_decision", args));
+  }
 
   if (error) {
     const message = `${error.message ?? ""} ${error.details ?? ""}`;

@@ -1,7 +1,7 @@
 const FRIENDLY_FIELD_LABELS: Record<string, string> = {
   address: "dokładny adres",
   area: "metraż",
-  buildingType: "typ budynku",
+  buildingType: "Niepotwierdzony typ budynku",
   city: "miasto",
   district: "dzielnica",
   floor: "piętro",

@@ -18,6 +18,7 @@ import {
 import { canonicalMatchReasons, reconcileCanonicalListingDecision } from "./canonical-reconciliation";
 import { MIN_TOTAL_SALE_PRICE_PLN } from "@/features/flip-finder/sale-price-policy";
 import { isListingSource as isKnownListingSource } from "@/features/flip-finder/search-filter-contract";
+import { resolveBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
 
 type Row = Record<string, unknown>;
 
@@ -493,7 +494,7 @@ export function toListing(row: Row): RecalculationListing | null {
     city: nullableString(row.city),
     district: nullableString(row.district),
     locationText: nullableString(row.address),
-    buildingType: nullableString(row.building_type),
+    buildingType: resolveBuildingType(row.building_type, nullableString(row.title), nullableString(row.description)),
     ownership: nullableString(row.ownership),
     manualDecision: row.manual_decision === "ACCEPTED" || row.manual_decision === "REJECTED" ? row.manual_decision : null,
     lifecycleStatus: row.lifecycle_status === "ACTIVE" || row.lifecycle_status === "REVIEW" || row.lifecycle_status === "STALE" || row.lifecycle_status === "ARCHIVED" || row.lifecycle_status === "REJECTED" ? row.lifecycle_status : null,

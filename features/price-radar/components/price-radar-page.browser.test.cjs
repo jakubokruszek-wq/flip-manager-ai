@@ -13,15 +13,18 @@ const session = {
   access_token: "radar-browser-access-token", refresh_token: "radar-browser-refresh-token", token_type: "bearer", expires_in: 3600, expires_at: 4102444800,
   user: { id: ownerId, email: "operator@example.test", app_metadata: { role: "operator" }, user_metadata: {}, aud: "authenticated", created_at: "2026-10-01T00:00:00.000Z" },
 };
-const activeSources = ["domiporta", "olx"];
+const activeSources = ["domiporta", "olx", "gratka"];
 function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [] }; }
 function listing(id, marketType) {
   return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: "Pełny opis źródłowy.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
 }
 function results(filters, excluded = false) {
-  const pool = [listing("radar-domiporta", "secondary"), listing("radar-olx", "primary")];
+  const domiporta = listing("radar-domiporta", "secondary");
+  domiporta.crossSourceIdentity = "portal_shared_unit_id:unit-secondary";
+  domiporta.crossSourceAlternates = [{ id: "radar-gratka", source: "gratka", originalUrl: "https://example.test/radar-gratka", title: "Kopia Gratka", price: 455000, area: 50.5, rooms: 2, publishedAt: "2026-10-06T10:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T09:00:00.000Z" }];
+  const pool = [domiporta, listing("radar-olx", "primary")];
   const narrowed = pool.filter((item) => filters.market === "both" || item.marketType === filters.market);
-  const selected = filters.sources.length ? narrowed.filter((item) => filters.sources.includes(item.source)) : narrowed;
+  const selected = filters.sources.length ? narrowed.filter((item) => filters.sources.includes(item.source) || item.crossSourceAlternates.some((alternate) => filters.sources.includes(alternate.source))) : narrowed;
   const stats = selected.map((item) => ({ district: item.district, marketType: item.marketType, averagePricePerSqm: null, medianPricePerSqm: null, sampleSize: 1, isSmallSample: true, updatedAt: item.lastSeenAt }));
   const excludedListings = excluded ? selected.slice(0, 1).map((item) => ({ ...item, excludedAt: "2026-10-08T11:00:00.000Z", excludedReason: "ręcznie" })) : [];
   return { listings: excluded ? selected.slice(1) : selected, excludedListings, stats };
@@ -110,11 +113,15 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   });
 
   await page.goto(`http://127.0.0.1:${port}/price-radar`, { waitUntil: "domcontentloaded" });
+  const selectPortalAndWaitForSave = async (name) => { const saved = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT"); await page.getByRole("button", { name }).click(); await saved; };
   await page.getByRole("heading", { name: "Radar cen po remoncie", level: 1 }).waitFor();
   assert.ok(await page.getByRole("link", { name: "Radar cen po remoncie" }).count(), "the Radar has a separate navigation entry");
   await page.getByText("Mieszkanie secondary w bloku", { exact: false }).waitFor();
   await page.getByText("Mieszkanie primary w bloku", { exact: false }).waitFor();
-  assert.equal(await page.locator("a[href^='https://example.test/']").count(), 2, "both market listings retain their exact portal links before a source filter is applied");
+  assert.equal(await page.locator("a[href^='https://example.test/']").count(), 3, "the confirmed cross-source group retains both concrete portal links");
+  assert.ok(await page.getByText("Znaleziono także na: Gratka").count(), "the Radar shows the linked source explicitly");
+  const alternateDetails = await page.locator('a[href="https://example.test/radar-gratka"]').innerText();
+  assert.match(alternateDetails.normalize("NFKC"), /Gratka \u00b7 Kopia Gratka \u00b7 455\s*000 z\u0142 \u00b7 50\.5 m2/, "alternate price and area remain together as that source-specific values");
   assert.equal(await page.getByText("Średnia zł/m²").count(), 2, "both market groups are visibly independent");
   assert.equal(await page.getByText("Niewystarczająca próba").count(), 2);
   assert.equal(await page.getByText(/brak ceny referencyjnej \(minimum 20\)/).count(), 2);
@@ -139,13 +146,19 @@ test("real Radar page persists settings, separates markets, excludes/restores li
 
   await page.getByLabel("Rynek").selectOption("both");
   await page.waitForTimeout(650);
-  await page.getByRole("button", { name: "Domiporta" }).click();
+  await selectPortalAndWaitForSave("Domiporta");
   await page.waitForTimeout(650);
   assert.deepEqual(savedFilters.sources, ["domiporta"], "a portal selection is saved as a durable Radar filter");
   await page.waitForFunction(() => document.body.textContent?.includes("Mieszkanie secondary w bloku") && !document.body.textContent?.includes("Mieszkanie primary w bloku"));
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Radar cen po remoncie", level: 1 }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Domiporta" }).getAttribute("aria-pressed"), "true", "the selected portal survives a page reload");
+  await selectPortalAndWaitForSave("Domiporta");
+  await page.waitForTimeout(300);
+  await selectPortalAndWaitForSave("Gratka");
+  await page.waitForTimeout(300);
+  assert.deepEqual(savedFilters.sources, ["gratka"], "the alternate portal can be selected without changing the representative listing");
+  assert.ok(await page.getByText("Mieszkanie secondary w bloku", { exact: false }).count(), "the confirmed group remains visible when filtering by its alternate source");
 
   await page.getByRole("button", { name: "Wyklucz z porównań" }).first().click();
   await page.getByText(/Wykluczone z porównań/).waitFor();
@@ -163,8 +176,9 @@ test("real Radar page persists settings, separates markets, excludes/restores li
     assert.ok(overflow <= 1, `Radar page must not horizontally overflow at ${width}px; Next server output: ${serverOutput}`);
   }
   const selectedSourceLinks = page.locator("a[href^='https://example.test/']");
-  assert.equal(await selectedSourceLinks.count(), 1, "the saved Domiporta source filter leaves only its listing link visible");
-  assert.equal(await selectedSourceLinks.first().getAttribute("href"), "https://example.test/radar-domiporta");
+  assert.equal(await selectedSourceLinks.count(), 2, "the selected source keeps the group and its linked concrete URL");
+  assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-domiporta"));
+  assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-gratka"));
   assert.deepEqual(blockedExternalRequests, [], "the isolated browser never contacts a portal or remote Supabase");
   assert.equal(requests.some((request) => request.path === "/api/price-radar/run" && request.method === "POST"), false, "viewing and refreshing the page never starts a collection run");
 });

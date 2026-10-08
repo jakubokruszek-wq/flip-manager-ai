@@ -67,6 +67,31 @@ test("a Łódź filter excludes Rzeszów inferred from the title when the struct
   assert.deepEqual(result.reasons, ["city_mismatch"]);
 });
 
+test("a confirmed tenement is rejected by filters that allow only blocks/apartment buildings", () => {
+  const nonTenementFilter = { ...filter, buildingTypes: ["blok", "apartamentowiec"] };
+  const cases = [
+    { buildingType: "kamienica", title: "Mieszkanie po remoncie", description: "" },
+    { buildingType: null, title: "Mieszkanie po remoncie w kamienicy z windą", description: "Po rewitalizacji." },
+    // A stale/incorrect structured label cannot override direct evidence
+    // about the offered unit; it is rejected as a conflict, not sent to REVIEW.
+    { buildingType: "blok", title: "Mieszkanie po remoncie", description: "Lokal w kamienicy po rewitalizacji." },
+  ];
+  for (const current of cases) {
+    const result = evaluateListingAgainstFilter({ ...candidate, ...current }, nonTenementFilter);
+    assert.equal(result.bucket, "REJECTED", JSON.stringify(current));
+    assert.ok(result.reasons.includes("building_type") || result.reasons.includes("building_type_conflict"));
+  }
+});
+
+test("unknown and contradictory non-tenement evidence are never guessed to block; unknown stays visibly reviewable", () => {
+  const nonTenementFilter = { ...filter, buildingTypes: ["blok", "apartamentowiec"] };
+  const unknown = evaluateListingAgainstFilter({ ...candidate, buildingType: null, title: "Mieszkanie, 3 pokoje", description: "" }, nonTenementFilter);
+  assert.equal(unknown.bucket, "REVIEW");
+  assert.ok(unknown.unknownFields.includes("buildingType"));
+  const adjacent = evaluateListingAgainstFilter({ ...candidate, buildingType: "blok", title: "Mieszkanie w bloku", description: "Kamienica obok." }, nonTenementFilter);
+  assert.equal(adjacent.bucket, "MATCHED");
+});
+
 test("a Łódź filter excludes Żychlin inferred from the title when the structured city is empty", () => {
   const result = evaluateListingAgainstFilter(
     { ...candidate, city: null, title: "SPRZEDAM: Rozkładowe 3 pokoje w Żychlinie", locationText: null },

@@ -13,5 +13,5 @@ test("cleans display markdown and emoji without changing source data", () => {
 });
 
 test("uses friendly labels for technical fields", () => {
-  assert.deepEqual(friendlyMissingFields(["buildingType", "topFloor", "ownership", "buildingType"]), ["typ budynku", "liczba pięter w budynku", "forma własności"]);
+  assert.deepEqual(friendlyMissingFields(["buildingType", "topFloor", "ownership", "buildingType"]), ["Niepotwierdzony typ budynku", "liczba pięter w budynku", "forma własności"]);
 });

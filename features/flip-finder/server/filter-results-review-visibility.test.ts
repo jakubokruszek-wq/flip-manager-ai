@@ -419,6 +419,66 @@ test("same Facebook source URL is one Finder card, while a below-minimum price i
   assert.equal(payload?.reviewResults.some((item) => item.id === "listing-too-cheap"), false);
 });
 
+test("read path rejects an existing legacy row whose stored block type conflicts with its own tenement description", async () => {
+  const db = freshDb();
+  db.seed("listings", [listingRow({
+    id: "legacy-tenement-labelled-block",
+    title: "Mieszkanie po remoncie w kamienicy z windą",
+    description: "Kamienica po rewitalizacji, lokal przy ul. testowej.",
+    building_type: "blok",
+    ownership: "pełna własność",
+    lifecycle_status: "ACTIVE",
+    review_reason: null,
+    missing_fields: [],
+  })]);
+  db.seed("listing_filter_matches", [membershipRow("legacy-tenement-labelled-block", { is_current_match: true, match_reasons: [] })]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  assert.ok(payload);
+  assert.equal(payload.results.some((result) => result.id === "legacy-tenement-labelled-block"), false);
+  assert.equal(payload.reviewResults.some((result) => result.id === "legacy-tenement-labelled-block"), false);
+});
+
+test("Finder read path groups only confirmed cross-portal identity, keeps one coherent representative and all concrete links", async () => {
+  const db = freshDb();
+  const identity = "portal_shared_unit_id:unit-tuwima-71";
+  const common = { building_type: "blok", ownership: "pełna własność", lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [], cross_source_identity: identity };
+  db.seed("listings", [
+    listingRow({ id: "tuwima-gratka", source: "gratka", original_url: "https://gratka.pl/nieruchomosci/tuwima", title: "Mieszkanie · Tuwima", price: 365000, area: 71, rooms: 3, ...common }),
+    listingRow({ id: "tuwima-morizon", source: "morizon", original_url: "https://morizon.pl/oferta/tuwima", title: "Mieszkanie · Tuwima", price: 369000, area: 70.8, rooms: 3, ...common }),
+    listingRow({ id: "tuwima-nieruchomosci-online", source: "nieruchomosci_online", original_url: "https://lodz.nieruchomosci-online.pl/oferta/tuwima", title: "Mieszkanie · Tuwima", price: 365000, area: 71, rooms: 3, ...common }),
+  ]);
+  db.seed("listing_filter_matches", [
+    membershipRow("tuwima-gratka", { is_current_match: true, match_reasons: [] }),
+    membershipRow("tuwima-morizon", { is_current_match: true, match_reasons: [] }),
+    membershipRow("tuwima-nieruchomosci-online", { is_current_match: true, match_reasons: [] }),
+  ]);
+  currentDb = db;
+  const payload = await getFilterResults(FILTER_ID);
+  assert.ok(payload);
+  assert.equal(payload.results.length, 1);
+  assert.equal(payload.reviewResults.length, 0);
+  const [group] = payload.results;
+  assert.equal(group.id, "tuwima-gratka", "representative selection is stable by completeness, then source/id");
+  assert.equal(group.price, 365000);
+  assert.equal(group.area, 71, "price/area remain from the same canonical row");
+  assert.deepEqual(group.linkedListings?.map((item) => item.source).sort(), ["gratka", "morizon", "nieruchomosci_online"]);
+  assert.deepEqual(group.linkedListings?.map((item) => item.originalUrl).sort(), ["https://gratka.pl/nieruchomosci/tuwima", "https://lodz.nieruchomosci-online.pl/oferta/tuwima", "https://morizon.pl/oferta/tuwima"]);
+});
+
+test("same parameters with no explicit cross-source identity remain separate Finder cards", async () => {
+  const db = freshDb();
+  db.seed("listings", [
+    listingRow({ id: "separate-gratka", source: "gratka", original_url: "https://gratka.pl/nieruchomosci/a", title: "Mieszkanie", price: 299000, area: 65, rooms: 3, building_type: "blok", ownership: "pełna własność", lifecycle_status: "ACTIVE", missing_fields: [], cross_source_identity: null }),
+    listingRow({ id: "separate-allegro", source: "allegro_lokalnie", original_url: "https://allegrolokalnie.pl/oferta/b", title: "Mieszkanie", price: 299000, area: 65, rooms: 3, building_type: "blok", ownership: "pełna własność", lifecycle_status: "ACTIVE", missing_fields: [], cross_source_identity: null }),
+  ]);
+  db.seed("listing_filter_matches", [membershipRow("separate-gratka", { is_current_match: true, match_reasons: [] }), membershipRow("separate-allegro", { is_current_match: true, match_reasons: [] })]);
+  currentDb = db;
+  const payload = await getFilterResults(FILTER_ID);
+  assert.equal(payload?.results.length, 2);
+});
+
 test("Facebook content identity collapses route duplicates for one post without hiding a different post", async () => {
   const db = freshDb();
   const matchedFields = { building_type: "blok", ownership: "pełna własność", lifecycle_status: "ACTIVE", missing_fields: [] };

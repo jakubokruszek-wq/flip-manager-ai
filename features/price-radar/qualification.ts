@@ -1,4 +1,4 @@
-import { extractBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
+import { assessBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
 import { DEFAULT_RADAR_DISTRICTS, type RadarBuildingType, type RadarRenovationStatus } from "./types";
 import type { MarketType } from "@/features/flip-finder";
 
@@ -54,7 +54,6 @@ const SHARE_PATTERN = /\budzia\p{L}*\s+we?\s+wsp\p{L}*w\p{L}*asno\p{L}*/iu;
 const COMMERCIAL_PATTERN = /lokal\s+u\p{L}*ytkow\p{L}*|lokal\s+us\p{L}*ug\p{L}*|biuro\s+na\s+sprzeda\p{L}*|magazyn|hala\s+produkcyj\p{L}*/iu;
 const PLOT_PATTERN = /dzia\p{L}*k\p{L}*\s+(?:budowlan\p{L}*|rolna\p{L}*|inwestycyjn\p{L}*)/iu;
 const HOUSE_LIKE_PATTERN = /\bdom\p{L}*\b|szeregow\p{L}*|bli\p{L}*niacz\p{L}*|segment\p{L}*\b/iu;
-const TENEMENT_PATTERN = /kamienic\p{L}*/iu;
 const BULK_INVESTMENT_PATTERN = /ceny\s+mieszka\p{L}*\s+od|harmonogram\s+inwestycj\p{L}*|wybierz\s+(?:swoje\s+)?mieszkanie|r\p{L}*\p{L}*ne\s+metra\p{L}*e\s+do\s+wyboru|kilka\s+mieszka\p{L}*\s+w\s+ofercie|wiele\s+lokali\s+w\s+ofercie/iu;
 const APARTMENT_PATTERN = /\bmieszkan\p{L}*\b/iu;
 const APARTMENT_NEGATION_PATTERN = /(?:to\s+nie|nie\s+jest|brak)\s+(?:konkretnego\s+)?mieszkan\p{L}*/iu;
@@ -77,10 +76,8 @@ function normalizeDistrict(value: string | null): string | null {
 }
 
 function resolveBuildingTypeForRadar(candidate: QualificationCandidate, text: string): RadarBuildingType | null {
-  const structured = candidate.buildingType?.trim().toLocaleLowerCase("pl-PL") ?? null;
-  const textType = extractBuildingType(candidate.title, candidate.description);
-  const resolved = structured === "blok" || structured === "apartamentowiec" ? structured : structured ? null : textType;
-  if ((structured === "blok" || structured === "apartamentowiec") && textType && textType !== structured) return null;
+  const assessment = assessBuildingType(candidate.buildingType, candidate.title, candidate.description);
+  const resolved = assessment.conflict ? null : assessment.value;
   if (resolved === "blok" || resolved === "apartamentowiec") return resolved;
   // A structured value naming a disqualifying type (dom/kamienica/...) is
   // itself confirmation this is NOT a qualifying apartment -- handled by the
@@ -126,7 +123,8 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate): Qualif
   if (SHARE_PATTERN.test(text)) return reject("share");
   if (COMMERCIAL_PATTERN.test(text)) return reject("commercial");
   if (PLOT_PATTERN.test(text)) return reject("plot");
-  if (TENEMENT_PATTERN.test(text)) return reject("tenement_excluded");
+  const buildingEvidence = assessBuildingType(candidate.buildingType, candidate.title, candidate.description);
+  if (buildingEvidence.tenementEvidence) return reject("tenement_excluded");
   if (HOUSE_LIKE_PATTERN.test(text)) return reject("house_excluded");
   if (BULK_INVESTMENT_PATTERN.test(text)) return reject("bulk_investment_ad");
   const structuredPropertyType = candidate.propertyType?.trim().toLocaleLowerCase("pl-PL") ?? null;

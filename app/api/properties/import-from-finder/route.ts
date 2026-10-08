@@ -4,6 +4,7 @@ import { isListingSource } from "@/features/flip-finder/search-filter-contract";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { PropertyInvestmentAnalysis } from "@/features/properties/types";
+import { normalizeConfirmedPropertyIdentity } from "@/features/flip-finder/property-identity";
 
 type FinderImport = {
   listingId: string | null;
@@ -24,6 +25,7 @@ type FinderImport = {
   normalizedUrl: string;
   source: ListingSource;
   externalListingId: string | null;
+  crossSourceIdentity?: string | null;
   investmentAnalysis: PropertyInvestmentAnalysis | null;
 };
 
@@ -46,6 +48,7 @@ export async function POST(request: Request) {
     if (existing) {
       const update = {
         ...analysisColumns(resolved.investmentAnalysis),
+        ...(resolved.crossSourceIdentity ? { cross_source_identity: resolved.crossSourceIdentity } : {}),
         ...(resolved.source === "facebook" && resolved.images.length > 0 ? { images: resolved.images, listing_id: resolved.listingId } : {}),
       };
       const { data, error } = await supabase
@@ -77,6 +80,7 @@ export async function POST(request: Request) {
         original_url: resolved.originalUrl,
         normalized_url: resolved.normalizedUrl,
         external_listing_id: resolved.externalListingId,
+        ...(resolved.crossSourceIdentity ? { cross_source_identity: resolved.crossSourceIdentity } : {}),
         listing_id: resolved.listingId,
         source: resolved.source,
         images: resolved.images,
@@ -85,6 +89,15 @@ export async function POST(request: Request) {
       })
       .select("id")
       .single();
+    if (error?.code === "23505" && resolved.crossSourceIdentity) {
+      const winner = await findExistingProperty(supabase, resolved);
+      if (winner) {
+        const { data: updated, error: updateError } = await supabase.from("properties")
+          .update({ ...analysisColumns(resolved.investmentAnalysis), cross_source_identity: resolved.crossSourceIdentity })
+          .eq("id", winner.id).select("id").single();
+        if (!updateError && updated?.id) return Response.json({ status: "updated", propertyId: updated.id } satisfies ImportResponse);
+      }
+    }
     if (error || !data?.id) throw supabaseError("Nie udało się zapisać nieruchomości w CRM.", error);
     developmentLog("PROPERTY FINDER IMPORT WRITE:", { operation: "insert", propertyId: data.id });
     return Response.json({ status: "created", propertyId: data.id } satisfies ImportResponse, { status: 201 });
@@ -97,13 +110,21 @@ export async function POST(request: Request) {
 
 async function resolveListingReference(supabase: ReturnType<typeof createAdminClient>, listing: FinderImport): Promise<FinderImport> {
   if (!listing.listingId) return listing;
-  const { data, error } = await supabase.from("listings").select("external_listing_id,normalized_url,images").eq("id", listing.listingId).maybeSingle();
+  let { data, error } = await supabase.from("listings").select("external_listing_id,normalized_url,images,cross_source_identity").eq("id", listing.listingId).maybeSingle();
+  if (error?.code === "42703") {
+    ({ data, error } = await supabase.from("listings").select("external_listing_id,normalized_url,images").eq("id", listing.listingId).maybeSingle());
+  }
   if (error) throw supabaseError("Nie udało się odczytać identyfikatora oferty.", error);
   const storedImages = stringArray(data?.images);
-  return { ...listing, externalListingId: nullableString(data?.external_listing_id) ?? listing.externalListingId, normalizedUrl: nullableString(data?.normalized_url) ?? listing.normalizedUrl, images: listing.source === "facebook" && storedImages.length > 0 ? storedImages : listing.images };
+  return { ...listing, crossSourceIdentity: normalizeConfirmedPropertyIdentity(data?.cross_source_identity), externalListingId: nullableString(data?.external_listing_id) ?? listing.externalListingId, normalizedUrl: nullableString(data?.normalized_url) ?? listing.normalizedUrl, images: listing.source === "facebook" && storedImages.length > 0 ? storedImages : listing.images };
 }
 
 async function findExistingProperty(supabase: ReturnType<typeof createAdminClient>, listing: FinderImport): Promise<{ id: string } | null> {
+  if (listing.crossSourceIdentity) {
+    const identityResult = await supabase.from("properties").select("id").eq("cross_source_identity", listing.crossSourceIdentity).maybeSingle();
+    if (identityResult.data?.id && typeof identityResult.data.id === "string") return { id: identityResult.data.id };
+    if (identityResult.error && identityResult.error.code !== "42703") throw supabaseError("Nie udało się sprawdzić grupy nieruchomości w CRM.", identityResult.error);
+  }
   for (const query of [
     supabase.from("properties").select("id").eq("original_url", listing.originalUrl).maybeSingle(),
     supabase.from("properties").select("id").eq("normalized_url", listing.normalizedUrl).maybeSingle(),

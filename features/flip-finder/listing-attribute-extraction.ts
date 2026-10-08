@@ -47,14 +47,14 @@ const OWNERSHIP_PATTERNS: Pattern[] = [
   { canonical: "udział", regex: /udział\p{L}*\s+(?:we\s+)?współwłasnośc\p{L}*/giu },
 ];
 
-function extractCanonical(text: string, patterns: Pattern[]): string | null {
+function extractCanonical(text: string, patterns: Pattern[], ignoreMatch?: (match: RegExpExecArray, text: string) => boolean): string | null {
   const found = new Set<string>();
   for (const { canonical, regex } of patterns) {
     regex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(text)) !== null) {
       const before = text.slice(Math.max(0, match.index - 40), match.index);
-      if (!NEGATION_WINDOW.test(before)) {
+      if (!NEGATION_WINDOW.test(before) && !ignoreMatch?.(match, text)) {
         found.add(canonical);
       }
       // A zero-length match would loop forever; every pattern here matches
@@ -71,7 +71,7 @@ function scanText(title: string | null, description: string | null): string {
 }
 
 export function extractBuildingType(title: string | null, description: string | null): string | null {
-  return extractCanonical(scanText(title, description), BUILDING_TYPE_PATTERNS);
+  return extractCanonical(scanText(title, description), BUILDING_TYPE_PATTERNS, isNonListingTenementMention);
 }
 
 export function extractOwnership(title: string | null, description: string | null): string | null {
@@ -89,8 +89,53 @@ export function resolveBuildingType(
   title: string | null,
   description: string | null,
 ): string | null {
+  return assessBuildingType(structuredValue, title, description).value;
+}
+
+export type BuildingTypeAssessment = { value: string | null; conflict: boolean; tenementEvidence: boolean };
+
+/**
+ * Compare the persisted/source structure with affirmative text from this
+ * listing itself. A precise, unnegated tenement statement is never hidden by
+ * a contradictory legacy `building_type=blok` value. Conflicting evidence is
+ * reported as unknown (not guessed); Finder can fail closed when the active
+ * filter explicitly excludes tenements. Mentions of a nearby/surrounding
+ * tenement and negated statements do not count as evidence about this unit.
+ */
+export function assessBuildingType(
+  structuredValue: unknown,
+  title: string | null,
+  description: string | null,
+): BuildingTypeAssessment {
   const explicit = structuredText(structuredValue);
-  return explicit.present ? normalizeBuildingType(explicit.value) : extractBuildingType(title, description);
+  const structuredType = explicit.present ? normalizeBuildingType(explicit.value) : null;
+  const textType = extractBuildingType(title, description);
+  const textTenement = hasAffirmativeTenementMention(title, description);
+  const tenementEvidence = structuredType === "kamienica" || textTenement;
+  const conflict = Boolean(structuredType && textType && structuredType !== textType)
+    || Boolean(textTenement && !textType)
+    || Boolean(explicit.present && textTenement && !structuredType)
+    || Boolean(textTenement && (structuredType && structuredType !== "kamienica" || textType && textType !== "kamienica"));
+  if (conflict) return { value: null, conflict: true, tenementEvidence };
+  return { value: explicit.present ? structuredType : textType, conflict: false, tenementEvidence };
+}
+
+/** A tenement is confirmed only by its own structured field or an affirmative, listing-specific statement. */
+export function hasAffirmativeTenementMention(title: string | null, description: string | null): boolean {
+  return extractCanonical(scanText(title, description), [{ canonical: "kamienica", regex: /kamienic\p{L}*/giu }], isNonListingTenementMention) === "kamienica";
+}
+
+function isNonListingTenementMention(match: RegExpExecArray, text: string): boolean {
+  if (!/^kamienic\p{L}*$/iu.test(match[0])) return false;
+  const clauseStart = Math.max(text.lastIndexOf(".", match.index), text.lastIndexOf("!", match.index), text.lastIndexOf("?", match.index), text.lastIndexOf(";", match.index), text.lastIndexOf(",", match.index), text.lastIndexOf("\n", match.index)) + 1;
+  const clauseEndCandidates = [".", "!", "?", ";", ",", "\n"].map((separator) => text.indexOf(separator, match.index + match[0].length)).filter((index) => index >= 0);
+  const clauseEnd = clauseEndCandidates.length ? Math.min(...clauseEndCandidates) : text.length;
+  const before = text.slice(clauseStart, match.index).trim();
+  const after = text.slice(match.index + match[0].length, clauseEnd).trim();
+  const negated = /(?:\bnie(?:\s+\p{L}+){0,4}|\bbez|\bbrak(?:u)?)\s*$/iu.test(before);
+  const neighboring = /(?:\bobok|\bnaprzeciw(?:ko)?|\bw\s+sąsiedztwie|\bw\s+okolicy|\bpoblisk\p{L}*|\bsąsiedn\p{L}*|\bwidok(?:iem)?\s+na)\b/iu.test(before)
+    || /^(?:\s*\b(?:obok|naprzeciw(?:ko)?|w\s+sąsiedztwie|w\s+okolicy|poblisk\p{L}*|sąsiedn\p{L}*)\b)/iu.test(after);
+  return negated || neighboring;
 }
 
 export function resolveOwnership(

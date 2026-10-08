@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { QualifiedListing } from "@/features/price-radar/qualification";
+import { normalizeConfirmedPropertyIdentity } from "@/features/flip-finder/property-identity";
 
 export type RadarPersistCandidate = QualifiedListing & {
   source: string;
@@ -53,7 +54,7 @@ export async function persistRadarListing(
     content_hash: candidate.contentHash,
     published_at: candidate.publishedAt,
     source_updated_at: candidate.sourceUpdatedAt,
-    cross_source_identity: candidate.crossSourceIdentity,
+    cross_source_identity: normalizeConfirmedPropertyIdentity(candidate.crossSourceIdentity),
     collected_at: input.seenAt,
     last_seen_at: input.seenAt,
     raw_payload: candidate.rawPayload,

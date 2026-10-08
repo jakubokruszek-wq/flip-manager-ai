@@ -564,4 +564,62 @@ test("real Flip Finder gallery button keeps business click independent from trac
     assert.equal(await testPage.page.locator('[data-listing-id="matched-gratka"], [data-listing-id="review-olx"]').count(), 0, "selecting an active zero-result source filters both sections to zero");
     await testPage.page.close();
   });
+
+  await t.test("a confirmed multi-portal property stays one card with source links in MATCHED and REVIEW and survives source selection/refresh", async () => {
+    const sourceFilter = { ...filter, sources: ["gratka", "morizon", "nieruchomosci_online", "olx", "otodom"] };
+    const matchedGroup = {
+      ...result, id: "confirmed-tuwima", title: "Mieszkanie · Tuwima", source: "gratka", price: 365000, area: 71,
+      decisionBucket: "MATCHED", lifecycleStatus: "ACTIVE", reviewReason: null, missingFields: [],
+      linkedListings: [
+        { id: "confirmed-tuwima", source: "gratka", title: "Tuwima · Gratka", price: 365000, area: 71, rooms: 3, originalUrl: "https://gratka.pl/oferta/tuwima", publishedAt: now, lastSeenAt: now },
+        { id: "confirmed-tuwima-morizon", source: "morizon", title: "Tuwima · Morizon", price: 369000, area: 70.8, rooms: 3, originalUrl: "https://morizon.pl/oferta/tuwima", publishedAt: now, lastSeenAt: now },
+        { id: "confirmed-tuwima-nieruchomosci", source: "nieruchomosci_online", title: "Tuwima · N-O", price: 365000, area: 71, rooms: 3, originalUrl: "https://lodz.nieruchomosci-online.pl/oferta/tuwima", publishedAt: now, lastSeenAt: now },
+      ],
+    };
+    const reviewGroup = {
+      ...result, id: "confirmed-olx-review", title: "Mieszkanie do sprawdzenia", source: "olx", price: 299000, area: 65,
+      decisionBucket: "REVIEW", lifecycleStatus: "REVIEW", missingFields: ["ownership"],
+      linkedListings: [
+        { id: "confirmed-olx-review", source: "olx", title: "Oferta OLX", price: 299000, area: 65, rooms: 3, originalUrl: "https://www.olx.pl/oferta/confirmed-unit", publishedAt: now, lastSeenAt: now },
+        { id: "confirmed-otodom-review", source: "otodom", title: "Oferta Otodom", price: 299000, area: 66, rooms: 3, originalUrl: "https://www.otodom.pl/pl/oferta/confirmed-unit", publishedAt: now, lastSeenAt: now },
+      ],
+    };
+    const payload = { ...resultsPayload, filter: sourceFilter, results: [matchedGroup], reviewResults: [reviewGroup], counts: { active: 1, review: 1, archived: 0 }, total: 1 };
+    const testPage = await preparePage(browser, baseUrl, { resultsPayloadOverride: payload, waitForGalleryButton: false });
+    const counts = (name) => testPage.page.getByTestId(`finder-source-count-${name}`);
+    await counts("all").waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(await counts("all").innerText(), "Razem · Dopasowane: 1 · Do oceny: 1");
+    assert.equal(await counts("gratka").innerText(), "Gratka · Dopasowane: 1 · Do oceny: 0");
+    assert.equal(await counts("morizon").innerText(), "Morizon · Dopasowane: 1 · Do oceny: 0");
+    assert.equal(await counts("nieruchomosci_online").innerText(), "Nieruchomosci-online.pl · Dopasowane: 1 · Do oceny: 0");
+    assert.equal(await counts("olx").innerText(), "OLX · Dopasowane: 0 · Do oceny: 1");
+    assert.equal(await counts("otodom").innerText(), "Otodom · Dopasowane: 0 · Do oceny: 1");
+    assert.equal(await testPage.page.locator('[data-testid="finder-card"]').count(), 2, "one API group renders once in its resolved MATCHED or REVIEW section");
+
+    await counts("morizon").click();
+    assert.equal(await testPage.page.locator('[data-listing-id="confirmed-tuwima"]').count(), 1, "selecting an alternate source keeps its representative card");
+    await testPage.page.locator('[data-testid="finder-card"]').filter({ hasText: "Mieszkanie · Tuwima" }).getByRole("button", { name: "Analizuj" }).click();
+    const dialog = testPage.page.getByRole("dialog");
+    await dialog.waitFor({ state: "visible", timeout: 5_000 });
+    assert.equal(await dialog.getByRole("link", { name: /Otwórz Morizon/ }).getAttribute("href"), "https://morizon.pl/oferta/tuwima");
+    assert.equal(await dialog.getByRole("link", { name: /Otwórz Nieruchomosci-online.pl/ }).getAttribute("href"), "https://lodz.nieruchomosci-online.pl/oferta/tuwima");
+    assert.match((await dialog.innerText()).normalize("NFKC"), /Cena: 369\s*000\s*z\u0142 \u00b7 metra\u017c: 70,8 m2/);
+    await testPage.page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden", timeout: 5_000 });
+
+    await counts("otodom").click();
+    assert.equal(await testPage.page.locator('[data-listing-id="confirmed-olx-review"]').count(), 1, "selecting the alternate Otodom source keeps the canonical REVIEW card");
+    assert.equal(await testPage.page.locator('[data-testid="finder-card"]').count(), 1);
+    await testPage.page.reload({ waitUntil: "domcontentloaded" });
+    await counts("all").waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(await testPage.page.locator('[data-testid="finder-card"]').count(), 2, "a fresh read renders the same two groups, not their individual source rows");
+
+    for (const width of [320, 375, 768, 1280, 1440]) {
+      await testPage.page.setViewportSize({ width, height: 900 });
+      const layout = await testPage.page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, sourceBar: document.querySelector('[data-testid="finder-source-counts"]')?.scrollWidth, sourceBarClient: document.querySelector('[data-testid="finder-source-counts"]')?.clientWidth }));
+      assert.ok(layout.document <= width + 1, `group card source links must not create horizontal overflow at ${width}px: ${JSON.stringify(layout)}`);
+      assert.ok((layout.sourceBar ?? 0) <= (layout.sourceBarClient ?? 0) + 1, `source counter strip wraps at ${width}px: ${JSON.stringify(layout)}`);
+    }
+    await testPage.page.close();
+  });
 });

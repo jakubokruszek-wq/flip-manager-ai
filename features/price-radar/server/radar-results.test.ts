@@ -109,13 +109,27 @@ test("an unmapped/invalid row (missing a required confirmed field) is silently e
 
 test("only an explicit adapter cross-source unit reference can merge portal copies, and the surviving card retains links to both", async () => {
   currentDb = fakeDb([
-    row({ id: "listing-a", source: "domiporta", external_listing_id: "a", cross_source_identity: "unit:registry-123" }),
-    row({ id: "listing-b", source: "olx", external_listing_id: "b", original_url: "https://olx.pl/b", normalized_url: "https://olx.pl/b", cross_source_identity: "unit:registry-123" }),
+    row({ id: "listing-a", source: "domiporta", external_listing_id: "a", cross_source_identity: "portal_shared_unit_id:registry-123" }),
+    row({ id: "listing-b", source: "olx", external_listing_id: "b", original_url: "https://olx.pl/b", normalized_url: "https://olx.pl/b", price: 455_000, area: 50.5, price_per_sqm: 9_010, cross_source_identity: "portal_shared_unit_id:registry-123" }),
   ]);
   const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
   assert.equal(payload.listings.length, 1);
   assert.equal(payload.listings[0].crossSourceAlternates.length, 1);
   assert.equal(payload.listings[0].crossSourceAlternates[0].originalUrl, "https://olx.pl/b");
+  assert.equal(payload.listings[0].crossSourceAlternates[0].price, 455000);
+  assert.equal(payload.stats[0].sampleSize, 1, "the identity group contributes one row to the radar sample");
+});
+
+test("a selected portal retains a confirmed group when its representative is from another portal", async () => {
+  currentDb = fakeDb([
+    row({ id: "listing-a", source: "domiporta", external_listing_id: "a", cross_source_identity: "canonical_unit_id:unit-portal-filter" }),
+    row({ id: "listing-b", source: "olx", external_listing_id: "b", original_url: "https://olx.pl/b", normalized_url: "https://olx.pl/b", cross_source_identity: "canonical_unit_id:unit-portal-filter" }),
+  ]);
+  const payload = await getRadarResults(OWNER, { ...baseFilters, sources: ["olx"] }, currentDb as never);
+  assert.equal(payload.listings.length, 1);
+  assert.equal(payload.listings[0].source, "domiporta", "the group keeps one deterministic representative");
+  assert.equal(payload.listings[0].crossSourceAlternates[0]?.source, "olx");
+  assert.equal(payload.stats[0].sampleSize, 1);
 });
 
 test("read path always scopes its database query to the authenticated owner", async () => {

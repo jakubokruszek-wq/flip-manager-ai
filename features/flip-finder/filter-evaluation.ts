@@ -1,5 +1,6 @@
 import type { SearchFilter } from "@/features/flip-finder";
 import type { PropertyFields } from "@/features/properties/types/property";
+import { assessBuildingType } from "./listing-attribute-extraction.ts";
 import { LODZ_CONTEXT, OUTSIDE_LODZ_TOWN } from "@/features/location-intelligence/lodz-satellite-towns";
 import { OTHER_POLISH_CITY } from "@/features/location-intelligence/other-polish-cities";
 import { decisionBucket, type DecisionBucket } from "./decision-model.ts";
@@ -142,8 +143,17 @@ export function evaluateListingAgainstFilter(
     markUnknown("topFloor");
   }
 
+  const buildingType = assessBuildingType(candidate.buildingType, candidate.title, candidate.description);
+  const excludesTenement = filter.buildingTypes.length > 0
+    && !filter.buildingTypes.some((value) => value.trim().toLocaleLowerCase("pl-PL") === "kamienica");
+  if (buildingType.conflict && buildingType.tenementEvidence && excludesTenement) {
+    // A directly described tenement contradicting a stale structured label
+    // must never slip into either MATCHED or REVIEW for a non-tenement filter.
+    // The category remains unknown rather than rewriting it to either type.
+    reject(true, "building_type_conflict");
+  }
   evaluateKnownChoice(
-    candidate.buildingType,
+    buildingType.value,
     filter.buildingTypes,
     "buildingType",
     "building_type",

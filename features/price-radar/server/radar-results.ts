@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { dedupeByListingIdentity } from "@/features/listing-identity";
 import { computeRadarStats } from "@/features/price-radar/stats";
 import { DEFAULT_RADAR_DISTRICTS, type RadarFilters, type RadarListing, type RadarStatGroup } from "@/features/price-radar/types";
+import { normalizeConfirmedPropertyIdentity } from "@/features/flip-finder/property-identity";
 
 type Row = Record<string, unknown>;
 
@@ -25,7 +26,7 @@ export type RadarResultsPayload = {
  */
 export async function getRadarResults(ownerId: string, filters: RadarFilters, supabase = createAdminClient()): Promise<RadarResultsPayload> {
   const districts = filters.districts.length > 0 ? filters.districts : [...DEFAULT_RADAR_DISTRICTS];
-  let query = supabase
+  const query = supabase
     .from("price_radar_listings")
     .select("id,owner_id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash,first_seen_at,last_seen_at,published_at,source_updated_at,collected_at,cross_source_identity,status,excluded_at,excluded_reason")
     .eq("owner_id", ownerId)
@@ -33,7 +34,6 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
     .in("district", districts)
     .order("last_seen_at", { ascending: false })
     .order("id", { ascending: true });
-  if (filters.sources.length > 0) query = query.in("source", filters.sources);
 
   const rows: Row[] = [];
   const pageSize = 1000;
@@ -56,7 +56,8 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
     originalUrl: listing.originalUrl,
   }));
   const narrowedCandidates = deduped.filter((listing) => matchesNarrowFilters(listing, filters));
-  const narrowed = dedupeConfirmedCrossPortalIdentity(narrowedCandidates);
+  const grouped = dedupeConfirmedCrossPortalIdentity(narrowedCandidates);
+  const narrowed = filters.sources.length === 0 ? grouped : grouped.filter((listing) => filters.sources.includes(listing.source) || listing.crossSourceAlternates.some((alternate) => filters.sources.includes(alternate.source)));
   const visible = narrowed.filter((listing) => listing.excludedAt === null);
   const excludedListings = narrowed.filter((listing) => listing.excludedAt !== null);
 
@@ -91,13 +92,12 @@ function dedupeConfirmedCrossPortalIdentity(listings: RadarListing[]): RadarList
       kept.push(group[0]);
       continue;
     }
-    const sourcesInGroup = new Set(group.map((listing) => listing.source));
-    if (sourcesInGroup.size === 1) {
-      kept.push(...group);
-      continue;
-    }
-    const representative = [...group].sort((left, right) => completeness(right) - completeness(left) || right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
-    representative.crossSourceAlternates = group.filter((listing) => listing.id !== representative.id).map((listing) => ({ source: listing.source, originalUrl: listing.originalUrl }));
+    const representative = [...group].sort((left, right) => completeness(right) - completeness(left) || left.source.localeCompare(right.source) || left.id.localeCompare(right.id))[0];
+    representative.crossSourceAlternates = group.filter((listing) => listing.id !== representative.id).map((listing) => ({
+      id: listing.id, source: listing.source, originalUrl: listing.originalUrl, title: listing.title,
+      price: listing.price, area: listing.area, rooms: listing.rooms, publishedAt: listing.publishedAt,
+      sourceUpdatedAt: listing.sourceUpdatedAt, collectedAt: listing.collectedAt,
+    }));
     const excluded = group.filter((listing) => listing.excludedAt !== null).sort((left, right) => (right.excludedAt ?? "").localeCompare(left.excludedAt ?? ""))[0];
     if (excluded) {
       representative.excludedAt = excluded.excludedAt;
@@ -144,7 +144,7 @@ function toRadarListing(row: Row): RadarListing | null {
   const publishedAt = nullableString(row.published_at);
   const sourceUpdatedAt = nullableString(row.source_updated_at);
   const collectedAt = nullableString(row.collected_at);
-  const crossSourceIdentity = nullableString(row.cross_source_identity);
+  const crossSourceIdentity = normalizeConfirmedPropertyIdentity(row.cross_source_identity);
   const status = row.status === "active" || row.status === "removed" ? row.status : null;
 
   if (!id || !source || !externalListingId || !originalUrl || !normalizedUrl || !city || !district || !buildingType || !marketType || !renovationStatus || price === null || area === null || pricePerSqm === null || !contentHash || !firstSeenAt || !lastSeenAt || !collectedAt || !status) {

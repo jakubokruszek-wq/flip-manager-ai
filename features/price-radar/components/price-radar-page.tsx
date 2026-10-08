@@ -361,7 +361,7 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
         <DateRow label="Zmiana ogłoszenia" value={listing.sourceUpdatedAt} />
         <DateRow label="Pobrano" value={listing.collectedAt} />
       </dl>
-      {listing.crossSourceAlternates.length > 0 ? <div className="mt-2 flex flex-wrap gap-2 text-xs">{listing.crossSourceAlternates.map((item) => <a className="break-words text-primary underline" href={item.originalUrl} key={`${item.source}:${item.originalUrl}`} rel="noreferrer" target="_blank">Potwierdzony duplikat: {sourceLabel(item.source)}</a>)}</div> : null}
+      {listing.crossSourceAlternates.length > 0 ? <div className="mt-2 space-y-2 text-xs"><p className="font-semibold">Znaleziono także na: {listing.crossSourceAlternates.map((item) => sourceLabel(item.source)).filter((source, index, all) => all.indexOf(source) === index).join(", ")}</p>{listing.crossSourceAlternates.map((item) => <a className="grid break-words rounded-lg border border-border/60 p-2 text-primary underline sm:grid-cols-[minmax(0,1fr)_auto]" href={item.originalUrl} key={`${item.source}:${item.id}`} rel="noreferrer" target="_blank"><span>{sourceLabel(item.source)} · {item.title ?? "Ogłoszenie"} · {formatCurrency(item.price)} · {item.area} m²{item.rooms ? ` · ${item.rooms} pok.` : ""}</span><span>Opublikowano: {item.publishedAt ? formatDate(item.publishedAt) : "nie podano"} · pobrano: {formatDate(item.collectedAt)}</span></a>)}</div> : null}
       <div className="mt-4 flex flex-wrap gap-2">
         <Button nativeButton={false} render={<a href={listing.originalUrl} target="_blank" rel="noopener noreferrer" />} size="sm" variant="outline">
           Otwórz ogłoszenie

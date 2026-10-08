@@ -10,6 +10,19 @@ export type RadarDistrict = (typeof DEFAULT_RADAR_DISTRICTS)[number];
 export type RadarBuildingType = "blok" | "apartamentowiec";
 export type RadarRenovationStatus = "fresh_renovation" | "turnkey_finish";
 
+export type RadarSourceAlternative = {
+  id: string;
+  source: RadarSource;
+  originalUrl: string;
+  title: string | null;
+  price: number;
+  area: number;
+  rooms: number | null;
+  publishedAt: string | null;
+  sourceUpdatedAt: string | null;
+  collectedAt: string;
+};
+
 export type RadarListing = {
   id: string;
   source: RadarSource;
@@ -36,7 +49,7 @@ export type RadarListing = {
   collectedAt: string;
   /** Only set when a source supplies a stable, explicit cross-portal unit reference. */
   crossSourceIdentity: string | null;
-  crossSourceAlternates: Array<{ source: RadarSource; originalUrl: string }>;
+  crossSourceAlternates: RadarSourceAlternative[];
   status: "active" | "removed";
   excludedAt: string | null;
   excludedReason: string | null;

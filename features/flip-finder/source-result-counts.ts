@@ -6,7 +6,7 @@ export type FinderResultCounts = {
   bySource: Record<ListingSource, FinderSourceCount>;
 };
 
-type ResultSource = { source: ListingSource };
+type ResultSource = { id?: string; source: ListingSource; linkedListings?: Array<{ source: ListingSource }> };
 
 /**
  * Counts the canonical, already-filtered cards returned by Finder's read path.
@@ -23,14 +23,20 @@ export function countFinderResultsBySource(
   ) as Record<ListingSource, FinderSourceCount>;
   const total = { matched: 0, review: 0 };
 
-  for (const result of matchedResults) {
-    bySource[result.source].matched += 1;
-    total.matched += 1;
-  }
-  for (const result of reviewResults) {
-    bySource[result.source].review += 1;
-    total.review += 1;
-  }
+  countSection(matchedResults, "matched", bySource, total);
+  countSection(reviewResults, "review", bySource, total);
 
   return { total, bySource };
+}
+
+function countSection(results: readonly ResultSource[], bucket: "matched" | "review", bySource: Record<ListingSource, FinderSourceCount>, total: FinderSourceCount): void {
+  const seenCards = new Set<string>();
+  results.forEach((result, index) => {
+    const cardId = result.id ?? `row-${index}`;
+    if (seenCards.has(cardId)) return;
+    seenCards.add(cardId);
+    total[bucket] += 1;
+    const representedSources = new Set([result.source, ...(result.linkedListings ?? []).map((listing) => listing.source)]);
+    for (const source of representedSources) bySource[source][bucket] += 1;
+  });
 }

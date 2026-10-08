@@ -129,7 +129,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
   const allResults = useMemo(() => (data?.results ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.results, underwritingSettings]);
   const filteredResults = useMemo(() => {
     const textFiltered = filterResultsByText(allResults, query);
-    return source ? textFiltered.filter((result) => result.source === source) : textFiltered;
+    return source ? textFiltered.filter((result) => result.source === source || result.linkedListings?.some((listing) => listing.source === source)) : textFiltered;
   }, [allResults, query, source]);
   const renderedResults = useMemo(
     () => sortResults(filteredResults, sort),
@@ -137,7 +137,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
   );
   const reviewResults = useMemo(() => (data?.reviewResults ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.reviewResults, underwritingSettings]);
   const filteredReviewResults = useMemo(
-    () => source ? reviewResults.filter((result) => result.source === source) : reviewResults,
+    () => source ? reviewResults.filter((result) => result.source === source || result.linkedListings?.some((listing) => listing.source === source)) : reviewResults,
     [reviewResults, source],
   );
   const sortedReviewResults = useMemo(() => sortResults(filteredReviewResults, sort), [filteredReviewResults, sort]);
@@ -893,6 +893,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4"><p className="text-xs text-muted-foreground">Pokoje</p><p className="mt-1 font-semibold tracking-tight">{measure(result.rooms, "pok.")}</p></div>
           </div>
           <div className="rounded-xl border border-border/70 bg-muted/20 p-4 sm:p-5"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Opis ogłoszenia</p><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/80">{cleanDisplayText(formatListingDescription(result.description)) || "Brak opisu ogłoszenia."}</p></div>
+          {result.linkedListings && result.linkedListings.length > 1 ? <section aria-label="Potwierdzone ogłoszenia tej samej nieruchomości" className="rounded-xl border border-primary/25 bg-primary/[0.03] p-4 sm:p-5"><h3 className="text-sm font-semibold">Znaleziono także na: {[...new Set(result.linkedListings.map((item) => sourceLabel(item.source)).filter((label) => label !== sourceLabel(result.source)))].join(", ") || sourceLabel(result.source)}</h3><ul className="mt-3 space-y-2">{result.linkedListings.map((item) => <li className="grid min-w-0 gap-1 rounded-lg border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" key={item.id}><div className="min-w-0"><p className="break-words text-sm font-medium">{sourceLabel(item.source)}{item.title ? ` · ${cleanDisplayText(item.title)}` : ""}</p><p className="text-xs text-muted-foreground">Cena: {currency(item.price)} · metraż: {measure(item.area, "m²")}{item.rooms ? ` · ${measure(item.rooms, "pok.")}` : ""}</p><p className="text-xs text-muted-foreground">Publikacja: {item.publishedAt ? dateTime(item.publishedAt) : "nie podano"} · pobrano: {item.lastSeenAt ? dateTime(item.lastSeenAt) : "nie podano"}</p></div>{item.originalUrl ? <a className="min-h-11 break-all text-sm font-semibold text-primary underline" href={item.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz {sourceLabel(item.source)}</a> : <span className="text-xs text-muted-foreground">Brak potwierdzonego linku</span>}</li>)}</ul></section> : null}
           <div className="grid gap-3 rounded-xl bg-muted/40 p-4 text-sm sm:grid-cols-2"><Metric label="Piętro" value={result.floor ?? "—"} /><Metric label="Liczba pięter" value={result.totalFloors ?? "—"} /><Metric label="Typ budynku" value={result.buildingType ?? "—"} /><Metric label="Własność" value={result.ownership ?? "—"} /></div>
           <DetailList
             label={result.decisionBucket === "REJECTED" ? "Powody odrzucenia" : "Powody dopasowania"}

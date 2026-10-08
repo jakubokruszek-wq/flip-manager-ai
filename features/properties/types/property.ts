@@ -123,6 +123,8 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
     eventDate: string | null;
     eligibilityCriteria: string[];
   };
+  /** Explicit, confirmed cross-portal identity; never inferred from weak listing similarity. */
+  crossSourceIdentity?: string | null;
 };
 
 /** Listing returned by a source-specific search before it is matched or persisted. */
@@ -189,6 +191,19 @@ export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "ar
   galleryTotal?: number;
   galleryPersistedCount?: number;
   galleryError?: string | null;
+  crossSourceIdentity?: string | null;
+  linkedListings?: Array<{
+    id: string;
+    source: PropertyFinderSource;
+    title: string | null;
+    price: number | null;
+    area: number | null;
+    rooms: number | null;
+    originalUrl: string | null;
+    publishedAt?: string | null;
+    firstSeenAt?: string | null;
+    lastSeenAt?: string | null;
+  }>;
 };
 
 /** Persisted Flip Finder listing. */

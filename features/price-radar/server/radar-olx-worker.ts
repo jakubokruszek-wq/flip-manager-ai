@@ -47,8 +47,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
         rawPayload: raw, contentHash: listing.contentHash,
       });
       if (!outcome.qualified) continue;
-      const identityKind = raw.crossSourceIdentityKind;
-      const crossSourceIdentity = typeof raw.crossSourceIdentity === "string" && ["canonical_unit_id", "portal_shared_unit_id"].includes(String(identityKind)) ? `${identityKind}:${raw.crossSourceIdentity.trim()}` : null;
+      const crossSourceIdentity = listing.crossSourceIdentity ?? null;
       await persistRadarListing(client, {
         ...outcome, source: "olx", externalListingId: listing.externalListingId, originalUrl: listing.originalUrl,
         normalizedUrl: listing.normalizedUrl, title: listing.title, description: listing.description,

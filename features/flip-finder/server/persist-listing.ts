@@ -13,6 +13,7 @@ import { analyzeListingWithAiIfNeeded } from "./listing-ai-analysis";
 import { runAfterResponse } from "@/features/facebook-watcher/run-after-response";
 import { isValidSalePrice } from "@/features/flip-finder/sale-price";
 import { normalizePublicationDate } from "@/features/flip-finder/publication-date";
+import { normalizeConfirmedPropertyIdentity } from "@/features/flip-finder/property-identity";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -100,7 +101,8 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   // human applies that migration, this starts persisting with no further
   // code change.
   if (isMissingYearBuiltColumn(error)) {
-    const { year_built: _yearBuilt, ...listingValuesWithoutYearBuilt } = listingValues;
+    const listingValuesWithoutYearBuilt: Record<string, unknown> = { ...listingValues };
+    delete listingValuesWithoutYearBuilt.year_built;
     ({ data: saved, error } = await supabase.from("listings").upsert(listingValuesWithoutYearBuilt, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single());
   }
   if (isMissingReviewLifecycleColumn(error)) {
@@ -109,6 +111,15 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
     ({ data: saved, error } = await supabase.from("listings").upsert(legacyValues, { onConflict: "source,external_listing_id" }).select("id").abortSignal(signal).single());
   }
   if (error || !saved || typeof saved.id !== "string") throw new Error("Nie udało się zapisać oferty.");
+  // Raw portal payloads are untrusted input; only the parser's explicit,
+  // source-validated field may establish a cross-source identity.
+  const confirmedIdentity = normalizeConfirmedPropertyIdentity(item.crossSourceIdentity);
+  if (confirmedIdentity) {
+    // Keep normal ingestion compatible before the optional identity migration.
+    // A strong ID is ignored only when the column is genuinely absent.
+    const { error: identityError } = await supabase.from("listings").update({ cross_source_identity: confirmedIdentity }).eq("id", saved.id);
+    if (identityError && identityError.code !== "42703") throw new Error("Nie udało się zapisać potwierdzonej tożsamości nieruchomości.");
+  }
   void syncResaleCompFromListing(supabase, item, saved.id, matchedAt).catch((reason) => {
     console.warn("RESALE_COMP_SYNC_DEFERRED", {
       source: item.source,

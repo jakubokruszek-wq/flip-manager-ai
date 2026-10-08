@@ -14,7 +14,7 @@ function fakeDb(rows: Row[]) {
   return {
     from(table: string) {
       const filters: Record<string, unknown> = {};
-      let operation: "select" | "upsert" | "insert" = "select";
+      let operation: "select" | "upsert" | "insert" | "update" = "select";
       let payload: Row | null = null;
       const builder: Record<string, unknown> = {
         select: () => builder,
@@ -25,6 +25,7 @@ function fakeDb(rows: Row[]) {
         abortSignal: () => builder,
         insert: (value: Row) => { operation = "insert"; payload = value; return builder; },
         upsert: (value: Row) => { operation = "upsert"; payload = value; return builder; },
+        update: (value: Row) => { operation = "update"; payload = value; return builder; },
         maybeSingle: async () => {
           const row = rows.find((candidate) => Object.entries(filters).every(([key, value]) => candidate[key] === value)) ?? null;
           return { data: row, error: null };
@@ -40,6 +41,10 @@ function fakeDb(rows: Row[]) {
         },
         then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => {
           if (table === "listing_snapshots" && operation === "insert" && payload) snapshots.push({ ...payload });
+          if (table === "listings" && operation === "update" && payload) {
+            const existing = rows.find((candidate) => Object.entries(filters).every(([key, value]) => candidate[key] === value));
+            if (existing) Object.assign(existing, payload);
+          }
           return Promise.resolve({ data: [], error: null }).then(resolve, reject);
         },
       };
@@ -145,6 +150,25 @@ test("persistListing stores the adapter's confirmed publication date in snapshot
   assert.equal(rows.length, 1);
   assert.equal(db.snapshots.length, 1);
   assert.equal((db.snapshots[0].raw_data as Row).sourcePublishedAt, "2026-10-04T21:55:00.000Z");
+});
+
+test("persistListing stores only an explicitly supplied namespaced cross-portal unit identity", async () => {
+  const rows: Row[] = [];
+  const db = fakeDb(rows);
+  await persistListing(db as never, "filter-1", { ...listing("identified-1", "Mieszkanie"), crossSourceIdentity: "portal_shared_unit_id:unit-42" }, true, [], "scan-identity", "2026-10-07T10:00:00.000Z", AbortSignal.timeout(1000));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cross_source_identity, "portal_shared_unit_id:unit-42");
+});
+
+test("persistListing ignores identity-shaped fields inside untrusted portal raw payloads", async () => {
+  const rows: Row[] = [];
+  const db = fakeDb(rows);
+  await persistListing(db as never, "filter-1", {
+    ...listing("untrusted-identity-1", "Mieszkanie"),
+    rawPayload: { crossSourceIdentityKind: "canonical_unit_id", crossSourceIdentity: "forged-source-value" },
+  }, true, [], "scan-untrusted-identity", "2026-10-07T10:00:00.000Z", AbortSignal.timeout(1000));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cross_source_identity, undefined, "public portal JSON cannot force a canonical property merge");
 });
 
 test("a source scan does not reactivate or write over an archived listing without an explicit restore", async () => {

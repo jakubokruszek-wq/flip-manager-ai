@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractBuildingType, extractOwnership } from "./listing-attribute-extraction.ts";
+import { assessBuildingType, extractBuildingType, extractOwnership, resolveBuildingType } from "./listing-attribute-extraction.ts";
 
 test("extractBuildingType: confirmed, unambiguous declarations are extracted", () => {
   assert.equal(extractBuildingType("Mieszkanie w bloku z windą", null), "blok");
@@ -36,6 +36,26 @@ test("extractBuildingType: a genuine contradiction (two distinct real declaratio
   assert.equal(extractBuildingType("Mieszkanie w bloku", "Pomyłka, to kamienica"), null, "two different confirmed building types in the same listing is a contradiction, not a guess");
 });
 
+test("tenement renovation, elevator and apartment renovation still identify the offered building as a tenement", () => {
+  assert.equal(extractBuildingType("Kamienica po rewitalizacji z windą", null), "kamienica");
+  assert.equal(extractBuildingType("Mieszkanie z windą", "Lokal po remoncie w kamienicy"), "kamienica");
+  assert.equal(extractBuildingType("Mieszkanie w kamienicy", "Po generalnym remoncie, gotowe do zamieszkania"), "kamienica");
+});
+
+test("nearby-building and explicit negation mentions do not label the offered apartment as a tenement", () => {
+  assert.equal(extractBuildingType("Mieszkanie w bloku", "Kamienica obok, widok na zabytkową elewację"), "blok");
+  assert.equal(extractBuildingType("Mieszkanie w bloku", "W sąsiedztwie kamienicy, lokal znajduje się w bloku"), "blok");
+  assert.equal(extractBuildingType("To nie jest kamienica", "Mieszkanie w bloku"), "blok");
+  assert.equal(extractBuildingType("Bez kamienicy", "Mieszkanie w bloku"), "blok");
+});
+
+test("structured/text building conflict is unknown but retains tenement evidence for fail-closed filters", () => {
+  const assessment = assessBuildingType("blok", "Mieszkanie po remoncie", "Lokal znajduje się w kamienicy po rewitalizacji.");
+  assert.deepEqual(assessment, { value: null, conflict: true, tenementEvidence: true });
+  assert.equal(resolveBuildingType("blok", "Mieszkanie w bloku", "Kamienica obok"), "blok");
+  assert.deepEqual(assessBuildingType(null, "Mieszkanie w bloku i kamienicy", ""), { value: null, conflict: true, tenementEvidence: true });
+});
+
 test("extractBuildingType: case-insensitive", () => {
   assert.equal(extractBuildingType("MIESZKANIE W BLOKU", null), "blok");
 });
@@ -58,4 +78,8 @@ test("extractOwnership: a negated declaration is never extracted", () => {
 
 test("extractOwnership: a genuine contradiction stays unknown", () => {
   assert.equal(extractOwnership("Mieszkanie", "Pełna własność lub spółdzielcze, do uzgodnienia"), null, "two different confirmed ownership types is a contradiction, not a guess");
+});
+
+test("unknown structured building types stay unknown while direct tenement evidence is preserved", () => {
+  assert.deepEqual(assessBuildingType("unmapped source type", "Kamienica po remoncie", null), { value: null, conflict: true, tenementEvidence: true });
 });

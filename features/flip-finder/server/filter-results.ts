@@ -30,6 +30,8 @@ import { resolveListingUrl } from "@/features/listing-url";
 import { canonicalFacebookContentFingerprint, canonicalFacebookParameterFingerprint, dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
 import { earliestPublicationDate, isWithinFinderPublicationWindow, normalizePublicationDate } from "@/features/flip-finder/publication-date";
 import { isValidSalePrice } from "@/features/flip-finder/sale-price";
+import { resolveBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
+import { groupConfirmedPropertyResults } from "@/features/flip-finder/property-identity";
 
 type Row = Record<string, unknown>;
 
@@ -100,6 +102,7 @@ type ListingRow = Pick<
 > & {
   externalListingId?: string | null;
   contentHash?: string | null;
+  crossSourceIdentity?: string | null;
   contentFingerprint?: string | null;
   parameterFingerprint?: string | null;
   facebookPostId?: string | null;
@@ -223,7 +226,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     supabase
       .from("listings")
       .select(
-        "id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
+        "id,external_listing_id,content_hash,cross_source_identity,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
       )
       .in("id", idChunk)
       .eq("status", "active")
@@ -453,6 +456,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         originalUrl: listing.originalUrl,
         sourcePostUrl: listing.sourcePostUrl ?? null,
         source: listing.source,
+        crossSourceIdentity: listing.crossSourceIdentity ?? null,
         sourceConflict,
         listingStatus: listing.status,
         isActive: listing.status === "active",
@@ -514,6 +518,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       contentFingerprint: listingsById.get(result.id)?.contentFingerprint ?? listingsById.get(result.id)?.contentHash ?? null,
     }),
   );
+  const groupedResults = groupConfirmedPropertyResults(dedupedResults);
   // Duplicate-listing mission: a listing whose stored lifecycle is
   // STALE/ARCHIVED (set by some other process — aging out, a manual archive
   // action, restoration bookkeeping) can still independently satisfy the
@@ -530,9 +535,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const isArchivedLifecycle = (result: FilterResult) => archivedLifecycle.has(result.lifecycleStatus ?? "");
   const mainVisible = (result: FilterResult) =>
     (result.source === "facebook" || isValidSalePrice(result.price)) && isWithinFinderPublicationWindow(result.publishedAt, now);
-  const sortedResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
-  const reviewResults = sortResults(dedupedResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
-  const archivedResults = includeArchived ? sortResults(dedupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true || ((result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW") && !mainVisible(result))), "newest") : [];
+  const sortedResults = sortResults(groupedResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
+  const reviewResults = sortResults(groupedResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
+  const archivedResults = includeArchived ? sortResults(groupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true || ((result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW") && !mainVisible(result))), "newest") : [];
 
   return {
     filter,
@@ -598,6 +603,7 @@ export function toListingRow(row: Row): ListingRow | null {
 
   return {
     id,
+    crossSourceIdentity: nullableString(row.cross_source_identity),
     externalListingId: nullableString(row.external_listing_id),
     contentHash: nullableString(row.content_hash),
     title: nullableString(row.title),
@@ -605,7 +611,11 @@ export function toListingRow(row: Row): ListingRow | null {
     area: nullableNumber(row.area),
     rooms: nullableNumber(row.rooms),
     floor: nullableString(row.floor),
-    buildingType: nullableString(row.building_type),
+    // Reconcile the stored structure with the current listing's own text on
+    // every read. This prevents legacy `building_type=blok` rows whose
+    // description explicitly identifies a tenement from resurfacing as a
+    // confirmed match after an older import/recalculation.
+    buildingType: resolveBuildingType(row.building_type, nullableString(row.title), nullableString(row.description)),
     ownership: nullableString(row.ownership),
     description: nullableString(row.description),
     pricePerSqm: nullableNumber(row.price_per_sqm),

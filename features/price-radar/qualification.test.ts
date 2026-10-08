@@ -42,6 +42,19 @@ test("rejects missing price or area, never fabricating a price/m2", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ price: 0 })), { qualified: false, reason: "price_missing" });
 });
 
+test("Radar excludes confirmed tenements even after renovation or with an elevator", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({ title: "Mieszkanie po remoncie w kamienicy z windą" })), { qualified: false, reason: "tenement_excluded" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({ buildingType: "kamienica", title: "Mieszkanie po remoncie" })), { qualified: false, reason: "tenement_excluded" });
+});
+
+test("Radar treats own-listing building conflicts as excluded and ignores a neighboring tenement", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({ buildingType: "blok", title: "Mieszkanie po remoncie", description: "Lokal znajduje się w kamienicy po rewitalizacji. Rynek wtórny, świeżo po generalnym remoncie w 2025, gotowe do zamieszkania." })), { qualified: false, reason: "tenement_excluded" });
+  const nearby = qualifyRadarCandidate(candidate({ buildingType: "blok", title: "Mieszkanie w bloku, kamienica obok", description: "Rynek wtórny. Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania." }));
+  assert.equal(nearby.qualified, true);
+  const negated = qualifyRadarCandidate(candidate({ buildingType: "blok", title: "Mieszkanie w bloku", description: "To nie jest kamienica. Rynek wtórny, świeżo po generalnym remoncie w 2025, gotowe do zamieszkania." }));
+  assert.equal(negated.qualified, true);
+});
+
 test("rejects an unconfirmed district -- missing data is never treated as confirmation", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ district: null })), { qualified: false, reason: "district_not_confirmed" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Nieznana" })), { qualified: false, reason: "district_not_confirmed" });
