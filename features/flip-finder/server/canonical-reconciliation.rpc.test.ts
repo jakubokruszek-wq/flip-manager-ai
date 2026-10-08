@@ -313,6 +313,13 @@ test("stale clear-guard returns before changing manual REJECTED, ARCHIVED, or an
     assert.deepEqual(result.match_reasons, ["finder_cleared"]);
   }
 
+  for (const [listingId, reason] of [[rejectedId, "manual_rejected"], [archivedId, "archived"]] as const) {
+    const laterScan = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchedAt: "2026-10-07T12:00:00.000Z" });
+    assert.equal(laterScan.bucket, "REJECTED", "even a timestamp newer than the clear cannot override a deliberate excluded state");
+    assert.equal(laterScan.is_current_match, false);
+    assert.deepEqual(laterScan.match_reasons, [reason]);
+  }
+
   const listings = await db.query<{ id: string; lifecycle_status: string; manual_decision: string | null; archived_at: string | null }>(
     `select id, lifecycle_status, manual_decision, archived_at from listings where id in ($1,$2) order by id`,
     [rejectedId, archivedId],

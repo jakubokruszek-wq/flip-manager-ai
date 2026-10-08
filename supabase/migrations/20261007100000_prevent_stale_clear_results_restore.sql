@@ -114,16 +114,32 @@ begin
 
   normalized_reasons := coalesce(p_reasons, '[]'::jsonb);
   normalized_missing := coalesce(p_missing_fields, '[]'::jsonb);
-  current_match := p_bucket = 'MATCHED';
-  next_lifecycle := case when p_bucket = 'MATCHED' then 'ACTIVE' else p_lifecycle_status end;
+  if target.manual_decision = 'REJECTED' then
+    normalized_reasons := jsonb_build_array('manual_rejected');
+    normalized_missing := '[]'::jsonb;
+    current_match := false;
+    next_lifecycle := coalesce(target.lifecycle_status, 'REJECTED');
+  elsif target.lifecycle_status = 'ARCHIVED' then
+    normalized_reasons := jsonb_build_array('archived');
+    normalized_missing := '[]'::jsonb;
+    current_match := false;
+    next_lifecycle := 'ARCHIVED';
+  else
+    current_match := p_bucket = 'MATCHED';
+    next_lifecycle := case when p_bucket = 'MATCHED' then 'ACTIVE' else p_lifecycle_status end;
+  end if;
   if next_lifecycle not in ('ACTIVE', 'REVIEW', 'REJECTED', 'STALE', 'ARCHIVED') then
     raise exception 'CANONICAL_LIFECYCLE_INVALID';
   end if;
 
-  if p_bucket = 'REVIEW' and not (normalized_reasons ? 'review') then
+  if target.manual_decision is distinct from 'REJECTED'
+     and target.lifecycle_status is distinct from 'ARCHIVED'
+     and p_bucket = 'REVIEW' and not (normalized_reasons ? 'review') then
     normalized_reasons := jsonb_build_array('review') || normalized_reasons;
   end if;
-  if p_bucket = 'REVIEW' then
+  if target.manual_decision is distinct from 'REJECTED'
+     and target.lifecycle_status is distinct from 'ARCHIVED'
+     and p_bucket = 'REVIEW' then
     normalized_reasons := normalized_reasons || coalesce(
       (select jsonb_agg('unknown_' || value)
          from jsonb_array_elements_text(normalized_missing) as fields(value)
@@ -132,13 +148,16 @@ begin
     );
   end if;
 
-  update public.listings
-     set lifecycle_status = next_lifecycle,
-         archived_at = case when p_bucket in ('MATCHED', 'REVIEW') then null else archived_at end,
-         review_reason = case when p_bucket = 'REVIEW' then array_to_string(array(select jsonb_array_elements_text(normalized_reasons)), ', ') else null end,
-         missing_fields = case when p_bucket = 'REVIEW' then normalized_missing else '[]'::jsonb end,
-         status = 'active'
-   where id = p_listing_id;
+  if target.manual_decision is distinct from 'REJECTED'
+     and target.lifecycle_status is distinct from 'ARCHIVED' then
+    update public.listings
+       set lifecycle_status = next_lifecycle,
+           archived_at = case when p_bucket in ('MATCHED', 'REVIEW') then null else archived_at end,
+           review_reason = case when p_bucket = 'REVIEW' then array_to_string(array(select jsonb_array_elements_text(normalized_reasons)), ', ') else null end,
+           missing_fields = case when p_bucket = 'REVIEW' then normalized_missing else '[]'::jsonb end,
+           status = 'active'
+     where id = p_listing_id;
+  end if;
 
   insert into public.listing_filter_matches (
     listing_id, search_filter_id, last_matched_at, is_current_match,
@@ -154,7 +173,9 @@ begin
     match_origin = excluded.match_origin,
     source_scan_id = excluded.source_scan_id;
 
-  return query select p_listing_id, p_filter_id, p_bucket, next_lifecycle, current_match, normalized_reasons;
+  return query select p_listing_id, p_filter_id,
+    case when target.manual_decision = 'REJECTED' or target.lifecycle_status = 'ARCHIVED' then 'REJECTED'::text else p_bucket end,
+    next_lifecycle, current_match, normalized_reasons;
 end;
 $$;
 
