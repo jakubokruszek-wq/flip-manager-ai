@@ -3,6 +3,7 @@ import {
   Building2,
   FileText,
   Flame,
+  Gauge,
   Hammer,
   LayoutDashboard,
   LineChart,
@@ -49,6 +50,12 @@ export const modules: ModuleDefinition[] = [
     title: "Rynek",
     href: "/market",
     icon: LineChart,
+  },
+  {
+    id: "priceRadar",
+    title: "Radar cen po remoncie",
+    href: "/price-radar",
+    icon: Gauge,
   },
   {
     id: "renovations",

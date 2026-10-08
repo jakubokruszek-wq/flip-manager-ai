@@ -1,0 +1,49 @@
+import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
+import { getRadarResults } from "@/features/price-radar/server/radar-results";
+import { DEFAULT_RADAR_DISTRICTS, type RadarFilters, type RadarMarketFilter, type RadarSource } from "@/features/price-radar/types";
+
+export async function GET(request: Request) {
+  try {
+    await requireOperator();
+  } catch (error) {
+    return operatorAuthorizationResponse(error);
+  }
+  try {
+    const url = new URL(request.url);
+    const filters = parseFilters(url.searchParams);
+    const payload = await getRadarResults(filters);
+    return Response.json(payload);
+  } catch (error) {
+    console.error("PRICE RADAR RESULTS ROUTE ERROR:", error);
+    return Response.json({ message: "Nie udało się pobrać wyników Radaru." }, { status: 500 });
+  }
+}
+
+function parseFilters(searchParams: URLSearchParams): RadarFilters {
+  const districtsParam = searchParams.getAll("district");
+  const sourcesParam = searchParams.getAll("source");
+  const roomsParam = searchParams.getAll("rooms");
+  const market = searchParams.get("market");
+  return {
+    districts: districtsParam.length > 0 ? districtsParam : [...DEFAULT_RADAR_DISTRICTS],
+    market: isMarketFilter(market) ? market : "both",
+    areaMin: parsePositiveNumber(searchParams.get("areaMin")),
+    areaMax: parsePositiveNumber(searchParams.get("areaMax")),
+    rooms: roomsParam.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
+    sources: sourcesParam.filter(isRadarSource),
+  };
+}
+
+function isMarketFilter(value: string | null): value is RadarMarketFilter {
+  return value === "secondary" || value === "primary" || value === "both";
+}
+
+function isRadarSource(value: string): value is RadarSource {
+  return !["facebook", "bezposrednio", "official_auction"].includes(value);
+}
+
+function parsePositiveNumber(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}

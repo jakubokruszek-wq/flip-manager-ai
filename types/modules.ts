@@ -7,6 +7,7 @@ export type FeatureId =
   | "facebookWatcher"
   | "ai"
   | "market"
+  | "priceRadar"
   | "renovations"
   | "documents"
   | "crm"
