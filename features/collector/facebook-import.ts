@@ -98,7 +98,7 @@ async function applyFilters(supabase: ReturnType<typeof createAdminClient>, list
   });
   const aggregateBucket = evaluated.some(({ decision }) => decision.bucket === "MATCHED") ? "MATCHED" : evaluated.some(({ decision }) => decision.bucket === "REVIEW") ? "REVIEW" : "REJECTED";
   for (const { filter, decision } of evaluated) {
-    await reconcileCanonicalListingDecision({ supabase, listingId, filterId: filter.id, decision: { ...decision, reasons: decision.bucket === "MATCHED" ? ["collector_import", ...decision.reasons] : decision.reasons }, lifecycleStatus: aggregateBucket === "MATCHED" ? "ACTIVE" : aggregateBucket, matchOrigin: "collector_import" });
+    await reconcileCanonicalListingDecision({ supabase, listingId, filterId: filter.id, decision: { ...decision, reasons: decision.bucket === "MATCHED" ? ["collector_import", ...decision.reasons] : decision.reasons }, lifecycleStatus: aggregateBucket === "MATCHED" ? "ACTIVE" : aggregateBucket, matchOrigin: "collector_import", matchedAt: payload.collectedAt });
     if (decision.bucket === "MATCHED") matchedFilters.push(filter.id);
     if (decision.bucket === "REJECTED") rejectedFilters.push({ filterId: filter.id, reasons: decision.hardRejectReasons });
   }

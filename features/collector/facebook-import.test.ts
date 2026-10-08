@@ -6,6 +6,7 @@ type QueryResult = { data: unknown; error: null | { message: string } };
 const state = {
   listingUpsertCalls: 0,
   metadataUpsertPayloads: [] as Array<Record<string, unknown>>,
+  reconciliationInputs: [] as Array<Record<string, unknown>>,
 };
 
 class Query {
@@ -55,8 +56,8 @@ const adminClient = { from: (table: string) => new Query(table) };
 
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => adminClient } });
 mock.module("@/features/flip-finder/filter-evaluation", { namedExports: { evaluateCanonicalListingDecision: () => ({ bucket: "REJECTED", reasons: [], missingFields: [], hardRejectReasons: [] }) } });
-mock.module("@/features/flip-finder/server/canonical-reconciliation", { namedExports: { reconcileCanonicalListingDecision: async () => undefined } });
-mock.module("@/features/flip-finder/server/search-filters", { namedExports: { getActiveSearchFiltersForSource: async () => [] } });
+mock.module("@/features/flip-finder/server/canonical-reconciliation", { namedExports: { reconcileCanonicalListingDecision: async (input: Record<string, unknown>) => { state.reconciliationInputs.push(input); } } });
+mock.module("@/features/flip-finder/server/search-filters", { namedExports: { getActiveSearchFiltersForSource: async () => [{ id: "filter-1" }] } });
 mock.module("@/features/facebook-watcher/facebook-intent", { namedExports: { resolveFacebookListingIntent: () => ({ intent: "SELL_PROPERTY" }) } });
 mock.module("@/features/facebook-watcher/search-quality", { namedExports: { classifyFacebookAvailability: () => "ACTIVE", classifyFacebookPropertyType: () => "APARTMENT" } });
 
@@ -65,6 +66,7 @@ const { importFacebookCollectorPayload } = await import("./facebook-import.ts");
 test("collector reuses a legacy listing found by canonical Facebook post metadata", async () => {
   state.listingUpsertCalls = 0;
   state.metadataUpsertPayloads = [];
+  state.reconciliationInputs = [];
 
   const result = await importFacebookCollectorPayload("device-1", "import-1", {
     sourcePostUrl: "https://www.facebook.com/groups/new-route/posts/4486483384955652?utm_source=feed",
@@ -82,4 +84,7 @@ test("collector reuses a legacy listing found by canonical Facebook post metadat
   assert.equal(result.listingId, "legacy-listing");
   assert.equal(state.listingUpsertCalls, 0, "a canonical post match must not create another listings row");
   assert.equal(state.metadataUpsertPayloads[0]?.listing_id, "legacy-listing");
+  assert.equal(state.reconciliationInputs.length, 1);
+  assert.equal(state.reconciliationInputs[0]?.matchOrigin, "collector_import");
+  assert.equal(state.reconciliationInputs[0]?.matchedAt, "2026-09-27T20:00:00.000Z", "canonical reconciliation must use the time the post was collected, not import processing time");
 });

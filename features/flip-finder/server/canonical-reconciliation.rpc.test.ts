@@ -230,7 +230,7 @@ test("the local clear-guard SQL preserves a per-filter tombstone against an olde
     [listingId, filterId, clearedAt],
   );
 
-  const stale = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchedAt: "2026-10-07T10:00:00.000Z" });
+  const stale = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchOrigin: "collector_import", matchedAt: "2026-10-07T10:00:00.000Z" });
   assert.equal(stale.bucket, "REJECTED", "the stale observation must be reported as non-current rather than restoring MATCHED");
   assert.equal(stale.is_current_match, false);
   assert.deepEqual(stale.match_reasons, ["finder_cleared"]);
