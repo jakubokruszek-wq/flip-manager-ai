@@ -104,9 +104,10 @@ begin
      and m.match_reasons ? 'finder_cleared'
    for update;
   -- A missing observation time is not evidence that the observation is newer
-  -- than the clear. This also keeps callers from the currently deployed app
-  -- safe during migration-before-deployment: older callers that omit or send
-  -- NULL for p_matched_at must not restore a cleared result.
+  -- than the clear. Legacy callers that omit or send NULL fail closed here.
+  -- A previous application helper may synthesize now() before this RPC, which
+  -- SQL cannot distinguish from a true new observation; deploy the updated
+  -- caller promptly after this migration and drain old in-flight imports.
   if found and (cleared_at is null or p_matched_at is null or p_matched_at <= cleared_at) then
     return query select p_listing_id, p_filter_id, 'REJECTED'::text, target.lifecycle_status, false, jsonb_build_array('finder_cleared');
     return;
