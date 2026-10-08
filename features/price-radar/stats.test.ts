@@ -7,56 +7,66 @@ function listing(overrides: Partial<StatInputListing> = {}): StatInputListing {
   return { district: "Bałuty", marketType: "secondary", pricePerSqm: 9_000, lastSeenAt: "2026-10-01T00:00:00Z", status: "active", excludedAt: null, ...overrides };
 }
 
-test("computes mean and median price/m2 for a district+market group", () => {
-  const listings = [listing({ pricePerSqm: 8_000 }), listing({ pricePerSqm: 9_000 }), listing({ pricePerSqm: 10_000 })];
+test("computes mean and median from individual prices/m2 only when the minimum sample is met", () => {
+  const listings = Array.from({ length: MIN_RADAR_SAMPLE_SIZE }, (_, index) => listing({ pricePerSqm: 8_000 + index * 100 }));
   const group = statGroupFor(computeRadarStats(listings), "Bałuty", "secondary");
   assert.ok(group);
-  assert.equal(group.averagePricePerSqm, 9_000);
-  assert.equal(group.medianPricePerSqm, 9_000);
-  assert.equal(group.sampleSize, 3);
+  assert.equal(group.averagePricePerSqm, 8_950);
+  assert.equal(group.medianPricePerSqm, 8_950);
+  assert.equal(group.sampleSize, MIN_RADAR_SAMPLE_SIZE);
 });
 
 test("median handles an even-sized sample by averaging the two middle values", () => {
-  const listings = [listing({ pricePerSqm: 8_000 }), listing({ pricePerSqm: 9_000 }), listing({ pricePerSqm: 10_000 }), listing({ pricePerSqm: 11_000 })];
+  const listings = [
+    ...Array.from({ length: MIN_RADAR_SAMPLE_SIZE - 1 }, (_, index) => listing({ pricePerSqm: 8_000 + index * 100 })),
+    listing({ pricePerSqm: 12_000 }),
+  ];
   const group = statGroupFor(computeRadarStats(listings), "Bałuty", "secondary");
-  assert.equal(group?.medianPricePerSqm, 9_500);
+  assert.equal(group?.medianPricePerSqm, 8_950);
 });
 
 test("secondary and primary markets never mix into one average, even for the same district", () => {
   const listings = [
-    listing({ marketType: "secondary", pricePerSqm: 8_000 }),
-    listing({ marketType: "primary", pricePerSqm: 14_000 }),
+    ...Array.from({ length: MIN_RADAR_SAMPLE_SIZE }, () => listing({ marketType: "secondary", pricePerSqm: 8_000 })),
+    ...Array.from({ length: MIN_RADAR_SAMPLE_SIZE }, () => listing({ marketType: "primary", pricePerSqm: 14_000 })),
   ];
   const groups = computeRadarStats(listings);
   assert.equal(statGroupFor(groups, "Bałuty", "secondary")?.averagePricePerSqm, 8_000);
   assert.equal(statGroupFor(groups, "Bałuty", "primary")?.averagePricePerSqm, 14_000);
 });
 
-test("a sample below MIN_RADAR_SAMPLE_SIZE is flagged isSmallSample but still reported with its real count, never hidden", () => {
-  const listings = Array.from({ length: 5 }, () => listing());
+test("a sample of 19 exposes the real count and withholds mean/median reference prices", () => {
+  const listings = Array.from({ length: MIN_RADAR_SAMPLE_SIZE - 1 }, () => listing());
   const group = statGroupFor(computeRadarStats(listings), "Bałuty", "secondary");
-  assert.equal(group?.sampleSize, 5);
+  assert.equal(group?.sampleSize, 19);
   assert.equal(group?.isSmallSample, true);
+  assert.equal(group?.averagePricePerSqm, null);
+  assert.equal(group?.medianPricePerSqm, null);
 });
 
-test("a sample at or above MIN_RADAR_SAMPLE_SIZE is not flagged", () => {
-  const listings = Array.from({ length: MIN_RADAR_SAMPLE_SIZE }, () => listing());
-  const group = statGroupFor(computeRadarStats(listings), "Bałuty", "secondary");
-  assert.equal(group?.sampleSize, MIN_RADAR_SAMPLE_SIZE);
-  assert.equal(group?.isSmallSample, false);
+test("sample sizes 20 and 21 expose confirmed reference prices", () => {
+  const listings = Array.from({ length: MIN_RADAR_SAMPLE_SIZE + 1 }, (_, index) => listing({ pricePerSqm: 9_000 + index }));
+  const atTwenty = statGroupFor(computeRadarStats(listings.slice(0, MIN_RADAR_SAMPLE_SIZE)), "Bałuty", "secondary");
+  const atTwentyOne = statGroupFor(computeRadarStats(listings), "Bałuty", "secondary");
+  assert.equal(atTwenty?.sampleSize, 20);
+  assert.equal(atTwenty?.isSmallSample, false);
+  assert.equal(atTwenty?.averagePricePerSqm, 9_009.5);
+  assert.equal(atTwenty?.medianPricePerSqm, 9_009.5);
+  assert.equal(atTwentyOne?.sampleSize, 21);
+  assert.equal(atTwentyOne?.averagePricePerSqm, 9_010);
 });
 
 test("an excluded listing never contributes to the average, median, or sample count", () => {
-  const listings = [listing({ pricePerSqm: 8_000 }), listing({ pricePerSqm: 100_000, excludedAt: "2026-10-01T00:00:00Z" })];
+  const listings = [...Array.from({ length: MIN_RADAR_SAMPLE_SIZE }, () => listing({ pricePerSqm: 8_000 })), listing({ pricePerSqm: 100_000, excludedAt: "2026-10-01T00:00:00Z" })];
   const group = statGroupFor(computeRadarStats(listings), "Bałuty", "secondary");
-  assert.equal(group?.sampleSize, 1);
+  assert.equal(group?.sampleSize, MIN_RADAR_SAMPLE_SIZE);
   assert.equal(group?.averagePricePerSqm, 8_000);
 });
 
 test("a removed (no longer active) listing never contributes either", () => {
-  const listings = [listing({ pricePerSqm: 8_000 }), listing({ pricePerSqm: 100_000, status: "removed" })];
+  const listings = [...Array.from({ length: MIN_RADAR_SAMPLE_SIZE }, () => listing({ pricePerSqm: 8_000 })), listing({ pricePerSqm: 100_000, status: "removed" })];
   const group = statGroupFor(computeRadarStats(listings), "Bałuty", "secondary");
-  assert.equal(group?.sampleSize, 1);
+  assert.equal(group?.sampleSize, MIN_RADAR_SAMPLE_SIZE);
 });
 
 test("updatedAt is the most recent lastSeenAt in the sample", () => {

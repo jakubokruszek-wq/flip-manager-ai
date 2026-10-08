@@ -218,7 +218,19 @@ test("real Finder observes automatic runs using GET, preserves manual monitoring
     authServer.listen(authPort, "127.0.0.1", resolve);
   });
   t.after(() => authServer.close());
-  const childEnv = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --use-system-ca`.trim(), NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "browser-test-publishable-key" };
+  const childEnv = {
+    PATH: process.env.PATH,
+    SYSTEMROOT: process.env.SYSTEMROOT,
+    WINDIR: process.env.WINDIR,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    USERPROFILE: process.env.USERPROFILE,
+    LOCALAPPDATA: process.env.LOCALAPPDATA,
+    APPDATA: process.env.APPDATA,
+    NEXT_TELEMETRY_DISABLED: "1",
+    NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`,
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "browser-test-publishable-key",
+  };
   await new Promise((resolve, reject) => {
     const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     let buildOutput = "";

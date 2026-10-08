@@ -30,6 +30,13 @@ export type RadarListing = {
   contentHash: string;
   firstSeenAt: string;
   lastSeenAt: string;
+  /** Source-provided dates only. Null means the portal did not provide that date. */
+  publishedAt: string | null;
+  sourceUpdatedAt: string | null;
+  collectedAt: string;
+  /** Only set when a source supplies a stable, explicit cross-portal unit reference. */
+  crossSourceIdentity: string | null;
+  crossSourceAlternates: Array<{ source: RadarSource; originalUrl: string }>;
   status: "active" | "removed";
   excludedAt: string | null;
   excludedReason: string | null;
@@ -42,12 +49,16 @@ export type RadarCheckpoint = {
   currentSourceIndex: number;
   /** Per-source adapter cursor state (page number, continuation token, ...), opaque to collect.ts itself. */
   perSourceCursor: Record<string, unknown>;
+  sourceStatuses: Record<string, "pending" | "running" | "completed" | "failed">;
+  sourceErrors: Record<string, string>;
   buffer: unknown[];
   bufferOffset: number;
 };
 
 export type RadarRun = {
   id: string;
+  ownerId: string;
+  leaseToken: string | null;
   status: RadarRunStatus;
   startedAt: string;
   finishedAt: string | null;
@@ -55,6 +66,8 @@ export type RadarRun = {
   scannedCount: number;
   qualifiedCount: number;
   errorMessage: string | null;
+  sourceStatuses: Record<string, "pending" | "running" | "completed" | "failed">;
+  sourceErrors: Record<string, string>;
 };
 
 export type RadarMarketFilter = "secondary" | "primary" | "both";

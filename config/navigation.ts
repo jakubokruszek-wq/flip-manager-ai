@@ -7,6 +7,7 @@ export const workingNavigationIds = [
   "properties",
   "deals",
   "facebookWatcher",
+  "priceRadar",
   "settings",
 ] as const satisfies readonly FeatureId[];
 
@@ -24,6 +25,7 @@ export const navigationSections: NavSection[] = [
       toNavigationItem("properties"),
       toNavigationItem("deals"),
       toNavigationItem("facebookWatcher"),
+      toNavigationItem("priceRadar"),
     ],
   },
   { label: "System", items: [toNavigationItem("settings")] },

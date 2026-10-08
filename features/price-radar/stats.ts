@@ -15,8 +15,8 @@ export type StatInputListing = {
  * -- "Oba" (both) is a UI selection that simply shows every group, not a
  * combined one. Excluded and removed listings never enter the sample. A
  * group below MIN_RADAR_SAMPLE_SIZE is still returned (never hidden) but
- * flagged isSmallSample, so the UI can show "Mała próba" with the real count
- * instead of presenting it as a solid comparison.
+ * flagged isSmallSample, so the UI can show the true count but no reference
+ * price until the minimum sample threshold is reached.
  */
 export function computeRadarStats(listings: StatInputListing[]): RadarStatGroup[] {
   const groups = new Map<string, StatInputListing[]>();
@@ -37,8 +37,8 @@ export function computeRadarStats(listings: StatInputListing[]): RadarStatGroup[
     result.push({
       district,
       marketType,
-      averagePricePerSqm: sampleSize > 0 ? values.reduce((sum, value) => sum + value, 0) / sampleSize : null,
-      medianPricePerSqm: sampleSize > 0 ? median(values) : null,
+      averagePricePerSqm: sampleSize >= MIN_RADAR_SAMPLE_SIZE ? values.reduce((sum, value) => sum + value, 0) / sampleSize : null,
+      medianPricePerSqm: sampleSize >= MIN_RADAR_SAMPLE_SIZE ? median(values) : null,
       sampleSize,
       isSmallSample: sampleSize < MIN_RADAR_SAMPLE_SIZE,
       updatedAt,

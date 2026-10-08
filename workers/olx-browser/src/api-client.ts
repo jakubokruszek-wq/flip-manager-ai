@@ -6,7 +6,7 @@ import {
 } from "../../../features/flip-finder/olx-worker-protocol.ts";
 import type { WorkerConfig } from "./config.ts";
 
-export type WorkerJob = { id: string; runId: string; sourceScanId: string; filterId: string; requestUrl: string; leaseToken: string; leasedUntil: string; attempts: number };
+export type WorkerJob = { id: string; runId: string; sourceScanId: string | null; filterId: string | null; contextType?: "finder" | "price_radar"; radarOwnerId?: string | null; radarRunLeaseToken?: string | null; requestUrl: string; leaseToken: string; leasedUntil: string; attempts: number };
 
 export function createApiClient(config: WorkerConfig) {
   async function post<T>(pathname: string, payload: unknown, signal?: AbortSignal): Promise<T> {
@@ -31,8 +31,8 @@ export function createApiClient(config: WorkerConfig) {
   }
   return {
     claim: (signal?: AbortSignal) => post<{ job: WorkerJob | null }>("/api/olx-worker/claim", { workerId: config.workerId }, signal),
-    heartbeat: (job: WorkerJob, signal?: AbortSignal) => post("/api/olx-worker/heartbeat", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId }, signal),
-    complete: (job: WorkerJob, result: { fetched: number; listings: unknown[]; warnings: string[]; durationMs: number }, signal?: AbortSignal) => post("/api/olx-worker/complete", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, ...result }, signal),
-    fail: (job: WorkerJob, errorCode: string, errorMessage: string, signal?: AbortSignal) => post("/api/olx-worker/fail", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, errorCode, errorMessage }, signal),
+    heartbeat: (job: WorkerJob, signal?: AbortSignal) => post("/api/olx-worker/heartbeat", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, radarLeaseToken: job.radarRunLeaseToken ?? null }, signal),
+    complete: (job: WorkerJob, result: { fetched: number; listings: unknown[]; warnings: string[]; durationMs: number }, signal?: AbortSignal) => post("/api/olx-worker/complete", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, radarLeaseToken: job.radarRunLeaseToken ?? null, ...result }, signal),
+    fail: (job: WorkerJob, errorCode: string, errorMessage: string, signal?: AbortSignal) => post("/api/olx-worker/fail", { jobId: job.id, leaseToken: job.leaseToken, workerId: config.workerId, radarLeaseToken: job.radarRunLeaseToken ?? null, errorCode, errorMessage }, signal),
   };
 }

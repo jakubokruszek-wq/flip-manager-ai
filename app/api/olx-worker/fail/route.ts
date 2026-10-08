@@ -20,5 +20,5 @@ function parseBody(text: string) {
   if (!value || typeof value !== "object") throw new Error("INVALID_PAYLOAD");
   const row = value as Record<string, unknown>;
   for (const key of ["jobId", "leaseToken", "workerId", "errorCode", "errorMessage"] as const) if (typeof row[key] !== "string" || !row[key]) throw new Error("INVALID_PAYLOAD");
-  return { jobId: String(row.jobId), leaseToken: String(row.leaseToken), workerId: String(row.workerId), errorCode: String(row.errorCode), errorMessage: String(row.errorMessage) };
+  return { jobId: String(row.jobId), leaseToken: String(row.leaseToken), workerId: String(row.workerId), errorCode: String(row.errorCode), errorMessage: String(row.errorMessage), radarLeaseToken: typeof row.radarLeaseToken === "string" ? row.radarLeaseToken : null };
 }

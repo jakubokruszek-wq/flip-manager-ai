@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { dedupeByListingIdentity } from "@/features/listing-identity";
 import { computeRadarStats } from "@/features/price-radar/stats";
 import { DEFAULT_RADAR_DISTRICTS, type RadarFilters, type RadarListing, type RadarStatGroup } from "@/features/price-radar/types";
@@ -23,14 +23,15 @@ export type RadarResultsPayload = {
  * confirmed externalListingId/URL identity only, never a shared catalog
  * URL or a similar title/address (see listing-identity.ts).
  */
-export async function getRadarResults(filters: RadarFilters): Promise<RadarResultsPayload> {
-  const supabase = await createClient();
+export async function getRadarResults(ownerId: string, filters: RadarFilters, supabase = createAdminClient()): Promise<RadarResultsPayload> {
   const districts = filters.districts.length > 0 ? filters.districts : [...DEFAULT_RADAR_DISTRICTS];
   let query = supabase
     .from("price_radar_listings")
-    .select("id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash,first_seen_at,last_seen_at,status,excluded_at,excluded_reason")
+    .select("id,owner_id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash,first_seen_at,last_seen_at,published_at,source_updated_at,collected_at,cross_source_identity,status,excluded_at,excluded_reason")
+    .eq("owner_id", ownerId)
     .eq("status", "active")
     .in("district", districts)
+    .order("last_seen_at", { ascending: false })
     .order("id", { ascending: true });
   if (filters.sources.length > 0) query = query.in("source", filters.sources);
 
@@ -54,9 +55,8 @@ export async function getRadarResults(filters: RadarFilters): Promise<RadarResul
     externalListingId: listing.externalListingId,
     originalUrl: listing.originalUrl,
   }));
-  const crossPortalDeduped = dedupeCrossPortal(deduped);
-
-  const narrowed = crossPortalDeduped.filter((listing) => matchesNarrowFilters(listing, filters));
+  const narrowedCandidates = deduped.filter((listing) => matchesNarrowFilters(listing, filters));
+  const narrowed = dedupeConfirmedCrossPortalIdentity(narrowedCandidates);
   const visible = narrowed.filter((listing) => listing.excludedAt === null);
   const excludedListings = narrowed.filter((listing) => listing.excludedAt !== null);
 
@@ -72,22 +72,15 @@ export async function getRadarResults(filters: RadarFilters): Promise<RadarResul
   return { listings: visible, excludedListings, stats };
 }
 
-/**
- * Cross-portal duplicates (the same real apartment listed on two different
- * sites) have no shared ID or URL to confirm them by -- real estate portals
- * expose none. Rather than merge by title or address text (explicitly
- * forbidden: two different apartments can share a near-identical title or
- * building address), this only collapses listings whose price, area,
- * district and room count are ALL exactly identical -- a coincidence real
- * enough to require positive evidence, but conservative enough that it
- * never fires on "similar", only on exact figures across every field a
- * genuinely different apartment would almost certainly differ on in at
- * least one. The earliest-discovered listing (by firstSeenAt) is kept.
- */
-function dedupeCrossPortal(listings: RadarListing[]): RadarListing[] {
+/** Cross-portal merging requires a source-provided, stable cross-reference. */
+function dedupeConfirmedCrossPortalIdentity(listings: RadarListing[]): RadarListing[] {
   const groups = new Map<string, RadarListing[]>();
   for (const listing of listings) {
-    const key = `${listing.price}|${listing.area}|${listing.district}|${listing.rooms ?? "null"}`;
+    if (!listing.crossSourceIdentity) {
+      groups.set(`listing:${listing.id}`, [listing]);
+      continue;
+    }
+    const key = `cross:${listing.crossSourceIdentity}`;
     const group = groups.get(key) ?? [];
     group.push(listing);
     groups.set(key, group);
@@ -100,17 +93,23 @@ function dedupeCrossPortal(listings: RadarListing[]): RadarListing[] {
     }
     const sourcesInGroup = new Set(group.map((listing) => listing.source));
     if (sourcesInGroup.size === 1) {
-      // Same portal, same exact figures but somehow not caught by identity
-      // dedup above (e.g. a portal re-issuing a new externalListingId) --
-      // out of scope for cross-portal collapsing; keep all, identity dedup
-      // already did its job for genuine within-source duplicates.
       kept.push(...group);
       continue;
     }
-    const earliest = group.reduce((current, listing) => (listing.firstSeenAt < current.firstSeenAt ? listing : current));
-    kept.push(earliest);
+    const representative = [...group].sort((left, right) => completeness(right) - completeness(left) || right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+    representative.crossSourceAlternates = group.filter((listing) => listing.id !== representative.id).map((listing) => ({ source: listing.source, originalUrl: listing.originalUrl }));
+    const excluded = group.filter((listing) => listing.excludedAt !== null).sort((left, right) => (right.excludedAt ?? "").localeCompare(left.excludedAt ?? ""))[0];
+    if (excluded) {
+      representative.excludedAt = excluded.excludedAt;
+      representative.excludedReason = excluded.excludedReason;
+    }
+    kept.push(representative);
   }
   return kept;
+}
+
+function completeness(listing: RadarListing): number {
+  return Number(Boolean(listing.title)) + Number(Boolean(listing.description)) + Number(Boolean(listing.rooms)) + Number(Boolean(listing.publishedAt)) + Number(Boolean(listing.sourceUpdatedAt));
 }
 
 function matchesNarrowFilters(listing: RadarListing, filters: RadarFilters): boolean {
@@ -142,9 +141,13 @@ function toRadarListing(row: Row): RadarListing | null {
   const contentHash = nullableString(row.content_hash);
   const firstSeenAt = nullableString(row.first_seen_at);
   const lastSeenAt = nullableString(row.last_seen_at);
+  const publishedAt = nullableString(row.published_at);
+  const sourceUpdatedAt = nullableString(row.source_updated_at);
+  const collectedAt = nullableString(row.collected_at);
+  const crossSourceIdentity = nullableString(row.cross_source_identity);
   const status = row.status === "active" || row.status === "removed" ? row.status : null;
 
-  if (!id || !source || !externalListingId || !originalUrl || !normalizedUrl || !city || !district || !buildingType || !marketType || !renovationStatus || price === null || area === null || pricePerSqm === null || !contentHash || !firstSeenAt || !lastSeenAt || !status) {
+  if (!id || !source || !externalListingId || !originalUrl || !normalizedUrl || !city || !district || !buildingType || !marketType || !renovationStatus || price === null || area === null || pricePerSqm === null || !contentHash || !firstSeenAt || !lastSeenAt || !collectedAt || !status) {
     return null;
   }
 
@@ -152,7 +155,7 @@ function toRadarListing(row: Row): RadarListing | null {
     id, source: source as RadarListing["source"], externalListingId, originalUrl, normalizedUrl,
     title: nullableString(row.title), description: nullableString(row.description),
     price, area, pricePerSqm, rooms: nullableNumber(row.rooms), city, district, buildingType, marketType, renovationStatus,
-    contentHash, firstSeenAt, lastSeenAt, status,
+    contentHash, firstSeenAt, lastSeenAt, publishedAt, sourceUpdatedAt, collectedAt, crossSourceIdentity, crossSourceAlternates: [], status,
     excludedAt: nullableString(row.excluded_at), excludedReason: nullableString(row.excluded_reason),
   };
 }

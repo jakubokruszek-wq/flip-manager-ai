@@ -1,18 +1,20 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 import { getRadarResults } from "@/features/price-radar/server/radar-results";
 import { DEFAULT_RADAR_DISTRICTS, type RadarFilters, type RadarMarketFilter, type RadarSource } from "@/features/price-radar/types";
+import { RADAR_SOURCES } from "@/features/price-radar/server/collect";
 
 export async function GET(request: Request) {
+  let operator;
   try {
-    await requireOperator();
+    operator = await requireOperator();
   } catch (error) {
     return operatorAuthorizationResponse(error);
   }
   try {
     const url = new URL(request.url);
     const filters = parseFilters(url.searchParams);
-    const payload = await getRadarResults(filters);
-    return Response.json(payload);
+    const payload = await getRadarResults(operator.id, filters);
+    return Response.json({ ...payload, activeSources: RADAR_SOURCES, disabledSourceNote: "Źródła poza wspólną bramką Findera pozostają wyłączone w Radarze." });
   } catch (error) {
     console.error("PRICE RADAR RESULTS ROUTE ERROR:", error);
     return Response.json({ message: "Nie udało się pobrać wyników Radaru." }, { status: 500 });
@@ -39,7 +41,7 @@ function isMarketFilter(value: string | null): value is RadarMarketFilter {
 }
 
 function isRadarSource(value: string): value is RadarSource {
-  return !["facebook", "bezposrednio", "official_auction"].includes(value);
+  return RADAR_SOURCES.includes(value as RadarSource);
 }
 
 function parsePositiveNumber(value: string | null): number | null {

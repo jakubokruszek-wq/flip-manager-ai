@@ -2,8 +2,9 @@ import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/
 import { excludeRadarListing, restoreRadarListing } from "@/features/price-radar/server/radar-exclusion";
 
 export async function POST(request: Request) {
+  let operator;
   try {
-    await requireOperator();
+    operator = await requireOperator();
   } catch (error) {
     return operatorAuthorizationResponse(error);
   }
@@ -14,7 +15,7 @@ export async function POST(request: Request) {
     const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : null;
     if (!listingId) return Response.json({ message: "Brak identyfikatora oferty." }, { status: 400 });
 
-    const result = excluded ? await excludeRadarListing(listingId, reason) : await restoreRadarListing(listingId);
+    const result = excluded ? await excludeRadarListing(operator.id, listingId, reason) : await restoreRadarListing(operator.id, listingId);
     if (!result.ok) return Response.json({ message: "Nie znaleziono oferty Radaru." }, { status: 404 });
     return Response.json({ ok: true });
   } catch (error) {

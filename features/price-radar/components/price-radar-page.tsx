@@ -5,13 +5,17 @@ import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
-import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarSource, type RadarStatGroup } from "@/features/price-radar/types";
+import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarSource, type RadarStatGroup, type RadarRunStatus } from "@/features/price-radar/types";
 
 type ResultsResponse = {
   listings: RadarListing[];
   excludedListings: RadarListing[];
   stats: RadarStatGroup[];
+  activeSources: RadarSource[];
+  disabledSourceNote: string;
 };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; errorMessage: string | null };
+type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[] }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
 const SOURCE_OPTIONS: { value: RadarSource; label: string }[] = [
@@ -42,8 +46,59 @@ export function PriceRadarPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingExclusion, setPendingExclusion] = useState<string | null>(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [activeSourceIds, setActiveSourceIds] = useState<RadarSource[]>([]);
+  const [disabledSourceNote, setDisabledSourceNote] = useState("");
+  const [run, setRun] = useState<RunStatus | null>(null);
+  const [runStarting, setRunStarting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiFetch("/api/price-radar/settings").then(async (response) => {
+      const payload = await response.json() as SettingsResponse | { message?: string };
+      if (!response.ok || !("filters" in payload)) throw new Error("message" in payload && payload.message ? payload.message : "Nie udało się odczytać zapisanych filtrów Radaru.");
+      if (cancelled) return;
+      setDistricts(payload.filters.districts);
+      setMarket(payload.filters.market);
+      setAreaMin(payload.filters.areaMin === null ? "" : String(payload.filters.areaMin));
+      setAreaMax(payload.filters.areaMax === null ? "" : String(payload.filters.areaMax));
+      setRooms(payload.filters.rooms);
+      setSources(payload.filters.sources);
+      setActiveSourceIds(payload.activeSources);
+      setDisabledSourceNote(payload.disabledSourceNote);
+      setSettingsLoaded(true);
+    }).catch((reason) => {
+      if (!cancelled) { setError(reason instanceof Error ? reason.message : "Nie udało się odczytać filtrów Radaru."); setSettingsLoaded(true); }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const saveSettings = useCallback(async () => {
+    setSettingsSaving(true);
+    try {
+      const response = await apiFetch("/api/price-radar/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filters: { districts, market, areaMin: areaMin ? Number(areaMin) : null, areaMax: areaMax ? Number(areaMax) : null, rooms, sources } }),
+      });
+      const payload = await response.json() as { filters?: SettingsResponse["filters"]; message?: string };
+      if (!response.ok || !payload.filters) throw new Error(payload.message || "Nie udało się zapisać filtrów Radaru.");
+      setSettingsDirty(false);
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Nie udało się zapisać filtrów Radaru.");
+    } finally { setSettingsSaving(false); }
+  }, [districts, market, areaMin, areaMax, rooms, sources]);
+
+  useEffect(() => {
+    if (!settingsLoaded || !settingsDirty) return;
+    const timeoutId = window.setTimeout(() => { void saveSettings(); }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [settingsLoaded, settingsDirty, saveSettings]);
 
   const load = useCallback(async () => {
+    if (!settingsLoaded) return;
     setIsLoading(true);
     try {
       const params = new URLSearchParams();
@@ -66,7 +121,7 @@ export function PriceRadarPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [districts, market, areaMin, areaMax, rooms, sources]);
+  }, [settingsLoaded, districts, market, areaMin, areaMax, rooms, sources]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -75,14 +130,52 @@ export function PriceRadarPage() {
     return () => window.clearTimeout(timeoutId);
   }, [load]);
 
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const refresh = async () => {
+      try {
+        const response = await apiFetch("/api/price-radar/run");
+        const payload = await response.json() as { run?: RunStatus | null };
+        if (!response.ok) throw new Error("Nie udało się odczytać stanu zbierania Radaru.");
+        if (!cancelled) setRun(payload.run ?? null);
+      } catch (reason) {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Nie udało się odczytać stanu zbierania Radaru.");
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => { void refresh(); }, run?.status === "running" || run?.status === "pending" ? 5_000 : 60_000);
+      }
+    };
+    void refresh();
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [settingsLoaded, run?.status, run?.id]);
+
   const toggleDistrict = (district: string) => {
+    setSettingsDirty(true);
     setDistricts((current) => (current.includes(district) ? current.filter((item) => item !== district) : [...current, district]));
   };
   const toggleRoom = (room: number) => {
+    setSettingsDirty(true);
     setRooms((current) => (current.includes(room) ? current.filter((item) => item !== room) : [...current, room]));
   };
   const toggleSource = (source: RadarSource) => {
+    setSettingsDirty(true);
     setSources((current) => (current.includes(source) ? current.filter((item) => item !== source) : [...current, source]));
+  };
+
+  const startCollection = async () => {
+    setRunStarting(true);
+    try {
+      const response = await apiFetch("/api/price-radar/run", { method: "POST" });
+      const payload = await response.json() as { runId?: string; status?: RadarRunStatus; message?: string };
+      if (!response.ok) throw new Error(payload.message || "Nie udało się rozpocząć zbierania Radaru.");
+      const status = await apiFetch("/api/price-radar/run");
+      const statusPayload = await status.json() as { run?: RunStatus | null };
+      setRun(statusPayload.run ?? null);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Nie udało się rozpocząć zbierania Radaru.");
+    } finally { setRunStarting(false); }
   };
 
   const setExclusion = async (listingId: string, excluded: boolean) => {
@@ -103,6 +196,7 @@ export function PriceRadarPage() {
   };
 
   const groupedStats = useMemo(() => data?.stats ?? [], [data]);
+  const visibleSources = activeSourceIds.length ? SOURCE_OPTIONS.filter((option) => activeSourceIds.includes(option.value)) : [];
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -117,8 +211,9 @@ export function PriceRadarPage() {
                 <button
                   key={district}
                   type="button"
+                  aria-pressed={districts.includes(district)}
                   onClick={() => toggleDistrict(district)}
-                  className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${districts.includes(district) ? "border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-input text-muted-foreground"}`}
+                  className={`rounded-full border px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${districts.includes(district) ? "border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-input text-muted-foreground"}`}
                 >
                   {district}
                 </button>
@@ -127,11 +222,12 @@ export function PriceRadarPage() {
           </div>
 
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rynek</p>
+            <label htmlFor="price-radar-market" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rynek</label>
             <select
+              id="price-radar-market"
               className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm"
               value={market}
-              onChange={(event) => setMarket(event.target.value as RadarMarketFilter)}
+              onChange={(event) => { setSettingsDirty(true); setMarket(event.target.value as RadarMarketFilter); }}
             >
               <option value="both">Oba</option>
               <option value="secondary">Wtórny</option>
@@ -142,9 +238,9 @@ export function PriceRadarPage() {
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Metraż (m²)</p>
             <div className="flex items-center gap-2">
-              <input type="number" min={0} placeholder="od" value={areaMin} onChange={(event) => setAreaMin(event.target.value)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm" />
+              <input type="number" min={0} placeholder="od" value={areaMin} onChange={(event) => { setSettingsDirty(true); setAreaMin(event.target.value); }} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm" />
               <span className="text-muted-foreground">–</span>
-              <input type="number" min={0} placeholder="do" value={areaMax} onChange={(event) => setAreaMax(event.target.value)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm" />
+              <input type="number" min={0} placeholder="do" value={areaMax} onChange={(event) => { setSettingsDirty(true); setAreaMax(event.target.value); }} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm" />
             </div>
           </div>
 
@@ -155,8 +251,9 @@ export function PriceRadarPage() {
                 <button
                   key={room}
                   type="button"
+                  aria-pressed={rooms.includes(room)}
                   onClick={() => toggleRoom(room)}
-                  className={`size-9 rounded-full border text-sm font-medium transition-colors ${rooms.includes(room) ? "border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-input text-muted-foreground"}`}
+                  className={`size-9 rounded-full border text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${rooms.includes(room) ? "border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-input text-muted-foreground"}`}
                 >
                   {room}
                 </button>
@@ -168,18 +265,33 @@ export function PriceRadarPage() {
         <div className="mt-4">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Portale</p>
           <div className="flex flex-wrap gap-2">
-            {SOURCE_OPTIONS.map((option) => (
+            {visibleSources.map((option) => (
               <button
                 key={option.value}
                 type="button"
+                aria-pressed={sources.includes(option.value) || sources.length === 0}
                 onClick={() => toggleSource(option.value)}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${sources.includes(option.value) || sources.length === 0 ? "border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-input text-muted-foreground"}`}
+                className={`rounded-full border px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary ${sources.includes(option.value) || sources.length === 0 ? "border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-input text-muted-foreground"}`}
               >
                 {option.label}
               </button>
             ))}
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">{disabledSourceNote || "Dostępne są wyłącznie źródła włączone we wspólnej bramce."} Filtr pusty oznacza wszystkie aktywne portale.</p>
         </div>
+      </section>
+
+      <section aria-label="Zbieranie ofert Radaru" className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
+        <div className="min-w-0">
+          <h2 className="font-semibold">Zbieranie Radaru</h2>
+          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runStatusLabel(run.status)} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
+          {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
+          {settingsSaving ? <p className="mt-1 text-xs text-muted-foreground">Zapisywanie ustawień…</p> : settingsDirty ? <p className="mt-1 text-xs text-destructive">Ustawienia nie zostały zapisane. Zmiana zostanie ponowiona po kolejnej edycji.</p> : null}
+        </div>
+        <Button disabled={runStarting || run?.status === "running" || !settingsLoaded} onClick={() => void startCollection()}>
+          {runStarting ? "Uruchamianie…" : run?.status === "running" ? "Przebieg trwa" : "Uruchom / wznów zbieranie"}
+        </Button>
+        {run?.sourceStatuses ? <div className="flex w-full min-w-0 flex-wrap gap-2 text-xs">{Object.entries(run.sourceStatuses).map(([source, status]) => <span className="max-w-full break-words rounded-full border px-2 py-1" key={source}>{source}: {statusLabel(status)}</span>)}</div> : null}
       </section>
 
       {error ? (
@@ -195,7 +307,7 @@ export function PriceRadarPage() {
             <div className="flex items-center justify-between">
               <p className="font-semibold">{group.district} · {group.marketType === "primary" ? "Pierwotny" : "Wtórny"}</p>
               {group.isSmallSample ? (
-                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">Mała próba</span>
+                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">Niewystarczająca próba</span>
               ) : null}
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3">
@@ -203,7 +315,7 @@ export function PriceRadarPage() {
               <MetricCard label="Mediana zł/m²" value={group.medianPricePerSqm ? formatCurrency(group.medianPricePerSqm) : "—"} />
             </div>
             <p className="mt-3 text-xs text-muted-foreground">
-              {group.sampleSize} {group.sampleSize === 1 ? "mieszkanie" : "mieszkań"} w próbie (min. {MIN_RADAR_SAMPLE_SIZE})
+              {group.sampleSize} {group.sampleSize === 1 ? "mieszkanie" : "mieszkań"} · {group.sampleSize < MIN_RADAR_SAMPLE_SIZE ? `brak ceny referencyjnej (minimum ${MIN_RADAR_SAMPLE_SIZE})` : "ceny ofertowe w próbie"}
               {group.updatedAt ? ` · aktualizacja ${formatDate(group.updatedAt)}` : ""}
             </p>
           </div>
@@ -235,19 +347,21 @@ export function PriceRadarPage() {
 
 function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarListing; excluded?: boolean; onExclude: () => void; pending: boolean }) {
   return (
-    <article className={`rounded-xl border bg-card p-4 ${excluded ? "opacity-60" : ""}`}>
+    <article className={`min-w-0 overflow-hidden rounded-xl border bg-card p-4 ${excluded ? "opacity-60" : ""}`}>
       <div className="flex items-start justify-between gap-2">
-        <h3 className="line-clamp-2 min-w-0 font-semibold">{listing.title ?? "Oferta bez tytułu"}</h3>
-        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{listing.source}</span>
+        <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{listing.title ?? "Oferta bez tytułu"}</h3>
+        <span className="max-w-32 shrink-0 break-words rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{sourceLabel(listing.source)}</span>
       </div>
-      <p className="mt-1 text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"}</p>
+      <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"} · {listing.renovationStatus === "fresh_renovation" ? "Świeży pełny remont" : "Wykończone pod klucz"}</p>
       <p className="mt-3 text-sm font-medium">
         {formatCurrency(listing.price)} · {listing.area} m² · {formatCurrency(listing.pricePerSqm)}/m²{listing.rooms ? ` · ${listing.rooms} pok.` : ""}
       </p>
       <dl className="mt-3 grid gap-1 text-xs text-muted-foreground">
-        <div className="flex justify-between"><dt>Pierwsze wykrycie</dt><dd>{formatDate(listing.firstSeenAt)}</dd></div>
-        <div className="flex justify-between"><dt>Ostatnie potwierdzenie</dt><dd>{formatDate(listing.lastSeenAt)}</dd></div>
+        <DateRow label="Opublikowano" value={listing.publishedAt} />
+        <DateRow label="Zmiana ogłoszenia" value={listing.sourceUpdatedAt} />
+        <DateRow label="Pobrano" value={listing.collectedAt} />
       </dl>
+      {listing.crossSourceAlternates.length > 0 ? <div className="mt-2 flex flex-wrap gap-2 text-xs">{listing.crossSourceAlternates.map((item) => <a className="break-words text-primary underline" href={item.originalUrl} key={`${item.source}:${item.originalUrl}`} rel="noreferrer" target="_blank">Potwierdzony duplikat: {sourceLabel(item.source)}</a>)}</div> : null}
       <div className="mt-4 flex flex-wrap gap-2">
         <Button nativeButton={false} render={<a href={listing.originalUrl} target="_blank" rel="noopener noreferrer" />} size="sm" variant="outline">
           Otwórz ogłoszenie
@@ -258,6 +372,22 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
       </div>
     </article>
   );
+}
+
+function DateRow({ label, value }: { label: string; value: string | null }) {
+  return <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2"><dt>{label}</dt><dd className="break-words text-right">{value ? formatDate(value) : "Nie podano"}</dd></div>;
+}
+
+function sourceLabel(source: RadarSource): string {
+  return SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? source;
+}
+
+function runStatusLabel(status: RadarRunStatus): string {
+  return ({ pending: "Oczekuje", running: "Trwa", completed: "Zakończono", partial: "Zakończono częściowo", failed: "Niepowodzenie" })[status];
+}
+
+function statusLabel(status: string): string {
+  return ({ pending: "oczekuje", running: "pobieranie", completed: "ukończono", failed: "błąd" } as Record<string, string>)[status] ?? "nieznany";
 }
 
 function formatCurrency(value: number): string {

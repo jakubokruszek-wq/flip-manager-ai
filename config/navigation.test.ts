@@ -15,6 +15,7 @@ const routeFiles = new Map([
   ["/properties", "app/(app)/properties/page.tsx"],
   ["/flip-finder", "app/(app)/flip-finder/page.tsx"],
   ["/facebook-watcher", "app/(app)/facebook-watcher/page.tsx"],
+  ["/price-radar", "app/(app)/price-radar/page.tsx"],
   ["/settings", "app/(app)/settings/page.tsx"],
 ]);
 
@@ -33,6 +34,7 @@ test("placeholder modules are hidden from active navigation", () => {
   for (const title of ["Analiza AI", "CRM", "Dokumenty", "Rynek", "Remonty"]) {
     assert.equal(activeTitles.has(title), false);
   }
+  assert.ok(activeTitles.has("Radar cen po remoncie"));
 });
 
 test("desktop navigation and mobile navigation use the same active item list", () => {
@@ -46,6 +48,7 @@ test("active state matches exact and nested routes without activating Dashboard 
   assert.equal(isNavigationItemActive("/flip-finder", "/flip-finder"), true);
   assert.equal(isNavigationItemActive("/properties/new", "/properties"), true);
   assert.equal(isNavigationItemActive("/facebook-watcher/groups", "/facebook-watcher"), true);
+  assert.equal(isNavigationItemActive("/price-radar", "/price-radar"), true);
   assert.equal(isNavigationItemActive("/settings/alerts", "/settings"), true);
   assert.equal(isNavigationItemActive("/properties", "/dashboard"), false);
 });
@@ -56,4 +59,5 @@ test("nested pages receive the correct top navigation title", () => {
   assert.equal(getModuleTitle("/properties/new"), "Nieruchomości");
   assert.equal(getModuleTitle("/facebook-watcher/groups"), "Facebook Watcher");
   assert.equal(getModuleTitle("/flip-finder/filters/new"), "Flip Finder");
+  assert.equal(getModuleTitle("/price-radar"), "Radar cen po remoncie");
 });

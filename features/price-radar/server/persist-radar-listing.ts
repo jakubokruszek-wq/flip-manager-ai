@@ -15,34 +15,26 @@ export type RadarPersistCandidate = QualifiedListing & {
   rooms: number | null;
   city: string;
   contentHash: string;
+  publishedAt: string | null;
+  sourceUpdatedAt: string | null;
+  crossSourceIdentity: string | null;
   rawPayload: Record<string, unknown>;
 };
 
 /**
- * Upserts one already-qualified Radar listing. A re-collection that
- * re-confirms the same (source, externalListingId) updates price/area/text
- * and bumps last_seen_at, but never touches excluded_at/excluded_reason --
- * an operator's exclusion is Radar's own sticky decision, independent of
- * whatever a later collection run observes. Mirrors persist-listing.ts's own
- * "preserve what a re-scan doesn't confirm" principle, applied to exclusion
- * instead of buildingType/ownership.
+ * Persistence is a single SECURITY DEFINER RPC so the database checks the
+ * current run lease and writes the snapshot in one transaction. A worker
+ * whose lease was replaced cannot write even if it finishes a portal fetch
+ * late. The RPC updates by stable source ID or same-source normalized URL;
+ * cross-source identity is data for read-side exact-proof grouping only.
  */
 export async function persistRadarListing(
   supabase: SupabaseClient,
   candidate: RadarPersistCandidate,
-  seenAt: string,
+  input: { ownerId: string; runId: string; leaseToken: string; seenAt: string },
   signal?: AbortSignal,
-): Promise<{ listingId: string; created: boolean }> {
-  let existingQuery = supabase
-    .from("price_radar_listings")
-    .select("id")
-    .eq("source", candidate.source)
-    .eq("external_listing_id", candidate.externalListingId);
-  if (signal) existingQuery = existingQuery.abortSignal(signal);
-  const existing = await existingQuery.maybeSingle();
-  if (existing.error) throw new Error("Nie udało się sprawdzić istniejącej oferty Radaru.");
-
-  const values = {
+): Promise<{ listingId: string }> {
+  const payload = {
     source: candidate.source,
     external_listing_id: candidate.externalListingId,
     original_url: candidate.originalUrl,
@@ -59,17 +51,21 @@ export async function persistRadarListing(
     market_type: candidate.marketType,
     renovation_status: candidate.renovationStatus,
     content_hash: candidate.contentHash,
-    last_seen_at: seenAt,
-    status: "active",
+    published_at: candidate.publishedAt,
+    source_updated_at: candidate.sourceUpdatedAt,
+    cross_source_identity: candidate.crossSourceIdentity,
+    collected_at: input.seenAt,
+    last_seen_at: input.seenAt,
     raw_payload: candidate.rawPayload,
   };
-
-  let upsertQuery = supabase
-    .from("price_radar_listings")
-    .upsert(values, { onConflict: "source,external_listing_id" })
-    .select("id");
-  if (signal) upsertQuery = upsertQuery.abortSignal(signal);
-  const { data, error } = await upsertQuery.single();
-  if (error || !data || typeof data.id !== "string") throw new Error("Nie udało się zapisać oferty Radaru.");
-  return { listingId: data.id, created: !existing.data };
+  let query = supabase.rpc("persist_price_radar_listing", {
+    p_owner_id: input.ownerId,
+    p_run_id: input.runId,
+    p_lease_token: input.leaseToken,
+    p_listing: payload,
+  });
+  if (signal && "abortSignal" in query && typeof query.abortSignal === "function") query = query.abortSignal(signal);
+  const { data, error } = await query;
+  if (error || typeof data !== "string") throw new Error(error?.message === "RADAR_LEASE_LOST" ? "RADAR_LEASE_LOST" : "Nie udało się zapisać oferty Radaru.");
+  return { listingId: data };
 }

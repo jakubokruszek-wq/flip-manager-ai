@@ -14,6 +14,7 @@ import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { slugifyCity, type SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import type { SearchFilter } from "@/features/flip-finder";
+import { finishRadarOlxJob } from "@/features/price-radar/server/radar-olx-worker";
 
 type Row = Record<string, unknown>;
 
@@ -21,8 +22,11 @@ export type EnqueuedOlxJob = { jobId: string; sourceScanId: string; runId: strin
 export type ClaimedOlxJob = {
   id: string;
   runId: string;
-  sourceScanId: string;
-  filterId: string;
+  sourceScanId: string | null;
+  filterId: string | null;
+  contextType: "finder" | "price_radar";
+  radarOwnerId: string | null;
+  radarRunLeaseToken: string | null;
   requestUrl: string;
   leaseToken: string;
   leasedUntil: string;
@@ -96,8 +100,11 @@ export async function claimOlxJob(workerId: string): Promise<ClaimedOlxJob | nul
   return {
     id: requiredString(row.id, "job id"),
     runId: requiredString(row.scan_run_id, "run id"),
-    sourceScanId: requiredString(row.source_scan_id, "source scan id"),
-    filterId: requiredString(row.search_filter_id, "filter id"),
+    sourceScanId: nullableString(row.source_scan_id),
+    filterId: nullableString(row.search_filter_id),
+    contextType: row.context_type === "price_radar" ? "price_radar" : "finder",
+    radarOwnerId: nullableString(row.radar_owner_id),
+    radarRunLeaseToken: nullableString(row.radar_lease_token),
     requestUrl: assertAllowedOlxUrl(requiredString(row.request_url, "request url")).toString(),
     leaseToken: requiredString(row.lease_token, "lease token"),
     leasedUntil: requiredString(row.leased_until, "leased until"),
@@ -105,31 +112,54 @@ export async function claimOlxJob(workerId: string): Promise<ClaimedOlxJob | nul
   };
 }
 
-export async function heartbeatOlxJob(input: { jobId: string; leaseToken: string; workerId: string }): Promise<string> {
+export async function heartbeatOlxJob(input: { jobId: string; leaseToken: string; workerId: string; radarLeaseToken?: string | null }): Promise<string> {
   const supabase = createOlxWorkerAdminClient();
   const leasedUntil = new Date(Date.now() + 120_000).toISOString();
+  const context = await supabase.from("olx_scan_jobs").select("context_type").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
+  if (context.error || !context.data) throw new Error("OLX_JOB_LEASE_LOST");
+  if (context.data.context_type === "price_radar") {
+    if (!input.radarLeaseToken) throw new Error("RADAR_LEASE_LOST");
+    const heartbeat = await supabase.rpc("heartbeat_price_radar_olx_job", { p_job_id: input.jobId, p_worker_id: input.workerId, p_job_lease_token: input.leaseToken, p_radar_lease_token: input.radarLeaseToken, p_lease_seconds: 120 });
+    if (heartbeat.error || heartbeat.data !== true) throw new Error("OLX_JOB_LEASE_LOST");
+    return leasedUntil;
+  }
   const result = await supabase.from("olx_scan_jobs").update({ heartbeat_at: new Date().toISOString(), leased_until: leasedUntil })
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").select("id").maybeSingle();
   if (result.error || !result.data) throw new Error("OLX_JOB_LEASE_LOST");
   return leasedUntil;
 }
 
-export async function failOlxJob(input: { jobId: string; leaseToken: string; workerId: string; errorCode: string; errorMessage: string }): Promise<void> {
+export async function failOlxJob(input: { jobId: string; leaseToken: string; workerId: string; errorCode: string; errorMessage: string; radarLeaseToken?: string | null }): Promise<void> {
   const supabase = createOlxWorkerAdminClient();
   const now = new Date().toISOString();
+  const context = await supabase.from("olx_scan_jobs").select("context_type,radar_owner_id,radar_run_id,radar_lease_token")
+    .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
+  if (context.error || !context.data) throw new Error("OLX_JOB_LEASE_LOST");
+  if (context.data.context_type === "price_radar") {
+    if (typeof context.data.radar_owner_id !== "string" || typeof context.data.radar_run_id !== "string" || typeof context.data.radar_lease_token !== "string") throw new Error("RADAR_OLX_CONTEXT_INVALID");
+    if (input.radarLeaseToken !== context.data.radar_lease_token) throw new Error("RADAR_LEASE_LOST");
+    await finishRadarOlxJob({ jobId: input.jobId, jobLeaseToken: input.leaseToken, workerId: input.workerId, ownerId: context.data.radar_owner_id, runId: context.data.radar_run_id, radarLeaseToken: context.data.radar_lease_token }, { errorCode: input.errorCode, errorMessage: input.errorMessage }, supabase);
+    return;
+  }
   const job = await supabase.from("olx_scan_jobs").update({ status: "failed", finished_at: now, leased_until: null, heartbeat_at: now, error_code: input.errorCode.slice(0, 100), error_message: input.errorMessage.slice(0, 1000) })
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").select("source_scan_id").maybeSingle();
   if (job.error || !job.data) throw new Error("OLX_JOB_LEASE_LOST");
   await supabase.from("source_scans").update({ status: "failed", finished_at: now, error_message: input.errorMessage.slice(0, 1000) }).eq("id", job.data.source_scan_id).in("status", ["pending", "running"]);
 }
 
-export async function completeOlxJob(input: { jobId: string; leaseToken: string; workerId: string; fetched: number; listings: SourceListing[]; warnings: string[]; durationMs: number }): Promise<SourceScanResult> {
+export async function completeOlxJob(input: { jobId: string; leaseToken: string; workerId: string; fetched: number; listings: SourceListing[]; warnings: string[]; durationMs: number; radarLeaseToken?: string | null }): Promise<SourceScanResult> {
   const supabase = createOlxWorkerAdminClient();
-  const jobResult = await supabase.from("olx_scan_jobs").select("id,status,source_scan_id,search_filter_id,result_summary").eq("id", input.jobId).maybeSingle();
+  const jobResult = await supabase.from("olx_scan_jobs").select("id,status,context_type,source_scan_id,search_filter_id,result_summary,radar_owner_id,radar_run_id,radar_lease_token").eq("id", input.jobId).maybeSingle();
   if (jobResult.error || !jobResult.data) throw new Error("OLX_JOB_NOT_FOUND");
   if (jobResult.data.status === "completed" && isSourceScanResult(jobResult.data.result_summary)) return jobResult.data.result_summary;
   const lease = await supabase.from("olx_scan_jobs").select("id").eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", input.workerId).eq("status", "running").maybeSingle();
   if (lease.error || !lease.data) throw new Error("OLX_JOB_LEASE_LOST");
+  if (jobResult.data.context_type === "price_radar") {
+    const radarLeaseToken = input.radarLeaseToken;
+    if (typeof jobResult.data.radar_owner_id !== "string" || typeof jobResult.data.radar_run_id !== "string" || typeof jobResult.data.radar_lease_token !== "string" || typeof radarLeaseToken !== "string" || radarLeaseToken !== jobResult.data.radar_lease_token) throw new Error("RADAR_LEASE_LOST");
+    const radarResult = await finishRadarOlxJob({ jobId: input.jobId, jobLeaseToken: input.leaseToken, workerId: input.workerId, ownerId: jobResult.data.radar_owner_id, runId: jobResult.data.radar_run_id, radarLeaseToken }, input, supabase);
+    return { source: "olx", status: "completed", fetched: radarResult.fetched, normalized: radarResult.qualified, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: Math.max(0, radarResult.fetched - radarResult.qualified), durationMs: input.durationMs, errorCode: null, errorMessage: null, warnings: input.warnings, matchDiagnostics: emptyMatchDiagnosticSummary() };
+  }
   const filter = await getSearchFilter(String(jobResult.data.search_filter_id));
   if (!filter) throw new Error("OLX_FILTER_NOT_FOUND");
   const sourceScanId = String(jobResult.data.source_scan_id);
@@ -243,13 +273,14 @@ export async function getOlxScanRunStatus(runId: string) {
   };
 }
 
-export function parseOlxCompletionPayload(value: unknown): { jobId: string; leaseToken: string; workerId: string; fetched: number; listings: SourceListing[]; warnings: string[]; durationMs: number } {
+export function parseOlxCompletionPayload(value: unknown): { jobId: string; leaseToken: string; workerId: string; fetched: number; listings: SourceListing[]; warnings: string[]; durationMs: number; radarLeaseToken: string | null } {
   const row = requireRow(value);
   const listingsValue = row.listings;
   if (!Array.isArray(listingsValue) || listingsValue.length > 200) throw new Error("INVALID_LISTINGS");
   return {
     jobId: requiredString(row.jobId, "jobId"), leaseToken: requiredString(row.leaseToken, "leaseToken"), workerId: requiredString(row.workerId, "workerId"),
     fetched: nonnegativeInteger(row.fetched), listings: listingsValue.map(parseSourceListing), warnings: stringArray(row.warnings).slice(0, 20), durationMs: nonnegativeInteger(row.durationMs),
+    radarLeaseToken: nullableString(row.radarLeaseToken),
   };
 }
 
