@@ -4,7 +4,8 @@ import { normalizeOtodomUrl } from "../otodom-search.ts";
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
 mock.module("@/features/market-intelligence/resale-comps-store", { namedExports: { syncResaleCompFromListing: async () => ({ saved: false, created: false, compId: null, available: true }) } });
-mock.module("@/features/flip-finder/server/canonical-reconciliation", { namedExports: { reconcileCanonicalListingDecision: async () => ({ isCurrentMatch: true }) } });
+let reconciliationCalls = 0;
+mock.module("@/features/flip-finder/server/canonical-reconciliation", { namedExports: { reconcileCanonicalListingDecision: async () => { reconciliationCalls += 1; return { isCurrentMatch: true }; } } });
 
 type Row = Record<string, unknown>;
 function fakeDb(rows: Row[]) {
@@ -144,6 +145,26 @@ test("persistListing stores the adapter's confirmed publication date in snapshot
   assert.equal(rows.length, 1);
   assert.equal(db.snapshots.length, 1);
   assert.equal((db.snapshots[0].raw_data as Row).sourcePublishedAt, "2026-10-04T21:55:00.000Z");
+});
+
+test("a source scan does not reactivate or write over an archived listing without an explicit restore", async () => {
+  reconciliationCalls = 0;
+  const archivedRow: Row = {
+    id: "archived-canonical", source: "domiporta", external_listing_id: "archived-id",
+    original_url: "https://domiporta.pl/oferta/lodz-1", normalized_url: "https://domiporta.pl/oferta/lodz-1",
+    title: "Archived title", price: 480000, content_hash: "archived-content", images: ["https://img.example/old.jpg"],
+    lifecycle_status: "ARCHIVED", archived_at: "2026-10-01T10:00:00.000Z", manual_decision: null,
+  };
+  const before = structuredClone(archivedRow);
+  const rows: Row[] = [archivedRow];
+  const db = fakeDb(rows);
+
+  const result = await persistListing(db as never, "filter-1", listing("archived-id", "New source title"), true, [], "scan-archived", "2026-10-07T10:00:00Z", AbortSignal.timeout(1000));
+
+  assert.deepEqual(result, { listingId: "archived-canonical", listingCreated: false, matchCreated: false, updated: 0, priceDrop: 0 });
+  assert.deepEqual(rows, [before], "archived lifecycle, content, and archival timestamp remain untouched");
+  assert.equal(db.snapshots.length, 0, "the archived row must not gain new history as a side effect of a scan");
+  assert.equal(reconciliationCalls, 0, "the importer must not reach canonical reconciliation for an archived row");
 });
 
 test("a non-Facebook reimport without a valid total sale price is rejected before any row or existing price can be changed", async () => {

@@ -63,6 +63,13 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
   const existing = existingResult.data;
   if (existingError) throw new Error("Nie udało się sprawdzić istniejącej oferty.");
   const current = existing && typeof existing === "object" && "id" in existing && typeof existing.id === "string" ? { id: existing.id, price: typeof existing.price === "number" ? existing.price : null, contentHash: typeof existing.content_hash === "string" ? existing.content_hash : null, images: Array.isArray(existing.images) ? existing.images.filter((image: unknown): image is string => typeof image === "string") : [], buildingType: typeof existing.building_type === "string" ? existing.building_type : null, ownership: typeof existing.ownership === "string" ? existing.ownership : null } satisfies ExistingListing : null;
+  const archived = existing && typeof existing === "object" && existing.lifecycle_status === "ARCHIVED";
+  // Archived listings require an explicit restore action. A source scan must
+  // not reactivate them in the listings upsert before canonical reconciliation
+  // has a chance to apply a per-filter clear tombstone.
+  if (archived && current) {
+    return { listingId: current.id, listingCreated: false, matchCreated: false, updated: 0, priceDrop: 0 };
+  }
   const manualRejected = existing && typeof existing === "object" && existing.manual_decision === "REJECTED";
   const archivedAt = existing && typeof existing === "object" && typeof existing.archived_at === "string" ? existing.archived_at : null;
   const canonicalExternalListingId = existing && typeof existing === "object" && typeof existing.external_listing_id === "string" ? existing.external_listing_id : item.externalListingId;
