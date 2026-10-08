@@ -12,7 +12,9 @@ begin;
 -- deterministically. This is CONFIRMED by locally reproducing the exact
 -- 42702 (code, message, and internal statement/position) against the
 -- unmodified function body using a real embedded Postgres engine — not
--- inferred from source reading alone.
+-- inferred from source reading alone. The embedded test engine used here is
+-- PGlite (Postgres compiled to WASM), not a native PostgreSQL service or
+-- Production.
 --
 -- Postgres's ON CONFLICT (...) column-list grammar only accepts bare
 -- column names — neither `table.column` nor `alias.column` qualification
@@ -25,7 +27,8 @@ begin;
 -- exact same conflict (public.listing_filter_matches's primary key is
 -- declared inline as `primary key (listing_id, search_filter_id)` in
 -- 20260719113000_create_flip_finder_foundation.sql, so Postgres's default
--- naming assigns it listing_filter_matches_pkey). Verified locally,
+-- naming assigns it listing_filter_matches_pkey). Verified locally in the
+-- PGlite/WASM test harness,
 -- before and after, that this produces byte-identical results across
 -- MATCHED/REVIEW/REJECTED, is idempotent on retry with no duplicate rows,
 -- and correctly maintains independent membership rows per filter for the
