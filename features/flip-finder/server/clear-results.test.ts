@@ -18,9 +18,15 @@ mock.module("server-only", { namedExports: {} });
 mock.module("@/lib/supabase/server", { namedExports: { createClient: async () => db } });
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => db } });
 mock.module("@/features/flip-finder/server/search-filters", { namedExports: { getSearchFilter: async (id: string) => id === filterId ? filter : null } });
+mock.module("@/features/auth/operator", { namedExports: {
+  requireOperator: async () => ({ id: "operator-clear-test", email: "operator@example.test" }),
+  operatorAuthorizationResponse: () => Response.json({ ok: false }, { status: 401 }),
+} });
 
 const { ClearResultsConflictError, clearFilterResults } = await import("./clear-results.ts");
 const { getFilterResults } = await import("./filter-results.ts");
+const { POST: clearResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/clear-results/route.ts");
+const { GET: getResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/results/route.ts");
 
 function makeListing(id: string, review = false): Record<string, unknown> {
   return {
@@ -78,6 +84,42 @@ test("clearing zero MATCHED plus 22 REVIEW rows hides both result sections witho
   const otherMembership = db.rows("listing_filter_matches").find((row) => row.search_filter_id === otherFilterId);
   assert.equal(otherMembership?.is_current_match, true, "another filter's row must not be cleared");
   assert.equal(db.rows("listing_filter_matches").filter((row) => row.search_filter_id === filterId && (row.match_reasons as string[]).includes("finder_cleared")).length, 22);
+});
+
+test("route E2E: confirmation POST writes per-filter tombstones and the subsequent results GET returns zero MATCHED and REVIEW", async () => {
+  const listings = [makeListing("route-matched"), makeListing("route-review-a", true), makeListing("route-review-b", true)];
+  initialize(listings, listings.map((row) => membership(String(row.id), row.id !== "route-matched")));
+
+  const beforeResponse = await getResultsRoute(
+    new Request(`http://localhost/api/flip-finder/search-filters/${filterId}/results`),
+    { params: Promise.resolve({ id: filterId }) },
+  );
+  assert.equal(beforeResponse.status, 200);
+  const before = await beforeResponse.json() as { results: unknown[]; reviewResults: unknown[] };
+  assert.equal(before.results.length, 1);
+  assert.equal(before.reviewResults.length, 2);
+
+  const clearResponse = await clearResultsRoute(
+    new Request(`http://localhost/api/flip-finder/search-filters/${filterId}/clear-results`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }),
+    { params: Promise.resolve({ id: filterId }) },
+  );
+  assert.equal(clearResponse.status, 200);
+  assert.deepEqual(await clearResponse.json(), { ok: true, archivedCount: 3 });
+  assert.equal(db.rows("listing_filter_matches").filter((row) => row.search_filter_id === filterId && (row.match_reasons as string[]).includes("finder_cleared")).length, 3);
+
+  const afterResponse = await getResultsRoute(
+    new Request(`http://localhost/api/flip-finder/search-filters/${filterId}/results`),
+    { params: Promise.resolve({ id: filterId }) },
+  );
+  assert.equal(afterResponse.status, 200);
+  const after = await afterResponse.json() as { results: unknown[]; reviewResults: unknown[]; counts: { active: number; review: number } };
+  assert.deepEqual(after.results, []);
+  assert.deepEqual(after.reviewResults, []);
+  assert.deepEqual(after.counts, { active: 0, review: 0, archived: 0 });
 });
 
 test("clearing more than 2000 visible memberships writes deterministic chunks of at most 200 and is idempotent", async () => {

@@ -32,6 +32,7 @@ import { calculateResultUnderwriting, loadUnderwritingSettings } from "@/feature
 import { DEFAULT_UNDERWRITING_SETTINGS } from "@/features/flip-finder/underwriting";
 import { activeSourcesSummary, latestActiveScansText, sourceLabel } from "@/features/flip-finder/source-summary";
 import { activeFilterSources } from "@/features/flip-finder/source-availability";
+import { countFinderResultsBySource } from "@/features/flip-finder/source-result-counts";
 import { LISTING_SOURCES, type SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { shouldShowGenericStatusBadge } from "@/features/flip-finder/listing-card-variant";
@@ -135,14 +136,21 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
     [filteredResults, sort],
   );
   const reviewResults = useMemo(() => (data?.reviewResults ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.reviewResults, underwritingSettings]);
-  const sortedReviewResults = useMemo(() => sortResults(reviewResults, sort), [reviewResults, sort]);
+  const filteredReviewResults = useMemo(
+    () => source ? reviewResults.filter((result) => result.source === source) : reviewResults,
+    [reviewResults, source],
+  );
+  const sortedReviewResults = useMemo(() => sortResults(filteredReviewResults, sort), [filteredReviewResults, sort]);
   const reviewBuckets = useMemo(() => reviewCounts(sortedReviewResults), [sortedReviewResults]);
   const visibleReviewResults = sortedReviewResults;
-  const reviewCount = data?.counts?.review ?? sortedReviewResults.length;
+  const reviewCount = sortedReviewResults.length;
   const archivedResults = useMemo(() => archiveOpen ? sortResults(data?.archivedResults ?? [], sort) : [], [archiveOpen, data?.archivedResults, sort]);
-  const sourceCounts = useMemo(() => countSources(data?.results ?? []), [data]);
+  const sourceCounts = useMemo(
+    () => countFinderResultsBySource(data?.results ?? [], data?.reviewResults ?? []),
+    [data?.results, data?.reviewResults],
+  );
   const activeSources = activeFilterSources(data?.filter.sources ?? []);
-  const historicalSources = LISTING_SOURCES.filter((item) => sourceCounts[item] > 0 && !activeSources.includes(item));
+  const historicalSources = LISTING_SOURCES.filter((item) => (sourceCounts.bySource[item].matched + sourceCounts.bySource[item].review) > 0 && !activeSources.includes(item));
   const dealOfDay = useMemo(() => selectDealOfDay([...allResults, ...reviewResults]), [allResults, reviewResults]);
 
   if (error) {
@@ -153,11 +161,17 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
     <section aria-label="Oferty dopasowane do aktywnego filtra" className="space-y-4">
       {data ? <>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
-          <div><p className="font-semibold">BAZA OFERT</p><p className="mt-1 text-sm text-muted-foreground">Aktywne zapisane oferty: <strong className="text-foreground">{data.total}</strong></p></div>
+          <div><p className="font-semibold">BAZA OFERT</p><p className="mt-1 text-sm text-muted-foreground">Widoczne oferty: <strong className="text-foreground">{sourceCounts.total.matched + sourceCounts.total.review}</strong></p></div>
           <button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source ? <span className="size-2 rounded-full bg-primary" /> : null}</button>
-          <div className="hidden flex-wrap items-center gap-2 sm:flex"><SourceCount label="Razem" value={data.total} active={source === null} onClick={() => setSource(null)} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => setSource(item)} />)}</div>
         </div>
-        {filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><p className="mt-3 text-xs text-muted-foreground">{activeSourcesSummary(activeSources)}</p><div className="mt-5 grid grid-cols-2 gap-2"><SourceCount label="Wszystkie" value={data.total} active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{activeSources.filter((item) => sourceCounts[item] > 0).map((item) => <SourceCount key={item} label={sourceLabel(item)} value={sourceCounts[item]} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />)}</div></div></div> : null}
+        <div aria-label="Wyniki według źródła" className="flex w-full min-w-0 flex-wrap gap-2" data-testid="finder-source-counts">
+          <SourceCount label={`Razem · Dopasowane: ${sourceCounts.total.matched} · Do oceny: ${sourceCounts.total.review}`} testId="finder-source-count-all" active={source === null} onClick={() => setSource(null)} />
+          {activeSources.map((item) => {
+            const counts = sourceCounts.bySource[item];
+            return <SourceCount key={item} label={`${sourceLabel(item)} · Dopasowane: ${counts.matched} · Do oceny: ${counts.review}`} testId={`finder-source-count-${item}`} active={source === item} onClick={() => setSource(item)} />;
+          })}
+        </div>
+        {filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><p className="mt-3 text-xs text-muted-foreground">{activeSourcesSummary(activeSources)}</p><div className="mt-5 flex min-w-0 flex-wrap gap-2"><SourceCount label={`Razem · Dopasowane: ${sourceCounts.total.matched} · Do oceny: ${sourceCounts.total.review}`} testId="finder-source-count-all-mobile" active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{activeSources.map((item) => { const counts = sourceCounts.bySource[item]; return <SourceCount key={item} label={`${sourceLabel(item)} · Dopasowane: ${counts.matched} · Do oceny: ${counts.review}`} testId={`finder-source-count-${item}-mobile`} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />; })}</div></div></div> : null}
       </> : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <input
@@ -204,7 +218,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
       {data ? <details className="rounded-xl border border-border/60 bg-muted/10 px-3 py-2">
         <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Źródła i historia skanów · {activeSourcesSummary(activeSources)}</summary>
         <p className="mt-3 text-xs text-muted-foreground">{latestActiveScansText(data.sourceScans, activeSources)}</p>
-        {historicalSources.length ? <p className="mt-2 text-xs text-muted-foreground/80">Historyczne wyniki z wyłączonych źródeł: {historicalSources.map((item) => `${sourceLabel(item)} (${sourceCounts[item]})`).join(", ")}</p> : null}
+        {historicalSources.length ? <p className="mt-2 text-xs text-muted-foreground/80">Historyczne wyniki z wyłączonych źródeł: {historicalSources.map((item) => { const counts = sourceCounts.bySource[item]; return `${sourceLabel(item)} (Dopasowane: ${counts.matched}, Do oceny: ${counts.review})`; }).join(", ")}</p> : null}
       </details> : null}
       <details className="rounded-xl border border-border/60 px-3 py-2">
         <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Historia wyszukiwania i działania</summary>
@@ -994,12 +1008,7 @@ function CalculatorInput({ label, value, onChange }: { label: string; value: num
 function CalculatorComputed({ label, value }: { label: string; value: string }) { return <div><span className="mb-1.5 block text-xs font-medium text-muted-foreground">{label}</span><div className="flex h-10 items-center rounded-lg border border-border/70 bg-muted/50 px-3 text-sm font-semibold">{value}</div></div>; }
 function CalculatorResult({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "negative" | "warning" | "positive" }) { const toneClass = tone === "positive" ? "border-emerald-500/20 bg-emerald-500/[0.07] text-emerald-200" : tone === "negative" ? "border-red-500/20 bg-red-500/[0.07] text-red-200" : tone === "warning" ? "border-amber-500/20 bg-amber-500/[0.07] text-amber-100" : "border-border/70 bg-surface-elevated/55 text-foreground"; return <div className={`min-w-0 rounded-xl border p-3 ${toneClass}`}><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="type-financial-standard mt-1">{value}</p></div>; }
 function AnalysisList({ label, values, empty, accent }: { label: string; values: string[]; empty: string; accent: "emerald" | "amber" | "rose" | "gold" }) { const accentClass = accent === "emerald" ? "border-success/20 bg-success/[0.05]" : accent === "amber" ? "border-warning/20 bg-warning/[0.05]" : accent === "rose" ? "border-danger/20 bg-danger/[0.05]" : "border-gold/20 bg-gold/[0.05]"; return <section className={`rounded-2xl border p-4 ${accentClass}`}><h3 className="text-sm font-bold">{label}</h3><ul className="mt-3 space-y-2 text-sm leading-5 text-foreground/80">{values.length ? values.map((value) => <li className="flex gap-2" key={value}><span className="mt-2 size-1.5 shrink-0 rounded-full bg-current/70" />{value}</li>) : <li className="text-muted-foreground">{empty}</li>}</ul></section>; }
-function SourceCount({ label, value, active, onClick }: { label: string; value: number; active: boolean; onClick: () => void }) { return <button aria-pressed={active} className={`min-h-11 rounded-xl border px-3 py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary ${active ? "bg-primary text-primary-foreground" : "bg-card"}`} onClick={onClick} type="button">{label}: {value}</button>; }
-function countSources(results: FilterResult[]): Record<FilterResult["source"], number> {
-  const counts = Object.fromEntries(LISTING_SOURCES.map((source) => [source, 0])) as Record<FilterResult["source"], number>;
-  for (const result of results) counts[result.source] += 1;
-  return counts;
-}
+function SourceCount({ label, testId, active, onClick }: { label: string; testId: string; active: boolean; onClick: () => void }) { return <button aria-pressed={active} className={`min-w-0 max-w-full flex-[1_1_16rem] whitespace-normal break-words [overflow-wrap:anywhere] rounded-xl border px-3 py-2 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary ${active ? "bg-primary text-primary-foreground" : "bg-card"}`} data-testid={testId} onClick={onClick} type="button">{label}</button>; }
 function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 truncate font-medium">{value}</p></div>; }
 function OpportunityFinancialMetric({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="type-financial-standard mt-0.5 text-foreground" title={value}>{value}</p></div>; }
 function DetailList({ label, values, empty }: { label: string; values: string[]; empty: string }) { return <div className="mt-4 text-sm"><p className="font-medium">{label}</p><p className="mt-1 text-muted-foreground">{values.length ? values.join(", ") : empty}</p></div>; }

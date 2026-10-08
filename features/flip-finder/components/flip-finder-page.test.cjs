@@ -58,7 +58,9 @@ test("saved listings database is labeled independently from the latest scan", ()
   assert.match(inlineResults, /BAZA OFERT/);
   assert.match(inlineResults, /AKTYWNE \/ DOPASOWANE/);
   assert.doesNotMatch(inlineResults, /AKTYWNE \/ MATCHED/);
-  assert.match(inlineResults, /Aktywne zapisane oferty:/);
+  assert.match(inlineResults, /Widoczne oferty:/);
+  assert.match(inlineResults, /Razem · Dopasowane: \$\{sourceCounts\.total\.matched\} · Do oceny: \$\{sourceCounts\.total\.review\}/);
+  assert.doesNotMatch(inlineResults, /Aktywne zapisane oferty:/);
   assert.doesNotMatch(inlineResults, /Znalezione oferty:/);
 });
 

@@ -174,7 +174,7 @@ function makeScanStressResults(cardCount) {
   };
 }
 
-async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0, scanFailure = null, clearResultsFailure = null, clearResultsArchivedCount = 4 } = {}) {
+async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialGalleryStatus = result.galleryStatus, galleryStatusResponse = null, scanResponseDelayMs = 0, activeCardCount = 0, scanFailure = null, clearResultsFailure = null, clearResultsArchivedCount = 4, resultsPayloadOverride = null, waitForGalleryButton = true } = {}) {
   const page = await browser.newPage();
   await page.context().addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
   const traceRequests = [];
@@ -183,7 +183,7 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
   let resultsRequests = 0;
   let clearResultsRequests = 0;
   let resultsCleared = false;
-  const pageResultsPayload = makeScanStressResults(activeCardCount);
+  const pageResultsPayload = resultsPayloadOverride ?? makeScanStressResults(activeCardCount);
   if (throwTraceFetch) {
     await page.addInitScript(() => {
       const realFetch = window.fetch.bind(window);
@@ -241,8 +241,9 @@ async function preparePage(browser, baseUrl, { throwTraceFetch = false, initialG
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
   await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
-  const button = page.locator(`[data-gallery-request-button="true"][data-listing-id="${listingId}"]`);
-  await button.waitFor({ state: "visible", timeout: 60_000 });
+  const firstResultId = pageResultsPayload.results?.[0]?.id ?? pageResultsPayload.reviewResults?.[0]?.id ?? listingId;
+  const button = page.locator(`[data-gallery-request-button="true"][data-listing-id="${firstResultId}"]`);
+  if (waitForGalleryButton) await button.waitFor({ state: "visible", timeout: 60_000 });
   return { page, button, traceRequests, galleryRequestCount: () => galleryRequests, scanRequestCount: () => scanRequests, resultsRequestCount: () => resultsRequests, clearResultsRequestCount: () => clearResultsRequests };
 }
 
@@ -461,8 +462,12 @@ test("real Flip Finder gallery button keeps business click independent from trac
     assert.equal(testPage.clearResultsRequestCount(), 1, "a rapid double-click must still send exactly one clear-results request");
     await testPage.page.waitForFunction(() => document.querySelectorAll('[data-testid="finder-card"]').length === 0, null, { timeout: 10_000 });
     assert.match(await testPage.page.locator("body").innerText(), /Historia i CRM pozostają zachowane/);
+    assert.equal(await testPage.page.getByTestId("finder-source-count-all").innerText(), "Razem · Dopasowane: 0 · Do oceny: 0", "the server refresh must clear both counters, not just remove the cards");
+    assert.equal(await testPage.page.getByTestId("finder-source-count-facebook").innerText(), "Facebook · Dopasowane: 0 · Do oceny: 0");
     await testPage.page.reload({ waitUntil: "domcontentloaded" });
     await testPage.page.waitForFunction(() => document.querySelectorAll('[data-testid="finder-card"]').length === 0, null, { timeout: 10_000 });
+    assert.equal(await testPage.page.getByTestId("finder-source-count-all").innerText(), "Razem · Dopasowane: 0 · Do oceny: 0", "a fresh GET after reload must keep both totals at zero");
+    assert.equal(await testPage.page.getByTestId("finder-source-count-facebook").innerText(), "Facebook · Dopasowane: 0 · Do oceny: 0");
     assert.equal(testPage.clearResultsRequestCount(), 1, "reload must not clear again or recreate hidden results");
 
     await confirmButton.click().catch(() => {});
@@ -486,6 +491,67 @@ test("real Flip Finder gallery button keeps business click independent from trac
     assert.ok(await dialog.isVisible(), "the dialog must stay open on failure so the user can retry");
     const dialogText = await dialog.innerText();
     assert.doesNotMatch(dialogText, /Error:|TypeError|stack|node_modules/i, "no raw internal token may reach the UI");
+    await testPage.page.close();
+  });
+
+  await t.test("source counters include MATCHED and REVIEW, retain active 0/0 portals, filter both card sections, and wrap at supported widths", async () => {
+    const sourceFilter = { ...filter, sources: ["gratka", "olx", "domiporta"] };
+    const matchedGratka = { ...result, id: "matched-gratka", title: "Gratka matched", source: "gratka", decisionBucket: "MATCHED", lifecycleStatus: "ACTIVE", reviewReason: null, missingFields: [] };
+    const reviewOlx = { ...result, id: "review-olx", title: "OLX review", source: "olx", decisionBucket: "REVIEW", lifecycleStatus: "REVIEW", reviewReason: "unknown_area", missingFields: ["area"] };
+    const sourcePayload = {
+      ...resultsPayload,
+      filter: sourceFilter,
+      results: [matchedGratka],
+      reviewResults: [reviewOlx],
+      counts: { active: 1, review: 1, archived: 0 },
+      total: 1,
+    };
+    const testPage = await preparePage(browser, baseUrl, { resultsPayloadOverride: sourcePayload, waitForGalleryButton: false });
+    const countButton = (source) => testPage.page.getByTestId(`finder-source-count-${source}`);
+    const allCounts = countButton("all");
+    const gratkaCounts = countButton("gratka");
+    const olxCounts = countButton("olx");
+    const domiportaCounts = countButton("domiporta");
+
+    await allCounts.waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(await allCounts.innerText(), "Razem · Dopasowane: 1 · Do oceny: 1");
+    assert.equal(await gratkaCounts.innerText(), "Gratka · Dopasowane: 1 · Do oceny: 0");
+    assert.equal(await olxCounts.innerText(), "OLX · Dopasowane: 0 · Do oceny: 1");
+    assert.equal(await domiportaCounts.innerText(), "Domiporta · Dopasowane: 0 · Do oceny: 0", "an active source with no cards stays visible");
+    assert.equal(await testPage.page.locator('[data-listing-id="matched-gratka"]').count(), 1);
+    assert.equal(await testPage.page.locator('[data-listing-id="review-olx"]').count(), 1);
+
+    for (const width of [320, 375, 768, 1280, 1440]) {
+      await testPage.page.setViewportSize({ width, height: 900 });
+      const layout = await testPage.page.getByTestId("finder-source-counts").evaluate((bar) => {
+        const bounds = bar.getBoundingClientRect();
+        const buttons = Array.from(bar.querySelectorAll("button"));
+        return {
+          clientWidth: bar.clientWidth,
+          scrollWidth: bar.scrollWidth,
+          buttonsWithin: buttons.every((button) => {
+            const buttonBounds = button.getBoundingClientRect();
+            return buttonBounds.left >= bounds.left - 1 && buttonBounds.right <= bounds.right + 1 && button.scrollWidth <= button.clientWidth + 1;
+          }),
+        };
+      });
+      assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `source strip must not overflow horizontally at ${width}px: ${JSON.stringify(layout)}`);
+      assert.ok(layout.buttonsWithin, `source labels must wrap without clipping at ${width}px: ${JSON.stringify(layout)}`);
+    }
+
+    await gratkaCounts.click();
+    assert.equal(await gratkaCounts.getAttribute("aria-pressed"), "true");
+    assert.equal(await testPage.page.locator('[data-listing-id="matched-gratka"]').count(), 1, "selected Gratka keeps its MATCHED card");
+    assert.equal(await testPage.page.locator('[data-listing-id="review-olx"]').count(), 0, "selected Gratka excludes OLX REVIEW cards");
+
+    await olxCounts.click();
+    assert.equal(await olxCounts.getAttribute("aria-pressed"), "true");
+    assert.equal(await testPage.page.locator('[data-listing-id="matched-gratka"]').count(), 0, "selected OLX excludes Gratka MATCHED cards");
+    assert.equal(await testPage.page.locator('[data-listing-id="review-olx"]').count(), 1, "selected OLX keeps its REVIEW card");
+
+    await domiportaCounts.click();
+    assert.equal(await domiportaCounts.getAttribute("aria-pressed"), "true");
+    assert.equal(await testPage.page.locator('[data-listing-id="matched-gratka"], [data-listing-id="review-olx"]').count(), 0, "selecting an active zero-result source filters both sections to zero");
     await testPage.page.close();
   });
 });
