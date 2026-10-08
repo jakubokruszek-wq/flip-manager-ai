@@ -30,6 +30,15 @@ test("low-confidence OCR price cannot replace a strong price or create a price d
   assert.equal(result.priceChanged, false);
 });
 
+test("a reimport with no price preserves the existing known sale price", () => {
+  const result = mergeFacebookPropertyByConfidence(
+    existing({ price: 161_000 }),
+    property({ price: null, pricePerM2: null, confidence: 0, fieldConfidence: { price: 0 } }),
+  );
+  assert.equal(result.property.price, 161_000);
+  assert.equal(result.priceChanged, false);
+});
+
 test("deterministic authoritative text price beats stale high-confidence history", () => {
   const result = mergeFacebookPropertyByConfidence(
     existing({ price: 1_778 }, 0.95),

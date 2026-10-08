@@ -44,7 +44,7 @@ create or replace function public.reconcile_canonical_listing_decision(
   p_lifecycle_status text,
   p_match_origin text default 'scan',
   p_source_scan_id uuid default null,
-  p_matched_at timestamptz default now()
+  p_matched_at timestamptz default null
 )
 returns table (
   listing_id uuid,
@@ -100,7 +100,11 @@ begin
      and m.is_current_match = false
      and m.match_reasons ? 'finder_cleared'
    for update;
-  if found and cleared_at is not null and coalesce(p_matched_at, now()) <= cleared_at then
+  -- A missing observation time is not evidence that the observation is newer
+  -- than the clear. This also keeps callers from the currently deployed app
+  -- safe during migration-before-deployment: older callers that omit or send
+  -- NULL for p_matched_at must not restore a cleared result.
+  if found and (cleared_at is null or p_matched_at is null or p_matched_at <= cleared_at) then
     return query select p_listing_id, p_filter_id, 'REJECTED'::text, target.lifecycle_status, false, jsonb_build_array('finder_cleared');
     return;
   end if;

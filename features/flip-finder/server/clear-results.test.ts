@@ -81,9 +81,12 @@ test("clearing zero MATCHED plus 22 REVIEW rows hides both result sections witho
 });
 
 test("clearing more than 2000 visible memberships writes deterministic chunks of at most 200 and is idempotent", async () => {
-  const listings = Array.from({ length: 2_105 }, (_, i) => makeListing(`matched-${String(i).padStart(4, "0")}`));
-  const memberships = listings.map((row) => membership(String(row.id)));
+  const listings = Array.from({ length: 2_105 }, (_, i) => makeListing(`mixed-${String(i).padStart(4, "0")}`, i % 2 === 1));
+  const memberships = listings.map((row, i) => membership(String(row.id), i % 2 === 1));
   initialize(listings, memberships);
+  const before = await getFilterResults(filterId);
+  assert.equal(before?.results.length, 1_053);
+  assert.equal(before?.reviewResults.length, 1_052);
   const updateChunkSizes: number[] = [];
   const originalFrom = db.from.bind(db);
   Object.defineProperty(db, "from", {
@@ -110,7 +113,9 @@ test("clearing more than 2000 visible memberships writes deterministic chunks of
   assert.ok(updateChunkSizes.length > 1);
   assert.ok(updateChunkSizes.every((size) => size > 0 && size <= 200), `writes must use no more than 200 IDs per update: ${updateChunkSizes}`);
   assert.equal(updateChunkSizes.reduce((sum, size) => sum + size, 0), 2_105);
-  assert.equal((await getFilterResults(filterId))?.total, 0, "the next read must stay empty, including IDs after the first read page");
+  const after = await getFilterResults(filterId);
+  assert.equal(after?.total, 0, "the next read must keep the MATCHED section empty, including IDs after the first read page");
+  assert.equal(after?.reviewResults.length, 0, "the next read must keep the REVIEW section empty, including IDs after the first read page");
   assert.deepEqual(await clearFilterResults(filterId), { archivedCount: 0 }, "repeating a successful clear is a no-op");
   assert.equal(db.rows("listing_filter_matches").filter((row) => (row.match_reasons as string[]).includes("finder_cleared")).length, 2_105);
 });

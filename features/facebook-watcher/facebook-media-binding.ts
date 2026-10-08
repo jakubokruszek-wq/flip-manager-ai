@@ -158,5 +158,10 @@ export function facebookImageProvenanceDiagnostics(
 }
 
 export function preserveFacebookPublishedAt(incoming: string | null | undefined, existing: string | null | undefined): string | null {
-  return incoming ?? existing ?? null;
+  const incomingTime = incoming ? Date.parse(incoming) : Number.NaN;
+  const existingTime = existing ? Date.parse(existing) : Number.NaN;
+
+  if (!Number.isFinite(incomingTime)) return Number.isFinite(existingTime) ? existing! : null;
+  if (!Number.isFinite(existingTime)) return incoming!;
+  return incomingTime < existingTime ? incoming! : existing!;
 }

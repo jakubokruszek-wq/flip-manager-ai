@@ -48,10 +48,12 @@ test("structured exact-post media provenance is an explicit safe exception", () 
   assert.deepEqual(exactBoundPropertyImages(input([structured]), "A"), [structured.url]);
 });
 
-test("a later scan without creation time preserves published_at", () => {
+test("unknown or later reimport dates preserve the oldest known published_at", () => {
   const existing = "2026-08-17T13:18:00.000Z";
   assert.equal(preserveFacebookPublishedAt(null, existing), existing);
   assert.equal(preserveFacebookPublishedAt("2026-08-17T13:18:00.000Z", null), existing);
+  assert.equal(preserveFacebookPublishedAt("2026-09-01T13:18:00.000Z", existing), existing, "a reimport must not rejuvenate a listing by replacing its older known publication date");
+  assert.equal(preserveFacebookPublishedAt(null, null), null, "unknown publication stays unknown instead of becoming an import timestamp");
 });
 
 test("image persistence diagnostics distinguish candidates, new uploads and final listing count", () => {

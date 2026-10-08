@@ -34,6 +34,7 @@ const SCHEMA_SQL = `
     archived_at timestamptz,
     review_reason text,
     missing_fields jsonb default '[]'::jsonb,
+    manual_decision text,
     status text
   );
   create table search_filters (id uuid primary key, name text);
@@ -68,10 +69,10 @@ async function seed(db: PGlite, listingId: string, filterId: string): Promise<vo
 
 type ReconcileRow = { listing_id: string; search_filter_id: string; bucket: string; lifecycle_status: string; is_current_match: boolean; match_reasons: string[] };
 
-async function reconcile(db: PGlite, args: { listingId: string; filterId: string; bucket: string; reasons: string[]; missingFields: string[]; lifecycleStatus: string; matchOrigin?: string; matchedAt?: string }): Promise<ReconcileRow> {
+async function reconcile(db: PGlite, args: { listingId: string; filterId: string; bucket: string; reasons: string[]; missingFields: string[]; lifecycleStatus: string; matchOrigin?: string; matchedAt?: string | null }): Promise<ReconcileRow> {
   const result = await db.query<ReconcileRow>(
     `select * from reconcile_canonical_listing_decision($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [args.listingId, args.filterId, args.bucket, JSON.stringify(args.reasons), JSON.stringify(args.missingFields), args.lifecycleStatus, args.matchOrigin ?? "scan", null, args.matchedAt ?? new Date().toISOString()],
+    [args.listingId, args.filterId, args.bucket, JSON.stringify(args.reasons), JSON.stringify(args.missingFields), args.lifecycleStatus, args.matchOrigin ?? "scan", null, args.matchedAt === undefined ? new Date().toISOString() : args.matchedAt],
   );
   return result.rows[0];
 }
@@ -221,6 +222,28 @@ test("the local clear-guard SQL preserves a per-filter tombstone against an olde
   assert.match(migration, /for update;/i);
   await db.exec(migration);
 
+  const functionState = await db.query<{
+    is_security_definer: boolean;
+    settings: string[] | null;
+    result_shape: string;
+    anon_can_execute: boolean;
+    authenticated_can_execute: boolean;
+    service_role_can_execute: boolean;
+  }>(`select p.prosecdef as is_security_definer, p.proconfig as settings,
+             pg_get_function_result(p.oid) as result_shape,
+             has_function_privilege('anon', p.oid, 'EXECUTE') as anon_can_execute,
+             has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_execute,
+             has_function_privilege('service_role', p.oid, 'EXECUTE') as service_role_can_execute
+        from pg_proc as p join pg_namespace as n on n.oid=p.pronamespace
+       where n.nspname='public' and p.proname='reconcile_canonical_listing_decision'`);
+  assert.equal(functionState.rows.length, 1);
+  assert.equal(functionState.rows[0].is_security_definer, true);
+  assert.ok(functionState.rows[0].settings?.includes("search_path=public"));
+  assert.equal(functionState.rows[0].result_shape, "TABLE(listing_id uuid, search_filter_id uuid, bucket text, lifecycle_status text, is_current_match boolean, match_reasons jsonb)");
+  assert.equal(functionState.rows[0].anon_can_execute, false);
+  assert.equal(functionState.rows[0].authenticated_can_execute, false);
+  assert.equal(functionState.rows[0].service_role_can_execute, true);
+
   const listingId = "24aad2a9-86e7-48a8-b3c1-0a470ed466e3";
   const filterId = "6ebf3a9c-5418-4ae6-a0bf-1989b6603367";
   const clearedAt = "2026-10-07T11:00:00.000Z";
@@ -242,6 +265,16 @@ test("the local clear-guard SQL preserves a per-filter tombstone against an olde
   assert.equal(persistedAfterStale.rows[0].is_current_match, false);
   assert.deepEqual(persistedAfterStale.rows[0].match_reasons, ["finder_cleared"]);
 
+  const unknownTimestamp = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchedAt: null });
+  assert.equal(unknownTimestamp.bucket, "REJECTED", "a caller without a trustworthy observation timestamp must fail closed against a clear tombstone");
+  assert.deepEqual(unknownTimestamp.match_reasons, ["finder_cleared"]);
+  const omittedTimestamp = await db.query<ReconcileRow>(
+    `select * from reconcile_canonical_listing_decision($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [listingId, filterId, "MATCHED", "[]", "[]", "ACTIVE", "scan", null],
+  );
+  assert.equal(omittedTimestamp.rows[0].bucket, "REJECTED", "the backwards-compatible default for an omitted timestamp must also fail closed");
+  assert.deepEqual(omittedTimestamp.rows[0].match_reasons, ["finder_cleared"]);
+
   const nextScan = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchedAt: "2026-10-07T12:00:00.000Z" });
   assert.equal(nextScan.bucket, "MATCHED");
   assert.equal(nextScan.is_current_match, true, "a new actual scan after the clear can publish its result");
@@ -251,6 +284,48 @@ test("the local clear-guard SQL preserves a per-filter tombstone against an olde
   );
   assert.equal(persistedAfterNextScan.rows[0].is_current_match, true);
   assert.deepEqual(persistedAfterNextScan.rows[0].match_reasons, []);
+});
+
+test("stale clear-guard returns before changing manual REJECTED, ARCHIVED, or another filter's membership", async () => {
+  const db = new PGlite();
+  await db.exec(`create role anon; create role authenticated; create role service_role;`);
+  await db.exec(SCHEMA_SQL);
+  await db.exec(fs.readFileSync(CLEAR_GUARD_DRAFT_PATH, "utf8"));
+  const filterId = "6ebf3a9c-5418-4ae6-a0bf-1989b6603367";
+  const otherFilterId = "7ebf3a9c-5418-4ae6-a0bf-1989b6603367";
+  const rejectedId = "24aad2a9-86e7-48a8-b3c1-0a470ed466e3";
+  const archivedId = "34aad2a9-86e7-48a8-b3c1-0a470ed466e3";
+  const clearedAt = "2026-10-07T11:00:00.000Z";
+  await seed(db, rejectedId, filterId);
+  await db.query(`insert into listings (id, status) values ($1, 'active')`, [archivedId]);
+  await db.query(`insert into search_filters (id, name) values ($1, 'other')`, [otherFilterId]);
+  await db.query(`update listings set lifecycle_status='REJECTED', manual_decision='REJECTED', archived_at='2026-10-06T00:00:00.000Z' where id=$1`, [rejectedId]);
+  await db.query(`update listings set lifecycle_status='ARCHIVED', archived_at='2026-10-05T00:00:00.000Z' where id=$1`, [archivedId]);
+  await db.query(
+    `insert into listing_filter_matches (listing_id, search_filter_id, last_matched_at, is_current_match, match_reasons, match_origin) values ($1,$2,$3,false,'["finder_cleared"]'::jsonb,'scan'),($4,$2,$3,false,'["finder_cleared"]'::jsonb,'scan'),($1,$5,$3,true,'[]'::jsonb,'scan')`,
+    [rejectedId, filterId, clearedAt, archivedId, otherFilterId],
+  );
+
+  for (const listingId of [rejectedId, archivedId]) {
+    const result = await reconcile(db, { listingId, filterId, bucket: "MATCHED", reasons: [], missingFields: [], lifecycleStatus: "ACTIVE", matchedAt: "2026-10-07T10:00:00.000Z" });
+    assert.equal(result.bucket, "REJECTED");
+    assert.equal(result.is_current_match, false);
+    assert.deepEqual(result.match_reasons, ["finder_cleared"]);
+  }
+
+  const listings = await db.query<{ id: string; lifecycle_status: string; manual_decision: string | null; archived_at: string | null }>(
+    `select id, lifecycle_status, manual_decision, archived_at from listings where id in ($1,$2) order by id`,
+    [rejectedId, archivedId],
+  );
+  assert.deepEqual(listings.rows.map((row) => ({ ...row, archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : null })), [
+    { id: rejectedId, lifecycle_status: "REJECTED", manual_decision: "REJECTED", archived_at: "2026-10-06T00:00:00.000Z" },
+    { id: archivedId, lifecycle_status: "ARCHIVED", manual_decision: null, archived_at: "2026-10-05T00:00:00.000Z" },
+  ]);
+  const otherFilter = await db.query<{ is_current_match: boolean; match_reasons: string[] }>(
+    `select is_current_match, match_reasons from listing_filter_matches where listing_id=$1 and search_filter_id=$2`,
+    [rejectedId, otherFilterId],
+  );
+  assert.deepEqual(otherFilter.rows, [{ is_current_match: true, match_reasons: [] }], "the exact filter guard must not alter another filter's membership");
 });
 
 test("D: a high price/m2 apartment is correctly rejected by the real filter-evaluation logic, and the RPC persists REJECTED without a reconciliation failure", async () => {
