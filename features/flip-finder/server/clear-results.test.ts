@@ -26,7 +26,7 @@ mock.module("@/features/auth/operator", { namedExports: {
 const { ClearResultsConflictError, clearFilterResults } = await import("./clear-results.ts");
 const { getFilterResults } = await import("./filter-results.ts");
 const { POST: clearResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/clear-results/route.ts");
-const { GET: getResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/results/route.ts");
+const { GET: getResultsRoute, maxDuration: resultsRouteMaxDuration } = await import("../../../app/api/flip-finder/search-filters/[id]/results/route.ts");
 
 function makeListing(id: string, review = false): Record<string, unknown> {
   return {
@@ -58,6 +58,16 @@ function initialize(listings: Record<string, unknown>[], memberships: Record<str
     .seed("source_scans", sourceScans)
     .seed("resale_comps", []);
 }
+
+test("the results route is budgeted for its multi-table, ID-chunked pagination work, not the platform's short default", () => {
+  // "Nie udało się pobrać wyników filtra" reached the operator in Production
+  // during a heavy, concurrent 12-source scan against the same tables this
+  // route reads. No code/schema regression was found on direct
+  // reproduction, but this route -- unlike scans/[runId]/continue and
+  // search-filters/[id]/scan, which already do this for comparable
+  // multi-table work -- had no maxDuration override at all.
+  assert.equal(resultsRouteMaxDuration, 60);
+});
 
 test("clearing zero MATCHED plus 22 REVIEW rows hides both result sections without changing listing, history, CRM decision, or another filter", async () => {
   const listings = Array.from({ length: 22 }, (_, i) => makeListing(`review-${i}`, true));

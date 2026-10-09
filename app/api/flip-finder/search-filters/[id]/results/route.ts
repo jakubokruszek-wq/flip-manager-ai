@@ -2,6 +2,15 @@ import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/
 
 import { getFilterResults } from "@/features/flip-finder/server/filter-results";
 
+// getFilterResults does multiple paginated, ID-chunked reads across listings,
+// listing_snapshots, listing_source_metadata and resale_comps -- the same
+// kind of multi-table DB-heavy work scans/[runId]/continue and
+// search-filters/[id]/scan already set this for. Unlike those, this route
+// had no override and fell back to the platform default, well under this
+// query's worst case next to an active multi-source scan writing to the same
+// tables concurrently.
+export const maxDuration = 60;
+
 type Context = {
   params: Promise<{ id: string }>;
 };
