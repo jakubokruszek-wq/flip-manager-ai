@@ -56,6 +56,7 @@ function toRadarRun(row: Row): RadarRun {
     id: String(row.id),
     ownerId: String(row.owner_id),
     leaseToken: typeof row.lease_token === "string" ? row.lease_token : null,
+    leaseUntil: typeof row.lease_until === "string" ? row.lease_until : null,
     status: isRunStatus(row.status) ? row.status : "pending",
     startedAt: String(row.started_at),
     finishedAt: typeof row.finished_at === "string" ? row.finished_at : null,

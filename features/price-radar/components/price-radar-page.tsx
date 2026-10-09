@@ -14,7 +14,7 @@ type ResultsResponse = {
   activeSources: RadarSource[];
   disabledSourceNote: string;
 };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; errorMessage: string | null };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; errorMessage: string | null };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[] }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
@@ -284,12 +284,12 @@ export function PriceRadarPage() {
       <section aria-label="Zbieranie ofert Radaru" className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
         <div className="min-w-0">
           <h2 className="font-semibold">Zbieranie Radaru</h2>
-          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runStatusLabel(run.status)} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
+          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runStatusLabel(run.status)}${run.status === "running" && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
           {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
           {settingsSaving ? <p className="mt-1 text-xs text-muted-foreground">Zapisywanie ustawień…</p> : settingsDirty ? <p className="mt-1 text-xs text-destructive">Ustawienia nie zostały zapisane. Zmiana zostanie ponowiona po kolejnej edycji.</p> : null}
         </div>
-        <Button disabled={runStarting || run?.status === "running" || !settingsLoaded} onClick={() => void startCollection()}>
-          {runStarting ? "Uruchamianie…" : run?.status === "running" ? "Przebieg trwa" : "Uruchom / wznów zbieranie"}
+        <Button disabled={runStarting || isRunActuallyActive(run) || !settingsLoaded} onClick={() => void startCollection()}>
+          {runStarting ? "Uruchamianie…" : isRunActuallyActive(run) ? "Przebieg trwa" : "Uruchom / wznów zbieranie"}
         </Button>
         {run?.sourceStatuses ? <div className="flex w-full min-w-0 flex-wrap gap-2 text-xs">{Object.entries(run.sourceStatuses).map(([source, status]) => <span className="max-w-full break-words rounded-full border px-2 py-1" key={source}>{source}: {statusLabel(status)}</span>)}</div> : null}
       </section>
@@ -384,6 +384,21 @@ function sourceLabel(source: RadarSource): string {
 
 function runStatusLabel(status: RadarRunStatus): string {
   return ({ pending: "Oczekuje", running: "Trwa", completed: "Zakończono", partial: "Zakończono częściowo", failed: "Niepowodzenie" })[status];
+}
+
+/**
+ * status === "running" alone does not mean a claim is still held: the
+ * owning portion's lease can expire (a crashed/disconnected local OLX
+ * worker, a timed-out request) without anything ever flipping the run's own
+ * status row. The server's own claim RPC already treats an expired lease as
+ * reclaimable, so the UI must not block the operator from retrying past a
+ * stale "running" label -- that would leave an orphaned run with no way to
+ * resume it short of direct database access.
+ */
+function isRunActuallyActive(run: RunStatus | null): boolean {
+  if (!run || run.status !== "running") return false;
+  if (!run.leaseUntil) return false;
+  return new Date(run.leaseUntil).getTime() > Date.now();
 }
 
 function statusLabel(status: string): string {

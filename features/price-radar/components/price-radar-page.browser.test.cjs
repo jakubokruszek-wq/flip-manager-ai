@@ -182,3 +182,81 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.deepEqual(blockedExternalRequests, [], "the isolated browser never contacts a portal or remote Supabase");
   assert.equal(requests.some((request) => request.path === "/api/price-radar/run" && request.method === "POST"), false, "viewing and refreshing the page never starts a collection run");
 });
+
+test("a 'running' Radar run whose lease already expired (a dead local OLX worker) is shown as resumable, not stuck forever behind a disabled button", { timeout: 600_000 }, async (t) => {
+  const port = await freePort();
+  const authPort = await freePort();
+  const root = path.resolve(__dirname, "../../..");
+  const nextBin = require.resolve("next/dist/bin/next");
+  const authServer = http.createServer((request, response) => {
+    if (request.url === "/auth/v1/user") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify(session.user)); return; }
+    if (request.url?.startsWith("/rest/v1/")) { response.writeHead(200, { "content-type": "application/json" }); response.end("[]"); return; }
+    response.writeHead(404); response.end("{}");
+  });
+  await new Promise((resolve, reject) => { authServer.once("error", reject); authServer.listen(authPort, "127.0.0.1", resolve); });
+  t.after(() => authServer.close());
+  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_OPTIONS: "--use-system-ca", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
+  await new Promise((resolve, reject) => {
+    const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    build.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8000); });
+    build.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8000); });
+    build.once("error", reject);
+    build.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`isolated Next build failed (${code}): ${output}`)));
+  });
+  const server = spawn(process.execPath, [nextBin, "start", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+  let serverOutput = "";
+  server.stdout.on("data", (chunk) => { serverOutput = `${serverOutput}${chunk}`.slice(-8000); });
+  server.stderr.on("data", (chunk) => { serverOutput = `${serverOutput}${chunk}`.slice(-8000); });
+  t.after(() => { if (!server.killed) server.kill(); });
+  await waitForServer(`http://127.0.0.1:${port}/price-radar`);
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.context().addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(session), url: `http://127.0.0.1:${port}`, httpOnly: true, sameSite: "Lax" }]);
+
+  // Reproduces the real Production state observed on 2026-10-09: the OLX job
+  // died through claim_olx_scan_job's own generic LEASE_EXHAUSTED path, which
+  // never updates price_radar_runs -- the run row is left at status "running"
+  // with a lease_until already in the past.
+  const orphanedRun = {
+    id: "93a7f1d5-0000-4000-8000-000000000001", status: "running", startedAt: "2026-10-09T20:50:06.000Z", finishedAt: null,
+    leaseUntil: new Date(Date.now() - 5 * 60_000).toISOString(),
+    scannedCount: 29, qualifiedCount: 0,
+    sourceStatuses: { otodom: "failed", olx: "running", morizon: "pending" },
+    sourceErrors: { otodom: "Otodom: placeholder_url (29)" },
+    errorMessage: null,
+  };
+  let postCount = 0;
+  await page.route("**/api/price-radar/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === "/api/price-radar/settings") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ filters: defaultFilters(), activeSources, disabledSourceNote: "" }) });
+    if (url.pathname === "/api/price-radar/results") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ listings: [], excludedListings: [], stats: [] }) });
+    if (url.pathname === "/api/price-radar/run" && request.method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: orphanedRun }) });
+    if (url.pathname === "/api/price-radar/run" && request.method() === "POST") {
+      postCount += 1;
+      orphanedRun.sourceStatuses.olx = "failed";
+      orphanedRun.sourceErrors.olx = "RADAR_OLX_JOB_ALREADY_FAILED";
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: orphanedRun.id, status: "partial", scannedCount: 29, qualifiedCount: 0 }) });
+    }
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "unexpected Radar request" }) });
+  });
+
+  await page.goto(`http://127.0.0.1:${port}/price-radar`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Radar cen po remoncie", level: 1 }).waitFor();
+  // Settings load asynchronously and gate the button too (disabled={... || !settingsLoaded}).
+  // Wait for a settings-derived element so this test's own assertion isn't racing that load.
+  await page.getByRole("button", { name: districts[0] }).waitFor();
+  // The run status arrives via its own async fetch after settings load. Wait
+  // for its resulting, run-derived text before reading the button's state,
+  // so this assertion isn't racing that fetch's resolution.
+  await page.getByText("przerwany, gotowy do wznowienia", { exact: false }).waitFor();
+  const resumeButton = page.getByRole("button", { name: "Uruchom / wznów zbieranie" });
+  await resumeButton.waitFor();
+  assert.equal(await resumeButton.isDisabled(), false, "a run stuck at status=running with an expired lease must not permanently disable the resume button");
+  await resumeButton.click();
+  await page.waitForFunction(() => document.body.textContent?.includes("RADAR_OLX_JOB_ALREADY_FAILED"));
+  assert.equal(postCount, 1, "clicking the resume button must actually call POST /api/price-radar/run");
+  assert.equal(serverOutput.includes("Error:"), false, serverOutput);
+});
