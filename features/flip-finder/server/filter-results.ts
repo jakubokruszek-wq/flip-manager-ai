@@ -31,7 +31,8 @@ import { canonicalFacebookContentFingerprint, canonicalFacebookParameterFingerpr
 import { earliestPublicationDate, isWithinFinderPublicationWindow, normalizePublicationDate } from "@/features/flip-finder/publication-date";
 import { isValidSalePrice } from "@/features/flip-finder/sale-price";
 import { resolveBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
-import { groupConfirmedPropertyResults } from "@/features/flip-finder/property-identity";
+import { groupPropertyResults, identityPairKey } from "@/features/flip-finder/property-identity";
+import { normalizeListingIdentityEvidence } from "@/features/flip-finder/identity-evidence";
 
 type Row = Record<string, unknown>;
 
@@ -49,6 +50,7 @@ type FilterResultsPayload = {
   newMatches: number;
   lastScan: SearchFilterScan | null;
   sourceScans: SearchFilterScan[];
+  identityFeatures: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean };
 };
 
 type MatchRow = {
@@ -103,6 +105,7 @@ type ListingRow = Pick<
   externalListingId?: string | null;
   contentHash?: string | null;
   crossSourceIdentity?: string | null;
+  identityEvidence?: import("@/features/flip-finder/identity-evidence").ListingIdentityEvidence;
   contentFingerprint?: string | null;
   parameterFingerprint?: string | null;
   facebookPostId?: string | null;
@@ -126,13 +129,15 @@ type SnapshotRow = {
   rawData: Row;
 };
 
-export async function getFilterResults(filterId: string, includeArchived = false, now = Date.now()): Promise<FilterResultsPayload | null> {
+export async function getFilterResults(filterId: string, includeArchived = false, now = Date.now(), operatorId?: string): Promise<FilterResultsPayload | null> {
   const filter = await getSearchFilter(filterId);
   if (isFilterMissing(filter)) {
     return null;
   }
 
   const supabase = await createClient();
+  let adminClient: ReturnType<typeof createAdminClient> | null = null;
+  const getAdminClient = () => (adminClient ??= createAdminClient());
   const [matchesResult, scansResult] = await Promise.all([
     fetchAllRows(() =>
       supabase
@@ -215,6 +220,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
       newMatches: 0,
       lastScan,
       sourceScans: scans,
+      identityFeatures: { automaticEvidenceAvailable: false, manualReviewAvailable: false },
     };
   }
 
@@ -222,11 +228,13 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const lifecycleStatuses = includeArchived
     ? ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]
     : ["ACTIVE", "REVIEW"];
-  const buildListingQuery = (idChunk: string[]) =>
+  const baseListingColumns =
+    "id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count";
+  const buildListingQuery = (idChunk: string[], identityColumns: "both" | "cross" | "none") =>
     supabase
       .from("listings")
       .select(
-        "id,external_listing_id,content_hash,cross_source_identity,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count",
+        `${baseListingColumns}${identityColumns === "both" ? ",cross_source_identity,identity_evidence" : identityColumns === "cross" ? ",cross_source_identity" : ""}`,
       )
       .in("id", idChunk)
       .eq("status", "active")
@@ -235,8 +243,8 @@ export async function getFilterResults(filterId: string, includeArchived = false
       // .range() pages across a stable sequence, never PostgREST's otherwise
       // unspecified LIMIT/OFFSET row order.
       .order("id", { ascending: true });
-  const [listingsResultRaw, snapshotsResult] = await Promise.all([
-    fetchAllRowsForIds(listingIds, buildListingQuery),
+  const [initialListingsResult, snapshotsResult] = await Promise.all([
+    fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, "both")),
     fetchAllRowsForIds(listingIds, (idChunk) =>
       supabase
         .from("listing_snapshots")
@@ -249,11 +257,23 @@ export async function getFilterResults(filterId: string, includeArchived = false
         .order("listing_id", { ascending: true }),
     ),
   ]);
-  let listingsResult: typeof listingsResultRaw = listingsResultRaw;
-  if (listingsResult.error?.code === "42703") {
+  let listingsResult = initialListingsResult;
+  let identityEvidenceAvailable = !initialListingsResult.error;
+  if (isMissingSelectedColumn(listingsResult.error, "identity_evidence")) {
+    identityEvidenceAvailable = false;
+    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, "cross"));
+  }
+  if (isMissingSelectedColumn(listingsResult.error, "cross_source_identity")) {
+    identityEvidenceAvailable = false;
+    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, "none"));
+  }
+  if (listingsResult.error?.code === "42703" || listingsResult.error?.code === "PGRST204") {
+    // Compatibility for pre-lifecycle schemas remains separate from optional
+    // identity columns. Only an explicit missing-column response reaches it.
+    identityEvidenceAvailable = false;
     listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) =>
       supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", idChunk).eq("status", "active").order("id", { ascending: true }),
-    ) as typeof listingsResultRaw;
+    ) as typeof initialListingsResult;
   }
   if (listingsResult.error || snapshotsResult.error) {
     console.error("FLIP FINDER RESULTS LISTINGS ERROR:", listingsResult.error ?? snapshotsResult.error);
@@ -262,15 +282,17 @@ export async function getFilterResults(filterId: string, includeArchived = false
 
   // listing_source_metadata contains private source-post material. The
   // protected results route authorizes the operator before this function is
-  // called; use the service-role client and avoid initializing it entirely
-  // for portal-only result sets.
+  // called; only initialize the service client for this table when Facebook
+  // rows exist. Manual identity decisions use the session client and the
+  // migration's owner-scoped SELECT policies, so ordinary portal results do
+  // not require service-role credentials.
   const facebookListingIds = [...new Set(asRows(listingsResult.data)
     .filter((row) => row.source === "facebook" && typeof row.id === "string")
     .map((row) => String(row.id)))];
   let priceQualityResult: { data: unknown; error: { message?: string; code?: string } | null } = { data: [], error: null };
   if (facebookListingIds.length > 0) {
     try {
-      const admin = createAdminClient();
+      const admin = getAdminClient();
       priceQualityResult = await fetchAllRowsForIds(facebookListingIds, (idChunk) =>
         admin.from("listing_source_metadata")
           .select("listing_id,source_post_url,collected_at,published_at,metadata")
@@ -357,6 +379,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
         }];
       }),
   );
+  const manualIdentityScope = operatorId
+    ? await readManualIdentityScope(supabase, operatorId, filterId)
+    : { available: false, groupByListing: new Map<string, string>(), blockedPairs: new Set<string>() };
   const snapshotsByListingId = new Map<string, SnapshotRow[]>();
 
   for (const snapshot of asRows(snapshotsResult.data)
@@ -457,6 +482,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         sourcePostUrl: listing.sourcePostUrl ?? null,
         source: listing.source,
         crossSourceIdentity: listing.crossSourceIdentity ?? null,
+        identityEvidence: listing.identityEvidence,
         sourceConflict,
         listingStatus: listing.status,
         isActive: listing.status === "active",
@@ -518,7 +544,10 @@ export async function getFilterResults(filterId: string, includeArchived = false
       contentFingerprint: listingsById.get(result.id)?.contentFingerprint ?? listingsById.get(result.id)?.contentHash ?? null,
     }),
   );
-  const groupedResults = groupConfirmedPropertyResults(dedupedResults);
+  const groupedResults = groupPropertyResults(dedupedResults, {
+    blockedPairs: manualIdentityScope.blockedPairs,
+    manualGroupByListing: manualIdentityScope.groupByListing,
+  });
   // Duplicate-listing mission: a listing whose stored lifecycle is
   // STALE/ARCHIVED (set by some other process — aging out, a manual archive
   // action, restoration bookkeeping) can still independently satisfy the
@@ -553,6 +582,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
     newMatches: sortedResults.filter((result) => result.isNew).length,
     lastScan,
     sourceScans: scans,
+    identityFeatures: { automaticEvidenceAvailable: identityEvidenceAvailable, manualReviewAvailable: manualIdentityScope.available },
   };
 }
 
@@ -583,6 +613,46 @@ function isMatchOrigin(value: string): value is MatchRow["matchOrigin"] {
   return value === "scan" || value === "filter_recalculation" || value === "collector_import";
 }
 
+async function readManualIdentityScope(supabase: Awaited<ReturnType<typeof createClient>>, ownerId: string, filterId: string): Promise<{ available: boolean; groupByListing: Map<string, string>; blockedPairs: Set<string> }> {
+  const [groups, decisions] = await Promise.all([
+    supabase.from("finder_listing_identity_groups").select("listing_id,group_id").eq("owner_id", ownerId).eq("search_filter_id", filterId),
+    supabase.from("finder_listing_identity_decisions").select("listing_a,listing_b,decision").eq("owner_id", ownerId).eq("search_filter_id", filterId).eq("decision", "not_link"),
+  ]);
+  const missingTable = isMissingIdentityTable(groups.error) || isMissingIdentityTable(decisions.error);
+  if (missingTable) return { available: false, groupByListing: new Map(), blockedPairs: new Set() };
+  if (groups.error || decisions.error) {
+    console.error("FLIP FINDER IDENTITY DECISIONS ERROR:", groups.error ?? decisions.error);
+    throw new Error("Nie udało się pobrać ręcznych decyzji łączenia ofert.");
+  }
+  const groupByListing = new Map<string, string>();
+  for (const row of asRows(groups.data)) {
+    const listingId = nullableString(row.listing_id);
+    const groupId = nullableString(row.group_id);
+    if (listingId && groupId) groupByListing.set(listingId, groupId);
+  }
+  const blockedPairs = new Set<string>();
+  for (const row of asRows(decisions.data)) {
+    const left = nullableString(row.listing_a);
+    const right = nullableString(row.listing_b);
+    if (left && right) blockedPairs.add(identityPairKey(left, right));
+  }
+  return { available: true, groupByListing, blockedPairs };
+}
+
+function isMissingIdentityTable(error: { code?: unknown; message?: unknown } | null): boolean {
+  if (!error) return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (code === "42P01" || code === "PGRST205") && /finder_listing_identity_(?:groups|decisions)/u.test(message);
+}
+
+function isMissingSelectedColumn(error: { code?: unknown; message?: unknown } | null, column: string): boolean {
+  if (!error) return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (code === "42703" || code === "PGRST204") && new RegExp(`\\b${column}\\b`, "u").test(message);
+}
+
 export function toListingRow(row: Row): ListingRow | null {
   const id = nullableString(row.id);
   const originalUrl = nullableString(row.original_url);
@@ -604,6 +674,7 @@ export function toListingRow(row: Row): ListingRow | null {
   return {
     id,
     crossSourceIdentity: nullableString(row.cross_source_identity),
+    identityEvidence: normalizeListingIdentityEvidence(row.identity_evidence),
     externalListingId: nullableString(row.external_listing_id),
     contentHash: nullableString(row.content_hash),
     title: nullableString(row.title),

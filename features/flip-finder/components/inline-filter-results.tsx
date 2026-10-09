@@ -48,6 +48,7 @@ type ResultsResponse = {
   newMatches: number;
   lastScan: SearchFilterScan | null;
   sourceScans: SearchFilterScan[];
+  identityFeatures?: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean };
 };
 
 type PriceHistoryResponse = {
@@ -164,6 +165,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
           <div><p className="font-semibold">BAZA OFERT</p><p className="mt-1 text-sm text-muted-foreground">Widoczne oferty: <strong className="text-foreground">{sourceCounts.total.matched + sourceCounts.total.review}</strong></p></div>
           <button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source ? <span className="size-2 rounded-full bg-primary" /> : null}</button>
         </div>
+        {data.identityFeatures && (!data.identityFeatures.automaticEvidenceAvailable || !data.identityFeatures.manualReviewAvailable) ? <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3 text-xs text-muted-foreground" data-testid="finder-identity-schema-status">Łączenie między portalami jest częściowo niedostępne do czasu zastosowania draftu migracji Finder Identity. Zwykłe wyniki ofert pozostają dostępne.</p> : null}
         <div aria-label="Wyniki według źródła" className="flex w-full min-w-0 flex-wrap gap-2" data-testid="finder-source-counts">
           <SourceCount label={`Razem · Dopasowane: ${sourceCounts.total.matched} · Do oceny: ${sourceCounts.total.review}`} testId="finder-source-count-all" active={source === null} onClick={() => setSource(null)} />
           {activeSources.map((item) => {
@@ -209,9 +211,9 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
         </div>
       ) : null}
       {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / DOPASOWANE <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
-      {data && reviewCount > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewCount}</p><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div></div><div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard autoOpen={result.id === deepLinkListingId} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
+      {data && reviewCount > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewCount}</p><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div></div><div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard autoOpen={result.id === deepLinkListingId} identityManagementAvailable={data.identityFeatures?.manualReviewAvailable ?? false} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
       <div className="grid gap-4 lg:grid-cols-2" data-finder-offers>
-        {renderedResults.map((result) => <ExpandableListingCard autoOpen={result.id === deepLinkListingId} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
+        {renderedResults.map((result) => <ExpandableListingCard autoOpen={result.id === deepLinkListingId} identityManagementAvailable={data?.identityFeatures?.manualReviewAvailable ?? false} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
       </div>
       {data ? <div className="flex justify-end border-t border-border/60 pt-4"><Button aria-label="Otwórz historię ofert" onClick={() => setArchiveOpen((current) => !current)} type="button" variant="outline">{archiveOpen ? "Wróć do bieżących ofert" : "Historia ofert"}</Button></div> : null}
       {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} filter={data.filter} key={result.id} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
@@ -597,7 +599,7 @@ function isGalleryState(value: unknown): value is GalleryState {
 // accept/reject decision actions are REVIEW-specific, rendered outside it --
 // exactly the way the Facebook Watcher renders its own workflow actions
 // outside this same shared card, never inside a second, duplicated component.
-function ReviewListingCard({ result, onChanged, autoOpen = false, averagePricePerSqm, marketType, filter }: { result: FilterResult; onChanged: () => void; autoOpen?: boolean; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null }) {
+function ReviewListingCard({ result, onChanged, autoOpen = false, averagePricePerSqm, marketType, filter, identityManagementAvailable = false }: { result: FilterResult; onChanged: () => void; autoOpen?: boolean; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; identityManagementAvailable?: boolean }) {
   const [busy, setBusy] = useState(false);
   const decide = async (decision: "ACCEPTED" | "REJECTED") => {
     setBusy(true);
@@ -609,7 +611,7 @@ function ReviewListingCard({ result, onChanged, autoOpen = false, averagePricePe
   };
   return (
     <div>
-      <ExpandableListingCard autoOpen={autoOpen} averagePricePerSqm={averagePricePerSqm} filter={filter ?? null} marketType={marketType} onChanged={onChanged} result={result} />
+      <ExpandableListingCard autoOpen={autoOpen} identityManagementAvailable={identityManagementAvailable} averagePricePerSqm={averagePricePerSqm} filter={filter ?? null} marketType={marketType} onChanged={onChanged} result={result} />
       <div className="-mt-2 flex flex-wrap gap-2 px-4 pb-4 sm:px-5">
         <Button disabled={busy} onClick={() => void decide("ACCEPTED")} type="button">DODAJ</Button>
         <Button disabled={busy} onClick={() => void decide("REJECTED")} type="button" variant="outline">ODRZUĆ</Button>
@@ -638,7 +640,7 @@ function PreviewMetric({ label, value, emphasis = false }: { label: string; valu
   return <article className={`rounded-xl border p-4 ${emphasis ? "border-gold/35 bg-gold/[0.06]" : "border-border/70 bg-background/40"}`}><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-2 text-lg font-semibold tabular-nums ${emphasis ? "text-gold" : "text-foreground"}`}>{value}</p></article>;
 }
 
-function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, filter = null, onOpen, onCrmImported, variant = "standalone", hideLifecycleBadge = false, autoOpen = false }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
+function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, filter = null, onOpen, onCrmImported, variant = "standalone", hideLifecycleBadge = false, autoOpen = false, identityManagementAvailable = false, onChanged }: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean; identityManagementAvailable?: boolean; onChanged?: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const listingUrl = resolveListingUrl({ source: result.source, sourcePostUrl: result.sourcePostUrl, originalUrl: result.originalUrl });
   // A push notification's deep link identifies the exact listing to open —
@@ -654,6 +656,8 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   }, [autoOpen, onOpen]);
   const [crmImporting, setCrmImporting] = useState(false);
   const [crmToast, setCrmToast] = useState<string | null>(null);
+  const [identityBusy, setIdentityBusy] = useState(false);
+  const [identityMessage, setIdentityMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"details" | "underwriting" | "calculator" | "analysis" | "price-history" | "market" | "renovation-visualizer">("details");
   const [priceHistory, setPriceHistory] = useState<PriceHistoryResponse | null>(null);
   const [priceHistoryError, setPriceHistoryError] = useState<string | null>(null);
@@ -822,6 +826,32 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
     }
   };
 
+  const manageIdentity = async (action: "link" | "not_link" | "unlink", listingA: string, listingB?: string) => {
+    if (!filter || variant !== "standalone" || !identityManagementAvailable || identityBusy) return;
+    const confirmation = action === "link"
+      ? "Połączyć te oferty jako jedno mieszkanie? Zostaną zachowane oba źródłowe rekordy."
+      : action === "unlink"
+        ? "Rozłączyć tę ofertę z ręcznej grupy i zapamiętać, że nie należy jej ponownie łączyć?"
+        : "Zapamiętać, że tych ofert nie należy łączyć?"
+    if (!window.confirm(confirmation)) return;
+    setIdentityBusy(true);
+    setIdentityMessage(null);
+    try {
+      const response = await fetch(`/api/flip-finder/search-filters/${encodeURIComponent(filter.id)}/identity`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, listingA, ...(listingB ? { listingB } : {}) }),
+      });
+      const payload: unknown = await readJson(response);
+      if (!response.ok) throw new Error(readMessage(payload, "Nie udało się zapisać decyzji o łączeniu ofert."));
+      setIdentityMessage(action === "link" ? "Oferty połączono dla tego filtra." : action === "unlink" ? "Oferty rozłączono; decyzja została zapamiętana." : "Para została zapamiętana jako odrębne oferty.");
+      onChanged?.();
+    } catch (reason) {
+      setIdentityMessage(reason instanceof Error ? reason.message : "Nie udało się zapisać decyzji o łączeniu ofert.");
+    } finally { setIdentityBusy(false); }
+  };
+
   return (
     <Dialog onOpenChange={setExpanded} open={expanded}>
       <article className="ui-card ui-card-hover group overflow-hidden !border-transparent hover:!border-transparent">
@@ -893,7 +923,9 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4"><p className="text-xs text-muted-foreground">Pokoje</p><p className="mt-1 font-semibold tracking-tight">{measure(result.rooms, "pok.")}</p></div>
           </div>
           <div className="rounded-xl border border-border/70 bg-muted/20 p-4 sm:p-5"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Opis ogłoszenia</p><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/80">{cleanDisplayText(formatListingDescription(result.description)) || "Brak opisu ogłoszenia."}</p></div>
-          {result.linkedListings && result.linkedListings.length > 1 ? <section aria-label="Potwierdzone ogłoszenia tej samej nieruchomości" className="rounded-xl border border-primary/25 bg-primary/[0.03] p-4 sm:p-5"><h3 className="text-sm font-semibold">Znaleziono także na: {[...new Set(result.linkedListings.map((item) => sourceLabel(item.source)).filter((label) => label !== sourceLabel(result.source)))].join(", ") || sourceLabel(result.source)}</h3><ul className="mt-3 space-y-2">{result.linkedListings.map((item) => <li className="grid min-w-0 gap-1 rounded-lg border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" key={item.id}><div className="min-w-0"><p className="break-words text-sm font-medium">{sourceLabel(item.source)}{item.title ? ` · ${cleanDisplayText(item.title)}` : ""}</p><p className="text-xs text-muted-foreground">Cena: {currency(item.price)} · metraż: {measure(item.area, "m²")}{item.rooms ? ` · ${measure(item.rooms, "pok.")}` : ""}</p><p className="text-xs text-muted-foreground">Publikacja: {item.publishedAt ? dateTime(item.publishedAt) : "nie podano"} · pobrano: {item.lastSeenAt ? dateTime(item.lastSeenAt) : "nie podano"}</p></div>{item.originalUrl ? <a className="min-h-11 break-all text-sm font-semibold text-primary underline" href={item.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz {sourceLabel(item.source)}</a> : <span className="text-xs text-muted-foreground">Brak potwierdzonego linku</span>}</li>)}</ul></section> : null}
+          {result.linkedListings && result.linkedListings.length > 1 ? <section aria-label="Potwierdzone ogłoszenia tej samej nieruchomości" className="rounded-xl border border-primary/25 bg-primary/[0.03] p-4 sm:p-5"><h3 className="text-sm font-semibold">Znaleziono także na: {[...new Set(result.linkedListings.map((item) => sourceLabel(item.source)).filter((label) => label !== sourceLabel(result.source)))].join(", ") || sourceLabel(result.source)}</h3><ul className="mt-3 space-y-2">{result.linkedListings.map((item) => <li className="grid min-w-0 gap-1 rounded-lg border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" key={item.id}><div className="min-w-0"><p className="break-words text-sm font-medium">{sourceLabel(item.source)}{item.title ? ` · ${cleanDisplayText(item.title)}` : ""}</p><p className="text-xs text-muted-foreground">Cena: {currency(item.price)} · metraż: {measure(item.area, "m²")}{item.rooms ? ` · ${measure(item.rooms, "pok.")}` : ""}</p><p className="text-xs text-muted-foreground">Publikacja: {item.publishedAt ? dateTime(item.publishedAt) : "nie podano"} · pobrano: {item.lastSeenAt ? dateTime(item.lastSeenAt) : "nie podano"}</p></div>{item.originalUrl ? <a className="min-h-11 break-all text-sm font-semibold text-primary underline" href={item.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz {sourceLabel(item.source)}</a> : <span className="text-xs text-muted-foreground">Brak potwierdzonego linku</span>}{variant === "standalone" && item.id !== result.id ? <Button className="sm:col-span-2" disabled={!identityManagementAvailable || identityBusy} onClick={() => void manageIdentity(result.identityGroupId ? "unlink" : "not_link", item.id, result.identityGroupId ? undefined : result.id)} type="button" variant="outline">{result.identityGroupId ? "Rozłącz ofertę z grupy" : "Nie łącz tych ofert"}</Button> : null}</li>)}</ul></section> : null}
+          {variant === "standalone" && result.identityCandidates?.length ? <section aria-label="Możliwe duplikaty do weryfikacji" className="rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-4 sm:p-5"><h3 className="text-sm font-semibold">Możliwy duplikat · porównaj przed połączeniem</h3><p className="mt-1 text-xs text-muted-foreground">Kandydatura wynika ze wspólnych zdjęć i zgodnych danych lokalu. Nie została automatycznie połączona.</p><ul className="mt-3 space-y-3">{result.identityCandidates.map((candidate) => <li className="grid min-w-0 gap-2 rounded-lg border border-border/60 p-3" key={candidate.id}><div className="min-w-0"><p className="break-words text-sm font-medium">{sourceLabel(candidate.source)} · {cleanDisplayText(candidate.title) || "Oferta bez tytułu"}</p><p className="text-xs text-muted-foreground">{currency(candidate.price)} · {measure(candidate.area, "m²")} · {measure(candidate.rooms, "pok.")}</p>{candidate.originalUrl ? <a className="break-all text-xs font-semibold text-primary underline" href={candidate.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz źródłową ofertę</a> : null}</div><div className="flex flex-wrap gap-2"><Button disabled={!identityManagementAvailable || identityBusy} onClick={() => void manageIdentity("link", result.id, candidate.id)} type="button">Połącz oferty</Button><Button disabled={!identityManagementAvailable || identityBusy} onClick={() => void manageIdentity("not_link", result.id, candidate.id)} type="button" variant="outline">Nie łącz tych ofert</Button></div></li>)}</ul>{!identityManagementAvailable ? <p className="mt-2 text-xs text-amber-700" role="status">Zapisy ręcznej weryfikacji są niedostępne: wymagany draft migracji nie został jeszcze potwierdzony.</p> : null}</section> : null}
+          {identityMessage ? <p className="rounded-lg border border-border/60 p-3 text-sm" role="status">{identityMessage}</p> : null}
           <div className="grid gap-3 rounded-xl bg-muted/40 p-4 text-sm sm:grid-cols-2"><Metric label="Piętro" value={result.floor ?? "—"} /><Metric label="Liczba pięter" value={result.totalFloors ?? "—"} /><Metric label="Typ budynku" value={result.buildingType ?? "—"} /><Metric label="Własność" value={result.ownership ?? "—"} /></div>
           <DetailList
             label={result.decisionBucket === "REJECTED" ? "Powody odrzucenia" : "Powody dopasowania"}
@@ -927,7 +959,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
   );
 }
 
-export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean }) {
+export function ExpandableListingCard(props: { result: FilterResult; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; onOpen?: () => void; onCrmImported?: (propertyId: string) => void; onChanged?: () => void; variant?: "standalone" | "watcher"; hideLifecycleBadge?: boolean; autoOpen?: boolean; identityManagementAvailable?: boolean }) {
   const [traceId] = useState(createGalleryTraceId);
   const handleCardPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
     captureGalleryTrace("GALLERY_CARD_POINTER_CAPTURE", event, props.result, props.result.galleryStatus ?? "NOT_REQUESTED", traceId);

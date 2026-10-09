@@ -135,7 +135,7 @@ function assertNoFacebookScanContact(db: FakeFacebookSupabase) {
   assert.ok(!accesses.some((entry) => entry.kind === "rpc" && /facebook.*(?:scan|enqueue)|(?:scan|enqueue).*facebook/iu.test(entry.name)), "Finder must not call a Facebook scan enqueue RPC");
 }
 
-test("authorized portal-only Finder results never initialize the service client or query private Facebook metadata", async () => {
+test("authorized portal-only Finder results use owner-scoped session identity reads without service-role access", async () => {
   const db = freshDb();
   db.seed("search_filters", [{ ...CHORALNA_FILTER_ROW, sources: ["domiporta"] }]);
   db.seed("listings", [listingRow({ id: "portal-only", source: "domiporta", original_url: "https://domiporta.pl/oferta/portal-only", building_type: "blok", ownership: "pełna własność", lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [] })]);
@@ -147,7 +147,10 @@ test("authorized portal-only Finder results never initialize the service client 
 
   const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
   assert.equal(response.status, 200);
-  assert.equal(adminClientCreations, 0, "portal-only read does not create a privileged Supabase client");
+  assert.equal(adminClientCreations, 0, "a portal-only read never needs service-role credentials");
+  assert.ok(sessionTableReads.includes("finder_listing_identity_groups"));
+  assert.ok(sessionTableReads.includes("finder_listing_identity_decisions"));
+  assert.equal(adminTableReads.length, 0, "the owner-scoped RLS read stays on the session client");
   assert.ok(!sessionTableReads.includes("listing_source_metadata"), "publishable/session client must not read private metadata");
   assert.ok(!adminTableReads.includes("listing_source_metadata"));
   assertNoFacebookScanContact(db);
@@ -165,10 +168,36 @@ test("authorized Facebook Finder results read private source metadata only throu
 
   const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
   assert.equal(response.status, 200);
-  assert.equal(adminClientCreations, 1);
+  assert.equal(adminClientCreations, 1, "only private Facebook metadata requires the service client");
   assert.ok(adminTableReads.includes("listing_source_metadata"), "the privileged server client must perform the batched metadata read");
   assert.ok(!sessionTableReads.includes("listing_source_metadata"), "the user/session client must never access the private metadata table");
   assertNoFacebookScanContact(db);
+});
+
+test("pre-migration identity columns and tables leave ordinary Finder results visible and report identity features unavailable", async () => {
+  const db = freshDb();
+  db.seed("search_filters", [{ ...CHORALNA_FILTER_ROW, sources: ["domiporta"] }]);
+  db.seed("listings", [listingRow({ id: "legacy-identity-schema", source: "domiporta", original_url: "https://domiporta.pl/oferta/legacy-identity-schema", lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [] })]);
+  db.seed("listing_filter_matches", [membershipRow("legacy-identity-schema", { is_current_match: true, match_reasons: [] })]);
+  db.failNext("listings", "select", 'column "identity_evidence" does not exist', 1, "42703");
+  db.failNext("listings", "select", 'column "cross_source_identity" does not exist', 1, "42703");
+  db.failNext("finder_listing_identity_groups", "select", 'relation "finder_listing_identity_groups" does not exist', 1, "42P01");
+  currentDb = db;
+  const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
+  assert.equal(response.status, 200, "missing optional identity schema must not break ordinary offer reads");
+  const payload = await response.json() as { results: Array<{ id: string }>; reviewResults: Array<{ id: string }>; identityFeatures: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean } };
+  assert.deepEqual([...payload.results, ...payload.reviewResults].map((row) => row.id), ["legacy-identity-schema"]);
+  assert.deepEqual(payload.identityFeatures, { automaticEvidenceAvailable: false, manualReviewAvailable: false }, "the API reports precise unavailable feature flags instead of returning empty results or claiming a successful write");
+});
+
+test("manual identity read surfaces permission and transport errors instead of disguising them as migration-unavailable", async () => {
+  const db = freshDb();
+  db.seed("listings", [listingRow({ id: "identity-read-error", source: "domiporta", lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [] })]);
+  db.seed("listing_filter_matches", [membershipRow("identity-read-error", { is_current_match: true, match_reasons: [] })]);
+  db.failNext("finder_listing_identity_groups", "select", "permission denied for table finder_listing_identity_groups", 1, "42501");
+  currentDb = db;
+  const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
+  assert.equal(response.status, 500, "only an exact missing-table response is downgraded to feature unavailable");
 });
 
 test("anonymous Finder results requests stop at operator authorization before any database or private-metadata access", async () => {

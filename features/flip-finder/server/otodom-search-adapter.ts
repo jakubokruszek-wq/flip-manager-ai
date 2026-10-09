@@ -23,6 +23,7 @@ import {
 } from "@/features/flip-finder/otodom-normalization";
 import type { PropertySearchListing } from "@/features/properties/types/property";
 import { resolveBuildingType, resolveOwnership } from "@/features/flip-finder/listing-attribute-extraction";
+import { extractListingIdentityEvidence } from "@/features/flip-finder/identity-evidence";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_LISTINGS = 30;
@@ -277,6 +278,7 @@ function toListing(row: Record<string, unknown>): PropertySearchListing | null {
   const structuredOwnership = row.ownership ?? row.ownershipType ?? row.tenure;
   const rooms = mapRoomsNumber(row.roomsNumber ?? row.rooms);
   const floor = mapFloorNumber(row.floorNumber ?? row.floor);
+  const images = imageUrls(row);
   const rawPayload = {
     id: externalListingId,
     url: normalizedUrl,
@@ -287,6 +289,8 @@ function toListing(row: Record<string, unknown>): PropertySearchListing | null {
     floor,
     locationText: address,
   };
+  const buildingType = resolveBuildingType(structuredBuildingType, title, description);
+  const identityEvidence = extractListingIdentityEvidence({ source: "otodom", title, description, address, city, district, area, rooms, floor, marketType: text(row, "marketType", "marketTypeName"), buildingType, images, sourceRecord: row });
 
   return {
     source: "otodom",
@@ -303,15 +307,27 @@ function toListing(row: Record<string, unknown>): PropertySearchListing | null {
     city,
     district,
     description,
-    buildingType: resolveBuildingType(structuredBuildingType, title, description),
+    buildingType,
     ownership: resolveOwnership(structuredOwnership, title, description),
     thumbnailUrl: thumbnailUrl(row),
+    images,
     sellerType: text(row, "sellerType", "advertiserType"),
     marketType: text(row, "marketType"),
     publishedAt: text(row, "createdAt", "publishedAt"),
     rawPayload,
+    identityEvidence,
     contentHash: calculateContentHash(rawPayload),
   };
+}
+
+function imageUrls(row: Record<string, unknown>): string[] {
+  const values = Array.isArray(row.images) ? row.images : row.image ? [row.image] : [];
+  return values.flatMap((value) => {
+    if (typeof value === "string") return [value];
+    if (!isRecord(value)) return [];
+    const url = text(value, "large", "medium", "url", "thumbnail");
+    return url ? [url] : [];
+  }).slice(0, 10);
 }
 
 function incrementReason(counts: OtodomRejectionCounts, reason: OtodomRejectionReason): void {

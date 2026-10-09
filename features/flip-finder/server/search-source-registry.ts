@@ -14,6 +14,7 @@ import { fetchOfficialLodzGroup } from "@/features/flip-finder/official-lodz-ada
 import type { SourceBatchContext } from "@/features/flip-finder/source-batches";
 import { SCHEMA_READY_SOURCE_IDS as SHARED_SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 import { resolveBuildingType, resolveOwnership } from "@/features/flip-finder/listing-attribute-extraction";
+import { extractListingIdentityEvidence } from "@/features/flip-finder/identity-evidence";
 export { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 
 const USER_AGENT =
@@ -246,7 +247,8 @@ function toMorizonListing(offer: Record<string, unknown>, fallbackCity: string |
 function listing(source: SourceListing["source"], id: string, url: string, title: string | null, price: number | null, area: number | null, roomCount: number | null, floor: string | null, city: string | null, district: string | null, description: string | null, images: string[], buildingType: string | null, ownership: string | null, rawPayload: Record<string, unknown>, publishedAt: string | null = null): SourceListing {
   const locationText = [district, city].filter(Boolean).join(", ") || null; const normalizedUrl = normalizeOtodomUrl(url);
   const payload = { id, url: normalizedUrl, title, price, area, roomCount, floor, city, district };
-  return { source, externalListingId: id, originalUrl: url, normalizedUrl, title, price, area, rooms: roomCount, floor, pricePerSqm: price !== null && area ? price / area : null, city, district, locationText, images, thumbnailUrl: images[0] ?? null, buildingType, ownership, description, publishedAt, rawPayload, contentHash: calculateContentHash(payload) };
+  const identityEvidence = extractListingIdentityEvidence({ source, title, description, city, district, area, rooms: roomCount, floor, buildingType, images, sourceRecord: rawPayload });
+  return { source, externalListingId: id, originalUrl: url, normalizedUrl, title, price, area, rooms: roomCount, floor, pricePerSqm: price !== null && area ? price / area : null, city, district, locationText, images, thumbnailUrl: images[0] ?? null, buildingType, ownership, description, publishedAt, rawPayload, contentHash: calculateContentHash(payload), identityEvidence };
 }
 
 function absoluteUrl(value: string | null, base: string, host: string): string | null { if (!value) return null; try { const url = new URL(value, base); return url.hostname === host || url.hostname.endsWith(`.${host}`) ? url.toString() : null; } catch { return null; } }

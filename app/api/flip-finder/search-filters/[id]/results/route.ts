@@ -7,14 +7,15 @@ type Context = {
 };
 
 export async function GET(request: Request, { params }: Context) {
+  let operator: Awaited<ReturnType<typeof requireOperator>>;
   try {
-    await requireOperator();
+    operator = await requireOperator();
   } catch (error) {
     return operatorAuthorizationResponse(error);
   }
   try {
     const includeArchived = new URL(request.url).searchParams.get("view") === "archive";
-    const results = await getFilterResults((await params).id, includeArchived);
+    const results = await getFilterResults((await params).id, includeArchived, Date.now(), operator.id);
 
     if (!results) {
       return Response.json({ message: "Nie znaleziono filtra." }, { status: 404 });

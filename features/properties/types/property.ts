@@ -125,6 +125,8 @@ export type PropertySourceListing = Pick<PropertyFields, "title" | "price" | "ar
   };
   /** Explicit, confirmed cross-portal identity; never inferred from weak listing similarity. */
   crossSourceIdentity?: string | null;
+  /** Curated evidence derived from fields parsed by this source adapter. */
+  identityEvidence?: import("@/features/flip-finder/identity-evidence").ListingIdentityEvidence;
 };
 
 /** Listing returned by a source-specific search before it is matched or persisted. */
@@ -137,6 +139,8 @@ export type PropertySearchListing = Omit<Pick<PropertyFields, "title" | "descrip
   marketType: string | null;
   rawPayload: Record<string, unknown>;
   contentHash: string;
+  images?: string[];
+  identityEvidence?: import("@/features/flip-finder/identity-evidence").ListingIdentityEvidence;
 };
 
 /** Property data submitted by the Facebook Collector before it is persisted. */
@@ -192,6 +196,9 @@ export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "ar
   galleryPersistedCount?: number;
   galleryError?: string | null;
   crossSourceIdentity?: string | null;
+  identityEvidence?: import("@/features/flip-finder/identity-evidence").ListingIdentityEvidence;
+  identityGroupId?: string | null;
+  identityCandidates?: Array<{ id: string; source: PropertyFinderSource; title: string | null; price: number | null; area: number | null; rooms: number | null; originalUrl: string | null; publishedAt?: string | null; firstSeenAt?: string | null; lastSeenAt?: string | null; reason: string }>;
   linkedListings?: Array<{
     id: string;
     source: PropertyFinderSource;

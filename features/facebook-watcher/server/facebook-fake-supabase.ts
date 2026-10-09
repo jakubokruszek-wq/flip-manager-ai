@@ -20,7 +20,8 @@ type Row = Record<string, unknown>;
 const DEFAULT_SELECT_ROW_CAP = 1000;
 type RpcResult = { data: unknown; error: { message: string } | null };
 type RpcHandler = (params: Row) => RpcResult;
-type FailureRule = { op: "insert" | "update" | "upsert" | "select"; message: string; remaining: number };
+type QueryFailure = { message: string; code?: string };
+type FailureRule = { op: "insert" | "update" | "upsert" | "select"; message: string; code?: string; remaining: number };
 export type FakeDatabaseAccess = { kind: "table" | "rpc"; name: string };
 
 export class FakeFacebookSupabase {
@@ -63,19 +64,19 @@ export class FakeFacebookSupabase {
   }
 
   /** Forces the next `count` matching operations on `table` to fail with `message`, then behave normally again. */
-  failNext(table: string, op: FailureRule["op"], message: string, count = 1): this {
+  failNext(table: string, op: FailureRule["op"], message: string, count = 1, code?: string): this {
     const list = this.failures.get(table) ?? [];
-    list.push({ op, message, remaining: count });
+    list.push({ op, message, code, remaining: count });
     this.failures.set(table, list);
     return this;
   }
 
-  private consumeFailure(table: string, op: FailureRule["op"]): string | null {
+  private consumeFailure(table: string, op: FailureRule["op"]): QueryFailure | null {
     const list = this.failures.get(table);
     const rule = list?.find((entry) => entry.op === op && entry.remaining > 0);
     if (!rule) return null;
     rule.remaining -= 1;
-    return rule.message;
+    return { message: rule.message, ...(rule.code ? { code: rule.code } : {}) };
   }
 
   private nextId(): string {
@@ -99,7 +100,7 @@ export class FakeFacebookSupabase {
   _setTable(table: string, rows: Row[]): void {
     this.tables.set(table, rows);
   }
-  _consumeFailure(table: string, op: FailureRule["op"]): string | null {
+  _consumeFailure(table: string, op: FailureRule["op"]): QueryFailure | null {
     return this.consumeFailure(table, op);
   }
   _nextId(): string {
@@ -296,9 +297,9 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     return this.op === "select" ? matched.slice(0, DEFAULT_SELECT_ROW_CAP) : matched;
   }
 
-  private execute(): { data: unknown; error: { message: string } | null } {
+  private execute(): { data: unknown; error: QueryFailure | null } {
     const failure = this.db._consumeFailure(this.table, this.op);
-    if (failure) return { data: null, error: { message: failure } };
+    if (failure) return { data: null, error: failure };
 
     if (this.op === "select") {
       return { data: this.matchingRows(), error: null };
@@ -367,14 +368,14 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     return { data: this.wantsSelectBack ? rows : null, error: null };
   }
 
-  async maybeSingle(): Promise<{ data: Row | null; error: { message: string } | null }> {
+  async maybeSingle(): Promise<{ data: Row | null; error: QueryFailure | null }> {
     const result = this.execute();
     if (result.error) return { data: null, error: result.error };
     const rows = Array.isArray(result.data) ? result.data : this.matchingRows();
     return { data: (rows[0] as Row) ?? null, error: null };
   }
 
-  async single(): Promise<{ data: Row | null; error: { message: string } | null }> {
+  async single(): Promise<{ data: Row | null; error: QueryFailure | null }> {
     const result = this.execute();
     if (result.error) return { data: null, error: result.error };
     const rows = Array.isArray(result.data) ? result.data : this.matchingRows();
@@ -382,8 +383,8 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     return { data: rows[0] as Row, error: null };
   }
 
-  then<TResult1 = { data: unknown; error: { message: string } | null }, TResult2 = never>(
-    onfulfilled?: ((value: { data: unknown; error: { message: string } | null }) => TResult1 | PromiseLike<TResult1>) | null,
+  then<TResult1 = { data: unknown; error: QueryFailure | null }, TResult2 = never>(
+    onfulfilled?: ((value: { data: unknown; error: QueryFailure | null }) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): PromiseLike<TResult1 | TResult2> {
     return Promise.resolve(this.execute()).then(onfulfilled, onrejected);

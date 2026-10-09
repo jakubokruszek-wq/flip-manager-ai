@@ -14,6 +14,7 @@ import { runAfterResponse } from "@/features/facebook-watcher/run-after-response
 import { isValidSalePrice } from "@/features/flip-finder/sale-price";
 import { normalizePublicationDate } from "@/features/flip-finder/publication-date";
 import { normalizeConfirmedPropertyIdentity } from "@/features/flip-finder/property-identity";
+import { hasListingIdentityEvidence, mergeListingIdentityEvidence } from "@/features/flip-finder/identity-evidence";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -120,6 +121,26 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
     const { error: identityError } = await supabase.from("listings").update({ cross_source_identity: confirmedIdentity }).eq("id", saved.id);
     if (identityError && identityError.code !== "42703") throw new Error("Nie udało się zapisać potwierdzonej tożsamości nieruchomości.");
   }
+  const incomingEvidence = item.identityEvidence;
+  if (incomingEvidence && hasListingIdentityEvidence(incomingEvidence)) {
+    const previousEvidence = await supabase.from("listings").select("identity_evidence").eq("id", saved.id).abortSignal(signal).maybeSingle();
+    if (isMissingIdentityEvidenceColumn(previousEvidence.error)) {
+      // The migration is intentionally a draft. Ordinary listing persistence
+      // remains available before it, while the result API reports evidence
+      // based dedup as unavailable instead of returning false empty results.
+    } else if (previousEvidence.error) {
+      throw new Error("Nie udało się odczytać zapisanych dowodów tożsamości nieruchomości.");
+    } else {
+      const mergedEvidence = mergeListingIdentityEvidence(previousEvidence.data?.identity_evidence, incomingEvidence);
+      const { error: evidenceError } = await supabase.from("listings").update({ identity_evidence: mergedEvidence }).eq("id", saved.id).abortSignal(signal);
+      if (isMissingIdentityEvidenceColumn(evidenceError)) {
+        // A PostgREST schema cache may lag the database briefly. Only the
+        // optional column is ignored; all other write failures stay visible.
+      } else if (evidenceError) {
+        throw new Error("Nie udało się zapisać dowodów tożsamości nieruchomości.");
+      }
+    }
+  }
   void syncResaleCompFromListing(supabase, item, saved.id, matchedAt).catch((reason) => {
     console.warn("RESALE_COMP_SYNC_DEFERRED", {
       source: item.source,
@@ -209,6 +230,13 @@ function isMissingYearBuiltColumn(error: { code?: unknown; message?: unknown } |
   const code = typeof error.code === "string" ? error.code : "";
   const message = typeof error.message === "string" ? error.message : "";
   return (code === "42703" || code === "PGRST204") && /year_built/.test(message);
+}
+
+function isMissingIdentityEvidenceColumn(error: { code?: unknown; message?: unknown } | null): boolean {
+  if (!error) return false;
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (code === "42703" || code === "PGRST204") && /identity_evidence/u.test(message);
 }
 
 function normalizedUrlCandidates(source: string, normalizedUrl: string): string[] {

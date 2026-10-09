@@ -2,6 +2,7 @@ import { calculateContentHash, normalizeOtodomUrl } from "./otodom-search.ts";
 import { extractOlxImages } from "./server/olx-images.ts";
 import type { PropertySourceListing } from "../properties/types/property.ts";
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction.ts";
+import { extractListingIdentityEvidence } from "./identity-evidence.ts";
 
 export type OlxParseResult = {
   rawItems: number;
@@ -100,6 +101,7 @@ function toOlxListing(ad: Record<string, unknown>): PropertySourceListing | null
   const locationText = [district, city].filter(Boolean).join(", ") || null;
   const buildingType = resolveBuildingType(param("builttype"), title, description);
   const ownership = resolveOwnership(param("ownership"), title, description);
+  const identityEvidence = extractListingIdentityEvidence({ source: "olx", title, description, address: ad.location, city, district, area, rooms: roomCount, floor: param("floor_select"), marketType: param("market"), buildingType, images, sourceRecord: ad });
   const payload = { id, url: normalizedUrl, title, price, area, roomCount, floor: param("floor_select"), city, district };
   return {
     source: "olx",
@@ -122,6 +124,7 @@ function toOlxListing(ad: Record<string, unknown>): PropertySourceListing | null
     description,
     publishedAt: dateValue(ad.createdTime ?? ad.createdAt ?? ad.created_at ?? ad.publishedAt ?? ad.creation_time),
     rawPayload: ad,
+    identityEvidence,
     contentHash: calculateContentHash(payload),
   };
 }

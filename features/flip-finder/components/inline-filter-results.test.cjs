@@ -37,7 +37,7 @@ test("the REVIEW bucket card renders through the same ExpandableListingCard as M
   const start = page.indexOf("function ReviewListingCard(");
   assert.ok(start >= 0, "ReviewListingCard must exist");
   const source = page.slice(start, page.indexOf("\n}\n", start));
-  assert.match(source, /<ExpandableListingCard autoOpen=\{autoOpen\} averagePricePerSqm=\{averagePricePerSqm\} filter=\{filter \?\? null\} marketType=\{marketType\} onChanged=\{onChanged\} result=\{result\} \/>/, "ReviewListingCard must delegate its entire card/price/detail rendering to the shared ExpandableListingCard");
+  assert.match(source, /<ExpandableListingCard autoOpen=\{autoOpen\} identityManagementAvailable=\{identityManagementAvailable\} averagePricePerSqm=\{averagePricePerSqm\} filter=\{filter \?\? null\} marketType=\{marketType\} onChanged=\{onChanged\} result=\{result\} \/>/, "ReviewListingCard must delegate card rendering and Finder-only identity review to the shared ExpandableListingCard");
 });
 
 test("currency/currencyPerSqm formatting is unchanged: Polish locale, PLN currency, no decimals", () => {
@@ -57,7 +57,7 @@ test("REVIEW deep link uses the same autoOpen contract as MATCHED, opening the f
   const start = page.indexOf("function ReviewListingCard(");
   assert.ok(start >= 0, "ReviewListingCard must exist");
   const source = page.slice(start, page.indexOf("function QuickInvestmentPreview(", start));
-  assert.match(source, /function ReviewListingCard\(\{ result, onChanged, autoOpen = false, averagePricePerSqm, marketType, filter \}:/, "ReviewListingCard must accept the same optional autoOpen prop MATCHED cards use");
+  assert.match(source, /function ReviewListingCard\(\{ result, onChanged, autoOpen = false, averagePricePerSqm, marketType, filter, identityManagementAvailable = false \}:/, "ReviewListingCard must accept the same optional autoOpen prop MATCHED cards use and a migration-gated Finder identity flag");
   assert.match(source, /<ExpandableListingCard autoOpen=\{autoOpen\}/, "ReviewListingCard must forward autoOpen straight into the shared ExpandableListingCard, not a separate scroll effect");
   assert.match(page, /<ReviewListingCard autoOpen=\{result\.id === deepLinkListingId\}/, "the review results list must wire autoOpen to the exact same deepLinkListingId contract already used for MATCHED cards");
 });
@@ -66,7 +66,7 @@ test("REVIEW deep link uses the same autoOpen contract as MATCHED, opening the f
 // byte-identical to before this hotfix — this patch only adds REVIEW support
 // alongside it, never touches the MATCHED path.
 test("non-Facebook MATCHED deep link has no regression: autoOpen is still wired to the same deepLinkListingId contract", () => {
-  assert.match(page, /<ExpandableListingCard autoOpen=\{result\.id === deepLinkListingId\} averagePricePerSqm=\{data\?\.filter\.maxPricePerSqm \?\? null\} filter=\{data\?\.filter \?\? null\} key=\{result\.id\} marketType=\{data\?\.filter\.marketType \?\? null\} onChanged=\{\(\) => void load\(\)\} result=\{result\} \/>/);
+  assert.match(page, /<ExpandableListingCard autoOpen=\{result\.id === deepLinkListingId\} identityManagementAvailable=\{data\?\.identityFeatures\?\.manualReviewAvailable \?\? false\} averagePricePerSqm=\{data\?\.filter\.maxPricePerSqm \?\? null\} filter=\{data\?\.filter \?\? null\} key=\{result\.id\} marketType=\{data\?\.filter\.marketType \?\? null\} onChanged=\{\(\) => void load\(\)\} result=\{result\} \/>/);
   assert.match(page, /const autoOpenedRef = useRef\(false\);/);
 });
 
@@ -136,6 +136,22 @@ test("MATCHED and REVIEW cards share the exact same keyboard-safe analysis entry
   assert.match(source, /<ExpandableListingCard autoOpen=\{autoOpen\}/, "REVIEW's only detail-view entry point must be the shared ExpandableListingCard");
 });
 
+test("cross-portal identity review is Finder-only, confirmed by the operator, source-preserving, and explicitly unavailable before the draft schema exists", () => {
+  assert.match(page, /data-testid="finder-identity-schema-status"/);
+  assert.match(page, /Mo\u017cliwy duplikat/);
+  assert.match(page, /Znaleziono tak\u017ce na:/);
+  assert.match(page, /variant !== "standalone" \|\| !identityManagementAvailable/);
+  assert.match(page, /window\.confirm\(confirmation\)/);
+  assert.match(page, /method: "POST"/);
+  assert.match(page, /\/api\/flip-finder\/search-filters\/\$\{encodeURIComponent\(filter\.id\)\}\/identity/);
+  assert.match(page, /Po\u0142\u0105cz oferty/);
+  assert.match(page, /Nie \u0142\u0105cz tych ofert/);
+  assert.match(page, /Roz\u0142\u0105cz ofert\u0119 z grupy/);
+  assert.match(page, /Otw\u00f3rz \{sourceLabel\(item\.source\)\}/);
+  assert.match(page, /Zapisy r\u0119cznej weryfikacji s\u0105 niedost\u0119pne: wymagany draft migracji nie zosta\u0142 jeszcze potwierdzony/);
+  assert.match(page, /identityManagementAvailable=\{data\?\.identityFeatures\?\.manualReviewAvailable \?\? false\}/);
+  assert.doesNotMatch(page, /variant="watcher"[^\n]{0,300}identityManagementAvailable=\{true\}/);
+});
 // The dialog header's score-badge + "Otwórz Deal Room" action row forced
 // sm:flex-nowrap, which could overflow horizontally at ordinary (not
 // ultra-wide) desktop widths instead of wrapping. flex-wrap only activates

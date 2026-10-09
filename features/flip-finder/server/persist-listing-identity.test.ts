@@ -160,6 +160,54 @@ test("persistListing stores only an explicitly supplied namespaced cross-portal 
   assert.equal(rows[0].cross_source_identity, "portal_shared_unit_id:unit-42");
 });
 
+test("persistListing keeps confirmed identity evidence across a price-changing reimport with sparse portal data", async () => {
+  const previousEvidence = {
+    agencyReference: { agency: "biuro-lodz", number: "bio-71" },
+    buildingKey: "lodz|tuwima|12",
+    apartmentNumber: "4",
+    unitKey: "lodz|tuwima|12|unit:4",
+    marketType: "secondary",
+    buildingType: "kamienica",
+    area: 50.2,
+    rooms: 2,
+    floor: "3",
+    sharedPhotoAssetKeys: ["https://cdn.example.test/unit/interior-1.jpg"],
+  };
+  const rows: Row[] = [{
+    id: "identity-reimport",
+    source: "domiporta",
+    external_listing_id: "stable-offer-id",
+    normalized_url: "https://domiporta.pl/oferta/lodz-1",
+    price: 480000,
+    content_hash: "old-content",
+    images: [],
+    identity_evidence: previousEvidence,
+  }];
+  const db = fakeDb(rows);
+  const updated = await persistListing(db as never, "filter-1", {
+    ...listing("stable-offer-id", "Ta sama oferta z nową ceną"),
+    price: 470000,
+    contentHash: "new-content",
+    identityEvidence: {
+      agencyReference: null,
+      buildingKey: "lodz|tuwima|12",
+      apartmentNumber: null,
+      unitKey: null,
+      marketType: "secondary",
+      buildingType: null,
+      area: null,
+      rooms: null,
+      floor: null,
+      sharedPhotoAssetKeys: [],
+    },
+  }, true, [], "scan-reimport", "2026-10-09T10:00:00Z", AbortSignal.timeout(1000));
+
+  assert.equal(updated.listingId, "identity-reimport");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].price, 470000, "the current price may change on a legitimate reimport");
+  assert.deepEqual(rows[0].identity_evidence, previousEvidence, "omitted evidence is merged without erasing the prior confirmed unit identity");
+});
+
 test("persistListing ignores identity-shaped fields inside untrusted portal raw payloads", async () => {
   const rows: Row[] = [];
   const db = fakeDb(rows);
