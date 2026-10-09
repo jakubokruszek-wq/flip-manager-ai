@@ -236,7 +236,12 @@ function toMorizonListing(offer: Record<string, unknown>, fallbackCity: string |
   const item = isRecord(offer.itemOffered) ? offer.itemOffered : offer; const address = isRecord(item.address) ? item.address : {};
   const price = number(offer.price); const area = number(atPath(item, ["floorSize", "value"]));
   if (price === null || price <= 0 || area === null || area <= 0 || /\/mieszkania\/[^/]+\/?$/i.test(new URL(url).pathname)) return null;
-  const locality = text(address, "addressLocality"); const district = locality && ["bałuty", "górna", "polesie", "śródmieście", "widzew"].includes(normalize(locality)) ? locality : null;
+  // normalize() strips diacritics (ą/ę/ó/ś/ź/ż and ł -> a/e/o/s/z/z/l); the
+  // comparison list must be normalized the same way, or every district whose
+  // name has one of these (Bałuty, Górna, Śródmieście -- 3 of 5 Łódź
+  // districts) silently never matches, leaving district null and city wrongly
+  // set to the raw, un-mapped locality instead of "Łódź".
+  const locality = text(address, "addressLocality"); const district = locality && ["baluty", "gorna", "polesie", "srodmiescie", "widzew"].includes(normalize(locality)) ? locality : null;
   const title = text(offer, "name");
   const description = text(item, "description") ?? text(offer, "description");
   const buildingType = resolveBuildingType(item.buildingType ?? item.building_type, title, description);

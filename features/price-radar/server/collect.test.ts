@@ -199,6 +199,35 @@ test("one source's fetch failure is terminal and visible -- other sources still 
   assert.equal(db.tables.price_radar_listings.length, MOCKED_SOURCE_COUNT - 1);
 });
 
+test("a source that times out mid-portion is marked pending with an honest message (no claimed daily wait) and resumes on the very next portion call", async () => {
+  // The real Production run (93a7f1d5...) showed official_cooperative as
+  // "RADAR_PORTION_WAITING_FOR_NEXT_DAILY_WINDOW", then later concluded with
+  // a real terminal result within the same operator session -- proving
+  // nothing in this code actually enforces a calendar-day wait. The label
+  // was simply wrong; this is what it can honestly promise.
+  const db = fakeDb();
+  let domiportaAttempts = 0;
+  fakeSourceImpl = async (id) => {
+    if (id === "domiporta") {
+      domiportaAttempts += 1;
+      if (domiportaAttempts === 1) { const error = new Error("simulated portion timeout"); error.name = "AbortError"; throw error; }
+      return { listings: [qualifyingListing("domiporta-resumed", "domiporta")], warnings: [], fetched: 1 };
+    }
+    return { listings: [qualifyingListing(`${id}-1`, id)], warnings: [], fetched: 1 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  const first = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  assert.equal(first.sourceStatuses.domiporta, "pending");
+  assert.doesNotMatch(first.sourceErrors.domiporta ?? "", /NEXT_DAILY_WINDOW/, "must not reintroduce the old label claiming a specific daily wait that no code enforces");
+  assert.match(first.sourceErrors.domiporta ?? "", /najbliższym uruchomieniu/);
+
+  const second = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  assert.equal(domiportaAttempts, 2, "the very next portion call, not a day later, must retry the same pending source");
+  assert.equal(second.status, "completed");
+  assert.equal(second.sourceStatuses.domiporta, "completed");
+});
+
 test("re-collecting the same listing preserves a prior exclusion -- persistRadarListing's upsert never writes excluded_at/excluded_reason", async () => {
   const db = fakeDb({
     listings: [{ id: "existing-1", owner_id: ownerId, source: "domiporta", external_listing_id: "domiporta-1", normalized_url: "https://example.test/domiporta-1", excluded_at: "2026-10-01T00:00:00Z", excluded_reason: "poza budżetem" }],

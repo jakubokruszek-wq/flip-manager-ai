@@ -203,7 +203,15 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       } catch (reason) {
         if (isRetryableTimeout(reason, controller.signal)) {
           checkpoint.sourceStatuses[sourceId] = "pending";
-          checkpoint.sourceErrors[sourceId] = "RADAR_PORTION_WAITING_FOR_NEXT_DAILY_WINDOW";
+          // Confirmed by the owning run's own history (93a7f1d5...): this
+          // source resumed and reached a real terminal result within the
+          // same operator session, not after a calendar day. Nothing here
+          // enforces a daily wait -- it only means this portion's own time
+          // budget ran out mid-fetch; the next invocation of this function
+          // (manual click or, once scheduled, the next cron tick) picks the
+          // same source back up via its retained cursor. The previous label
+          // claimed a specific "daily window" that does not exist in code.
+          checkpoint.sourceErrors[sourceId] = "RADAR_PORTION_TIME_BUDGET_EXCEEDED: zostanie wznowione przy najbliższym uruchomieniu zbierania (ręcznym lub zaplanowanym), nie wymaga czekania do następnego dnia.";
           break;
         }
         checkpoint.sourceStatuses[sourceId] = "failed";
