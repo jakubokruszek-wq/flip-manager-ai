@@ -4,7 +4,7 @@ Ten moduł nie jest aktywowany na Production. `supabase/migrations/2026100800000
 
 ## Dzienny harmonogram
 
-Endpoint `POST /api/jobs/price-radar-collect` przetwarza jedną porcję jednego właściciela. Przebieg i checkpoint pozostają w `price_radar_runs`; po wygaśnięciu lease kolejny tick przejmuje ten sam run. Proponowany termin to `15 3 * * *` w UTC. Oznacza 04:15 czasu Warszawy zimą i 05:15 latem; UTC jest stabilny i endpoint nie zależy od strefy hosta. Wpisu nie dodano do `vercel.json` i nie skonfigurowano aktywnego Supabase Cron.
+Endpoint `GET|POST /api/jobs/price-radar-collect` przetwarza jedną porcję jednego właściciela (obie metody wykonują tę samą logikę — jak w każdym innym zadaniu w `app/api/jobs/`, ponieważ Vercel Cron i część darmowych harmonogramów zewnętrznych, np. cron-job.org, wywołują metodą GET). Przebieg i checkpoint pozostają w `price_radar_runs`; po wygaśnięciu lease kolejny tick przejmuje ten sam run. Proponowany termin to `15 3 * * *` w UTC. Oznacza 04:15 czasu Warszawy zimą i 05:15 latem; UTC jest stabilny i endpoint nie zależy od strefy hosta. Wpisu nie dodano do `vercel.json` i nie skonfigurowano aktywnego Supabase Cron.
 
 Po osobnym przeglądzie wdrożenia migracji i jawnej autoryzacji można skonfigurować w Supabase Cron POST do endpointu z `Authorization: Bearer <wartość z Vault>`; sekret musi być identyczny z Production `CRON_SECRET`, przechowywany wyłącznie w Vault, a URL należy pobrać z zatwierdzonego środowiska. Nie zapisuj wartości sekretu w repo, logach ani tym dokumencie. Przed aktywacją potwierdź, że `pg_cron`, `pg_net`, Vault, wymagane tabele/kolumny/RPC i sekret istnieją. Zachowaj inne zadania i nie twórz duplikatu istniejącego Radar Cron.
 

@@ -27,3 +27,11 @@ export async function POST(request: Request) {
   }
   return Response.json({ status: "idle", message: "Brak właściciela Radaru gotowego do pobrania porcji." });
 }
+
+// Vercel Cron and other free external schedulers (e.g. cron-job.org) may
+// invoke a cron path with GET rather than POST -- every other job route in
+// app/api/jobs/ (facebook-watch, finder-scan-continuation,
+// finder-scan-scheduler, listing-lifecycle) already accepts both for this
+// exact reason. This route had only POST, so a real scheduler GET would have
+// received a 405 and the portion would never run.
+export const GET = POST;
