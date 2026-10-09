@@ -212,3 +212,25 @@ test("re-collecting the same listing preserves a prior exclusion -- persistRadar
   assert.equal(row.excluded_at, "2026-10-01T00:00:00Z", "a re-collection must never clear a prior exclusion");
   assert.equal(row.excluded_reason, "poza budżetem");
 });
+
+test("resuming after the OLX worker exhausted its lease (claim_olx_scan_job's own LEASE_EXHAUSTED path, not Radar's finalize RPC) marks olx failed and lets the rest of the queue finish -- a run is never stuck forever behind a dead OLX job", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id) => (id === "olx" ? { listings: [], warnings: [], fetched: 0 } : { listings: [qualifyingListing(`${id}-1`, id)], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, [], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  // Reproduces the real Production state: a prior portion queued this run's
+  // OLX job, the local worker never finished it, and claim_olx_scan_job's own
+  // generic lease-exhaustion fallback (not Radar's finalize_price_radar_olx_job
+  // RPC) marked the job "failed" directly -- so the run's own checkpoint was
+  // never told. enqueueRadarOlxJob must surface this as RADAR_OLX_JOB_ALREADY_FAILED
+  // on the next attempt rather than silently re-queuing or hanging.
+  db.tables.olx_scan_jobs.push({ id: "job-1", idempotency_key: `price-radar:${ownerId}:olx:${claimed.run.id}`, status: "failed", error_code: "LEASE_EXHAUSTED" });
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  assert.equal(result.sourceStatuses.olx, "failed", "a dead OLX job must be recognized as failed, not left at 'running' forever");
+  assert.match(result.sourceErrors.olx ?? "", /RADAR_OLX_JOB_ALREADY_FAILED/);
+  assert.equal(result.sourceStatuses.domiporta, "completed", "sources after olx in the queue must still run");
+  assert.equal(result.sourceStatuses.morizon, "completed");
+  assert.equal(result.status, "partial", "one dead source among otherwise-successful ones ends the run partial, not stuck in 'running'");
+  assert.notEqual(db.tables.price_radar_runs[0].status, "running", "the run must reach a terminal status instead of waiting on OLX forever");
+});
