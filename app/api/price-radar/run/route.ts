@@ -1,7 +1,10 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
-import { claimOrCreateRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
+import { claimOrCreateRadarRun, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
 import { readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 /**
  * Manual/operator-triggered Radar collection portion. Claims (or resumes)
@@ -25,7 +28,7 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   let operator;
   try {
     operator = await requireOperator();
@@ -33,6 +36,24 @@ export async function POST() {
     return operatorAuthorizationResponse(error);
   }
   try {
+    const body = await request.json().catch(() => undefined) as unknown;
+    if (body !== undefined && (!body || typeof body !== "object" || !("expectedRunId" in body) || typeof body.expectedRunId !== "string" || !body.expectedRunId.trim())) {
+      return Response.json({ code: "INVALID_RESUME_REQUEST" }, { status: 400 });
+    }
+    const expectedRunId = body && typeof body === "object" && "expectedRunId" in body ? body.expectedRunId : null;
+    if (typeof expectedRunId === "string") {
+      const latest = await latestRadarRun(operator.id);
+      if (!latest || latest.id !== expectedRunId || (latest.status !== "pending" && latest.status !== "running")) {
+        return Response.json({ code: "RADAR_RUN_CHANGED", message: "The requested Radar run is no longer resumable." }, { status: 409 });
+      }
+      const resumed = await resumeExistingRadarRun(operator.id, expectedRunId);
+      if (resumed.kind === "blocked") {
+        return Response.json({ code: resumed.reason, message: "The Radar run was not resumed; refresh its current state." }, { status: 409 });
+      }
+      if (!resumed.run.leaseToken) throw new Error("RADAR_LEASE_LOST");
+      const portion = await runRadarCollectionPortion({ runId: resumed.run.id, ownerId: operator.id, leaseToken: resumed.run.leaseToken });
+      return Response.json({ runId: resumed.run.id, ...portion });
+    }
     const settings = await readRadarSettings(operator.id);
     const claim = await claimOrCreateRadarRun(operator.id, settings.sources);
     if (claim.kind === "blocked") {

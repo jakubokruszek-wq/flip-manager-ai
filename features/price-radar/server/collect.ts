@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
@@ -7,7 +8,7 @@ import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availabil
 import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
-import type { SourceBatch } from "@/features/flip-finder/source-batches";
+import { SourceBatchYield, type RadarDetailCursor, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
 import type { RadarCheckpoint, RadarRun, RadarRunStatus, RadarSource } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
 
@@ -84,6 +85,7 @@ function sourceDate(raw: Record<string, unknown>, keys: string[]): string | null
 }
 
 export type RadarClaimResult = { kind: "claimed"; run: RadarRun } | { kind: "blocked" };
+export type RadarResumeResult = { kind: "claimed"; run: RadarRun } | { kind: "blocked"; reason: "run_changed" | "lease_active" | "olx_queue_owns_source" | "inconsistent_run" };
 
 /** The DB RPC serializes claims by owner and returns a fenced lease token. */
 export async function claimOrCreateRadarRun(ownerId: string, selectedSources: readonly RadarSource[] = RADAR_SOURCES, supabase: SupabaseClient = createAdminClient()): Promise<RadarClaimResult> {
@@ -98,6 +100,47 @@ export async function claimOrCreateRadarRun(ownerId: string, selectedSources: re
   if (error) throw new Error("RADAR_RUN_CLAIM_FAILED");
   const row = rpcRow(data);
   return row ? { kind: "claimed", run: toRadarRun({ ...row, id: row.run_id, owner_id: ownerId, lease_token: row.lease_token }) } : { kind: "blocked" };
+}
+
+/**
+ * Reclaims only the exact nonterminal run observed by the UI. The old lease
+ * token and expiry are part of the UPDATE predicate, so only one concurrent
+ * resume can win. This deliberately never inserts a run. The OLX source stays
+ * under claim_price_radar_run because that RPC also atomically fences/requeues
+ * its separate worker job; the browser must wait for that queue instead.
+ */
+export async function resumeExistingRadarRun(ownerId: string, expectedRunId: string, supabase: SupabaseClient = createAdminClient()): Promise<RadarResumeResult> {
+  const selected = await supabase.from("price_radar_runs").select("*").eq("id", expectedRunId).eq("owner_id", ownerId).maybeSingle();
+  if (selected.error || !selected.data) return { kind: "blocked", reason: "run_changed" };
+  const row = selected.data as Row;
+  if (row.status !== "pending" && row.status !== "running") return { kind: "blocked", reason: "run_changed" };
+
+  const run = toRadarRun(row);
+  const now = Date.now();
+  const oldLeaseUntil = typeof row.lease_until === "string" ? row.lease_until : null;
+  if (oldLeaseUntil && !Number.isFinite(Date.parse(oldLeaseUntil))) return { kind: "blocked", reason: "inconsistent_run" };
+  if (oldLeaseUntil && Date.parse(oldLeaseUntil) > now) return { kind: "blocked", reason: "lease_active" };
+
+  const source = run.checkpoint.sourceQueue[run.checkpoint.currentSourceIndex];
+  if (!source || !isRecord(run.checkpoint.sourceStatuses) || !Object.hasOwn(run.checkpoint.sourceStatuses, source)) return { kind: "blocked", reason: "inconsistent_run" };
+  if (source === "olx" && run.checkpoint.sourceStatuses.olx === "running") {
+    return { kind: "blocked", reason: "olx_queue_owns_source" };
+  }
+
+  const leaseToken = randomUUID();
+  let update = supabase.from("price_radar_runs").update({
+    status: "running",
+    lease_token: leaseToken,
+    lease_until: new Date(now + LEASE_SECONDS * 1000).toISOString(),
+    error_message: null,
+  }).eq("id", expectedRunId).eq("owner_id", ownerId).eq("status", row.status);
+  update = row.lease_token === null || row.lease_token === undefined ? update.is("lease_token", null) : update.eq("lease_token", row.lease_token);
+  if (oldLeaseUntil === null) update = update.is("lease_until", null);
+  else update = update.eq("lease_until", oldLeaseUntil).lte("lease_until", new Date(now).toISOString());
+  const claimed = await update.select("*").maybeSingle();
+  if (claimed.error) throw new Error("RADAR_RUN_RESUME_FAILED");
+  if (!claimed.data) return { kind: "blocked", reason: "run_changed" };
+  return { kind: "claimed", run: toRadarRun(claimed.data as Row) };
 }
 
 export type RadarPortionResult = { status: "running" | "completed" | "failed" | "partial"; scannedCount: number; qualifiedCount: number; sourceStatuses: RadarRun["sourceStatuses"]; sourceErrors: Record<string, string> };
@@ -141,7 +184,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       }
 
       checkpoint.sourceStatuses[sourceId] = "running";
-      delete checkpoint.sourceErrors[sourceId];
+      if (!isRadarDetailCursor(checkpoint.perSourceCursor[sourceId])) delete checkpoint.sourceErrors[sourceId];
       await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
       try {
         if (sourceId === "olx") {
@@ -151,7 +194,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           break;
         }
         let emittedBatches = false;
-        const processBatch = async (batch: SourceBatch, nextCursor: number | null) => {
+        const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
           if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) {
             controller.abort();
             throw new Error("RADAR_PORTION_BUDGET_YIELD");
@@ -188,7 +231,13 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         // The underlying adapter must honor the passed AbortSignal. We also
         // refuse to persist any result after this portion's budget expires.
         const cursorValue = checkpoint.perSourceCursor[sourceId];
-        const batches = { ...(typeof cursorValue === "number" ? { cursor: cursorValue } : {}), onBatch: processBatch };
+        const batches: SourceBatchContext = {
+          ...(typeof cursorValue === "number" ? { cursor: cursorValue } : {}),
+          ...(isRadarDetailCursor(cursorValue) ? { radarDetailCursor: cursorValue } : {}),
+          purpose: "price_radar",
+          deadlineAt: started + PORTION_BUDGET_MS - YIELD_MARGIN_MS,
+          onBatch: processBatch,
+        };
         const sourcePromise = source.fetch(syntheticCriteria(sourceId), controller.signal, batches);
         const result = await Promise.race([sourcePromise, abortPromise(controller.signal)]);
         controller.signal.throwIfAborted();
@@ -201,6 +250,11 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
       } catch (reason) {
+        if (reason instanceof SourceBatchYield) {
+          checkpoint.sourceStatuses[sourceId] = "pending";
+          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+          break;
+        }
         if (isRetryableTimeout(reason, controller.signal)) {
           checkpoint.sourceStatuses[sourceId] = "pending";
           // Confirmed by the owning run's own history (93a7f1d5...): this
@@ -252,4 +306,10 @@ function abortPromise(signal: AbortSignal): Promise<never> {
     if (signal.aborted) reject(new DOMException("The operation was aborted", "AbortError"));
     else signal.addEventListener("abort", () => reject(new DOMException("The operation was aborted", "AbortError")), { once: true });
   });
+}
+
+function isRadarDetailCursor(value: unknown): value is RadarDetailCursor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const cursor = value as Partial<RadarDetailCursor>;
+  return cursor.kind === "radar_detail_v1" && Number.isInteger(cursor.page) && Number(cursor.page) > 0 && Number.isInteger(cursor.candidateIndex) && Number(cursor.candidateIndex) >= 0;
 }

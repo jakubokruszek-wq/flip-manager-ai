@@ -13,6 +13,8 @@ export async function fetchOlxWithBrowser(requestUrl: string, signal: AbortSigna
   const url = assertAllowedOlxUrl(requestUrl).toString();
   const startedAt = Date.now();
   const browser = await chromium.launch({ headless: true });
+  const closeOnAbort = () => { void browser.close().catch(() => undefined); };
+  signal.addEventListener("abort", closeOnAbort, { once: true });
   try {
     signal.throwIfAborted();
     const context = await browser.newContext({ locale: "pl-PL" });
@@ -31,6 +33,7 @@ export async function fetchOlxWithBrowser(requestUrl: string, signal: AbortSigna
       durationMs: Date.now() - startedAt,
     };
   } finally {
+    signal.removeEventListener("abort", closeOnAbort);
     await browser.close();
   }
 }

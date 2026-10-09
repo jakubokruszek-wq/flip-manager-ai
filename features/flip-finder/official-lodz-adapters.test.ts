@@ -8,6 +8,10 @@ mock.module("@/features/market-intelligence/resale-comps-store", { namedExports:
 mock.module("@/features/flip-finder/server/canonical-reconciliation", { namedExports: { reconcileCanonicalListingDecision: async () => ({ isCurrentMatch: true }) } });
 
 function source(id: string) { return OFFICIAL_LODZ_SOURCES.find((item) => item.id === id)!; }
+function numericCursor(value: unknown): number | null {
+  assert.ok(value === null || typeof value === "number", "official adapters only emit numeric page/detail cursors");
+  return value as number | null;
+}
 async function parse(id: string, html: string, fetchDetail: (url: string) => Promise<string> = async () => "") {
   return OFFICIAL_LODZ_PARSERS[id]!(html, source(id), fetchDetail);
 }
@@ -20,12 +24,12 @@ test("official detail checkpoints resume at the next notice and propagate budget
   let next: number | null = null;
   const parser = OFFICIAL_LODZ_PARSERS["sm-dabrowa"];
   await assert.rejects(parser(list, source("sm-dabrowa"), fetchDetail, undefined, {
-    onBatch: async (batch, cursor) => { assert.equal(batch.listings.length, 1); next = cursor; throw new Error("SOURCE_SLICE_YIELD"); },
+    onBatch: async (batch, cursor) => { assert.equal(batch.listings.length, 1); next = numericCursor(cursor); throw new Error("SOURCE_SLICE_YIELD"); },
   }), /SOURCE_SLICE_YIELD/);
   assert.equal(next, 1);
   assert.equal(requests.length, 1);
   const saved: string[] = [];
-  await parser(list, source("sm-dabrowa"), fetchDetail, undefined, { cursor: next!, onBatch: async (batch, cursor) => { saved.push(...batch.listings.map((listing) => listing.originalUrl!)); next = cursor; } });
+  await parser(list, source("sm-dabrowa"), fetchDetail, undefined, { cursor: next!, onBatch: async (batch, cursor) => { saved.push(...batch.listings.map((listing) => listing.originalUrl!)); next = numericCursor(cursor); } });
   assert.equal(next, null);
   assert.equal(requests.length, 2);
   assert.match(requests[0], /501-/);

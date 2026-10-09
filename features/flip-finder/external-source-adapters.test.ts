@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
-import { fetchExternalPortal, EXTERNAL_PORTAL_PARSERS } from "./external-source-adapters.ts";
+import { fetchExternalPortal, EXTERNAL_PORTAL_PARSERS, parseRadarOfferDetail } from "./external-source-adapters.ts";
 import { activeSources, EXTERNAL_SOURCE_CONFIGS, SOURCES } from "./server/search-source-registry.ts";
 import type { ExternalSourceId } from "./external-source-parser.ts";
+import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
 mock.module("@/features/market-intelligence/resale-comps-store", { namedExports: { syncResaleCompFromListing: async () => ({ saved: false, created: false, compId: null, available: true }) } });
@@ -444,6 +445,99 @@ test("the real oferty.net public page structure (plain <table class=\"property\"
   const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
   assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
   assert.equal(rows[0]?.price, 425000);
+});
+
+const OFERTY_NET_DETAIL_OBSERVED_PAGE = `
+<title>Mieszkanie na sprzeda&#380; | oferty.net</title>
+<div class="header">
+  <span>Mieszkanie na sprzeda&#380;</span>
+  <h1>&#321;&#243;d&#378;, &#346;r&oacute;dmie&#347;cie, Stefana Jaracza</h1>
+  <h3>Pow.: 83,61 m2, Cena: 735 000 PLN</h3>
+</div>
+<div class="param"><dl>
+  <dt>Powierzchnia u&#380;ytkowa</dt><dd>83,61 m2</dd>
+  <dt>Typ budynku</dt><dd>APARTAMENTOWIEC</dd>
+  <dt>Rynek pierwotny</dt><dd>Nie</dd>
+  <dt>Stan nieruchomo&#347;ci</dt><dd>DO WYKO&#323;CZENIA</dd>
+</dl></div>
+<div class="description">Stan deweloperski, do wyko&#324;czenia.</div>`;
+
+test("Oferty.net detail fetch overrides search-card values with confirmed total price/location/building/market and excludes unfinished stock", async () => {
+  const previousFetch = globalThis.fetch;
+  const urls: string[] = [];
+  const candidatePage = `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzeda&#380; &#321;&#243;d&#378;" src="https://cdn.example/oferta.jpg"></td><td class="cell_location"><a href="https://www.oferty.net/mieszkanie-lodz-srodmiescie-jaracza,offer-1" title="mieszkanie na sprzeda&#380;">Mieszkanie &#321;&#243;d&#378;</a></td><td class="cell_area">53 m2</td><td class="cell_rooms">2</td><td class="cell_price">489 000</td></tr></table>`;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    urls.push(url);
+    return new Response(url.includes("/mieszkania,lodz") ? candidatePage : OFERTY_NET_DETAIL_OBSERVED_PAGE, { status: 200, headers: { "content-type": "text/html" } });
+  };
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async () => undefined,
+    });
+    const listing = result.listings[0]!;
+    assert.equal(urls.filter((url) => url.includes("/mieszkania,lodz")).length, 1, "the existing result adapter supplies the candidate page");
+    assert.equal(urls.filter((url) => url.includes(",offer-1")).length, 1, "the existing adapter fetches that candidate's own detail URL once");
+    assert.equal(listing.price, 735_000, "Radar uses the detail page's total price, not the search card price");
+    assert.equal(listing.area, 83.61);
+    assert.equal(listing.city, "\u0141\u00f3d\u017a");
+    assert.equal(listing.district, "\u015ar\u00f3dmie\u015bcie");
+    assert.equal(listing.buildingType, "apartamentowiec");
+    assert.equal(listing.rawPayload.marketType, "secondary");
+    assert.equal(listing.rawPayload.detailVerified, true, "the page has explicit evidence for all required detail fields");
+    const qualification = qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: "apartment", rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    });
+    assert.deepEqual(qualification, { qualified: false, reason: "unfinished_or_needs_renovation" }, "confirmed price and property details do not override a developer-state/unfinished exclusion");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Domiporta detail parser marks an observed archived apartment inactive and never verifiable for Radar", () => {
+  const archived = `<title>Mieszkanie na sprzeda&#380;</title><h1>Mieszkanie na sprzeda&#380;, 60 m2</h1><div class="summary__location">&#321;&#243;d&#378;, Ba&#322;uty, Wa&#322;brzyska</div><div class="archive__title">Og&#322;oszenie jest ju&#380; nieaktualne</div><div class="summary__price_number">330 000 z&#322;</div><dl><dt class="features__item_name">Powierzchnia</dt><dd class="features__item_value">60 m2</dd></dl>`;
+  const parsed = parseRadarOfferDetail("domiporta", archived);
+  assert.equal(parsed.active, false);
+  assert.equal(parsed.price, 330_000, "the detail price is read as a total amount");
+  assert.equal(parsed.area, 60);
+  assert.equal(parsed.city, "\u0141\u00f3d\u017a");
+  assert.equal(parsed.district, "Ba\u0142uty");
+  assert.equal(parsed.verified, false);
+});
+
+test("Radar detail cursor resumes after three completed detail pages without repeating their requests", async () => {
+  const previousFetch = globalThis.fetch;
+  const detailUrls: string[] = [];
+  const rows = [1, 2, 3, 4].map((index) => {
+    const item = listingValues(`detail-${index}`, "oferty_net", 1);
+    const url = `https://www.oferty.net/mieszkanie-lodz-srodmiescie,detail-${index}`;
+    return `<tr class="property"><td class="cell_photo"><img alt="${item.title}" src="${item.images[0]}"></td><td class="cell_location"><a href="${url}" title="mieszkanie na sprzeda&#380;">${item.title}</a></td><td class="cell_area">53 m2</td><td class="cell_rooms">2</td><td class="cell_price">489 000</td></tr>`;
+  }).join("");
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/mieszkania,lodz")) return new Response(`<table>${rows}</table>`, { status: 200 });
+    detailUrls.push(url);
+    return new Response(OFERTY_NET_DETAIL_OBSERVED_PAGE, { status: 200 });
+  };
+  try {
+    let savedCursor: unknown = null;
+    const firstContext = { purpose: "price_radar" as const, deadlineAt: Date.now() + 50_000, onBatch: async (_batch: unknown, cursor: unknown) => { savedCursor = cursor; } };
+    await assert.rejects(fetchExternalPortal(config("oferty_net"), filter, undefined, firstContext as never), /SOURCE_BATCH_YIELD:detail_batch_limit/);
+    assert.deepEqual(savedCursor, { kind: "radar_detail_v1", page: 1, candidateIndex: 3 });
+    assert.equal(detailUrls.length, 3);
+
+    let finalCursor: unknown = "not-null";
+    const resumed = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
+      purpose: "price_radar", radarDetailCursor: savedCursor as never, deadlineAt: Date.now() + 50_000,
+      onBatch: async (_batch, cursor) => { finalCursor = cursor; },
+    });
+    assert.equal(detailUrls.length, 4, "the three completed detail pages are not fetched a second time");
+    assert.equal(new Set(detailUrls).size, 4);
+    assert.equal(resumed.listings.length, 1);
+    assert.equal(finalCursor, null, "the adapter marks the detail queue complete only after the last candidate");
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 // Real public page excerpt (read-only GET of allegrolokalnie.pl's category

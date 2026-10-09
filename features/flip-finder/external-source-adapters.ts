@@ -2,17 +2,20 @@ import { load } from "cheerio";
 import type { PropertySourceListing } from "@/features/properties/types/property";
 import { calculateContentHash } from "./otodom-search";
 import type { ExternalSourceConfig, ExternalSourceId } from "./external-source-parser";
-import type { SourceBatchContext } from "./source-batches";
+import { SourceBatchYield, type RadarDetailCursor, type SourceBatchContext } from "./source-batches";
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
 import { invalidSalePriceWarning } from "./sale-price";
 import { extractListingIdentityEvidence } from "./identity-evidence";
 
-export type ExternalPortalPage = { listings: PropertySourceListing[]; hasNextPage: boolean; invalidSalePriceCount?: number };
+export type ExternalPortalPage = { listings: PropertySourceListing[]; detailCandidates?: PropertySourceListing[]; hasNextPage: boolean; invalidSalePriceCount?: number };
 type PortalRecord = Record<string, unknown>;
-type PortalCandidate = { id?: unknown; url?: unknown; title?: unknown; description?: unknown; price?: unknown; area?: unknown; rooms?: unknown; floor?: unknown; city?: unknown; district?: unknown; images?: unknown; publishedAt?: unknown; yearBuilt?: unknown; buildingType?: unknown; ownership?: unknown; sourceRecord?: unknown };
+type PortalCandidate = { id?: unknown; url?: unknown; title?: unknown; description?: unknown; price?: unknown; area?: unknown; rooms?: unknown; floor?: unknown; city?: unknown; district?: unknown; images?: unknown; publishedAt?: unknown; yearBuilt?: unknown; buildingType?: unknown; ownership?: unknown; marketType?: unknown; propertyType?: unknown; sourceRecord?: unknown };
 type PortalParser = (html: string, fallbackCity: string) => ExternalPortalPage;
 
 const MAX_PAGES = 5;
+const RADAR_DETAIL_PAGE_LIMIT_PER_PORTION = 3;
+const RADAR_DETAIL_REQUEST_TIMEOUT_MS = 8_000;
+const RADAR_DETAIL_SOURCES = new Set<ExternalSourceId>(["oferty_net", "domiporta"]);
 const TRACKING_PARAM = /^(utm_|fbclid|gclid|dclid|msclkid|yclid|ref$)/iu;
 const RENTAL_SIGNAL = /\b(wynajem|wynajm|najem|rent|do wynajęcia|do wynajecia|mieszkanie za remont)\b/iu;
 
@@ -31,6 +34,9 @@ export const EXTERNAL_PORTAL_PARSERS: Record<ExternalSourceId, PortalParser> = {
 };
 
 export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: { city: string | null }, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+  if (batches?.purpose === "price_radar" && RADAR_DETAIL_SOURCES.has(config.id)) {
+    return fetchRadarPortalDetails(config, criteria.city ?? "", signal, batches);
+  }
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
@@ -58,11 +64,96 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
   return { listings, warnings: [...new Set(warnings)], fetched };
 }
 
-async function fetchExternalPage(url: string, signal?: AbortSignal): Promise<Response> {
+async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: string, signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+  const parser = EXTERNAL_PORTAL_PARSERS[config.id];
+  const cursor: RadarDetailCursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1", page: batches.cursor ?? 1, candidateIndex: 0 };
+  const listings: PropertySourceListing[] = [];
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  let fetched = 0;
+  let detailPagesThisPortion = 0;
+  let sawCandidates = false;
+
+  for (let page = cursor.page; page <= MAX_PAGES; page += 1) {
+    if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
+    const pageUrlValue = pageUrl(config, city, page);
+    const pageResponse = await fetchExternalPage(pageUrlValue, signal);
+    if (!pageResponse.ok) throw new Error(`${config.label}: HTTP ${pageResponse.status}.`);
+    const pageHtml = await pageResponse.text();
+    assertNotAccessChallenge(config.label, pageHtml);
+    const parsed = parser(pageHtml, city);
+    const candidates = parsed.detailCandidates ?? parsed.listings;
+    sawCandidates ||= candidates.length > 0;
+    const firstIndex = page === cursor.page ? cursor.candidateIndex : 0;
+
+    if (candidates.length === 0) {
+      const next = parsed.hasNextPage && page < MAX_PAGES ? radarDetailCursor(page + 1, 0) : null;
+      await batches.onBatch({ listings: [], warnings: [], fetched: 0 }, next);
+      if (!next) break;
+      continue;
+    }
+
+    for (let candidateIndex = firstIndex; candidateIndex < candidates.length; candidateIndex += 1) {
+      if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
+      if (batches.deadlineAt && Date.now() + RADAR_DETAIL_REQUEST_TIMEOUT_MS >= batches.deadlineAt) {
+        throw new SourceBatchYield("portion_budget");
+      }
+      const baseListing = candidates[candidateIndex]!;
+      const detailUrl = absoluteUrl(baseListing.originalUrl, config.id);
+      const next = candidateIndex + 1 < candidates.length
+        ? radarDetailCursor(page, candidateIndex + 1)
+        : parsed.hasNextPage && page < MAX_PAGES ? radarDetailCursor(page + 1, 0) : null;
+      let detailListing: PropertySourceListing | null = null;
+      const candidateWarnings: string[] = [];
+      const candidateFetched = 1;
+
+      if (detailUrl) {
+        const detailResponse = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS);
+        if (detailResponse.status === 404 || detailResponse.status === 410) {
+          // A listing removed between results and details is not a source outage and must not be qualified from stale card data.
+        } else if (!detailResponse.ok) {
+          throw new Error(`${config.label}: HTTP ${detailResponse.status} (detail).`);
+        } else {
+          const detailHtml = await detailResponse.text();
+          assertNotAccessChallenge(config.label, detailHtml);
+          const detail = parseRadarOfferDetail(config.id as "oferty_net" | "domiporta", detailHtml);
+          if (detail.active) {
+            detailListing = mergeRadarDetail(baseListing, detail);
+          }
+        }
+      } else {
+        candidateWarnings.push(`DETAIL_URL_INVALID:${baseListing.externalListingId}`);
+      }
+
+      fetched += candidateFetched;
+      warnings.push(...candidateWarnings);
+      if (detailListing) {
+        const identity = `${detailListing.source}:${detailListing.externalListingId}:${detailListing.normalizedUrl}`;
+        if (!seen.has(identity)) { seen.add(identity); listings.push(detailListing); }
+      }
+      await batches.onBatch({ listings: detailListing ? [detailListing] : [], warnings: candidateWarnings, fetched: candidateFetched }, next);
+      detailPagesThisPortion += 1;
+      if (detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) {
+        throw new SourceBatchYield("detail_batch_limit");
+      }
+    }
+
+    if (!parsed.hasNextPage || page >= MAX_PAGES) break;
+  }
+
+  if (!sawCandidates) warnings.push(`${config.label}: brak ofert z prawidłowym adresem szczegółów.`);
+  return { listings, warnings: [...new Set(warnings)], fetched };
+}
+
+function radarDetailCursor(page: number, candidateIndex: number): RadarDetailCursor {
+  return { kind: "radar_detail_v1", page, candidateIndex };
+}
+
+async function fetchExternalPage(url: string, signal?: AbortSignal, timeoutMs = 20_000): Promise<Response> {
   let response: Response | null = null;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (signal?.aborted) throw new Error("external source request aborted.");
-    response = await fetch(url, { cache: "no-store", headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8", "User-Agent": "FlipManager/1.0" }, redirect: "follow", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
+    response = await fetch(url, { cache: "no-store", headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8", "User-Agent": "FlipManager/1.0" }, redirect: "follow", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
     if ((response.status !== 429 && response.status < 500) || attempt === 2) return response;
     await retryDelay(attempt, signal);
   }
@@ -75,6 +166,134 @@ async function retryDelay(attempt: number, signal?: AbortSignal): Promise<void> 
     const timer = setTimeout(resolve, 150 * 2 ** (attempt - 1));
     signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("external source request aborted.")); }, { once: true });
   });
+}
+
+type ParsedRadarPortalDetail = {
+  active: boolean;
+  verified: boolean;
+  price: number | null;
+  area: number | null;
+  city: string | null;
+  district: string | null;
+  buildingType: string | null;
+  marketType: "primary" | "secondary" | null;
+  propertyType: "apartment" | null;
+  description: string | null;
+};
+
+/**
+ * Parses only the two existing portal adapters that need detail-page evidence
+ * for Radar qualification. The result-list parser remains the single source
+ * of candidate IDs/URLs; this parser never discovers or crawls new pages.
+ */
+export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: string): ParsedRadarPortalDetail {
+  const $ = load(html);
+  const fieldValues = new Map<string, string>();
+  const fields = source === "oferty_net" ? $(".param dt") : $(".features__item_name");
+  fields.each((_, element) => {
+    const label = normalizeDetailLabel($(element).text());
+    const value = $(element).next("dd, .features__item_value").text().replace(/\s+/gu, " ").trim();
+    if (label && value) fieldValues.set(label, value);
+  });
+
+  const textByLabels = (aliases: string[]): string | null => {
+    for (const alias of aliases) {
+      const value = fieldValues.get(normalizeDetailLabel(alias));
+      if (value) return value;
+    }
+    return null;
+  };
+  const headline = source === "oferty_net" ? $(".header h3").first().text() : $(".summary__price_number").first().text();
+  const explicitPrice = source === "oferty_net"
+    ? headline.match(/\bCena\s*:\s*([\d\s\u00a0.,]+)\s*(?:PLN|zł)\b/iu)?.[1]
+    : $(".summary__price_number [itemprop='price']").first().attr("content") ?? headline;
+  const price = explicitPrice ? money(explicitPrice) : null;
+  const areaText = textByLabels(["Powierzchnia użytkowa", "Powierzchnia mieszkalna", "Powierzchnia całkowita", "Powierzchnia"]);
+  const area = areaText ? decimal(areaFromText(areaText) ?? areaText) : null;
+  const location = source === "oferty_net" ? $(".header h1").first().text() : $(".summary__location").first().text();
+  const { city, district } = parseRadarLocation(location);
+  const titleText = [$("title").first().text(), $("h1").first().text(), source === "oferty_net" ? $(".header span").first().text() : ""].join(" ");
+  const detailDescription = source === "domiporta"
+    ? $(".description__container").first().text()
+    : $(".description, .offer_description, .offer-description, [itemprop='description']").first().text();
+
+  const buildingType = textByLabels(["Typ budynku", "Rodzaj budynku", "Rodzaj zabudowy"])
+    ?? resolveBuildingType(null, titleText, detailDescription);
+  const primaryMarket = textByLabels(["Rynek pierwotny"]);
+  const marketLabel = textByLabels(["Rynek"]);
+  const marketType = parseMarketType(primaryMarket, marketLabel) ?? parseMarketType(null, `${titleText} ${detailDescription ?? ""}`);
+  const propertyType = /mieszkan\p{L}*/iu.test(titleText) && /sprzed\p{L}*/iu.test(titleText) ? "apartment" : null;
+  const conditionLabel = textByLabels(["Stan nieruchomości", "Stan mieszkania", "Stan wykończenia", "Standard wykończenia"]);
+  const description = [detailDescription, conditionLabel ? `Stan nieruchomości: ${conditionLabel}` : null].map((value) => value?.replace(/\s+/gu, " ").trim()).filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
+  const pageText = `${titleText} ${description ?? ""} ${$(".archive__title, .archive").text()}`;
+  const active = !$(".archive, .archive__title").length && !/ogłoszenie\s+(?:jest\s+)?już\s+nieaktualne|oferta\s+nieaktualna|archiwum\s+domiporta/iu.test(pageText);
+  const finishEvidence = /stan\s+deweloperski|do\s+wykończenia|do\s+remontu|wymaga\s+remontu|wykończon\p{L}*\s+pod\s+klucz|świeżo\s+po\s+(?:generalnym|kapitalnym)\s+remoncie|generaln\p{L}*\s+remont.{0,35}20\d{2}|gotow\p{L}*\s+do\s+zamieszkan\p{L}*/iu.test(`${conditionLabel ?? ""} ${description ?? ""}`);
+  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishEvidence;
+  return { active, verified, price, area, city, district, buildingType, marketType, propertyType, description };
+}
+
+function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortalDetail): PropertySourceListing {
+  const raw = { ...base.rawPayload };
+  const candidate = isRecord(raw.candidate) ? raw.candidate : {};
+  const mergedCandidate = {
+    ...candidate,
+    price: detail.price ?? base.price,
+    area: detail.area ?? base.area,
+    city: detail.city,
+    district: detail.district,
+    buildingType: detail.buildingType,
+    marketType: detail.marketType,
+    propertyType: detail.propertyType,
+    detailAttempted: true,
+    detailVerified: detail.verified,
+  };
+  const description = [base.description, detail.description].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
+  const exactPrice = detail.price ?? base.price;
+  const exactArea = detail.area ?? base.area;
+  return {
+    ...base,
+    price: exactPrice,
+    area: exactArea,
+    pricePerSqm: exactPrice && exactArea ? exactPrice / exactArea : null,
+    city: detail.city,
+    district: detail.district,
+    locationText: [detail.district, detail.city].filter(Boolean).join(", ") || null,
+    buildingType: resolveBuildingType(detail.buildingType, base.title, description),
+    description,
+    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified },
+  };
+}
+
+function parseRadarLocation(value: string): { city: string | null; district: string | null } {
+  const parts = value.split(/[,;|\n]+/u).map(normalizeDetailLabel).filter(Boolean);
+  const city = parts.some((part) => part === "lodz" || part.startsWith("lodz ")) ? "\u0141\u00f3d\u017a" : null;
+  const districts: Array<[string, string]> = [["baluty", "Ba\u0142uty"], ["gorna", "G\u00f3rna"], ["polesie", "Polesie"], ["srodmiescie", "\u015ar\u00f3dmie\u015bcie"], ["widzew", "Widzew"]];
+  const tokens = new Set(parts.flatMap((part) => part.split(" ")));
+  const district = districts.find(([key]) => tokens.has(key))?.[1] ?? null;
+  return { city, district };
+}
+
+function parseMarketType(primaryValue: string | null, marketValue: string | null): "primary" | "secondary" | null {
+  const primary = normalizeDetailLabel(primaryValue ?? "");
+  if (["tak", "yes", "1"].includes(primary)) return "primary";
+  if (["nie", "no", "0"].includes(primary)) return "secondary";
+  const market = normalizeDetailLabel(marketValue ?? "");
+  if (/pierwotny|deweloperski/u.test(market)) return "primary";
+  if (/wtorny/u.test(market)) return "secondary";
+  return null;
+}
+
+function normalizeDetailLabel(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/gu, "l").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/gu, " ");
+}
+
+function assertNotAccessChallenge(source: string, html: string): void {
+  const $ = load(html);
+  const title = $("title").first().text();
+  const visible = $("body").text().slice(0, 4000);
+  if (/captcha|verify\s+you\s+are\s+human|access\s+denied|zablokowano\s+dostęp|potwierdź,?\s+że\s+nie\s+jesteś\s+robotem/iu.test(`${title} ${visible}`)) {
+    throw new Error(`${source}: CAPTCHA_OR_ACCESS_DENIED (no retry or bypass).`);
+  }
 }
 
 function pageUrl(config: ExternalSourceConfig, city: string, page: number): string {
@@ -409,15 +628,37 @@ function fromNieruchomosciOnlineRecord(record: PortalRecord): PortalCandidate { 
 function fromDomiportaRecord(record: PortalRecord): PortalCandidate { const nestedOffer = atPath(record, ["offers", "itemOffered"]); const offered = isRecord(record.itemOffered) ? record.itemOffered : isRecord(nestedOffer) ? nestedOffer : record; return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), buildingType: record.buildingType ?? offered.buildingType ?? offered.building_type, ownership: record.ownership ?? offered.ownership ?? offered.ownershipType, images: record.image, publishedAt: record.datePosted ?? record.datePublished, sourceRecord: record }; }
 function fromAdresowoRecord(record: PortalRecord): PortalCandidate { const offered = isRecord(record.itemOffered) ? record.itemOffered : record; return { id: record.identifier ?? record.sku, url: record.url ?? record.mainEntityOfPage, title: record.name, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: atPath(offered, ["floorSize", "value"]) ?? offered.area, rooms: offered.numberOfRooms, floor: offered.floorLevel, city: atPath(offered, ["address", "addressLocality"]), district: atPath(offered, ["address", "addressSuburb"]), buildingType: record.buildingType ?? offered.buildingType ?? offered.building_type, ownership: record.ownership ?? offered.ownership ?? offered.ownershipType, images: record.image, publishedAt: record.datePosted, sourceRecord: record }; }
 function fromSprzedajemyRecord(record: PortalRecord): PortalCandidate { const title = stringValue(record.name) ?? stringValue(record.title); return { id: record.sku ?? record.productID ?? record.identifier ?? record.url, url: record.url, title, description: record.description, price: atPath(record, ["offers", "price"]) ?? record.price, area: record.area ?? areaFromText(title), rooms: record.numberOfRooms ?? record.rooms ?? roomsFromText(title), city: atPath(record, ["address", "addressLocality"]), district: atPath(record, ["address", "addressSuburb"]), buildingType: record.buildingType ?? record.building_type, ownership: record.ownership ?? record.ownershipType, images: record.image, publishedAt: record.datePosted ?? record.datePublished, sourceRecord: record }; }
-function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[], fallbackCity: string, hasNextPage: boolean): ExternalPortalPage { const listings: PropertySourceListing[] = []; const seen = new Set<string>(); let invalidSalePriceCount = 0; for (const candidate of candidates) { const url = absoluteUrl(candidate.url, source); const title = stringValue(candidate.title); const description = stringValue(candidate.description); if (url && !isSearchUrl(url) && !RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`) && (money(candidate.price) === null || money(candidate.price)! <= 0)) invalidSalePriceCount += 1; const listing = toListing(source, candidate, fallbackCity); if (!listing || seen.has(listing.externalListingId)) continue; seen.add(listing.externalListingId); listings.push(listing); } return { listings, hasNextPage, invalidSalePriceCount }; }
-function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbackCity: string): PropertySourceListing | null {
+function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[], fallbackCity: string, hasNextPage: boolean): ExternalPortalPage {
+  const listings: PropertySourceListing[] = [];
+  const detailCandidates: PropertySourceListing[] = [];
+  const seen = new Set<string>();
+  const seenDetails = new Set<string>();
+  let invalidSalePriceCount = 0;
+  for (const candidate of candidates) {
+    const url = absoluteUrl(candidate.url, source);
+    const title = stringValue(candidate.title);
+    const description = stringValue(candidate.description);
+    if (url && !isSearchUrl(url) && !RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`) && (money(candidate.price) === null || money(candidate.price)! <= 0)) invalidSalePriceCount += 1;
+    const detailCandidate = toListing(source, candidate, fallbackCity, true);
+    if (detailCandidate && !seenDetails.has(detailCandidate.externalListingId)) {
+      seenDetails.add(detailCandidate.externalListingId);
+      detailCandidates.push(detailCandidate);
+    }
+    const listing = toListing(source, candidate, fallbackCity);
+    if (!listing || seen.has(listing.externalListingId)) continue;
+    seen.add(listing.externalListingId);
+    listings.push(listing);
+  }
+  return { listings, detailCandidates, hasNextPage, invalidSalePriceCount };
+}
+function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbackCity: string, allowIncompleteForDetail = false): PropertySourceListing | null {
   const url = absoluteUrl(candidate.url, source);
   const title = stringValue(candidate.title);
   const description = stringValue(candidate.description);
   if (!url || isSearchUrl(url) || RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`)) return null;
   const price = money(candidate.price);
   const area = decimal(candidate.area);
-  if (price === null || price <= 0 || area === null || area <= 0) return null;
+  if (!allowIncompleteForDetail && (price === null || price <= 0 || area === null || area <= 0)) return null;
   const city = stringValue(candidate.city) ?? fallbackCity;
   const district = stringValue(candidate.district);
   const externalListingId = stringValue(candidate.id) ?? new URL(url).pathname.replace(/\/+$/u, "");
@@ -429,8 +670,10 @@ function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbac
   const payload = { id: externalListingId, url: normalizedUrl, title, price, area, rooms, city, district };
   const buildingType = resolveBuildingType(candidate.buildingType, title, cleanDescription);
   const identityEvidence = extractListingIdentityEvidence({ source, title, description: cleanDescription, city, district, area, rooms, floor, images, buildingType, sourceRecord: candidate.sourceRecord });
-  const safeCandidate = { id: candidate.id, url: candidate.url, title: candidate.title, description: candidate.description, price: candidate.price, area: candidate.area, rooms: candidate.rooms, floor: candidate.floor, city: candidate.city, district: candidate.district, images: candidate.images, publishedAt: candidate.publishedAt, yearBuilt: candidate.yearBuilt, buildingType: candidate.buildingType, ownership: candidate.ownership };
-  return { source, externalListingId, originalUrl: url, normalizedUrl, title, price, area, rooms, floor, pricePerSqm: price / area, city, district, locationText: [district, city].filter(Boolean).join(", ") || null, thumbnailUrl: images[0] ?? null, images, buildingType, ownership: resolveOwnership(candidate.ownership, title, cleanDescription), yearBuilt: yearBuiltValue(candidate.yearBuilt), description: cleanDescription, publishedAt: stringValue(candidate.publishedAt), rawPayload: { source, candidate: safeCandidate }, contentHash: calculateContentHash(payload), identityEvidence };
+  const safeCandidate = { id: candidate.id, url: candidate.url, title: candidate.title, description: candidate.description, price: candidate.price, area: candidate.area, rooms: candidate.rooms, floor: candidate.floor, city: candidate.city, district: candidate.district, images: candidate.images, publishedAt: candidate.publishedAt, yearBuilt: candidate.yearBuilt, buildingType: candidate.buildingType, ownership: candidate.ownership, marketType: candidate.marketType, propertyType: candidate.propertyType };
+  const marketType = candidate.marketType === "primary" || candidate.marketType === "secondary" ? candidate.marketType : null;
+  const propertyType = stringValue(candidate.propertyType);
+  return { source, externalListingId, originalUrl: url, normalizedUrl, title, price, area, rooms, floor, pricePerSqm: price && area ? price / area : null, city, district, locationText: [district, city].filter(Boolean).join(", ") || null, thumbnailUrl: images[0] ?? null, images, buildingType, ownership: resolveOwnership(candidate.ownership, title, cleanDescription), yearBuilt: yearBuiltValue(candidate.yearBuilt), description: cleanDescription, publishedAt: stringValue(candidate.publishedAt), rawPayload: { source, candidate: safeCandidate, ...(marketType ? { marketType } : {}), ...(propertyType ? { propertyType } : {}) }, contentHash: calculateContentHash(payload), identityEvidence };
 }
 
 function absoluteUrl(value: unknown, source: ExternalSourceId): string | null { const raw = stringValue(value); if (!raw) return null; const host = SOURCE_HOSTS[source]; try { const url = new URL(raw, `https://${host}`); if (url.protocol !== "https:" || (url.hostname !== host && !url.hostname.endsWith(`.${host}`))) return null; return url.toString(); } catch { return null; } }

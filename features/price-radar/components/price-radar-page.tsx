@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -14,7 +14,7 @@ type ResultsResponse = {
   activeSources: RadarSource[];
   disabledSourceNote: string;
 };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; errorMessage: string | null };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[] }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
@@ -53,6 +53,10 @@ export function PriceRadarPage() {
   const [disabledSourceNote, setDisabledSourceNote] = useState("");
   const [run, setRun] = useState<RunStatus | null>(null);
   const [runStarting, setRunStarting] = useState(false);
+  const [autoResumeMessage, setAutoResumeMessage] = useState<string | null>(null);
+  const autoResumeInFlight = useRef(false);
+  const lastAutoResumeAttempt = useRef<{ key: string; at: number } | null>(null);
+  const refreshRunNow = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -135,20 +139,72 @@ export function PriceRadarPage() {
     let cancelled = false;
     let timer: number | undefined;
     const refresh = async () => {
+      let nextDelay = 60_000;
+      let shouldPoll = false;
       try {
         const response = await apiFetch("/api/price-radar/run");
         const payload = await response.json() as { run?: RunStatus | null };
         if (!response.ok) throw new Error("Nie udało się odczytać stanu zbierania Radaru.");
-        if (!cancelled) setRun(payload.run ?? null);
+        const latest = payload.run ?? null;
+        if (!cancelled) setRun(latest);
+        const nonterminal = latest?.status === "running" || latest?.status === "pending";
+        nextDelay = nonterminal ? 5_000 : 60_000;
+        shouldPoll = nonterminal;
+        const leaseExpired = nonterminal && (!latest.leaseUntil || !Number.isFinite(Date.parse(latest.leaseUntil)) || Date.parse(latest.leaseUntil) <= Date.now());
+        const currentSourceIndex = latest?.checkpoint?.currentSourceIndex ?? -1;
+        const currentSource = latest?.checkpoint?.sourceQueue?.[currentSourceIndex];
+        const olxWorkerOwnsSource = currentSource === "olx" && latest?.sourceStatuses.olx === "running";
+        if (olxWorkerOwnsSource && !cancelled) setAutoResumeMessage("OLX: dalszy krok nale\u017cy do kolejki workera; sprawdz jej stan.");
+        else if (!cancelled) setAutoResumeMessage(null);
+        const attemptKey = latest ? `${latest.id}:${latest.leaseUntil ?? "none"}` : "";
+        const priorAttempt = lastAutoResumeAttempt.current;
+        const retryDelayElapsed = !priorAttempt || priorAttempt.key !== attemptKey || Date.now() - priorAttempt.at >= 30_000;
+        if (!cancelled && leaseExpired && latest && !olxWorkerOwnsSource && !autoResumeInFlight.current && retryDelayElapsed) {
+          autoResumeInFlight.current = true;
+          lastAutoResumeAttempt.current = { key: attemptKey, at: Date.now() };
+          if (!cancelled) { setRunStarting(true); setAutoResumeMessage(null); }
+          try {
+            const resumed = await apiFetch("/api/price-radar/run", {
+              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRunId: latest.id }),
+            });
+            const resumePayload = await resumed.json().catch(() => null) as { code?: string; message?: string } | null;
+            if (resumed.status === 409) {
+        if (olxWorkerOwnsSource && !cancelled) setAutoResumeMessage("OLX: dalszy krok nale\u017cy do kolejki workera; sprawdz jej stan.");
+            } else if (!resumed.ok) {
+              throw new Error(resumePayload?.message || "Unable to automatically resume the Radar run.");
+            } else if (!cancelled) {
+              setAutoResumeMessage(null);
+              await load();
+            }
+            const currentResponse = await apiFetch("/api/price-radar/run");
+            const currentPayload = await currentResponse.json() as { run?: RunStatus | null };
+            if (!currentResponse.ok) throw new Error("Unable to refresh the Radar run after continuation.");
+            if (!cancelled) setRun(currentPayload.run ?? null);
+            nextDelay = currentPayload.run?.status === "running" || currentPayload.run?.status === "pending" ? 5_000 : 60_000;
+            shouldPoll = currentPayload.run?.status === "running" || currentPayload.run?.status === "pending";
+          } finally {
+            autoResumeInFlight.current = false;
+            setRunStarting(false);
+          }
+        }
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "Nie udało się odczytać stanu zbierania Radaru.");
       } finally {
-        if (!cancelled) timer = window.setTimeout(() => { void refresh(); }, run?.status === "running" || run?.status === "pending" ? 5_000 : 60_000);
+        if (!cancelled && shouldPoll) timer = window.setTimeout(() => { void refresh(); }, nextDelay);
       }
     };
+    const refreshNow = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      void refresh();
+    };
+    refreshRunNow.current = refreshNow;
     void refresh();
-    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [settingsLoaded, run?.status, run?.id]);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (refreshRunNow.current === refreshNow) refreshRunNow.current = null;
+    };
+  }, [settingsLoaded, load]);
 
   const toggleDistrict = (district: string) => {
     setSettingsDirty(true);
@@ -164,6 +220,7 @@ export function PriceRadarPage() {
   };
 
   const startCollection = async () => {
+    autoResumeInFlight.current = true;
     setRunStarting(true);
     try {
       const response = await apiFetch("/api/price-radar/run", { method: "POST" });
@@ -173,9 +230,13 @@ export function PriceRadarPage() {
       const statusPayload = await status.json() as { run?: RunStatus | null };
       setRun(statusPayload.run ?? null);
       await load();
+      refreshRunNow.current?.();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Nie udało się rozpocząć zbierania Radaru.");
-    } finally { setRunStarting(false); }
+    } finally {
+      autoResumeInFlight.current = false;
+      setRunStarting(false);
+    }
   };
 
   const setExclusion = async (listingId: string, excluded: boolean) => {
@@ -284,8 +345,9 @@ export function PriceRadarPage() {
       <section aria-label="Zbieranie ofert Radaru" className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
         <div className="min-w-0">
           <h2 className="font-semibold">Zbieranie Radaru</h2>
-          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runStatusLabel(run.status)}${run.status === "running" && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
+          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runStatusLabel(run.status)}${(run.status === "running" || run.status === "pending") && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
           {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
+          {autoResumeMessage ? <p className="mt-2 text-xs text-muted-foreground">{autoResumeMessage}</p> : null}
           {settingsSaving ? <p className="mt-1 text-xs text-muted-foreground">Zapisywanie ustawień…</p> : settingsDirty ? <p className="mt-1 text-xs text-destructive">Ustawienia nie zostały zapisane. Zmiana zostanie ponowiona po kolejnej edycji.</p> : null}
         </div>
         <Button disabled={runStarting || isRunActuallyActive(run) || !settingsLoaded} onClick={() => void startCollection()}>
@@ -396,7 +458,7 @@ function runStatusLabel(status: RadarRunStatus): string {
  * resume it short of direct database access.
  */
 function isRunActuallyActive(run: RunStatus | null): boolean {
-  if (!run || run.status !== "running") return false;
+  if (!run || (run.status !== "running" && run.status !== "pending")) return false;
   if (!run.leaseUntil) return false;
   return new Date(run.leaseUntil).getTime() > Date.now();
 }

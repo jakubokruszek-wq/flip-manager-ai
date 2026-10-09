@@ -7,7 +7,7 @@ function candidate(overrides: Partial<QualificationCandidate> = {}): Qualificati
     source: "domiporta", externalListingId: "ext-1", originalUrl: "https://example.test/1", normalizedUrl: "https://example.test/1",
     title: "Mieszkanie w bloku, Łódź Bałuty", description: "Świeżo po generalnym remoncie w 2025, nowe instalacje, gotowe do zamieszkania. Rynek wtórny.",
     price: 450_000, area: 50, pricePerSqm: 9_000, rooms: 2, city: "Łódź", district: "Bałuty",
-    buildingType: null, marketType: null, contentHash: "hash-1",
+    buildingType: null, marketType: null, rawPayload: { detailVerified: true }, contentHash: "hash-1",
     ...overrides,
   };
 }
@@ -40,6 +40,12 @@ test("rejects missing price or area, never fabricating a price/m2", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ price: null })), { qualified: false, reason: "price_missing" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ area: null })), { qualified: false, reason: "area_missing" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ price: 0 })), { qualified: false, reason: "price_missing" });
+});
+
+test("Oferty.net and Domiporta do not qualify from a result card until the specific offer detail fields are confirmed", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({ source: "oferty_net", rawPayload: {} })), { qualified: false, reason: "detail_not_confirmed" });
+  assert.equal(qualifyRadarCandidate(candidate({ source: "morizon", rawPayload: {} })).qualified, true, "the detail gate is scoped to the two adapters that fetch details");
 });
 
 test("Radar excludes confirmed tenements even after renovation or with an elevator", () => {
@@ -133,7 +139,7 @@ test("Radar price/m² always comes from the positive total price divided by area
 
 test("rejects a starting-price ad or an amount explicitly marked as per square metre", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ title: "Mieszkania od 400 000 zł w bloku" })), { qualified: false, reason: "price_is_starting_price" });
-  assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { priceUnit: "per_sqm" } })), { qualified: false, reason: "price_is_not_total_offer_price" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { detailVerified: true, priceUnit: "per_sqm" } })), { qualified: false, reason: "price_is_not_total_offer_price" });
 });
 
 test("a structured buildingType naming a disqualifying type (e.g. 'dom') is never overridden by a hopeful text guess", () => {

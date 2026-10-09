@@ -103,6 +103,7 @@ function resolveMarketType(candidate: QualificationCandidate, text: string): Mar
 }
 
 export function qualifyRadarCandidate(candidate: QualificationCandidate): QualificationResult {
+  if ((candidate.source === "oferty_net" || candidate.source === "domiporta") && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
   if (candidate.price === null || !Number.isFinite(candidate.price) || candidate.price <= 0) return reject("price_missing");
   if (candidate.area === null || !Number.isFinite(candidate.area) || candidate.area <= 0) return reject("area_missing");
   const payload = candidate.rawPayload ?? {};

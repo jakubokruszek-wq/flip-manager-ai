@@ -56,7 +56,9 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   t.after(() => authServer.close());
   // Only a small, explicit environment is passed to Next. It cannot inherit secrets
   // or read the developer's .env.local because the runner uses an isolated copy.
-  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_OPTIONS: "--use-system-ca", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
+  // NODE_ENV=test is intentional: Next.js does not load .env.local in test mode.
+  // The runner passes only this loopback Supabase mock and never inherits secrets.
+  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: "test", NODE_OPTIONS: "--use-system-ca", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
   await new Promise((resolve, reject) => {
     const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
@@ -183,7 +185,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.equal(requests.some((request) => request.path === "/api/price-radar/run" && request.method === "POST"), false, "viewing and refreshing the page never starts a collection run");
 });
 
-test("a 'running' Radar run whose lease already expired (a dead local OLX worker) is shown as resumable, not stuck forever behind a disabled button", { timeout: 600_000 }, async (t) => {
+test("an expired nonterminal Radar run resumes automatically in place without a manual click", { timeout: 600_000 }, async (t) => {
   const port = await freePort();
   const authPort = await freePort();
   const root = path.resolve(__dirname, "../../..");
@@ -195,7 +197,8 @@ test("a 'running' Radar run whose lease already expired (a dead local OLX worker
   });
   await new Promise((resolve, reject) => { authServer.once("error", reject); authServer.listen(authPort, "127.0.0.1", resolve); });
   t.after(() => authServer.close());
-  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_OPTIONS: "--use-system-ca", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
+  // Match the first browser case: the test environment suppresses .env.local.
+  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: "test", NODE_OPTIONS: "--use-system-ca", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
   await new Promise((resolve, reject) => {
     const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
@@ -223,11 +226,13 @@ test("a 'running' Radar run whose lease already expired (a dead local OLX worker
     id: "93a7f1d5-0000-4000-8000-000000000001", status: "running", startedAt: "2026-10-09T20:50:06.000Z", finishedAt: null,
     leaseUntil: new Date(Date.now() - 5 * 60_000).toISOString(),
     scannedCount: 29, qualifiedCount: 0,
-    sourceStatuses: { otodom: "failed", olx: "running", morizon: "pending" },
+    sourceStatuses: { otodom: "failed", olx: "failed", morizon: "pending" },
     sourceErrors: { otodom: "Otodom: placeholder_url (29)" },
+    checkpoint: { sourceQueue: ["morizon"], currentSourceIndex: 0 },
     errorMessage: null,
   };
   let postCount = 0;
+  const resumedRunIds = [];
   await page.route("**/api/price-radar/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -236,8 +241,12 @@ test("a 'running' Radar run whose lease already expired (a dead local OLX worker
     if (url.pathname === "/api/price-radar/run" && request.method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: orphanedRun }) });
     if (url.pathname === "/api/price-radar/run" && request.method() === "POST") {
       postCount += 1;
-      orphanedRun.sourceStatuses.olx = "failed";
-      orphanedRun.sourceErrors.olx = "RADAR_OLX_JOB_ALREADY_FAILED";
+      resumedRunIds.push(request.postDataJSON()?.expectedRunId ?? null);
+      orphanedRun.status = "partial";
+      orphanedRun.finishedAt = new Date().toISOString();
+      orphanedRun.leaseUntil = null;
+      orphanedRun.sourceStatuses.morizon = "failed";
+      orphanedRun.sourceErrors.morizon = "OFFLINE_FIXTURE_FAILURE";
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: orphanedRun.id, status: "partial", scannedCount: 29, qualifiedCount: 0 }) });
     }
     return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "unexpected Radar request" }) });
@@ -251,12 +260,12 @@ test("a 'running' Radar run whose lease already expired (a dead local OLX worker
   // The run status arrives via its own async fetch after settings load. Wait
   // for its resulting, run-derived text before reading the button's state,
   // so this assertion isn't racing that fetch's resolution.
-  await page.getByText("przerwany, gotowy do wznowienia", { exact: false }).waitFor();
-  const resumeButton = page.getByRole("button", { name: "Uruchom / wznów zbieranie" });
-  await resumeButton.waitFor();
-  assert.equal(await resumeButton.isDisabled(), false, "a run stuck at status=running with an expired lease must not permanently disable the resume button");
-  await resumeButton.click();
-  await page.waitForFunction(() => document.body.textContent?.includes("RADAR_OLX_JOB_ALREADY_FAILED"));
-  assert.equal(postCount, 1, "clicking the resume button must actually call POST /api/price-radar/run");
+  await page.getByText("Zakończono częściowo", { exact: false }).waitFor();
+  await page.waitForFunction(() => document.body.textContent?.includes("OFFLINE_FIXTURE_FAILURE"));
+  assert.equal(postCount, 1, "a stale nonterminal run is automatically continued without a manual click");
+  assert.deepEqual(resumedRunIds, [orphanedRun.id], "auto-resume is bound to the same run ID, never to a new run request");
+  assert.equal(orphanedRun.id, "93a7f1d5-0000-4000-8000-000000000001", "the current run identity remains unchanged");
+  await page.getByRole("button", { name: "Uruchom / wznów zbieranie" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Uruchamianie…" }).count(), 0, "the automatic resume must release the UI's busy state after the terminal response");
   assert.equal(serverOutput.includes("Error:"), false, serverOutput);
 });

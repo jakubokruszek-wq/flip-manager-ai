@@ -136,7 +136,7 @@ function qualifyingListing(id: string, source: string) {
     title: "Mieszkanie w bloku, Łódź Bałuty", description: "Świeżo po generalnym remoncie w 2025, nowe instalacje, gotowe do zamieszkania. Rynek wtórny.",
     price: 450_000, area: 50, pricePerSqm: 9_000, rooms: 2, city: "Łódź", district: "Bałuty",
     buildingType: null, floor: null, locationText: "Bałuty, Łódź", thumbnailUrl: null, images: [], publishedAt: null,
-    rawPayload: {}, contentHash: `hash-${id}`,
+    rawPayload: source === "domiporta" ? { detailVerified: true } : {}, contentHash: `hash-${id}`,
   };
 }
 

@@ -111,6 +111,7 @@ export async function fetchOfficialLodzGroup(group: OfficialCanonicalSource, cri
       const result = await fetchOfficialSource(source.id, criteria, signal, batches ? {
         cursor: index === Math.floor(cursor / 100) ? cursor % 100 : 0,
         onBatch: async (part, nextDetail) => {
+          if (nextDetail !== null && typeof nextDetail !== "number") throw new Error("INVALID_OFFICIAL_SOURCE_CURSOR");
           emitted = true;
           const next = nextDetail === null ? (index + 1 < sources.length ? (index + 1) * 100 : null) : index * 100 + nextDetail;
           try { await batches.onBatch(part, next); } catch (error) { callbackFailed = true; throw error; }

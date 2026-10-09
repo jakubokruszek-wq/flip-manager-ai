@@ -8,8 +8,8 @@ export async function POST(request: Request) {
   if (!auth.ok) return auth.response;
   try {
     const body = parseBody(auth.body);
-    const leasedUntil = await heartbeatOlxJob(body);
-    return Response.json({ ok: true, leasedUntil });
+    const leases = await heartbeatOlxJob(body);
+    return Response.json({ ok: true, ...leases });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "OLX_HEARTBEAT_FAILED" }, { status: 409 });
   }

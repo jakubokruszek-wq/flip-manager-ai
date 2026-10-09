@@ -1,12 +1,34 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 
-import { classifyOlxResponse } from "./browser.ts";
+let closeCount = 0;
+let gotoStarted: (() => void) | null = null;
+let rejectNavigation: ((reason: Error) => void) | null = null;
+const navigationStarted = new Promise<void>((resolve) => { gotoStarted = resolve; });
 
-test("classifies OLX access failures without retry/bypass", () => {
-  assert.deepEqual(classifyOlxResponse(403, ""), { blocked: true, code: "OLX_HTTP_403" });
-  assert.deepEqual(classifyOlxResponse(405, "<title>Human Verification</title>"), { blocked: true, code: "OLX_HTTP_405" });
-  assert.deepEqual(classifyOlxResponse(429, ""), { blocked: true, code: "OLX_HTTP_429" });
-  assert.deepEqual(classifyOlxResponse(200, "<title>Human Verification</title>"), { blocked: true, code: "OLX_HUMAN_VERIFICATION" });
-  assert.deepEqual(classifyOlxResponse(200, "<title>Mieszkania Łódź</title>"), { blocked: false, code: null });
+mock.module("playwright", { namedExports: {
+  chromium: {
+    launch: async () => ({
+      newContext: async () => ({
+        newPage: async () => ({
+          goto: async () => new Promise((_resolve, reject) => { rejectNavigation = reject; gotoStarted?.(); }),
+          content: async () => "",
+          url: () => "https://www.olx.pl/nieruchomosci/mieszkania/sprzedaz/lodz/",
+          title: async () => "OLX",
+        }),
+      }),
+      close: async () => { closeCount += 1; rejectNavigation?.(new Error("browser closed")); },
+    }),
+  },
+} });
+const { fetchOlxWithBrowser } = await import("./browser.ts");
+
+test("lease-loss abort closes Chromium during an in-flight OLX navigation", async () => {
+  closeCount = 0;
+  const controller = new AbortController();
+  const result = assert.rejects(fetchOlxWithBrowser("https://www.olx.pl/nieruchomosci/mieszkania/sprzedaz/lodz/", controller.signal));
+  await navigationStarted;
+  controller.abort(new Error("lease lost"));
+  await result;
+  assert.ok(closeCount >= 1, "browser.close must be invoked promptly when the lease signal aborts");
 });

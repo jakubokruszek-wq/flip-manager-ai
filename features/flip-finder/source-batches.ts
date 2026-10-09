@@ -2,7 +2,31 @@ import type { PropertySourceListing } from "@/features/properties/types/property
 
 /** A committed cursor points to the next page/site, never to a new scan. */
 export type SourceBatch = { listings: PropertySourceListing[]; warnings: string[]; fetched: number };
+export type RadarDetailCursor = {
+  kind: "radar_detail_v1";
+  page: number;
+  candidateIndex: number;
+};
+export type SourceBatchCursor = number | RadarDetailCursor | null;
+export type SourceBatchYieldReason = "portion_budget" | "detail_batch_limit";
+
+/** A completed, persisted batch may deliberately yield while retaining its opaque cursor. */
+export class SourceBatchYield extends Error {
+  readonly reason: SourceBatchYieldReason;
+
+  constructor(reason: SourceBatchYieldReason) {
+    super(`SOURCE_BATCH_YIELD:${reason}`);
+    this.name = "SourceBatchYield";
+    this.reason = reason;
+  }
+}
+
 export type SourceBatchContext = {
   cursor?: number;
-  onBatch(batch: SourceBatch, nextCursor: number | null): Promise<void>;
+  /** Present only while the selected Radar run is enriching a portal detail page. */
+  radarDetailCursor?: RadarDetailCursor;
+  purpose?: "finder" | "price_radar";
+  /** Hard yield boundary supplied by the owning Radar portion. */
+  deadlineAt?: number;
+  onBatch(batch: SourceBatch, nextCursor: SourceBatchCursor): Promise<void>;
 };

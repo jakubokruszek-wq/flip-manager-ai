@@ -1,19 +1,23 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
+import { SourceBatchYield } from "@/features/flip-finder/source-batches";
 
 type Row = Record<string, unknown>;
 type Listing = { source: string; externalListingId: string; originalUrl: string; normalizedUrl: string; title: string; description: string; price: number; area: number; pricePerSqm: number; rooms: number; city: string; district: string; buildingType: null; floor: null; locationText: string; thumbnailUrl: null; images: never[]; publishedAt: null; rawPayload: Record<string, unknown>; contentHash: string };
 type Batch = { listings: Listing[]; warnings: string[]; fetched: number };
-type Batches = { cursor?: number; onBatch(batch: Batch, nextCursor: number | null): Promise<void> };
+type RadarDetailCursor = { kind: "radar_detail_v1"; page: number; candidateIndex: number };
+type Batches = { cursor?: number; radarDetailCursor?: RadarDetailCursor; purpose?: "finder" | "price_radar"; deadlineAt?: number; onBatch(batch: Batch, nextCursor: number | RadarDetailCursor | null): Promise<void> };
 const ownerId = "owner-radar-checkpoint";
 
 function fakeDb() {
   const tables: Record<string, Row[]> = { price_radar_runs: [], price_radar_listings: [], olx_scan_jobs: [] };
   const accessedTables = new Set<string>();
+  const persisted: string[] = [];
   let sequence = 0;
   return {
     tables,
     accessedTables,
+    persisted,
     async rpc(name: string, args: Row) {
       if (name === "claim_price_radar_run") {
         const existing = tables.price_radar_runs.find((row) => row.owner_id === args.p_owner_id && ["pending", "running"].includes(String(row.status)));
@@ -31,7 +35,7 @@ function fakeDb() {
         if (["completed", "partial", "failed"].includes(String(args.p_status))) Object.assign(row, { finished_at: new Date().toISOString(), lease_token: null, lease_until: null });
         return { data: true, error: null };
       }
-      if (name === "persist_price_radar_listing") return { data: `listing-${++sequence}`, error: null };
+      if (name === "persist_price_radar_listing") { persisted.push(String((args.p_listing as Row).external_listing_id)); return { data: `listing-${++sequence}`, error: null }; }
       throw new Error(`unexpected RPC ${name}`);
     },
     from(table: string) {
@@ -65,14 +69,15 @@ function listing(id: string): Listing {
     source: "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`,
     title: "Mieszkanie w bloku, Łódź Bałuty", description: "Świeżo po generalnym remoncie w 2025, nowe instalacje, gotowe do zamieszkania. Rynek wtórny.",
     price: 450_000, area: 50, pricePerSqm: 9_000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: null, floor: null,
-    locationText: "Bałuty, Łódź", thumbnailUrl: null, images: [], publishedAt: null, rawPayload: {}, contentHash: `hash-${id}`,
+    locationText: "Bałuty, Łódź", thumbnailUrl: null, images: [], publishedAt: null, rawPayload: { detailVerified: true }, contentHash: `hash-${id}`,
   };
 }
 
 let fetchFixture: (source: string, cursor: number | undefined, batches: Batches | undefined) => Promise<{ listings: Listing[]; warnings: string[]; fetched: number }>;
+let fetchRadarDetailFixture: ((batches: Batches | undefined) => Promise<{ listings: Listing[]; warnings: string[]; fetched: number }>) | null = null;
 const sourceRegistry = ["domiporta", "olx"].map((id) => ({
   id, label: id,
-  fetch: async (_criteria: unknown, _signal?: AbortSignal, batches?: Batches) => fetchFixture(id, batches?.cursor, batches),
+  fetch: async (_criteria: unknown, _signal?: AbortSignal, batches?: Batches) => id === "domiporta" && fetchRadarDetailFixture ? fetchRadarDetailFixture(batches) : fetchFixture(id, batches?.cursor, batches),
 }));
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("checkpoint tests must inject a fake DB"); } } });
 mock.module("@/features/flip-finder/server/search-source-registry", {
@@ -107,6 +112,40 @@ test("a page checkpoint resumes the same run at the next page and does not fetch
   assert.equal(second.status, "completed");
   assert.equal(pageOneReads, 1);
   assert.equal(pageTwoReads, 1);
+});
+
+test("a Radar detail checkpoint resumes the same run and persists only candidates not already checkpointed", async () => {
+  const db = fakeDb();
+  let adapterCalls = 0;
+  fetchRadarDetailFixture = async (batches) => {
+    adapterCalls += 1;
+    assert.equal(batches?.purpose, "price_radar");
+    if (!batches?.radarDetailCursor) {
+      assert.ok(batches?.onBatch);
+      await batches.onBatch({ listings: [listing("detail-1")], warnings: [], fetched: 1 }, { kind: "radar_detail_v1", page: 1, candidateIndex: 1 });
+      throw new SourceBatchYield("detail_batch_limit");
+    }
+    assert.deepEqual(batches.radarDetailCursor, { kind: "radar_detail_v1", page: 1, candidateIndex: 1 });
+    await batches.onBatch({ listings: [listing("detail-2")], warnings: [], fetched: 1 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  try {
+    const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+    if (claim.kind !== "claimed") throw new Error("expected a claimed run");
+    const first = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+    const saved = db.tables.price_radar_runs[0]!;
+    assert.equal(first.status, "running");
+    assert.equal(first.sourceStatuses.domiporta, "pending");
+    assert.equal(saved.id, claim.run.id, "the incomplete detail queue keeps the original run ID");
+    assert.deepEqual((saved.checkpoint as { perSourceCursor: Record<string, unknown> }).perSourceCursor.domiporta, { kind: "radar_detail_v1", page: 1, candidateIndex: 1 });
+    assert.deepEqual(db.persisted, ["detail-1"]);
+
+    const second = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+    assert.equal(second.status, "completed");
+    assert.equal(adapterCalls, 2);
+    assert.deepEqual(db.persisted, ["detail-1", "detail-2"], "only the uncompleted candidate is persisted by the resumed portion");
+    assert.equal(db.tables.price_radar_runs[0]?.id, claim.run.id);
+  } finally { fetchRadarDetailFixture = null; }
 });
 
 test("completed and terminal 403 source checkpoints advance without retrying the adapter", async () => {

@@ -10,6 +10,7 @@ export async function resolve(specifier, context, nextResolve) {
   }
   if (specifier === "next/server") return nextResolve("next/server.js", context);
   if (specifier === "next/navigation") return nextResolve("next/navigation.js", context);
+  if (specifier === "next/headers") return nextResolve("next/headers.js", context);
 
   const isProjectSource = specifier.startsWith("@/") || specifier.startsWith(".");
   const target = specifier.startsWith("@/") ? new URL(specifier.slice(2), repoRoot).href : specifier;

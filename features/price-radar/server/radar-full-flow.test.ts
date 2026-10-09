@@ -76,7 +76,9 @@ const fakeSources = [{
           title: "Mieszkanie w bloku, Łódź Bałuty", description: "Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania. Rynek wtórny.",
           price: 450_000, area: 50, pricePerSqm: 9_000, rooms: 2, floor: null, city: "Łódź", district: "Bałuty",
           buildingType: null, locationText: "Bałuty, Łódź", thumbnailUrl: null, images: [], publishedAt: null,
-          rawPayload: {}, contentHash: "hash-flow-1",
+          // This fixture represents the already verified detail response for
+          // a Domiporta candidate; search-card-only candidates must be rejected.
+          rawPayload: { detailVerified: true }, contentHash: "hash-flow-1",
         }], warnings: [], fetched: 1,
       }),
     }];
