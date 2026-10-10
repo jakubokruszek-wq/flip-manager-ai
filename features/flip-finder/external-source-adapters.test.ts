@@ -893,6 +893,28 @@ test("Radar detail cursor resumes after three completed detail pages without rep
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test("a legacy Radar Oferty.net cursor stays on the original search route and page", async () => {
+  const previousFetch = globalThis.fetch;
+  const requested: string[] = [];
+  const row = `<tr class="property"><td class="cell_location"><a href="https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412" title="mieszkanie na sprzeda&#380;">Mieszkanie Łódź Bałuty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td></tr>`;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.includes("/mieszkania,lodz")) return new Response(`<table>${row}</table>`, { status: 200 });
+    return new Response(OFERTY_NET_DETAIL_OBSERVED_PAGE, { status: 200 });
+  };
+  try {
+    await fetchExternalPortal(config("oferty_net"), { city: "Łódź", areaMin: 31, areaMax: 62, rooms: [1, 2, 3] }, undefined, {
+      purpose: "price_radar", ofertyNetLegacySearch: true,
+      radarDetailCursor: { kind: "radar_detail_v1", page: 2, candidateIndex: 0 },
+      deadlineAt: Date.now() + 50_000, onBatch: async () => {},
+    });
+    assert.match(requested[0] ?? "", /^https:\/\/oferty\.net\/mieszkania,lodz\?page=2$/u);
+    assert.ok(requested.every((url) => !url.includes("/mieszkania/szukaj")), "old cursor must not be replayed against the new page ordering");
+    assert.equal(requested.length, 2, "old search page and its one detail; no new location-context request");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 // Real public page excerpt (read-only GET of allegrolokalnie.pl's category
 // page /oferty/nieruchomosci/mieszkania-na-sprzedaz-112739/lodz, 2026-10-03),
 // trimmed to 2 of the page's real 60 items. Every field here (name, url,

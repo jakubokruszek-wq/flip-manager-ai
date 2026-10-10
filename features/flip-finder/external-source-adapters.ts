@@ -39,7 +39,7 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
   if (batches?.purpose === "price_radar" && RADAR_DETAIL_SOURCES.has(config.id)) {
     return fetchRadarPortalDetails(config, criteria, signal, batches);
   }
-  const ofertyLocation = config.id === "oferty_net" ? await resolveOfertyNetLocation(config, criteria.city ?? "", signal) : null;
+  const ofertyLocation = config.id === "oferty_net" && !batches?.ofertyNetLegacySearch ? await resolveOfertyNetLocation(config, criteria.city ?? "", signal) : null;
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
@@ -47,7 +47,7 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
   let fetched = 0;
   for (let page = batches?.cursor || 1; page <= MAX_PAGES; page += 1) {
     if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
-    const url = pageUrl(config, criteria, page, ofertyLocation);
+    const url = pageUrl(config, criteria, page, ofertyLocation, batches?.ofertyNetLegacySearch);
     const response = await fetchExternalPage(url, signal);
     if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status}.`);
     const parsed = parser(await response.text(), criteria.city ?? "");
@@ -71,7 +71,7 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
 async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const city = criteria.city ?? "";
-  const ofertyLocation = config.id === "oferty_net" ? await resolveOfertyNetLocation(config, city, signal) : null;
+  const ofertyLocation = config.id === "oferty_net" && !batches.ofertyNetLegacySearch ? await resolveOfertyNetLocation(config, city, signal) : null;
   const cursor: RadarDetailCursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1", page: batches.cursor ?? 1, candidateIndex: 0 };
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
@@ -82,7 +82,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
 
   for (let page = cursor.page; page <= MAX_PAGES; page += 1) {
     if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
-    const pageUrlValue = pageUrl(config, criteria, page, ofertyLocation);
+    const pageUrlValue = pageUrl(config, criteria, page, ofertyLocation, batches.ofertyNetLegacySearch);
     const pageResponse = await fetchExternalPage(pageUrlValue, signal);
     if (!pageResponse.ok) throw new Error(`${config.label}: HTTP ${pageResponse.status}.`);
     const pageHtml = await pageResponse.text();
@@ -457,10 +457,10 @@ async function resolveOfertyNetLocation(config: ExternalSourceConfig, city: stri
   return { country: match[1]!, region: match[2]!, city: match[3]! };
 }
 
-function pageUrl(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, page: number, ofertyLocation: OfertyNetLocationIds | null = null): string {
+function pageUrl(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, page: number, ofertyLocation: OfertyNetLocationIds | null = null, ofertyNetLegacySearch = false): string {
   const city = criteria.city ?? "";
   const base = new URL(config.searchPath(city), `https://${config.hostnames[0]}`);
-  if (config.id === "oferty_net") {
+  if (config.id === "oferty_net" && !ofertyNetLegacySearch) {
     // Names and values come from Oferty.net's public GET search form. The
     // older /mieszkania,<city> shortcut mixed sale and rental rows and could
     // not carry the selected area/room bounds.

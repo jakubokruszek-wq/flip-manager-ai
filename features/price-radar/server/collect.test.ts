@@ -119,13 +119,14 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("tests must pass an explicit fake db, never the real admin client"); } } });
 
 type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[]; rejectionReasons?: string[] };
-type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
+type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; ofertyNetLegacySearch?: boolean; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
 let fakeSourceImpl: (id: string, cursor?: number, batches?: FakeBatchContext, signal?: AbortSignal) => Promise<{ listings: unknown[]; warnings: string[]; fetched: number }>;
 let observedSearchCriteria: unknown = null;
 const mockedSources = [
   { id: "domiporta", label: "Domiporta", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("domiporta", batches?.cursor, batches, signal); } },
   { id: "morizon", label: "Morizon", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("morizon", batches?.cursor, batches, signal); } },
   { id: "olx", label: "OLX", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("olx", batches?.cursor, batches, signal); } },
+  { id: "oferty_net", label: "Oferty.net", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("oferty_net", batches?.cursor, batches, signal); } },
 ];
 mock.module("@/features/flip-finder/server/search-source-registry", {
   namedExports: {
@@ -185,6 +186,24 @@ test("new Radar runs snapshot selected area and room bounds and reuse them for s
   assert.equal(criteria?.areaMin, 31);
   assert.equal(criteria?.areaMax, 62);
   assert.deepEqual(criteria?.rooms, [1, 2, 3], "continuation uses the run snapshot instead of mutable settings");
+});
+
+test("only a pre-form Oferty.net checkpoint replays its saved page with the legacy search", async () => {
+  const legacyDb = fakeDb();
+  const observed: Array<{ page: number | undefined; legacy: boolean | undefined }> = [];
+  fakeSourceImpl = async (id, page, batches) => {
+    if (id === "oferty_net") observed.push({ page, legacy: batches?.ofertyNetLegacySearch });
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const legacy = await claimOrCreateRadarRun(ownerId, ["oferty_net"], legacyDb as never);
+  if (legacy.kind !== "claimed") throw new Error("expected legacy claim");
+  (legacyDb.tables.price_radar_runs[0]!.checkpoint as Row).perSourceCursor = { oferty_net: 2 };
+  await runRadarCollectionPortion({ runId: legacy.run.id, ownerId, leaseToken: legacy.run.leaseToken! }, legacyDb as never);
+  const currentDb = fakeDb();
+  const current = await claimOrCreateRadarRun(ownerId, ["oferty_net"], currentDb as never, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] });
+  if (current.kind !== "claimed") throw new Error("expected current claim");
+  await runRadarCollectionPortion({ runId: current.run.id, ownerId, leaseToken: current.run.leaseToken! }, currentDb as never);
+  assert.deepEqual(observed, [{ page: 2, legacy: true }, { page: undefined, legacy: undefined }]);
 });
 
 const MOCKED_SOURCE_COUNT = 2;
@@ -283,6 +302,26 @@ test("detail diagnostics retain at most five sanitized samples per source withou
   assert.ok(examples.every((item) => !JSON.stringify(item).includes("secret") && !JSON.stringify(item).includes("123456789") && !JSON.stringify(item).includes("private@example.com")));
   assert.ok(examples.every((item) => item.listingUrl?.startsWith("https://example.test/listing-")));
   assert.ok(examples.every((item) => item.listingUrl!.length <= 1_024 && item.finalUrl!.length <= 1_024), "URLs are bounded before entering the durable checkpoint");
+});
+
+test("detail diagnostics retain public Oferty.net and Domiporta IDs while scrubbing contact data", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id, _cursor, batches) => {
+    if (id === "domiporta" && batches) await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [
+      { kind: "detail_not_confirmed", listingUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-fb,1543068412?token=secret", finalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-fb,1543068412#contact", httpStatus: 200, identity: "same_url", unconfirmedFields: ["market_type"], contradictoryFields: [] },
+      { kind: "detail_not_confirmed", listingUrl: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-dwupokojowe-lodz-45m2/156297090?auth=secret", finalUrl: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-dwupokojowe-lodz-45m2/156297090", httpStatus: 200, identity: "same_url", unconfirmedFields: ["district"], contradictoryFields: [] },
+      { kind: "detail_not_confirmed", listingUrl: "https://example.test/contact+48123456789", finalUrl: null, httpStatus: 200, identity: "unconfirmed", unconfirmedFields: [], contradictoryFields: [] },
+    ] }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+  await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  const examples = ((db.tables.price_radar_runs[0]?.checkpoint as Row).detailDiagnostics as Record<string, RadarDetailDiagnostic[]>).domiporta;
+  assert.ok(examples[0]?.listingUrl?.endsWith("-fb,1543068412"));
+  assert.ok(examples[1]?.listingUrl?.endsWith("/156297090"));
+  assert.ok(examples[2]?.listingUrl?.includes("[redacted]"));
+  assert.ok(!JSON.stringify(examples).includes("secret"));
 });
 
 test("a source that times out mid-portion is marked pending with an honest message (no claimed daily wait) and resumes on the very next portion call", async () => {

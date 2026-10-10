@@ -37,6 +37,8 @@ export type SourceBatchContext = {
   /** Present only while the selected Radar run is enriching a portal detail page. */
   radarDetailCursor?: RadarDetailCursor;
   purpose?: "finder" | "price_radar";
+  /** Preserve the search-page identity of Radar checkpoints created before the Oferty.net form query. */
+  ofertyNetLegacySearch?: boolean;
   /** Hard yield boundary supplied by the owning Radar portion. */
   deadlineAt?: number;
   onBatch(batch: SourceBatch, nextCursor: SourceBatchCursor): Promise<void>;

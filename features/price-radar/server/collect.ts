@@ -270,6 +270,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           ...(typeof cursorValue === "number" ? { cursor: cursorValue } : {}),
           ...(isRadarDetailCursor(cursorValue) ? { radarDetailCursor: cursorValue } : {}),
           purpose: "price_radar",
+          ...(sourceId === "oferty_net" && !checkpoint.searchCriteria ? { ofertyNetLegacySearch: true } : {}),
           deadlineAt: started + PORTION_BUDGET_MS - YIELD_MARGIN_MS,
           onBatch: processBatch,
         };
@@ -410,7 +411,17 @@ function safeDiagnosticUrl(value: string | null): string | null {
     url.hash = "";
     url.pathname = url.pathname
       .replace(/[\w.+-]+@[\w.-]+\.[A-Z]{2,}/giu, "[redacted]")
-      .replace(/\+?\d[\d ().-]{7,}\d/gu, "[redacted]");
+      .replace(/\+?\d[\d ().-]{7,}\d/gu, (candidate, offset: number, path: string) => {
+        // Oferty.net's public offer ID is the numeric suffix after `-fb,`.
+        // It looks like a phone number to the generic contact-data scrubber.
+        const publicOfferId = /^\/mieszkanie[^/]*-fb,$/u.test(path.slice(0, offset)) && /^\d{6,}$/u.test(candidate)
+          && /(?:\/|$)/u.test(path.slice(offset + candidate.length));
+        const publicDomiportaId = /^\/nieruchomosci\/sprzedam-mieszkanie-[^/]+\/$/u.test(path.slice(0, offset))
+          && /^\d{9}$/u.test(candidate) && /^(?:\/|$)/u.test(path.slice(offset + candidate.length));
+        return ((url.hostname === "oferty.net" || url.hostname === "www.oferty.net") && publicOfferId)
+          || ((url.hostname === "domiporta.pl" || url.hostname === "www.domiporta.pl") && publicDomiportaId)
+          ? candidate : "[redacted]";
+      });
     return `${url.origin}${url.pathname}`.slice(0, 1_024);
   } catch {
     return null;
