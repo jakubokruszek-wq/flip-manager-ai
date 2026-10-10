@@ -200,6 +200,8 @@ test("a non-qualifying candidate is scanned but never persisted", async () => {
   assert.equal(result.qualifiedCount, 0);
   assert.equal(db.tables.price_radar_listings.length, 0);
   assert.equal(result.scannedCount, MOCKED_SOURCE_COUNT);
+  assert.deepEqual(result.qualificationRejections, { domiporta: { rental: 1 }, morizon: { rental: 1 } }, "each source records the exact first strict rejection reason without persisting rejected candidates");
+  assert.deepEqual((db.tables.price_radar_runs[0].checkpoint as Row).qualificationRejections, result.qualificationRejections, "reason counts survive in the existing durable JSON checkpoint");
 });
 
 test("one source's fetch failure is terminal and visible -- other sources still save and the run ends partial", async () => {

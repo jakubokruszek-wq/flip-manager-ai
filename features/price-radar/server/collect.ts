@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
-import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
+import { normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
@@ -45,6 +45,7 @@ function defaultCheckpoint(sources: RadarSource[]): RadarCheckpoint {
     perSourceCursor: {},
     sourceStatuses: Object.fromEntries(sources.map((source) => [source, "pending"])),
     sourceErrors: {},
+    qualificationRejections: {},
     buffer: [],
     bufferOffset: 0,
   };
@@ -55,6 +56,7 @@ function toRadarRun(row: Row): RadarRun {
   const checkpoint = isRecord(raw) && Array.isArray(raw.sourceQueue)
     ? raw as unknown as RadarCheckpoint
     : defaultCheckpoint(RADAR_SOURCES);
+  const normalizedCheckpoint = { ...checkpoint, qualificationRejections: normalizeRadarQualificationRejections(checkpoint.qualificationRejections) };
   return {
     id: String(row.id),
     ownerId: String(row.owner_id),
@@ -63,12 +65,13 @@ function toRadarRun(row: Row): RadarRun {
     status: isRunStatus(row.status) ? row.status : "pending",
     startedAt: String(row.started_at),
     finishedAt: typeof row.finished_at === "string" ? row.finished_at : null,
-    checkpoint,
+    checkpoint: normalizedCheckpoint,
     scannedCount: typeof row.scanned_count === "number" ? row.scanned_count : 0,
     qualifiedCount: typeof row.qualified_count === "number" ? row.qualified_count : 0,
     errorMessage: typeof row.error_message === "string" ? row.error_message : null,
     sourceStatuses: isRecord(row.source_statuses) ? row.source_statuses as RadarRun["sourceStatuses"] : checkpoint.sourceStatuses,
     sourceErrors: checkpoint.sourceErrors ?? {},
+    qualificationRejections: normalizedCheckpoint.qualificationRejections,
   };
 }
 
@@ -145,7 +148,7 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
   return { kind: "claimed", run: toRadarRun(claimed.data as Row) };
 }
 
-export type RadarPortionResult = { status: "running" | "completed" | "failed" | "partial"; scannedCount: number; qualifiedCount: number; sourceStatuses: RadarRun["sourceStatuses"]; sourceErrors: Record<string, string> };
+export type RadarPortionResult = { status: "running" | "completed" | "failed" | "partial"; scannedCount: number; qualifiedCount: number; sourceStatuses: RadarRun["sourceStatuses"]; sourceErrors: Record<string, string>; qualificationRejections: NonNullable<RadarRun["qualificationRejections"]> };
 
 /**
  * Runs one time-boxed source portion. Every listing write and every checkpoint
@@ -213,7 +216,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               propertyType: typeof listing.rawPayload.propertyType === "string" ? listing.rawPayload.propertyType : null,
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
             });
-            if (!outcome.qualified) continue;
+            if (!outcome.qualified) {
+              recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, outcome.reason);
+              continue;
+            }
             const raw = listing.rawPayload;
             const crossSourceIdentity = listing.crossSourceIdentity ?? null;
             await persistRadarListing(supabase, {
@@ -286,7 +292,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   const finalStatus: RadarRunStatus = done ? failedSources === 0 ? "completed" : failedSources === checkpoint.sourceQueue.length ? "failed" : "partial" : "running";
   const errorMessage = Object.entries(checkpoint.sourceErrors).map(([sourceId, message]) => `${sourceId}: ${message}`).join("\n").slice(0, 2000) || null;
   await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, finalStatus, errorMessage);
-  return { status: finalStatus, scannedCount: scanned, qualifiedCount: qualified, sourceStatuses: checkpoint.sourceStatuses, sourceErrors: checkpoint.sourceErrors };
+  return { status: finalStatus, scannedCount: scanned, qualifiedCount: qualified, sourceStatuses: checkpoint.sourceStatuses, sourceErrors: checkpoint.sourceErrors, qualificationRejections: checkpoint.qualificationRejections ?? {} };
 }
 
 async function saveCheckpoint(supabase: SupabaseClient, input: { runId: string; ownerId: string; leaseToken: string }, checkpoint: RadarCheckpoint, scanned: number, qualified: number, status: RadarRunStatus, errorMessage: string | null = null): Promise<void> {
@@ -300,7 +306,7 @@ async function saveCheckpoint(supabase: SupabaseClient, input: { runId: string; 
 }
 
 function resultOf(run: RadarRun): RadarPortionResult {
-  return { status: run.status === "pending" ? "running" : run.status, scannedCount: run.scannedCount, qualifiedCount: run.qualifiedCount, sourceStatuses: run.sourceStatuses, sourceErrors: run.sourceErrors };
+  return { status: run.status === "pending" ? "running" : run.status, scannedCount: run.scannedCount, qualifiedCount: run.qualifiedCount, sourceStatuses: run.sourceStatuses, sourceErrors: run.sourceErrors, qualificationRejections: run.qualificationRejections ?? {} };
 }
 
 function abortPromise(signal: AbortSignal): Promise<never> {

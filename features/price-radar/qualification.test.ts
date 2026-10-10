@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { qualifyRadarCandidate, type QualificationCandidate } from "./qualification.ts";
+import { normalizeRadarQualificationRejections, qualifyRadarCandidate, type QualificationCandidate } from "./qualification.ts";
 
 function candidate(overrides: Partial<QualificationCandidate> = {}): QualificationCandidate {
   return {
@@ -145,4 +145,12 @@ test("rejects a starting-price ad or an amount explicitly marked as per square m
 test("a structured buildingType naming a disqualifying type (e.g. 'dom') is never overridden by a hopeful text guess", () => {
   const result = qualifyRadarCandidate(candidate({ buildingType: "dom" }));
   assert.equal(result.qualified, false);
+});
+
+test("qualification rejection diagnostics accept only known, positive integer counts and bounded source keys", () => {
+  assert.deepEqual(normalizeRadarQualificationRejections({
+    olx: { district_not_confirmed: 51, rental: 2, invented_reason: 4, price_missing: -1 },
+    "bad source": { rental: 8 },
+    morizon: "not-an-object",
+  }), { olx: { district_not_confirmed: 51, rental: 2 } });
 });

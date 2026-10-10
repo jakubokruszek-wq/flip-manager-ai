@@ -16,7 +16,7 @@ mock.module("@/features/auth/operator", { namedExports: {
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string) => { claimCalls.push(ownerId); return { kind: "claimed", run: { id: "new-run", leaseToken: "new-token" } }; },
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
-  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {} }; },
+  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
 mock.module("@/features/price-radar/server/radar-settings", { namedExports: { readRadarSettings: async () => ({ sources: ["morizon"] }) } });
 mock.module("@/features/price-radar/server/radar-run-status", { namedExports: { latestRadarRun: async () => latest } });

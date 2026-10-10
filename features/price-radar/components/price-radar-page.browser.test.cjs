@@ -228,6 +228,7 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
     scannedCount: 29, qualifiedCount: 0,
     sourceStatuses: { otodom: "failed", olx: "failed", morizon: "pending" },
     sourceErrors: { otodom: "Otodom: placeholder_url (29)" },
+    qualificationRejections: { olx: { district_not_confirmed: 7, building_type_not_confirmed: 3 } },
     checkpoint: { sourceQueue: ["morizon"], currentSourceIndex: 0 },
     errorMessage: null,
   };
@@ -262,6 +263,10 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   // so this assertion isn't racing that fetch's resolution.
   await page.getByText("Zakończono częściowo", { exact: false }).waitFor();
   await page.waitForFunction(() => document.body.textContent?.includes("OFFLINE_FIXTURE_FAILURE"));
+  const rejectionDetails = page.getByLabel("Powody odrzucenia ofert");
+  await rejectionDetails.locator("summary").click();
+  await page.getByText("brak potwierdzonej dzielnicy Łodzi · 7", { exact: false }).waitFor();
+  await page.getByText("brak potwierdzonego typu budynku · 3", { exact: false }).waitFor();
   assert.equal(postCount, 1, "a stale nonterminal run is automatically continued without a manual click");
   assert.deepEqual(resumedRunIds, [orphanedRun.id], "auto-resume is bound to the same run ID, never to a new run request");
   assert.equal(orphanedRun.id, "93a7f1d5-0000-4000-8000-000000000001", "the current run identity remains unchanged");

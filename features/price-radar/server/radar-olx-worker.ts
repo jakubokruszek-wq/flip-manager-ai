@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
+import { normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import type { RadarCheckpoint, RadarRunStatus } from "@/features/price-radar/types";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
@@ -46,7 +46,10 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
         propertyType: typeof raw.propertyType === "string" ? raw.propertyType : null,
         rawPayload: raw, contentHash: listing.contentHash,
       });
-      if (!outcome.qualified) continue;
+      if (!outcome.qualified) {
+        recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, "olx", outcome.reason);
+        continue;
+      }
       const crossSourceIdentity = listing.crossSourceIdentity ?? null;
       await persistRadarListing(client, {
         ...outcome, source: "olx", externalListingId: listing.externalListingId, originalUrl: listing.originalUrl,
@@ -59,7 +62,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
     sourceStatus = sourceErrors.length ? "failed" : "completed";
     if (sourceErrors.length) checkpoint.sourceErrors.olx = sourceErrors.join("; ").slice(0, 1000);
     else delete checkpoint.sourceErrors.olx;
-    resultSummary = { source: "olx", status: "completed", fetched, normalized: qualified, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: Math.max(0, fetched - qualified), durationMs: payload.durationMs, errorCode: null, errorMessage: null, warnings: sourceErrors, matchDiagnostics: {} };
+    resultSummary = { source: "olx", status: "completed", fetched, normalized: qualified, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: Math.max(0, fetched - qualified), durationMs: payload.durationMs, errorCode: null, errorMessage: null, warnings: sourceErrors, qualificationRejections: checkpoint.qualificationRejections, matchDiagnostics: {} };
   }
 
   checkpoint.sourceStatuses.olx = sourceStatus;
@@ -86,7 +89,7 @@ function parseCheckpoint(value: unknown): RadarCheckpoint {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("RADAR_CHECKPOINT_INVALID");
   const row = value as Partial<RadarCheckpoint>;
   if (!Array.isArray(row.sourceQueue) || !Number.isInteger(row.currentSourceIndex) || !row.sourceStatuses || !row.sourceErrors || !row.perSourceCursor) throw new Error("RADAR_CHECKPOINT_INVALID");
-  return row as RadarCheckpoint;
+  return { ...(row as RadarCheckpoint), qualificationRejections: normalizeRadarQualificationRejections(row.qualificationRejections) };
 }
 function isFuture(value: unknown): boolean { return typeof value === "string" && Date.parse(value) > Date.now(); }
 function sourceDate(raw: Record<string, unknown>): string | null {

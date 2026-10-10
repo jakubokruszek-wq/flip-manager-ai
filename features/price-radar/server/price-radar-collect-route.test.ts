@@ -40,7 +40,7 @@ mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
 } });
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string) => { claimCalls.push(ownerId); return claimResults[ownerId] ?? { kind: "blocked" }; },
-  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "completed", scannedCount: 3, qualifiedCount: 1, sourceStatuses: {}, sourceErrors: {} }; },
+  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "completed", scannedCount: 3, qualifiedCount: 1, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
 
 const route = await import("../../../app/api/jobs/price-radar-collect/route.ts");

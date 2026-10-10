@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
-import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarSource, type RadarStatGroup, type RadarRunStatus } from "@/features/price-radar/types";
+import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus } from "@/features/price-radar/types";
 
 type ResultsResponse = {
   listings: RadarListing[];
@@ -14,7 +14,7 @@ type ResultsResponse = {
   activeSources: RadarSource[];
   disabledSourceNote: string;
 };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[] }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
@@ -347,6 +347,7 @@ export function PriceRadarPage() {
           <h2 className="font-semibold">Zbieranie Radaru</h2>
           <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runStatusLabel(run.status)}${(run.status === "running" || run.status === "pending") && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
           {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
+          {run?.qualificationRejections && Object.values(run.qualificationRejections).some((counts) => Object.keys(counts).length > 0) ? <details aria-label="Powody odrzucenia ofert" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Powody odrzucenia w kwalifikacji</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.qualificationRejections).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${qualificationRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
           {autoResumeMessage ? <p className="mt-2 text-xs text-muted-foreground">{autoResumeMessage}</p> : null}
           {settingsSaving ? <p className="mt-1 text-xs text-muted-foreground">Zapisywanie ustawień…</p> : settingsDirty ? <p className="mt-1 text-xs text-destructive">Ustawienia nie zostały zapisane. Zmiana zostanie ponowiona po kolejnej edycji.</p> : null}
         </div>
@@ -465,6 +466,38 @@ function isRunActuallyActive(run: RunStatus | null): boolean {
 
 function statusLabel(status: string): string {
   return ({ pending: "oczekuje", running: "pobieranie", completed: "ukończono", failed: "błąd" } as Record<string, string>)[status] ?? "nieznany";
+}
+
+function radarSourceLabel(source: string): string {
+  return SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? source;
+}
+
+function qualificationRejectionLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    detail_not_confirmed: "brak potwierdzonych danych szczegółowych",
+    price_missing: "brak ceny całkowitej",
+    area_missing: "brak metrażu",
+    price_is_not_total_offer_price: "cena nie jest całkowitą ceną oferty",
+    price_is_starting_price: "cena jest ceną od",
+    price_per_sqm_invalid: "nieprawidłowa cena za m²",
+    district_not_confirmed: "brak potwierdzonej dzielnicy Łodzi",
+    city_not_lodz: "oferta poza Łodzią",
+    rental: "najem lub wynajem",
+    share: "udział we współwłasności",
+    commercial: "lokal użytkowy",
+    plot: "działka",
+    tenement_excluded: "kamienica wyłączona z próby",
+    house_excluded: "dom lub segment",
+    bulk_investment_ad: "zbiorcza reklama inwestycji, nie pojedynczy lokal",
+    apartment_not_confirmed: "brak potwierdzenia, że to mieszkanie",
+    building_type_not_confirmed: "brak potwierdzonego typu budynku",
+    market_type_not_confirmed: "brak potwierdzonego rynku",
+    unfinished_or_needs_renovation: "stan deweloperski lub lokal do remontu",
+    renovation_exclusion: "sprzeczne dane o remoncie",
+    renovation_not_confirmed_fresh_full: "brak potwierdzenia świeżego, pełnego remontu",
+    turnkey_not_confirmed: "brak potwierdzenia wykończenia pod klucz",
+  };
+  return labels[reason] ?? reason;
 }
 
 function formatCurrency(value: number): string {

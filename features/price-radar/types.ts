@@ -57,6 +57,34 @@ export type RadarListing = {
 
 export type RadarRunStatus = "pending" | "running" | "completed" | "failed" | "partial";
 
+/** First strict qualification rejection reason, grouped by Radar source. */
+export const RADAR_QUALIFICATION_REJECTION_REASONS = [
+  "detail_not_confirmed",
+  "price_missing",
+  "area_missing",
+  "price_is_not_total_offer_price",
+  "price_is_starting_price",
+  "price_per_sqm_invalid",
+  "district_not_confirmed",
+  "city_not_lodz",
+  "rental",
+  "share",
+  "commercial",
+  "plot",
+  "tenement_excluded",
+  "house_excluded",
+  "bulk_investment_ad",
+  "apartment_not_confirmed",
+  "building_type_not_confirmed",
+  "market_type_not_confirmed",
+  "unfinished_or_needs_renovation",
+  "renovation_exclusion",
+  "renovation_not_confirmed_fresh_full",
+  "turnkey_not_confirmed",
+] as const;
+export type RadarQualificationRejectionReason = (typeof RADAR_QUALIFICATION_REJECTION_REASONS)[number];
+export type RadarQualificationRejections = Record<string, Partial<Record<RadarQualificationRejectionReason, number>>>;
+
 export type RadarCheckpoint = {
   sourceQueue: RadarSource[];
   currentSourceIndex: number;
@@ -64,6 +92,8 @@ export type RadarCheckpoint = {
   perSourceCursor: Record<string, unknown>;
   sourceStatuses: Record<string, "pending" | "running" | "completed" | "failed">;
   sourceErrors: Record<string, string>;
+  /** Runtime diagnostics stored in the existing checkpoint JSONB; no schema change required. */
+  qualificationRejections?: RadarQualificationRejections;
   buffer: unknown[];
   bufferOffset: number;
 };
@@ -83,6 +113,7 @@ export type RadarRun = {
   errorMessage: string | null;
   sourceStatuses: Record<string, "pending" | "running" | "completed" | "failed">;
   sourceErrors: Record<string, string>;
+  qualificationRejections?: RadarQualificationRejections;
 };
 
 export type RadarMarketFilter = "secondary" | "primary" | "both";

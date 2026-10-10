@@ -64,6 +64,21 @@ test("OLX worker persists only qualified Radar rows and finalizes through the Ra
   assert.equal((finalized[0].p_checkpoint as typeof checkpoint).currentSourceIndex, 1);
 });
 
+test("OLX worker records strict rejection reasons without persisting an unqualified offer", async () => {
+  persisted = [];
+  finalized = [];
+  currentRunToken = radarLeaseToken;
+  const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
+    fetched: 1, listings: [{ ...candidate(), district: null } as never], warnings: [], durationMs: 1200,
+  }, fakeDb() as never);
+  assert.deepEqual(result, { source: "olx", status: "completed", fetched: 1, qualified: 0 });
+  assert.equal(persisted.length, 0, "rejection diagnostics do not weaken or bypass qualification");
+  const savedCheckpoint = finalized[0].p_checkpoint as Row;
+  assert.deepEqual(savedCheckpoint.qualificationRejections, { olx: { district_not_confirmed: 1 } });
+  assert.deepEqual((finalized[0].p_result_summary as Row).qualificationRejections, savedCheckpoint.qualificationRejections);
+  assert.equal((finalized[0].p_qualified_count as number), 1, "the persisted run count remains the preexisting total plus zero new qualifications");
+});
+
 test("a stale Radar lease cannot persist or finalize an OLX worker result", async () => {
   persisted = [];
   finalized = [];

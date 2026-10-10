@@ -1,5 +1,12 @@
 import { assessBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
-import { DEFAULT_RADAR_DISTRICTS, type RadarBuildingType, type RadarRenovationStatus } from "./types";
+import {
+  DEFAULT_RADAR_DISTRICTS,
+  RADAR_QUALIFICATION_REJECTION_REASONS,
+  type RadarBuildingType,
+  type RadarQualificationRejectionReason,
+  type RadarQualificationRejections,
+  type RadarRenovationStatus,
+} from "./types";
 import type { MarketType } from "@/features/flip-finder";
 
 /**
@@ -43,10 +50,40 @@ export type QualifiedListing = {
 
 export type QualificationResult =
   | ({ qualified: true } & QualifiedListing)
-  | { qualified: false; reason: string };
+  | { qualified: false; reason: RadarQualificationRejectionReason };
 
-function reject(reason: string): QualificationResult {
+function reject(reason: RadarQualificationRejectionReason): QualificationResult {
   return { qualified: false, reason };
+}
+
+export function recordRadarQualificationRejection(
+  rejections: RadarQualificationRejections,
+  source: string,
+  reason: RadarQualificationRejectionReason,
+): void {
+  const sourceCounts = rejections[source] ?? (rejections[source] = {});
+  sourceCounts[reason] = (sourceCounts[reason] ?? 0) + 1;
+}
+
+/** Drops malformed/unknown checkpoint values before returning them to the UI. */
+export function normalizeRadarQualificationRejections(value: unknown): RadarQualificationRejections {
+  if (!isRecord(value)) return {};
+  const allowedReasons = new Set<string>(RADAR_QUALIFICATION_REJECTION_REASONS);
+  const result: RadarQualificationRejections = {};
+  for (const [source, rawCounts] of Object.entries(value).slice(0, 32)) {
+    if (!/^[a-z0-9_]{1,64}$/iu.test(source) || !isRecord(rawCounts)) continue;
+    const counts: RadarQualificationRejections[string] = {};
+    for (const [reason, rawCount] of Object.entries(rawCounts)) {
+      if (!allowedReasons.has(reason) || !Number.isSafeInteger(rawCount) || Number(rawCount) <= 0) continue;
+      counts[reason as RadarQualificationRejectionReason] = Number(rawCount);
+    }
+    if (Object.keys(counts).length) result[source] = counts;
+  }
+  return result;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 const RENTAL_PATTERN = /wynajem|wynajm\p{L}*|do wynaj\p{L}*|najem\b|czynsz najmu|sublokat\p{L}*|pokój\s+(?:do\s+wynaj\p{L}*|w\s+mieszkaniu)/iu;
