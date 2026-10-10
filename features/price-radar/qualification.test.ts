@@ -66,6 +66,57 @@ test("rejects an unconfirmed district -- missing data is never treated as confir
   assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Nieznana" })), { qualified: false, reason: "district_not_confirmed" });
 });
 
+// Confirmed live against this app's own stored listings (2026-10-11): most
+// real district values are not a bare canonical name at all. An exact,
+// whole-string match alone rejected the large majority of real candidates
+// with genuinely confirmable Łódź locations as "district_not_confirmed".
+test("a portal's compound 'MainDistrict, street/sub-area' value confirms the leading district (domy.pl/allegrolokalnie.pl's own real shape)", () => {
+  const street = (district: string) => qualifyRadarCandidate(candidate({ district: `${district}, ul. Jaracza 57` }));
+  assert.equal(street("Śródmieście").qualified, true);
+  const subArea = qualifyRadarCandidate(candidate({ district: "Bałuty, Teofilów" }));
+  assert.equal(subArea.qualified, true);
+  if (subArea.qualified) assert.equal(subArea.district, "Bałuty", "the leading, unit-naming segment wins -- never the trailing sub-area");
+});
+
+test("a trailing-hyphenated compound ('Widzew-Wschód') still confirms its leading district", () => {
+  const result = qualifyRadarCandidate(candidate({ district: "Widzew-Wschód" }));
+  assert.equal(result.qualified, true);
+  if (result.qualified) assert.equal(result.district, "Widzew");
+});
+
+test("a bare sub-area name with no district at all confirms its district via the cross-validated neighbourhood table (gratka.pl's own real shape)", () => {
+  const cases: Array<[string, string]> = [
+    ["Teofilów", "Bałuty"], ["Julianów-Marysin-Rogi", "Bałuty"], ["Radogoszcz", "Bałuty"], ["Łagiewniki", "Bałuty"],
+    ["Dąbrowa", "Górna"], ["Chojny", "Górna"], ["Chojny-Dąbrowa", "Górna"], ["Ruda", "Górna"], ["Rokicie", "Górna"],
+    ["Stare Polesie", "Polesie"], ["Retkinia", "Polesie"], ["Karolew-Retkinia Wschód", "Polesie"], ["Koziny", "Polesie"], ["Złotno", "Polesie"], ["Lublinek-Pienista", "Polesie"],
+    ["Olechów-Janów", "Widzew"], ["Zarzew", "Widzew"], ["Stary Widzew", "Widzew"],
+    ["Os. Katedralna", "Śródmieście"],
+  ];
+  for (const [value, expectedDistrict] of cases) {
+    const result = qualifyRadarCandidate(candidate({ district: value }));
+    assert.equal(result.qualified, true, `"${value}" must confirm a district`);
+    if (result.qualified) assert.equal(result.district, expectedDistrict, `"${value}" must resolve to ${expectedDistrict}`);
+  }
+});
+
+// domy.pl's own real shape: the leading segment is the sub-area itself, not
+// the main district, with a street as the second segment ("Teofilów,
+// Rojna" -- a real Bałuty street, not a second place called "Rojna"). The
+// neighbourhood table must be checked against the leading segment, not only
+// a bare whole-string value, or these never resolve at all.
+test("a bare sub-area followed by its own street ('Teofilów, Rojna') still resolves via the neighbourhood table on the leading segment", () => {
+  const result = qualifyRadarCandidate(candidate({ district: "Teofilów, Rojna" }));
+  assert.equal(result.qualified, true);
+  if (result.qualified) assert.equal(result.district, "Bałuty");
+});
+
+test("a city name alone, or a sub-area with no internal cross-validated district pairing, stays unconfirmed rather than guessed", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Łódź" })), { qualified: false, reason: "district_not_confirmed" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Stoki" })), { qualified: false, reason: "district_not_confirmed" }, "never observed paired with a canonical district in this app's own data -- must not be guessed from outside geography knowledge");
+  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Górniak" })), { qualified: false, reason: "district_not_confirmed" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Górniak, ul. Grabowa" })), { qualified: false, reason: "district_not_confirmed" }, "an unvalidated leading sub-area with its own street must stay unconfirmed too, never fall back to a different segment");
+});
+
 test("rejects a city other than Łódź", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ city: "Warszawa" })), { qualified: false, reason: "city_not_lodz" });
 });

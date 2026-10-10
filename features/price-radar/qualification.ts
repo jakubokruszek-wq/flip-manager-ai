@@ -123,11 +123,69 @@ const MOVE_IN_READY_PATTERN = /gotow\p{L}*\s+do\s+zamieszkan\p{L}*|do\s+natychmi
 const RENOVATION_CONFLICT_PATTERN = /(?:remont\s+(?:do\s+wykonania|konieczny|planowan\p{L}*|częściow\p{L}*)|w\s+trakcie\s+remontu|bez\s+generalnego\s+remontu|\bnie\s+po\s+(?:generalnym|kapitalnym)\s+remoncie)/iu;
 const STARTING_PRICE_PATTERN = /(?:^|[\s:])od\s+\d[\d\s.,]*\s*(?:zł|PLN)/iu;
 
+// Confirmed live from this app's own stored listings (2026-10-11): most
+// portals never send a bare "Bałuty"/"Górna"/... value at all. domy.pl and
+// allegrolokalnie.pl instead send a compound "MainDistrict, sub-area" (e.g.
+// "Śródmieście, ul. Jaracza 57", "Bałuty, Teofilów", "Widzew-Wschód"), and
+// gratka.pl sends the bare sub-area alone with no district at all ("Teofilów",
+// "Dąbrowa", "Retkinia"...) -- an exact, whole-string match against the 5
+// canonical names caught none of these, so most candidates with real,
+// specific location text still failed "district_not_confirmed".
+//
+// Every key below is a sub-area this app has directly observed paired with
+// its district as "MainDistrict, <this sub-area>" in another source's own
+// structured field for the SAME district -- never guessed from outside
+// Łódź geography knowledge alone. A sub-area with no such internal
+// cross-validation (e.g. "Stoki", "Górniak", "Piastów-Kurak", seen only as
+// bare, unpaired values) is deliberately left unmapped rather than guessed.
+const NEIGHBORHOOD_TO_DISTRICT: Record<string, string> = {
+  "teofilów": "Bałuty",
+  "julianów marysin rogi": "Bałuty",
+  "radogoszcz": "Bałuty",
+  "łagiewniki": "Bałuty",
+  "dąbrowa": "Górna",
+  "chojny": "Górna",
+  "chojny dąbrowa": "Górna",
+  "ruda": "Górna",
+  "rokicie": "Górna",
+  "stare polesie": "Polesie",
+  "retkinia": "Polesie",
+  "karolew retkinia wschód": "Polesie",
+  "koziny": "Polesie",
+  "złotno": "Polesie",
+  "lublinek pienista": "Polesie",
+  "olechów janów": "Widzew",
+  "zarzew": "Widzew",
+  "os. katedralna": "Śródmieście",
+};
+
+/** A canonical name appearing anywhere in `text` as its own whole word --
+ * leading ("Bałuty, Teofilów"), trailing-hyphenated ("Widzew-Wschód"), or
+ * mid-string ("Stary Widzew"). Plain \b is ASCII-only even under /u (it is
+ * defined on \w, which excludes ą/ć/ę/ł/ń/ó/ś/ź/ż), so a name starting or
+ * ending in a diacritic (Śródmieście, Łódź-adjacent names) would silently
+ * never match at that edge -- a Unicode-aware \p{L} lookaround boundary is
+ * used instead. */
+function resolveDistrictSegment(text: string): string | null {
+  const exact = DEFAULT_RADAR_DISTRICTS.find((district) => district.toLocaleLowerCase("pl-PL") === text.toLocaleLowerCase("pl-PL"));
+  if (exact) return exact;
+  const contained = DEFAULT_RADAR_DISTRICTS.find((district) => new RegExp(`(?<!\\p{L})${district}(?!\\p{L})`, "iu").test(text));
+  if (contained) return contained;
+  const neighborhoodKey = text.toLocaleLowerCase("pl-PL").replace(/[-–]/gu, " ").replace(/\s+/gu, " ").trim();
+  return NEIGHBORHOOD_TO_DISTRICT[neighborhoodKey] ?? null;
+}
+
 function normalizeDistrict(value: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();
-  const match = DEFAULT_RADAR_DISTRICTS.find((district) => district.toLocaleLowerCase("pl-PL") === trimmed.toLocaleLowerCase("pl-PL"));
-  return match ?? null;
+  // The unit's own district/sub-area is always the value's leading,
+  // comma-delimited segment -- a trailing segment is a street or secondary
+  // qualifier, never a second, independently meaningful place (confirmed
+  // against this app's own stored listings: "Teofilów, Rojna" names a
+  // Bałuty street, not a second place called "Rojna"). Falling back to the
+  // full value only matters for a comma-less compound ("Widzew-Wschód").
+  const leadingSegment = trimmed.split(",")[0]?.trim();
+  return (leadingSegment ? resolveDistrictSegment(leadingSegment) : null) ?? resolveDistrictSegment(trimmed);
 }
 
 function ownOfferEvidenceText(candidate: QualificationCandidate): string {
