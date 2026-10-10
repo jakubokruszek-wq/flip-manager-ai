@@ -7,6 +7,7 @@ let ownerRows: Row[] = [];
 let adminCalls: Array<{ op: string; table: string; payload?: Row; filters: Row }> = [];
 let settingsCalls: string[] = [];
 let claimCalls: string[] = [];
+let claimCriteria: Array<{ ownerId: string; sources: unknown; criteria: unknown }> = [];
 let claimResults: Record<string, { kind: "claimed"; run: { id: string; leaseToken: string } } | { kind: "blocked" }> = {};
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
 
@@ -36,10 +37,10 @@ mock.module("@/lib/supabase/admin", { namedExports: {
   createAdminClient: () => fakeAdmin(),
 } });
 mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
-  readRadarSettings: async (ownerId: string) => { settingsCalls.push(ownerId); return { districts: [], market: "both", areaMin: null, areaMax: null, rooms: [], sources: [] }; },
+  readRadarSettings: async (ownerId: string) => { settingsCalls.push(ownerId); return { districts: [], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: ["oferty_net"] }; },
 } });
 mock.module("@/features/price-radar/server/collect", { namedExports: {
-  claimOrCreateRadarRun: async (ownerId: string) => { claimCalls.push(ownerId); return claimResults[ownerId] ?? { kind: "blocked" }; },
+  claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria.push({ ownerId, sources, criteria }); return claimResults[ownerId] ?? { kind: "blocked" }; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "completed", scannedCount: 3, qualifiedCount: 1, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
 
@@ -50,6 +51,7 @@ function reset() {
   adminCalls = [];
   settingsCalls = [];
   claimCalls = [];
+  claimCriteria = [];
   claimResults = {};
   portionCalls = [];
 }
@@ -121,6 +123,7 @@ test("the owner and collection scope come only from the server-trusted price_rad
   });
   assert.deepEqual(settingsCalls, ["owner-trusted"]);
   assert.deepEqual(claimCalls, ["owner-trusted"]);
+  assert.deepEqual(claimCriteria, [{ ownerId: "owner-trusted", sources: ["oferty_net"], criteria: { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] } }]);
 });
 
 test("an owner whose Radar run is already active is skipped in favor of the next owner (existing lock/idempotency honored)", async () => {

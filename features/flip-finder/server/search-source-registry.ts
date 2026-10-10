@@ -48,14 +48,10 @@ export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
   { id: "domiporta", label: "Domiporta", hostnames: ["domiporta.pl"], searchPath: (city) => `/mieszkanie/sprzedam/lodzkie/${slugifyCity(city)}` },
   { id: "sprzedajemy", label: "Sprzedajemy.pl", hostnames: ["sprzedajemy.pl"], searchPath: (city) => `/${slugifyCity(city)}/nieruchomosci/mieszkania` },
   { id: "adresowo", label: "Adresowo.pl", hostnames: ["adresowo.pl"], searchPath: (city) => `/mieszkania/${slugifyCity(city)}/` },
-  // Confirmed against a real, read-only GET (2026-10-03): the registered
-  // /mieszkania/sprzedam/<city> path is a 404; the real path is
-  // /mieszkania,<city> (comma, no "sprzedam" segment) and correctly reaches
-  // a Łódź-titled page. Re-investigated further: the earlier "zero price
-  // mentions" conclusion only checked for a literal "zł" substring -- the
-  // page is genuinely server-rendered (a real <table class="property"> of
-  // listing rows with plain-numeric prices, no currency suffix), not
-  // client-side AJAX. Activated below.
+  // The city landing route is used only to read the portal's selected
+  // country/region/city IDs from myOfertyLocationSelector. Result pages are
+  // requested through the public /mieszkania/szukaj GET form with sale,
+  // apartment, area, room, and location filters set explicitly.
   { id: "oferty_net", label: "Oferty.net", hostnames: ["oferty.net"], searchPath: (city) => `/mieszkania,${slugifyCity(city)}` },
   // Re-investigated (read-only, 2026-10-03): the previously registered path
   // 302-redirects to the homepage -- a wrong path, not merely an unfiltered

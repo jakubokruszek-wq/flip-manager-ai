@@ -7,6 +7,7 @@ let operatorError: Error | null = null;
 let resumeResult: { kind: "claimed"; run: Run } | { kind: "blocked"; reason: string } = { kind: "blocked", reason: "run_changed" };
 let resumeCalls: string[] = [];
 let claimCalls: string[] = [];
+let claimCriteria: unknown[] = [];
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
 
 mock.module("@/features/auth/operator", { namedExports: {
@@ -14,11 +15,11 @@ mock.module("@/features/auth/operator", { namedExports: {
   operatorAuthorizationResponse: () => Response.json({ message: "unauthorized" }, { status: 401 }),
 } });
 mock.module("@/features/price-radar/server/collect", { namedExports: {
-  claimOrCreateRadarRun: async (ownerId: string) => { claimCalls.push(ownerId); return { kind: "claimed", run: { id: "new-run", leaseToken: "new-token" } }; },
+  claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria = [sources, criteria]; return { kind: "claimed", run: { id: "new-run", leaseToken: "new-token" } }; },
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
-mock.module("@/features/price-radar/server/radar-settings", { namedExports: { readRadarSettings: async () => ({ sources: ["morizon"] }) } });
+mock.module("@/features/price-radar/server/radar-settings", { namedExports: { readRadarSettings: async () => ({ sources: ["morizon"], areaMin: 31, areaMax: 62, rooms: [1, 2, 3] }) } });
 mock.module("@/features/price-radar/server/radar-run-status", { namedExports: { latestRadarRun: async () => latest } });
 
 const route = await import("../../../app/api/price-radar/run/route.ts");
@@ -29,6 +30,7 @@ function reset() {
   resumeResult = { kind: "claimed", run: { id: "existing-run", status: "running", leaseToken: "fresh-token", leaseUntil: "2026-10-10T10:02:00.000Z" } };
   resumeCalls = [];
   claimCalls = [];
+  claimCriteria = [];
   portionCalls = [];
 }
 
@@ -73,6 +75,7 @@ test("manual start without expectedRunId retains the existing claim-or-create pa
   const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST" }));
   assert.equal(response.status, 200);
   assert.deepEqual(claimCalls, ["owner-1"]);
+  assert.deepEqual(claimCriteria, [["morizon"], { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] }], "a new run receives the saved search bounds for its checkpoint snapshot");
   assert.deepEqual(resumeCalls, []);
   assert.deepEqual(portionCalls, [{ runId: "new-run", ownerId: "owner-1", leaseToken: "new-token" }]);
 });

@@ -19,7 +19,11 @@ export async function POST(request: Request) {
   for (const row of owners ?? []) {
     if (typeof row.owner_id !== "string") continue;
     const settings = await readRadarSettings(row.owner_id, admin);
-    const claim = await claimOrCreateRadarRun(row.owner_id, settings.sources, admin);
+    const claim = await claimOrCreateRadarRun(row.owner_id, settings.sources, admin, {
+      areaMin: settings.areaMin,
+      areaMax: settings.areaMax,
+      rooms: settings.rooms,
+    });
     if (claim.kind === "blocked" || !claim.run.leaseToken) continue;
     const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId: row.owner_id, leaseToken: claim.run.leaseToken }, admin);
     await admin.from("price_radar_settings").update({ updated_at: new Date().toISOString() }).eq("owner_id", row.owner_id);

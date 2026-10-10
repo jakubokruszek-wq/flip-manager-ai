@@ -33,10 +33,13 @@ export const EXTERNAL_PORTAL_PARSERS: Record<ExternalSourceId, PortalParser> = {
   allegro_lokalnie: parseAllegroLokalnie,
 };
 
-export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: { city: string | null }, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+export type ExternalPortalCriteria = { city: string | null; areaMin?: number | null; areaMax?: number | null; rooms?: readonly number[] };
+
+export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
   if (batches?.purpose === "price_radar" && RADAR_DETAIL_SOURCES.has(config.id)) {
-    return fetchRadarPortalDetails(config, criteria.city ?? "", signal, batches);
+    return fetchRadarPortalDetails(config, criteria, signal, batches);
   }
+  const ofertyLocation = config.id === "oferty_net" ? await resolveOfertyNetLocation(config, criteria.city ?? "", signal) : null;
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
@@ -44,11 +47,12 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
   let fetched = 0;
   for (let page = batches?.cursor || 1; page <= MAX_PAGES; page += 1) {
     if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
-    const url = pageUrl(config, criteria.city ?? "", page);
+    const url = pageUrl(config, criteria, page, ofertyLocation);
     const response = await fetchExternalPage(url, signal);
     if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status}.`);
     const parsed = parser(await response.text(), criteria.city ?? "");
     const pageWarnings = [invalidSalePriceWarning(parsed.invalidSalePriceCount ?? 0)].filter((warning): warning is string => Boolean(warning));
+    if (parsed.hasNextPage && page === MAX_PAGES) pageWarnings.push(publicSearchPageLimitWarning(config));
     if (batches) {
       await batches.onBatch({ listings: parsed.listings, warnings: pageWarnings, fetched: parsed.listings.length + (parsed.invalidSalePriceCount ?? 0) }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
     }
@@ -64,8 +68,10 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
   return { listings, warnings: [...new Set(warnings)], fetched };
 }
 
-async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: string, signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
+  const city = criteria.city ?? "";
+  const ofertyLocation = config.id === "oferty_net" ? await resolveOfertyNetLocation(config, city, signal) : null;
   const cursor: RadarDetailCursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1", page: batches.cursor ?? 1, candidateIndex: 0 };
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
@@ -76,7 +82,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: strin
 
   for (let page = cursor.page; page <= MAX_PAGES; page += 1) {
     if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
-    const pageUrlValue = pageUrl(config, city, page);
+    const pageUrlValue = pageUrl(config, criteria, page, ofertyLocation);
     const pageResponse = await fetchExternalPage(pageUrlValue, signal);
     if (!pageResponse.ok) throw new Error(`${config.label}: HTTP ${pageResponse.status}.`);
     const pageHtml = await pageResponse.text();
@@ -88,7 +94,9 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: strin
 
     if (candidates.length === 0) {
       const next = parsed.hasNextPage && page < MAX_PAGES ? radarDetailCursor(page + 1, 0) : null;
-      await batches.onBatch({ listings: [], warnings: [], fetched: 0 }, next);
+      const pageWarnings = parsed.hasNextPage && page === MAX_PAGES ? [publicSearchPageLimitWarning(config)] : [];
+      warnings.push(...pageWarnings);
+      await batches.onBatch({ listings: [], warnings: pageWarnings, fetched: 0 }, next);
       if (!next) break;
       continue;
     }
@@ -105,6 +113,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: strin
         : parsed.hasNextPage && page < MAX_PAGES ? radarDetailCursor(page + 1, 0) : null;
       let detailListing: PropertySourceListing | null = null;
       const candidateWarnings: string[] = [];
+      if (parsed.hasNextPage && page === MAX_PAGES && candidateIndex === candidates.length - 1) candidateWarnings.push(publicSearchPageLimitWarning(config));
       const candidateFetched = 1;
       let detailDiagnostic: RadarDetailDiagnostic | undefined;
 
@@ -429,10 +438,56 @@ function assertNotAccessChallenge(source: string, html: string): void {
   }
 }
 
-function pageUrl(config: ExternalSourceConfig, city: string, page: number): string {
+type OfertyNetLocationIds = { country: string; region: string; city: string };
+
+async function resolveOfertyNetLocation(config: ExternalSourceConfig, city: string, signal?: AbortSignal): Promise<OfertyNetLocationIds> {
+  const contextUrl = new URL(config.searchPath(city), `https://${config.hostnames[0]}`).toString();
+  const response = await fetchExternalPage(contextUrl, signal);
+  if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status} (city search context).`);
+  const html = await response.text();
+  assertNotAccessChallenge(config.label, html);
+  const finalUrl = response.url || contextUrl;
+  if (!absoluteUrl(finalUrl, config.id)) throw new Error(`${config.label}: CITY_SEARCH_CONTEXT_HOST_MISMATCH.`);
+  const expectedPath = new URL(contextUrl).pathname.replace(/\/$/u, "");
+  const finalPath = new URL(finalUrl).pathname.replace(/\/$/u, "");
+  if (finalPath !== expectedPath) throw new Error(`${config.label}: CITY_SEARCH_CONTEXT_REDIRECTED.`);
+  const match = html.match(/myOfertyLocationSelector\s*\(\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]\s*\)/iu);
+  if (!match) throw new Error(`${config.label}: LOCATION_SELECTOR_NOT_CONFIRMED.`);
+  if (match[1] === "0" || match[2] === "0" || match[3] === "0") throw new Error(`${config.label}: CITY_LOCATION_NOT_SELECTED.`);
+  return { country: match[1]!, region: match[2]!, city: match[3]! };
+}
+
+function pageUrl(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, page: number, ofertyLocation: OfertyNetLocationIds | null = null): string {
+  const city = criteria.city ?? "";
   const base = new URL(config.searchPath(city), `https://${config.hostnames[0]}`);
+  if (config.id === "oferty_net") {
+    // Names and values come from Oferty.net's public GET search form. The
+    // older /mieszkania,<city> shortcut mixed sale and rental rows and could
+    // not carry the selected area/room bounds.
+    base.pathname = "/mieszkania/szukaj";
+    base.search = "";
+    base.searchParams.set("ps[type]", "1");
+    base.searchParams.set("ps[transaction]", "1");
+    if (!ofertyLocation) throw new Error(`${config.label}: LOCATION_SELECTOR_NOT_CONFIRMED.`);
+    base.searchParams.set("ps[location][type]", "4");
+    base.searchParams.set("ps[location][select_level0]", ofertyLocation.country);
+    base.searchParams.set("ps[location][select_level1]", ofertyLocation.region);
+    base.searchParams.set("ps[location][select_level2]", ofertyLocation.city);
+    base.searchParams.append("ps[location][select_level3][]", "0");
+    if (criteria.areaMin !== null && criteria.areaMin !== undefined) base.searchParams.set("ps[living_area_from]", String(criteria.areaMin));
+    if (criteria.areaMax !== null && criteria.areaMax !== undefined) base.searchParams.set("ps[living_area_to]", String(criteria.areaMax));
+    const rooms = [...new Set((criteria.rooms ?? []).filter((room) => Number.isInteger(room) && room > 0))].sort((a, b) => a - b);
+    if (rooms.length) {
+      base.searchParams.set("ps[number_of_rooms_from]", String(rooms[0]));
+      base.searchParams.set("ps[number_of_rooms_to]", String(rooms.at(-1)));
+    }
+  }
   if (page > 1) base.searchParams.set("page", String(page));
   return base.toString();
+}
+
+function publicSearchPageLimitWarning(config: ExternalSourceConfig): string {
+  return `${config.label}: PUBLIC_SEARCH_PAGE_LIMIT_REACHED (${MAX_PAGES} pages); later pages were not requested.`;
 }
 
 // Real public structure, confirmed against gratka.pl/nieruchomosci/mieszkania/<city>

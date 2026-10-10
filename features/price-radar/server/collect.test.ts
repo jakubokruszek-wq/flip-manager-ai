@@ -121,10 +121,11 @@ mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => {
 type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[]; rejectionReasons?: string[] };
 type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
 let fakeSourceImpl: (id: string, cursor?: number, batches?: FakeBatchContext, signal?: AbortSignal) => Promise<{ listings: unknown[]; warnings: string[]; fetched: number }>;
+let observedSearchCriteria: unknown = null;
 const mockedSources = [
-  { id: "domiporta", label: "Domiporta", fetch: async (_criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => fakeSourceImpl("domiporta", batches?.cursor, batches, signal) },
-  { id: "morizon", label: "Morizon", fetch: async (_criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => fakeSourceImpl("morizon", batches?.cursor, batches, signal) },
-  { id: "olx", label: "OLX", fetch: async (_criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => fakeSourceImpl("olx", batches?.cursor, batches, signal) },
+  { id: "domiporta", label: "Domiporta", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("domiporta", batches?.cursor, batches, signal); } },
+  { id: "morizon", label: "Morizon", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("morizon", batches?.cursor, batches, signal); } },
+  { id: "olx", label: "OLX", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("olx", batches?.cursor, batches, signal); } },
 ];
 mock.module("@/features/flip-finder/server/search-source-registry", {
   namedExports: {
@@ -169,6 +170,21 @@ test("claim and continuation checkpoints use the 75-second lease for a 42-second
   const leaseCalls = db.rpcCalls.filter(({ name }) => name === "claim_price_radar_run" || name === "checkpoint_price_radar_run");
   assert.ok(leaseCalls.length >= 2);
   assert.ok(leaseCalls.every(({ args }) => args.p_lease_seconds === 75), "every claim and checkpoint must retain the shorter lease window");
+});
+
+test("new Radar runs snapshot selected area and room bounds and reuse them for source fetches", async () => {
+  const db = fakeDb();
+  observedSearchCriteria = null;
+  fakeSourceImpl = async () => ({ listings: [], warnings: [], fetched: 0 });
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] });
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+  assert.deepEqual(claim.run.checkpoint.searchCriteria, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] });
+  await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  const criteria = observedSearchCriteria as { city?: string; areaMin?: number | null; areaMax?: number | null; rooms?: number[] } | null;
+  assert.equal(criteria?.city, "\u0141\u00f3d\u017a");
+  assert.equal(criteria?.areaMin, 31);
+  assert.equal(criteria?.areaMax, 62);
+  assert.deepEqual(criteria?.rooms, [1, 2, 3], "continuation uses the run snapshot instead of mutable settings");
 });
 
 const MOCKED_SOURCE_COUNT = 2;

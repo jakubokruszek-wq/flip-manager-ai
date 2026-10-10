@@ -9,7 +9,7 @@ import { isRadarQualificationRejectionReason, normalizeRadarQualificationRejecti
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
-import type { RadarCheckpoint, RadarRun, RadarRunStatus, RadarSource } from "@/features/price-radar/types";
+import type { RadarCheckpoint, RadarRun, RadarRunStatus, RadarSearchCriteria, RadarSource } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
 
 type Row = Record<string, unknown>;
@@ -29,10 +29,10 @@ export const RADAR_SOURCES: RadarSource[] = SCHEMA_READY_SOURCE_IDS.filter((id):
   return activeSources(filter).some((source) => source.id === id);
 });
 
-function syntheticCriteria(sourceId: RadarSource): SearchFilter {
+function syntheticCriteria(sourceId: RadarSource, searchCriteria?: RadarSearchCriteria): SearchFilter {
   return {
     id: "price-radar-collection", name: "Radar cen po remoncie", sources: [sourceId], city: "Łódź", districts: [],
-    priceMin: null, priceMax: null, areaMin: null, areaMax: null, rooms: [], floorMin: null, floorMax: null,
+    priceMin: null, priceMax: null, areaMin: searchCriteria?.areaMin ?? null, areaMax: searchCriteria?.areaMax ?? null, rooms: searchCriteria?.rooms ?? [], floorMin: null, floorMax: null,
     excludeGroundFloor: false, excludeTopFloor: false, buildingTypes: [], ownershipTypes: [], marketType: null,
     privateOnly: false, maxPricePerSqm: null, requiredKeywords: [], excludedKeywords: [], minFlipScore: null,
     minEstimatedProfit: null, maxEstimatedRenovationCost: null, scanIntervalMinutes: 1440, isActive: true,
@@ -40,7 +40,7 @@ function syntheticCriteria(sourceId: RadarSource): SearchFilter {
   };
 }
 
-function defaultCheckpoint(sources: RadarSource[]): RadarCheckpoint {
+function defaultCheckpoint(sources: RadarSource[], searchCriteria?: RadarSearchCriteria): RadarCheckpoint {
   return {
     sourceQueue: sources,
     currentSourceIndex: 0,
@@ -48,6 +48,7 @@ function defaultCheckpoint(sources: RadarSource[]): RadarCheckpoint {
     sourceStatuses: Object.fromEntries(sources.map((source) => [source, "pending"])),
     sourceErrors: {},
     qualificationRejections: {},
+    ...(searchCriteria ? { searchCriteria: { ...searchCriteria, rooms: [...searchCriteria.rooms] } } : {}),
     buffer: [],
     bufferOffset: 0,
   };
@@ -95,10 +96,10 @@ export type RadarClaimResult = { kind: "claimed"; run: RadarRun } | { kind: "blo
 export type RadarResumeResult = { kind: "claimed"; run: RadarRun } | { kind: "blocked"; reason: "run_changed" | "lease_active" | "olx_queue_owns_source" | "inconsistent_run" };
 
 /** The DB RPC serializes claims by owner and returns a fenced lease token. */
-export async function claimOrCreateRadarRun(ownerId: string, selectedSources: readonly RadarSource[] = RADAR_SOURCES, supabase: SupabaseClient = createAdminClient()): Promise<RadarClaimResult> {
+export async function claimOrCreateRadarRun(ownerId: string, selectedSources: readonly RadarSource[] = RADAR_SOURCES, supabase: SupabaseClient = createAdminClient(), searchCriteria?: RadarSearchCriteria): Promise<RadarClaimResult> {
   const allowed = new Set(RADAR_SOURCES);
   const sourceQueue = selectedSources.length ? selectedSources.filter((source) => allowed.has(source)) : [...RADAR_SOURCES];
-  const initialCheckpoint = defaultCheckpoint(sourceQueue);
+  const initialCheckpoint = defaultCheckpoint(sourceQueue, searchCriteria);
   const { data, error } = await supabase.rpc("claim_price_radar_run", {
     p_owner_id: ownerId,
     p_initial_checkpoint: initialCheckpoint,
@@ -201,7 +202,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         continue;
       }
       attemptedSourceIds.add(sourceId);
-      const source = activeSources(syntheticCriteria(sourceId)).find((candidate) => candidate.id === sourceId);
+      const source = activeSources(syntheticCriteria(sourceId, checkpoint.searchCriteria)).find((candidate) => candidate.id === sourceId);
       if (!source) {
         checkpoint.sourceStatuses[sourceId] = "failed";
         checkpoint.sourceErrors[sourceId] = "SOURCE_NOT_ACTIVE_OR_REGISTERED";
@@ -272,7 +273,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           deadlineAt: started + PORTION_BUDGET_MS - YIELD_MARGIN_MS,
           onBatch: processBatch,
         };
-        const sourcePromise = source.fetch(syntheticCriteria(sourceId), controller.signal, batches);
+        const sourcePromise = source.fetch(syntheticCriteria(sourceId, checkpoint.searchCriteria), controller.signal, batches);
         const result = await Promise.race([sourcePromise, abortPromise(controller.signal)]);
         controller.signal.throwIfAborted();
         if (!emittedBatches) {

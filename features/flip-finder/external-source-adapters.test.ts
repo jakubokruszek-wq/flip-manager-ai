@@ -152,7 +152,7 @@ test("every portal adapter paginates, keeps IDs stable, and deduplicates a repea
   try {
     for (const source of SOURCE_IDS) {
       const requested: string[] = [];
-      globalThis.fetch = async (input) => { const url = String(input); requested.push(url); const page = new URL(url).searchParams.get("page") === "2" ? 2 : 1; return new Response(fixture(source, page), { status: 200, headers: { "content-type": "text/html" } }); };
+      globalThis.fetch = async (input) => { const url = String(input); if (source === "oferty_net" && isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url); requested.push(url); const page = new URL(url).searchParams.get("page") === "2" ? 2 : 1; return new Response(fixture(source, page), { status: 200, headers: { "content-type": "text/html" } }); };
       const result = await fetchExternalPortal(config(source), filter, undefined);
       assert.equal(requested.length, 2, source);
       assert.equal(result.listings.length, 2, source);
@@ -392,7 +392,7 @@ test("the real szybko.pl public page structure (schema.org Microdata, captured 2
   assert.equal(rows[0]?.price, 799999);
 });
 
-// Real public page excerpt (read-only GET of oferty.net/mieszkania,lodz,
+// Real public page excerpt (read-only GET of oferty.net/mieszkania/szukaj,
 // 2026-10-03), trimmed to 3 of the page's real ~20 rows -- including one
 // genuine rental row ("na wynajem"/"do wynajęcia"), which must be filtered
 // out by the existing RENTAL_SIGNAL check rather than kept as a sale
@@ -496,6 +496,17 @@ function responseWithUrl(body: string, status: number, url: string): Response {
   return response;
 }
 
+const OFERTY_NET_LOCATION_CONTEXT = `<script>$('#locationSelector').myOfertyLocationSelector([10, 1410, 331410]);</script>`;
+
+function isOfertyNetLocationContext(url: string): boolean {
+  const parsed = new URL(url);
+  return parsed.hostname.endsWith("oferty.net") && /^\/mieszkania,lodz\/?$/u.test(parsed.pathname);
+}
+
+function ofertyNetLocationContextResponse(url: string): Response {
+  return responseWithUrl(OFERTY_NET_LOCATION_CONTEXT, 200, url);
+}
+
 test("Oferty.net detail fetch overrides search-card values with confirmed total price/location/building/market and excludes unfinished stock", async () => {
   const previousFetch = globalThis.fetch;
   const urls: string[] = [];
@@ -503,7 +514,8 @@ test("Oferty.net detail fetch overrides search-card values with confirmed total 
   globalThis.fetch = async (input) => {
     const url = String(input);
     urls.push(url);
-    return new Response(url.includes("/mieszkania,lodz") ? candidatePage : OFERTY_NET_DETAIL_OBSERVED_PAGE, { status: 200, headers: { "content-type": "text/html" } });
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return new Response(url.includes("/mieszkania/szukaj") ? candidatePage : OFERTY_NET_DETAIL_OBSERVED_PAGE, { status: 200, headers: { "content-type": "text/html" } });
   };
   try {
     const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
@@ -511,7 +523,8 @@ test("Oferty.net detail fetch overrides search-card values with confirmed total 
       onBatch: async () => undefined,
     });
     const listing = result.listings[0]!;
-    assert.equal(urls.filter((url) => url.includes("/mieszkania,lodz")).length, 1, "the existing result adapter supplies the candidate page");
+    assert.equal(urls.filter((url) => url.includes("/mieszkania/szukaj")).length, 1, "the existing result adapter supplies the candidate page");
+    assert.equal(urls.filter(isOfertyNetLocationContext).length, 1, "the city IDs are read from the portal's own selected-location context");
     assert.equal(urls.filter((url) => url.includes(",offer-1")).length, 1, "the existing adapter fetches that candidate's own detail URL once");
     assert.equal(listing.price, 735_000, "Radar uses the detail page's total price, not the search card price");
     assert.equal(listing.area, 83.61);
@@ -538,7 +551,8 @@ test("the current Oferty.net Bałuty/Łanowa detail traverses the shared Finder 
   globalThis.fetch = async (input) => {
     const url = String(input);
     requests.push(url);
-    return responseWithUrl(url.includes("/mieszkania,lodz") ? listingPage : OFERTY_NET_DETAIL_LANOWA, 200, url);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return responseWithUrl(url.includes("/mieszkania/szukaj") ? listingPage : OFERTY_NET_DETAIL_LANOWA, 200, url);
   };
   try {
     const criteria = { city: "\u0141\u00f3d\u017a" };
@@ -548,7 +562,9 @@ test("the current Oferty.net Bałuty/Łanowa detail traverses the shared Finder 
     assert.equal(finder.listings[0]?.price, 419_000);
     assert.equal(finder.listings[0]?.area, 45);
     assert.equal(finder.listings[0]?.rooms, 2);
-    assert.equal(requests.length, 1, "Finder uses its normal result-page path and does not fetch details");
+    assert.equal(requests.filter((url) => url.includes("/mieszkania/szukaj")).length, 1, "Finder uses the public sale results path");
+    assert.equal(requests.filter((url) => url.includes(",1543068412")).length, 0, "Finder does not fetch listing details");
+    assert.equal(requests.length, 2, "Finder makes one location-context and one result-page GET");
 
     requests.length = 0;
     const diagnostics: RadarDetailDiagnostic[] = [];
@@ -556,8 +572,8 @@ test("the current Oferty.net Bałuty/Łanowa detail traverses the shared Finder 
       purpose: "price_radar", deadlineAt: Date.now() + 50_000,
       onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
     });
-    assert.equal(requests.length, 2, "Radar makes one result-page GET and one specific detail-page GET");
-    assert.equal(requests.filter((url) => url.includes("/mieszkania,lodz")).length, 1);
+    assert.equal(requests.length, 3, "Radar makes one location-context, one result-page, and one specific detail-page GET");
+    assert.equal(requests.filter((url) => url.includes("/mieszkania/szukaj")).length, 1);
     assert.equal(requests.filter((url) => url.includes(",1543068412")).length, 1);
     assert.deepEqual(diagnostics, []);
     assert.equal(radar.fetched, 1);
@@ -592,7 +608,8 @@ test("the observed Oferty.net offer flows from detail parsing through qualificat
   const resultPage = `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzedaż Łódź Bałuty, pod wynajem"></td><td class="cell_location"><a href="${listingUrl}" title="Mieszkanie Łanowa, Łódź, Bałuty">Mieszkanie Łanowa, Łódź, Bałuty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td><td class="cell_added_at">2026-09-30</td></tr></table>`;
   globalThis.fetch = async (input) => {
     const url = String(input);
-    return responseWithUrl(url.includes("/mieszkania,lodz") ? resultPage : OFERTY_NET_DETAIL_LANOWA, 200, url);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return responseWithUrl(url.includes("/mieszkania/szukaj") ? resultPage : OFERTY_NET_DETAIL_LANOWA, 200, url);
   };
   const rows: Row[] = [];
   const db = {
@@ -667,7 +684,8 @@ test("Radar rejects a clearly explicit house from the result card before spendin
   const rejectionReasons: string[] = [];
   globalThis.fetch = async (input) => {
     const url = String(input);
-    if (url.includes("/mieszkania,lodz")) return new Response(page, { status: 200 });
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    if (url.includes("/mieszkania/szukaj")) return new Response(page, { status: 200 });
     detailRequests.push(url);
     return responseWithUrl(OFERTY_NET_DETAIL_LANOWA, 200, validUrl);
   };
@@ -689,9 +707,11 @@ test("Radar records exact missing detail fields from a successful HTTP response 
   const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">58 m2</td><td class="cell_rooms">3</td><td class="cell_price">270 000</td></tr></table>`;
   const missingFieldsDetail = `<title>Mieszkanie na sprzeda&#380; | oferty.net</title><div class="header"><span>Mieszkanie na sprzeda&#380;</span><h1>&#321;&#243;d&#378;, Ba&#322;uty, Przyk&#322;adowa</h1><h3>Pow.: 58 m2, Cena: 270 000 PLN</h3></div><div class="param"><dl><dt>Powierzchnia u&#380;ytkowa</dt><dd>58 m2</dd></dl></div>`;
   const diagnostics: RadarDetailDiagnostic[] = [];
-  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
-    ? new Response(candidatePage, { status: 200 })
-    : responseWithUrl(missingFieldsDetail, 200, listingUrl);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return url.includes("/mieszkania/szukaj") ? new Response(candidatePage, { status: 200 }) : responseWithUrl(missingFieldsDetail, 200, listingUrl);
+  };
   try {
     const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
       purpose: "price_radar", deadlineAt: Date.now() + 50_000,
@@ -724,9 +744,11 @@ test("Radar preserves specific freshness/readiness gaps even when the offer othe
     .replace(/<p>Lokal przeszed&#322; generalny remont[\s\S]*?<\/p>/u, "<p>Mieszkanie po generalnym remoncie.</p>")
     .replace(/<p>Jest gotowy do wprowadzenia[\s\S]*?<\/p>/u, "");
   const diagnostics: RadarDetailDiagnostic[] = [];
-  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
-    ? new Response(candidatePage, { status: 200 })
-    : responseWithUrl(incompleteDetail, 200, listingUrl);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return url.includes("/mieszkania/szukaj") ? new Response(candidatePage, { status: 200 }) : responseWithUrl(incompleteDetail, 200, listingUrl);
+  };
   try {
     const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
       purpose: "price_radar", deadlineAt: Date.now() + 50_000,
@@ -755,9 +777,11 @@ test("Radar records a redirected detail identity mismatch and does not attach an
   const redirectedUrl = "https://www.oferty.net/mieszkanie-lodz-srodmiescie,other-2";
   const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">58 m2</td><td class="cell_rooms">3</td><td class="cell_price">270 000</td></tr></table>`;
   const diagnostics: RadarDetailDiagnostic[] = [];
-  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
-    ? new Response(candidatePage, { status: 200 })
-    : responseWithUrl(OFERTY_NET_DETAIL_OBSERVED_PAGE, 200, redirectedUrl);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return url.includes("/mieszkania/szukaj") ? new Response(candidatePage, { status: 200 }) : responseWithUrl(OFERTY_NET_DETAIL_OBSERVED_PAGE, 200, redirectedUrl);
+  };
   try {
     const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
       purpose: "price_radar", deadlineAt: Date.now() + 50_000,
@@ -779,9 +803,11 @@ test("Radar reports a detail HTTP failure with status and does not advance the c
   const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">58 m2</td><td class="cell_rooms">3</td><td class="cell_price">270 000</td></tr></table>`;
   const diagnostics: RadarDetailDiagnostic[] = [];
   let savedCursor: unknown;
-  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
-    ? new Response(candidatePage, { status: 200 })
-    : responseWithUrl("forbidden", 403, listingUrl);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return url.includes("/mieszkania/szukaj") ? new Response(candidatePage, { status: 200 }) : responseWithUrl("forbidden", 403, listingUrl);
+  };
   try {
     await assert.rejects(fetchExternalPortal(config("oferty_net"), filter, undefined, {
       purpose: "price_radar", deadlineAt: Date.now() + 50_000,
@@ -802,7 +828,9 @@ test("Radar records network failure without saving response content or advancing
   const diagnostics: RadarDetailDiagnostic[] = [];
   let savedCursor: unknown;
   globalThis.fetch = async (input) => {
-    if (String(input).includes("/mieszkania,lodz")) return new Response(candidatePage, { status: 200 });
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    if (url.includes("/mieszkania/szukaj")) return new Response(candidatePage, { status: 200 });
     throw new TypeError("socket failed with private@example.com");
   };
   try {
@@ -841,7 +869,8 @@ test("Radar detail cursor resumes after three completed detail pages without rep
   }).join("");
   globalThis.fetch = async (input) => {
     const url = String(input);
-    if (url.includes("/mieszkania,lodz")) return new Response(`<table>${rows}</table>`, { status: 200 });
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    if (url.includes("/mieszkania/szukaj")) return new Response(`<table>${rows}</table>`, { status: 200 });
     detailUrls.push(url);
     return new Response(OFERTY_NET_DETAIL_OBSERVED_PAGE, { status: 200 });
   };
@@ -998,6 +1027,75 @@ test("the real domy.pl public page structure (<article class=\"propertyBox\"> ca
   const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
   assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
   assert.equal(rows[0]?.price, 240000);
+});
+
+test("Oferty.net uses its public sale form, carries Radar/Finder bounds, follows numbered pages, deduplicates ids, and reports the five-page cap", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests: string[] = [];
+  const resultRequests: string[] = [];
+  const targetUrl = "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412";
+  const pageHtml = (page: number) => {
+    const id = page === 5 ? "1543068412" : `fixture-${page === 2 ? 1 : page}`;
+    const url = page === 5 ? targetUrl : `https://www.oferty.net/mieszkanie-na-sprzedaz-lodz-baluty-${id},${id}`;
+    const paginator = `<div class="paginator"><li class="navigate current"><div><a>${page}</a></div></li><li class="navigate"><div><a href="?page=${page + 1}">${page + 1}</a></div></li></div>`;
+    return `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty"></td><td class="cell_location"><a href="${url}" title="Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty">Mieszkanie, Ba&#322;uty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td></tr></table>${paginator}`;
+  };
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requests.push(url);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    resultRequests.push(url);
+    const page = Number(new URL(url).searchParams.get("page") ?? 1);
+    return responseWithUrl(pageHtml(page), 200, url);
+  };
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), {
+      city: "\u0141\u00f3d\u017a", areaMin: 31, areaMax: 62, rooms: [3, 1, 2],
+    });
+    assert.equal(resultRequests.length, 5, "the adapter follows numbered pages only to its explicit five-page cap");
+    assert.equal(requests.length, 6, "one city-context request supplies the selected location IDs");
+    assert.equal(result.fetched, 5, "fetched counts page candidates, including repeated ids");
+    assert.equal(result.listings.length, 4, "a repeated portal id is deduplicated across pages");
+    const target = result.listings.find((item) => item.externalListingId === "1543068412");
+    assert.ok(target, "the observed offer on page five is found through the normal public search path");
+    assert.equal(target.price, 419_000);
+    assert.equal(target.area, 45);
+    assert.equal(target.rooms, 2);
+    const first = new URL(resultRequests[0]!);
+    assert.equal(first.pathname, "/mieszkania/szukaj");
+    assert.equal(first.searchParams.get("ps[type]"), "1");
+    assert.equal(first.searchParams.get("ps[transaction]"), "1");
+    assert.equal(first.searchParams.get("ps[location][type]"), "4");
+    assert.equal(first.searchParams.get("ps[location][select_level0]"), "10");
+    assert.equal(first.searchParams.get("ps[location][select_level1]"), "1410");
+    assert.equal(first.searchParams.get("ps[location][select_level2]"), "331410");
+    assert.deepEqual(first.searchParams.getAll("ps[location][select_level3][]"), ["0"]);
+    assert.equal(first.searchParams.get("ps[living_area_from]"), "31");
+    assert.equal(first.searchParams.get("ps[living_area_to]"), "62");
+    assert.equal(first.searchParams.get("ps[number_of_rooms_from]"), "1");
+    assert.equal(first.searchParams.get("ps[number_of_rooms_to]"), "3");
+    assert.deepEqual(resultRequests.map((url) => new URL(url).searchParams.get("page") ?? "1"), ["1", "2", "3", "4", "5"]);
+    assert.ok(result.warnings.some((warning) => warning.includes("PUBLIC_SEARCH_PAGE_LIMIT_REACHED (5 pages)")), "additional portal pages are reported as a cap, not a natural end");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Oferty.net refuses an unselected or redirected city context instead of sending an unscoped search", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input) => responseWithUrl(
+      `<script>$('#locationSelector').myOfertyLocationSelector([10, 1410, 0]);</script>`,
+      200,
+      String(input),
+    );
+    await assert.rejects(fetchExternalPortal(config("oferty_net"), { city: "\u0141\u00f3d\u017a" }), /CITY_LOCATION_NOT_SELECTED/);
+
+    globalThis.fetch = async () => responseWithUrl(
+      OFERTY_NET_LOCATION_CONTEXT,
+      200,
+      "https://www.oferty.net/",
+    );
+    await assert.rejects(fetchExternalPortal(config("oferty_net"), { city: "\u0141\u00f3d\u017a" }), /CITY_SEARCH_CONTEXT_REDIRECTED/);
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test("the registry exposes every new adapter for the schema gate", () => {

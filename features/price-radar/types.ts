@@ -86,6 +86,9 @@ export const RADAR_QUALIFICATION_REJECTION_REASONS = [
 export type RadarQualificationRejectionReason = (typeof RADAR_QUALIFICATION_REJECTION_REASONS)[number];
 export type RadarQualificationRejections = Record<string, Partial<Record<RadarQualificationRejectionReason, number>>>;
 
+/** Bounds frozen when a Radar run starts so a continuation issues the same portal queries. */
+export type RadarSearchCriteria = { areaMin: number | null; areaMax: number | null; rooms: number[] };
+
 export type RadarCheckpoint = {
   sourceQueue: RadarSource[];
   currentSourceIndex: number;
@@ -95,6 +98,8 @@ export type RadarCheckpoint = {
   sourceErrors: Record<string, string>;
   /** Runtime diagnostics stored in the existing checkpoint JSONB; no schema change required. */
   qualificationRejections?: RadarQualificationRejections;
+  /** Optional for legacy runs; new runs persist their search bounds in the existing checkpoint JSONB. */
+  searchCriteria?: RadarSearchCriteria;
   /** At most five sanitized detail examples per source; never stores page HTML or contact data. */
   detailDiagnostics?: Record<string, RadarDetailDiagnostic[]>;
   buffer: unknown[];

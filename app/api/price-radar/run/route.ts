@@ -55,7 +55,11 @@ export async function POST(request: Request) {
       return Response.json({ runId: resumed.run.id, ...portion });
     }
     const settings = await readRadarSettings(operator.id);
-    const claim = await claimOrCreateRadarRun(operator.id, settings.sources);
+    const claim = await claimOrCreateRadarRun(operator.id, settings.sources, undefined, {
+      areaMin: settings.areaMin,
+      areaMax: settings.areaMax,
+      rooms: settings.rooms,
+    });
     if (claim.kind === "blocked") {
       return Response.json({ message: "Inny przebieg Radaru już trwa." }, { status: 409 });
     }
