@@ -27,11 +27,14 @@ test("latest run exposes saved qualification rejection counts and ignores malfor
     checkpoint: {
       sourceQueue: ["olx"], currentSourceIndex: 1, sourceStatuses: { olx: "completed" }, sourceErrors: {},
       qualificationRejections: { olx: { district_not_confirmed: 7, invented_reason: 100 }, "bad source": { rental: 4 } },
+      detailDiagnostics: { domiporta: [{ kind: "detail_not_confirmed", listingUrl: "https://domiporta.test/oferta/123", finalUrl: "https://domiporta.test/oferta/123", httpStatus: 200, identity: "same_url", unconfirmedFields: ["market_type"], contradictoryFields: [] }] },
     },
     source_statuses: { olx: "completed" },
   }) as never);
   assert.deepEqual(run?.qualificationRejections, { olx: { district_not_confirmed: 7 } });
   assert.deepEqual(run?.checkpoint.qualificationRejections, { olx: { district_not_confirmed: 7 } });
+  assert.equal(run?.checkpoint.detailDiagnostics?.domiporta?.[0]?.httpStatus, 200, "latest-run GET preserves sanitized detail evidence stored in the checkpoint");
+  assert.deepEqual(run?.checkpoint.detailDiagnostics?.domiporta?.[0]?.unconfirmedFields, ["market_type"]);
 });
 
 test("legacy checkpoints without qualification diagnostics remain readable", async () => {

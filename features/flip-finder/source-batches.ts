@@ -1,7 +1,18 @@
 import type { PropertySourceListing } from "@/features/properties/types/property";
 
 /** A committed cursor points to the next page/site, never to a new scan. */
-export type SourceBatch = { listings: PropertySourceListing[]; warnings: string[]; fetched: number };
+export type RadarDetailDiagnostic = {
+  kind: "detail_fetch_failed" | "detail_identity_mismatch" | "detail_not_confirmed";
+  listingUrl: string | null;
+  finalUrl: string | null;
+  httpStatus: number | null;
+  identity: "same_url" | "same_listing_id" | "mismatch" | "unconfirmed" | "not_checked";
+  unconfirmedFields: string[];
+  contradictoryFields: string[];
+  errorCode?: "INVALID_DETAIL_URL" | "NETWORK_ERROR" | "TIMEOUT" | "HTTP_ERROR" | "ACCESS_CHALLENGE" | "NOT_FOUND" | "GONE";
+};
+
+export type SourceBatch = { listings: PropertySourceListing[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[] };
 export type RadarDetailCursor = {
   kind: "radar_detail_v1";
   page: number;

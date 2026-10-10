@@ -8,7 +8,7 @@ import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availabil
 import { normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
-import { SourceBatchYield, type RadarDetailCursor, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
+import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
 import type { RadarCheckpoint, RadarRun, RadarRunStatus, RadarSource } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
 
@@ -19,6 +19,8 @@ const PORTION_BUDGET_MS = 42_000;
 const LEASE_SECONDS = 75;
 const YIELD_MARGIN_MS = 8_000;
 const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
+const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
+const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "active_listing", "identity"]);
 
 /** Radar may only use sources that are both in the shared schema gate and have a registered adapter. */
 export const RADAR_SOURCES: RadarSource[] = SCHEMA_READY_SOURCE_IDS.filter((id): id is RadarSource => {
@@ -253,6 +255,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
             qualified += 1;
           }
           for (const warning of batch.warnings) checkpoint.sourceErrors[sourceId] = sourceError(warning);
+          if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);
           checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
           await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
         };
@@ -366,6 +369,48 @@ function isRadarDetailCursor(value: unknown): value is RadarDetailCursor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const cursor = value as Partial<RadarDetailCursor>;
   return cursor.kind === "radar_detail_v1" && Number.isInteger(cursor.page) && Number(cursor.page) > 0 && Number.isInteger(cursor.candidateIndex) && Number(cursor.candidateIndex) >= 0;
+}
+
+function appendDetailDiagnostics(checkpoint: RadarCheckpoint, sourceId: string, diagnostics: RadarDetailDiagnostic[]): void {
+  checkpoint.detailDiagnostics ??= {};
+  const examples = checkpoint.detailDiagnostics[sourceId] ?? [];
+  const seen = new Set(examples.map((item) => `${item.kind}|${item.listingUrl ?? ""}|${item.httpStatus ?? ""}|${item.errorCode ?? ""}`));
+  for (const diagnostic of diagnostics) {
+    if (examples.length >= DETAIL_DIAGNOSTIC_SAMPLE_LIMIT) break;
+    const safe: RadarDetailDiagnostic = {
+      kind: diagnostic.kind,
+      listingUrl: safeDiagnosticUrl(diagnostic.listingUrl),
+      finalUrl: safeDiagnosticUrl(diagnostic.finalUrl),
+      httpStatus: Number.isInteger(diagnostic.httpStatus) && diagnostic.httpStatus! >= 100 && diagnostic.httpStatus! <= 599 ? diagnostic.httpStatus : null,
+      identity: ["same_url", "same_listing_id", "mismatch", "unconfirmed", "not_checked"].includes(diagnostic.identity) ? diagnostic.identity : "unconfirmed",
+      unconfirmedFields: [...new Set(diagnostic.unconfirmedFields.filter((field) => DETAIL_DIAGNOSTIC_FIELDS.has(field)))].slice(0, DETAIL_DIAGNOSTIC_FIELDS.size),
+      contradictoryFields: [...new Set(diagnostic.contradictoryFields.filter((field) => DETAIL_DIAGNOSTIC_FIELDS.has(field)))].slice(0, DETAIL_DIAGNOSTIC_FIELDS.size),
+      ...(diagnostic.errorCode && ["INVALID_DETAIL_URL", "NETWORK_ERROR", "TIMEOUT", "HTTP_ERROR", "ACCESS_CHALLENGE", "NOT_FOUND", "GONE"].includes(diagnostic.errorCode) ? { errorCode: diagnostic.errorCode } : {}),
+    };
+    const key = `${safe.kind}|${safe.listingUrl ?? ""}|${safe.httpStatus ?? ""}|${safe.errorCode ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    examples.push(safe);
+  }
+  checkpoint.detailDiagnostics[sourceId] = examples.slice(0, DETAIL_DIAGNOSTIC_SAMPLE_LIMIT);
+}
+
+function safeDiagnosticUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    url.pathname = url.pathname
+      .replace(/[\w.+-]+@[\w.-]+\.[A-Z]{2,}/giu, "[redacted]")
+      .replace(/\+?\d[\d ().-]{7,}\d/gu, "[redacted]");
+    return `${url.origin}${url.pathname}`.slice(0, 1_024);
+  } catch {
+    return null;
+  }
 }
 
 function nextUnfinishedSourceIndex(checkpoint: RadarCheckpoint, startIndex: number, attempted: ReadonlySet<RadarSource> = new Set()): number | null {

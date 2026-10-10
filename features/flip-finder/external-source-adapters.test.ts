@@ -3,6 +3,7 @@ import test, { mock } from "node:test";
 import { fetchExternalPortal, EXTERNAL_PORTAL_PARSERS, parseRadarOfferDetail } from "./external-source-adapters.ts";
 import { activeSources, EXTERNAL_SOURCE_CONFIGS, SOURCES } from "./server/search-source-registry.ts";
 import type { ExternalSourceId } from "./external-source-parser.ts";
+import type { RadarDetailDiagnostic } from "./source-batches.ts";
 import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
@@ -462,6 +463,12 @@ const OFERTY_NET_DETAIL_OBSERVED_PAGE = `
 </dl></div>
 <div class="description">Stan deweloperski, do wyko&#324;czenia.</div>`;
 
+function responseWithUrl(body: string, status: number, url: string): Response {
+  const response = new Response(body, { status, headers: { "content-type": "text/html" } });
+  Object.defineProperty(response, "url", { value: url });
+  return response;
+}
+
 test("Oferty.net detail fetch overrides search-card values with confirmed total price/location/building/market and excludes unfinished stock", async () => {
   const previousFetch = globalThis.fetch;
   const urls: string[] = [];
@@ -496,6 +503,108 @@ test("Oferty.net detail fetch overrides search-card values with confirmed total 
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test("Radar records exact missing detail fields from a successful HTTP response without changing qualification", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,detail-missing-1";
+  const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">58 m2</td><td class="cell_rooms">3</td><td class="cell_price">270 000</td></tr></table>`;
+  const missingFieldsDetail = `<title>Mieszkanie na sprzeda&#380; | oferty.net</title><div class="header"><span>Mieszkanie na sprzeda&#380;</span><h1>&#321;&#243;d&#378;, Ba&#322;uty, Przyk&#322;adowa</h1><h3>Pow.: 58 m2, Cena: 270 000 PLN</h3></div><div class="param"><dl><dt>Powierzchnia u&#380;ytkowa</dt><dd>58 m2</dd></dl></div>`;
+  const diagnostics: RadarDetailDiagnostic[] = [];
+  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
+    ? new Response(candidatePage, { status: 200 })
+    : responseWithUrl(missingFieldsDetail, 200, listingUrl);
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    assert.equal(result.listings.length, 1, "the same existing candidate continues to the unchanged strict qualifier");
+    assert.equal(result.listings[0]?.rawPayload.detailVerified, false);
+    const qualification = qualifyRadarCandidate({
+      source: result.listings[0]!.source, externalListingId: result.listings[0]!.externalListingId,
+      originalUrl: result.listings[0]!.originalUrl, normalizedUrl: result.listings[0]!.normalizedUrl,
+      title: result.listings[0]!.title, description: result.listings[0]!.description,
+      price: result.listings[0]!.price, area: result.listings[0]!.area, pricePerSqm: result.listings[0]!.pricePerSqm,
+      rooms: result.listings[0]!.rooms, city: result.listings[0]!.city, district: result.listings[0]!.district,
+      buildingType: result.listings[0]!.buildingType, marketType: null, propertyType: null,
+      rawPayload: result.listings[0]!.rawPayload, contentHash: result.listings[0]!.contentHash,
+    });
+    assert.deepEqual(qualification, { qualified: false, reason: "detail_not_confirmed" });
+    assert.deepEqual(diagnostics, [{
+      kind: "detail_not_confirmed", listingUrl, finalUrl: listingUrl, httpStatus: 200, identity: "same_url",
+      unconfirmedFields: ["building_type", "market_type", "finish_evidence"], contradictoryFields: [],
+    }]);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Radar records a redirected detail identity mismatch and does not attach another listing's fields", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,expected-1";
+  const redirectedUrl = "https://www.oferty.net/mieszkanie-lodz-srodmiescie,other-2";
+  const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">58 m2</td><td class="cell_rooms">3</td><td class="cell_price">270 000</td></tr></table>`;
+  const diagnostics: RadarDetailDiagnostic[] = [];
+  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
+    ? new Response(candidatePage, { status: 200 })
+    : responseWithUrl(OFERTY_NET_DETAIL_OBSERVED_PAGE, 200, redirectedUrl);
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    assert.equal(result.listings.length, 1);
+    assert.equal(result.listings[0]?.rawPayload.detailVerified, false);
+    assert.notEqual(result.listings[0]?.price, 735_000, "the redirected offer's parsed detail price is not assigned to the requested candidate");
+    assert.deepEqual(diagnostics, [{
+      kind: "detail_identity_mismatch", listingUrl, finalUrl: redirectedUrl, httpStatus: 200, identity: "mismatch",
+      unconfirmedFields: ["identity"], contradictoryFields: ["identity"],
+    }]);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Radar reports a detail HTTP failure with status and does not advance the candidate cursor", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,detail-403";
+  const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">58 m2</td><td class="cell_rooms">3</td><td class="cell_price">270 000</td></tr></table>`;
+  const diagnostics: RadarDetailDiagnostic[] = [];
+  let savedCursor: unknown;
+  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
+    ? new Response(candidatePage, { status: 200 })
+    : responseWithUrl("forbidden", 403, listingUrl);
+  try {
+    await assert.rejects(fetchExternalPortal(config("oferty_net"), filter, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch, cursor) => { diagnostics.push(...(batch.diagnostics ?? [])); savedCursor = cursor; },
+    }), /HTTP 403 \(detail\)/);
+    assert.equal(savedCursor && JSON.stringify(savedCursor), JSON.stringify({ kind: "radar_detail_v1", page: 1, candidateIndex: 0 }));
+    assert.deepEqual(diagnostics, [{
+      kind: "detail_fetch_failed", listingUrl, finalUrl: listingUrl, httpStatus: 403, identity: "not_checked",
+      unconfirmedFields: [], contradictoryFields: [], errorCode: "HTTP_ERROR",
+    }]);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Radar records network failure without saving response content or advancing the candidate", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,detail-network";
+  const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">58 m2</td><td class="cell_rooms">3</td><td class="cell_price">270 000</td></tr></table>`;
+  const diagnostics: RadarDetailDiagnostic[] = [];
+  let savedCursor: unknown;
+  globalThis.fetch = async (input) => {
+    if (String(input).includes("/mieszkania,lodz")) return new Response(candidatePage, { status: 200 });
+    throw new TypeError("socket failed with private@example.com");
+  };
+  try {
+    await assert.rejects(fetchExternalPortal(config("oferty_net"), filter, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch, cursor) => { diagnostics.push(...(batch.diagnostics ?? [])); savedCursor = cursor; },
+    }), /socket failed/);
+    assert.deepEqual(savedCursor, { kind: "radar_detail_v1", page: 1, candidateIndex: 0 });
+    assert.equal(diagnostics[0]?.kind, "detail_fetch_failed");
+    assert.equal(diagnostics[0]?.httpStatus, null);
+    assert.equal(diagnostics[0]?.errorCode, "NETWORK_ERROR");
+    assert.equal(JSON.stringify(diagnostics).includes("private@example.com"), false, "raw exception text is never stored in the diagnostic");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test("Domiporta detail parser marks an observed archived apartment inactive and never verifiable for Radar", () => {
   const archived = `<title>Mieszkanie na sprzeda&#380;</title><h1>Mieszkanie na sprzeda&#380;, 60 m2</h1><div class="summary__location">&#321;&#243;d&#378;, Ba&#322;uty, Wa&#322;brzyska</div><div class="archive__title">Og&#322;oszenie jest ju&#380; nieaktualne</div><div class="summary__price_number">330 000 z&#322;</div><dl><dt class="features__item_name">Powierzchnia</dt><dd class="features__item_value">60 m2</dd></dl>`;
   const parsed = parseRadarOfferDetail("domiporta", archived);
@@ -505,6 +614,8 @@ test("Domiporta detail parser marks an observed archived apartment inactive and 
   assert.equal(parsed.city, "\u0141\u00f3d\u017a");
   assert.equal(parsed.district, "Ba\u0142uty");
   assert.equal(parsed.verified, false);
+  assert.deepEqual(parsed.unconfirmedFields, ["building_type", "market_type", "finish_evidence"]);
+  assert.deepEqual(parsed.contradictoryFields, ["active_listing"], "the archived marker is distinct from missing qualification data");
 });
 
 test("Radar detail cursor resumes after three completed detail pages without repeating their requests", async () => {

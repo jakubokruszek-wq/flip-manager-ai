@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { SourceBatchYield } from "@/features/flip-finder/source-batches";
+import type { RadarDetailDiagnostic } from "@/features/flip-finder/source-batches";
 
 type Row = Record<string, unknown>;
 const ownerId = "owner-test";
@@ -117,7 +118,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
 
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("tests must pass an explicit fake db, never the real admin client"); } } });
 
-type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number };
+type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[] };
 type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
 let fakeSourceImpl: (id: string, cursor?: number, batches?: FakeBatchContext, signal?: AbortSignal) => Promise<{ listings: unknown[]; warnings: string[]; fetched: number }>;
 const mockedSources = [
@@ -217,6 +218,35 @@ test("one source's fetch failure is terminal and visible -- other sources still 
   assert.equal(result.status, "partial");
   assert.equal(result.sourceStatuses.domiporta, "failed");
   assert.equal(db.tables.price_radar_listings.length, MOCKED_SOURCE_COUNT - 1);
+});
+
+test("detail diagnostics retain at most five sanitized samples per source without changing scan counters", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id, _cursor, batches) => {
+    if (id === "domiporta" && batches) {
+      const diagnostics: RadarDetailDiagnostic[] = Array.from({ length: 8 }, (_, index) => ({
+        kind: "detail_not_confirmed", listingUrl: `https://example.test/listing-${index}/contact+48123456789?token=secret`,
+        finalUrl: `https://example.test/listing-${index}/contact+48123456789?email=private%40example.com`, httpStatus: 200,
+        identity: "same_listing_id", unconfirmedFields: ["market_type", "unknown_raw_field"], contradictoryFields: [],
+      }));
+      await batches.onBatch({ listings: [], warnings: [], fetched: diagnostics.length, diagnostics }, null);
+    }
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  const checkpoint = db.tables.price_radar_runs[0]?.checkpoint as Row;
+  const examples = (checkpoint.detailDiagnostics as Record<string, RadarDetailDiagnostic[]>).domiporta;
+
+  assert.equal(result.scannedCount, 8, "diagnostic recording does not change the batch's existing scan count");
+  assert.equal(result.qualifiedCount, 0);
+  assert.deepEqual(checkpoint.qualificationRejections, {}, "diagnostics do not synthesize qualification rejections");
+  assert.equal(examples.length, 5, "only five detail samples per source are retained");
+  assert.ok(examples.every((item) => item.unconfirmedFields.join(",") === "market_type"));
+  assert.ok(examples.every((item) => !JSON.stringify(item).includes("secret") && !JSON.stringify(item).includes("123456789") && !JSON.stringify(item).includes("private@example.com")));
+  assert.ok(examples.every((item) => item.listingUrl?.startsWith("https://example.test/listing-")));
+  assert.ok(examples.every((item) => item.listingUrl!.length <= 1_024 && item.finalUrl!.length <= 1_024), "URLs are bounded before entering the durable checkpoint");
 });
 
 test("a source that times out mid-portion is marked pending with an honest message (no claimed daily wait) and resumes on the very next portion call", async () => {

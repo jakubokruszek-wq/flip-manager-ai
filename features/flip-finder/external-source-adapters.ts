@@ -2,7 +2,7 @@ import { load } from "cheerio";
 import type { PropertySourceListing } from "@/features/properties/types/property";
 import { calculateContentHash } from "./otodom-search";
 import type { ExternalSourceConfig, ExternalSourceId } from "./external-source-parser";
-import { SourceBatchYield, type RadarDetailCursor, type SourceBatchContext } from "./source-batches";
+import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatchContext } from "./source-batches";
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
 import { invalidSalePriceWarning } from "./sale-price";
 import { extractListingIdentityEvidence } from "./identity-evidence";
@@ -106,23 +106,70 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: strin
       let detailListing: PropertySourceListing | null = null;
       const candidateWarnings: string[] = [];
       const candidateFetched = 1;
+      let detailDiagnostic: RadarDetailDiagnostic | undefined;
 
       if (detailUrl) {
-        const detailResponse = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS);
+        let detailResponse: Response;
+        try {
+          detailResponse = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS);
+        } catch (error) {
+          detailDiagnostic = {
+            kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: null, httpStatus: null, identity: "not_checked",
+            unconfirmedFields: [], contradictoryFields: [], errorCode: isTimeoutError(error) ? "TIMEOUT" : "NETWORK_ERROR",
+          };
+          await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [detailDiagnostic] }, radarDetailCursor(page, candidateIndex));
+          throw error;
+        }
         if (detailResponse.status === 404 || detailResponse.status === 410) {
           // A listing removed between results and details is not a source outage and must not be qualified from stale card data.
+          detailDiagnostic = {
+            kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: detailResponse.url || detailUrl, httpStatus: detailResponse.status,
+            identity: "unconfirmed", unconfirmedFields: [], contradictoryFields: [], errorCode: detailResponse.status === 404 ? "NOT_FOUND" : "GONE",
+          };
         } else if (!detailResponse.ok) {
+          detailDiagnostic = {
+            kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: detailResponse.url || detailUrl, httpStatus: detailResponse.status,
+            identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "HTTP_ERROR",
+          };
+          await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [detailDiagnostic] }, radarDetailCursor(page, candidateIndex));
           throw new Error(`${config.label}: HTTP ${detailResponse.status} (detail).`);
         } else {
           const detailHtml = await detailResponse.text();
-          assertNotAccessChallenge(config.label, detailHtml);
+          try {
+            assertNotAccessChallenge(config.label, detailHtml);
+          } catch (error) {
+            detailDiagnostic = {
+              kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: detailResponse.url || detailUrl, httpStatus: detailResponse.status,
+              identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "ACCESS_CHALLENGE",
+            };
+            await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [detailDiagnostic] }, radarDetailCursor(page, candidateIndex));
+            throw error;
+          }
           const detail = parseRadarOfferDetail(config.id as "oferty_net" | "domiporta", detailHtml);
-          if (detail.active) {
-            detailListing = mergeRadarDetail(baseListing, detail);
+          const finalUrl = detailResponse.url || detailUrl;
+          const identity = compareRadarDetailIdentity(config.id as "oferty_net" | "domiporta", baseListing, detailUrl, finalUrl);
+          if (identity === "mismatch") {
+            detailDiagnostic = {
+              kind: "detail_identity_mismatch", listingUrl: detailUrl, finalUrl, httpStatus: detailResponse.status, identity,
+              unconfirmedFields: ["identity"], contradictoryFields: ["identity"],
+            };
+            detailListing = withUnconfirmedRadarDetail(baseListing);
+          } else {
+            if (detail.active) detailListing = mergeRadarDetail(baseListing, detail);
+            if (!detail.verified) {
+              detailDiagnostic = {
+                kind: "detail_not_confirmed", listingUrl: detailUrl, finalUrl, httpStatus: detailResponse.status, identity,
+                unconfirmedFields: detail.unconfirmedFields, contradictoryFields: detail.contradictoryFields,
+              };
+            }
           }
         }
       } else {
         candidateWarnings.push(`DETAIL_URL_INVALID:${baseListing.externalListingId}`);
+        detailDiagnostic = {
+          kind: "detail_fetch_failed", listingUrl: baseListing.originalUrl || null, finalUrl: null, httpStatus: null, identity: "not_checked",
+          unconfirmedFields: [], contradictoryFields: [], errorCode: "INVALID_DETAIL_URL",
+        };
       }
 
       fetched += candidateFetched;
@@ -131,7 +178,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: strin
         const identity = `${detailListing.source}:${detailListing.externalListingId}:${detailListing.normalizedUrl}`;
         if (!seen.has(identity)) { seen.add(identity); listings.push(detailListing); }
       }
-      await batches.onBatch({ listings: detailListing ? [detailListing] : [], warnings: candidateWarnings, fetched: candidateFetched }, next);
+      await batches.onBatch({ listings: detailListing ? [detailListing] : [], warnings: candidateWarnings, fetched: candidateFetched, ...(detailDiagnostic ? { diagnostics: [detailDiagnostic] } : {}) }, next);
       detailPagesThisPortion += 1;
       if (detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) {
         throw new SourceBatchYield("detail_batch_limit");
@@ -171,6 +218,8 @@ async function retryDelay(attempt: number, signal?: AbortSignal): Promise<void> 
 type ParsedRadarPortalDetail = {
   active: boolean;
   verified: boolean;
+  unconfirmedFields: string[];
+  contradictoryFields: string[];
   price: number | null;
   area: number | null;
   city: string | null;
@@ -229,7 +278,60 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   const active = !$(".archive, .archive__title").length && !/ogłoszenie\s+(?:jest\s+)?już\s+nieaktualne|oferta\s+nieaktualna|archiwum\s+domiporta/iu.test(pageText);
   const finishEvidence = /stan\s+deweloperski|do\s+wykończenia|do\s+remontu|wymaga\s+remontu|wykończon\p{L}*\s+pod\s+klucz|świeżo\s+po\s+(?:generalnym|kapitalnym)\s+remoncie|generaln\p{L}*\s+remont.{0,35}20\d{2}|gotow\p{L}*\s+do\s+zamieszkan\p{L}*/iu.test(`${conditionLabel ?? ""} ${description ?? ""}`);
   const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishEvidence;
-  return { active, verified, price, area, city, district, buildingType, marketType, propertyType, description };
+  const unconfirmedFields: string[] = [];
+  const contradictoryFields: string[] = [];
+  if (price === null || price <= 0) unconfirmedFields.push("total_price");
+  if (area === null || area <= 0) unconfirmedFields.push("area");
+  if (city === null) unconfirmedFields.push("city_lodz");
+  if (!district) unconfirmedFields.push("district");
+  if (!buildingType) unconfirmedFields.push("building_type");
+  else if (!["blok", "apartamentowiec"].includes(normalizeDetailLabel(buildingType))) contradictoryFields.push("building_type");
+  const normalizedMarketText = normalizeDetailLabel(`${primaryMarket ?? ""} ${marketLabel ?? ""} ${titleText} ${detailDescription ?? ""}`);
+  const primaryEvidence = /rynek pierwotny|od dewelopera|nowa inwestycja|inwestycja deweloperska/u.test(normalizedMarketText);
+  const secondaryEvidence = /rynek wtorny/u.test(normalizedMarketText);
+  if (primaryEvidence && secondaryEvidence) contradictoryFields.push("market_type");
+  else if (!marketType) unconfirmedFields.push("market_type");
+  if (propertyType !== "apartment") {
+    const normalizedTitle = normalizeDetailLabel(titleText);
+    (/(?:na|do) wynaj|czynsz najmu|dom|dzialk|lokal uzytkow/iu.test(normalizedTitle) ? contradictoryFields : unconfirmedFields).push("apartment_sale");
+  }
+  const normalizedFinishText = normalizeDetailLabel(`${conditionLabel ?? ""} ${description ?? ""}`);
+  const positiveFinishEvidence = /wykonczon\w* pod klucz|swiezo po (?:generalnym|kapitalnym) remoncie|gotow\w* do zamieszkan\w*/u.test(normalizedFinishText);
+  const unfinishedEvidence = /stan deweloperski|do wykonczenia|do remontu|wymaga remontu/u.test(normalizedFinishText);
+  if (positiveFinishEvidence && unfinishedEvidence) contradictoryFields.push("finish_evidence");
+  else if (!finishEvidence) unconfirmedFields.push("finish_evidence");
+  if (!active) contradictoryFields.push("active_listing");
+  return { active, verified, unconfirmedFields, contradictoryFields, price, area, city, district, buildingType, marketType, propertyType, description };
+}
+
+function withUnconfirmedRadarDetail(base: PropertySourceListing): PropertySourceListing {
+  return { ...base, rawPayload: { ...base.rawPayload, detailAttempted: true, detailVerified: false } };
+}
+
+function compareRadarDetailIdentity(source: "oferty_net" | "domiporta", listing: PropertySourceListing, requestedUrl: string, finalUrl: string): RadarDetailDiagnostic["identity"] {
+  const normalizeUrl = (value: string): string | null => {
+    try {
+      const url = new URL(value);
+      url.search = "";
+      url.hash = "";
+      url.pathname = url.pathname.replace(/\.html?$/iu, "").replace(/\/$/u, "");
+      return `${url.hostname.toLowerCase()}${url.pathname.toLowerCase()}`;
+    } catch { return null; }
+  };
+  if (normalizeUrl(requestedUrl) && normalizeUrl(requestedUrl) === normalizeUrl(finalUrl)) return "same_url";
+  const idFromUrl = (value: string): string | null => {
+    const id = source === "oferty_net" ? ofertyNetIdFromUrl(value) : lastPathSegmentId(value);
+    return id?.replace(/\.html?$/iu, "").toLowerCase() ?? null;
+  };
+  const expectedId = listing.externalListingId || idFromUrl(requestedUrl);
+  const responseId = idFromUrl(finalUrl);
+  if (expectedId && responseId) return expectedId.toLowerCase() === responseId ? "same_listing_id" : "mismatch";
+  return "unconfirmed";
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "TimeoutError" || error.name === "AbortError" || /timed?\s*out|timeout/iu.test(error.message);
 }
 
 function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortalDetail): PropertySourceListing {
