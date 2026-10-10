@@ -70,7 +70,8 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
   const statuses = { ...checkpoint.sourceStatuses };
   const pending = checkpoint.currentSourceIndex < checkpoint.sourceQueue.length;
   const failed = Object.values(statuses).filter((status) => status === "failed").length;
-  const runStatus: RadarRunStatus = pending ? "running" : failed === 0 ? "completed" : failed === checkpoint.sourceQueue.length ? "failed" : "partial";
+  const partial = Object.values(statuses).filter((status) => status === "partial").length;
+  const runStatus: RadarRunStatus = pending ? "running" : failed === checkpoint.sourceQueue.length ? "failed" : failed > 0 || partial > 0 ? "partial" : "completed";
   const runErrors = Object.entries(checkpoint.sourceErrors).map(([source, message]) => `${source}: ${message}`).join("\n").slice(0, 2000) || null;
   const { data, error } = await client.rpc("finalize_price_radar_olx_job", {
     p_owner_id: input.ownerId, p_run_id: input.runId, p_radar_lease_token: input.radarLeaseToken,

@@ -82,6 +82,15 @@ function isRecord(value: unknown): value is Record<string, unknown> { return val
 function isRunStatus(value: unknown): value is RadarRunStatus { return value === "pending" || value === "running" || value === "completed" || value === "failed" || value === "partial"; }
 function rpcRow(value: unknown): Row | null { return Array.isArray(value) ? isRecord(value[0]) ? value[0] : null : isRecord(value) ? value : null; }
 function sourceError(error: unknown): string { return (error instanceof Error ? error.message : String(error)).replace(/[\r\n\t]/g, " ").slice(0, 500); }
+const PUBLIC_SEARCH_PAGE_LIMIT_MARKER = "PUBLIC_SEARCH_PAGE_LIMIT_REACHED";
+function sourceStatusFromWarnings(warnings: readonly string[]): "completed" | "failed" | "partial" {
+  if (warnings.length === 0) return "completed";
+  // The adapter has already parsed and checkpointed the pages it was allowed
+  // to request. A deliberate coverage cap is incomplete data, not a failed
+  // fetch, and the saved rows must remain usable. Other warnings retain the
+  // existing failure semantics; actual fetch/HTTP failures still throw.
+  return warnings.some((warning) => warning.includes(PUBLIC_SEARCH_PAGE_LIMIT_MARKER)) ? "partial" : "failed";
+}
 function isRetryableTimeout(error: unknown, signal: AbortSignal): boolean { return signal.aborted || (error instanceof Error && (error.name === "AbortError" || /timeout|aborted/i.test(error.message))); }
 function isTerminalAccessError(error: unknown): boolean { return /\b403\b|forbidden|captcha|access denied/i.test(sourceError(error)); }
 function sourceDate(raw: Record<string, unknown>, keys: string[]): string | null {
@@ -190,12 +199,17 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       }
       const sourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex]!;
       if (checkpoint.perSourceCursor[sourceId] === SOURCE_DONE_CURSOR) {
-        checkpoint.sourceStatuses[sourceId] = checkpoint.sourceErrors[sourceId] ? "failed" : "completed";
+        if (!["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[sourceId] ?? "")) {
+          const savedError = checkpoint.sourceErrors[sourceId];
+          checkpoint.sourceStatuses[sourceId] = savedError
+            ? sourceStatusFromWarnings([savedError])
+            : "completed";
+        }
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
         continue;
       }
-      if (checkpoint.sourceStatuses[sourceId] === "completed" || checkpoint.sourceStatuses[sourceId] === "failed") {
+      if (checkpoint.sourceStatuses[sourceId] === "completed" || checkpoint.sourceStatuses[sourceId] === "failed" || checkpoint.sourceStatuses[sourceId] === "partial") {
         checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
@@ -281,7 +295,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           await processBatch({ listings: result.listings, warnings: result.warnings, fetched: result.fetched }, null);
         }
         if (result.warnings.length > 0) checkpoint.sourceErrors[sourceId] = result.warnings.map(sourceError).join("; ").slice(0, 1000);
-        checkpoint.sourceStatuses[sourceId] = checkpoint.sourceErrors[sourceId] ? "failed" : "completed";
+        checkpoint.sourceStatuses[sourceId] = sourceStatusFromWarnings(result.warnings);
         checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
@@ -340,10 +354,15 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
     clearTimeout(timeoutId);
   }
 
-  const done = checkpoint.sourceQueue.every((source) => checkpoint.sourceStatuses[source] === "completed" || checkpoint.sourceStatuses[source] === "failed");
+  const done = checkpoint.sourceQueue.every((source) => checkpoint.sourceStatuses[source] === "completed" || checkpoint.sourceStatuses[source] === "failed" || checkpoint.sourceStatuses[source] === "partial");
   if (done) checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
   const failedSources = Object.values(checkpoint.sourceStatuses).filter((status) => status === "failed").length;
-  const finalStatus: RadarRunStatus = done ? failedSources === 0 ? "completed" : failedSources === checkpoint.sourceQueue.length ? "failed" : "partial" : "running";
+  const partialSources = Object.values(checkpoint.sourceStatuses).filter((status) => status === "partial").length;
+  const finalStatus: RadarRunStatus = done
+    ? failedSources === checkpoint.sourceQueue.length ? "failed"
+      : failedSources > 0 || partialSources > 0 ? "partial"
+        : "completed"
+    : "running";
   const errorMessage = Object.entries(checkpoint.sourceErrors).map(([sourceId, message]) => `${sourceId}: ${message}`).join("\n").slice(0, 2000) || null;
   await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, finalStatus, errorMessage);
   return { status: finalStatus, scannedCount: scanned, qualifiedCount: qualified, sourceStatuses: checkpoint.sourceStatuses, sourceErrors: checkpoint.sourceErrors, qualificationRejections: checkpoint.qualificationRejections ?? {} };
@@ -437,7 +456,7 @@ function nextUnfinishedSourceIndex(checkpoint: RadarCheckpoint, startIndex: numb
     const source = queue[index];
     if (!source || attempted.has(source)) continue;
     const status = checkpoint.sourceStatuses[source];
-    if (status === "completed" || status === "failed" || checkpoint.perSourceCursor[source] === SOURCE_DONE_CURSOR) continue;
+    if (status === "completed" || status === "failed" || status === "partial" || checkpoint.perSourceCursor[source] === SOURCE_DONE_CURSOR) continue;
     return index;
   }
   return null;

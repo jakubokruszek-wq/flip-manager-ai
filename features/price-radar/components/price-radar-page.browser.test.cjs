@@ -15,7 +15,7 @@ const session = {
 };
 const activeSources = ["domiporta", "olx", "gratka"];
 let showObservedOfertyNetOffer = false;
-function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [] }; }
+function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null }; }
 function listing(id, marketType) {
   return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: "Pełny opis źródłowy.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
 }

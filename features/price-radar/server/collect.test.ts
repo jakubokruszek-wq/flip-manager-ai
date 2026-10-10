@@ -305,6 +305,38 @@ test("one source's fetch failure is terminal and visible -- other sources still 
   assert.equal(db.tables.price_radar_listings.length, MOCKED_SOURCE_COUNT - 1);
 });
 
+test("public search page cap keeps saved offers and finishes the source/run as partial without retrying", async () => {
+  const db = fakeDb();
+  let fetchCount = 0;
+  fakeSourceImpl = async (id) => {
+    fetchCount += 1;
+    const listing = qualifyingListing(`${id}-saved-before-cap`, id);
+    listing.rawPayload.detailVerified = true;
+    return {
+      listings: [listing],
+      warnings: [`${id}: PUBLIC_SEARCH_PAGE_LIMIT_REACHED (5 pages); later pages were not requested.`],
+      fetched: 1,
+    };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.status, "partial");
+  assert.equal(result.sourceStatuses.oferty_net, "partial");
+  assert.match(result.sourceErrors.oferty_net ?? "", /PUBLIC_SEARCH_PAGE_LIMIT_REACHED/);
+  assert.equal(result.scannedCount, 1);
+  assert.equal(result.qualifiedCount, 1);
+  assert.equal(db.tables.price_radar_listings.length, 1, "already parsed and qualified rows remain persisted");
+  assert.equal(db.tables.price_radar_runs[0]?.status, "partial");
+  assert.equal(db.tables.price_radar_runs[0]?.lease_token, null, "partial is terminal and releases the lease");
+
+  const repeated = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  assert.equal(repeated.status, "partial");
+  assert.equal(fetchCount, 1, "terminal coverage caps are not automatically retried as a new scan");
+});
+
 test("detail diagnostics retain at most five sanitized samples per source without changing scan counters", async () => {
   const db = fakeDb();
   fakeSourceImpl = async (id, _cursor, batches) => {

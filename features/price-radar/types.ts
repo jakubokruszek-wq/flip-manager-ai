@@ -61,6 +61,7 @@ export type RadarListing = {
 };
 
 export type RadarRunStatus = "pending" | "running" | "completed" | "failed" | "partial";
+export type RadarSourceStatus = "pending" | "running" | "completed" | "failed" | "partial";
 
 /** First strict qualification rejection reason, grouped by Radar source. */
 export const RADAR_QUALIFICATION_REJECTION_REASONS = [
@@ -105,7 +106,7 @@ export type RadarCheckpoint = {
   currentSourceIndex: number;
   /** Per-source adapter cursor state (page number, continuation token, ...), opaque to collect.ts itself. */
   perSourceCursor: Record<string, unknown>;
-  sourceStatuses: Record<string, "pending" | "running" | "completed" | "failed">;
+  sourceStatuses: Record<string, RadarSourceStatus>;
   sourceErrors: Record<string, string>;
   /** Runtime diagnostics stored in the existing checkpoint JSONB; no schema change required. */
   qualificationRejections?: RadarQualificationRejections;
@@ -130,7 +131,7 @@ export type RadarRun = {
   scannedCount: number;
   qualifiedCount: number;
   errorMessage: string | null;
-  sourceStatuses: Record<string, "pending" | "running" | "completed" | "failed">;
+  sourceStatuses: Record<string, RadarSourceStatus>;
   sourceErrors: Record<string, string>;
   qualificationRejections?: RadarQualificationRejections;
 };
