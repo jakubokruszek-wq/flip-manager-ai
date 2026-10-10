@@ -6,7 +6,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 import { isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
-import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
 import type { RadarCheckpoint, RadarRun, RadarRunStatus, RadarSearchCriteria, RadarSource } from "@/features/price-radar/types";
@@ -20,7 +21,7 @@ const LEASE_SECONDS = 75;
 const YIELD_MARGIN_MS = 8_000;
 const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
 const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
-const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
+const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "rooms", "floor", "location", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
 
 /** Radar may only use sources that are both in the shared schema gate and have a registered adapter. */
 export const RADAR_SOURCES: RadarSource[] = SCHEMA_READY_SOURCE_IDS.filter((id): id is RadarSource => {
@@ -257,12 +258,29 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
             }, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
             if (!outcome.qualified) {
+              if (outcome.reason === "detail_conflict" && (listing.source === "oferty_net" || listing.source === "domiporta")) {
+                const evidence = isRecord(listing.rawPayload.detailEvidence) ? listing.rawPayload.detailEvidence : {};
+                const recorded = Array.isArray(listing.rawPayload.detailContradictions)
+                  ? listing.rawPayload.detailContradictions.filter((field): field is string => typeof field === "string")
+                  : [];
+                const conflicts = [...new Set([...recorded, ...findRadarOwnListingConflicts({
+                  area: listing.area,
+                  rooms: listing.rooms,
+                  floor: typeof evidence.floor === "number" ? evidence.floor : null,
+                  locationText: typeof evidence.locationText === "string" ? evidence.locationText : typeof listing.rawPayload.detailLocationText === "string" ? listing.rawPayload.detailLocationText : null,
+                  title: listing.title,
+                  description: listing.description,
+                })])];
+                await markExistingRadarListingForReview(supabase, {
+                  ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString(),
+                }, { source: listing.source, externalListingId: listing.externalListingId, issueFields: conflicts }, controller.signal);
+              }
               recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, outcome.reason);
               continue;
             }
             const raw = listing.rawPayload;
             const crossSourceIdentity = listing.crossSourceIdentity ?? null;
-            await persistRadarListing(supabase, {
+            const persisted = await persistRadarListing(supabase, {
               ...outcome, source: listing.source, externalListingId: listing.externalListingId,
               originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl, title: listing.title,
               description: listing.description, price: listing.price!, area: listing.area!, rooms: listing.rooms,
@@ -270,6 +288,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               sourceUpdatedAt: sourceDate(raw, ["updatedAt", "modifiedAt", "updated_at", "modified_at"]),
               crossSourceIdentity, rawPayload: raw,
             }, { ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString() }, controller.signal);
+            if (persisted.identityConflictFields?.length) {
+              recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, "listing_identity_changed");
+              continue;
+            }
             qualified += 1;
           }
           for (const warning of batch.warnings) checkpoint.sourceErrors[sourceId] = sourceError(warning);
@@ -431,9 +453,11 @@ function safeDiagnosticUrl(value: string | null): string | null {
     url.pathname = url.pathname
       .replace(/[\w.+-]+@[\w.-]+\.[A-Z]{2,}/giu, "[redacted]")
       .replace(/\+?\d[\d ().-]{7,}\d/gu, (candidate, offset: number, path: string) => {
-        // Oferty.net's public offer ID is the numeric suffix after `-fb,`.
-        // It looks like a phone number to the generic contact-data scrubber.
-        const publicOfferId = /^\/mieszkanie[^/]*-fb,$/u.test(path.slice(0, offset)) && /^\d{6,}$/u.test(candidate)
+        // Oferty.net's public IDs are either the numeric suffix after `-fb,`
+        // in the SEO route or the canonical `/of,<id>` route. They look like
+        // phone numbers to the generic contact-data scrubber.
+        const publicOfferId = (/^\/mieszkanie[^/]*-fb,$/u.test(path.slice(0, offset))
+          || /^\/of,$/u.test(path.slice(0, offset))) && /^\d{6,}$/u.test(candidate)
           && /(?:\/|$)/u.test(path.slice(offset + candidate.length));
         const publicDomiportaId = /^\/nieruchomosci\/sprzedam-mieszkanie-[^/]+\/$/u.test(path.slice(0, offset))
           && /^\d{9}$/u.test(candidate) && /^(?:\/|$)/u.test(path.slice(offset + candidate.length));

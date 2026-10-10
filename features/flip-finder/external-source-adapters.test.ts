@@ -490,6 +490,27 @@ const OFERTY_NET_DETAIL_LANOWA = `
   <p>Uk&#322;ad sprawdzi si&#281; tak&#380;e pod wynajem.</p>
 </div>`;
 
+const OFERTY_NET_DETAIL_IDENTITY_CONFLICT = `
+<title>Mieszkanie na sprzedaż - Zawiszy Czarnego, Bałuty-Doły, Łódź</title>
+<div class="header">
+  <span>Mieszkanie na sprzedaż</span>
+  <h1>łódzkie, Łódź, Bałuty, Bałuty-Doły, Zawiszy Czarnego</h1>
+  <h3>Pow.: 57 m2, Cena: 549 000 PLN</h3>
+</div>
+<div class="param"><dl>
+  <dt>Powierzchnia użytkowa</dt><dd>57 m2</dd>
+  <dt>Liczba pokoi</dt><dd>3</dd>
+  <dt>Piętro</dt><dd>6</dd>
+  <dt>Typ budynku</dt><dd>BLOK</dd>
+  <dt>Rynek pierwotny</dt><dd>Nie</dd>
+</dl></div>
+<div class="description">
+  <p>Na sprzedaż mieszkanie o powierzchni 45 m2, położone na parterze na łódzkim Teofilowie.</p>
+  <p>Lokal przeszedł generalny remont i po jego zakończeniu nie był jeszcze zamieszkały.</p>
+  <p>Jest gotowy do wprowadzenia bez dodatkowych prac.</p>
+  <p>Układ sprawdzi się także pod wynajem.</p>
+</div>`;
+
 function responseWithUrl(body: string, status: number, url: string): Response {
   const response = new Response(body, { status, headers: { "content-type": "text/html" } });
   Object.defineProperty(response, "url", { value: url });
@@ -634,6 +655,7 @@ test("the observed Oferty.net offer flows from detail parsing through qualificat
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
         in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return builder; },
         order: () => builder,
+        maybeSingle: async () => ({ data: rows.find((row) => filters.every((filter) => filter(row))) ?? null, error: null }),
         range: async () => ({ data: rows.filter((row) => filters.every((filter) => filter(row))), error: null }),
       };
       return builder;
@@ -672,6 +694,69 @@ test("the observed Oferty.net offer flows from detail parsing through qualificat
     assert.equal(read.stats.length, 1);
     assert.equal(read.stats[0]?.sampleSize, 1, "the stats count one persisted, qualified apartment under the district/market filters");
     assert.equal(read.stats[0]?.averagePricePerSqm, null, "one real listing remains below the reference-sample threshold");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("the current Oferty.net 1543068412 response is quarantined when its own-unit description contradicts the structured apartment", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/of,1543068412";
+  const page = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzedaż">Mieszkanie, Łódź, Bałuty</a></td><td class="cell_area">57 m2</td><td class="cell_rooms">3</td><td class="cell_price">549 000</td></tr></table>`;
+  const diagnostics: RadarDetailDiagnostic[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return responseWithUrl(url.includes("/mieszkania/szukaj") ? page : OFERTY_NET_DETAIL_IDENTITY_CONFLICT, 200, url);
+  };
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), { city: "Łódź" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    const listing = result.listings[0]!;
+    assert.equal(listing.externalListingId, "1543068412");
+    assert.equal(listing.price, 549_000);
+    assert.equal(listing.area, 57);
+    assert.equal(listing.rooms, 3);
+    assert.equal(listing.rawPayload.detailVerified, false);
+    assert.deepEqual(listing.rawPayload.detailContradictions, ["area", "floor", "location"]);
+    const qualification = qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
+      rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    });
+    assert.deepEqual(qualification, { qualified: false, reason: "detail_conflict" });
+    assert.deepEqual(diagnostics[0]?.contradictoryFields, ["area", "floor", "location"]);
+    assert.equal(diagnostics[0]?.httpStatus, 200, "this is a content contradiction, not a fetch failure");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("the existing detail adapter verifies a coherent category B offer without requiring a renovation date", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,category-b-ready";
+  const page = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzedaż">Mieszkanie, Łódź, Bałuty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td></tr></table>`;
+  const categoryB = OFERTY_NET_DETAIL_LANOWA
+    .replace("419 000 PLN", "419 000 PLN")
+    .replace(/<div class="description">[\s\S]*?<\/div>/u, "<div class=\"description\"><p>Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.</p></div>");
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return responseWithUrl(url.includes("/mieszkania/szukaj") ? page : categoryB, 200, url);
+  };
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), { city: "Łódź" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000, onBatch: async () => undefined,
+    });
+    const listing = result.listings[0]!;
+    assert.equal(listing.rawPayload.detailVerified, true, "complete finish, readiness, and high standard establish the detail gate independently of renovation date");
+    assert.deepEqual(qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
+      rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    }, 2), { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "turnkey_finish", district: "Bałuty", pricePerSqm: 419_000 / 45 });
   } finally { globalThis.fetch = previousFetch; }
 });
 

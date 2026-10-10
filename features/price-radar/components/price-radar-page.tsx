@@ -422,9 +422,13 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
     <article className={`min-w-0 overflow-hidden rounded-xl border bg-card p-4 ${excluded ? "opacity-60" : ""}`}>
       <div className="flex items-start justify-between gap-2">
         <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{listing.title ?? "Oferta bez tytułu"}</h3>
-        <span className="max-w-32 shrink-0 break-words rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{sourceLabel(listing.source)}</span>
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+          <span className="max-w-32 break-words rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{sourceLabel(listing.source)}</span>
+          {listing.verificationIssues?.length ? <span className="max-w-48 break-words rounded-full border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300" title={`Poza statystykami A/B: ${listing.verificationIssues.map(verificationIssueLabel).join(", ")}`}>Wymaga weryfikacji · poza próbą A/B</span> : null}
+        </div>
       </div>
-      <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"} · {qualityCategoryLabel(listing.qualityCategory, listing.marketType)}</p>
+      <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"}{listing.verificationIssues?.length ? " · poza klasyfikacją A/B do czasu weryfikacji" : ` · ${qualityCategoryLabel(listing.qualityCategory, listing.marketType)}`}</p>
+      {listing.verificationIssues?.length ? <p className="mt-1 break-words text-xs text-amber-700 dark:text-amber-300">Sprzeczne dane: {listing.verificationIssues.map(verificationIssueLabel).join(", ")}. Oferta pozostaje zachowana, ale nie wchodzi do statystyk.</p> : null}
       <p className="mt-3 text-sm font-medium">
         {formatCurrency(listing.price)} · {listing.area} m² · {formatCurrency(listing.pricePerSqm)}/m²{listing.rooms ? ` · ${listing.rooms} pok.` : ""}
       </p>
@@ -459,6 +463,10 @@ function qualityCategoryLabel(category: RadarQualityCategory, market: "primary" 
   return market === "primary" ? "A · Wykończone pod klucz" : "A · Po świeżym remoncie";
 }
 
+function verificationIssueLabel(issue: string): string {
+  return ({ area: "metraż", rooms: "liczba pokoi", floor: "piętro", location: "lokalizacja" } as Record<string, string>)[issue] ?? issue;
+}
+
 function runStatusLabel(status: RadarRunStatus): string {
   return ({ pending: "Oczekuje", running: "Trwa", completed: "Zakończono", partial: "Zakończono częściowo", failed: "Niepowodzenie" })[status];
 }
@@ -489,6 +497,8 @@ function radarSourceLabel(source: string): string {
 function qualificationRejectionLabel(reason: string): string {
   const labels: Record<string, string> = {
     detail_not_confirmed: "brak potwierdzonych danych szczegółowych",
+    detail_conflict: "sprzeczne dane o tym samym mieszkaniu; oferta wymaga weryfikacji",
+    listing_identity_changed: "portalowe ID wskazuje istotnie zmienione mieszkanie; wymagana weryfikacja",
     price_missing: "brak ceny całkowitej",
     area_missing: "brak metrażu",
     price_is_not_total_offer_price: "cena nie jest całkowitą ceną oferty",

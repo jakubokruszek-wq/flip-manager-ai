@@ -58,6 +58,8 @@ export type RadarListing = {
   status: "active" | "removed";
   excludedAt: string | null;
   excludedReason: string | null;
+  /** A listing remains visible for review but is omitted from A/B sample statistics while unresolved. */
+  verificationIssues?: string[];
 };
 
 export type RadarRunStatus = "pending" | "running" | "completed" | "failed" | "partial";
@@ -66,6 +68,8 @@ export type RadarSourceStatus = "pending" | "running" | "completed" | "failed" |
 /** First strict qualification rejection reason, grouped by Radar source. */
 export const RADAR_QUALIFICATION_REJECTION_REASONS = [
   "detail_not_confirmed",
+  "detail_conflict",
+  "listing_identity_changed",
   "price_missing",
   "area_missing",
   "price_is_not_total_offer_price",

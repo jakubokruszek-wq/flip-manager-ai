@@ -5,6 +5,7 @@ import { dedupeByListingIdentity } from "@/features/listing-identity";
 import { computeRadarStats } from "@/features/price-radar/stats";
 import { DEFAULT_RADAR_DISTRICTS, type RadarFilters, type RadarListing, type RadarStatGroup } from "@/features/price-radar/types";
 import { normalizeConfirmedPropertyIdentity } from "@/features/flip-finder/property-identity";
+import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 
 type Row = Record<string, unknown>;
 
@@ -28,7 +29,7 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
   const districts = filters.districts.length > 0 ? filters.districts : [...DEFAULT_RADAR_DISTRICTS];
   const query = supabase
     .from("price_radar_listings")
-    .select("id,owner_id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash,first_seen_at,last_seen_at,published_at,source_updated_at,collected_at,cross_source_identity,status,excluded_at,excluded_reason")
+    .select("id,owner_id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash,first_seen_at,last_seen_at,published_at,source_updated_at,collected_at,cross_source_identity,status,excluded_at,excluded_reason,raw_payload")
     .eq("owner_id", ownerId)
     .eq("status", "active")
     .in("district", districts)
@@ -61,7 +62,7 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
   const visible = narrowed.filter((listing) => listing.excludedAt === null);
   const excludedListings = narrowed.filter((listing) => listing.excludedAt !== null);
 
-  const stats = computeRadarStats(narrowed.map((listing) => ({
+  const stats = computeRadarStats(narrowed.filter((listing) => (listing.verificationIssues?.length ?? 0) === 0).map((listing) => ({
     district: listing.district,
     marketType: listing.marketType,
     qualityCategory: listing.qualityCategory,
@@ -148,10 +149,28 @@ function toRadarListing(row: Row): RadarListing | null {
   const collectedAt = nullableString(row.collected_at);
   const crossSourceIdentity = normalizeConfirmedPropertyIdentity(row.cross_source_identity);
   const status = row.status === "active" || row.status === "removed" ? row.status : null;
+  const rawPayload = asRecord(row.raw_payload);
+  const detailEvidence = asRecord(rawPayload.detailEvidence);
 
   if (!id || !source || !externalListingId || !originalUrl || !normalizedUrl || !city || !district || !buildingType || !marketType || !renovationStatus || price === null || area === null || pricePerSqm === null || !contentHash || !firstSeenAt || !lastSeenAt || !collectedAt || !status) {
     return null;
   }
+
+  const recordedContradictions = Array.isArray(rawPayload.detailContradictions)
+    ? rawPayload.detailContradictions.filter((field): field is string => typeof field === "string")
+    : [];
+  const identityContradictions = Array.isArray(rawPayload.identityVerificationIssues)
+    ? rawPayload.identityVerificationIssues.filter((field): field is string => typeof field === "string")
+    : [];
+  const detectedContradictions = findRadarOwnListingConflicts({
+    area,
+    rooms: nullableNumber(row.rooms),
+    floor: nullableNumber(detailEvidence.floor),
+    locationText: nullableString(detailEvidence.locationText) ?? nullableString(rawPayload.detailLocationText),
+    title: nullableString(row.title),
+    description: nullableString(row.description),
+  });
+  const verificationIssues = [...new Set([...recordedContradictions, ...identityContradictions, ...detectedContradictions])];
 
   return {
     id, source: source as RadarListing["source"], externalListingId, originalUrl, normalizedUrl,
@@ -160,7 +179,12 @@ function toRadarListing(row: Row): RadarListing | null {
     qualityCategory: marketType === "primary" || renovationStatus === "fresh_renovation" ? "fresh_renovation" : "ready_high_standard",
     contentHash, firstSeenAt, lastSeenAt, publishedAt, sourceUpdatedAt, collectedAt, crossSourceIdentity, crossSourceAlternates: [], status,
     excludedAt: nullableString(row.excluded_at), excludedReason: nullableString(row.excluded_reason),
+    verificationIssues,
   };
+}
+
+function asRecord(value: unknown): Row {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 }
 
 function nullableString(value: unknown): string | null {

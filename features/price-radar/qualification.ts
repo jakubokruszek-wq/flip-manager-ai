@@ -8,6 +8,7 @@ import {
   type RadarRenovationStatus,
 } from "./types";
 import type { MarketType } from "@/features/flip-finder";
+import { findRadarOwnListingConflicts } from "./own-listing-consistency";
 
 /**
  * Radar's own, strict qualification -- entirely independent of Finder's
@@ -187,6 +188,19 @@ export function inspectRadarFinishEvidence(text: string): {
   };
 }
 
+/** Category B has no renovation-date requirement, but must have three distinct
+ * positive facts about this dwelling: complete finish, move-in readiness, and
+ * high standard. Negated and unrelated-unit statements do not qualify. */
+export function hasCategoryBFinishEvidence(title: string | null, description: string | null): boolean {
+  const ownText = ownOfferEvidenceText({ title, description } as QualificationCandidate);
+  const finish = inspectRadarFinishEvidence(ownText);
+  return FULL_FINISH_PATTERN.test(ownText)
+    && (finish.moveInReady || READY_NO_WORK_PATTERN.test(ownText))
+    && HIGH_STANDARD_PATTERN.test(ownText)
+    && !HIGH_STANDARD_NEGATION_PATTERN.test(ownText)
+    && !FINISH_CONTRADICTION_PATTERN.test(ownText);
+}
+
 type RadarPreflightCandidate = Pick<QualificationCandidate, "title" | "description" | "buildingType" | "propertyType" | "rawPayload">;
 
 /**
@@ -213,6 +227,21 @@ export function preflightRadarCandidateRejection(candidate: RadarPreflightCandid
 }
 
 export function qualifyRadarCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2): QualificationResult {
+  if (candidate.source === "oferty_net" || candidate.source === "domiporta") {
+    const recordedConflicts = Array.isArray(candidate.rawPayload?.detailContradictions)
+      ? candidate.rawPayload.detailContradictions.filter((item): item is string => typeof item === "string")
+      : [];
+    const evidence = isRecord(candidate.rawPayload?.detailEvidence) ? candidate.rawPayload.detailEvidence : {};
+    const conflicts = findRadarOwnListingConflicts({
+      area: candidate.area,
+      rooms: candidate.rooms,
+      floor: typeof evidence.floor === "number" ? evidence.floor : null,
+      locationText: typeof evidence.locationText === "string" ? evidence.locationText : typeof candidate.rawPayload?.detailLocationText === "string" ? candidate.rawPayload.detailLocationText : null,
+      title: candidate.title,
+      description: candidate.description,
+    });
+    if (recordedConflicts.length > 0 || conflicts.length > 0) return reject("detail_conflict");
+  }
   if ((candidate.source === "oferty_net" || candidate.source === "domiporta") && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
   if (candidate.price === null || !Number.isFinite(candidate.price) || candidate.price <= 0) return reject("price_missing");
   if (candidate.area === null || !Number.isFinite(candidate.area) || candidate.area <= 0) return reject("area_missing");
@@ -252,11 +281,7 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate, quality
       return { qualified: true, buildingType, marketType, renovationStatus: "fresh_renovation", district, pricePerSqm };
     }
     if (qualityRulesVersion >= 2) {
-      const ownOfferText = ownOfferEvidenceText(candidate);
-      const complete = FULL_FINISH_PATTERN.test(ownOfferText);
-      const ready = finish.moveInReady || READY_NO_WORK_PATTERN.test(ownOfferText);
-      const highStandard = HIGH_STANDARD_PATTERN.test(ownOfferText) && !HIGH_STANDARD_NEGATION_PATTERN.test(ownOfferText);
-      if (!FINISH_CONTRADICTION_PATTERN.test(ownOfferText) && complete && ready && highStandard) {
+      if (hasCategoryBFinishEvidence(candidate.title, candidate.description)) {
         return { qualified: true, buildingType, marketType, renovationStatus: "turnkey_finish", district, pricePerSqm };
       }
     }

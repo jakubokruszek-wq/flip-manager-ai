@@ -28,7 +28,7 @@ function row(overrides: Row = {}): Row {
   return {
     id: "listing-1", owner_id: OWNER, source: "domiporta", external_listing_id: "ext-1", original_url: "https://domiporta.pl/1", normalized_url: "https://domiporta.pl/1",
     title: "Mieszkanie", description: null, price: 450_000, area: 50, price_per_sqm: 9_000, rooms: 2, city: "Łódź", district: "Bałuty",
-    building_type: "blok", market_type: "secondary", renovation_status: "fresh_renovation", content_hash: "hash-1",
+    building_type: "blok", market_type: "secondary", renovation_status: "fresh_renovation", content_hash: "hash-1", raw_payload: {},
     first_seen_at: "2026-10-01T00:00:00Z", last_seen_at: "2026-10-05T00:00:00Z", published_at: null, source_updated_at: null, collected_at: "2026-10-05T00:00:00Z", cross_source_identity: null, status: "active", excluded_at: null, excluded_reason: null,
     ...overrides,
   };
@@ -124,6 +124,29 @@ test("secondary turnkey records are assigned to category B while fresh secondary
     ["turnkey-primary", "fresh_renovation"],
   ]);
   assert.equal(payload.stats.length, 3, "district, market, and quality category are independent groups");
+});
+
+test("a previously persisted Oferty.net row with conflicting own-unit area, floor, and microdistrict stays visible for review but is excluded from A/B statistics", async () => {
+  currentDb = fakeDb([row({
+    id: "oferty-1543068412", source: "oferty_net", external_listing_id: "1543068412",
+    original_url: "https://www.oferty.net/of,1543068412", normalized_url: "https://www.oferty.net/of,1543068412",
+    title: "Mieszkanie na sprzedaż — Zawiszy Czarnego, Bałuty-Doły, Łódź",
+    description: "Na sprzedaż mieszkanie o powierzchni 45 m², położone na parterze na łódzkim Teofilowie. Lokal przeszedł generalny remont i jest gotowy do wprowadzenia.",
+    price: 549_000, area: 57, price_per_sqm: 549_000 / 57, rooms: 3,
+    raw_payload: { detailVerified: true, detailLocationText: "Łódź, Bałuty, Bałuty-Doły, Zawiszy Czarnego", detailEvidence: { floor: 6, locationText: "Łódź, Bałuty, Bałuty-Doły, Zawiszy Czarnego" } },
+  })]);
+  const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
+  assert.equal(payload.listings.length, 1, "the historical row is retained as visible review evidence");
+  assert.deepEqual(payload.listings[0]?.verificationIssues, ["area", "floor", "location"]);
+  assert.equal(payload.stats.length, 0, "an unresolved same-dwelling contradiction cannot enter category A/B sample counts");
+});
+
+test("a stored identity-change marker survives read and excludes the old snapshot from sample statistics without deleting it", async () => {
+  currentDb = fakeDb([row({ raw_payload: { identityVerificationIssues: ["area", "rooms", "location"] } })]);
+  const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
+  assert.equal(payload.listings.length, 1);
+  assert.deepEqual(payload.listings[0]?.verificationIssues, ["area", "rooms", "location"]);
+  assert.equal(payload.stats.length, 0);
 });
 
 test("an unmapped/invalid row (missing a required confirmed field) is silently excluded from the read, never crashing the page", async () => {

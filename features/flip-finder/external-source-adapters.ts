@@ -6,7 +6,8 @@ import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, t
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
 import { invalidSalePriceWarning } from "./sale-price";
 import { extractListingIdentityEvidence } from "./identity-evidence";
-import { inspectRadarFinishEvidence, isRadarRentalTransactionText, preflightRadarCandidateRejection } from "@/features/price-radar/qualification";
+import { hasCategoryBFinishEvidence, inspectRadarFinishEvidence, isRadarRentalTransactionText, preflightRadarCandidateRejection } from "@/features/price-radar/qualification";
+import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 
 export type ExternalPortalPage = { listings: PropertySourceListing[]; detailCandidates?: PropertySourceListing[]; hasNextPage: boolean; invalidSalePriceCount?: number };
 type PortalRecord = Record<string, unknown>;
@@ -245,6 +246,7 @@ type ParsedRadarPortalDetail = {
   price: number | null;
   area: number | null;
   rooms: number | null;
+  floor: number | null;
   city: string | null;
   district: string | null;
   locationText: string | null;
@@ -285,6 +287,8 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   const area = areaText ? decimal(areaFromText(areaText) ?? areaText) : null;
   const roomsText = textByLabels(["Liczba pokoi", "Pokoje"]);
   const rooms = roomsText ? decimal(roomsText.match(/\d+(?:[.,]\d+)?/u)?.[0] ?? roomsText) : null;
+  const floorText = textByLabels(["Piętro", "Kondygnacja", "Poziom"]);
+  const floor = parseFloor(floorText);
   const location = source === "oferty_net" ? $(".header h1").first().text() : $(".summary__location").first().text();
   const locationText = location.replace(/\s+/gu, " ").trim() || null;
   const { city, district } = parseRadarLocation(location);
@@ -310,8 +314,7 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   // Detail verification means the source explicitly states a finish/condition
   // fact. Qualification still decides whether that fact meets Radar's stricter
   // market-specific renovation/turnkey rules.
-  const finishStatusConfirmed = finish.fullRenovation || finish.turnkey || unfinishedEvidence;
-  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed;
+  const finishStatusConfirmed = finish.fullRenovation || finish.turnkey || unfinishedEvidence || hasCategoryBFinishEvidence(titleText, description);
   const unconfirmedFields: string[] = [];
   const contradictoryFields: string[] = [];
   if (price === null || price <= 0) unconfirmedFields.push("total_price");
@@ -338,7 +341,17 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   } else if (marketType === "primary" && !finish.turnkey) unconfirmedFields.push("turnkey_finish");
   else if (!marketType && !positiveFinishEvidence) unconfirmedFields.push("finish_evidence");
   if (!active) contradictoryFields.push("active_listing");
-  return { active, verified, unconfirmedFields, contradictoryFields, price, area, rooms, city, district, locationText, buildingType, marketType, propertyType, description };
+  contradictoryFields.push(...findRadarOwnListingConflicts({ area, rooms, floor, locationText, title: titleText, description }));
+  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed && contradictoryFields.length === 0;
+  return { active, verified, unconfirmedFields, contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, city, district, locationText, buildingType, marketType, propertyType, description };
+}
+
+function parseFloor(value: string | null): number | null {
+  if (!value) return null;
+  const normalized = normalizeDetailLabel(value);
+  if (/\bparter\b/u.test(normalized)) return 0;
+  const match = normalized.match(/\d{1,2}/u);
+  return match ? Number(match[0]) : null;
 }
 
 function withUnconfirmedRadarDetail(base: PropertySourceListing): PropertySourceListing {
@@ -387,6 +400,8 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     detailAttempted: true,
     detailVerified: detail.verified,
     detailLocationText: detail.locationText,
+    detailContradictions: detail.contradictoryFields,
+    detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText },
   };
   const description = [base.description, detail.description].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
   const exactPrice = detail.price ?? base.price;
@@ -402,7 +417,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     locationText: [detail.district, detail.city].filter(Boolean).join(", ") || null,
     buildingType: resolveBuildingType(detail.buildingType, base.title, description),
     description,
-    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: detail.locationText },
+    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: detail.locationText, detailContradictions: detail.contradictoryFields, detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText } },
   };
 }
 

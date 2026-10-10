@@ -104,6 +104,15 @@ test("Oferty.net: a completed general renovation left unoccupied and explicitly 
   assert.deepEqual(result, { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "fresh_renovation", district: "Bałuty", pricePerSqm: 419_000 / 45 });
 });
 
+test("Oferty.net records with unresolved same-unit conflicts are rejected before entering qualification A/B", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    source: "oferty_net", externalListingId: "1543068412", price: 549_000, area: 57, rooms: 3,
+    title: "Mieszkanie na sprzedaż — Bałuty-Doły, Łódź",
+    description: "Mieszkanie o powierzchni 45 m², położone na parterze na Teofilowie. Generalny remont, gotowe do wprowadzenia.",
+    rawPayload: { detailVerified: true, detailContradictions: ["area", "floor", "location"], detailEvidence: { floor: 6, locationText: "Bałuty-Doły" } },
+  })), { qualified: false, reason: "detail_conflict" });
+});
+
 test("a full renovation without an explicit recent year or unused-since-completion evidence stays unqualified", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({
     description: "Mieszkanie po generalnym remoncie, gotowe do wprowadzenia. Rynek wtórny.",

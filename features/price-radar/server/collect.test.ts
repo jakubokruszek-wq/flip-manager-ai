@@ -137,6 +137,7 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
 });
 
 const { claimOrCreateRadarRun, runRadarCollectionPortion, RADAR_SOURCES } = await import("./collect.ts");
+const { getRadarResults } = await import("./radar-results.ts");
 
 function qualifyingListing(id: string, source: string) {
   return {
@@ -371,6 +372,7 @@ test("detail diagnostics retain public Oferty.net and Domiporta IDs while scrubb
   fakeSourceImpl = async (id, _cursor, batches) => {
     if (id === "domiporta" && batches) await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [
       { kind: "detail_not_confirmed", listingUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-fb,1543068412?token=secret", finalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-fb,1543068412#contact", httpStatus: 200, identity: "same_url", unconfirmedFields: ["market_type"], contradictoryFields: [] },
+      { kind: "detail_not_confirmed", listingUrl: "https://www.oferty.net/of,1543068412?token=secret", finalUrl: "https://www.oferty.net/of,1543068412#contact", httpStatus: 200, identity: "same_url", unconfirmedFields: ["market_type"], contradictoryFields: [] },
       { kind: "detail_not_confirmed", listingUrl: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-dwupokojowe-lodz-45m2/156297090?auth=secret", finalUrl: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-dwupokojowe-lodz-45m2/156297090", httpStatus: 200, identity: "same_url", unconfirmedFields: ["district"], contradictoryFields: [] },
       { kind: "detail_not_confirmed", listingUrl: "https://example.test/contact+48123456789", finalUrl: null, httpStatus: 200, identity: "unconfirmed", unconfirmedFields: [], contradictoryFields: [] },
     ] }, null);
@@ -381,8 +383,9 @@ test("detail diagnostics retain public Oferty.net and Domiporta IDs while scrubb
   await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
   const examples = ((db.tables.price_radar_runs[0]?.checkpoint as Row).detailDiagnostics as Record<string, RadarDetailDiagnostic[]>).domiporta;
   assert.ok(examples[0]?.listingUrl?.endsWith("-fb,1543068412"));
-  assert.ok(examples[1]?.listingUrl?.endsWith("/156297090"));
-  assert.ok(examples[2]?.listingUrl?.includes("[redacted]"));
+  assert.ok(examples[1]?.listingUrl?.endsWith("/of,1543068412"), "the canonical public ID is retained too");
+  assert.ok(examples[2]?.listingUrl?.endsWith("/156297090"));
+  assert.ok(examples[3]?.listingUrl?.includes("[redacted]"));
   assert.ok(!JSON.stringify(examples).includes("secret"));
 });
 
@@ -540,6 +543,109 @@ test("re-collecting the same listing preserves a prior exclusion -- persistRadar
   assert.ok(row);
   assert.equal(row.excluded_at, "2026-10-01T00:00:00Z", "a re-collection must never clear a prior exclusion");
   assert.equal(row.excluded_reason, "poza budżetem");
+});
+
+test("a changed dwelling under the same portal ID is retained for review, excluded from qualification, and never overwritten by a price/property reimport", async () => {
+  const previousRaw = { detailVerified: true, detailLocationText: "Łódź, Teofilów, Łanowa", detailEvidence: { area: 45, rooms: 2, floor: 0, locationText: "Łódź, Teofilów, Łanowa" } };
+  const existing = {
+    id: "radar-existing-1543068412", owner_id: ownerId, source: "oferty_net", external_listing_id: "1543068412",
+    original_url: "https://www.oferty.net/of,1543068412", normalized_url: "https://www.oferty.net/of,1543068412",
+    title: "Mieszkanie Łanowa, Teofilów", description: "Mieszkanie o powierzchni 45 m², 2 pokoje, parter, Teofilów. Świeży generalny remont, gotowe do wprowadzenia. Rynek wtórny.",
+    price: 419_000, area: 45, price_per_sqm: 419_000 / 45, rooms: 2, city: "Łódź", district: "Bałuty", building_type: "blok",
+    market_type: "secondary", renovation_status: "fresh_renovation", content_hash: "old-property", first_seen_at: "2026-10-01T00:00:00Z",
+    last_seen_at: "2026-10-01T00:00:00Z", collected_at: "2026-10-01T00:00:00Z", cross_source_identity: null, raw_payload: previousRaw,
+    status: "active", excluded_at: null, excluded_reason: null,
+  };
+  const db = fakeDb({ listings: [existing] });
+  const incoming = qualifyingListing("1543068412", "oferty_net") as Record<string, unknown>;
+  incoming.price = 549_000;
+  incoming.area = 57;
+  incoming.pricePerSqm = 549_000 / 57;
+  incoming.rooms = 3;
+  incoming.title = "Mieszkanie w bloku, Zawiszy Czarnego, Bałuty-Doły";
+  incoming.buildingType = "blok";
+  incoming.description = "Mieszkanie o powierzchni 57 m², 3 pokoje, 6 piętro, Bałuty-Doły. Świeży generalny remont w 2026, gotowe do wprowadzenia. Rynek wtórny.";
+  incoming.rawPayload = { detailVerified: true, marketType: "secondary", propertyType: "apartment", detailLocationText: "Łódź, Bałuty-Doły, Zawiszy Czarnego", detailEvidence: { area: 57, rooms: 3, floor: 6, locationText: "Łódź, Bałuty-Doły, Zawiszy Czarnego" } };
+  fakeSourceImpl = async (_id, _cursor, batches) => {
+    await batches?.onBatch({ listings: [incoming], warnings: [], fetched: 1 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed run");
+  const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  const kept = db.tables.price_radar_listings[0]!;
+  assert.equal(result.qualifiedCount, 0);
+  assert.equal(kept.id, "radar-existing-1543068412");
+  assert.equal(kept.area, 45, "new details for a materially different dwelling do not overwrite the saved property snapshot");
+  assert.equal(kept.price, 419_000, "the new property's price is not mistaken for a price update of the old dwelling");
+  assert.deepEqual((kept.raw_payload as Row).identityVerificationIssues, ["area", "rooms", "floor", "location"]);
+  assert.deepEqual(result.qualificationRejections.oferty_net, { listing_identity_changed: 1 });
+});
+
+test("a rejected contradictory reimport quarantines the previously counted dwelling without replacing its facts", async () => {
+  const existing = {
+    id: "radar-existing-conflicted", owner_id: ownerId, source: "oferty_net", external_listing_id: "1543068412",
+    original_url: "https://www.oferty.net/of,1543068412", normalized_url: "https://www.oferty.net/of,1543068412",
+    title: "Mieszkanie na Łanowej, Teofilów", description: "Mieszkanie o powierzchni 45 m², 2 pokoje, parter, Teofilów. Pełny remont, gotowe do wprowadzenia.",
+    price: 419_000, area: 45, price_per_sqm: 419_000 / 45, rooms: 2, city: "Łódź", district: "Bałuty", building_type: "blok",
+    market_type: "secondary", renovation_status: "fresh_renovation", content_hash: "old-property", first_seen_at: "2026-10-01T00:00:00Z",
+    last_seen_at: "2026-10-01T00:00:00Z", collected_at: "2026-10-01T00:00:00Z", cross_source_identity: null,
+    raw_payload: { detailVerified: true, detailEvidence: { area: 45, rooms: 2, floor: 0, locationText: "Łódź, Teofilów, Łanowa" } },
+    status: "active", excluded_at: null, excluded_reason: null,
+  };
+  const db = fakeDb({ listings: [existing] });
+  const incoming = qualifyingListing("1543068412", "oferty_net") as Record<string, unknown>;
+  incoming.area = 57;
+  incoming.rooms = 3;
+  incoming.title = "Mieszkanie na Zawiszy Czarnego, Bałuty-Doły";
+  incoming.description = "Mieszkanie o powierzchni 45 m², 2 pokoje, parter na Teofilowie; nagłówek ogłoszenia podaje 57 m², 3 pokoje i 6. piętro.";
+  incoming.rawPayload = {
+    detailVerified: false, marketType: "secondary", propertyType: "apartment",
+    detailLocationText: "Łódź, Bałuty-Doły, Zawiszy Czarnego",
+    detailContradictions: ["area", "rooms", "floor", "location"],
+    detailEvidence: { area: 57, rooms: 3, floor: 6, locationText: "Łódź, Bałuty-Doły, Zawiszy Czarnego" },
+  };
+  fakeSourceImpl = async (_id, _cursor, batches) => {
+    await batches?.onBatch({ listings: [incoming], warnings: [], fetched: 1 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed run");
+  const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  const kept = db.tables.price_radar_listings[0]!;
+  assert.equal(result.qualifiedCount, 0);
+  assert.equal(kept.area, 45);
+  assert.equal(kept.price, 419_000);
+  assert.deepEqual((kept.raw_payload as Row).identityVerificationIssues, ["area", "rooms", "floor", "location"]);
+  assert.deepEqual(result.qualificationRejections.oferty_net, { detail_conflict: 1 });
+
+  const read = await getRadarResults(ownerId, { districts: ["Bałuty"], market: "both", areaMin: 30, areaMax: 80, rooms: [], sources: [], minPricePerSqm: null }, db as never);
+  assert.equal(read.listings.length, 1, "the saved record and its evidence remain available for review");
+  assert.equal(read.listings[0]?.id, "radar-existing-conflicted");
+  assert.deepEqual(read.listings[0]?.verificationIssues, ["area", "rooms", "floor", "location"]);
+  assert.equal(read.stats.length, 0, "the saved but unresolved record is excluded from A/B reference statistics");
+});
+
+test("a materially changed reimport never clears a pre-existing manual exclusion", async () => {
+  const db = fakeDb({ listings: [{
+    id: "excluded-old", owner_id: ownerId, source: "oferty_net", external_listing_id: "changed-id", original_url: "https://oferty.net/old", normalized_url: "https://oferty.net/old",
+    title: "Old apartment", description: "Old description", price: 400_000, area: 45, price_per_sqm: 400_000 / 45, rooms: 2, city: "Łódź", district: "Bałuty",
+    building_type: "blok", market_type: "secondary", renovation_status: "fresh_renovation", content_hash: "old-hash", first_seen_at: "2026-10-01T00:00:00Z",
+    last_seen_at: "2026-10-01T00:00:00Z", collected_at: "2026-10-01T00:00:00Z", cross_source_identity: null,
+    raw_payload: { detailEvidence: { area: 45, rooms: 2, floor: 0, locationText: "Teofilów" } }, status: "active", excluded_at: "2026-10-02T00:00:00Z", excluded_reason: "ręczna decyzja",
+  }] });
+  const incoming = qualifyingListing("changed-id", "oferty_net") as Record<string, unknown>;
+  incoming.rawPayload = { detailVerified: true, marketType: "secondary", propertyType: "apartment", detailEvidence: { area: 57, rooms: 3, floor: 6, locationText: "Bałuty-Doły" } };
+  incoming.area = 57;
+  incoming.rooms = 3;
+  (incoming.rawPayload as Row).detailLocationText = "Bałuty-Doły";
+  fakeSourceImpl = async (_id, _cursor, batches) => { await batches?.onBatch({ listings: [incoming], warnings: [], fetched: 1 }, null); return { listings: [], warnings: [], fetched: 0 }; };
+  const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed run");
+  await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  assert.equal(db.tables.price_radar_listings[0]?.excluded_at, "2026-10-02T00:00:00Z");
+  assert.equal(db.tables.price_radar_listings[0]?.excluded_reason, "ręczna decyzja");
+  assert.equal(db.rpcCalls.filter(({ name }) => name === "persist_price_radar_listing").length, 0, "an excluded snapshot is not rewritten while identity is uncertain");
 });
 
 test("resuming after the OLX worker exhausted its lease (claim_olx_scan_job's own LEASE_EXHAUSTED path, not Radar's finalize RPC) marks olx failed and lets the rest of the queue finish -- a run is never stuck forever behind a dead OLX job", async () => {

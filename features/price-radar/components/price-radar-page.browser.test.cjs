@@ -15,11 +15,23 @@ const session = {
 };
 const activeSources = ["domiporta", "olx", "gratka"];
 let showObservedOfertyNetOffer = false;
+let showConflictingOfertyNetOffer = false;
 function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null }; }
 function listing(id, marketType) {
   return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: "Pełny opis źródłowy.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
 }
 function results(filters, excluded = false) {
+  if (showConflictingOfertyNetOffer) {
+    const offer = {
+      ...listing("radar-oferty-net-1543068412", "secondary"), source: "oferty_net", externalListingId: "1543068412",
+      originalUrl: "https://www.oferty.net/of,1543068412", normalizedUrl: "https://www.oferty.net/of,1543068412",
+      title: "Mieszkanie na sprzedaż — Zawiszy Czarnego, Bałuty-Doły, Łódź",
+      description: "Na sprzedaż mieszkanie o powierzchni 45 m², położone na parterze na łódzkim Teofilowie. Lokal przeszedł generalny remont i jest gotowy do wprowadzenia.",
+      price: 549000, area: 57, pricePerSqm: 549000 / 57, rooms: 3,
+      verificationIssues: ["area", "floor", "location"],
+    };
+    return { listings: [offer], excludedListings: [], stats: [] };
+  }
   if (showObservedOfertyNetOffer) {
     const offer = {
       ...listing("radar-oferty-net-1543068412", "secondary"), source: "oferty_net", externalListingId: "1543068412",
@@ -200,6 +212,13 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.match(lanowaCardText, /45\s*m².*2\s*pok/u);
   assert.equal(await page.locator(`a[href="https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412"]`).count(), 1, "the visible card links to the exact observed portal offer");
   showObservedOfertyNetOffer = false;
+  showConflictingOfertyNetOffer = true;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Oferty w próbie (1)" }).waitFor();
+  await page.getByText("Wymaga weryfikacji · poza próbą A/B").waitFor();
+  await page.getByText("Sprzeczne dane: metraż, piętro, lokalizacja.", { exact: false }).waitFor();
+  assert.equal(await page.getByText("Średnia zł/m²").count(), 0, "a visible unresolved offer does not create an A/B statistic group");
+  showConflictingOfertyNetOffer = false;
   savedFilters.sources = ["gratka"];
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("a[href^='https://example.test/']").first().waitFor();
