@@ -293,6 +293,54 @@ test("a detail-batch yield checkpoints its cursor and lets later sources progres
   assert.equal(db.tables.price_radar_runs[0]?.id, claimed.run.id);
 });
 
+test("a resumed run at the end of its source queue processes both pending sources once and preserves its detail cursor", async () => {
+  const sourceQueue = ["morizon", "domiporta"];
+  const detailCursor = { kind: "radar_detail_v1" as const, page: 4, candidateIndex: 12 };
+  const checkpoint = {
+    sourceQueue,
+    currentSourceIndex: sourceQueue.length,
+    sourceStatuses: { morizon: "pending", domiporta: "pending" },
+    sourceErrors: {},
+    perSourceCursor: { morizon: 3, domiporta: detailCursor },
+    qualificationRejections: {},
+    buffer: [],
+    bufferOffset: 0,
+  };
+  const runId = "run-resume-at-end-with-two-pending";
+  const db = fakeDb({ runs: [{
+    id: runId,
+    owner_id: ownerId,
+    status: "running",
+    lease_token: "current-resume-lease",
+    lease_until: new Date(Date.now() + 60_000).toISOString(),
+    started_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    checkpoint,
+    source_statuses: checkpoint.sourceStatuses,
+    source_errors: checkpoint.sourceErrors,
+    scanned_count: 17,
+    qualified_count: 0,
+  }] });
+  const attempts: Record<string, number> = {};
+  let resumedDomiportaCursor: FakeBatchContext["radarDetailCursor"];
+  fakeSourceImpl = async (id, cursor, batches) => {
+    attempts[id] = (attempts[id] ?? 0) + 1;
+    if (id === "morizon") assert.equal(cursor, 3, "resume keeps Morizon's page cursor");
+    if (id === "domiporta") resumedDomiportaCursor = batches?.radarDetailCursor;
+    return { listings: [qualifyingListing(`${id}-resumed`, id)], warnings: [], fetched: 1 };
+  };
+
+  const result = await runRadarCollectionPortion({ runId, ownerId, leaseToken: "current-resume-lease" }, db as never);
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.sourceStatuses.morizon, "completed");
+  assert.equal(result.sourceStatuses.domiporta, "completed");
+  assert.deepEqual(attempts, { morizon: 1, domiporta: 1 }, "both pending sources resume once; neither source is repeated");
+  assert.deepEqual(resumedDomiportaCursor, detailCursor, "Domiporta resumes from its saved detail candidate, not from the start");
+  assert.equal(db.tables.price_radar_runs.length, 1, "continuation preserves the existing run instead of creating another");
+  assert.equal(db.tables.price_radar_runs[0]?.id, runId);
+  assert.equal(result.scannedCount, 19, "the existing total is incremented by exactly one fetched candidate per resumed source");
+});
+
 test("a resumed Domiporta detail cursor clears only its stale portion-timeout diagnostic after successful completion", async () => {
   const db = fakeDb();
   fakeSourceImpl = async (id) => ({ listings: [qualifyingListing(`${id}-resumed`, id)], warnings: [], fetched: 1 });
