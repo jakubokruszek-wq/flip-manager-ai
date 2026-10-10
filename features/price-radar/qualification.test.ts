@@ -89,6 +89,27 @@ test("a sale listing described as ideal for future rental is not misclassified a
   assert.equal(result.qualified, true, "the wording describes possible investment use, not an offer to rent the property");
 });
 
+test("Oferty.net: a completed general renovation left unoccupied and explicitly ready to move in is confirmed without an invented renovation year", () => {
+  const result = qualifyRadarCandidate(candidate({
+    source: "oferty_net",
+    externalListingId: "1543068412",
+    originalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412",
+    normalizedUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412",
+    title: "Mieszkanie na sprzedaż - Łanowa Teofilów, Bałuty, Łódź",
+    description: "Lokal przeszedł generalny remont i po jego zakończeniu nie był jeszcze zamieszkały. Jest gotowy do wprowadzenia. Układ sprawdzi się także pod wynajem.",
+    price: 419_000, area: 45, pricePerSqm: null, rooms: 2,
+    city: "Łódź", district: "Bałuty", buildingType: "blok", marketType: "secondary", propertyType: "apartment",
+    rawPayload: { detailVerified: true },
+  }));
+  assert.deepEqual(result, { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "fresh_renovation", district: "Bałuty", pricePerSqm: 419_000 / 45 });
+});
+
+test("a full renovation without an explicit recent year or unused-since-completion evidence stays unqualified", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    description: "Mieszkanie po generalnym remoncie, gotowe do wprowadzenia. Rynek wtórny.",
+  })), { qualified: false, reason: "renovation_not_confirmed_fresh_full" });
+});
+
 test("an actual offer to rent remains excluded even when its title also mentions investment use", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({
     title: "Mieszkanie idealne pod wynajem",

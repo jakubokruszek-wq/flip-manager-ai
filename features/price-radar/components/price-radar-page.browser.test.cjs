@@ -14,11 +14,27 @@ const session = {
   user: { id: ownerId, email: "operator@example.test", app_metadata: { role: "operator" }, user_metadata: {}, aud: "authenticated", created_at: "2026-10-01T00:00:00.000Z" },
 };
 const activeSources = ["domiporta", "olx", "gratka"];
+let showObservedOfertyNetOffer = false;
 function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [] }; }
 function listing(id, marketType) {
   return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: "Pełny opis źródłowy.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
 }
 function results(filters, excluded = false) {
+  if (showObservedOfertyNetOffer) {
+    const offer = {
+      ...listing("radar-oferty-net-1543068412", "secondary"), source: "oferty_net", externalListingId: "1543068412",
+      originalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412",
+      normalizedUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412",
+      title: "Mieszkanie na sprzedaż — Łanowa, Teofilów, Bałuty, Łódź",
+      description: "45 m², 2 pokoje, blok. Rynek wtórny. Generalny remont, lokal niezamieszkany po remoncie, gotowy do wprowadzenia. Także pod wynajem.",
+      price: 419000, area: 45, pricePerSqm: 419000 / 45, rooms: 2, city: "Łódź", district: "Bałuty",
+      crossSourceIdentity: null, crossSourceAlternates: [],
+    };
+    return {
+      listings: [offer], excludedListings: [],
+      stats: [{ district: "Bałuty", marketType: "secondary", averagePricePerSqm: null, medianPricePerSqm: null, sampleSize: 1, isSmallSample: true, updatedAt: offer.lastSeenAt }],
+    };
+  }
   const domiporta = listing("radar-domiporta", "secondary");
   domiporta.crossSourceIdentity = "portal_shared_unit_id:unit-secondary";
   domiporta.crossSourceAlternates = [{ id: "radar-gratka", source: "gratka", originalUrl: "https://example.test/radar-gratka", title: "Kopia Gratka", price: 455000, area: 50.5, rooms: 2, publishedAt: "2026-10-06T10:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T09:00:00.000Z" }];
@@ -134,8 +150,9 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   await page.getByLabel("Rynek").selectOption("primary");
   await page.waitForFunction(() => document.body.textContent?.includes("Mieszkanie primary w bloku") && !document.body.textContent?.includes("Mieszkanie secondary w bloku"));
 
+  const districtSave = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT");
   await page.getByRole("button", { name: "Bałuty" }).click();
-  await page.waitForTimeout(650);
+  await districtSave;
   assert.ok(requests.some((request) => request.path === "/api/price-radar/settings" && request.method === "PUT"), "changed filters persist through the settings API");
   assert.deepEqual(savedFilters.districts.includes("Bałuty"), false, "the changed setting was saved");
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -171,6 +188,21 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   failNextSave = true;
   await page.getByLabel("Rynek").selectOption("both");
   await page.getByText("Ustawienia nie zostały zapisane", { exact: false }).waitFor();
+
+  showObservedOfertyNetOffer = true;
+  savedFilters.sources = [];
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Mieszkanie na sprzedaż — Łanowa, Teofilów, Bałuty, Łódź" }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Oferty w próbie (1)" }).count(), 1, "the current offer is rendered as one card from the API response");
+  const lanowaCardText = await page.locator("article").innerText();
+  assert.match(lanowaCardText, /Bałuty, Łódź.*Wtórny.*Blok/u);
+  assert.match(lanowaCardText, /419[\s\u00a0]*000\s*zł/u);
+  assert.match(lanowaCardText, /45\s*m².*2\s*pok/u);
+  assert.equal(await page.locator(`a[href="https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412"]`).count(), 1, "the visible card links to the exact observed portal offer");
+  showObservedOfertyNetOffer = false;
+  savedFilters.sources = ["gratka"];
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("a[href^='https://example.test/']").first().waitFor();
 
   for (const width of [320, 375, 768, 1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });

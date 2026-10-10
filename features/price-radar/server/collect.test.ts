@@ -118,7 +118,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
 
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("tests must pass an explicit fake db, never the real admin client"); } } });
 
-type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[] };
+type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[]; rejectionReasons?: string[] };
 type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
 let fakeSourceImpl: (id: string, cursor?: number, batches?: FakeBatchContext, signal?: AbortSignal) => Promise<{ listings: unknown[]; warnings: string[]; fetched: number }>;
 const mockedSources = [
@@ -204,6 +204,26 @@ test("a non-qualifying candidate is scanned but never persisted", async () => {
   assert.equal(result.scannedCount, MOCKED_SOURCE_COUNT);
   assert.deepEqual(result.qualificationRejections, { domiporta: { rental: 1 }, morizon: { rental: 1 } }, "each source records the exact first strict rejection reason without persisting rejected candidates");
   assert.deepEqual((db.tables.price_radar_runs[0].checkpoint as Row).qualificationRejections, result.qualificationRejections, "reason counts survive in the existing durable JSON checkpoint");
+});
+
+test("preflight exclusions are checkpointed with their concrete reason and never trigger persistence", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id, _cursor, batches) => {
+    if (id === "domiporta" && batches) {
+      await batches.onBatch({ listings: [], warnings: [], fetched: 1, rejectionReasons: ["house_excluded"] }, null);
+    }
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.scannedCount, 1, "the candidate rejected before detail is still included in the scanned count");
+  assert.equal(result.qualifiedCount, 0);
+  assert.deepEqual(result.qualificationRejections, { domiporta: { house_excluded: 1 } });
+  assert.equal(db.tables.price_radar_listings.length, 0, "an explicitly ineligible candidate is never persisted");
+  assert.equal(db.rpcCalls.some(({ name }) => name === "persist_price_radar_listing"), false, "the persistence RPC is not called for a preflight rejection");
 });
 
 test("one source's fetch failure is terminal and visible -- other sources still save and the run ends partial", async () => {

@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
-import { normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
+import { isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
@@ -20,7 +20,7 @@ const LEASE_SECONDS = 75;
 const YIELD_MARGIN_MS = 8_000;
 const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
 const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
-const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "active_listing", "identity"]);
+const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
 
 /** Radar may only use sources that are both in the shared schema gate and have a registered adapter. */
 export const RADAR_SOURCES: RadarSource[] = SCHEMA_READY_SOURCE_IDS.filter((id): id is RadarSource => {
@@ -228,6 +228,9 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           }
           emittedBatches = true;
           scanned += batch.fetched;
+          for (const reason of batch.rejectionReasons ?? []) {
+            if (isRadarQualificationRejectionReason(reason)) recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, reason);
+          }
           for (const listing of batch.listings) {
             controller.signal.throwIfAborted();
             const outcome = qualifyRadarCandidate({

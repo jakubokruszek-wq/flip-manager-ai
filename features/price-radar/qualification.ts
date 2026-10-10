@@ -82,6 +82,10 @@ export function normalizeRadarQualificationRejections(value: unknown): RadarQual
   return result;
 }
 
+export function isRadarQualificationRejectionReason(value: unknown): value is RadarQualificationRejectionReason {
+  return typeof value === "string" && RADAR_QUALIFICATION_REJECTION_REASONS.includes(value as RadarQualificationRejectionReason);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -101,8 +105,14 @@ const DEVELOPER_STATE_PATTERN = /stan\s+deweloperski|do\s+wyko\p{L}*czenia|bez\s
 const NEEDS_RENOVATION_PATTERN = /do\s+remontu|wymaga\s+remontu|do\s+odnowienia|surowy\s+stan/iu;
 const TURNKEY_PATTERN = /wyko\p{L}*czon\p{L}*\s+pod\s+klucz/iu;
 const FRESH_FULL_RENOVATION_PATTERN = /(?:świeżo|niedawno)\s+po\s+(?:generalnym|kapitalnym)\s+remoncie|(?:generalny|kapitalny)\s+remont\s+(?:zakończon\p{L}*\s+)?w\s+20(?:2[1-9]|3\d)|(?:po\s+)?(?:generalnym|kapitalnym)\s+remoncie\s+(?:z\s+)?20(?:2[1-9]|3\d)/iu;
+// A listing can establish that the completed full renovation is still unused
+// without stating its calendar year. Require all three facts in the offer:
+// the general renovation, explicit non-occupancy since completion, and an
+// independently stated ready-to-move condition. This is deliberately narrow;
+// a generic "po remoncie" or a recent publication date alone is insufficient.
+const UNUSED_AFTER_FULL_RENOVATION_PATTERN = /generaln\p{L}*\s+remon\p{L}*[\s\S]{0,140}?\bpo\s+(?:jego\s+)?zakończeni\p{L}*[\s\S]{0,80}?\bnie\s+(?:był|było|byli)\s+(?:jeszcze\s+)?zamieszk\p{L}*/iu;
 const MOVE_IN_READY_PATTERN = /gotow\p{L}*\s+do\s+zamieszkan\p{L}*|do\s+natychmiastow\p{L}*\s+wprowadzen\p{L}*/iu;
-const RENOVATION_CONFLICT_PATTERN = /(?:do\s+remontu|wymaga\s+remontu|remont\s+(?:do\s+wykonania|konieczny|planowan\p{L}*|częściow\p{L}*)|w\s+trakcie\s+remontu|bez\s+generalnego\s+remontu|nie\s+po\s+(?:generalnym|kapitalnym)\s+remoncie)/iu;
+const RENOVATION_CONFLICT_PATTERN = /(?:do\s+remontu|wymaga\s+remontu|remont\s+(?:do\s+wykonania|konieczny|planowan\p{L}*|częściow\p{L}*)|w\s+trakcie\s+remontu|bez\s+generalnego\s+remontu|\bnie\s+po\s+(?:generalnym|kapitalnym)\s+remoncie)/iu;
 const STARTING_PRICE_PATTERN = /(?:^|[\s:])od\s+\d[\d\s.,]*\s*(?:zł|PLN)/iu;
 
 function normalizeDistrict(value: string | null): string | null {
@@ -139,6 +149,51 @@ function resolveMarketType(candidate: QualificationCandidate, text: string): Mar
   return null; // absent or contradictory text signal -- unknown, never guessed
 }
 
+/** The phrase "pod wynajem" is an investment use, not a rental transaction. */
+export function isRadarRentalTransactionText(value: string | null | undefined): boolean {
+  return RENTAL_PATTERN.test((value ?? "").replace(/\bpod\s+wynajem\b/giu, " "));
+}
+
+export function inspectRadarFinishEvidence(text: string): {
+  fullRenovation: boolean;
+  freshFullRenovation: boolean;
+  moveInReady: boolean;
+  turnkey: boolean;
+} {
+  const fullRenovation = /(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(text);
+  return {
+    fullRenovation,
+    freshFullRenovation: FRESH_FULL_RENOVATION_PATTERN.test(text) || UNUSED_AFTER_FULL_RENOVATION_PATTERN.test(text),
+    moveInReady: MOVE_IN_READY_PATTERN.test(text) || /gotow\p{L}*\s+do\s+wprowadzen\p{L}*/iu.test(text),
+    turnkey: TURNKEY_PATTERN.test(text),
+  };
+}
+
+type RadarPreflightCandidate = Pick<QualificationCandidate, "title" | "description" | "buildingType" | "propertyType" | "rawPayload">;
+
+/**
+ * Returns only exclusions that can be proven from the result card alone.
+ * Missing fields are intentionally not rejected here because a detail page
+ * may confirm them; the same helper is also used by the final qualifier so
+ * Finder/Radar parsing cannot disagree about explicit sale-vs-rental text.
+ */
+export function preflightRadarCandidateRejection(candidate: RadarPreflightCandidate): RadarQualificationRejectionReason | null {
+  const payload = candidate.rawPayload ?? {};
+  if (payload.priceIsStartingAt === true || payload.priceKind === "from" || payload.priceUnit === "per_sqm") return "price_is_not_total_offer_price";
+  const text = `${candidate.title ?? ""} ${candidate.description ?? ""}`;
+  if (STARTING_PRICE_PATTERN.test(text)) return "price_is_starting_price";
+  if (isRadarRentalTransactionText(text)) return "rental";
+  if (SHARE_PATTERN.test(text)) return "share";
+  if (COMMERCIAL_PATTERN.test(text)) return "commercial";
+  if (PLOT_PATTERN.test(text)) return "plot";
+  if (assessBuildingType(candidate.buildingType, candidate.title, candidate.description).tenementEvidence) return "tenement_excluded";
+  if (HOUSE_LIKE_PATTERN.test(text)) return "house_excluded";
+  if (BULK_INVESTMENT_PATTERN.test(text)) return "bulk_investment_ad";
+  const structuredPropertyType = candidate.propertyType?.trim().toLocaleLowerCase("pl-PL") ?? null;
+  if (APARTMENT_NEGATION_PATTERN.test(text) || (structuredPropertyType && !["apartment", "mieszkanie", "flat"].includes(structuredPropertyType))) return "apartment_not_confirmed";
+  return null;
+}
+
 export function qualifyRadarCandidate(candidate: QualificationCandidate): QualificationResult {
   if ((candidate.source === "oferty_net" || candidate.source === "domiporta") && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
   if (candidate.price === null || !Number.isFinite(candidate.price) || candidate.price <= 0) return reject("price_missing");
@@ -157,21 +212,10 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate): Qualif
   if (!district) return reject("district_not_confirmed");
   if (!candidate.city || candidate.city.trim().toLocaleLowerCase("pl-PL") !== "łódź") return reject("city_not_lodz");
 
-  // "Pod wynajem" describes a possible investment use of a property, not the
-  // current transaction. Sale pages often contain phrases such as "idealne
-  // pod wynajem", so remove only this use-case phrase before checking the
-  // existing strict rental-intent patterns.
-  const rentalIntentText = text.replace(/\bpod\s+wynajem\b/giu, " ");
-  if (RENTAL_PATTERN.test(rentalIntentText)) return reject("rental");
-  if (SHARE_PATTERN.test(text)) return reject("share");
-  if (COMMERCIAL_PATTERN.test(text)) return reject("commercial");
-  if (PLOT_PATTERN.test(text)) return reject("plot");
-  const buildingEvidence = assessBuildingType(candidate.buildingType, candidate.title, candidate.description);
-  if (buildingEvidence.tenementEvidence) return reject("tenement_excluded");
-  if (HOUSE_LIKE_PATTERN.test(text)) return reject("house_excluded");
-  if (BULK_INVESTMENT_PATTERN.test(text)) return reject("bulk_investment_ad");
+  const preflightRejection = preflightRadarCandidateRejection(candidate);
+  if (preflightRejection) return reject(preflightRejection);
   const structuredPropertyType = candidate.propertyType?.trim().toLocaleLowerCase("pl-PL") ?? null;
-  if (APARTMENT_NEGATION_PATTERN.test(text) || (structuredPropertyType && !["apartment", "mieszkanie", "flat"].includes(structuredPropertyType)) || (!structuredPropertyType && !APARTMENT_PATTERN.test(text))) return reject("apartment_not_confirmed");
+  if (!structuredPropertyType && !APARTMENT_PATTERN.test(text)) return reject("apartment_not_confirmed");
 
   const buildingType = resolveBuildingTypeForRadar(candidate, text);
   if (!buildingType) return reject("building_type_not_confirmed");
@@ -181,14 +225,15 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate): Qualif
 
   if (DEVELOPER_STATE_PATTERN.test(text) || NEEDS_RENOVATION_PATTERN.test(text)) return reject("unfinished_or_needs_renovation");
 
+  const finish = inspectRadarFinishEvidence(text);
   if (marketType === "secondary") {
     if (RENOVATION_CONFLICT_PATTERN.test(text)) return reject("renovation_exclusion");
-    if (!FRESH_FULL_RENOVATION_PATTERN.test(text) || !MOVE_IN_READY_PATTERN.test(text)) return reject("renovation_not_confirmed_fresh_full");
+    if (!finish.freshFullRenovation || !finish.moveInReady) return reject("renovation_not_confirmed_fresh_full");
     return { qualified: true, buildingType, marketType, renovationStatus: "fresh_renovation", district, pricePerSqm };
   }
 
   // Primary market: must be an explicit, confirmed turnkey/finished
   // declaration -- "stan deweloperski" was already excluded above.
-  if (!TURNKEY_PATTERN.test(text)) return reject("turnkey_not_confirmed");
+  if (!finish.turnkey) return reject("turnkey_not_confirmed");
   return { qualified: true, buildingType, marketType, renovationStatus: "turnkey_finish", district, pricePerSqm };
 }

@@ -5,6 +5,10 @@ import { activeSources, EXTERNAL_SOURCE_CONFIGS, SOURCES } from "./server/search
 import type { ExternalSourceId } from "./external-source-parser.ts";
 import type { RadarDetailDiagnostic } from "./source-batches.ts";
 import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
+import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { getRadarResults } from "@/features/price-radar/server/radar-results";
+
+type Row = Record<string, unknown>;
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
 mock.module("@/features/market-intelligence/resale-comps-store", { namedExports: { syncResaleCompFromListing: async () => ({ saved: false, created: false, compId: null, available: true }) } });
@@ -463,6 +467,29 @@ const OFERTY_NET_DETAIL_OBSERVED_PAGE = `
 </dl></div>
 <div class="description">Stan deweloperski, do wyko&#324;czenia.</div>`;
 
+// Sanitized structure and non-contact offer facts observed on the public
+// Oferty.net detail page 1543068412 on 2026-10-10. Contact forms/identifiers
+// and personal data are intentionally omitted from this offline regression.
+const OFERTY_NET_DETAIL_LANOWA = `
+<title>Mieszkanie na sprzeda&#380; - &#321;anowa Teofil&oacute;w, Ba&#322;uty, &#321;&oacute;d&#378; | oferty.net</title>
+<div class="header">
+  <span>Mieszkanie na sprzeda&#380;</span>
+  <h1>&#322;&oacute;dzkie, &#321;&oacute;d&#378;, Ba&#322;uty, Teofil&oacute;w, &#321;anowa</h1>
+  <h3>Pow.: 45 m2, Cena: 419 000 PLN</h3>
+</div>
+<div class="param"><dl>
+  <dt>Powierzchnia u&#380;ytkowa</dt><dd>45 m2</dd>
+  <dt>Liczba pokoi</dt><dd>2</dd>
+  <dt>Typ budynku</dt><dd>BLOK</dd>
+  <dt>Rynek pierwotny</dt><dd>Nie</dd>
+</dl></div>
+<div class="description">
+  <p>Na sprzeda&#380; mieszkanie o powierzchni 45 m2 na Teofilowie przy ul. &#321;anowej.</p>
+  <p>Lokal przeszed&#322; generalny remont i po jego zako&#324;czeniu nie by&#322; jeszcze zamieszka&#322;y.</p>
+  <p>Jest gotowy do wprowadzenia bez dodatkowych prac.</p>
+  <p>Uk&#322;ad sprawdzi si&#281; tak&#380;e pod wynajem.</p>
+</div>`;
+
 function responseWithUrl(body: string, status: number, url: string): Response {
   const response = new Response(body, { status, headers: { "content-type": "text/html" } });
   Object.defineProperty(response, "url", { value: url });
@@ -503,6 +530,159 @@ test("Oferty.net detail fetch overrides search-card values with confirmed total 
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test("the current Oferty.net Bałuty/Łanowa detail traverses the shared Finder and Radar adapter paths and strict qualification", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412";
+  const listingPage = `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzeda&#380; - &#321;anowa Teofil&oacute;w, Ba&#322;uty, &#321;&oacute;d&#378;. Uk&#322;ad tak&#380;e pod wynajem." src="https://cdn.example/lanowa.jpg"></td><td class="cell_location"><a href="${listingUrl}" title="Mieszkanie na sprzeda&#380;, &#321;&oacute;d&#378;, Ba&#322;uty">Mieszkanie &#321;anowa, &#321;&oacute;d&#378;, Ba&#322;uty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td><td class="cell_added_at">2026-09-30</td></tr></table><div class="paginator"><li class="navigate current"><div><a>1</a></div></li></div>`;
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requests.push(url);
+    return responseWithUrl(url.includes("/mieszkania,lodz") ? listingPage : OFERTY_NET_DETAIL_LANOWA, 200, url);
+  };
+  try {
+    const criteria = { city: "\u0141\u00f3d\u017a" };
+    const finder = await fetchExternalPortal(config("oferty_net"), criteria);
+    assert.equal(finder.listings.length, 1, "the shared result-page parser keeps a sale mentioning 'pod wynajem'");
+    assert.equal(finder.listings[0]?.externalListingId, "1543068412");
+    assert.equal(finder.listings[0]?.price, 419_000);
+    assert.equal(finder.listings[0]?.area, 45);
+    assert.equal(finder.listings[0]?.rooms, 2);
+    assert.equal(requests.length, 1, "Finder uses its normal result-page path and does not fetch details");
+
+    requests.length = 0;
+    const diagnostics: RadarDetailDiagnostic[] = [];
+    const radar = await fetchExternalPortal(config("oferty_net"), criteria, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    assert.equal(requests.length, 2, "Radar makes one result-page GET and one specific detail-page GET");
+    assert.equal(requests.filter((url) => url.includes("/mieszkania,lodz")).length, 1);
+    assert.equal(requests.filter((url) => url.includes(",1543068412")).length, 1);
+    assert.deepEqual(diagnostics, []);
+    assert.equal(radar.fetched, 1);
+    assert.equal(radar.listings.length, 1);
+    const listing = radar.listings[0]!;
+    assert.equal(listing.externalListingId, "1543068412");
+    assert.equal(listing.price, 419_000, "the total asking price comes from the detail heading, not admin rent/charges");
+    assert.equal(listing.area, 45);
+    assert.equal(listing.rooms, 2, "room count is read from the detail parameters when available");
+    assert.equal(listing.city, "\u0141\u00f3d\u017a");
+    assert.equal(listing.district, "Ba\u0142uty");
+    assert.equal(listing.buildingType, "blok");
+    assert.equal(listing.rawPayload.marketType, "secondary", "Rynek pierwotny: Nie means the secondary market");
+    assert.equal(listing.rawPayload.propertyType, "apartment");
+    assert.equal(listing.rawPayload.detailVerified, true);
+    assert.match(String(listing.rawPayload.detailLocationText), /\u0141anowa/u, "the detailed address path retains the street beyond the district");
+    assert.match(listing.description ?? "", /pod wynajem/u, "the actual use-case wording remains available without classifying the transaction as rental");
+    const qualification = qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
+      rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    });
+    assert.deepEqual(qualification, { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "fresh_renovation", district: "Ba\u0142uty", pricePerSqm: 419_000 / 45 });
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("the observed Oferty.net offer flows from detail parsing through qualification, lease-fenced persistence, Radar read and statistics", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412";
+  const resultPage = `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzedaż Łódź Bałuty, pod wynajem"></td><td class="cell_location"><a href="${listingUrl}" title="Mieszkanie Łanowa, Łódź, Bałuty">Mieszkanie Łanowa, Łódź, Bałuty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td><td class="cell_added_at">2026-09-30</td></tr></table>`;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    return responseWithUrl(url.includes("/mieszkania,lodz") ? resultPage : OFERTY_NET_DETAIL_LANOWA, 200, url);
+  };
+  const rows: Row[] = [];
+  const db = {
+    async rpc(name: string, args: Row) {
+      assert.equal(name, "persist_price_radar_listing");
+      assert.equal(args.p_owner_id, "operator-test");
+      assert.equal(args.p_run_id, "run-test");
+      assert.equal(args.p_lease_token, "lease-test");
+      const payload = args.p_listing as Row;
+      const row = {
+        id: "radar-lanowa-1", owner_id: args.p_owner_id, ...payload,
+        first_seen_at: payload.collected_at, status: "active", excluded_at: null, excluded_reason: null,
+      };
+      rows.push(row);
+      return { data: row.id, error: null };
+    },
+    from(table: string) {
+      assert.equal(table, "price_radar_listings");
+      const filters: Array<(row: Row) => boolean> = [];
+      const builder: Row = {
+        select: () => builder,
+        eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
+        in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return builder; },
+        order: () => builder,
+        range: async () => ({ data: rows.filter((row) => filters.every((filter) => filter(row))), error: null }),
+      };
+      return builder;
+    },
+  };
+
+  try {
+    const radarSource = await fetchExternalPortal(config("oferty_net"), { city: "\u0141\u00f3d\u017a" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000, onBatch: async () => undefined,
+    });
+    assert.equal(radarSource.listings.length, 1);
+    const listing = radarSource.listings[0]!;
+    const qualification = qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
+      rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    });
+    assert.equal(qualification.qualified, true);
+    if (!qualification.qualified) return;
+    const saved = await persistRadarListing(db as never, {
+      ...qualification, source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl,
+      normalizedUrl: listing.normalizedUrl, title: listing.title, description: listing.description, price: listing.price!, area: listing.area!,
+      rooms: listing.rooms, city: listing.city!, contentHash: listing.contentHash, publishedAt: listing.publishedAt ?? null,
+      sourceUpdatedAt: null, crossSourceIdentity: listing.crossSourceIdentity ?? null, rawPayload: listing.rawPayload,
+    }, { ownerId: "operator-test", runId: "run-test", leaseToken: "lease-test", seenAt: "2026-10-10T12:00:00.000Z" });
+    assert.equal(saved.listingId, "radar-lanowa-1");
+
+    const read = await getRadarResults("operator-test", { districts: ["Bałuty"], market: "secondary", areaMin: 40, areaMax: 50, rooms: [2], sources: ["oferty_net"] }, db as never);
+    assert.equal(read.listings.length, 1, "the owner-scoped Radar read returns the persisted offer as a visible card");
+    assert.equal(read.listings[0]?.id, saved.listingId);
+    assert.equal(read.listings[0]?.originalUrl, listingUrl);
+    assert.equal(read.listings[0]?.district, "Bałuty");
+    assert.equal(read.listings[0]?.price, 419_000);
+    assert.equal(read.stats.length, 1);
+    assert.equal(read.stats[0]?.sampleSize, 1, "the stats count one persisted, qualified apartment under the district/market filters");
+    assert.equal(read.stats[0]?.averagePricePerSqm, null, "one real listing remains below the reference-sample threshold");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Radar rejects a clearly explicit house from the result card before spending a detail request", async () => {
+  const previousFetch = globalThis.fetch;
+  const validUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,preflight-valid";
+  const houseUrl = "https://www.oferty.net/dom-lodz-baluty,preflight-house";
+  const page = `<table><tr class="property"><td class="cell_photo"><img alt="Dom na sprzeda&#380;, &#321;&oacute;d&#378;, Ba&#322;uty"></td><td class="cell_location"><a href="${houseUrl}" title="Dom na sprzeda&#380;, &#321;&oacute;d&#378;, Ba&#322;uty">Dom</a></td><td class="cell_area">90 m2</td><td class="cell_rooms">4</td><td class="cell_price">700 000</td></tr><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzeda&#380;, &#321;&oacute;d&#378;, Ba&#322;uty"></td><td class="cell_location"><a href="${validUrl}" title="Mieszkanie na sprzeda&#380;, &#321;&oacute;d&#378;, Ba&#322;uty">Mieszkanie</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td></tr></table>`;
+  const detailRequests: string[] = [];
+  const rejectionReasons: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/mieszkania,lodz")) return new Response(page, { status: 200 });
+    detailRequests.push(url);
+    return responseWithUrl(OFERTY_NET_DETAIL_LANOWA, 200, validUrl);
+  };
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), { city: "\u0141\u00f3d\u017a" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { rejectionReasons.push(...(batch.rejectionReasons ?? [])); },
+    });
+    assert.deepEqual(detailRequests, [validUrl], "the house never triggers its own detail GET");
+    assert.deepEqual(rejectionReasons, ["house_excluded"]);
+    assert.equal(result.fetched, 2, "both source candidates count as scanned, even though one was rejected before details");
+    assert.equal(result.listings.length, 1);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test("Radar records exact missing detail fields from a successful HTTP response without changing qualification", async () => {
   const previousFetch = globalThis.fetch;
   const listingUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,detail-missing-1";
@@ -533,6 +713,39 @@ test("Radar records exact missing detail fields from a successful HTTP response 
       kind: "detail_not_confirmed", listingUrl, finalUrl: listingUrl, httpStatus: 200, identity: "same_url",
       unconfirmedFields: ["building_type", "market_type", "finish_evidence"], contradictoryFields: [],
     }]);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Radar preserves specific freshness/readiness gaps even when the offer otherwise identifies a full renovation", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-lodz-baluty,detail-renovation-gaps";
+  const candidatePage = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzeda&#380;">Mieszkanie na sprzeda&#380;, &#321;&#243;d&#378;, Ba&#322;uty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td></tr></table>`;
+  const incompleteDetail = OFERTY_NET_DETAIL_LANOWA
+    .replace(/<p>Lokal przeszed&#322; generalny remont[\s\S]*?<\/p>/u, "<p>Mieszkanie po generalnym remoncie.</p>")
+    .replace(/<p>Jest gotowy do wprowadzenia[\s\S]*?<\/p>/u, "");
+  const diagnostics: RadarDetailDiagnostic[] = [];
+  globalThis.fetch = async (input) => String(input).includes("/mieszkania,lodz")
+    ? new Response(candidatePage, { status: 200 })
+    : responseWithUrl(incompleteDetail, 200, listingUrl);
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), filter, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    assert.equal(result.listings.length, 1);
+    assert.equal(result.listings[0]?.rawPayload.detailVerified, true, `the page confirms a completed full renovation, while qualification still checks freshness and readiness separately: ${JSON.stringify({ rawPayload: result.listings[0]?.rawPayload, diagnostics })}`);
+    assert.deepEqual(diagnostics, [{
+      kind: "detail_not_confirmed", listingUrl, finalUrl: listingUrl, httpStatus: 200, identity: "same_url",
+      unconfirmedFields: ["renovation_recency", "move_in_readiness"], contradictoryFields: [],
+    }]);
+    const listing = result.listings[0]!;
+    assert.deepEqual(qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
+      rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    }), { qualified: false, reason: "renovation_not_confirmed_fresh_full" });
   } finally { globalThis.fetch = previousFetch; }
 });
 

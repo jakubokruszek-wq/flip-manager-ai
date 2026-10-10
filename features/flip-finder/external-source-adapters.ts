@@ -6,6 +6,7 @@ import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, t
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
 import { invalidSalePriceWarning } from "./sale-price";
 import { extractListingIdentityEvidence } from "./identity-evidence";
+import { inspectRadarFinishEvidence, isRadarRentalTransactionText, preflightRadarCandidateRejection } from "@/features/price-radar/qualification";
 
 export type ExternalPortalPage = { listings: PropertySourceListing[]; detailCandidates?: PropertySourceListing[]; hasNextPage: boolean; invalidSalePriceCount?: number };
 type PortalRecord = Record<string, unknown>;
@@ -17,7 +18,6 @@ const RADAR_DETAIL_PAGE_LIMIT_PER_PORTION = 3;
 const RADAR_DETAIL_REQUEST_TIMEOUT_MS = 8_000;
 const RADAR_DETAIL_SOURCES = new Set<ExternalSourceId>(["oferty_net", "domiporta"]);
 const TRACKING_PARAM = /^(utm_|fbclid|gclid|dclid|msclkid|yclid|ref$)/iu;
-const RENTAL_SIGNAL = /\b(wynajem|wynajm|najem|rent|do wynajęcia|do wynajecia|mieszkanie za remont)\b/iu;
 
 /** Each portal has a separate parser. Only the final canonical mapping is shared. */
 export const EXTERNAL_PORTAL_PARSERS: Record<ExternalSourceId, PortalParser> = {
@@ -108,6 +108,19 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: strin
       const candidateFetched = 1;
       let detailDiagnostic: RadarDetailDiagnostic | undefined;
 
+      const preflightRejection = preflightRadarCandidateRejection({
+        title: baseListing.title,
+        description: baseListing.description,
+        buildingType: baseListing.buildingType,
+        propertyType: typeof baseListing.rawPayload.propertyType === "string" ? baseListing.rawPayload.propertyType : null,
+        rawPayload: baseListing.rawPayload,
+      });
+      if (preflightRejection) {
+        fetched += candidateFetched;
+        await batches.onBatch({ listings: [], warnings: [], fetched: candidateFetched, rejectionReasons: [preflightRejection] }, next);
+        continue;
+      }
+
       if (detailUrl) {
         let detailResponse: Response;
         try {
@@ -156,7 +169,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, city: strin
             detailListing = withUnconfirmedRadarDetail(baseListing);
           } else {
             if (detail.active) detailListing = mergeRadarDetail(baseListing, detail);
-            if (!detail.verified) {
+            if (!detail.verified || detail.unconfirmedFields.length > 0 || detail.contradictoryFields.length > 0) {
               detailDiagnostic = {
                 kind: "detail_not_confirmed", listingUrl: detailUrl, finalUrl, httpStatus: detailResponse.status, identity,
                 unconfirmedFields: detail.unconfirmedFields, contradictoryFields: detail.contradictoryFields,
@@ -222,8 +235,10 @@ type ParsedRadarPortalDetail = {
   contradictoryFields: string[];
   price: number | null;
   area: number | null;
+  rooms: number | null;
   city: string | null;
   district: string | null;
+  locationText: string | null;
   buildingType: string | null;
   marketType: "primary" | "secondary" | null;
   propertyType: "apartment" | null;
@@ -259,7 +274,10 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   const price = explicitPrice ? money(explicitPrice) : null;
   const areaText = textByLabels(["Powierzchnia użytkowa", "Powierzchnia mieszkalna", "Powierzchnia całkowita", "Powierzchnia"]);
   const area = areaText ? decimal(areaFromText(areaText) ?? areaText) : null;
+  const roomsText = textByLabels(["Liczba pokoi", "Pokoje"]);
+  const rooms = roomsText ? decimal(roomsText.match(/\d+(?:[.,]\d+)?/u)?.[0] ?? roomsText) : null;
   const location = source === "oferty_net" ? $(".header h1").first().text() : $(".summary__location").first().text();
+  const locationText = location.replace(/\s+/gu, " ").trim() || null;
   const { city, district } = parseRadarLocation(location);
   const titleText = [$("title").first().text(), $("h1").first().text(), source === "oferty_net" ? $(".header span").first().text() : ""].join(" ");
   const detailDescription = source === "domiporta"
@@ -276,8 +294,15 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   const description = [detailDescription, conditionLabel ? `Stan nieruchomości: ${conditionLabel}` : null].map((value) => value?.replace(/\s+/gu, " ").trim()).filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
   const pageText = `${titleText} ${description ?? ""} ${$(".archive__title, .archive").text()}`;
   const active = !$(".archive, .archive__title").length && !/ogłoszenie\s+(?:jest\s+)?już\s+nieaktualne|oferta\s+nieaktualna|archiwum\s+domiporta/iu.test(pageText);
-  const finishEvidence = /stan\s+deweloperski|do\s+wykończenia|do\s+remontu|wymaga\s+remontu|wykończon\p{L}*\s+pod\s+klucz|świeżo\s+po\s+(?:generalnym|kapitalnym)\s+remoncie|generaln\p{L}*\s+remont.{0,35}20\d{2}|gotow\p{L}*\s+do\s+zamieszkan\p{L}*/iu.test(`${conditionLabel ?? ""} ${description ?? ""}`);
-  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishEvidence;
+  const finishText = `${conditionLabel ?? ""} ${description ?? ""}`;
+  const finish = inspectRadarFinishEvidence(finishText);
+  const normalizedFinishText = normalizeDetailLabel(finishText);
+  const unfinishedEvidence = /stan deweloperski|do wykonczenia|do remontu|wymaga remontu/u.test(normalizedFinishText);
+  // Detail verification means the source explicitly states a finish/condition
+  // fact. Qualification still decides whether that fact meets Radar's stricter
+  // market-specific renovation/turnkey rules.
+  const finishStatusConfirmed = finish.fullRenovation || finish.turnkey || unfinishedEvidence;
+  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed;
   const unconfirmedFields: string[] = [];
   const contradictoryFields: string[] = [];
   if (price === null || price <= 0) unconfirmedFields.push("total_price");
@@ -295,13 +320,16 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
     const normalizedTitle = normalizeDetailLabel(titleText);
     (/(?:na|do) wynaj|czynsz najmu|dom|dzialk|lokal uzytkow/iu.test(normalizedTitle) ? contradictoryFields : unconfirmedFields).push("apartment_sale");
   }
-  const normalizedFinishText = normalizeDetailLabel(`${conditionLabel ?? ""} ${description ?? ""}`);
-  const positiveFinishEvidence = /wykonczon\w* pod klucz|swiezo po (?:generalnym|kapitalnym) remoncie|gotow\w* do zamieszkan\w*/u.test(normalizedFinishText);
-  const unfinishedEvidence = /stan deweloperski|do wykonczenia|do remontu|wymaga remontu/u.test(normalizedFinishText);
+  const positiveFinishEvidence = finish.fullRenovation || finish.turnkey || finish.freshFullRenovation || finish.moveInReady;
   if (positiveFinishEvidence && unfinishedEvidence) contradictoryFields.push("finish_evidence");
-  else if (!finishEvidence) unconfirmedFields.push("finish_evidence");
+  else if (marketType === "secondary") {
+    if (!finish.fullRenovation) unconfirmedFields.push("renovation_completion");
+    if (!finish.freshFullRenovation) unconfirmedFields.push("renovation_recency");
+    if (!finish.moveInReady) unconfirmedFields.push("move_in_readiness");
+  } else if (marketType === "primary" && !finish.turnkey) unconfirmedFields.push("turnkey_finish");
+  else if (!marketType && !positiveFinishEvidence) unconfirmedFields.push("finish_evidence");
   if (!active) contradictoryFields.push("active_listing");
-  return { active, verified, unconfirmedFields, contradictoryFields, price, area, city, district, buildingType, marketType, propertyType, description };
+  return { active, verified, unconfirmedFields, contradictoryFields, price, area, rooms, city, district, locationText, buildingType, marketType, propertyType, description };
 }
 
 function withUnconfirmedRadarDetail(base: PropertySourceListing): PropertySourceListing {
@@ -341,6 +369,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     ...candidate,
     price: detail.price ?? base.price,
     area: detail.area ?? base.area,
+    rooms: detail.rooms ?? base.rooms,
     city: detail.city,
     district: detail.district,
     buildingType: detail.buildingType,
@@ -348,6 +377,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     propertyType: detail.propertyType,
     detailAttempted: true,
     detailVerified: detail.verified,
+    detailLocationText: detail.locationText,
   };
   const description = [base.description, detail.description].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
   const exactPrice = detail.price ?? base.price;
@@ -356,13 +386,14 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     ...base,
     price: exactPrice,
     area: exactArea,
+    rooms: detail.rooms ?? base.rooms,
     pricePerSqm: exactPrice && exactArea ? exactPrice / exactArea : null,
     city: detail.city,
     district: detail.district,
     locationText: [detail.district, detail.city].filter(Boolean).join(", ") || null,
     buildingType: resolveBuildingType(detail.buildingType, base.title, description),
     description,
-    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified },
+    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: detail.locationText },
   };
 }
 
@@ -740,7 +771,7 @@ function fromCandidates(source: ExternalSourceId, candidates: PortalCandidate[],
     const url = absoluteUrl(candidate.url, source);
     const title = stringValue(candidate.title);
     const description = stringValue(candidate.description);
-    if (url && !isSearchUrl(url) && !RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`) && (money(candidate.price) === null || money(candidate.price)! <= 0)) invalidSalePriceCount += 1;
+    if (url && !isSearchUrl(url) && !isRadarRentalTransactionText(`${title ?? ""} ${description ?? ""}`) && (money(candidate.price) === null || money(candidate.price)! <= 0)) invalidSalePriceCount += 1;
     const detailCandidate = toListing(source, candidate, fallbackCity, true);
     if (detailCandidate && !seenDetails.has(detailCandidate.externalListingId)) {
       seenDetails.add(detailCandidate.externalListingId);
@@ -757,7 +788,7 @@ function toListing(source: ExternalSourceId, candidate: PortalCandidate, fallbac
   const url = absoluteUrl(candidate.url, source);
   const title = stringValue(candidate.title);
   const description = stringValue(candidate.description);
-  if (!url || isSearchUrl(url) || RENTAL_SIGNAL.test(`${title ?? ""} ${description ?? ""}`)) return null;
+  if (!url || isSearchUrl(url) || isRadarRentalTransactionText(`${title ?? ""} ${description ?? ""}`)) return null;
   const price = money(candidate.price);
   const area = decimal(candidate.area);
   if (!allowIncompleteForDetail && (price === null || price <= 0 || area === null || area <= 0)) return null;
