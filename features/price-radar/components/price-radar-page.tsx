@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
-import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus } from "@/features/price-radar/types";
+import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory } from "@/features/price-radar/types";
 
 type ResultsResponse = {
   listings: RadarListing[];
@@ -15,7 +15,7 @@ type ResultsResponse = {
   disabledSourceNote: string;
 };
 type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
-type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[] }; activeSources: RadarSource[]; disabledSourceNote: string };
+type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
 const SOURCE_OPTIONS: { value: RadarSource; label: string }[] = [
@@ -40,6 +40,7 @@ export function PriceRadarPage() {
   const [market, setMarket] = useState<RadarMarketFilter>("both");
   const [areaMin, setAreaMin] = useState("");
   const [areaMax, setAreaMax] = useState("");
+  const [minPricePerSqm, setMinPricePerSqm] = useState("");
   const [rooms, setRooms] = useState<number[]>([]);
   const [sources, setSources] = useState<RadarSource[]>([]);
   const [data, setData] = useState<ResultsResponse | null>(null);
@@ -68,6 +69,7 @@ export function PriceRadarPage() {
       setMarket(payload.filters.market);
       setAreaMin(payload.filters.areaMin === null ? "" : String(payload.filters.areaMin));
       setAreaMax(payload.filters.areaMax === null ? "" : String(payload.filters.areaMax));
+      setMinPricePerSqm(payload.filters.minPricePerSqm === null ? "" : String(payload.filters.minPricePerSqm));
       setRooms(payload.filters.rooms);
       setSources(payload.filters.sources);
       setActiveSourceIds(payload.activeSources);
@@ -84,7 +86,7 @@ export function PriceRadarPage() {
     try {
       const response = await apiFetch("/api/price-radar/settings", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filters: { districts, market, areaMin: areaMin ? Number(areaMin) : null, areaMax: areaMax ? Number(areaMax) : null, rooms, sources } }),
+        body: JSON.stringify({ filters: { districts, market, areaMin: areaMin ? Number(areaMin) : null, areaMax: areaMax ? Number(areaMax) : null, rooms, sources, minPricePerSqm: minPricePerSqm ? Number(minPricePerSqm) : null } }),
       });
       const payload = await response.json() as { filters?: SettingsResponse["filters"]; message?: string };
       if (!response.ok || !payload.filters) throw new Error(payload.message || "Nie udało się zapisać filtrów Radaru.");
@@ -93,7 +95,7 @@ export function PriceRadarPage() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Nie udało się zapisać filtrów Radaru.");
     } finally { setSettingsSaving(false); }
-  }, [districts, market, areaMin, areaMax, rooms, sources]);
+  }, [districts, market, areaMin, areaMax, rooms, sources, minPricePerSqm]);
 
   useEffect(() => {
     if (!settingsLoaded || !settingsDirty) return;
@@ -112,6 +114,7 @@ export function PriceRadarPage() {
       params.set("market", market);
       if (areaMin) params.set("areaMin", areaMin);
       if (areaMax) params.set("areaMax", areaMax);
+      if (minPricePerSqm) params.set("minPricePerSqm", minPricePerSqm);
 
       const response = await apiFetch(`/api/price-radar/results?${params.toString()}`);
       const payload = (await response.json()) as ResultsResponse | { message?: string };
@@ -125,7 +128,7 @@ export function PriceRadarPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [settingsLoaded, districts, market, areaMin, areaMax, rooms, sources]);
+  }, [settingsLoaded, districts, market, areaMin, areaMax, rooms, sources, minPricePerSqm]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -306,6 +309,12 @@ export function PriceRadarPage() {
           </div>
 
           <div>
+            <label htmlFor="price-radar-min-price-per-sqm" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Min. cena ofertowa za m²</label>
+            <input id="price-radar-min-price-per-sqm" type="number" min={0} max={100000} step={100} placeholder="wyłączony" value={minPricePerSqm} onChange={(event) => { setSettingsDirty(true); setMinPricePerSqm(event.target.value); }} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm" />
+            <p className="mt-1 text-xs text-muted-foreground">Opcjonalny filtr porównań; standard oceniamy wyłącznie z danych oferty.</p>
+          </div>
+
+          <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pokoje</p>
             <div className="flex flex-wrap gap-2">
               {ROOM_OPTIONS.map((room) => (
@@ -366,9 +375,9 @@ export function PriceRadarPage() {
           <p className="text-sm text-muted-foreground">Brak danych dla wybranych filtrów.</p>
         ) : null}
         {groupedStats.map((group) => (
-          <div key={`${group.district}-${group.marketType}`} className="rounded-xl border bg-card p-4">
+          <div key={`${group.district}-${group.marketType}-${group.qualityCategory}`} className="rounded-xl border bg-card p-4">
             <div className="flex items-center justify-between">
-              <p className="font-semibold">{group.district} · {group.marketType === "primary" ? "Pierwotny" : "Wtórny"}</p>
+              <p className="font-semibold">{group.district} · {group.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {qualityCategoryLabel(group.qualityCategory, group.marketType)}</p>
               {group.isSmallSample ? (
                 <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">Niewystarczająca próba</span>
               ) : null}
@@ -415,7 +424,7 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
         <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{listing.title ?? "Oferta bez tytułu"}</h3>
         <span className="max-w-32 shrink-0 break-words rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{sourceLabel(listing.source)}</span>
       </div>
-      <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"} · {listing.renovationStatus === "fresh_renovation" ? "Świeży pełny remont" : "Wykończone pod klucz"}</p>
+      <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"} · {qualityCategoryLabel(listing.qualityCategory, listing.marketType)}</p>
       <p className="mt-3 text-sm font-medium">
         {formatCurrency(listing.price)} · {listing.area} m² · {formatCurrency(listing.pricePerSqm)}/m²{listing.rooms ? ` · ${listing.rooms} pok.` : ""}
       </p>
@@ -443,6 +452,11 @@ function DateRow({ label, value }: { label: string; value: string | null }) {
 
 function sourceLabel(source: RadarSource): string {
   return SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? source;
+}
+
+function qualityCategoryLabel(category: RadarQualityCategory, market: "primary" | "secondary"): string {
+  if (category === "ready_high_standard") return "B · Gotowe — wysoki standard";
+  return market === "primary" ? "A · Wykończone pod klucz" : "A · Po świeżym remoncie";
 }
 
 function runStatusLabel(status: RadarRunStatus): string {

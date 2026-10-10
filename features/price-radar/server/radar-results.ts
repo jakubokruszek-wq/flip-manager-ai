@@ -64,6 +64,7 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
   const stats = computeRadarStats(narrowed.map((listing) => ({
     district: listing.district,
     marketType: listing.marketType,
+    qualityCategory: listing.qualityCategory,
     pricePerSqm: listing.pricePerSqm,
     lastSeenAt: listing.lastSeenAt,
     status: listing.status,
@@ -117,6 +118,7 @@ function matchesNarrowFilters(listing: RadarListing, filters: RadarFilters): boo
   if (filters.areaMin !== null && listing.area < filters.areaMin) return false;
   if (filters.areaMax !== null && listing.area > filters.areaMax) return false;
   if (filters.rooms.length > 0 && (listing.rooms === null || !filters.rooms.includes(listing.rooms))) return false;
+  if (filters.minPricePerSqm !== null && listing.pricePerSqm < filters.minPricePerSqm) return false;
   return true;
 }
 
@@ -155,6 +157,7 @@ function toRadarListing(row: Row): RadarListing | null {
     id, source: source as RadarListing["source"], externalListingId, originalUrl, normalizedUrl,
     title: nullableString(row.title), description: nullableString(row.description),
     price, area, pricePerSqm, rooms: nullableNumber(row.rooms), city, district, buildingType, marketType, renovationStatus,
+    qualityCategory: marketType === "primary" || renovationStatus === "fresh_renovation" ? "fresh_renovation" : "ready_high_standard",
     contentHash, firstSeenAt, lastSeenAt, publishedAt, sourceUpdatedAt, collectedAt, crossSourceIdentity, crossSourceAlternates: [], status,
     excludedAt: nullableString(row.excluded_at), excludedReason: nullableString(row.excluded_reason),
   };

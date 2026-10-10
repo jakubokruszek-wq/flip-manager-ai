@@ -177,15 +177,45 @@ test("new Radar runs snapshot selected area and room bounds and reuse them for s
   const db = fakeDb();
   observedSearchCriteria = null;
   fakeSourceImpl = async () => ({ listings: [], warnings: [], fetched: 0 });
-  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] });
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, qualityRulesVersion: 2 });
   if (claim.kind !== "claimed") throw new Error("expected claimed");
-  assert.deepEqual(claim.run.checkpoint.searchCriteria, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] });
+  assert.deepEqual(claim.run.checkpoint.searchCriteria, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, qualityRulesVersion: 2 });
   await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
   const criteria = observedSearchCriteria as { city?: string; areaMin?: number | null; areaMax?: number | null; rooms?: number[] } | null;
   assert.equal(criteria?.city, "\u0141\u00f3d\u017a");
   assert.equal(criteria?.areaMin, 31);
   assert.equal(criteria?.areaMax, 62);
   assert.deepEqual(criteria?.rooms, [1, 2, 3], "continuation uses the run snapshot instead of mutable settings");
+});
+
+test("a legacy checkpoint with no qualification version keeps strict v1 rules when resumed", async () => {
+  const db = fakeDb();
+  const bCandidate = qualifyingListing("ready-b", "domiporta");
+  bCandidate.description = "Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.";
+  fakeSourceImpl = async (_id, _cursor, batches) => {
+    await batches?.onBatch({ listings: [bCandidate], warnings: [], fetched: 1 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] });
+  if (claim.kind !== "claimed" || !claim.run.leaseToken) throw new Error("expected claimed legacy-style run");
+  const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken }, db as never);
+  assert.equal(portion.qualifiedCount, 0, "a pre-v2 active run is not silently broadened to category B");
+  assert.equal(portion.qualificationRejections.domiporta?.renovation_not_confirmed_fresh_full, 1);
+});
+
+test("a v2 checkpoint accepts a fully ready high-standard secondary listing without requiring a fresh renovation year", async () => {
+  const db = fakeDb();
+  const bCandidate = qualifyingListing("ready-b-v2", "domiporta");
+  bCandidate.description = "Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.";
+  fakeSourceImpl = async (_id, _cursor, batches) => {
+    await batches?.onBatch({ listings: [bCandidate], warnings: [], fetched: 1 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never, { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], qualityRulesVersion: 2, minPricePerSqm: null });
+  if (claim.kind !== "claimed" || !claim.run.leaseToken) throw new Error("expected v2 run");
+  const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken }, db as never);
+  assert.equal(portion.qualifiedCount, 1);
+  assert.equal(db.tables.price_radar_listings[0]?.renovation_status, "turnkey_finish");
 });
 
 test("only a pre-form Oferty.net checkpoint replays its saved page with the legacy search", async () => {

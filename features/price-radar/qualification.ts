@@ -102,8 +102,15 @@ const APARTMENT_NEGATION_PATTERN = /(?:to\s+nie|nie\s+jest|brak)\s+(?:konkretneg
 const PRIMARY_MARKET_PATTERN = /rynek\s+pierwotny|od\s+dewelopera|nowa\s+inwestycja|inwestycja\s+deweloperska/iu;
 const SECONDARY_MARKET_PATTERN = /rynek\s+wt\p{L}*rny/iu;
 const DEVELOPER_STATE_PATTERN = /stan\s+deweloperski|do\s+wyko\p{L}*czenia|bez\s+wyko\p{L}*czenia/iu;
-const NEEDS_RENOVATION_PATTERN = /do\s+remontu|wymaga\s+remontu|do\s+odnowienia|surowy\s+stan/iu;
+const NEEDS_RENOVATION_PATTERN = /(?<!\bnie\s)(?<!\bnie jest\s)(?:do\s+remontu|wymaga\s+remontu|do\s+odnowienia|surowy\s+stan)/iu;
 const TURNKEY_PATTERN = /wyko\p{L}*czon\p{L}*\s+pod\s+klucz/iu;
+const FULL_FINISH_PATTERN = /(?:w\s+pelni|kompletnie|calkowicie)\s+wyko\p{L}*|pelne\s+wyko\p{L}*|wyko\p{L}*czon\p{L}*\s+pod\s+klucz/iu;
+const HIGH_STANDARD_PATTERN = /(?:wysok\p{L}*\s+standard(?:zie|u|em)?|bardzo\s+dobr\p{L}*\s+standard(?:zie|u|em)?|standard\s+wyko\p{L}*\s+(?:jest\s+)?wysok\p{L}*|stan\s+(?:idealn\p{L}*|perfekcyjn\p{L}*)|bardzo\s+dobr\p{L}*\s+stan(?:ie|u)?)/iu;
+const READY_NO_WORK_PATTERN = /(?:bez\s+(?:konieczn\p{L}*\s+)?dodatkow\p{L}*\s+prac|nie\s+wymaga\s+(?:juz\s+)?(?:dodatkow\p{L}*\s+)?prac|bez\s+naklad\p{L}*\s+finansow\p{L}*)/iu;
+const FINISH_CONTRADICTION_PATTERN = /(?:\bnie\s+(?:jest\s+)?(?:w\s+pelni\s+)?wyko\p{L}*czon\p{L}*|wymaga\s+(?:dodatkow\p{L}*\s+)?wyko\p{L}*czenia|do\s+wyko\p{L}*czenia|wyko\p{L}*czenie\s+(?:do\s+wykonania|za\s+doplat\p{L}*|dodatkow\p{L}*\s+platn\p{L}*)|standard\s+do\s+popraw\p{L}*|\bnie\s+(?:jest\s+)?gotow\p{L}*\s+do\s+(?:zamieszkan\p{L}*|wprowadzen\p{L}*))/iu;
+const NON_PROPERTY_SEGMENT_PATTERN = /(?:czesci\s+wspoln\p{L}*|klatk\p{L}*\s+schodow\p{L}*|budyn\p{L}*\s+(?:jest|sa|zostal)|inne\s+mieszkan\p{L}*|inne\s+lokal\p{L}*|wybor\s+lokal\p{L}*|inwestycj\p{L}*\s+oferuj\p{L}*)/iu;
+const HIGH_STANDARD_NEGATION_PATTERN = /(?:nie\s+(?:ma|posiada|jest)\s+(?:w\s+)?(?:wysok\p{L}*\s+standard\p{L}*|bardzo\s+dobr\p{L}*\s+standard\p{L}*|idealn\p{L}*\s+stan\p{L}*)|standard\s+(?:nie\s+jest\s+)?(?:wysok\p{L}*|bardzo\s+dobr\p{L}*)\s+)/iu;
+const TURNKEY_EXTRA_COST_PATTERN = /(?:wyko\p{L}*czon\p{L}*\s+pod\s+klucz|wyko\p{L}*czenie|pakiet\s+wyko\p{L}*czeniow\p{L}*)[\s\S]{0,60}(?:za\s+doplat\p{L}*|dodatkow\p{L}*\s+platn\p{L}*|jest\s+opcjon\p{L}*)|opcjonaln\p{L}*\s+wyko\p{L}*/iu;
 const FRESH_FULL_RENOVATION_PATTERN = /(?:świeżo|niedawno)\s+po\s+(?:generalnym|kapitalnym)\s+remoncie|(?:generalny|kapitalny)\s+remont\s+(?:zakończon\p{L}*\s+)?w\s+20(?:2[1-9]|3\d)|(?:po\s+)?(?:generalnym|kapitalnym)\s+remoncie\s+(?:z\s+)?20(?:2[1-9]|3\d)/iu;
 // A listing can establish that the completed full renovation is still unused
 // without stating its calendar year. Require all three facts in the offer:
@@ -112,7 +119,7 @@ const FRESH_FULL_RENOVATION_PATTERN = /(?:świeżo|niedawno)\s+po\s+(?:generalny
 // a generic "po remoncie" or a recent publication date alone is insufficient.
 const UNUSED_AFTER_FULL_RENOVATION_PATTERN = /generaln\p{L}*\s+remon\p{L}*[\s\S]{0,140}?\bpo\s+(?:jego\s+)?zakończeni\p{L}*[\s\S]{0,80}?\bnie\s+(?:był|było|byli)\s+(?:jeszcze\s+)?zamieszk\p{L}*/iu;
 const MOVE_IN_READY_PATTERN = /gotow\p{L}*\s+do\s+zamieszkan\p{L}*|do\s+natychmiastow\p{L}*\s+wprowadzen\p{L}*/iu;
-const RENOVATION_CONFLICT_PATTERN = /(?:do\s+remontu|wymaga\s+remontu|remont\s+(?:do\s+wykonania|konieczny|planowan\p{L}*|częściow\p{L}*)|w\s+trakcie\s+remontu|bez\s+generalnego\s+remontu|\bnie\s+po\s+(?:generalnym|kapitalnym)\s+remoncie)/iu;
+const RENOVATION_CONFLICT_PATTERN = /(?:remont\s+(?:do\s+wykonania|konieczny|planowan\p{L}*|częściow\p{L}*)|w\s+trakcie\s+remontu|bez\s+generalnego\s+remontu|\bnie\s+po\s+(?:generalnym|kapitalnym)\s+remoncie)/iu;
 const STARTING_PRICE_PATTERN = /(?:^|[\s:])od\s+\d[\d\s.,]*\s*(?:zł|PLN)/iu;
 
 function normalizeDistrict(value: string | null): string | null {
@@ -120,6 +127,17 @@ function normalizeDistrict(value: string | null): string | null {
   const trimmed = value.trim();
   const match = DEFAULT_RADAR_DISTRICTS.find((district) => district.toLocaleLowerCase("pl-PL") === trimmed.toLocaleLowerCase("pl-PL"));
   return match ?? null;
+}
+
+function ownOfferEvidenceText(candidate: QualificationCandidate): string {
+  return `${candidate.title ?? ""}. ${candidate.description ?? ""}`
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[łŁ]/gu, "l")
+    .split(/[.!?;\n]+/u)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0 && !NON_PROPERTY_SEGMENT_PATTERN.test(segment))
+    .join(". ");
 }
 
 function resolveBuildingTypeForRadar(candidate: QualificationCandidate, text: string): RadarBuildingType | null {
@@ -194,7 +212,7 @@ export function preflightRadarCandidateRejection(candidate: RadarPreflightCandid
   return null;
 }
 
-export function qualifyRadarCandidate(candidate: QualificationCandidate): QualificationResult {
+export function qualifyRadarCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2): QualificationResult {
   if ((candidate.source === "oferty_net" || candidate.source === "domiporta") && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
   if (candidate.price === null || !Number.isFinite(candidate.price) || candidate.price <= 0) return reject("price_missing");
   if (candidate.area === null || !Number.isFinite(candidate.area) || candidate.area <= 0) return reject("area_missing");
@@ -223,17 +241,32 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate): Qualif
   const marketType = resolveMarketType(candidate, text);
   if (!marketType) return reject("market_type_not_confirmed");
 
-  if (DEVELOPER_STATE_PATTERN.test(text) || NEEDS_RENOVATION_PATTERN.test(text)) return reject("unfinished_or_needs_renovation");
+  const explicitlyNeedsWork = NEEDS_RENOVATION_PATTERN.test(text);
+  if (DEVELOPER_STATE_PATTERN.test(text) || explicitlyNeedsWork) return reject("unfinished_or_needs_renovation");
 
   const finish = inspectRadarFinishEvidence(text);
   if (marketType === "secondary") {
-    if (RENOVATION_CONFLICT_PATTERN.test(text)) return reject("renovation_exclusion");
-    if (!finish.freshFullRenovation || !finish.moveInReady) return reject("renovation_not_confirmed_fresh_full");
-    return { qualified: true, buildingType, marketType, renovationStatus: "fresh_renovation", district, pricePerSqm };
+    const renovationConflict = RENOVATION_CONFLICT_PATTERN.test(text);
+    if (qualityRulesVersion === 1 && renovationConflict) return reject("renovation_exclusion");
+    if (finish.freshFullRenovation && finish.moveInReady && !renovationConflict) {
+      return { qualified: true, buildingType, marketType, renovationStatus: "fresh_renovation", district, pricePerSqm };
+    }
+    if (qualityRulesVersion >= 2) {
+      const ownOfferText = ownOfferEvidenceText(candidate);
+      const complete = FULL_FINISH_PATTERN.test(ownOfferText);
+      const ready = finish.moveInReady || READY_NO_WORK_PATTERN.test(ownOfferText);
+      const highStandard = HIGH_STANDARD_PATTERN.test(ownOfferText) && !HIGH_STANDARD_NEGATION_PATTERN.test(ownOfferText);
+      if (!FINISH_CONTRADICTION_PATTERN.test(ownOfferText) && complete && ready && highStandard) {
+        return { qualified: true, buildingType, marketType, renovationStatus: "turnkey_finish", district, pricePerSqm };
+      }
+    }
+    if (renovationConflict) return reject("renovation_exclusion");
+    return reject("renovation_not_confirmed_fresh_full");
   }
 
   // Primary market: must be an explicit, confirmed turnkey/finished
   // declaration -- "stan deweloperski" was already excluded above.
-  if (!finish.turnkey) return reject("turnkey_not_confirmed");
+  const normalizedText = text.normalize("NFD").replace(/\p{M}/gu, "").replace(/[łŁ]/gu, "l");
+  if (!finish.turnkey || TURNKEY_EXTRA_COST_PATTERN.test(normalizedText)) return reject("turnkey_not_confirmed");
   return { qualified: true, buildingType, marketType, renovationStatus: "turnkey_finish", district, pricePerSqm };
 }

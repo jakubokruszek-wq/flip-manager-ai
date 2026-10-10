@@ -4,7 +4,7 @@ import { computeRadarStats, statGroupFor, type StatInputListing } from "./stats.
 import { MIN_RADAR_SAMPLE_SIZE } from "./types.ts";
 
 function listing(overrides: Partial<StatInputListing> = {}): StatInputListing {
-  return { district: "Bałuty", marketType: "secondary", pricePerSqm: 9_000, lastSeenAt: "2026-10-01T00:00:00Z", status: "active", excludedAt: null, ...overrides };
+  return { district: "Bałuty", marketType: "secondary", qualityCategory: "fresh_renovation", pricePerSqm: 9_000, lastSeenAt: "2026-10-01T00:00:00Z", status: "active", excludedAt: null, ...overrides };
 }
 
 test("computes mean and median from individual prices/m2 only when the minimum sample is met", () => {
@@ -33,6 +33,18 @@ test("secondary and primary markets never mix into one average, even for the sam
   const groups = computeRadarStats(listings);
   assert.equal(statGroupFor(groups, "Bałuty", "secondary")?.averagePricePerSqm, 8_000);
   assert.equal(statGroupFor(groups, "Bałuty", "primary")?.averagePricePerSqm, 14_000);
+});
+
+test("quality categories are independent samples within the same district and market", () => {
+  const groups = computeRadarStats([
+    ...Array.from({ length: 20 }, () => listing({ qualityCategory: "fresh_renovation", pricePerSqm: 9_000 })),
+    ...Array.from({ length: 19 }, () => listing({ qualityCategory: "ready_high_standard", pricePerSqm: 10_000 })),
+  ]);
+  assert.equal(statGroupFor(groups, "Bałuty", "secondary", "fresh_renovation")?.sampleSize, 20);
+  assert.equal(statGroupFor(groups, "Bałuty", "secondary", "fresh_renovation")?.isSmallSample, false);
+  assert.equal(statGroupFor(groups, "Bałuty", "secondary", "ready_high_standard")?.sampleSize, 19);
+  assert.equal(statGroupFor(groups, "Bałuty", "secondary", "ready_high_standard")?.isSmallSample, true);
+  assert.equal(statGroupFor(groups, "Bałuty", "secondary", "ready_high_standard")?.averagePricePerSqm, null);
 });
 
 test("a sample of 19 exposes the real count and withholds mean/median reference prices", () => {

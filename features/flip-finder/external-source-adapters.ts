@@ -738,31 +738,59 @@ function domyRoomsFromTitle(title: string): number | null {
 // exact same listing (identical title/price/area/image, three different
 // URLs) -- every scan previously created a brand-new row instead of
 // updating the existing one, permanently accumulating duplicate Finder
-// cards for one real apartment. The CDN image path's first two segments
-// (a 6-hex bucket id and a long content hash, e.g.
-// "/original/119757/5797904d459db7923228e64a91aa/...") are stable across
-// those same rescans -- confirmed against this app's own listing_snapshots
-// history -- so they are used as the identity anchor instead of the URL.
-function allegroLokalnieImageAssetId(imageUrl: unknown): string | null {
-  if (typeof imageUrl !== "string") return null;
-  try {
-    const path = new URL(imageUrl).pathname.split("/").filter(Boolean);
-    const [bucket, hash] = [path[1], path[2]];
-    // Both segments must themselves look like real content hashes (bare
-    // hex, no file extension) -- a short bucket id plus a long asset hash,
-    // confirmed against this app's own stored scan history for a real,
-    // repeatedly-rescanned listing. A placeholder/test filename like
-    // "offer1.jpg" must never be mistaken for one.
-    if (bucket && hash && /^[0-9a-f]{4,8}$/iu.test(bucket) && /^[0-9a-f]{16,40}$/iu.test(hash)) return `${bucket}/${hash}`;
-    return null;
-  } catch {
-    return null;
-  }
+// cards for one real apartment.
+//
+// An earlier fix used the CDN image path as the identity anchor instead.
+// That was wrong and has been reverted: a shared photo proves nothing about
+// listing or property identity by itself. A stock/template image two
+// genuinely different real apartments happen to share would wrongly fuse
+// two different listings into one id, and an ordinary photo swap on the
+// seller's own listing would wrongly split one real listing back into two.
+// Shared photos still feed `sharedPhotoAssetKeys` (via `images` into
+// extractListingIdentityEvidence below) for the existing manual
+// review/candidate system -- they are never used to set this id.
+//
+// The real structural id lives elsewhere: each card's own HTML element (the
+// same `a.mlc-itembox` card already read below for its "Rok budowy"
+// parameter) additionally carries a portal-assigned per-offer UUID,
+// duplicated in two of its own analytics attributes
+// (data-card-analytics-click, and the matching lokalnie_offer_id field
+// inside data-experiment-analytics) -- confirmed present and mutually
+// distinct across all 60 real cards on a live search page, and clearly
+// independent of the url's rotating slug. This is the same kind of
+// backend-assigned field other adapters in this file read from
+// sku/productID/identifier; reading it from the HTML card instead of the
+// JSON-LD block follows the exact pathname-correlation pattern
+// allegroLokalnieYearBuiltByPath already uses for yearBuilt.
+//
+// It has not been possible to directly re-confirm this specific id stayed
+// the same across a slug rotation already recorded in this app's own
+// history: no prior scan ever captured the HTML card's analytics
+// attributes, only the JSON-LD candidate fields, so rows stored before this
+// fix cannot be retroactively proven identical this way. They are
+// deliberately left as separate rows (see the regression tests for this
+// adapter) pending an explicit manual decision through the existing
+// identity grouping flow -- never auto-merged on a rotation that is not a
+// confirmed fact. The url slug remains the fallback id for any card where
+// this attribute is absent or malformed.
+function allegroLokalnieOfferIdByPath($: ReturnType<typeof load>): Map<string, string> {
+  const offerIdByPath = new Map<string, string>();
+  $("a.mlc-itembox[itemprop='url']").each((_index, anchor) => {
+    const href = $(anchor).attr("href");
+    const path = href ? pathnameOf(href, "https://allegrolokalnie.pl") : null;
+    if (!path) return;
+    const offerId = $(anchor).attr("data-card-analytics-click");
+    if (offerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(offerId)) {
+      offerIdByPath.set(path, offerId.toLocaleLowerCase("en-US"));
+    }
+  });
+  return offerIdByPath;
 }
 
 function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPortalPage {
   const $ = load(html);
   const yearBuiltByPath = allegroLokalnieYearBuiltByPath($);
+  const offerIdByPath = allegroLokalnieOfferIdByPath($);
   const candidates = jsonLdItemListCandidates(html).filter((record) => hasType(record, "Product")).map((record) => {
     const url = text(record, "url");
     const name = stringValue(record.name) ?? "";
@@ -780,7 +808,7 @@ function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPorta
     }
     const image = atPath(record, ["image", "url"]) ?? atPath(record, ["image", "contentUrl"]);
     return {
-      id: allegroLokalnieImageAssetId(image) ?? (url ? lastPathSegmentId(url) : undefined),
+      id: (urlPath !== null ? offerIdByPath.get(urlPath) : null) ?? (url ? lastPathSegmentId(url) : undefined),
       url: record.url,
       title: record.name,
       price: atPath(record, ["offers", "price"]),

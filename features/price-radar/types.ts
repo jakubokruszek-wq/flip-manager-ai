@@ -10,6 +10,8 @@ export type RadarDistrict = (typeof DEFAULT_RADAR_DISTRICTS)[number];
 
 export type RadarBuildingType = "blok" | "apartamentowiec";
 export type RadarRenovationStatus = "fresh_renovation" | "turnkey_finish";
+export type RadarQualityCategory = "fresh_renovation" | "ready_high_standard";
+export const RADAR_QUALITY_RULES_VERSION = 2 as const;
 
 export type RadarSourceAlternative = {
   id: string;
@@ -41,6 +43,8 @@ export type RadarListing = {
   buildingType: RadarBuildingType;
   marketType: MarketType;
   renovationStatus: RadarRenovationStatus;
+  /** Derived from the confirmed market and stored finish status; no DB enum change is needed. */
+  qualityCategory: RadarQualityCategory;
   contentHash: string;
   firstSeenAt: string;
   lastSeenAt: string;
@@ -87,7 +91,14 @@ export type RadarQualificationRejectionReason = (typeof RADAR_QUALIFICATION_REJE
 export type RadarQualificationRejections = Record<string, Partial<Record<RadarQualificationRejectionReason, number>>>;
 
 /** Bounds frozen when a Radar run starts so a continuation issues the same portal queries. */
-export type RadarSearchCriteria = { areaMin: number | null; areaMax: number | null; rooms: number[] };
+export type RadarSearchCriteria = {
+  areaMin: number | null;
+  areaMax: number | null;
+  rooms: number[];
+  /** Missing on legacy runs; those continue under v1 qualification rules. */
+  qualityRulesVersion?: 1 | 2;
+  minPricePerSqm?: number | null;
+};
 
 export type RadarCheckpoint = {
   sourceQueue: RadarSource[];
@@ -133,6 +144,8 @@ export type RadarFilters = {
   areaMax: number | null;
   rooms: number[];
   sources: RadarSource[];
+  /** Optional display/sample filter; null means disabled. */
+  minPricePerSqm: number | null;
 };
 
 export const MIN_RADAR_SAMPLE_SIZE = 20;
@@ -140,6 +153,7 @@ export const MIN_RADAR_SAMPLE_SIZE = 20;
 export type RadarStatGroup = {
   district: string;
   marketType: MarketType;
+  qualityCategory: RadarQualityCategory;
   averagePricePerSqm: number | null;
   medianPricePerSqm: number | null;
   sampleSize: number;

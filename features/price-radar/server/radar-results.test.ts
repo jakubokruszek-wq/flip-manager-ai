@@ -34,7 +34,7 @@ function row(overrides: Row = {}): Row {
   };
 }
 
-const baseFilters = { districts: [], market: "both" as const, areaMin: null, areaMax: null, rooms: [], sources: [] };
+const baseFilters = { districts: [], market: "both" as const, areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null };
 
 test("reads active listings, computes stats, and returns them visible", async () => {
   currentDb = fakeDb([row(), row({ id: "listing-2", external_listing_id: "ext-2", original_url: "https://domiporta.pl/2", normalized_url: "https://domiporta.pl/2", price: 500_000, price_per_sqm: 10_000 })]);
@@ -99,6 +99,31 @@ test("market=secondary/primary narrows results without mixing the stats groups",
   const payload = await getRadarResults(OWNER, { ...baseFilters, market: "secondary" }, currentDb as never);
   assert.equal(payload.listings.length, 1);
   assert.equal(payload.listings[0].marketType, "secondary");
+});
+
+test("the optional minimum asking price per square metre filters cards and matching stats together", async () => {
+  currentDb = fakeDb([
+    row({ id: "below", external_listing_id: "below", original_url: "https://domiporta.pl/below", normalized_url: "https://domiporta.pl/below", price_per_sqm: 8_799 }),
+    row({ id: "above", external_listing_id: "above", original_url: "https://domiporta.pl/above", normalized_url: "https://domiporta.pl/above", price_per_sqm: 8_800 }),
+  ]);
+  const payload = await getRadarResults(OWNER, { ...baseFilters, minPricePerSqm: 8_800 }, currentDb as never);
+  assert.deepEqual(payload.listings.map((listing) => listing.id), ["above"]);
+  assert.equal(payload.stats[0]?.sampleSize, 1, "the stat count and card list use the same price-filtered unique set");
+});
+
+test("secondary turnkey records are assigned to category B while fresh secondary and turnkey primary records remain category A", async () => {
+  currentDb = fakeDb([
+    row({ id: "fresh-secondary" }),
+    row({ id: "ready-secondary", external_listing_id: "ready", original_url: "https://domy.pl/ready", normalized_url: "https://domy.pl/ready", renovation_status: "turnkey_finish" }),
+    row({ id: "turnkey-primary", source: "morizon", external_listing_id: "primary", original_url: "https://morizon.pl/primary", normalized_url: "https://morizon.pl/primary", market_type: "primary", renovation_status: "turnkey_finish" }),
+  ]);
+  const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
+  assert.deepEqual(payload.listings.map(({ id, qualityCategory }) => [id, qualityCategory]), [
+    ["fresh-secondary", "fresh_renovation"],
+    ["ready-secondary", "ready_high_standard"],
+    ["turnkey-primary", "fresh_renovation"],
+  ]);
+  assert.equal(payload.stats.length, 3, "district, market, and quality category are independent groups");
 });
 
 test("an unmapped/invalid row (missing a required confirmed field) is silently excluded from the read, never crashing the page", async () => {

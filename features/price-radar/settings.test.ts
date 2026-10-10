@@ -11,6 +11,7 @@ test("Radar defaults are Łódź districts, both markets, no narrow limits, and 
   assert.equal(DEFAULT_RADAR_FILTERS.areaMax, null);
   assert.deepEqual(DEFAULT_RADAR_FILTERS.rooms, []);
   assert.deepEqual(DEFAULT_RADAR_FILTERS.sources, []);
+  assert.equal(DEFAULT_RADAR_FILTERS.minPricePerSqm, null, "the optional unit-price filter is off by default");
   assert.deepEqual(normalizeRadarFilters(null), DEFAULT_RADAR_FILTERS);
 });
 
@@ -26,6 +27,10 @@ test("saved filters retain only actually registered, schema-ready Radar adapters
   assert.equal(filters.areaMax, 80);
   assert.deepEqual(filters.rooms, [2]);
   assert.deepEqual(filters.sources, ["domiporta"]);
+  const withMinimum = normalizeRadarFilters({ districts: ["Bałuty"], minPricePerSqm: 8_800 });
+  assert.equal(withMinimum.minPricePerSqm, 8_800);
+  assert.equal(normalizeRadarFilters({ minPricePerSqm: -1 }).minPricePerSqm, null);
+  assert.equal(normalizeRadarFilters({ minPricePerSqm: 100_001 }).minPricePerSqm, null);
   assert.ok(filters.sources.every((source) => RADAR_SOURCES.includes(source)));
 });
 

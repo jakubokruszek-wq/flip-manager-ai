@@ -45,7 +45,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
         marketType: resolveOlxMarketType(raw),
         propertyType: typeof raw.propertyType === "string" ? raw.propertyType : null,
         rawPayload: raw, contentHash: listing.contentHash,
-      });
+      }, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
       if (!outcome.qualified) {
         recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, "olx", outcome.reason);
         continue;

@@ -96,7 +96,7 @@ const { excludeRadarListing, restoreRadarListing } = await import("./radar-exclu
 
 test("full fake-boundary flow: adapter -> qualification -> lease-fenced persist -> read -> exclusion -> refresh -> restore", async () => {
   db = fakeDb();
-  const filters = { districts: ["Bałuty"], market: "both" as const, areaMin: null, areaMax: null, rooms: [], sources: [] };
+  const filters = { districts: ["Bałuty"], market: "both" as const, areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null };
   const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
   assert.equal(claimed.kind, "claimed");
   if (claimed.kind !== "claimed" || !claimed.run.leaseToken) return;

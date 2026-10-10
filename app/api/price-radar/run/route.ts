@@ -2,6 +2,7 @@ import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/
 import { claimOrCreateRadarRun, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
 import { readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
+import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -59,6 +60,8 @@ export async function POST(request: Request) {
       areaMin: settings.areaMin,
       areaMax: settings.areaMax,
       rooms: settings.rooms,
+      minPricePerSqm: settings.minPricePerSqm,
+      qualityRulesVersion: RADAR_QUALITY_RULES_VERSION,
     });
     if (claim.kind === "blocked") {
       return Response.json({ message: "Inny przebieg Radaru już trwa." }, { status: 409 });

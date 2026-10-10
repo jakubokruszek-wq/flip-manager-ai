@@ -663,7 +663,7 @@ test("the observed Oferty.net offer flows from detail parsing through qualificat
     }, { ownerId: "operator-test", runId: "run-test", leaseToken: "lease-test", seenAt: "2026-10-10T12:00:00.000Z" });
     assert.equal(saved.listingId, "radar-lanowa-1");
 
-    const read = await getRadarResults("operator-test", { districts: ["Bałuty"], market: "secondary", areaMin: 40, areaMax: 50, rooms: [2], sources: ["oferty_net"] }, db as never);
+    const read = await getRadarResults("operator-test", { districts: ["Bałuty"], market: "secondary", areaMin: 40, areaMax: 50, rooms: [2], sources: ["oferty_net"], minPricePerSqm: null }, db as never);
     assert.equal(read.listings.length, 1, "the owner-scoped Radar read returns the persisted offer as a visible card");
     assert.equal(read.listings[0]?.id, saved.listingId);
     assert.equal(read.listings[0]?.originalUrl, listingUrl);
@@ -951,31 +951,26 @@ test("the real allegrolokalnie.pl public page structure (flat ItemList, name-onl
   assert.equal(rows[0]?.price, 425000);
 });
 
-// Live-reproduced (2026-10-10): the exact same real Łódź/Górna, 68 m²,
-// 220 000 PLN listing was scanned under three different URL slugs on three
-// different occasions ("...-ujw", "...-oos", "...-q5f"), confirmed via this
-// app's own listing_snapshots history to share one byte-identical image URL
-// each time -- and only ONE of the three slugs was even still present on a
-// fresh fetch of the live search page. Before this fix, each slug produced a
-// distinct externalListingId (lastPathSegmentId(url)), so every rescan
-// created a brand-new permanent duplicate Finder card for one real
-// apartment instead of updating the existing row.
-test("Allegro Lokalnie: the same real listing rescanned under a rotated URL slug keeps one stable externalListingId, keyed off its stable image asset instead of the unstable URL", () => {
-  const stableImage = "https://a.allegroimg.com/original/119757/5797904d459db7923228e64a91aa/Mieszkanie-Lodz-Gorna-68-m2";
-  const scan = (urlSlug: string) => JSON.stringify({
+// These regression fixtures model the adapter's per-card portal UUID. An
+// image is deliberately held constant across distinct UUIDs: it is evidence
+// for manual review, never a canonical identity key.
+test("Allegro Lokalnie: portal offer UUID survives slug/photo rotation, while different UUIDs sharing a photo remain separate", () => {
+  const sharedImage = "https://a.allegroimg.com/original/119757/5797904d459db7923228e64a91aa/Mieszkanie-Lodz-Gorna-68-m2";
+  const offerA = "11111111-1111-4111-8111-111111111111";
+  const offerB = "22222222-2222-4222-8222-222222222222";
+  const scan = (slug: string, offerId: string, image = sharedImage) => JSON.stringify({
     "@context": "https://schema.org", "@type": "ItemList",
-    itemListElement: [{ "@type": "ListItem", position: 1, item: { "@type": "Product", name: "Mieszkanie, Łódź, Górna, 68 m²", url: `https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-${urlSlug}`, category: "Mieszkania na sprzedaż", itemCondition: "https://schema.org/UsedCondition", image: { "@type": "ImageObject", url: stableImage, contentUrl: stableImage }, offers: { "@type": "Offer", price: "220000", priceCurrency: "PLN" } } }],
+    itemListElement: [{ "@type": "ListItem", position: 1, item: { "@type": "Product", name: "Mieszkanie, Łódź, Górna, 68 m²", url: `https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-${slug}`, category: "Mieszkania na sprzedaż", itemCondition: "https://schema.org/UsedCondition", image: { "@type": "ImageObject", url: image, contentUrl: image }, offers: { "@type": "Offer", price: "220000", priceCurrency: "PLN" } } }],
   });
-  const htmlFor = (urlSlug: string) => `<script type="application/ld+json">${scan(urlSlug)}</script><input class="ml-pagination__input" value="1"><span class="ml-pagination__count">z 1</span>`;
-  const first = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("ujw"), "Łódź").listings[0];
-  const second = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("oos"), "Łódź").listings[0];
-  const third = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("q5f"), "Łódź").listings[0];
-  assert.equal(first?.externalListingId, "119757/5797904d459db7923228e64a91aa");
-  assert.equal(first?.externalListingId, second?.externalListingId, "a rotated URL slug for the same real listing (same image) must not mint a new id");
-  assert.equal(first?.externalListingId, third?.externalListingId);
-  // originalUrl still reflects whichever slug this specific scan observed --
-  // only the stable identity key changes, not the link shown to the operator.
-  assert.equal(third?.originalUrl, "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-q5f");
+  const htmlFor = (slug: string, offerId: string, image = sharedImage) => `<script type="application/ld+json">${scan(slug, offerId, image)}</script><a class="mlc-card mlc-itembox" itemprop="url" href="/oferta/mieszkanie-lodz-gorna-68-m2-${slug}" data-card-analytics-click="${offerId}"></a><input class="ml-pagination__input" value="1"><span class="ml-pagination__count">z 1</span>`;
+  const first = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("ujw", offerA), "Łódź").listings[0];
+  const rotatedSlug = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("oos", offerA, "https://a.allegroimg.com/original/119757/new-photo-hash"), "Łódź").listings[0];
+  const samePhotoDifferentUnit = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("q5f", offerB), "Łódź").listings[0];
+  assert.equal(first?.externalListingId, offerA);
+  assert.equal(first?.externalListingId, rotatedSlug?.externalListingId, "the portal-assigned identity survives a slug and photo rotation");
+  assert.notEqual(first?.externalListingId, samePhotoDifferentUnit?.externalListingId, "a shared photo cannot merge distinct portal offers");
+  assert.equal(first?.originalUrl, "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-ujw");
+  assert.equal(rotatedSlug?.originalUrl, "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-oos");
 });
 
 // Real markup shape (read-only GET of allegrolokalnie.pl's Łódź category

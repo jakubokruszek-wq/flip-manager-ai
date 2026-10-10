@@ -1,9 +1,10 @@
-import { MIN_RADAR_SAMPLE_SIZE, type RadarStatGroup } from "./types";
+import { MIN_RADAR_SAMPLE_SIZE, type RadarQualityCategory, type RadarStatGroup } from "./types";
 import type { MarketType } from "@/features/flip-finder";
 
 export type StatInputListing = {
   district: string;
   marketType: MarketType;
+  qualityCategory: RadarQualityCategory;
   pricePerSqm: number;
   lastSeenAt: string;
   status: "active" | "removed";
@@ -11,7 +12,8 @@ export type StatInputListing = {
 };
 
 /**
- * Groups by (district, marketType) and never mixes markets into one average
+ * Groups by (district, marketType, qualityCategory) and never mixes either
+ * market or finish quality into one average
  * -- "Oba" (both) is a UI selection that simply shows every group, not a
  * combined one. Excluded and removed listings never enter the sample. A
  * group below MIN_RADAR_SAMPLE_SIZE is still returned (never hidden) but
@@ -22,7 +24,7 @@ export function computeRadarStats(listings: StatInputListing[]): RadarStatGroup[
   const groups = new Map<string, StatInputListing[]>();
   for (const listing of listings) {
     if (listing.status !== "active" || listing.excludedAt !== null) continue;
-    const key = `${listing.district}::${listing.marketType}`;
+    const key = `${listing.district}::${listing.marketType}::${listing.qualityCategory}`;
     const group = groups.get(key) ?? [];
     group.push(listing);
     groups.set(key, group);
@@ -30,13 +32,14 @@ export function computeRadarStats(listings: StatInputListing[]): RadarStatGroup[
 
   const result: RadarStatGroup[] = [];
   for (const [key, group] of groups) {
-    const [district, marketType] = key.split("::") as [string, MarketType];
+    const [district, marketType, qualityCategory] = key.split("::") as [string, MarketType, RadarQualityCategory];
     const values = group.map((item) => item.pricePerSqm).sort((left, right) => left - right);
     const sampleSize = values.length;
     const updatedAt = group.reduce<string | null>((latest, item) => (!latest || item.lastSeenAt > latest ? item.lastSeenAt : latest), null);
     result.push({
       district,
       marketType,
+      qualityCategory,
       averagePricePerSqm: sampleSize >= MIN_RADAR_SAMPLE_SIZE ? values.reduce((sum, value) => sum + value, 0) / sampleSize : null,
       medianPricePerSqm: sampleSize >= MIN_RADAR_SAMPLE_SIZE ? median(values) : null,
       sampleSize,
@@ -44,7 +47,7 @@ export function computeRadarStats(listings: StatInputListing[]): RadarStatGroup[
       updatedAt,
     });
   }
-  return result.sort((left, right) => left.district.localeCompare(right.district, "pl") || left.marketType.localeCompare(right.marketType));
+  return result.sort((left, right) => left.district.localeCompare(right.district, "pl") || left.marketType.localeCompare(right.marketType) || left.qualityCategory.localeCompare(right.qualityCategory));
 }
 
 function median(sortedValues: number[]): number {
@@ -52,6 +55,6 @@ function median(sortedValues: number[]): number {
   return sortedValues.length % 2 === 0 ? (sortedValues[mid - 1] + sortedValues[mid]) / 2 : sortedValues[mid];
 }
 
-export function statGroupFor(groups: RadarStatGroup[], district: string, marketType: MarketType): RadarStatGroup | null {
-  return groups.find((group) => group.district === district && group.marketType === marketType) ?? null;
+export function statGroupFor(groups: RadarStatGroup[], district: string, marketType: MarketType, qualityCategory?: RadarQualityCategory): RadarStatGroup | null {
+  return groups.find((group) => group.district === district && group.marketType === marketType && (qualityCategory === undefined || group.qualityCategory === qualityCategory)) ?? null;
 }

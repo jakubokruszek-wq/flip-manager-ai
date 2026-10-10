@@ -241,7 +241,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               marketType: typeof listing.rawPayload.marketType === "string" ? listing.rawPayload.marketType : null,
               propertyType: typeof listing.rawPayload.propertyType === "string" ? listing.rawPayload.propertyType : null,
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
-            });
+            }, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
             if (!outcome.qualified) {
               recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, outcome.reason);
               continue;

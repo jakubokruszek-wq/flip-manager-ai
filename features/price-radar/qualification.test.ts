@@ -110,6 +110,55 @@ test("a full renovation without an explicit recent year or unused-since-completi
   })), { qualified: false, reason: "renovation_not_confirmed_fresh_full" });
 });
 
+test("category B accepts a fully finished, ready secondary apartment in an explicitly high standard without inventing a renovation date", () => {
+  const result = qualifyRadarCandidate(candidate({
+    description: "Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.",
+  }));
+  assert.deepEqual(result, { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "turnkey_finish", district: "Bałuty", pricePerSqm: 9_000 });
+});
+
+test("a directly negated repair requirement does not reject category A or B, but a separate contradictory repair requirement still rejects", () => {
+  const fresh = qualifyRadarCandidate(candidate({
+    description: "Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania, nie wymaga remontu. Rynek wtórny.",
+  }));
+  assert.equal(fresh.qualified && fresh.renovationStatus, "fresh_renovation");
+
+  const ready = qualifyRadarCandidate(candidate({
+    description: "W pełni wykończone, gotowe do zamieszkania, wysoki standard. Mieszkanie nie wymaga remontu. Rynek wtórny.",
+  }));
+  assert.equal(ready.qualified && ready.renovationStatus, "turnkey_finish");
+
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    description: "Mieszkanie nie wymaga remontu, ale wymaga remontu przed zamieszkaniem. W pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.",
+  })), { qualified: false, reason: "unfinished_or_needs_renovation" });
+});
+
+test("category B requires complete finish, readiness, and high standard as separate positive evidence", () => {
+  assert.equal(qualifyRadarCandidate(candidate({ description: "Mieszkanie premium, w pełni wykończone i gotowe do zamieszkania. Rynek wtórny." })).qualified, false, "premium alone is not standard evidence");
+  assert.equal(qualifyRadarCandidate(candidate({ description: "W pełni wykończone, wysoki standard. Rynek wtórny." })).qualified, false, "finish and standard do not prove readiness");
+  assert.equal(qualifyRadarCandidate(candidate({ description: "Gotowe do zamieszkania, wysoki standard. Rynek wtórny." })).qualified, false, "readiness and standard do not prove complete finish");
+});
+
+test("category B rejects negated, contradictory, extra-cost, and unrelated building/other-unit quality claims", () => {
+  assert.equal(qualifyRadarCandidate(candidate({ description: "W pełni wykończone, gotowe do zamieszkania. Standard nie jest wysoki. Rynek wtórny." })).qualified, false);
+  assert.equal(qualifyRadarCandidate(candidate({ description: "W pełni wykończone, gotowe do zamieszkania, wysoki standard, ale wymaga dodatkowego wykończenia. Rynek wtórny." })).qualified, false);
+  assert.equal(qualifyRadarCandidate(candidate({ description: "Mieszkanie gotowe do zamieszkania. Budynek jest w wysokim standardzie. Rynek wtórny." })).qualified, false, "building standard alone cannot qualify the unit");
+  assert.equal(qualifyRadarCandidate(candidate({ description: "W pełni wykończone, gotowe do zamieszkania. Inne mieszkanie oferuje wysoki standard. Rynek wtórny." })).qualified, false, "another unit cannot supply finish evidence");
+});
+
+test("old run rule version 1 keeps its original strict secondary renovation requirement", () => {
+  const bCandidate = candidate({ description: "Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny." });
+  assert.deepEqual(qualifyRadarCandidate(bCandidate, 1), { qualified: false, reason: "renovation_not_confirmed_fresh_full" });
+});
+
+test("a fresh completed renovation takes category A precedence over category B", () => {
+  const result = qualifyRadarCandidate(candidate({
+    description: "Świeżo po generalnym remoncie w 2025, w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.",
+  }));
+  assert.equal(result.qualified, true);
+  if (result.qualified) assert.equal(result.renovationStatus, "fresh_renovation");
+});
+
 test("an actual offer to rent remains excluded even when its title also mentions investment use", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({
     title: "Mieszkanie idealne pod wynajem",
@@ -144,6 +193,15 @@ test("primary market: a confirmed 'stan deweloperski' listing is excluded even t
 
 test("primary market: no explicit turnkey declaration never qualifies, even with no negative signal either", () => {
   const result = qualifyRadarCandidate(candidate({ title: "Mieszkanie w apartamentowcu", description: "Rynek pierwotny, nowa inwestycja.", district: "Widzew", buildingType: "apartamentowiec" }));
+  assert.deepEqual(result, { qualified: false, reason: "turnkey_not_confirmed" });
+});
+
+test("primary turnkey finish explicitly offered for an additional charge is not included in the sale category", () => {
+  const result = qualifyRadarCandidate(candidate({
+    title: "Mieszkanie w apartamentowcu",
+    description: "Rynek pierwotny, wykończone pod klucz za dopłatą.",
+    district: "Widzew", buildingType: "apartamentowiec",
+  }));
   assert.deepEqual(result, { qualified: false, reason: "turnkey_not_confirmed" });
 });
 

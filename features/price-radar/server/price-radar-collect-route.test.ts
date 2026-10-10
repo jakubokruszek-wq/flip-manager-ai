@@ -37,7 +37,7 @@ mock.module("@/lib/supabase/admin", { namedExports: {
   createAdminClient: () => fakeAdmin(),
 } });
 mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
-  readRadarSettings: async (ownerId: string) => { settingsCalls.push(ownerId); return { districts: [], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: ["oferty_net"] }; },
+  readRadarSettings: async (ownerId: string) => { settingsCalls.push(ownerId); return { districts: [], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: ["oferty_net"], minPricePerSqm: 8_800 }; },
 } });
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria.push({ ownerId, sources, criteria }); return claimResults[ownerId] ?? { kind: "blocked" }; },
@@ -123,7 +123,7 @@ test("the owner and collection scope come only from the server-trusted price_rad
   });
   assert.deepEqual(settingsCalls, ["owner-trusted"]);
   assert.deepEqual(claimCalls, ["owner-trusted"]);
-  assert.deepEqual(claimCriteria, [{ ownerId: "owner-trusted", sources: ["oferty_net"], criteria: { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] } }]);
+  assert.deepEqual(claimCriteria, [{ ownerId: "owner-trusted", sources: ["oferty_net"], criteria: { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, qualityRulesVersion: 2 } }]);
 });
 
 test("an owner whose Radar run is already active is skipped in favor of the next owner (existing lock/idempotency honored)", async () => {

@@ -19,7 +19,7 @@ mock.module("@/features/price-radar/server/collect", { namedExports: {
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
-mock.module("@/features/price-radar/server/radar-settings", { namedExports: { readRadarSettings: async () => ({ sources: ["morizon"], areaMin: 31, areaMax: 62, rooms: [1, 2, 3] }) } });
+mock.module("@/features/price-radar/server/radar-settings", { namedExports: { readRadarSettings: async () => ({ sources: ["morizon"], areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800 }) } });
 mock.module("@/features/price-radar/server/radar-run-status", { namedExports: { latestRadarRun: async () => latest } });
 
 const route = await import("../../../app/api/price-radar/run/route.ts");
@@ -75,7 +75,7 @@ test("manual start without expectedRunId retains the existing claim-or-create pa
   const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST" }));
   assert.equal(response.status, 200);
   assert.deepEqual(claimCalls, ["owner-1"]);
-  assert.deepEqual(claimCriteria, [["morizon"], { areaMin: 31, areaMax: 62, rooms: [1, 2, 3] }], "a new run receives the saved search bounds for its checkpoint snapshot");
+  assert.deepEqual(claimCriteria, [["morizon"], { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, qualityRulesVersion: 2 }], "a new run freezes saved bounds, the unit-price filter, and the current qualification rules version");
   assert.deepEqual(resumeCalls, []);
   assert.deepEqual(portionCalls, [{ runId: "new-run", ownerId: "owner-1", leaseToken: "new-token" }]);
 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { normalizeOtodomUrl } from "../otodom-search.ts";
+import { EXTERNAL_PORTAL_PARSERS } from "../external-source-adapters.ts";
 
 mock.module("@/features/flip-finder/listing-images", { namedExports: { resolveListingImages: (existing: string[], thumbnail: string | null, images?: string[]) => [...new Set([...existing, ...(thumbnail ? [thumbnail] : []), ...(images ?? [])])] } });
 mock.module("@/features/market-intelligence/resale-comps-store", { namedExports: { syncResaleCompFromListing: async () => ({ saved: false, created: false, compId: null, available: true }) } });
@@ -141,6 +142,81 @@ test("persistListing treats Otodom .html and extensionless URLs as one canonical
   assert.equal(rows.length, 1);
   assert.equal(rows[0].external_listing_id, "old-otodom-id");
   assert.equal(rows[0].normalized_url, "https://otodom.pl/pl/oferta/mieszkanie-lodz-ID4CRDS");
+});
+
+function allegroFixture(slug: string, offerId: string, photoUrl: string) {
+  const url = `https://allegrolokalnie.pl/oferta/${slug}`;
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    itemListElement: [{
+      "@type": "ListItem",
+      item: {
+        "@type": "Product",
+        name: "Mieszkanie Łódź Górna, 68 m²",
+        url,
+        category: "Mieszkania na sprzedaż",
+        itemCondition: "https://schema.org/UsedCondition",
+        image: { "@type": "ImageObject", url: photoUrl },
+        offers: { "@type": "Offer", price: "220000", priceCurrency: "PLN" },
+      },
+    }],
+  };
+  const html = `<script type="application/ld+json">${JSON.stringify(data)}</script><a class="mlc-itembox" itemprop="url" href="${url}" data-card-analytics-click="${offerId}"></a>`;
+  return EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(html, "Łódź").listings[0]!;
+}
+
+test("Allegro distinct portal UUIDs sharing a photo persist as distinct canonical listings", async () => {
+  const sharedPhoto = "https://a.allegroimg.com/original/119757/shared-photo-hash/room.jpg";
+  const rows: Row[] = [];
+  const db = fakeDb(rows);
+  const first = allegroFixture("mieszkanie-lodz-gorna-68-m2-ujw", "11111111-1111-4111-8111-111111111111", sharedPhoto);
+  const second = allegroFixture("mieszkanie-lodz-gorna-68-m2-oos", "22222222-2222-4222-8222-222222222222", sharedPhoto);
+
+  const firstSaved = await persistListing(db as never, "filter-1", first, true, [], "scan-allegro", "2026-10-10T19:00:00.000Z", AbortSignal.timeout(1000));
+  const secondSaved = await persistListing(db as never, "filter-1", second, true, [], "scan-allegro", "2026-10-10T19:01:00.000Z", AbortSignal.timeout(1000));
+
+  assert.notEqual(first.externalListingId, second.externalListingId);
+  assert.notEqual(firstSaved.listingId, secondSaved.listingId);
+  assert.equal(rows.length, 2, "a shared photo is not sufficient evidence to merge two portal identities");
+});
+
+test("Allegro reimport with a rotated portal UUID reuses an exact historical URL and preserves its decision and history", async () => {
+  const url = "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-ujw";
+  const photo = "https://a.allegroimg.com/original/119757/old-photo-hash/room.jpg";
+  const rows: Row[] = [{
+    id: "historical-allegro-listing",
+    source: "allegro_lokalnie",
+    external_listing_id: "119757/legacy-image-hash",
+    original_url: url,
+    normalized_url: url,
+    title: "Historyczny tytuł",
+    price: 220000,
+    area: 68,
+    rooms: 3,
+    city: "Łódź",
+    district: "Górna",
+    price_per_sqm: 3235,
+    content_hash: "historical-content",
+    images: [photo],
+    manual_decision: "REJECTED",
+    lifecycle_status: "REJECTED",
+    archived_at: "2026-10-01T10:00:00.000Z",
+  }];
+  const db = fakeDb(rows);
+  const current = allegroFixture("mieszkanie-lodz-gorna-68-m2-ujw", "33333333-3333-4333-8333-333333333333", "https://a.allegroimg.com/original/119757/new-photo-hash/room.jpg");
+
+  const saved = await persistListing(db as never, "filter-1", current, true, [], "scan-allegro-reimport", "2026-10-10T19:02:00.000Z", AbortSignal.timeout(1000));
+
+  assert.equal(saved.listingId, "historical-allegro-listing", "same source URL resolves the legacy row in place despite its old image-derived ID");
+  assert.equal(rows.length, 1, "reimport updates the existing history row rather than inserting or deleting");
+  assert.equal(rows[0]?.external_listing_id, "119757/legacy-image-hash", "the historical canonical key remains stable");
+  assert.equal(rows[0]?.manual_decision, "REJECTED");
+  assert.equal(rows[0]?.lifecycle_status, "REJECTED");
+  assert.equal(rows[0]?.archived_at, "2026-10-01T10:00:00.000Z");
+  assert.deepEqual(rows[0]?.images, [photo, "https://a.allegroimg.com/original/119757/new-photo-hash/room.jpg"]);
+  assert.equal(db.snapshots.length, 1, "the changed reimport appends a snapshot against the unchanged listing ID");
+  assert.equal(db.snapshots[0]?.listing_id, "historical-allegro-listing");
 });
 
 test("persistListing stores the adapter's confirmed publication date in snapshot raw_data", async () => {

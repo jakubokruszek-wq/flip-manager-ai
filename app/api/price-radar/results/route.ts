@@ -31,6 +31,7 @@ function parseFilters(searchParams: URLSearchParams): RadarFilters {
     market: isMarketFilter(market) ? market : "both",
     areaMin: parsePositiveNumber(searchParams.get("areaMin")),
     areaMax: parsePositiveNumber(searchParams.get("areaMax")),
+    minPricePerSqm: parsePositiveNumber(searchParams.get("minPricePerSqm")),
     rooms: roomsParam.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
     sources: sourcesParam.filter(isRadarSource),
   };

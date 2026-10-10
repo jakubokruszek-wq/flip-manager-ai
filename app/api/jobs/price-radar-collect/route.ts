@@ -1,6 +1,7 @@
 import { claimOrCreateRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { readRadarSettings } from "@/features/price-radar/server/radar-settings";
+import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
 
 /** Draft endpoint; no active cron entry is added by this mission. */
 export const runtime = "nodejs";
@@ -23,6 +24,8 @@ export async function POST(request: Request) {
       areaMin: settings.areaMin,
       areaMax: settings.areaMax,
       rooms: settings.rooms,
+      minPricePerSqm: settings.minPricePerSqm,
+      qualityRulesVersion: RADAR_QUALITY_RULES_VERSION,
     });
     if (claim.kind === "blocked" || !claim.run.leaseToken) continue;
     const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId: row.owner_id, leaseToken: claim.run.leaseToken }, admin);

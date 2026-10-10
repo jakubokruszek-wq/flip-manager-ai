@@ -8,6 +8,7 @@ export const DEFAULT_RADAR_FILTERS: RadarFilters = {
   areaMax: null,
   rooms: [],
   sources: [],
+  minPricePerSqm: null,
 };
 
 const DISTRICTS = new Set<string>(DEFAULT_RADAR_DISTRICTS);
@@ -21,9 +22,14 @@ export function normalizeRadarFilters(value: unknown): RadarFilters {
   const market = object.market === "primary" || object.market === "secondary" ? object.market : "both";
   const areaMin = finitePositiveOrNull(object.areaMin);
   const areaMax = finitePositiveOrNull(object.areaMax);
-  return { districts: districts.length ? districts : [...DEFAULT_RADAR_FILTERS.districts], market, areaMin, areaMax, rooms, sources };
+  const minPricePerSqm = finitePricePerSqmOrNull(object.minPricePerSqm);
+  return { districts: districts.length ? districts : [...DEFAULT_RADAR_FILTERS.districts], market, areaMin, areaMax, rooms, sources, minPricePerSqm };
 }
 
 function finitePositiveOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1000 ? value : null;
+}
+
+function finitePricePerSqmOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100_000 ? value : null;
 }
