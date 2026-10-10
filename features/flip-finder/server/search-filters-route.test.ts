@@ -59,6 +59,7 @@ function chainable(result: unknown) {
     not: () => builder,
     order: () => builder,
     limit: () => builder,
+    range: () => builder,
     then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve(result).then(resolve, reject),
   };
   return builder;
@@ -346,7 +347,9 @@ test("a filter created via POST is present in a subsequent GET — the create-th
   const getResponse = await collectionRoute.GET();
   assert.equal(getResponse.status, 200);
   const body = await getResponse.json();
-  assert.ok(body.filters.some((filter: { name: string }) => filter.name === "Round-trip filter"), "the just-created filter must be present in a fresh list read, exactly as a real page reload would show");
+  const roundTripFilter = body.filters.find((filter: { name: string }) => filter.name === "Round-trip filter");
+  assert.ok(roundTripFilter, "the just-created filter must be present in a fresh list read, exactly as a real page reload would show");
+  assert.equal(roundTripFilter.totalMatches, 0, "a newly created filter with no saved memberships has zero visible cards without unnecessary per-filter reads");
 });
 
 // A real, previously-undiscovered gap: only a Postgres query returning a

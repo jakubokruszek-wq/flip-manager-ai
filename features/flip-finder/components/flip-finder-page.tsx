@@ -644,8 +644,8 @@ export function FlipFinderPage() {
                         {filter.maxPricePerSqm !== null ? (
                           <span>Maks. cena/m²: {formatCurrency(filter.maxPricePerSqm)}</span>
                         ) : null}
-                        <span>Wszystkie dopasowania: {formatNumber(filter.totalMatches ?? 0)}</span>
-                        <span>Nowe dopasowania: {formatNumber(filter.newMatches ?? 0)}</span>
+                        <span>Widoczne oferty: {formatNumber(filter.totalMatches ?? 0)}</span>
+                        <span>Nowe w ostatnim skanie: {formatNumber(filter.newMatches ?? 0)}</span>
                       </div>
                       {/* filter.lastScannedAt (search_filters.last_scanned_at) is
                           written exclusively by Finder's own runManualOtodomScan,

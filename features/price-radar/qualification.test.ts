@@ -81,6 +81,21 @@ test("excludes kamienica, dom, segment, działka, lokal użytkowy, pokój/najem,
   assert.equal(qualifyRadarCandidate(candidate({ title: "Nowa inwestycja", description: "Ceny mieszkań od 400 000 zł, różne metraże do wyboru, harmonogram inwestycji dostępny u dewelopera." })).qualified, false);
 });
 
+test("a sale listing described as ideal for future rental is not misclassified as a rental offer", () => {
+  const result = qualifyRadarCandidate(candidate({
+    title: "Mieszkanie w bloku, idealne pod wynajem, Łódź Bałuty",
+    description: "Sprzedaż lokalu. Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania. Rynek wtórny.",
+  }));
+  assert.equal(result.qualified, true, "the wording describes possible investment use, not an offer to rent the property");
+});
+
+test("an actual offer to rent remains excluded even when its title also mentions investment use", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    title: "Mieszkanie idealne pod wynajem",
+    description: "Aktualnie do wynajęcia. Świeżo po generalnym remoncie w 2025, rynek wtórny, gotowe do zamieszkania.",
+  })), { qualified: false, reason: "rental" });
+});
+
 test("rejects an unconfirmed building type (neither structured nor a text declaration of blok/apartamentowiec)", () => {
   const result = qualifyRadarCandidate(candidate({ title: "Mieszkanie na sprzedaż, Łódź", description: "Ładne, 3 pokoje. Po remoncie, gotowe do zamieszkania. Rynek wtórny." }));
   assert.deepEqual(result, { qualified: false, reason: "building_type_not_confirmed" });

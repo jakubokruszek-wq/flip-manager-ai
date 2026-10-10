@@ -42,7 +42,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
         source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
         title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
         rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
-        marketType: typeof raw.marketType === "string" ? raw.marketType : null,
+        marketType: resolveOlxMarketType(raw),
         propertyType: typeof raw.propertyType === "string" ? raw.propertyType : null,
         rawPayload: raw, contentHash: listing.contentHash,
       });
@@ -98,4 +98,22 @@ function sourceDate(raw: Record<string, unknown>): string | null {
     if (typeof value === "string" && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
   }
   return null;
+}
+
+function resolveOlxMarketType(raw: Record<string, unknown>): string | null {
+  const params = Array.isArray(raw.params) ? raw.params : [];
+  const marketParam = params.find((value) => isRecord(value) && value.key === "market");
+  const paramValue = isRecord(marketParam)
+    ? typeof marketParam.normalizedValue === "string" ? marketParam.normalizedValue : typeof marketParam.value === "string" ? marketParam.value : null
+    : null;
+  const sourceValue = typeof raw.marketType === "string" ? raw.marketType : paramValue;
+  const value = sourceValue?.normalize("NFD").replace(/[\u0300-\u036f]/gu, "").toLocaleLowerCase("pl-PL").trim();
+  if (!value) return null;
+  if (/\b(primary|pierwotn\p{L}*|dewelopersk\p{L}*)\b/iu.test(value)) return "primary";
+  if (/\b(secondary|resale|wtorn\p{L}*)\b/iu.test(value)) return "secondary";
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

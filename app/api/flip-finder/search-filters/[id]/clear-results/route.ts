@@ -6,8 +6,9 @@ import { LISTING_SOURCES } from "@/features/flip-finder";
 type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {
+  let operator: Awaited<ReturnType<typeof requireOperator>>;
   try {
-    await requireOperator();
+    operator = await requireOperator();
   } catch (error) {
     return operatorAuthorizationResponse(error);
   }
@@ -16,7 +17,7 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
   const source = typeof body?.source === "string" && (LISTING_SOURCES as readonly string[]).includes(body.source) ? body.source as (typeof LISTING_SOURCES)[number] : undefined;
   const olderThanDays = typeof body?.olderThanDays === "number" && Number.isFinite(body.olderThanDays) && body.olderThanDays > 0 ? body.olderThanDays : undefined;
   try {
-    const result = await clearFilterResults(filterId, { source, olderThanDays });
+    const result = await clearFilterResults(filterId, { source, olderThanDays }, operator.id);
     return Response.json({ ok: true, ...result });
   } catch (error) {
     if (error instanceof ClearResultsConflictError) {

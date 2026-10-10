@@ -24,10 +24,10 @@ export class ClearResultsConflictError extends Error {
  * lifecycle, current decision and source validation cannot drift from the UI.
  * Listings, snapshots, CRM/deals and other filters are never modified.
  */
-export async function clearFilterResults(filterId: string, scope: ClearResultsScope = {}): Promise<ClearResultsSummary> {
+export async function clearFilterResults(filterId: string, scope: ClearResultsScope = {}, operatorId?: string): Promise<ClearResultsSummary> {
   const supabase = createAdminClient();
   await assertNoActiveFinderWork(supabase, filterId);
-  const payload = await getFilterResults(filterId, false);
+  const payload = await getFilterResults(filterId, false, Date.now(), operatorId);
   if (!payload) throw new Error("Nie znaleziono filtra.");
   const cutoff = typeof scope.olderThanDays === "number" && scope.olderThanDays > 0
     ? Date.now() - scope.olderThanDays * 86_400_000

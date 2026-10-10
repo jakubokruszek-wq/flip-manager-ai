@@ -79,6 +79,22 @@ test("OLX worker records strict rejection reasons without persisting an unqualif
   assert.equal((finalized[0].p_qualified_count as number), 1, "the persisted run count remains the preexisting total plus zero new qualifications");
 });
 
+test("OLX worker maps the portal's structured market parameter before strict Radar qualification", async () => {
+  persisted = [];
+  finalized = [];
+  currentRunToken = radarLeaseToken;
+  const olxListing = {
+    ...candidate(),
+    description: "Sprzedaż mieszkania. Świeżo po generalnym remoncie w 2025, nowe instalacje, gotowe do zamieszkania.",
+    rawPayload: { params: [{ key: "market", normalizedValue: "wtórny" }] },
+  };
+  const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
+    fetched: 1, listings: [olxListing as never], warnings: [], durationMs: 1200,
+  }, fakeDb() as never);
+  assert.deepEqual(result, { source: "olx", status: "completed", fetched: 1, qualified: 1 });
+  assert.equal(persisted.length, 1, "a positive structured 'wtórny' value is mapped to secondary; all other strict checks still pass");
+});
+
 test("a stale Radar lease cannot persist or finalize an OLX worker result", async () => {
   persisted = [];
   finalized = [];

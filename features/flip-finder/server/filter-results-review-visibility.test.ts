@@ -126,6 +126,97 @@ mock.module("@/features/auth/operator", {
   },
 });
 const { GET: getFilterResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/results/route.ts");
+const { GET: getFilterListRoute } = await import("../../../app/api/flip-finder/search-filters/route.ts");
+const { POST: clearFilterResultsRoute } = await import("../../../app/api/flip-finder/search-filters/[id]/clear-results/route.ts");
+
+test("filter-list counts use the same grouped visible MATCHED + REVIEW read path and remain zero after clear/refresh", async () => {
+  const filter = { ...CHORALNA_FILTER_ROW, sources: ["otodom"] };
+  const makePortalListing = (id: string, overrides: Record<string, unknown> = {}) => listingRow({
+    id,
+    external_listing_id: id,
+    source: "otodom",
+    original_url: `https://www.otodom.pl/pl/oferta/${id}`,
+    title: "Mieszkanie w bloku, Łódź, 2 pokoje",
+    price: 295000,
+    area: 47,
+    price_per_sqm: 295000 / 47,
+    building_type: "blok",
+    ownership: "pełna własność",
+    lifecycle_status: "ACTIVE",
+    review_reason: null,
+    missing_fields: [],
+    manual_decision: null,
+    ...overrides,
+  });
+  const listings = [
+    makePortalListing("visible-matched"),
+    makePortalListing("visible-review", { area: null, price_per_sqm: null, lifecycle_status: "REVIEW", review_reason: "unknown_area", missing_fields: ["area"] }),
+    makePortalListing("already-cleared", { lifecycle_status: "REVIEW", review_reason: "unknown_area", missing_fields: ["area"] }),
+    makePortalListing("manual-rejected", { manual_decision: "REJECTED", manual_decision_reason: "not suitable" }),
+  ];
+  const memberships = [
+    ...[
+      membershipRow("visible-matched", { is_current_match: true, match_reasons: [] }),
+      membershipRow("visible-review", { is_current_match: false, match_reasons: ["review", "unknown_area"] }),
+      membershipRow("already-cleared", { is_current_match: true, match_reasons: ["review", "finder_cleared"] }),
+      membershipRow("manual-rejected", { is_current_match: true, match_reasons: [] }),
+    ].map((row) => ({ ...row, id: `${FILTER_ID}:${String(row.listing_id)}` })),
+  ];
+  const db = freshDb().seed("search_filters", [filter]).seed("listings", listings)
+    .seed("listing_filter_matches", memberships).seed("listing_snapshots", []).seed("source_scans", []).seed("resale_comps", []);
+  currentDb = db;
+  operatorAuthorizationFails = false;
+
+  const listBeforeResponse = await getFilterListRoute();
+  assert.equal(listBeforeResponse.status, 200);
+  const listBefore = await listBeforeResponse.json() as { filters: Array<{ id: string; totalMatches: number; currentMembershipRows: number; membershipRows: number }> };
+  assert.equal(listBefore.filters[0]?.totalMatches, 2, "one MATCHED plus one REVIEW card are visible after clear, status, price, age and manual-decision rules");
+  assert.equal(listBefore.filters[0]?.currentMembershipRows, 3, "raw current rows remain diagnostic and include a cleared tombstone and a manual rejection");
+  assert.equal(listBefore.filters[0]?.membershipRows, 4, "the raw membership diagnostic also includes the explicit REVIEW row that is not current MATCHED");
+
+  const clearResponse = await clearFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/clear-results`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  }), { params: Promise.resolve({ id: FILTER_ID }) });
+  assert.equal(clearResponse.status, 200);
+  assert.deepEqual(await clearResponse.json(), { ok: true, archivedCount: 2 });
+
+  const listAfterResponse = await getFilterListRoute();
+  assert.equal(listAfterResponse.status, 200);
+  const listAfter = await listAfterResponse.json() as { filters: Array<{ id: string; totalMatches: number; currentMembershipRows: number; membershipRows: number }> };
+  assert.equal(listAfter.filters[0]?.totalMatches, 0, "refreshing the filter-list endpoint must not restore cleared MATCHED or REVIEW cards");
+  assert.equal(listAfter.filters[0]?.currentMembershipRows, 2, "diagnostic rows can remain without being represented as visible cards");
+  assert.equal(listAfter.filters[0]?.membershipRows, 4, "clearing preserves all audit membership rows while both visible counters stay zero");
+
+  const detailResponse = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
+  const detail = await detailResponse.json() as { results: unknown[]; reviewResults: unknown[]; counts: { active: number; review: number } };
+  assert.equal(detailResponse.status, 200);
+  assert.deepEqual(detail.results, []);
+  assert.deepEqual(detail.reviewResults, []);
+  assert.deepEqual(detail.counts, { active: 0, review: 0, archived: 0 });
+});
+
+test("filter-list membership diagnostics page past the PostgREST row cap before deciding a filter is empty", async () => {
+  const filter = { ...CHORALNA_FILTER_ROW, sources: ["otodom"] };
+  const lastVisibleId = "visible-after-postgrest-cap";
+  const membershipRows = Array.from({ length: 1_000 }, (_, index) => membershipRow(`not-loaded-${index}`, { is_current_match: true, match_reasons: [] }));
+  membershipRows.push(membershipRow(lastVisibleId, { is_current_match: true, match_reasons: [] }));
+  const db = freshDb()
+    .seed("search_filters", [filter])
+    .seed("listings", [listingRow({ id: lastVisibleId, source: "otodom", original_url: `https://www.otodom.pl/pl/oferta/${lastVisibleId}`, lifecycle_status: "ACTIVE", review_reason: null, missing_fields: [] })])
+    .seed("listing_filter_matches", membershipRows)
+    .seed("listing_snapshots", [])
+    .seed("source_scans", [])
+    .seed("resale_comps", []);
+  currentDb = db;
+  operatorAuthorizationFails = false;
+
+  const response = await getFilterListRoute();
+  assert.equal(response.status, 200);
+  const body = await response.json() as { filters: Array<{ totalMatches: number; currentMembershipRows: number; membershipRows: number }> };
+  assert.equal(body.filters[0]?.membershipRows, 1_001, "diagnostic paging must see the final saved relationship beyond the default 1,000-row page");
+  assert.equal(body.filters[0]?.currentMembershipRows, 1_001);
+  assert.equal(body.filters[0]?.totalMatches, 1, "the filter must still run the canonical read path after page one and show its actual visible listing");
+});
 
 function assertNoFacebookScanContact(db: FakeFacebookSupabase) {
   const accesses = db.accessLog();

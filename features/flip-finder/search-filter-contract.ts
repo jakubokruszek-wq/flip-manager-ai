@@ -10,7 +10,12 @@ import { isActiveFilterSource } from "@/features/flip-finder/source-availability
 export type SearchFilterInput = Omit<SearchFilter, "id" | "lastScannedAt" | "createdAt" | "updatedAt">;
 
 export type SearchFilterListItem = SearchFilter & {
+  /** Number of final, grouped cards visible in MATCHED + REVIEW for this filter. */
   totalMatches: number;
+  /** Diagnostic count of current membership rows before visibility and grouping rules. */
+  currentMembershipRows?: number;
+  /** Diagnostic count of all saved membership rows; an empty filter has no visible cards. */
+  membershipRows?: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
 };
@@ -45,6 +50,11 @@ export type SearchFilterListResponse = {
     removedListings: number;
     newMatches: number;
   };
+};
+
+/** Intermediate, server-only list data before the route enriches final card counts. */
+export type SearchFilterListBaseResponse = Omit<SearchFilterListResponse, "filters"> & {
+  filters: Array<Omit<SearchFilterListItem, "totalMatches">>;
 };
 
 type SearchFilterSourceOptionDefinition = { value: ListingSource; label: string };

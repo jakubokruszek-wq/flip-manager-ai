@@ -157,7 +157,12 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate): Qualif
   if (!district) return reject("district_not_confirmed");
   if (!candidate.city || candidate.city.trim().toLocaleLowerCase("pl-PL") !== "łódź") return reject("city_not_lodz");
 
-  if (RENTAL_PATTERN.test(text)) return reject("rental");
+  // "Pod wynajem" describes a possible investment use of a property, not the
+  // current transaction. Sale pages often contain phrases such as "idealne
+  // pod wynajem", so remove only this use-case phrase before checking the
+  // existing strict rental-intent patterns.
+  const rentalIntentText = text.replace(/\bpod\s+wynajem\b/giu, " ");
+  if (RENTAL_PATTERN.test(rentalIntentText)) return reject("rental");
   if (SHARE_PATTERN.test(text)) return reject("share");
   if (COMMERCIAL_PATTERN.test(text)) return reject("commercial");
   if (PLOT_PATTERN.test(text)) return reject("plot");

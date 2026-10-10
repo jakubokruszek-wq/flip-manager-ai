@@ -5,7 +5,7 @@ import {
   isListingSource,
   isMarketType,
   type SearchFilterInput,
-  type SearchFilterListResponse,
+  type SearchFilterListBaseResponse,
   type SearchFilterScan,
 } from "@/features/flip-finder/search-filter-contract";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -54,12 +54,13 @@ export function searchFilterWriteFailureResponse(error: unknown, fallbackMessage
 
 const SOURCE_SCAN_COLUMNS =
   "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message,filter_snapshot";
+const MEMBERSHIP_PAGE_SIZE = 1_000;
 
-export async function listSearchFilters(): Promise<SearchFilterListResponse> {
+export async function listSearchFilters(): Promise<SearchFilterListBaseResponse> {
   const supabase = await createClient();
   const [filtersResult, matchesResult, listingsResult, scansResult, completedScansResult] = await Promise.all([
     supabase.from("search_filters").select("*").order("updated_at", { ascending: false }),
-    supabase.from("listing_filter_matches").select("search_filter_id").eq("is_current_match", true),
+    fetchAllFilterMembershipRows(supabase),
     supabase.from("listings").select("id,status,lifecycle_status"),
     supabase.from("source_scans").select(SOURCE_SCAN_COLUMNS).order("started_at", { ascending: false }).limit(SOURCE_SCAN_PAGE_LIMIT),
     supabase.from("source_scans").select(SOURCE_SCAN_COLUMNS).eq("status", "completed").not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(SOURCE_SCAN_PAGE_LIMIT),
@@ -73,12 +74,18 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
     throw new Error("Nie udało się pobrać filtrów.");
   }
 
+  // This diagnostic counts current membership rows only. The GET route replaces
+  // totalMatches with the authoritative visible-card count from getFilterResults
+  // after lifecycle, tombstone, manual-decision, price, publication-window,
+  // identity-grouping, and filter-rule checks.
   const matchCounts = new Map<string, number>();
+  const membershipCounts = new Map<string, number>();
   for (const match of asRows(matchesResult.data)) {
     const filterId = asString(match.search_filter_id);
 
     if (filterId) {
-      matchCounts.set(filterId, (matchCounts.get(filterId) ?? 0) + 1);
+      membershipCounts.set(filterId, (membershipCounts.get(filterId) ?? 0) + 1);
+      if (match.is_current_match === true) matchCounts.set(filterId, (matchCounts.get(filterId) ?? 0) + 1);
     }
   }
 
@@ -100,7 +107,8 @@ export async function listSearchFilters(): Promise<SearchFilterListResponse> {
     .map(toSearchFilter)
     .map((filter) => ({
       ...filter,
-      totalMatches: matchCounts.get(filter.id) ?? 0,
+      currentMembershipRows: matchCounts.get(filter.id) ?? 0,
+      membershipRows: membershipCounts.get(filter.id) ?? 0,
       newMatches: latestCompletedScans.get(filter.id)?.newCount ?? 0,
       lastScan: latestScans.get(filter.id) ?? null,
     }));
@@ -138,6 +146,23 @@ export async function getSearchFilter(id: string, options: { supabase?: ReturnTy
   }
 
   return data ? toSearchFilter(asRow(data)) : null;
+}
+
+async function fetchAllFilterMembershipRows(supabase: Awaited<ReturnType<typeof createClient>>): Promise<{ data: unknown[] | null; error: unknown }> {
+  const rows: unknown[] = [];
+  let from = 0;
+  while (true) {
+    const page = await supabase.from("listing_filter_matches")
+      .select("search_filter_id,listing_id,is_current_match")
+      .order("search_filter_id", { ascending: true })
+      .order("listing_id", { ascending: true })
+      .range(from, from + MEMBERSHIP_PAGE_SIZE - 1);
+    if (page.error) return { data: null, error: page.error };
+    const batch = asRows(page.data);
+    rows.push(...batch);
+    if (batch.length < MEMBERSHIP_PAGE_SIZE) return { data: rows, error: null };
+    from += batch.length;
+  }
 }
 
 /**

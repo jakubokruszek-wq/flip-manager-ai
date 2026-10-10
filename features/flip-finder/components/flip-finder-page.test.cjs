@@ -64,6 +64,13 @@ test("saved listings database is labeled independently from the latest scan", ()
   assert.doesNotMatch(inlineResults, /Znalezione oferty:/);
 });
 
+test("filter dashboard labels its canonical visible result count separately from last-scan telemetry", () => {
+  assert.match(page, /Widoczne oferty: \{formatNumber\(filter\.totalMatches \?\? 0\)\}/);
+  assert.match(page, /Nowe w ostatnim skanie: \{formatNumber\(filter\.newMatches \?\? 0\)\}/);
+  assert.doesNotMatch(page, /Zapisane powiązania: \{formatNumber\(filter\.totalMatches/);
+  assert.doesNotMatch(page, /Wszystkie dopasowania: \{formatNumber\(filter\.totalMatches/);
+});
+
 test("Finder keeps offer results primary and hides filter configuration until requested", () => {
   assert.match(page, /Ustawienia filtra/);
   assert.match(page, /<details className="relative">[\s\S]*FilterActions filter=\{activeFilter\}/);

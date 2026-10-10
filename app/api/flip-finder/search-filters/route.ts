@@ -1,17 +1,46 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 
 import { createSearchFilter, listSearchFilters, parseSearchFilterInput, searchFilterWriteFailureResponse } from "@/features/flip-finder/server/search-filters";
+import { getFilterResults } from "@/features/flip-finder/server/filter-results";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
 import type { SearchFilterInput } from "@/features/flip-finder/search-filter-contract";
 
+export const maxDuration = 60;
+
 export async function GET() {
+  let operator: Awaited<ReturnType<typeof requireOperator>>;
   try {
-    await requireOperator();
+    operator = await requireOperator();
   } catch (error) {
     return operatorAuthorizationResponse(error);
   }
-  try { return Response.json(await listSearchFilters()); }
+  try {
+    const payload = await listSearchFilters();
+    const now = Date.now();
+    const filters = await mapWithConcurrency(payload.filters, 3, async (filter) => {
+      if (filter.membershipRows === 0) return { ...filter, totalMatches: 0 };
+      const results = await getFilterResults(filter.id, false, now, operator.id);
+      return {
+        ...filter,
+        totalMatches: results ? results.results.length + results.reviewResults.length : 0,
+      };
+    });
+    return Response.json({ ...payload, filters });
+  }
   catch { return Response.json({ message: "Nie udało się pobrać filtrów." }, { status: 500 }); }
+}
+
+async function mapWithConcurrency<T, R>(items: readonly T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const output = new Array<R>(items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      output[index] = await mapper(items[index]!);
+    }
+  }));
+  return output;
 }
 
 export async function POST(request: Request) {
