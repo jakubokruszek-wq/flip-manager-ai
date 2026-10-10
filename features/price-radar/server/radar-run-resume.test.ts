@@ -74,6 +74,23 @@ test("an expired run with its pointer at the end can still reclaim its pending r
   assert.equal(db.updates, 1);
 });
 
+test("an expired run at the end with two pending sources reclaims the same run without resetting either cursor", async () => {
+  const checkpoint = {
+    sourceQueue: ["morizon", "domiporta"], currentSourceIndex: 2,
+    sourceStatuses: { morizon: "pending", domiporta: "pending" }, sourceErrors: {},
+    perSourceCursor: { morizon: 3, domiporta: { kind: "radar_detail_v1", page: 4, candidateIndex: 12 } },
+  };
+  const db = fakeDb(run({ checkpoint }));
+  const result = await resumeExistingRadarRun("owner-1", "radar-run-current", db as never);
+
+  assert.equal(result.kind, "claimed", "the end pointer is valid as long as at least one queued source is unfinished");
+  if (result.kind !== "claimed") return;
+  assert.equal(result.run.id, "radar-run-current", "resume never creates a replacement run");
+  assert.deepEqual(db.rows[0]?.checkpoint, checkpoint, "the reclaim preserves both pending statuses and each source's saved cursor");
+  assert.notEqual(result.run.leaseToken, "old-token", "the resumed work is fenced by the newly claimed lease");
+  assert.equal(db.updates, 1);
+});
+
 test("two resume requests for one expired run have one compare-and-set winner", async () => {
   const db = fakeDb(run());
   const results = await Promise.all([
