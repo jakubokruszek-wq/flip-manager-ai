@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
+import { SourceBatchYield } from "@/features/flip-finder/source-batches";
 
 type Row = Record<string, unknown>;
 const ownerId = "owner-test";
@@ -117,7 +118,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("tests must pass an explicit fake db, never the real admin client"); } } });
 
 type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number };
-type FakeBatchContext = { cursor?: number; onBatch(batch: FakeBatch, nextCursor: number | null): Promise<void> };
+type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
 let fakeSourceImpl: (id: string, cursor?: number, batches?: FakeBatchContext, signal?: AbortSignal) => Promise<{ listings: unknown[]; warnings: string[]; fetched: number }>;
 const mockedSources = [
   { id: "domiporta", label: "Domiporta", fetch: async (_criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => fakeSourceImpl("domiporta", batches?.cursor, batches, signal) },
@@ -238,13 +239,78 @@ test("a source that times out mid-portion is marked pending with an honest messa
   if (claimed.kind !== "claimed") throw new Error("expected claimed");
   const first = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
   assert.equal(first.sourceStatuses.domiporta, "pending");
+  assert.equal(first.sourceStatuses.morizon, "completed", "the timed-out source must move behind the other source in the same run");
+  assert.equal(first.status, "running", "the same run remains resumable while Domiporta is pending");
+  const firstStoredRun = db.tables.price_radar_runs[0] as Row;
+  const firstCheckpoint = firstStoredRun.checkpoint as { sourceQueue: string[] };
+  assert.deepEqual(firstCheckpoint.sourceQueue, ["morizon", "domiporta"]);
   assert.doesNotMatch(first.sourceErrors.domiporta ?? "", /NEXT_DAILY_WINDOW/, "must not reintroduce the old label claiming a specific daily wait that no code enforces");
   assert.match(first.sourceErrors.domiporta ?? "", /najbliższym uruchomieniu/);
 
   const second = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
   assert.equal(domiportaAttempts, 2, "the very next portion call, not a day later, must retry the same pending source");
+  assert.equal(claimed.run.id, db.tables.price_radar_runs[0]?.id, "continuation must retain the original run ID");
+  assert.equal(((db.tables.price_radar_runs[0] as Row).source_statuses as Record<string, unknown>).morizon, "completed", "a completed source is not repeated during resume");
   assert.equal(second.status, "completed");
   assert.equal(second.sourceStatuses.domiporta, "completed");
+});
+
+test("a detail-batch yield checkpoints its cursor and lets later sources progress before retrying that source", async () => {
+  const db = fakeDb();
+  let domiportaCalls = 0;
+  let morizonCalls = 0;
+  let resumedCursor: FakeBatchContext["radarDetailCursor"] = undefined;
+  fakeSourceImpl = async (id, _cursor, batches) => {
+    if (id === "domiporta") {
+      domiportaCalls += 1;
+      if (domiportaCalls === 1) {
+        await batches!.onBatch({ listings: [qualifyingListing("domiporta-page-1", id)], warnings: [], fetched: 1 }, { kind: "radar_detail_v1", page: 2, candidateIndex: 12 });
+        throw new SourceBatchYield("detail_batch_limit");
+      }
+      resumedCursor = batches?.radarDetailCursor;
+      return { listings: [qualifyingListing("domiporta-resumed", id)], warnings: [], fetched: 1 };
+    }
+    morizonCalls += 1;
+    return { listings: [qualifyingListing("morizon-once", id)], warnings: [], fetched: 1 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const first = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  assert.equal(first.status, "running");
+  assert.equal(first.sourceStatuses.domiporta, "pending");
+  assert.equal(first.sourceStatuses.morizon, "completed", "a source that yielded a normal detail batch cannot hold later sources behind it");
+  const firstStoredRun = db.tables.price_radar_runs[0] as Row;
+  const firstCheckpoint = firstStoredRun.checkpoint as { perSourceCursor: Record<string, unknown>; sourceQueue: string[] };
+  assert.deepEqual(firstCheckpoint.perSourceCursor.domiporta, { kind: "radar_detail_v1", page: 2, candidateIndex: 12 });
+  assert.deepEqual(firstCheckpoint.sourceQueue, ["morizon", "domiporta"]);
+
+  const resumed = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  assert.deepEqual(resumedCursor, { kind: "radar_detail_v1", page: 2, candidateIndex: 12 }, "the original detail cursor is preserved across the source rotation");
+  assert.equal(morizonCalls, 1, "the completed later source is not fetched again");
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.sourceStatuses.domiporta, "completed");
+  assert.equal(db.tables.price_radar_runs[0]?.id, claimed.run.id);
+});
+
+test("a resumed Domiporta detail cursor clears only its stale portion-timeout diagnostic after successful completion", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id) => ({ listings: [qualifyingListing(`${id}-resumed`, id)], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  const row = db.tables.price_radar_runs[0]!;
+  const checkpoint = row.checkpoint as Record<string, unknown>;
+  row.checkpoint = {
+    ...checkpoint,
+    perSourceCursor: { domiporta: { kind: "radar_detail_v1", page: 2, candidateIndex: 12 } },
+    sourceStatuses: { domiporta: "pending" },
+    sourceErrors: { domiporta: "RADAR_PORTION_TIME_BUDGET_EXCEEDED: retry at next portion" },
+  };
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  assert.equal(result.status, "completed", "a successful retry of a detailed cursor must not inherit the prior transient timeout as a terminal error");
+  assert.equal(result.sourceStatuses.domiporta, "completed");
+  assert.equal(result.sourceErrors.domiporta, undefined);
 });
 
 test("re-collecting the same listing preserves a prior exclusion -- persistRadarListing's upsert never writes excluded_at/excluded_reason", async () => {

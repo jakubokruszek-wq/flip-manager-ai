@@ -126,9 +126,12 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
   if (oldLeaseUntil && !Number.isFinite(Date.parse(oldLeaseUntil))) return { kind: "blocked", reason: "inconsistent_run" };
   if (oldLeaseUntil && Date.parse(oldLeaseUntil) > now) return { kind: "blocked", reason: "lease_active" };
 
-  const source = run.checkpoint.sourceQueue[run.checkpoint.currentSourceIndex];
-  if (!source || !isRecord(run.checkpoint.sourceStatuses) || !Object.hasOwn(run.checkpoint.sourceStatuses, source)) return { kind: "blocked", reason: "inconsistent_run" };
-  if (source === "olx" && run.checkpoint.sourceStatuses.olx === "running") {
+  const checkpoint = run.checkpoint;
+  if (!Array.isArray(checkpoint.sourceQueue) || !isRecord(checkpoint.sourceStatuses)) return { kind: "blocked", reason: "inconsistent_run" };
+  if (!Number.isInteger(checkpoint.currentSourceIndex) || checkpoint.currentSourceIndex < 0 || checkpoint.currentSourceIndex > checkpoint.sourceQueue.length
+    || checkpoint.sourceQueue.some((source) => !Object.hasOwn(checkpoint.sourceStatuses, source))) return { kind: "blocked", reason: "inconsistent_run" };
+  if (nextUnfinishedSourceIndex(checkpoint, checkpoint.currentSourceIndex) === null) return { kind: "blocked", reason: "inconsistent_run" };
+  if (checkpoint.sourceQueue.some((source) => source === "olx" && checkpoint.sourceStatuses.olx === "running")) {
     return { kind: "blocked", reason: "olx_queue_owns_source" };
   }
 
@@ -152,9 +155,9 @@ export type RadarPortionResult = { status: "running" | "completed" | "failed" | 
 
 /**
  * Runs one time-boxed source portion. Every listing write and every checkpoint
- * is lease-fenced in SQL. A timeout leaves the current source pending for the
- * next collection invocation; a permanent source error is terminal for this run,
- * recorded, and does not discard results from other sources.
+ * is lease-fenced in SQL. A timeout keeps the current source pending and moves
+ * it behind other unfinished sources, so a repeatedly slow portal cannot starve
+ * the rest of this run. A permanent source error is terminal for this run.
  */
 export async function runRadarCollectionPortion(input: { runId: string; ownerId: string; leaseToken: string }, supabase: SupabaseClient = createAdminClient()): Promise<RadarPortionResult> {
   const started = Date.now();
@@ -169,16 +172,33 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   let qualified = run.qualifiedCount;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), PORTION_BUDGET_MS);
+  const attemptedSourceIds = new Set<RadarSource>();
   try {
-    while (checkpoint.currentSourceIndex < checkpoint.sourceQueue.length) {
+    while (checkpoint.sourceQueue.length > 0) {
       if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) break;
-      const sourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
+      const currentSourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
+      if (!currentSourceId || attemptedSourceIds.has(currentSourceId)) {
+        const nextIndex = nextUnfinishedSourceIndex(checkpoint, currentSourceId ? checkpoint.currentSourceIndex + 1 : 0, attemptedSourceIds);
+        if (nextIndex === null) {
+          checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
+          break;
+        }
+        checkpoint.currentSourceIndex = nextIndex;
+      }
+      const sourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex]!;
       if (checkpoint.perSourceCursor[sourceId] === SOURCE_DONE_CURSOR) {
         checkpoint.sourceStatuses[sourceId] = checkpoint.sourceErrors[sourceId] ? "failed" : "completed";
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
         continue;
       }
+      if (checkpoint.sourceStatuses[sourceId] === "completed" || checkpoint.sourceStatuses[sourceId] === "failed") {
+        checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
+        checkpoint.currentSourceIndex += 1;
+        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+        continue;
+      }
+      attemptedSourceIds.add(sourceId);
       const source = activeSources(syntheticCriteria(sourceId)).find((candidate) => candidate.id === sourceId);
       if (!source) {
         checkpoint.sourceStatuses[sourceId] = "failed";
@@ -189,7 +209,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       }
 
       checkpoint.sourceStatuses[sourceId] = "running";
-      if (!isRadarDetailCursor(checkpoint.perSourceCursor[sourceId])) delete checkpoint.sourceErrors[sourceId];
+      if (!isRadarDetailCursor(checkpoint.perSourceCursor[sourceId]) || checkpoint.sourceErrors[sourceId]?.startsWith("RADAR_PORTION_TIME_BUDGET_EXCEEDED:")) delete checkpoint.sourceErrors[sourceId];
       await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
       try {
         if (sourceId === "olx") {
@@ -260,8 +280,20 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       } catch (reason) {
         if (reason instanceof SourceBatchYield) {
           checkpoint.sourceStatuses[sourceId] = "pending";
+          const currentIndex = checkpoint.currentSourceIndex;
+          if (currentIndex < checkpoint.sourceQueue.length - 1) {
+            const [deferredSource] = checkpoint.sourceQueue.splice(currentIndex, 1);
+            if (deferredSource) checkpoint.sourceQueue.push(deferredSource);
+          }
+          const nextIndex = nextUnfinishedSourceIndex(checkpoint, checkpoint.currentSourceIndex, attemptedSourceIds);
+          if (nextIndex === null) {
+            checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
+            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+            break;
+          }
+          checkpoint.currentSourceIndex = nextIndex;
           await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-          break;
+          continue;
         }
         if (isRetryableTimeout(reason, controller.signal)) {
           checkpoint.sourceStatuses[sourceId] = "pending";
@@ -274,7 +306,20 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           // same source back up via its retained cursor. The previous label
           // claimed a specific "daily window" that does not exist in code.
           checkpoint.sourceErrors[sourceId] = "RADAR_PORTION_TIME_BUDGET_EXCEEDED: zostanie wznowione przy najbliższym uruchomieniu zbierania (ręcznym lub zaplanowanym), nie wymaga czekania do następnego dnia.";
-          break;
+          const currentIndex = checkpoint.currentSourceIndex;
+          if (currentIndex < checkpoint.sourceQueue.length - 1) {
+            const [deferredSource] = checkpoint.sourceQueue.splice(currentIndex, 1);
+            if (deferredSource) checkpoint.sourceQueue.push(deferredSource);
+          }
+          const nextIndex = nextUnfinishedSourceIndex(checkpoint, checkpoint.currentSourceIndex, attemptedSourceIds);
+          if (nextIndex === null) {
+            checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
+            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+            break;
+          }
+          checkpoint.currentSourceIndex = nextIndex;
+          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+          continue;
         }
         checkpoint.sourceStatuses[sourceId] = "failed";
         checkpoint.sourceErrors[sourceId] = sourceError(reason);
@@ -287,7 +332,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
     clearTimeout(timeoutId);
   }
 
-  const done = checkpoint.currentSourceIndex >= checkpoint.sourceQueue.length;
+  const done = checkpoint.sourceQueue.every((source) => checkpoint.sourceStatuses[source] === "completed" || checkpoint.sourceStatuses[source] === "failed");
+  if (done) checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
   const failedSources = Object.values(checkpoint.sourceStatuses).filter((status) => status === "failed").length;
   const finalStatus: RadarRunStatus = done ? failedSources === 0 ? "completed" : failedSources === checkpoint.sourceQueue.length ? "failed" : "partial" : "running";
   const errorMessage = Object.entries(checkpoint.sourceErrors).map(([sourceId, message]) => `${sourceId}: ${message}`).join("\n").slice(0, 2000) || null;
@@ -320,4 +366,19 @@ function isRadarDetailCursor(value: unknown): value is RadarDetailCursor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const cursor = value as Partial<RadarDetailCursor>;
   return cursor.kind === "radar_detail_v1" && Number.isInteger(cursor.page) && Number(cursor.page) > 0 && Number.isInteger(cursor.candidateIndex) && Number(cursor.candidateIndex) >= 0;
+}
+
+function nextUnfinishedSourceIndex(checkpoint: RadarCheckpoint, startIndex: number, attempted: ReadonlySet<RadarSource> = new Set()): number | null {
+  const queue = checkpoint.sourceQueue;
+  if (!queue.length) return null;
+  const start = ((startIndex % queue.length) + queue.length) % queue.length;
+  for (let offset = 0; offset < queue.length; offset += 1) {
+    const index = (start + offset) % queue.length;
+    const source = queue[index];
+    if (!source || attempted.has(source)) continue;
+    const status = checkpoint.sourceStatuses[source];
+    if (status === "completed" || status === "failed" || checkpoint.perSourceCursor[source] === SOURCE_DONE_CURSOR) continue;
+    return index;
+  }
+  return null;
 }

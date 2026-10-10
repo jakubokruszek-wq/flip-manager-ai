@@ -59,6 +59,21 @@ test("an expired lease is reclaimed by compare-and-set for the exact run ID and 
   assert.equal(db.updates, 1);
 });
 
+test("an expired run with its pointer at the end can still reclaim its pending rotated source", async () => {
+  const checkpoint = {
+    sourceQueue: ["morizon", "domiporta"], currentSourceIndex: 2,
+    sourceStatuses: { morizon: "completed", domiporta: "pending" }, sourceErrors: {},
+    perSourceCursor: { domiporta: { kind: "radar_detail_v1", page: 2, candidateIndex: 12 } },
+  };
+  const db = fakeDb(run({ checkpoint }));
+  const result = await resumeExistingRadarRun("owner-1", "radar-run-current", db as never);
+  assert.equal(result.kind, "claimed", "the same run remains resumable when the next pending source wraps around the rotated queue");
+  if (result.kind !== "claimed") return;
+  assert.equal(result.run.id, "radar-run-current");
+  assert.deepEqual(db.rows[0]?.checkpoint, checkpoint, "reclaim does not reset or replace the source cursor");
+  assert.equal(db.updates, 1);
+});
+
 test("two resume requests for one expired run have one compare-and-set winner", async () => {
   const db = fakeDb(run());
   const results = await Promise.all([
@@ -75,6 +90,7 @@ test("a live lease, terminal run, mismatched run ID, or active OLX queue source 
     ["live lease", run({ lease_until: new Date(Date.now() + 60_000).toISOString() }), "lease_active"],
     ["terminal run", run({ status: "partial" }), "run_changed"],
     ["OLX queue source", run({ checkpoint: { sourceQueue: ["olx"], currentSourceIndex: 0, sourceStatuses: { olx: "running" }, sourceErrors: {}, perSourceCursor: {} } }), "olx_queue_owns_source"],
+    ["OLX queue source behind rotated pointer", run({ checkpoint: { sourceQueue: ["morizon", "olx"], currentSourceIndex: 2, sourceStatuses: { morizon: "completed", olx: "running" }, sourceErrors: {}, perSourceCursor: {} } }), "olx_queue_owns_source"],
   ];
   for (const [label, row, reason] of cases) await t.test(label, async () => {
     const db = fakeDb(row);
