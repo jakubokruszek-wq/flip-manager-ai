@@ -453,10 +453,10 @@ function safeDiagnosticUrl(value: string | null): string | null {
     url.pathname = url.pathname
       .replace(/[\w.+-]+@[\w.-]+\.[A-Z]{2,}/giu, "[redacted]")
       .replace(/\+?\d[\d ().-]{7,}\d/gu, (candidate, offset: number, path: string) => {
-        // Oferty.net's public IDs are either the numeric suffix after `-fb,`
-        // in the SEO route or the canonical `/of,<id>` route. They look like
-        // phone numbers to the generic contact-data scrubber.
-        const publicOfferId = (/^\/mieszkanie[^/]*-fb,$/u.test(path.slice(0, offset))
+        // Oferty.net's public IDs follow a two-letter route suffix (for
+        // example `-fb,`, `-ba,`, or `-fa,`) in SEO routes, or use canonical
+        // `/of,<id>`. They look like phone numbers to the contact scrubber.
+        const publicOfferId = (/^\/mieszkanie[^/]*-[a-z]{2},$/u.test(path.slice(0, offset))
           || /^\/of,$/u.test(path.slice(0, offset))) && /^\d{6,}$/u.test(candidate)
           && /(?:\/|$)/u.test(path.slice(offset + candidate.length));
         const publicDomiportaId = /^\/nieruchomosci\/sprzedam-mieszkanie-[^/]+\/$/u.test(path.slice(0, offset))

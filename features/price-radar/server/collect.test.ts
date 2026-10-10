@@ -373,6 +373,7 @@ test("detail diagnostics retain public Oferty.net and Domiporta IDs while scrubb
     if (id === "domiporta" && batches) await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [
       { kind: "detail_not_confirmed", listingUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-fb,1543068412?token=secret", finalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-fb,1543068412#contact", httpStatus: 200, identity: "same_url", unconfirmedFields: ["market_type"], contradictoryFields: [] },
       { kind: "detail_not_confirmed", listingUrl: "https://www.oferty.net/of,1543068412?token=secret", finalUrl: "https://www.oferty.net/of,1543068412#contact", httpStatus: 200, identity: "same_url", unconfirmedFields: ["market_type"], contradictoryFields: [] },
+      { kind: "detail_not_confirmed", listingUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-baluty-ba,1543068412?src=portal", finalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-baluty-ba,1543068412", httpStatus: 200, identity: "same_url", unconfirmedFields: ["district"], contradictoryFields: [] },
       { kind: "detail_not_confirmed", listingUrl: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-dwupokojowe-lodz-45m2/156297090?auth=secret", finalUrl: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-dwupokojowe-lodz-45m2/156297090", httpStatus: 200, identity: "same_url", unconfirmedFields: ["district"], contradictoryFields: [] },
       { kind: "detail_not_confirmed", listingUrl: "https://example.test/contact+48123456789", finalUrl: null, httpStatus: 200, identity: "unconfirmed", unconfirmedFields: [], contradictoryFields: [] },
     ] }, null);
@@ -384,8 +385,9 @@ test("detail diagnostics retain public Oferty.net and Domiporta IDs while scrubb
   const examples = ((db.tables.price_radar_runs[0]?.checkpoint as Row).detailDiagnostics as Record<string, RadarDetailDiagnostic[]>).domiporta;
   assert.ok(examples[0]?.listingUrl?.endsWith("-fb,1543068412"));
   assert.ok(examples[1]?.listingUrl?.endsWith("/of,1543068412"), "the canonical public ID is retained too");
-  assert.ok(examples[2]?.listingUrl?.endsWith("/156297090"));
-  assert.ok(examples[3]?.listingUrl?.includes("[redacted]"));
+  assert.ok(examples[2]?.listingUrl?.endsWith("-ba,1543068412"), "other two-letter Oferty.net routes retain their public IDs too");
+  assert.ok(examples[3]?.listingUrl?.endsWith("/156297090"));
+  assert.ok(examples[4]?.listingUrl?.includes("[redacted]"));
   assert.ok(!JSON.stringify(examples).includes("secret"));
 });
 
