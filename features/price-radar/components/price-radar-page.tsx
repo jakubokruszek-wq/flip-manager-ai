@@ -260,6 +260,13 @@ export function PriceRadarPage() {
   };
 
   const groupedStats = useMemo(() => data?.stats ?? [], [data]);
+  // "W próbie" must count exactly the listings computeRadarStats() above also
+  // counted (verificationIssues?.length === 0) -- the same split the server
+  // already applies before averaging. A listing kept visible only pending
+  // manual verification is a review candidate, never a qualified comparison,
+  // so it gets its own section/count instead of inflating this one.
+  const sampleListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) === 0), [data]);
+  const reviewListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) > 0), [data]);
   const visibleSources = activeSourceIds.length ? SOURCE_OPTIONS.filter((option) => activeSourceIds.includes(option.value)) : [];
 
   return (
@@ -372,7 +379,21 @@ export function PriceRadarPage() {
 
       <section aria-label="Statystyki Radaru" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {groupedStats.length === 0 && !isLoading ? (
-          <p className="text-sm text-muted-foreground">Brak danych dla wybranych filtrów.</p>
+          // A run's own historical qualifiedCount (shown above, in "Zbieranie
+          // Radaru") can stay at its old value while every one of those
+          // listings is later excluded, superseded, or kept out of A/B as a
+          // review candidate -- leaving the CURRENT sample genuinely empty.
+          // That is still a real, reportable zero, not "no data": it must
+          // show the true count and "Niewystarczająca próba", never an
+          // average/median (there is nothing to average), and never the
+          // historical run counter re-used as if it were today's sample.
+          <div className="rounded-xl border bg-card p-4">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">Wybrane filtry</p>
+              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">Niewystarczająca próba</span>
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">0 mieszkań · brak ceny referencyjnej (minimum {MIN_RADAR_SAMPLE_SIZE})</p>
+          </div>
         ) : null}
         {groupedStats.map((group) => (
           <div key={`${group.district}-${group.marketType}-${group.qualityCategory}`} className="rounded-xl border bg-card p-4">
@@ -395,12 +416,23 @@ export function PriceRadarPage() {
       </section>
 
       <section aria-label="Oferty w próbie" className="space-y-3">
-        <h2 className="text-lg font-semibold">Oferty w próbie ({data?.listings.length ?? 0})</h2>
+        <h2 className="text-lg font-semibold">Oferty w próbie ({sampleListings.length})</h2>
         <div className="grid gap-4 lg:grid-cols-2">
-          {(data?.listings ?? []).map((listing) => (
+          {sampleListings.map((listing) => (
             <ListingRow key={listing.id} listing={listing} onExclude={() => void setExclusion(listing.id, true)} pending={pendingExclusion === listing.id} />
           ))}
         </div>
+
+        {reviewListings.length > 0 ? (
+          <div className="mt-6">
+            <h3 className="text-sm font-semibold text-muted-foreground">Do weryfikacji · poza próbą A/B ({reviewListings.length})</h3>
+            <div className="mt-3 grid gap-4 lg:grid-cols-2">
+              {reviewListings.map((listing) => (
+                <ListingRow key={listing.id} listing={listing} onExclude={() => void setExclusion(listing.id, true)} pending={pendingExclusion === listing.id} />
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {data && data.excludedListings.length > 0 ? (
           <div className="mt-6">
@@ -487,7 +519,7 @@ function isRunActuallyActive(run: RunStatus | null): boolean {
 }
 
 function statusLabel(status: string): string {
-  return ({ pending: "oczekuje", running: "pobieranie", completed: "ukończono", failed: "błąd" } as Record<string, string>)[status] ?? "nieznany";
+  return ({ pending: "oczekuje", running: "pobieranie", completed: "ukończono", partial: "częściowe pokrycie", failed: "błąd" } as Record<string, string>)[status] ?? "nieznany";
 }
 
 function radarSourceLabel(source: string): string {

@@ -35,8 +35,14 @@ const BUILDING_TYPE_PATTERNS: Pattern[] = [
   // would fabricate a building type from a passing mention. Only a "dom"
   // (or "domek") directly qualified by a real house-type descriptor counts
   // as a genuine declaration, in either word order.
-  { canonical: "dom", regex: /\bdom(?:ek)?\p{L}*\s+(?:wolnostoj\p{L}*|jednorodzinn\p{L}*|bliźniacz\p{L}*|parterow\p{L}*|piętrow\p{L}*|letniskow\p{L}*)/giu },
-  { canonical: "dom", regex: /\b(?:wolnostoj\p{L}*|jednorodzinn\p{L}*|bliźniacz\p{L}*)\s+dom(?:ek)?\p{L}*/giu },
+  // "piętrowy" also appears fused with a count prefix with no space
+  // ("jednopiętrowy", "dwupiętrowy", "trzypiętrowy" -- a one/two/three-storey
+  // house); "dwurodzinny" (a house split into exactly two family units) is
+  // still architecturally a standalone house, unlike "wielorodzinny" (many
+  // units), which is deliberately left out here -- that phrasing describes
+  // an apartment-building scale, not a house.
+  { canonical: "dom", regex: /\bdom(?:ek)?\p{L}*\s+(?:wolnostoj\p{L}*|jednorodzinn\p{L}*|dwurodzinn\p{L}*|bliźniacz\p{L}*|parterow\p{L}*|(?:jedno|dwu|trzy)?piętrow\p{L}*|letniskow\p{L}*)/giu },
+  { canonical: "dom", regex: /\b(?:wolnostoj\p{L}*|jednorodzinn\p{L}*|dwurodzinn\p{L}*|bliźniacz\p{L}*)\s+dom(?:ek)?\p{L}*/giu },
   { canonical: "blok", regex: /\bblok\p{L}*/giu },
 ];
 
@@ -71,7 +77,7 @@ function scanText(title: string | null, description: string | null): string {
 }
 
 export function extractBuildingType(title: string | null, description: string | null): string | null {
-  return extractCanonical(scanText(title, description), BUILDING_TYPE_PATTERNS, isNonListingTenementMention);
+  return extractCanonical(scanText(title, description), BUILDING_TYPE_PATTERNS, isNonListingBuildingMention);
 }
 
 export function extractOwnership(title: string | null, description: string | null): string | null {
@@ -122,20 +128,39 @@ export function assessBuildingType(
 
 /** A tenement is confirmed only by its own structured field or an affirmative, listing-specific statement. */
 export function hasAffirmativeTenementMention(title: string | null, description: string | null): boolean {
-  return extractCanonical(scanText(title, description), [{ canonical: "kamienica", regex: /kamienic\p{L}*/giu }], isNonListingTenementMention) === "kamienica";
+  return extractCanonical(scanText(title, description), [{ canonical: "kamienica", regex: /kamienic\p{L}*/giu }], isNonListingBuildingMention) === "kamienica";
 }
 
-function isNonListingTenementMention(match: RegExpExecArray, text: string): boolean {
-  if (!/^kamienic\p{L}*$/iu.test(match[0])) return false;
-  const clauseStart = Math.max(text.lastIndexOf(".", match.index), text.lastIndexOf("!", match.index), text.lastIndexOf("?", match.index), text.lastIndexOf(";", match.index), text.lastIndexOf(",", match.index), text.lastIndexOf("\n", match.index)) + 1;
-  const clauseEndCandidates = [".", "!", "?", ";", ",", "\n"].map((separator) => text.indexOf(separator, match.index + match[0].length)).filter((index) => index >= 0);
+/**
+ * A mention of ANY building type -- not only a tenement -- can describe a
+ * neighbour instead of the unit actually offered ("obok bloku", "w
+ * sąsiedztwie kamienicy", "naprzeciwko domu jednorodzinnego"). This is the
+ * general rule every BUILDING_TYPE_PATTERNS match is checked against, not a
+ * kamienica-specific carve-out.
+ */
+function isNonListingBuildingMention(match: RegExpExecArray, text: string): boolean {
+  // Some sources store description as raw, unstripped HTML (e.g. OLX's own
+  // "<li>Blok z cegły</li><li>1 piętro</li>" bullet markup). A '>'/'<' tag
+  // boundary must stop the clause scan exactly like real punctuation would --
+  // otherwise an unrelated earlier bullet ("...w okolicy Parku Reymonta</p>")
+  // leaks into this match's own "before" text across a tag boundary and a
+  // genuinely affirmative, this-unit declaration gets wrongly discarded as a
+  // neighbour mention.
+  const clauseStart = Math.max(text.lastIndexOf(".", match.index), text.lastIndexOf("!", match.index), text.lastIndexOf("?", match.index), text.lastIndexOf(";", match.index), text.lastIndexOf(",", match.index), text.lastIndexOf("\n", match.index), text.lastIndexOf(">", match.index)) + 1;
+  const clauseEndCandidates = [".", "!", "?", ";", ",", "\n", "<"].map((separator) => text.indexOf(separator, match.index + match[0].length)).filter((index) => index >= 0);
   const clauseEnd = clauseEndCandidates.length ? Math.min(...clauseEndCandidates) : text.length;
   const before = text.slice(clauseStart, match.index).trim();
   const after = text.slice(match.index + match[0].length, clauseEnd).trim();
-  const negated = /(?:\bnie(?:\s+\p{L}+){0,4}|\bbez|\bbrak(?:u)?)\s*$/iu.test(before);
-  const neighboring = /(?:\bobok|\bnaprzeciw(?:ko)?|\bw\s+sąsiedztwie|\bw\s+okolicy|\bpoblisk\p{L}*|\bsąsiedn\p{L}*|\bwidok(?:iem)?\s+na)\b/iu.test(before)
+  // Negation itself is NOT re-checked here: extractCanonical's own shared
+  // NEGATION_WINDOW already applies to every pattern, including these. A
+  // wider, clause-scoped negation lookback was tried and reverted -- when a
+  // listing's free text has no punctuation at all between two distinct
+  // statements ("To nie jest kamienica Mieszkanie w bloku"), nothing
+  // distinguishes that from one real negated clause, and widening the
+  // reach wrongly discarded a later, unrelated, genuinely affirmative
+  // declaration together with the earlier negated one.
+  return /(?:\bobok|\bnaprzeciw(?:ko)?|\bw\s+sąsiedztwie|\bw\s+okolicy|\bpoblisk\p{L}*|\bsąsiedn\p{L}*|\bwidok(?:iem)?\s+na)\b/iu.test(before)
     || /^(?:\s*\b(?:obok|naprzeciw(?:ko)?|w\s+sąsiedztwie|w\s+okolicy|poblisk\p{L}*|sąsiedn\p{L}*)\b)/iu.test(after);
-  return negated || neighboring;
 }
 
 export function resolveOwnership(

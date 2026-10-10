@@ -49,6 +49,73 @@ test("nearby-building and explicit negation mentions do not label the offered ap
   assert.equal(extractBuildingType("Bez kamienicy", "Mieszkanie w bloku"), "blok");
 });
 
+// Confirmed Production case (listing 001193d7-4889-4db5-aab0-dbbdf15bd4a6):
+// Domiporta's own text names the unit's real building twice ("domu
+// jednopiętrowym", "domu dwurodzinnym") yet the old patterns recognized
+// neither -- "piętrowy" only matched bare, and "dwurodzinny" (a house split
+// into exactly two family units, still a standalone house) was entirely
+// absent from the qualifier list, leaving this listing's buildingType
+// permanently unknown and stuck in manual review instead of being correctly
+// excluded as "dom" from a blok/apartamentowiec-only filter.
+test("extractBuildingType: a numeric-prefixed 'piętrowy' and 'dwurodzinny' both confirm a standalone house", () => {
+  assert.equal(extractBuildingType(null, "Mieszkanie w domu jednopiętrowym, na parterze"), "dom");
+  assert.equal(extractBuildingType(null, "Dom dwupiętrowy, duży ogród"), "dom");
+  assert.equal(
+    extractBuildingType(
+      "Polecam 64 m² dom z ogródkiem, garażem i tarasem w Łodzi",
+      "Mieszkanie w domu jednopiętrowym na pierwszy piętrze mieści się w domu dwurodzinnym - na parterze mieszka sąsiad, oddzielne wejścia.",
+    ),
+    "dom",
+    "the real Production listing text must now resolve to a confirmed house, not stay unknown",
+  );
+});
+
+test("extractBuildingType: 'wielorodzinny' is deliberately not a house qualifier -- it names apartment-building scale, not a house", () => {
+  assert.equal(extractBuildingType(null, "Budynek wielorodzinny, nowe mieszkania"), null);
+});
+
+// Generalizing the neighbour/negation exclusion from kamienica-only to every
+// building type (per the Production fix above) must not start rejecting a
+// genuinely affirmative declaration just because an earlier, unrelated
+// bullet point happens to contain a neighbourhood word. Real OLX listings
+// store raw, unstripped HTML in their description ("<li>Blok z
+// cegły</li><li>1 piętro</li>..."), so a '<'/'>' tag boundary must stop the
+// clause scan exactly like a period would.
+test("extractBuildingType: an HTML tag boundary stops the neighbour-mention clause scan, so an unrelated earlier bullet never discards this unit's own affirmative declaration", () => {
+  assert.equal(
+    extractBuildingType(
+      "2 pokojowe mieszkanie w okazyjnej cenie Łódź",
+      "<p>Bezpośrednio sprzedam mieszkanie w okolicy Parku Reymonta w Łodzi</p><ul><li>Blok z cegły</li><li>1 piętro</li></ul>",
+    ),
+    "blok",
+    "the own-unit 'Blok z cegły' bullet must not be discarded as a neighbour mention leaking across a tag boundary from an earlier bullet",
+  );
+});
+
+test("extractBuildingType: a building type is still correctly excluded as a genuine neighbour mention with no HTML involved", () => {
+  assert.equal(
+    extractBuildingType(
+      "Mieszkanie na sprzedaż, 60 m² Bałuty, Polna",
+      "Polecam Polną Residence, nową inwestycję deweloperską w Łodzi na Bałutach, w okolicy bloków o niskiej zabudowie.",
+    ),
+    null,
+    "'w okolicy bloków' describes the surrounding area's other blocks, not this unit's own building",
+  );
+});
+
+// A clause-scoped negation lookback (reaching past the shared, fixed
+// NEGATION_WINDOW's 2-word limit) was tried for this real Production case
+// and reverted: without a sentence delimiter between two genuinely separate
+// statements, it cannot be told apart from one real negated clause (see
+// isNonListingBuildingMention's own comment), and wrongly discarded a later,
+// unrelated, affirmative "blok" together with an earlier negated one in an
+// existing test. This remains a known, accepted limitation, not a silent
+// regression: the shared NEGATION_WINDOW still catches negation within its
+// own 2-word reach exactly as before.
+test("extractBuildingType: a negation further than the shared 2-word window is a known, accepted limitation -- not silently claimed as fixed", () => {
+  assert.equal(extractBuildingType(null, "Nie szukasz zwykłego mieszkania w bloku."), "blok");
+});
+
 test("structured/text building conflict is unknown but retains tenement evidence for fail-closed filters", () => {
   const assessment = assessBuildingType("blok", "Mieszkanie po remoncie", "Lokal znajduje się w kamienicy po rewitalizacji.");
   assert.deepEqual(assessment, { value: null, conflict: true, tenementEvidence: true });

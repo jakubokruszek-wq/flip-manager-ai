@@ -214,10 +214,14 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   showObservedOfertyNetOffer = false;
   showConflictingOfertyNetOffer = true;
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "Oferty w próbie (1)" }).waitFor();
+  await page.getByRole("heading", { name: "Oferty w próbie (0)" }).waitFor();
+  await page.getByText("Do weryfikacji · poza próbą A/B (1)").waitFor();
   await page.getByText("Wymaga weryfikacji · poza próbą A/B").waitFor();
   await page.getByText("Sprzeczne dane: metraż, piętro, lokalizacja.", { exact: false }).waitFor();
   assert.equal(await page.getByText("Średnia zł/m²").count(), 0, "a visible unresolved offer does not create an A/B statistic group");
+  assert.equal(await page.getByRole("heading", { name: "Oferty w próbie (1)" }).count(), 0, "an offer outside the A/B sample must not inflate the qualified-sample count");
+  await page.getByText("0 mieszkań · brak ceny referencyjnej", { exact: false }).waitFor();
+  assert.equal(await page.getByText("Niewystarczająca próba").count(), 1, "a genuinely empty current sample is an explicit, reportable zero, not a silently blank section");
   showConflictingOfertyNetOffer = false;
   savedFilters.sources = ["gratka"];
   await page.reload({ waitUntil: "domcontentloaded" });
