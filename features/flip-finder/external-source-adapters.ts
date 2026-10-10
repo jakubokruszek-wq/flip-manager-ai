@@ -729,6 +729,37 @@ function domyRoomsFromTitle(title: string): number | null {
 // paginating -- unlike the ignored ?p=/?strona= guesses tried first) shown
 // via a disabled <input> with the current/total page count, not a
 // rel="next" link.
+// Allegro Lokalnie's own JSON-LD Product record has no sku/productID/
+// identifier at all, and its listing URL's trailing slug (e.g.
+// "...-68-m2-ujw") is NOT a stable per-listing id: the same real listing
+// reappears across scans with a different random 3-character suffix (e.g.
+// "-ujw" one scan, "-oos"/"-q5f" another), confirmed live by comparing a
+// current search page against this app's own stored scan history for the
+// exact same listing (identical title/price/area/image, three different
+// URLs) -- every scan previously created a brand-new row instead of
+// updating the existing one, permanently accumulating duplicate Finder
+// cards for one real apartment. The CDN image path's first two segments
+// (a 6-hex bucket id and a long content hash, e.g.
+// "/original/119757/5797904d459db7923228e64a91aa/...") are stable across
+// those same rescans -- confirmed against this app's own listing_snapshots
+// history -- so they are used as the identity anchor instead of the URL.
+function allegroLokalnieImageAssetId(imageUrl: unknown): string | null {
+  if (typeof imageUrl !== "string") return null;
+  try {
+    const path = new URL(imageUrl).pathname.split("/").filter(Boolean);
+    const [bucket, hash] = [path[1], path[2]];
+    // Both segments must themselves look like real content hashes (bare
+    // hex, no file extension) -- a short bucket id plus a long asset hash,
+    // confirmed against this app's own stored scan history for a real,
+    // repeatedly-rescanned listing. A placeholder/test filename like
+    // "offer1.jpg" must never be mistaken for one.
+    if (bucket && hash && /^[0-9a-f]{4,8}$/iu.test(bucket) && /^[0-9a-f]{16,40}$/iu.test(hash)) return `${bucket}/${hash}`;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPortalPage {
   const $ = load(html);
   const yearBuiltByPath = allegroLokalnieYearBuiltByPath($);
@@ -747,15 +778,16 @@ function parseAllegroLokalnie(html: string, fallbackCity: string): ExternalPorta
     if (urlPath !== null) {
       yearBuilt = yearBuiltByPath.get(urlPath) ?? null;
     }
+    const image = atPath(record, ["image", "url"]) ?? atPath(record, ["image", "contentUrl"]);
     return {
-      id: url ? lastPathSegmentId(url) : undefined,
+      id: allegroLokalnieImageAssetId(image) ?? (url ? lastPathSegmentId(url) : undefined),
       url: record.url,
       title: record.name,
       price: atPath(record, ["offers", "price"]),
       area: areaMatch ? areaFromText(areaMatch[0]) : null,
       city: fallbackCity,
       district: parts.length > 2 ? parts.slice(2).join(", ") || null : null,
-      images: atPath(record, ["image", "url"]) ?? atPath(record, ["image", "contentUrl"]),
+      images: image,
       yearBuilt,
     };
   });

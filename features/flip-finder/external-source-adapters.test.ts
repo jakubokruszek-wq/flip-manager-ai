@@ -951,6 +951,33 @@ test("the real allegrolokalnie.pl public page structure (flat ItemList, name-onl
   assert.equal(rows[0]?.price, 425000);
 });
 
+// Live-reproduced (2026-10-10): the exact same real Łódź/Górna, 68 m²,
+// 220 000 PLN listing was scanned under three different URL slugs on three
+// different occasions ("...-ujw", "...-oos", "...-q5f"), confirmed via this
+// app's own listing_snapshots history to share one byte-identical image URL
+// each time -- and only ONE of the three slugs was even still present on a
+// fresh fetch of the live search page. Before this fix, each slug produced a
+// distinct externalListingId (lastPathSegmentId(url)), so every rescan
+// created a brand-new permanent duplicate Finder card for one real
+// apartment instead of updating the existing row.
+test("Allegro Lokalnie: the same real listing rescanned under a rotated URL slug keeps one stable externalListingId, keyed off its stable image asset instead of the unstable URL", () => {
+  const stableImage = "https://a.allegroimg.com/original/119757/5797904d459db7923228e64a91aa/Mieszkanie-Lodz-Gorna-68-m2";
+  const scan = (urlSlug: string) => JSON.stringify({
+    "@context": "https://schema.org", "@type": "ItemList",
+    itemListElement: [{ "@type": "ListItem", position: 1, item: { "@type": "Product", name: "Mieszkanie, Łódź, Górna, 68 m²", url: `https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-${urlSlug}`, category: "Mieszkania na sprzedaż", itemCondition: "https://schema.org/UsedCondition", image: { "@type": "ImageObject", url: stableImage, contentUrl: stableImage }, offers: { "@type": "Offer", price: "220000", priceCurrency: "PLN" } } }],
+  });
+  const htmlFor = (urlSlug: string) => `<script type="application/ld+json">${scan(urlSlug)}</script><input class="ml-pagination__input" value="1"><span class="ml-pagination__count">z 1</span>`;
+  const first = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("ujw"), "Łódź").listings[0];
+  const second = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("oos"), "Łódź").listings[0];
+  const third = EXTERNAL_PORTAL_PARSERS.allegro_lokalnie(htmlFor("q5f"), "Łódź").listings[0];
+  assert.equal(first?.externalListingId, "119757/5797904d459db7923228e64a91aa");
+  assert.equal(first?.externalListingId, second?.externalListingId, "a rotated URL slug for the same real listing (same image) must not mint a new id");
+  assert.equal(first?.externalListingId, third?.externalListingId);
+  // originalUrl still reflects whichever slug this specific scan observed --
+  // only the stable identity key changes, not the link shown to the operator.
+  assert.equal(third?.originalUrl, "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-68-m2-q5f");
+});
+
 // Real markup shape (read-only GET of allegrolokalnie.pl's Łódź category
 // page, 2026-10-03): each card's own <ul class="mlc-itembox__params"> lists
 // explicit labeled parameters ("Rynek:", "Rok budowy:", "Typ budynku:") as
