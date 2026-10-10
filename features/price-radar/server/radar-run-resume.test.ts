@@ -52,6 +52,8 @@ test("an expired lease is reclaimed by compare-and-set for the exact run ID and 
   if (result.kind !== "claimed") return;
   assert.equal(result.run.id, "radar-run-current");
   assert.notEqual(result.run.leaseToken, "old-token");
+  const claimedLeaseMs = Date.parse(result.run.leaseUntil ?? "") - Date.now();
+  assert.ok(claimedLeaseMs > 70_000 && claimedLeaseMs <= 75_000, "resume should use the short, fenced lease that matches the portion budget");
   assert.equal(result.run.scannedCount, 12);
   assert.deepEqual(db.rows[0].checkpoint, run().checkpoint);
   assert.equal(db.updates, 1);

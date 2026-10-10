@@ -6,15 +6,18 @@ const ownerId = "owner-test";
 
 function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
   const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [] };
+  const rpcCalls: Array<{ name: string; args: Row }> = [];
   let seq = 0;
   return {
     tables,
+    rpcCalls,
     async rpc(name: string, args: Row) {
+      rpcCalls.push({ name, args: structuredClone(args) });
       if (name === "claim_price_radar_run") {
         const existing = tables.price_radar_runs.find((row) => row.owner_id === args.p_owner_id && ["pending", "running"].includes(String(row.status)));
         if (existing) return { data: null, error: null };
         const token = `lease-${++seq}`;
-        const row = { id: `run-${seq}`, owner_id: args.p_owner_id, lease_token: token, lease_until: new Date(Date.now() + 120_000).toISOString(), started_at: new Date().toISOString(), finished_at: null, status: "running", scanned_count: 0, qualified_count: 0, error_message: null, source_statuses: {}, checkpoint: args.p_initial_checkpoint };
+        const row = { id: `run-${seq}`, owner_id: args.p_owner_id, lease_token: token, lease_until: new Date(Date.now() + Number(args.p_lease_seconds) * 1000).toISOString(), started_at: new Date().toISOString(), finished_at: null, status: "running", scanned_count: 0, qualified_count: 0, error_message: null, source_statuses: {}, checkpoint: args.p_initial_checkpoint };
         tables.price_radar_runs.push(row);
         return { data: [{ ...row, run_id: row.id, lease_token: token }], error: null };
       }
@@ -23,6 +26,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
         if (!row) return { data: false, error: null };
         Object.assign(row, { checkpoint: args.p_checkpoint, source_statuses: args.p_source_statuses, scanned_count: args.p_scanned_count, qualified_count: args.p_qualified_count, status: args.p_status, error_message: args.p_error_message, finished_at: ["completed", "partial", "failed"].includes(String(args.p_status)) ? new Date().toISOString() : null });
         if (row.finished_at) Object.assign(row, { lease_token: null, lease_until: null });
+        else row.lease_until = new Date(Date.now() + Number(args.p_lease_seconds) * 1000).toISOString();
         return { data: true, error: null };
       }
       if (name === "persist_price_radar_listing") {
@@ -150,6 +154,19 @@ test("claimOrCreateRadarRun creates exactly one run and reports a concurrent att
   const second = await claimOrCreateRadarRun(ownerId, [], db as never);
   assert.equal(second.kind, "blocked");
   assert.equal(db.tables.price_radar_runs.length, 1);
+});
+
+test("claim and continuation checkpoints use the 75-second lease for a 42-second portion", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async () => ({ listings: [], warnings: [], fetched: 0 });
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+  const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+
+  assert.equal(result.status, "completed");
+  const leaseCalls = db.rpcCalls.filter(({ name }) => name === "claim_price_radar_run" || name === "checkpoint_price_radar_run");
+  assert.ok(leaseCalls.length >= 2);
+  assert.ok(leaseCalls.every(({ args }) => args.p_lease_seconds === 75), "every claim and checkpoint must retain the shorter lease window");
 });
 
 const MOCKED_SOURCE_COUNT = 2;

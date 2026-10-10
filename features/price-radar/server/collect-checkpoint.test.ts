@@ -24,7 +24,7 @@ function fakeDb() {
         if (existing) return { data: null, error: null };
         const id = `run-${++sequence}`;
         const token = `lease-${sequence}`;
-        const row = { id, run_id: id, owner_id: args.p_owner_id, lease_token: token, lease_until: new Date(Date.now() + 120_000).toISOString(), started_at: new Date().toISOString(), finished_at: null, status: "running", scanned_count: 0, qualified_count: 0, error_message: null, source_statuses: {}, checkpoint: args.p_initial_checkpoint };
+        const row = { id, run_id: id, owner_id: args.p_owner_id, lease_token: token, lease_until: new Date(Date.now() + Number(args.p_lease_seconds) * 1000).toISOString(), started_at: new Date().toISOString(), finished_at: null, status: "running", scanned_count: 0, qualified_count: 0, error_message: null, source_statuses: {}, checkpoint: args.p_initial_checkpoint };
         tables.price_radar_runs.push(row);
         return { data: [row], error: null };
       }
@@ -33,6 +33,7 @@ function fakeDb() {
         if (!row) return { data: false, error: null };
         Object.assign(row, { checkpoint: args.p_checkpoint, source_statuses: args.p_source_statuses, scanned_count: args.p_scanned_count, qualified_count: args.p_qualified_count, status: args.p_status, error_message: args.p_error_message });
         if (["completed", "partial", "failed"].includes(String(args.p_status))) Object.assign(row, { finished_at: new Date().toISOString(), lease_token: null, lease_until: null });
+        else row.lease_until = new Date(Date.now() + Number(args.p_lease_seconds) * 1000).toISOString();
         return { data: true, error: null };
       }
       if (name === "persist_price_radar_listing") { persisted.push(String((args.p_listing as Row).external_listing_id)); return { data: `listing-${++sequence}`, error: null }; }

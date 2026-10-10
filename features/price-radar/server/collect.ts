@@ -14,7 +14,9 @@ import type { SearchFilter } from "@/features/flip-finder";
 
 type Row = Record<string, unknown>;
 const PORTION_BUDGET_MS = 42_000;
-const LEASE_SECONDS = 120;
+// The portion hard-aborts at 42s; 75s leaves 33s for checkpointing and avoids
+// making the browser wait a full two minutes before its next CAS continuation.
+const LEASE_SECONDS = 75;
 const YIELD_MARGIN_MS = 8_000;
 const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
 
@@ -148,7 +150,7 @@ export type RadarPortionResult = { status: "running" | "completed" | "failed" | 
 /**
  * Runs one time-boxed source portion. Every listing write and every checkpoint
  * is lease-fenced in SQL. A timeout leaves the current source pending for the
- * next daily invocation; a permanent source error is terminal for this run,
+ * next collection invocation; a permanent source error is terminal for this run,
  * recorded, and does not discard results from other sources.
  */
 export async function runRadarCollectionPortion(input: { runId: string; ownerId: string; leaseToken: string }, supabase: SupabaseClient = createAdminClient()): Promise<RadarPortionResult> {
