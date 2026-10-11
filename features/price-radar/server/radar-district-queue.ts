@@ -23,7 +23,7 @@ function isSchemaUnavailable(error: { code?: unknown; message?: unknown } | null
 /** A bounded, non-sensitive diagnostic that keeps a missing/unwritable queue visible in the run. */
 export function radarDistrictQueueFailureWarning(reason: "schema_unavailable" | "error"): string {
   return reason === "schema_unavailable"
-    ? "RADAR_DISTRICT_QUEUE_UNAVAILABLE: zastosuj lokalny draft supabase/migrations/20261011120000_add_radar_district_queue.sql przed użyciem kolejki"
+    ? "RADAR_DISTRICT_QUEUE_UNAVAILABLE: zastosuj lokalny draft supabase/migrations/20261011154631_add_radar_district_queue.sql przed użyciem kolejki"
     : "RADAR_DISTRICT_QUEUE_SAVE_FAILED: zapis oferty wymagającej dzielnicy nie powiódł się";
 }
 
@@ -60,7 +60,7 @@ export type DistrictQueueCandidate = {
  * valid listings, but records a partial-coverage warning so operators can
  * see that the missing-district candidate was not saved. The feature starts
  * working only after a human applies
- * supabase/migrations/20261011120000_add_radar_district_queue.sql.
+ * supabase/migrations/20261011154631_add_radar_district_queue.sql.
  *
  * Also computes (or reuses) a best-effort AI district suggestion. The
  * EXISTING row's content_hash is checked first: when it matches this

@@ -1,9 +1,6 @@
--- Verification queries for 20261011120000_add_radar_district_queue.sql.
---
--- Deliberately named with a ".verification.sql" suffix, NOT the plain
--- "<timestamp>_name.sql" pattern -- `supabase db push` only ever applies
--- files matching that exact pattern, so this file is never picked up as
--- its own migration step.
+-- Verification queries for migration 20261011154631_add_radar_district_queue.sql.
+-- Kept outside supabase/migrations so the Supabase CLI cannot treat this
+-- read-only helper as another migration with the same version.
 --
 -- Already run once, successfully, by this mission: wrapped in `begin; ...
 -- rollback;` and executed against the real, linked Production database via

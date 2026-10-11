@@ -5,7 +5,7 @@ import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 
 const BASE = path.join(process.cwd(), "supabase/migrations/20261008000000_create_price_radar.sql");
-const QUEUE = path.join(process.cwd(), "supabase/migrations/20261011120000_add_radar_district_queue.sql");
+const QUEUE = path.join(process.cwd(), "supabase/migrations/20261011154631_add_radar_district_queue.sql");
 const OWNER = "00000000-0000-4000-8000-000000000071";
 const CROSS_SOURCE_ID = "portal_shared_unit_id:district-queue-test";
 

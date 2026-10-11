@@ -225,7 +225,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   const queueRead = await initialDistrictQueueRead;
   assert.equal(queueRead.status(), 200, `the dashboard reads queue availability; requests=${JSON.stringify(requests)}`);
   await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).waitFor();
-  assert.match(await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).innerText(), /20261011120000_add_radar_district_queue\.sql/u, "the UI states exactly which unapplied migration blocks this queue instance");
+  assert.match(await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).innerText(), /20261011154631_add_radar_district_queue\.sql/u, "the UI states exactly which unapplied migration blocks this queue instance");
   await page.getByText("Mieszkanie secondary w bloku", { exact: false }).waitFor();
   await page.getByText("Mieszkanie primary w bloku", { exact: false }).waitFor();
   assert.equal(await page.locator("a[href^='https://example.test/']").count(), 3, "the confirmed cross-source group retains both concrete portal links");

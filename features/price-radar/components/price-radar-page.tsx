@@ -563,7 +563,7 @@ export function PriceRadarPage() {
 
       {districtQueue && !districtQueue.available ? (
         <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-          Kolejka przypisania dzielnicy jest niedostępna. Wymaga zastosowania migracji <code>20261011120000_add_radar_district_queue.sql</code>; kandydaci nie są obecnie zapisywani do kolejki.
+          Kolejka przypisania dzielnicy jest niedostępna. Wymaga zastosowania migracji <code>20261011154631_add_radar_district_queue.sql</code>; kandydaci nie są obecnie zapisywani do kolejki.
         </div>
       ) : null}
 
