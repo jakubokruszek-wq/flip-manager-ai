@@ -58,10 +58,17 @@ export async function POST(request: Request) {
       }
       return Response.json({ runId: body.runId, status: stopped.kind });
     }
-    if (body !== undefined && (!body || typeof body !== "object" || !("expectedRunId" in body) || typeof body.expectedRunId !== "string" || !body.expectedRunId.trim())) {
+    const explicitlyStartingAfterTermination = Boolean(body && typeof body === "object" && "action" in body && body.action === "start_new");
+    if (explicitlyStartingAfterTermination) {
+      const latest = await latestRadarRun(operator.id);
+      if (!latest?.userTerminatedAt) {
+        return Response.json({ code: "RADAR_RUN_NOT_TERMINATED", message: "Nowy przebieg można uruchomić w ten sposób tylko po definitywnym zakończeniu poprzedniego." }, { status: 409 });
+      }
+    }
+    if (!explicitlyStartingAfterTermination && body !== undefined && (!body || typeof body !== "object" || !("expectedRunId" in body) || typeof body.expectedRunId !== "string" || !body.expectedRunId.trim())) {
       return Response.json({ code: "INVALID_RESUME_REQUEST" }, { status: 400 });
     }
-    const expectedRunId = body && typeof body === "object" && "expectedRunId" in body ? body.expectedRunId : null;
+    const expectedRunId = !explicitlyStartingAfterTermination && body && typeof body === "object" && "expectedRunId" in body ? body.expectedRunId : null;
     if (typeof expectedRunId === "string") {
       const latest = await latestRadarRun(operator.id);
       const stoppedRun = latest?.status === "partial" && latest.errorMessage === "RADAR_STOPPED_BY_OPERATOR" && typeof latest.stopRequestedAt === "string";

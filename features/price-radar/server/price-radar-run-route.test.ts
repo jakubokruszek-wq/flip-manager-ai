@@ -202,6 +202,29 @@ test("manual start without expectedRunId retains the existing claim-or-create pa
   assert.deepEqual(portionCalls, [{ runId: "new-run", ownerId: "owner-1", leaseToken: "new-token" }]);
 });
 
+test("a terminated run starts a new ID only through the explicit new-run action", async () => {
+  reset();
+  latest = { ...latest!, status: "partial", userTerminatedAt: "2026-10-11T18:00:00.000Z", errorMessage: null };
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "start_new" }),
+  }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).runId, "new-run");
+  assert.deepEqual(claimCalls, ["owner-1"]);
+  assert.deepEqual(resumeCalls, [], "an explicitly new run never calls the old-run resume path");
+  assert.deepEqual(portionCalls, [{ runId: "new-run", ownerId: "owner-1", leaseToken: "new-token" }]);
+
+  reset();
+  const rejected = await route.POST(new Request("http://localhost/api/price-radar/run", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "start_new" }),
+  }));
+  assert.equal(rejected.status, 409, "the explicit new-run action cannot bypass an active or resumable run");
+  assert.equal((await rejected.json()).code, "RADAR_RUN_NOT_TERMINATED");
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(resumeCalls, []);
+  assert.deepEqual(portionCalls, []);
+});
+
 test("a saved selection filtered to empty by a disabled source (e.g. szybko) is refused with a readable message -- it never silently starts scanning every active source", async () => {
   reset();
   sourcesFilteredToEmpty = true;

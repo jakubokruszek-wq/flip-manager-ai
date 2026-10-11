@@ -210,6 +210,13 @@ test("real Radar page persists settings, separates markets, excludes/restores li
           sourceStatuses: Object.fromEntries(Object.entries(radarRun.sourceStatuses || {}).map(([source, status]) => [source, status === "running" ? "pending" : status])) };
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: radarRun.id, status: "terminated" }) });
       }
+      if (body.action === "start_new" && radarRun?.userTerminatedAt) {
+        radarRun = { id: "radar-new-after-terminal-run", status: "running", startedAt: new Date().toISOString(), finishedAt: null,
+          leaseUntil: new Date(Date.now() + 120000).toISOString(), stopRequestedAt: null, userTerminatedAt: null, scannedCount: 0,
+          qualifiedCount: 0, sourceStatuses: { domiporta: "running" }, sourceErrors: {}, errorMessage: null,
+          checkpoint: { sourceQueue: ["domiporta"], currentSourceIndex: 0 } };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: radarRun.id, status: "running" }) });
+      }
       if (body.action === "stop" && nextStopFailure) {
         const failure = nextStopFailure;
         nextStopFailure = null;
@@ -425,6 +432,11 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.equal(await page.getByRole("button", { name: "Uruchom nowy przebieg" }).count(), 1, "the terminal state and end date survive a full page refresh");
   assert.equal(runPosts().filter((request) => request.body?.action === "terminate").length, terminationsBeforeSuccess + 1, "refresh reads terminal state but does not repeat the terminal write");
   assert.equal(runPosts().filter((request) => request.body?.expectedRunId === stoppedRunId).length, 1, "refreshing an ended run never resumes its old ID");
+  await page.getByRole("button", { name: "Uruchom nowy przebieg" }).click();
+  await page.getByRole("button", { name: "Zatrzymaj" }).waitFor();
+  assert.deepEqual(runPosts().at(-1)?.body, { action: "start_new" }, "a terminal run with the old stop marker starts explicitly instead of trying to resume its ID");
+  assert.equal(radarRun.id, "radar-new-after-terminal-run", "the explicit start creates a distinct run ID");
+  assert.equal(await page.getByText(/The requested Radar run is no longer resumable/u).count(), 0, "starting a new run clears the stale resumability error");
 });
 
 test("an expired nonterminal Radar run resumes automatically in place without a manual click", { timeout: 600_000 }, async (t) => {

@@ -321,11 +321,16 @@ export function PriceRadarPage() {
   const startCollection = async () => {
     autoResumeInFlight.current = true;
     setRunStarting(true);
+    setError(null);
     try {
-      const stoppedRun = run && run.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" && run.stopRequestedAt ? run : null;
+      const startingAfterTermination = Boolean(run?.userTerminatedAt);
+      const stoppedRun = !startingAfterTermination && run && run.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" && run.stopRequestedAt ? run : null;
       const response = await apiFetch("/api/price-radar/run", {
         method: "POST",
-        ...(stoppedRun ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRunId: stoppedRun.id }) } : {}),
+        ...((stoppedRun || startingAfterTermination) ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(stoppedRun ? { expectedRunId: stoppedRun.id } : { action: "start_new" }),
+        } : {}),
       });
       const payload = await response.json() as { runId?: string; status?: RadarRunStatus; message?: string };
       if (!response.ok) throw new Error(payload.message || "Nie udało się rozpocząć zbierania Radaru.");
@@ -334,6 +339,7 @@ export function PriceRadarPage() {
       setRun(statusPayload.run ?? null);
       await load();
       refreshRunNow.current?.();
+      setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Nie udało się rozpocząć zbierania Radaru.");
     } finally {
