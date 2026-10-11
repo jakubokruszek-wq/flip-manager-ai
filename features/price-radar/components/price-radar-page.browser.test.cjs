@@ -137,6 +137,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   let failNextSave = false;
   let radarRun = null;
   let nextStopFailure = null;
+  let nextTerminationFailure = null;
   const requests = [];
   await page.route("**/api/price-radar/**", async (route) => {
     const request = route.request();
@@ -198,6 +199,17 @@ test("real Radar page persists settings, separates markets, excludes/restores li
     if (url.pathname === "/api/price-radar/run" && request.method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: radarRun }) });
     if (url.pathname === "/api/price-radar/run" && request.method() === "POST") {
       const body = request.postDataJSON() || {};
+      if (body.action === "terminate" && nextTerminationFailure) {
+        const failure = nextTerminationFailure;
+        nextTerminationFailure = null;
+        return route.fulfill({ status: failure.status, contentType: "application/json", body: JSON.stringify(failure.body) });
+      }
+      if (body.action === "terminate" && radarRun?.id === body.runId && (radarRun.status === "running" || radarRun.status === "pending" || radarRun.errorMessage === "RADAR_STOPPED_BY_OPERATOR")) {
+        const userTerminatedAt = new Date().toISOString();
+        radarRun = { ...radarRun, status: "partial", userTerminatedAt, finishedAt: userTerminatedAt, leaseUntil: null,
+          sourceStatuses: Object.fromEntries(Object.entries(radarRun.sourceStatuses || {}).map(([source, status]) => [source, status === "running" ? "pending" : status])) };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: radarRun.id, status: "terminated" }) });
+      }
       if (body.action === "stop" && nextStopFailure) {
         const failure = nextStopFailure;
         nextStopFailure = null;
@@ -348,7 +360,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.equal(runPosts().length, 0, "viewing and refreshing the page never starts or resumes a collection run");
 
   const stoppedRunId = "radar-stop-browser-run";
-  radarRun = { id: stoppedRunId, status: "running", startedAt: new Date().toISOString(), finishedAt: null, leaseUntil: new Date(Date.now() + 120000).toISOString(), stopRequestedAt: null, scannedCount: 17, qualifiedCount: 1, sourceStatuses: { domiporta: "running" }, sourceErrors: {}, errorMessage: null, checkpoint: { sourceQueue: ["domiporta"], currentSourceIndex: 0 } };
+  radarRun = { id: stoppedRunId, status: "running", startedAt: new Date().toISOString(), finishedAt: null, leaseUntil: new Date(Date.now() + 120000).toISOString(), stopRequestedAt: null, userTerminatedAt: null, scannedCount: 17, qualifiedCount: 1, sourceStatuses: { domiporta: "running" }, sourceErrors: {}, errorMessage: null, checkpoint: { sourceQueue: ["domiporta"], currentSourceIndex: 0 } };
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Zatrzymaj" }).waitFor();
   assert.equal(runPosts().length, 0, "the active run is discovered by GET without starting another run");
@@ -378,6 +390,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   radarRun = { ...radarRun, status: "partial", errorMessage: "RADAR_STOPPED_BY_OPERATOR", finishedAt: new Date().toISOString(), leaseUntil: null };
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Wznów zatrzymany przebieg" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Zakończ przebieg" }).count(), 1, "a paused-but-resumable run also offers permanent end separately from STOP");
   assert.ok(await page.getByText(/Zatrzymany/).count(), "the acknowledged backend state is rendered as stopped");
   const postsBeforeStoppedRefresh = runPosts().length;
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -390,6 +403,28 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.equal(stopResumePosts.length, postsBeforeStoppedRefresh + 1, "resume happens only after the explicit operator click");
   assert.deepEqual(stopResumePosts.at(-1)?.body, { expectedRunId: stoppedRunId }, "resume continues the same scan_run_id");
   assert.equal(radarRun.id, stoppedRunId, "resume cannot allocate a new run ID");
+
+  nextTerminationFailure = { status: 500, body: { code: "RADAR_RUN_TERMINATION_FAILED", message: "Nie udało się zapisać końca." } };
+  await page.getByRole("button", { name: "Zakończ przebieg" }).click();
+  await page.getByText(/RADAR_RUN_TERMINATION_FAILED/).waitFor();
+  assert.equal(radarRun.userTerminatedAt, null, "a failed server write does not optimistically mark the run ended");
+  assert.equal(await page.getByRole("button", { name: "Zakończ przebieg" }).count(), 1, "the failed response leaves the operation available for a deliberate retry");
+
+  const terminationsBeforeSuccess = runPosts().filter((request) => request.body?.action === "terminate").length;
+  await page.getByRole("button", { name: "Zakończ przebieg" }).click();
+  await page.getByText(/Zakończony przez użytkownika/).waitFor();
+  assert.ok(radarRun.userTerminatedAt, "the browser only shows the terminal state after the server confirms it");
+  assert.equal(radarRun.id, stoppedRunId, "termination preserves the run ID");
+  assert.equal(radarRun.scannedCount, 17);
+  assert.equal(radarRun.qualifiedCount, 1);
+  assert.equal(radarRun.sourceStatuses.domiporta, "pending", "unfinished source work is not reported as completed");
+  assert.equal(await page.getByRole("button", { name: "Zakończ przebieg" }).count(), 0, "a terminal run cannot be ended again through a stale UI state");
+  assert.equal(await page.getByRole("button", { name: "Uruchom nowy przebieg" }).count(), 1, "the next start is explicitly a new run, never a resume of this ID");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByText(/Zakończony przez użytkownika/).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Uruchom nowy przebieg" }).count(), 1, "the terminal state and end date survive a full page refresh");
+  assert.equal(runPosts().filter((request) => request.body?.action === "terminate").length, terminationsBeforeSuccess + 1, "refresh reads terminal state but does not repeat the terminal write");
+  assert.equal(runPosts().filter((request) => request.body?.expectedRunId === stoppedRunId).length, 1, "refreshing an ended run never resumes its old ID");
 });
 
 test("an expired nonterminal Radar run resumes automatically in place without a manual click", { timeout: 600_000 }, async (t) => {

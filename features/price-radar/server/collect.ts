@@ -72,6 +72,7 @@ function toRadarRun(row: Row): RadarRun {
     leaseToken: typeof row.lease_token === "string" ? row.lease_token : null,
     leaseUntil: typeof row.lease_until === "string" ? row.lease_until : null,
     stopRequestedAt: typeof row.stop_requested_at === "string" ? row.stop_requested_at : null,
+    userTerminatedAt: typeof row.user_terminated_at === "string" ? row.user_terminated_at : null,
     status: isRunStatus(row.status) ? row.status : "pending",
     startedAt: String(row.started_at),
     finishedAt: typeof row.finished_at === "string" ? row.finished_at : null,
@@ -144,6 +145,21 @@ export async function requestRadarRunStop(ownerId: string, expectedRunId: string
   return { kind: "blocked", reason: "run_changed" };
 }
 
+export type RadarTerminationResult = { kind: "terminated" } | { kind: "blocked"; reason: "run_changed" | "not_active" };
+
+/** Permanently ends only the authenticated owner's exact Radar run. */
+export async function requestRadarRunTermination(ownerId: string, expectedRunId: string, supabase: SupabaseClient = createAdminClient()): Promise<RadarTerminationResult> {
+  const { data, error } = await supabase.rpc("terminate_price_radar_run", {
+    p_owner_id: ownerId,
+    p_run_id: expectedRunId,
+  });
+  if (error) throw new Error("RADAR_RUN_TERMINATION_FAILED");
+  const result = typeof data === "string" ? data : rpcRow(data)?.result;
+  if (result === "terminated") return { kind: "terminated" };
+  if (result === "not_active") return { kind: "blocked", reason: "not_active" };
+  return { kind: "blocked", reason: "run_changed" };
+}
+
 /** The DB RPC serializes claims by owner and returns a fenced lease token. */
 export async function claimOrCreateRadarRun(ownerId: string, selectedSources: readonly RadarSource[] = RADAR_SOURCES, supabase: SupabaseClient = createAdminClient(), searchCriteria?: RadarSearchCriteria): Promise<RadarClaimResult> {
   const allowed = new Set(RADAR_SOURCES);
@@ -170,6 +186,7 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
   const selected = await supabase.from("price_radar_runs").select("*").eq("id", expectedRunId).eq("owner_id", ownerId).maybeSingle();
   if (selected.error || !selected.data) return { kind: "blocked", reason: "run_changed" };
   const row = selected.data as Row;
+  if (typeof row.user_terminated_at === "string") return { kind: "blocked", reason: "run_changed" };
   const stoppedRun = row.status === "partial" && row.error_message === RADAR_STOPPED_BY_OPERATOR && typeof row.stop_requested_at === "string";
   if (row.stop_requested_at && !stoppedRun) return { kind: "blocked", reason: "run_changed" };
   if (row.status !== "pending" && row.status !== "running" && !stoppedRun) return { kind: "blocked", reason: "run_changed" };
@@ -221,6 +238,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   if (error || !runRow) throw new Error("RADAR_RUN_NOT_FOUND");
   const run = toRadarRun(runRow);
   if (run.status === "completed" || run.status === "failed" || run.status === "partial") return resultOf(run);
+  if (run.userTerminatedAt) return resultOf(run);
   if (run.leaseToken !== input.leaseToken) throw new Error("RADAR_LEASE_LOST");
 
   const checkpoint = run.checkpoint;
@@ -230,13 +248,19 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   const timeoutId = setTimeout(() => controller.abort(), PORTION_BUDGET_MS);
   let stopCheckInFlight = false;
   let operatorStopDetected = false;
+  let userTerminationDetected = false;
   const stopCheckId = setInterval(() => {
-    if (stopCheckInFlight || operatorStopDetected) return;
+    if (stopCheckInFlight || operatorStopDetected || userTerminationDetected) return;
     stopCheckInFlight = true;
-    void Promise.resolve(supabase.from("price_radar_runs").select("status,lease_token,stop_requested_at,error_message")
+    void Promise.resolve(supabase.from("price_radar_runs").select("status,lease_token,stop_requested_at,error_message,user_terminated_at")
       .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle())
       .then(({ data: current, error: stopReadError }) => {
         if (stopReadError || !current) return;
+        if (current.user_terminated_at || current.error_message === RADAR_TERMINATED_BY_USER) {
+          userTerminationDetected = true;
+          controller.abort(new DOMException("Radar run terminated by its owner", "AbortError"));
+          return;
+        }
         if (current.stop_requested_at || current.status !== "running" || current.lease_token !== input.leaseToken) {
           operatorStopDetected = Boolean(current.stop_requested_at || current.error_message === RADAR_STOPPED_BY_OPERATOR);
           if (operatorStopDetected) controller.abort(new DOMException("Radar stop requested", "AbortError"));
@@ -252,6 +276,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   try {
     while (checkpoint.sourceQueue.length > 0) {
       if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) break;
+      if (userTerminationDetected) break;
       if (operatorStopDetected) break;
       const currentSourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
       if (!currentSourceId || attemptedSourceIds.has(currentSourceId)) {
@@ -263,6 +288,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         checkpoint.currentSourceIndex = nextIndex;
       }
       const sourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex]!;
+      if (await radarRunUserTerminated(supabase, input)) {
+        userTerminationDetected = true;
+        break;
+      }
       if (await radarStopRequested(supabase, input)) {
         operatorStopDetected = true;
         if (checkpoint.sourceStatuses[sourceId] === "running") checkpoint.sourceStatuses[sourceId] = "pending";
@@ -319,6 +348,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         }
         let emittedBatches = false;
       const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
+          if (userTerminationDetected || await radarRunUserTerminated(supabase, input)) {
+            userTerminationDetected = true;
+            throw new Error(RADAR_TERMINATED_BY_USER);
+          }
           if (operatorStopDetected || await radarStopRequested(supabase, input)) {
             operatorStopDetected = true;
             throw new Error(RADAR_STOPPED_BY_OPERATOR);
@@ -332,6 +365,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           let batchQualified = 0;
           for (const listing of batch.listings) {
             controller.signal.throwIfAborted();
+            if (await radarRunUserTerminated(supabase, input)) {
+              userTerminationDetected = true;
+              throw new Error(RADAR_TERMINATED_BY_USER);
+            }
             const qualificationCandidate = {
               source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
               title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
@@ -449,6 +486,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
       } catch (reason) {
+        if (userTerminationDetected || isRadarTerminationError(reason) || await radarRunUserTerminated(supabase, input)) {
+          userTerminationDetected = true;
+          break;
+        }
         if (operatorStopDetected || isRadarStopError(reason) || await radarStopRequested(supabase, input)) {
           operatorStopDetected = true;
           checkpoint.sourceStatuses[sourceId] = "pending";
@@ -509,9 +550,19 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
       }
     }
+  } catch (reason) {
+    if (isRadarTerminationError(reason) || await radarRunUserTerminated(supabase, input)) userTerminationDetected = true;
+    else throw reason;
   } finally {
     clearTimeout(timeoutId);
     clearInterval(stopCheckId);
+  }
+
+  if (userTerminationDetected) {
+    const latest = await supabase.from("price_radar_runs").select("*")
+      .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
+    if (latest.data) return resultOf(toRadarRun(latest.data as Row));
+    throw new Error("RADAR_RUN_NOT_FOUND");
   }
 
   if (operatorStopDetected) {
@@ -587,7 +638,16 @@ async function saveCheckpoint(supabase: SupabaseClient, input: { runId: string; 
     });
     if (!stopped.error && stopped.data === true) return "stopped";
   }
+  if (await radarRunUserTerminated(supabase, input)) throw new Error(RADAR_TERMINATED_BY_USER);
   throw new Error("RADAR_LEASE_LOST");
+}
+
+export const RADAR_TERMINATED_BY_USER = "RADAR_TERMINATED_BY_USER";
+
+async function radarRunUserTerminated(supabase: SupabaseClient, input: { runId: string; ownerId: string }): Promise<boolean> {
+  const { data, error } = await supabase.from("price_radar_runs").select("user_terminated_at,error_message")
+    .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
+  return !error && Boolean(data && (data.user_terminated_at || data.error_message === RADAR_TERMINATED_BY_USER));
 }
 
 async function radarStopRequested(supabase: SupabaseClient, input: { runId: string; ownerId: string }): Promise<boolean> {
@@ -598,6 +658,10 @@ async function radarStopRequested(supabase: SupabaseClient, input: { runId: stri
 
 function isRadarStopError(error: unknown): boolean {
   return error instanceof Error && (error.message === RADAR_STOPPED_BY_OPERATOR || error.message === "RADAR_RUN_STOP_REQUESTED");
+}
+
+function isRadarTerminationError(error: unknown): boolean {
+  return error instanceof Error && error.message === RADAR_TERMINATED_BY_USER;
 }
 
 function resultOf(run: RadarRun): RadarPortionResult {

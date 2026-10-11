@@ -1,5 +1,5 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
-import { claimOrCreateRadarRun, requestRadarRunStop, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
+import { claimOrCreateRadarRun, requestRadarRunStop, requestRadarRunTermination, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
 import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
@@ -38,6 +38,16 @@ export async function POST(request: Request) {
   }
   try {
     const body = await request.json().catch(() => undefined) as unknown;
+    if (body && typeof body === "object" && "action" in body && body.action === "terminate") {
+      if (!("runId" in body) || typeof body.runId !== "string" || !body.runId.trim()) {
+        return Response.json({ code: "INVALID_TERMINATION_REQUEST" }, { status: 400 });
+      }
+      const terminated = await requestRadarRunTermination(operator.id, body.runId);
+      if (terminated.kind === "blocked") {
+        return Response.json({ code: terminated.reason, message: "Nie można definitywnie zakończyć tego przebiegu; odśwież jego stan." }, { status: 409 });
+      }
+      return Response.json({ runId: body.runId, status: terminated.kind });
+    }
     if (body && typeof body === "object" && "action" in body && body.action === "stop") {
       if (!("runId" in body) || typeof body.runId !== "string" || !body.runId.trim()) {
         return Response.json({ code: "INVALID_STOP_REQUEST" }, { status: 400 });
@@ -56,7 +66,7 @@ export async function POST(request: Request) {
       const latest = await latestRadarRun(operator.id);
       const stoppedRun = latest?.status === "partial" && latest.errorMessage === "RADAR_STOPPED_BY_OPERATOR" && typeof latest.stopRequestedAt === "string";
       const stopStillPending = Boolean(latest?.stopRequestedAt && (latest.status === "pending" || latest.status === "running"));
-      if (!latest || latest.id !== expectedRunId || stopStillPending || (latest.status !== "pending" && latest.status !== "running" && !stoppedRun)) {
+      if (!latest || latest.id !== expectedRunId || latest.userTerminatedAt || stopStillPending || (latest.status !== "pending" && latest.status !== "running" && !stoppedRun)) {
         return Response.json({ code: "RADAR_RUN_CHANGED", message: "The requested Radar run is no longer resumable." }, { status: 409 });
       }
       const resumed = await resumeExistingRadarRun(operator.id, expectedRunId);
@@ -88,6 +98,9 @@ export async function POST(request: Request) {
     console.error("PRICE RADAR RUN ROUTE ERROR:", error);
     if (error instanceof Error && error.message === "RADAR_RUN_STOP_FAILED") {
       return Response.json({ code: "RADAR_RUN_STOP_FAILED", message: "Nie udało się zapisać żądania zatrzymania Radaru." }, { status: 500 });
+    }
+    if (error instanceof Error && error.message === "RADAR_RUN_TERMINATION_FAILED") {
+      return Response.json({ code: "RADAR_RUN_TERMINATION_FAILED", message: "Nie udało się trwale zapisać zakończenia przebiegu Radaru." }, { status: 500 });
     }
     return Response.json({ message: "Nie udało się uruchomić zbierania Radaru." }, { status: 500 });
   }

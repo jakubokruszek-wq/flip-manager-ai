@@ -106,6 +106,7 @@ test("a live lease, terminal run, mismatched run ID, or active OLX queue source 
   const cases: Array<[string, Row, string]> = [
     ["live lease", run({ lease_until: new Date(Date.now() + 60_000).toISOString() }), "lease_active"],
     ["terminal run", run({ status: "partial" }), "run_changed"],
+    ["user-terminated run", run({ status: "partial", user_terminated_at: new Date().toISOString() }), "run_changed"],
     ["OLX queue source", run({ checkpoint: { sourceQueue: ["olx"], currentSourceIndex: 0, sourceStatuses: { olx: "running" }, sourceErrors: {}, perSourceCursor: {} } }), "olx_queue_owns_source"],
     ["OLX queue source behind rotated pointer", run({ checkpoint: { sourceQueue: ["morizon", "olx"], currentSourceIndex: 2, sourceStatuses: { morizon: "completed", olx: "running" }, sourceErrors: {}, perSourceCursor: {} } }), "olx_queue_owns_source"],
   ];

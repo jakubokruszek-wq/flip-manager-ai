@@ -135,6 +135,8 @@ export type RadarRun = {
   /** Null once finished; otherwise when the current claim's lease expires -- an orphaned "running" run (e.g. a dead OLX worker) is reclaimable past this instant, not stuck forever. */
   leaseUntil: string | null;
   stopRequestedAt: string | null;
+  /** Set only by the non-resumable user termination operation. */
+  userTerminatedAt: string | null;
   status: RadarRunStatus;
   startedAt: string;
   finishedAt: string | null;

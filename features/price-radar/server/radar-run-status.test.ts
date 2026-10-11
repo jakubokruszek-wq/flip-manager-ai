@@ -24,6 +24,7 @@ function fakeDb(row: Row) {
 test("latest run exposes saved qualification rejection counts and ignores malformed checkpoint diagnostics", async () => {
   const run = await latestRadarRun("owner-1", fakeDb({
     id: "run-1", started_at: "2026-10-10T10:00:00.000Z", status: "partial", scanned_count: 12, qualified_count: 0,
+    user_terminated_at: "2026-10-10T11:00:00.000Z",
     checkpoint: {
       sourceQueue: ["olx"], currentSourceIndex: 1, sourceStatuses: { olx: "completed" }, sourceErrors: {},
       sourceWarnings: { otodom: ["Otodom: duplicate (1)"] },
@@ -34,6 +35,7 @@ test("latest run exposes saved qualification rejection counts and ignores malfor
     source_statuses: { olx: "completed" },
   }) as never);
   assert.deepEqual(run?.qualificationRejections, { olx: { district_not_confirmed: 7 } });
+  assert.equal(run?.userTerminatedAt, "2026-10-10T11:00:00.000Z", "the latest-run read exposes the persistent non-resumable end timestamp");
   assert.deepEqual(run?.checkpoint.qualificationRejections, { olx: { district_not_confirmed: 7 } });
   assert.deepEqual(run?.sourceWarnings, { otodom: ["Otodom: duplicate (1)"] }, "latest-run GET exposes candidate warnings separately from failures");
   assert.deepEqual(run?.sourceRejectionCounts, { otodom: { duplicate: 1 } }, "latest-run GET exposes parser rejection counts");

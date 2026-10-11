@@ -34,7 +34,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
       }
       if (name === "persist_price_radar_listing") {
         const run = tables.price_radar_runs.find((entry) => entry.id === args.p_run_id && entry.owner_id === args.p_owner_id && entry.lease_token === args.p_lease_token && entry.status === "running");
-        if (!run || run.stop_requested_at) return { data: null, error: { message: "RADAR_LEASE_LOST" } };
+        if (!run || run.stop_requested_at || run.user_terminated_at) return { data: null, error: { message: "RADAR_LEASE_LOST" } };
         const candidate = args.p_listing as Row;
         let row = tables.price_radar_listings.find((entry) => entry.owner_id === args.p_owner_id && entry.source === candidate.source && (entry.external_listing_id === candidate.external_listing_id || entry.normalized_url === candidate.normalized_url));
         if (!row) { row = { id: `listing-${++seq}`, owner_id: args.p_owner_id }; tables.price_radar_listings.push(row); }
@@ -202,6 +202,40 @@ test("a persisted STOP request prevents the next source fetch and releases the s
   assert.equal(savedRun.error_message, "RADAR_STOPPED_BY_OPERATOR");
   assert.equal(savedRun.lease_token, null, "acknowledgment releases the lease instead of leaving an orphaned lock");
   assert.deepEqual((savedRun.checkpoint as { sourceQueue: string[] }).sourceQueue, ["domiporta"]);
+});
+
+test("a user termination during a batch aborts remaining candidate work and returns the durable terminal checkpoint without saving a late checkpoint", async () => {
+  let sourceFetches = 0;
+  let savedRun: Row | undefined;
+  const db = fakeDb({ onListingPersisted: (run) => {
+    savedRun = run;
+    run.user_terminated_at = new Date().toISOString();
+    run.status = "partial";
+    run.finished_at = run.user_terminated_at;
+    run.lease_token = null;
+    run.lease_until = null;
+    const checkpoint = run.checkpoint as Row;
+    checkpoint.sourceStatuses = { domiporta: "pending", morizon: "pending" };
+    run.source_statuses = checkpoint.sourceStatuses;
+  } });
+  fakeSourceImpl = async (_id, _cursor, batches) => {
+    sourceFetches += 1;
+    await batches?.onBatch({ listings: [qualifyingListing("saved-before-end", "domiporta"), qualifyingListing("must-not-save-after-end", "domiporta")], warnings: [], fetched: 2 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon"], db as never);
+  if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never);
+  assert.equal(sourceFetches, 1, "the source is never fetched a second time after the DB marker is observed");
+  assert.equal(db.rpcCalls.filter(({ name }) => name === "persist_price_radar_listing").length, 1, "the in-flight batch stops before persisting its next listing");
+  assert.equal(db.rpcCalls.filter(({ name }) => name === "checkpoint_price_radar_run").at(-1)?.args.p_status, "running", "the stale worker does not issue a terminal or running checkpoint after losing the lease");
+  assert.equal(result.status, "partial");
+  assert.equal(result.sourceStatuses.domiporta, "pending", "the interrupted source remains unfinished");
+  assert.equal(result.sourceStatuses.morizon, "pending", "later work remains pending");
+  assert.equal(savedRun?.user_terminated_at !== undefined, true);
+  assert.equal(savedRun?.status, "partial", "the user-end marker remains the authority after the source portion returns");
+  assert.equal(db.tables.price_radar_listings.length, 1, "the already persisted result survives termination");
 });
 
 test("a STOP racing with persistence does not advance a partial page cursor or double-count it on replay", async () => {

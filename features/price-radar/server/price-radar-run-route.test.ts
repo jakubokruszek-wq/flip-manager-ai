@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 
-type Run = { id: string; status: string; leaseToken: string | null; leaseUntil: string | null; stopRequestedAt?: string | null; errorMessage?: string | null };
+type Run = { id: string; status: string; leaseToken: string | null; leaseUntil: string | null; stopRequestedAt?: string | null; userTerminatedAt?: string | null; errorMessage?: string | null };
 let latest: Run | null = null;
 let operatorError: Error | null = null;
 let resumeResult: { kind: "claimed"; run: Run } | { kind: "blocked"; reason: string } = { kind: "blocked", reason: "run_changed" };
@@ -9,6 +9,9 @@ let resumeCalls: string[] = [];
 let stopCalls: Array<{ ownerId: string; runId: string }> = [];
 let stopResult: { kind: "stopping" | "stopped" } | { kind: "blocked"; reason: string } = { kind: "stopping" };
 let stopError: Error | null = null;
+let terminationCalls: Array<{ ownerId: string; runId: string }> = [];
+let terminationResult: { kind: "terminated" } | { kind: "blocked"; reason: string } = { kind: "terminated" };
+let terminationError: Error | null = null;
 let claimCalls: string[] = [];
 let claimCriteria: unknown[] = [];
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
@@ -21,6 +24,7 @@ mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria = [sources, criteria]; return { kind: "claimed", run: { id: "new-run", leaseToken: "new-token" } }; },
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
   requestRadarRunStop: async (ownerId: string, runId: string) => { stopCalls.push({ ownerId, runId }); if (stopError) throw stopError; return stopResult; },
+  requestRadarRunTermination: async (ownerId: string, runId: string) => { terminationCalls.push({ ownerId, runId }); if (terminationError) throw terminationError; return terminationResult; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
 let sourcesFilteredToEmpty = false;
@@ -40,6 +44,9 @@ function reset() {
   stopCalls = [];
   stopResult = { kind: "stopping" };
   stopError = null;
+  terminationCalls = [];
+  terminationResult = { kind: "terminated" };
+  terminationError = null;
   claimCalls = [];
   claimCriteria = [];
   portionCalls = [];
@@ -81,6 +88,43 @@ test("a repeated stop is idempotent after the SQL layer confirms the run stopped
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { runId: "existing-run", status: "stopped" });
   assert.deepEqual(portionCalls, [], "a stop request never runs or resumes the collection portion");
+});
+
+test("only the authenticated owner can persist an idempotent terminal end for the exact run", async () => {
+  reset();
+  operatorError = new Error("unauthorized");
+  const anonymous = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "terminate", runId: "existing-run" }) }));
+  assert.equal(anonymous.status, 401);
+  assert.deepEqual(terminationCalls, []);
+  assert.deepEqual(portionCalls, []);
+
+  reset();
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "terminate", runId: "existing-run" }) }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { runId: "existing-run", status: "terminated" });
+  assert.deepEqual(terminationCalls, [{ ownerId: "owner-1", runId: "existing-run" }]);
+  assert.deepEqual(stopCalls, [], "terminal end is distinct from resumable STOP");
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(resumeCalls, []);
+  assert.deepEqual(portionCalls, [], "ending a run never starts or resumes a collection portion");
+});
+
+test("termination write failures and terminal run resumes are surfaced without changing or resuming the run", async () => {
+  reset();
+  terminationError = new Error("RADAR_RUN_TERMINATION_FAILED");
+  const failedWrite = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "terminate", runId: "existing-run" }) }));
+  assert.equal(failedWrite.status, 500);
+  assert.deepEqual(await failedWrite.json(), { code: "RADAR_RUN_TERMINATION_FAILED", message: "Nie udało się trwale zapisać zakończenia przebiegu Radaru." });
+  assert.deepEqual(portionCalls, []);
+
+  reset();
+  latest = { ...latest!, status: "partial", userTerminatedAt: "2026-10-11T18:00:00.000Z", errorMessage: null };
+  const resume = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRunId: "existing-run" }) }));
+  assert.equal(resume.status, 409);
+  assert.equal((await resume.json()).code, "RADAR_RUN_CHANGED");
+  assert.deepEqual(resumeCalls, []);
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(portionCalls, []);
 });
 
 test("a stop persistence failure is returned as an explicit server error, never as a successful stopping response", async () => {

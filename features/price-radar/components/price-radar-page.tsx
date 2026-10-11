@@ -15,7 +15,7 @@ type ResultsResponse = {
   disabledSourceNote: string;
 };
 type DistrictQueueResponse = { available: boolean; pending: RadarDistrictQueueItem[]; assigned: RadarDistrictQueueItem[]; rejected: RadarDistrictQueueItem[] };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
@@ -55,6 +55,7 @@ export function PriceRadarPage() {
   const [run, setRun] = useState<RunStatus | null>(null);
   const [runStarting, setRunStarting] = useState(false);
   const [runStopping, setRunStopping] = useState(false);
+  const [runTerminating, setRunTerminating] = useState(false);
   const [autoResumeMessage, setAutoResumeMessage] = useState<string | null>(null);
   const autoResumeInFlight = useRef(false);
   const stopFinalizeInFlight = useRef(false);
@@ -370,6 +371,30 @@ export function PriceRadarPage() {
     } finally { setRunStopping(false); }
   };
 
+  const terminateCollection = async () => {
+    if (!run || !canTerminateRun(run) || runTerminating) return;
+    setRunTerminating(true);
+    setAutoResumeMessage("Zakończenie w toku; serwer zapisuje trwałą blokadę wznowienia.");
+    try {
+      const response = await apiFetch("/api/price-radar/run", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "terminate", runId: run.id }),
+      });
+      const payload = await response.json().catch(() => null) as { status?: "terminated"; code?: string; message?: string } | null;
+      if (!response.ok || payload?.status !== "terminated") {
+        await loadRunStatusNow().catch(() => undefined);
+        const serverMessage = [payload?.message, payload?.code].filter(Boolean).join(" · ");
+        throw new Error(serverMessage || "Nie udało się trwale zakończyć przebiegu Radaru.");
+      }
+      await loadRunStatusNow();
+      setAutoResumeMessage("Serwer potwierdził trwałe zakończenie przebiegu.");
+      refreshRunNow.current?.();
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Nie udało się trwale zakończyć przebiegu Radaru.");
+    } finally { setRunTerminating(false); }
+  };
+
   const loadRunStatusNow = async () => {
     const response = await apiFetch("/api/price-radar/run");
     const payload = await response.json() as { run?: RunStatus | null };
@@ -496,7 +521,7 @@ export function PriceRadarPage() {
       <section aria-label="Zbieranie ofert Radaru" className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
         <div className="min-w-0">
           <h2 className="font-semibold">Zbieranie Radaru</h2>
-          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" ? "Zatrzymany" : run.stopRequestedAt ? "Zatrzymywanie" : runStatusLabel(run.status)}${(run.status === "running" || run.status === "pending") && !run.stopRequestedAt && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
+          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${run.userTerminatedAt ? "Zakończony przez użytkownika" : run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" ? "Zatrzymany" : run.stopRequestedAt ? "Zatrzymywanie" : runStatusLabel(run.status)}${(run.status === "running" || run.status === "pending") && !run.stopRequestedAt && !run.userTerminatedAt && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}${run.userTerminatedAt ? ` · zakończono ${formatDate(run.userTerminatedAt)}` : ""}` : "Brak uruchomionego przebiegu."}</p>
           {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
           {run?.sourceRejectionCounts && Object.keys(run.sourceRejectionCounts).length > 0 ? <details aria-label="Odrzucone kandydatury źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Odrzucone kandydatury według źródła</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceRejectionCounts).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${sourceRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
           {run?.sourceWarnings && Object.values(run.sourceWarnings).some((warnings) => warnings.length > 0) ? <details aria-label="Uwagi i pokrycie źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Uwagi źródeł i zakres wyszukiwania</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceWarnings).map(([source, warnings]) => warnings.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {warnings.map(sourceWarningLabel).join("; ")}</li> : null)}</ul></details> : null}
@@ -504,12 +529,17 @@ export function PriceRadarPage() {
           {autoResumeMessage ? <p className="mt-2 text-xs text-muted-foreground">{autoResumeMessage}</p> : null}
           {settingsSaving ? <p className="mt-1 text-xs text-muted-foreground">Zapisywanie ustawień…</p> : settingsDirty ? <p className="mt-1 text-xs text-destructive">Ustawienia nie zostały zapisane. Zmiana zostanie ponowiona po kolejnej edycji.</p> : null}
         </div>
-        <Button disabled={runStarting || runStopping || Boolean(run?.stopRequestedAt && (run.status === "running" || run.status === "pending")) || (isRunActuallyActive(run) && !(run?.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR")) || !settingsLoaded} onClick={() => void startCollection()}>
-          {runStarting ? "Uruchamianie…" : run?.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" ? "Wznów zatrzymany przebieg" : run?.stopRequestedAt && (run.status === "running" || run.status === "pending") ? "Zatrzymywanie…" : isRunActuallyActive(run) ? "Przebieg trwa" : "Uruchom / wznów zbieranie"}
+        <Button disabled={runStarting || runStopping || runTerminating || Boolean(run?.stopRequestedAt && (run.status === "running" || run.status === "pending")) || (isRunActuallyActive(run) && !(run?.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR")) || !settingsLoaded} onClick={() => void startCollection()}>
+          {runStarting ? "Uruchamianie…" : run?.userTerminatedAt ? "Uruchom nowy przebieg" : run?.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" ? "Wznów zatrzymany przebieg" : run?.stopRequestedAt && (run.status === "running" || run.status === "pending") ? "Zatrzymywanie…" : isRunActuallyActive(run) ? "Przebieg trwa" : "Uruchom / wznów zbieranie"}
         </Button>
         {(run?.status === "running" || run?.status === "pending") ? (
-          <Button variant="outline" disabled={runStopping || Boolean(run.stopRequestedAt && isRunActuallyActive(run))} onClick={() => void stopCollection()}>
+          <Button variant="outline" disabled={runStopping || runTerminating || Boolean(run.stopRequestedAt && isRunActuallyActive(run))} onClick={() => void stopCollection()}>
             {runStopping ? "Zatrzymywanie…" : run.stopRequestedAt && !isRunActuallyActive(run) ? "Dokończ zatrzymanie" : run.stopRequestedAt ? "Zatrzymywanie…" : "Zatrzymaj"}
+          </Button>
+        ) : null}
+        {run && canTerminateRun(run) ? (
+          <Button variant="outline" disabled={runStopping || runTerminating} onClick={() => void terminateCollection()}>
+            {runTerminating ? "Zakończenie w toku…" : "Zakończ przebieg"}
           </Button>
         ) : null}
         {run?.sourceStatuses ? <div className="flex w-full min-w-0 flex-wrap gap-2 text-xs">{Object.entries(run.sourceStatuses).map(([source, status]) => <span className="max-w-full break-words rounded-full border px-2 py-1" key={source}>{source}: {statusLabel(status)}</span>)}</div> : null}
@@ -776,6 +806,11 @@ function isRunActuallyActive(run: RunStatus | null): boolean {
   if (!run || (run.status !== "running" && run.status !== "pending")) return false;
   if (!run.leaseUntil) return false;
   return new Date(run.leaseUntil).getTime() > Date.now();
+}
+
+function canTerminateRun(run: RunStatus): boolean {
+  return !run.userTerminatedAt && (run.status === "running" || run.status === "pending"
+    || (run.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" && Boolean(run.stopRequestedAt)));
 }
 
 function statusLabel(status: string): string {
