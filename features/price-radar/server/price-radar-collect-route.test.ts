@@ -10,6 +10,7 @@ let claimCalls: string[] = [];
 let claimCriteria: Array<{ ownerId: string; sources: unknown; criteria: unknown }> = [];
 let claimResults: Record<string, { kind: "claimed"; run: { id: string; leaseToken: string } } | { kind: "blocked" }> = {};
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
+let filteredToEmptyOwners: Set<string> = new Set();
 
 function fakeAdmin() {
   return {
@@ -38,6 +39,7 @@ mock.module("@/lib/supabase/admin", { namedExports: {
 } });
 mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
   readRadarSettings: async (ownerId: string) => { settingsCalls.push(ownerId); return { districts: [], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: ["oferty_net"], minPricePerSqm: 8_800 }; },
+  radarSettingsSourcesWereFilteredToEmpty: async (ownerId: string) => filteredToEmptyOwners.has(ownerId),
 } });
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria.push({ ownerId, sources, criteria }); return claimResults[ownerId] ?? { kind: "blocked" }; },
@@ -54,6 +56,7 @@ function reset() {
   claimCriteria = [];
   claimResults = {};
   portionCalls = [];
+  filteredToEmptyOwners = new Set();
 }
 
 function withCronSecret<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
@@ -138,6 +141,21 @@ test("an owner whose Radar run is already active is skipped in favor of the next
   });
   assert.deepEqual(claimCalls, ["owner-busy", "owner-free"]);
   assert.deepEqual(portionCalls, [{ runId: "run-2", ownerId: "owner-free", leaseToken: "lease-2" }]);
+});
+
+test("an owner whose saved selection was filtered to empty by a disabled source (szybko) is skipped entirely -- never silently scanned on every active source", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-szybko-only" }, { owner_id: "owner-free" }];
+  filteredToEmptyOwners = new Set(["owner-szybko-only"]);
+  claimResults = { "owner-free": { kind: "claimed", run: { id: "run-3", leaseToken: "lease-3" } } };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.runId, "run-3");
+  });
+  assert.deepEqual(claimCalls, ["owner-free"], "the filtered-to-empty owner must never reach claimOrCreateRadarRun at all");
+  assert.deepEqual(portionCalls, [{ runId: "run-3", ownerId: "owner-free", leaseToken: "lease-3" }]);
 });
 
 test("no owner ready for a portion reports idle without error", async () => {

@@ -19,7 +19,11 @@ mock.module("@/features/price-radar/server/collect", { namedExports: {
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
-mock.module("@/features/price-radar/server/radar-settings", { namedExports: { readRadarSettings: async () => ({ sources: ["morizon"], areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800 }) } });
+let sourcesFilteredToEmpty = false;
+mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
+  readRadarSettings: async () => ({ sources: ["morizon"], areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800 }),
+  radarSettingsSourcesWereFilteredToEmpty: async () => sourcesFilteredToEmpty,
+} });
 mock.module("@/features/price-radar/server/radar-run-status", { namedExports: { latestRadarRun: async () => latest } });
 
 const route = await import("../../../app/api/price-radar/run/route.ts");
@@ -32,6 +36,7 @@ function reset() {
   claimCalls = [];
   claimCriteria = [];
   portionCalls = [];
+  sourcesFilteredToEmpty = false;
 }
 
 test("anonymous auto-resume does not claim or process a Radar run", async () => {
@@ -78,4 +83,15 @@ test("manual start without expectedRunId retains the existing claim-or-create pa
   assert.deepEqual(claimCriteria, [["morizon"], { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, qualityRulesVersion: 2 }], "a new run freezes saved bounds, the unit-price filter, and the current qualification rules version");
   assert.deepEqual(resumeCalls, []);
   assert.deepEqual(portionCalls, [{ runId: "new-run", ownerId: "owner-1", leaseToken: "new-token" }]);
+});
+
+test("a saved selection filtered to empty by a disabled source (e.g. szybko) is refused with a readable message -- it never silently starts scanning every active source", async () => {
+  reset();
+  sourcesFilteredToEmpty = true;
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST" }));
+  assert.equal(response.status, 400);
+  const body = await response.json() as { message?: string };
+  assert.match(body.message ?? "", /wyłączone/i);
+  assert.deepEqual(claimCalls, [], "claim-or-create must never run -- that is the exact path that would reinterpret an empty list as 'all sources'");
+  assert.deepEqual(portionCalls, []);
 });

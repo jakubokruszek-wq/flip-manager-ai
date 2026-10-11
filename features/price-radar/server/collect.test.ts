@@ -671,3 +671,36 @@ test("resuming after the OLX worker exhausted its lease (claim_olx_scan_job's ow
   assert.equal(result.status, "partial", "one dead source among otherwise-successful ones ends the run partial, not stuck in 'running'");
   assert.notEqual(db.tables.price_radar_runs[0].status, "running", "the run must reach a terminal status instead of waiting on OLX forever");
 });
+
+test("resuming a legacy checkpoint that still queues a now-disabled source (szybko) skips it with an honest reason, fetches nothing from it, and still runs the rest of the queue", async () => {
+  const db = fakeDb();
+  // claimOrCreateRadarRun already filters a newly requested source list
+  // against RADAR_SOURCES, so it could never itself produce this state.
+  // This reproduces a run whose sourceQueue was saved to the database
+  // before szybko was turned off -- the one case that matters here.
+  const leaseToken = "lease-legacy-szybko";
+  db.tables.price_radar_runs.push({
+    id: "run-legacy-szybko", owner_id: ownerId, lease_token: leaseToken,
+    lease_until: new Date(Date.now() + 75_000).toISOString(),
+    started_at: new Date().toISOString(), finished_at: null, status: "running",
+    scanned_count: 0, qualified_count: 0, error_message: null, source_statuses: { szybko: "pending", domiporta: "pending" },
+    checkpoint: {
+      sourceQueue: ["szybko", "domiporta"], currentSourceIndex: 0, perSourceCursor: {},
+      sourceStatuses: { szybko: "pending", domiporta: "pending" }, sourceErrors: {}, qualificationRejections: {}, buffer: [], bufferOffset: 0,
+    },
+  });
+  let szybkoFetchAttempted = false;
+  fakeSourceImpl = async (id) => {
+    if (id === "szybko") { szybkoFetchAttempted = true; return { listings: [], warnings: [], fetched: 0 }; }
+    return { listings: [qualifyingListing(`${id}-1`, id)], warnings: [], fetched: 1 };
+  };
+
+  const result = await runRadarCollectionPortion({ runId: "run-legacy-szybko", ownerId, leaseToken }, db as never);
+
+  assert.equal(szybkoFetchAttempted, false, "a disabled source already queued by an old checkpoint must never actually be fetched");
+  assert.equal(result.sourceStatuses.szybko, "failed");
+  assert.equal(result.sourceErrors.szybko, "Źródło wyłączone.", "the skip reason must say the source is disabled, not merely 'not registered'");
+  assert.equal(result.sourceStatuses.domiporta, "completed", "the rest of the queue still runs after the disabled stage is skipped");
+  assert.equal(result.qualifiedCount, 1);
+  assert.equal(result.status, "partial", "a skipped disabled source still ends the run partial, not silently 'completed'");
+});

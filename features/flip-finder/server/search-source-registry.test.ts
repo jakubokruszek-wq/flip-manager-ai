@@ -52,26 +52,31 @@ test("source paths use the stable Łódź slug", () => {
   assert.equal(slugifyCity("Łódź-Bałuty"), "lodz-baluty");
 });
 
-test("only complete schema-ready adapters are schedulable", () => {
+test("only complete schema-ready adapters are schedulable -- szybko is explicitly requested but never scheduled, since it was deliberately disabled", () => {
   assert.deepEqual(
     activeSources({
       ...filter,
       sources: ["otodom", "olx", "morizon", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie", "gratka", "nieruchomosci_online"],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "domy", "allegro_lokalnie"],
   );
   assert.deepEqual(activeSources({ ...filter, sources: ["bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), ["official_cooperative", "official_uml"]);
 });
 
-test("Oferty.net, Szybko, Domy.pl and Allegro Lokalnie are active now that their real city-scoped URLs and parsers are verified", () => {
+// Szybko.pl's adapter is still fully built and registered (EXTERNAL_SOURCE_STATUS
+// reflects implementation completeness, a separate concern from whether a
+// source is currently allowed to run) -- but it was deliberately disabled
+// everywhere, so activeSources() must never schedule it even when a caller
+// explicitly asks for it by name.
+test("Oferty.net, Domy.pl and Allegro Lokalnie are active now that their real city-scoped URLs and parsers are verified; Szybko keeps its built adapter but is deliberately never scheduled", () => {
   assert.equal(EXTERNAL_SOURCE_STATUS.oferty_net, "public_html_adapter");
-  assert.equal(EXTERNAL_SOURCE_STATUS.szybko, "public_html_adapter");
+  assert.equal(EXTERNAL_SOURCE_STATUS.szybko, "public_html_adapter", "the adapter itself was not removed -- only turned off");
   assert.equal(EXTERNAL_SOURCE_STATUS.domy, "public_html_adapter");
   assert.equal(EXTERNAL_SOURCE_STATUS.allegro_lokalnie, "public_html_adapter");
-  assert.deepEqual(activeSources({ ...filter, sources: ["oferty_net", "szybko", "domy", "allegro_lokalnie"] }).map((source) => source.id), ["oferty_net", "szybko", "domy", "allegro_lokalnie"]);
+  assert.deepEqual(activeSources({ ...filter, sources: ["oferty_net", "szybko", "domy", "allegro_lokalnie"] }).map((source) => source.id), ["oferty_net", "domy", "allegro_lokalnie"]);
 });
 
-test("a legacy filter cannot schedule unavailable sources while preserving active source IDs", () => {
+test("a legacy filter cannot schedule unavailable or disabled sources while preserving active source IDs", () => {
   assert.deepEqual(
     activeSources({
       ...filter,
@@ -81,7 +86,7 @@ test("a legacy filter cannot schedule unavailable sources while preserving activ
         "official_cooperative", "official_uml", "official_auction",
       ],
     }).map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"],
   );
 });
 

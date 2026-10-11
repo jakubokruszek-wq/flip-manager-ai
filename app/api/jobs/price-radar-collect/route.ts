@@ -1,6 +1,6 @@
 import { claimOrCreateRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { readRadarSettings } from "@/features/price-radar/server/radar-settings";
+import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
 
 /** Draft endpoint; no active cron entry is added by this mission. */
@@ -19,6 +19,11 @@ export async function POST(request: Request) {
   if (error) return Response.json({ error: "RADAR_OWNER_READ_FAILED" }, { status: 500 });
   for (const row of owners ?? []) {
     if (typeof row.owner_id !== "string") continue;
+    // A saved row that explicitly named only now-disabled sources (e.g.
+    // szybko) must never be silently reinterpreted as "scan everything" --
+    // skip this owner's portion entirely and let the next owner's row claim
+    // this cron tick instead of starting an unintended full-portfolio scan.
+    if (await radarSettingsSourcesWereFilteredToEmpty(row.owner_id, admin)) continue;
     const settings = await readRadarSettings(row.owner_id, admin);
     const claim = await claimOrCreateRadarRun(row.owner_id, settings.sources, admin, {
       areaMin: settings.areaMin,

@@ -27,14 +27,19 @@ test("the other sources keep their plain source-name labels — only Facebook ne
   assert.equal(labels.morizon, "Morizon");
 });
 
-test("Szybko has a plain source-name label now that its real city-scoped URL and Microdata parser are verified", () => {
-  const schnell = SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === "szybko");
-  assert.equal(schnell?.label, "Szybko.pl");
+// Szybko.pl was deliberately turned off everywhere (SCHEMA_READY_SOURCE_IDS
+// no longer lists it). Its option keeps its plain label -- a saved filter
+// or historical scan referencing "szybko" must still render a readable
+// name -- but it must never be selectable again.
+test("Szybko keeps a plain, readable label for historical data, but is disabled -- it is deliberately off, not merely unavailable", () => {
+  const szybko = SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === "szybko");
+  assert.equal(szybko?.label, "Szybko.pl");
+  assert.equal(szybko?.disabled, true);
 });
 
 test("legacy unavailable source options are disabled while active sources remain selectable", () => {
-  const unavailable = ["bezposrednio", "official_auction"];
-  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "gratka", "nieruchomosci_online", "oferty_net", "szybko", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"];
+  const unavailable = ["bezposrednio", "official_auction", "szybko"];
+  const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "gratka", "nieruchomosci_online", "oferty_net", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"];
   for (const source of unavailable) {
     assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === source)?.disabled, true, `${source} must be disabled`);
   }

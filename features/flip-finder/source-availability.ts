@@ -11,7 +11,6 @@ export const SCHEMA_READY_SOURCE_IDS = [
   "gratka",
   "nieruchomosci_online",
   "oferty_net",
-  "szybko",
   "domy",
   "allegro_lokalnie",
   "official_cooperative",
@@ -19,6 +18,23 @@ export const SCHEMA_READY_SOURCE_IDS = [
 ] as const satisfies readonly Exclude<ListingSource, "facebook">[];
 
 export type SchemaReadySourceId = (typeof SCHEMA_READY_SOURCE_IDS)[number];
+
+/**
+ * Source IDs this app once actively scanned but has deliberately turned off
+ * everywhere (Finder, Radar, Watcher, manual runs, continuations,
+ * schedules, queues, URL imports). The ID stays a valid, recognized
+ * ListingSource -- so historical results, errors, and saved filter/settings
+ * entries referencing it remain readable -- it is simply never eligible to
+ * be fetched again. Checked separately from "never built at all" so a
+ * resumed legacy checkpoint or continuation can report the honest,
+ * specific "Źródło wyłączone" instead of a generic not-registered error.
+ */
+export const DISABLED_SOURCE_IDS = ["szybko"] as const satisfies readonly Exclude<ListingSource, "facebook">[];
+export type DisabledSourceId = (typeof DISABLED_SOURCE_IDS)[number];
+
+export function isDisabledSource(source: ListingSource): source is DisabledSourceId {
+  return (DISABLED_SOURCE_IDS as readonly ListingSource[]).includes(source);
+}
 
 /** Facebook is readable by Finder, but acquired only by the independent Watcher. */
 export function isActiveFilterSource(source: ListingSource): boolean {

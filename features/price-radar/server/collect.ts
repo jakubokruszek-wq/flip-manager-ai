@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
-import { SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
+import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 import { isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
@@ -24,8 +24,7 @@ const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
 const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "rooms", "floor", "location", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
 
 /** Radar may only use sources that are both in the shared schema gate and have a registered adapter. */
-export const RADAR_SOURCES: RadarSource[] = SCHEMA_READY_SOURCE_IDS.filter((id): id is RadarSource => {
-  if (["facebook", "bezposrednio", "official_auction"].includes(id)) return false;
+export const RADAR_SOURCES: RadarSource[] = SCHEMA_READY_SOURCE_IDS.filter((id) => {
   const filter = syntheticCriteria(id as RadarSource);
   return activeSources(filter).some((source) => source.id === id);
 });
@@ -219,8 +218,13 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       attemptedSourceIds.add(sourceId);
       const source = activeSources(syntheticCriteria(sourceId, checkpoint.searchCriteria)).find((candidate) => candidate.id === sourceId);
       if (!source) {
+        // A run claimed before a source was turned off can still carry it in
+        // its own saved sourceQueue (e.g. "szybko"). Resuming that old
+        // checkpoint must skip the stage through this exact same no-fetch
+        // path -- never retrying it, never blocking the rest of the queue --
+        // with an honest, specific reason distinct from "never registered".
         checkpoint.sourceStatuses[sourceId] = "failed";
-        checkpoint.sourceErrors[sourceId] = "SOURCE_NOT_ACTIVE_OR_REGISTERED";
+        checkpoint.sourceErrors[sourceId] = isDisabledSource(sourceId) ? "Źródło wyłączone." : "SOURCE_NOT_ACTIVE_OR_REGISTERED";
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
         continue;

@@ -25,7 +25,7 @@ test("zero sources (defensive) falls back to the ceiling rather than dividing by
 
 test("the legacy divisor helper retains its floor; actual workers give each source a full bounded portion", () => {
   const maxSequentialSources = SCHEMA_READY_SOURCE_IDS.filter((id) => id !== "olx").length;
-  assert.equal(maxSequentialSources, 13, "this test's premise: today's real maximum is 13 -- update the budget math (not just this number) if that ever changes");
+  assert.equal(maxSequentialSources, 12, "this test's premise: today's real maximum is 12 (szybko was disabled) -- update the budget math (not just this number) if that ever changes");
   assert.equal(sourceTimeoutBudgetMs(maxSequentialSources), MIN_SOURCE_TIMEOUT_MS);
   const perSourceBudget = sourceTimeoutBudgetMs(1);
   assert.equal(perSourceBudget, SOURCE_TIMEOUT_CEILING_MS, "the runtime passes one source, regardless of the filter's source count");

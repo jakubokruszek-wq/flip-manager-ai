@@ -43,3 +43,13 @@ test("malformed values cannot widen the district, room, or portal sets beyond Ra
   assert.deepEqual(filters.rooms, []);
   assert.deepEqual(filters.sources, []);
 });
+
+test("szybko is never accepted into saved Radar settings -- old saved settings and a direct API request are both stripped", () => {
+  assert.equal(RADAR_SOURCES.includes("szybko" as (typeof RADAR_SOURCES)[number]), false, "szybko must not be a schema-ready Radar source at all");
+  // A legacy saved settings row from before szybko was disabled.
+  const legacySaved = normalizeRadarFilters({ districts: ["Bałuty"], sources: ["domiporta", "szybko"] });
+  assert.deepEqual(legacySaved.sources, ["domiporta"], "an old saved settings row listing szybko must never resurrect it on read");
+  // A direct, crafted API PUT request trying to re-add it.
+  const directApiAttempt = normalizeRadarFilters({ districts: ["Bałuty"], sources: ["szybko"] });
+  assert.deepEqual(directApiAttempt.sources, [], "a direct API request naming only szybko ends up with an empty, not a widened, source list");
+});
