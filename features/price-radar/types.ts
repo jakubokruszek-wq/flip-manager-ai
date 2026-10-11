@@ -165,3 +165,38 @@ export type RadarStatGroup = {
   isSmallSample: boolean;
   updatedAt: string | null;
 };
+
+/**
+ * A Radar candidate fully qualified on every OTHER criterion -- confirmed
+ * building, market, and A/B finish -- with only its district left unset.
+ * Separate from RadarListing/the A/B sample for as long as status is
+ * "pending"; never counted in computeRadarStats() until an operator
+ * assigns a district and it is promoted into price_radar_listings.
+ */
+export type RadarDistrictQueueItem = {
+  id: string;
+  source: RadarSource;
+  externalListingId: string;
+  originalUrl: string;
+  normalizedUrl: string;
+  title: string | null;
+  description: string | null;
+  price: number;
+  area: number;
+  pricePerSqm: number;
+  rooms: number | null;
+  city: string;
+  buildingType: RadarBuildingType;
+  marketType: MarketType;
+  renovationStatus: RadarRenovationStatus;
+  qualityCategory: RadarQualityCategory;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  publishedAt: string | null;
+  sourceUpdatedAt: string | null;
+  collectedAt: string;
+  status: "pending" | "assigned" | "rejected";
+  assignedDistrict: string | null;
+  assignedAt: string | null;
+  rejectedAt: string | null;
+};

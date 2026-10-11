@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeRadarQualificationRejections, qualifyRadarCandidate, type QualificationCandidate } from "./qualification.ts";
+import { assessRadarDistrictOnlyCandidate, normalizeRadarQualificationRejections, qualifyRadarCandidate, type QualificationCandidate } from "./qualification.ts";
 
 function candidate(overrides: Partial<QualificationCandidate> = {}): QualificationCandidate {
   return {
@@ -307,4 +307,50 @@ test("qualification rejection diagnostics accept only known, positive integer co
     "bad source": { rental: 8 },
     morizon: "not-an-object",
   }), { olx: { district_not_confirmed: 51, rental: 2 } });
+});
+
+// The district-assignment queue (manual district assignment) must only ever
+// hold a candidate that is fully qualified on every OTHER Radar criterion.
+// qualifyRadarCandidate() checks district_not_confirmed before building
+// type, market type, and finish -- so seeing exactly that one reason proves
+// nothing about the rest on its own.
+test("assessRadarDistrictOnlyCandidate: a candidate missing only its district, with everything else confirmed, is eligible", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: null }));
+  assert.equal(result.eligible, true);
+  if (result.eligible) {
+    assert.equal(result.confirmed.buildingType, "blok");
+    assert.equal(result.confirmed.marketType, "secondary");
+    assert.equal(result.confirmed.renovationStatus, "fresh_renovation");
+    assert.equal(result.confirmed.pricePerSqm, 9_000);
+  }
+});
+
+test("assessRadarDistrictOnlyCandidate: a missing district alone never proves the rest -- a missing building type stays ineligible, not approved by district selection", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: null, title: "Mieszkanie", description: "Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania. Rynek wtórny." }));
+  assert.equal(result.eligible, false, "with no 'blok'/'apartamentowiec' declaration, building type must not be approved just because a district was later chosen");
+});
+
+test("assessRadarDistrictOnlyCandidate: a rental offer missing its district stays ineligible -- never approved by district selection alone", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: null, title: "Mieszkanie w bloku do wynajęcia", description: "Oferta najmu, czynsz miesięczny 2500 zł." }));
+  assert.equal(result.eligible, false);
+});
+
+test("assessRadarDistrictOnlyCandidate: a candidate rejected for an unrelated reason (e.g. missing price) is never made eligible by a district probe", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: null, price: null }));
+  assert.equal(result.eligible, false);
+});
+
+test("assessRadarDistrictOnlyCandidate: a candidate with an already-confirmed district (even one outside the operator's current filter scope) is not 'missing a district' -- it is never eligible for this queue", () => {
+  // normalizeDistrict only checks membership in the 5 canonical districts,
+  // never the operator's own filter selection -- so a confirmed district
+  // the operator currently has unchecked is a normal qualifyRadarCandidate
+  // pass/reject, never district_not_confirmed, and must never reach this queue.
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: "Widzew" }));
+  assert.equal(result.eligible, false);
+  assert.equal(qualifyRadarCandidate(candidate({ district: "Widzew" })).qualified, true, "this candidate already fully qualifies with its own confirmed district");
+});
+
+test("assessRadarDistrictOnlyCandidate: an already-fully-qualified candidate (district present) is not re-offered as a district-missing candidate", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate());
+  assert.equal(result.eligible, false);
 });

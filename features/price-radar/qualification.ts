@@ -353,3 +353,38 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate, quality
   if (!finish.turnkey || TURNKEY_EXTRA_COST_PATTERN.test(normalizedText)) return reject("turnkey_not_confirmed");
   return { qualified: true, buildingType, marketType, renovationStatus: "turnkey_finish", district, pricePerSqm };
 }
+
+export type RadarDistrictOnlyAssessment =
+  | { eligible: true; confirmed: Omit<QualifiedListing, "district" | "pricePerSqm"> & { pricePerSqm: number } }
+  | { eligible: false };
+
+/**
+ * A placeholder (any one of the 5 canonical districts -- the choice is
+ * inert, only used to get past the district check) that is never written
+ * anywhere; the real, operator-chosen district always replaces it before
+ * any persistence happens.
+ */
+const DISTRICT_PROBE = DEFAULT_RADAR_DISTRICTS[0];
+
+/**
+ * The district-assignment queue must only ever hold a candidate that is
+ * qualified on EVERY other Radar criterion -- confirmed building type,
+ * market, and A/B finish -- with district as the one genuinely missing
+ * fact. qualifyRadarCandidate() short-circuits on its first failing check,
+ * so observing "district_not_confirmed" alone proves nothing about the
+ * checks that come after it (building type, market, renovation/finish) --
+ * only re-running the exact same qualification with a stand-in district
+ * filled in can prove the rest would also pass. A missing building/market/
+ * finish, a rental, or any other contradictory feature must never be
+ * approved by a district choice alone; this returns ineligible for all of
+ * those, exactly like qualifyRadarCandidate itself would.
+ */
+export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2): RadarDistrictOnlyAssessment {
+  const direct = qualifyRadarCandidate(candidate, qualityRulesVersion);
+  if (direct.qualified || direct.reason !== "district_not_confirmed") return { eligible: false };
+  const probed = qualifyRadarCandidate({ ...candidate, district: DISTRICT_PROBE }, qualityRulesVersion);
+  if (!probed.qualified) return { eligible: false };
+  const { district: _district, pricePerSqm, ...confirmed } = probed;
+  void _district;
+  return { eligible: true, confirmed: { ...confirmed, pricePerSqm } };
+}

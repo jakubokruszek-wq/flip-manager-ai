@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
-import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory } from "@/features/price-radar/types";
+import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory } from "@/features/price-radar/types";
 
 type ResultsResponse = {
   listings: RadarListing[];
@@ -14,6 +14,7 @@ type ResultsResponse = {
   activeSources: RadarSource[];
   disabledSourceNote: string;
 };
+type DistrictQueueResponse = { available: boolean; pending: RadarDistrictQueueItem[]; assigned: RadarDistrictQueueItem[]; rejected: RadarDistrictQueueItem[] };
 type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null }; activeSources: RadarSource[]; disabledSourceNote: string };
 
@@ -58,6 +59,10 @@ export function PriceRadarPage() {
   const autoResumeInFlight = useRef(false);
   const lastAutoResumeAttempt = useRef<{ key: string; at: number } | null>(null);
   const refreshRunNow = useRef<(() => void) | null>(null);
+  const [districtQueue, setDistrictQueue] = useState<DistrictQueueResponse | null>(null);
+  const [districtChoices, setDistrictChoices] = useState<Record<string, string>>({});
+  const [districtQueuePending, setDistrictQueuePending] = useState<string | null>(null);
+  const [districtQueueError, setDistrictQueueError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,6 +141,65 @@ export function PriceRadarPage() {
     }, 0);
     return () => window.clearTimeout(timeoutId);
   }, [load]);
+
+  const loadDistrictQueue = useCallback(async () => {
+    try {
+      const response = await apiFetch("/api/price-radar/district-queue");
+      const payload = (await response.json()) as DistrictQueueResponse | { message?: string };
+      if (!response.ok || !("pending" in payload)) {
+        throw new Error("message" in payload && payload.message ? payload.message : "Nie udało się pobrać kolejki przypisania dzielnicy.");
+      }
+      setDistrictQueue(payload);
+      setDistrictQueueError(null);
+    } catch (reason) {
+      setDistrictQueueError(reason instanceof Error ? reason.message : "Nie udało się pobrać kolejki przypisania dzielnicy.");
+    }
+  }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void loadDistrictQueue();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [loadDistrictQueue]);
+
+  const assignDistrict = async (queueId: string) => {
+    const district = districtChoices[queueId];
+    if (!district) return;
+    setDistrictQueuePending(queueId);
+    try {
+      const response = await apiFetch("/api/price-radar/district-queue/assign", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queueId, district }),
+      });
+      const payload = await response.json() as { message?: string };
+      if (!response.ok) throw new Error(payload.message || "Nie udało się dodać oferty do porównań.");
+      setDistrictQueueError(null);
+      // A confirmed save moves the offer into price_radar_listings --
+      // both the queue and the A/B sample/stats must reflect this right away.
+      await Promise.all([loadDistrictQueue(), load()]);
+    } catch (reason) {
+      setDistrictQueueError(reason instanceof Error ? reason.message : "Nie udało się dodać oferty do porównań.");
+    } finally {
+      setDistrictQueuePending(null);
+    }
+  };
+
+  const setDistrictQueueRejection = async (queueId: string, rejected: boolean) => {
+    setDistrictQueuePending(queueId);
+    try {
+      const response = await apiFetch("/api/price-radar/district-queue/reject", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queueId, rejected }),
+      });
+      const payload = await response.json() as { message?: string };
+      if (!response.ok) throw new Error(payload.message || "Nie udało się zaktualizować decyzji.");
+      setDistrictQueueError(null);
+      await loadDistrictQueue();
+    } catch (reason) {
+      setDistrictQueueError(reason instanceof Error ? reason.message : "Nie udało się zaktualizować decyzji.");
+    } finally {
+      setDistrictQueuePending(null);
+    }
+  };
 
   useEffect(() => {
     if (!settingsLoaded) return;
@@ -415,6 +479,52 @@ export function PriceRadarPage() {
         ))}
       </section>
 
+      {districtQueueError ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{districtQueueError}</div>
+      ) : null}
+
+      {districtQueue && (districtQueue.pending.length > 0 || districtQueue.rejected.length > 0) ? (
+        <section aria-label="Do przypisania dzielnicy" className="space-y-3">
+          <h2 className="text-lg font-semibold">Do przypisania dzielnicy ({districtQueue.pending.length})</h2>
+          <p className="text-xs text-muted-foreground">
+            Mieszkania spełniające pozostałe kryteria Radaru (cena, metraż, pokoje, rynek, blok/apartamentowiec, standard A/B), którym brakuje wyłącznie potwierdzonej dzielnicy.
+          </p>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {districtQueue.pending.map((item) => (
+              <DistrictQueueRow
+                key={item.id}
+                item={item}
+                chosenDistrict={districtChoices[item.id] ?? ""}
+                onChooseDistrict={(district) => setDistrictChoices((current) => ({ ...current, [item.id]: district }))}
+                onAssign={() => void assignDistrict(item.id)}
+                onReject={() => void setDistrictQueueRejection(item.id, true)}
+                pending={districtQueuePending === item.id}
+              />
+            ))}
+          </div>
+
+          {districtQueue.rejected.length > 0 ? (
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold text-muted-foreground">Odrzucone z kolejki dzielnic ({districtQueue.rejected.length})</h3>
+              <div className="mt-3 grid gap-4 lg:grid-cols-2">
+                {districtQueue.rejected.map((item) => (
+                  <DistrictQueueRow
+                    key={item.id}
+                    item={item}
+                    rejected
+                    chosenDistrict={districtChoices[item.id] ?? ""}
+                    onChooseDistrict={(district) => setDistrictChoices((current) => ({ ...current, [item.id]: district }))}
+                    onAssign={() => void assignDistrict(item.id)}
+                    onReject={() => void setDistrictQueueRejection(item.id, false)}
+                    pending={districtQueuePending === item.id}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <section aria-label="Oferty w próbie" className="space-y-3">
         <h2 className="text-lg font-semibold">Oferty w próbie ({sampleListings.length})</h2>
         <div className="grid gap-4 lg:grid-cols-2">
@@ -477,6 +587,65 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
         <Button size="sm" variant="outline" disabled={pending} onClick={onExclude}>
           {excluded ? "Przywróć do porównań" : "Wyklucz z porównań"}
         </Button>
+      </div>
+    </article>
+  );
+}
+
+function DistrictQueueRow({ item, rejected, chosenDistrict, onChooseDistrict, onAssign, onReject, pending }: {
+  item: RadarDistrictQueueItem; rejected?: boolean; chosenDistrict: string; onChooseDistrict: (district: string) => void;
+  onAssign: () => void; onReject: () => void; pending: boolean;
+}) {
+  const selectId = `district-queue-select-${item.id}`;
+  return (
+    <article className={`min-w-0 overflow-hidden rounded-xl border bg-card p-4 ${rejected ? "opacity-60" : ""}`}>
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{item.title ?? "Oferta bez tytułu"}</h3>
+        <span className="max-w-32 break-words rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{sourceLabel(item.source)}</span>
+      </div>
+      <p className="mt-1 break-words text-sm text-muted-foreground">
+        {item.city} · {item.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {item.buildingType === "blok" ? "Blok" : "Apartamentowiec"} · {qualityCategoryLabel(item.qualityCategory, item.marketType)}
+      </p>
+      <p className="mt-1 break-words text-xs font-medium text-amber-700 dark:text-amber-300">Dzielnica wymaga przypisania</p>
+      <p className="mt-3 text-sm font-medium">
+        {formatCurrency(item.price)} · {item.area} m² · {formatCurrency(item.pricePerSqm)}/m²{item.rooms ? ` · ${item.rooms} pok.` : ""}
+      </p>
+      <dl className="mt-3 grid gap-1 text-xs text-muted-foreground">
+        <DateRow label="Opublikowano" value={item.publishedAt} />
+        <DateRow label="Zmiana ogłoszenia" value={item.sourceUpdatedAt} />
+        <DateRow label="Pobrano" value={item.collectedAt} />
+      </dl>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Button nativeButton={false} render={<a href={item.originalUrl} target="_blank" rel="noopener noreferrer" />} size="sm" variant="outline">
+          Otwórz ogłoszenie
+        </Button>
+        {!rejected ? (
+          <>
+            <label htmlFor={selectId} className="sr-only">Dzielnica</label>
+            <select
+              id={selectId}
+              className="h-9 rounded-lg border border-input bg-background px-2 text-sm"
+              value={chosenDistrict}
+              disabled={pending}
+              onChange={(event) => onChooseDistrict(event.target.value)}
+            >
+              <option value="">Wybierz dzielnicę</option>
+              {DEFAULT_RADAR_DISTRICTS.map((district) => (
+                <option key={district} value={district}>{district}</option>
+              ))}
+            </select>
+            <Button size="sm" disabled={pending || !chosenDistrict} onClick={onAssign}>
+              Dodaj do porównań
+            </Button>
+            <Button size="sm" variant="outline" disabled={pending} onClick={onReject}>
+              Odrzuć
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="outline" disabled={pending} onClick={onReject}>
+            Przywróć do kolejki
+          </Button>
+        )}
       </div>
     </article>
   );

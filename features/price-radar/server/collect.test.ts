@@ -6,8 +6,8 @@ import type { RadarDetailDiagnostic } from "@/features/flip-finder/source-batche
 type Row = Record<string, unknown>;
 const ownerId = "owner-test";
 
-function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
-  const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [] };
+function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[] } = {}) {
+  const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [], price_radar_district_queue: initial.districtQueue ?? [] };
   const rpcCalls: Array<{ name: string; args: Row }> = [];
   let seq = 0;
   return {
@@ -38,6 +38,13 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[] } = {}) {
         let row = tables.price_radar_listings.find((entry) => entry.owner_id === args.p_owner_id && entry.source === candidate.source && (entry.external_listing_id === candidate.external_listing_id || entry.normalized_url === candidate.normalized_url));
         if (!row) { row = { id: `listing-${++seq}`, owner_id: args.p_owner_id }; tables.price_radar_listings.push(row); }
         Object.assign(row, candidate, { excluded_at: row.excluded_at ?? null, excluded_reason: row.excluded_reason ?? null, status: "active", first_seen_at: row.first_seen_at ?? candidate.collected_at });
+        return { data: row.id, error: null };
+      }
+      if (name === "upsert_price_radar_district_queue_candidate") {
+        const candidate = args.p_candidate as Row;
+        let row = tables.price_radar_district_queue.find((entry) => entry.owner_id === args.p_owner_id && entry.source === candidate.source && entry.external_listing_id === candidate.external_listing_id);
+        if (!row) { row = { id: `queue-${++seq}`, owner_id: args.p_owner_id, status: "pending", assigned_district: null }; tables.price_radar_district_queue.push(row); }
+        Object.assign(row, candidate);
         return { data: row.id, error: null };
       }
       throw new Error(`unexpected RPC ${name}`);
@@ -703,4 +710,36 @@ test("resuming a legacy checkpoint that still queues a now-disabled source (szyb
   assert.equal(result.sourceStatuses.domiporta, "completed", "the rest of the queue still runs after the disabled stage is skipped");
   assert.equal(result.qualifiedCount, 1);
   assert.equal(result.status, "partial", "a skipped disabled source still ends the run partial, not silently 'completed'");
+});
+
+test("a candidate missing ONLY its district (every other Radar criterion confirmed) is queued for manual district assignment, never counted as a dead-end rejection", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id) => ({ listings: [{ ...qualifyingListing(`${id}-nodist`, id), district: null }], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.qualifiedCount, 0, "a queued candidate is not yet a qualified Radar listing");
+  assert.equal(db.tables.price_radar_listings.length, 0, "a district-only-missing candidate is never written straight to price_radar_listings");
+  assert.deepEqual(result.qualificationRejections, {}, "it must never also be counted as district_not_confirmed -- it is an actionable queue item, not a dead end");
+  assert.equal(db.tables.price_radar_district_queue.length, 1);
+  assert.equal(db.tables.price_radar_district_queue[0]?.source, "domiporta");
+  assert.equal(db.tables.price_radar_district_queue[0]?.building_type, "blok");
+  assert.equal(db.tables.price_radar_district_queue[0]?.status, "pending");
+});
+
+test("a candidate missing its district AND another criterion (e.g. an unconfirmed building type) is a genuine rejection, never queued", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id) => ({
+    listings: [{ ...qualifyingListing(`${id}-nodist-nobuild`, id), district: null, title: "Mieszkanie", description: "Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania. Rynek wtórny." }],
+    warnings: [], fetched: 1,
+  });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(db.tables.price_radar_district_queue.length, 0, "missing more than just the district must never reach the queue");
+  assert.deepEqual(result.qualificationRejections, { domiporta: { district_not_confirmed: 1 } }, "district_not_confirmed is reported first, same as before -- the queue only intercepts a genuinely district-only gap");
 });

@@ -5,8 +5,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
-import { isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
+import { assessRadarDistrictOnlyCandidate, isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
@@ -253,14 +254,15 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           }
           for (const listing of batch.listings) {
             controller.signal.throwIfAborted();
-            const outcome = qualifyRadarCandidate({
+            const qualificationCandidate = {
               source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
               title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
               rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
               marketType: typeof listing.rawPayload.marketType === "string" ? listing.rawPayload.marketType : null,
               propertyType: typeof listing.rawPayload.propertyType === "string" ? listing.rawPayload.propertyType : null,
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
-            }, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
+            };
+            const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
             if (!outcome.qualified) {
               if (outcome.reason === "detail_conflict" && (listing.source === "oferty_net" || listing.source === "domiporta")) {
                 const evidence = isRecord(listing.rawPayload.detailEvidence) ? listing.rawPayload.detailEvidence : {};
@@ -278,6 +280,26 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                 await markExistingRadarListingForReview(supabase, {
                   ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString(),
                 }, { source: listing.source, externalListingId: listing.externalListingId, issueFields: conflicts }, controller.signal);
+              }
+              // A candidate missing ONLY its district (every other criterion
+              // already confirmed) goes to the manual district-assignment
+              // queue instead of a dead-end rejection count -- it is an
+              // actionable item for the operator, not a failure. Anything
+              // that would still fail on a different ground (building,
+              // market, finish, rental, ...) keeps its normal rejection
+              // reason and is never queued.
+              if (outcome.reason === "district_not_confirmed") {
+                const districtAssessment = assessRadarDistrictOnlyCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
+                if (districtAssessment.eligible) {
+                  await upsertPendingDistrictCandidate(supabase, input.ownerId, {
+                    source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+                    title: listing.title, description: listing.description, price: listing.price!, area: listing.area!, rooms: listing.rooms,
+                    city: listing.city!, contentHash: listing.contentHash, crossSourceIdentity: listing.crossSourceIdentity ?? null,
+                    publishedAt: listing.publishedAt ?? null, sourceUpdatedAt: sourceDate(listing.rawPayload, ["updatedAt", "modifiedAt", "updated_at", "modified_at"]),
+                    rawPayload: listing.rawPayload,
+                  }, districtAssessment.confirmed, new Date().toISOString());
+                  continue;
+                }
               }
               recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, outcome.reason);
               continue;

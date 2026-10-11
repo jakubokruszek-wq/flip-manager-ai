@@ -8,6 +8,7 @@ const radarLeaseToken = "radar-lease-current";
 const checkpoint = { sourceQueue: ["olx"], currentSourceIndex: 0, perSourceCursor: {}, sourceStatuses: { olx: "running" }, sourceErrors: {}, buffer: [], bufferOffset: 0 };
 let persisted: Row[] = [];
 let finalized: Row[] = [];
+let districtQueueUpserts: Row[] = [];
 let currentRunToken = radarLeaseToken;
 
 function fakeDb() {
@@ -23,6 +24,10 @@ function fakeDb() {
       return builder;
     },
     async rpc(name: string, args: Row) {
+      if (name === "upsert_price_radar_district_queue_candidate") {
+        districtQueueUpserts.push(args);
+        return { data: "queue-row-1", error: null };
+      }
       assert.equal(name, "finalize_price_radar_olx_job");
       finalized.push(args);
       return { data: true, error: null };
@@ -46,6 +51,7 @@ function candidate() {
 test("OLX worker persists only qualified Radar rows and finalizes through the Radar lease RPC", async () => {
   persisted = [];
   finalized = [];
+  districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
   const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
     fetched: 1, listings: [candidate() as never], warnings: [], durationMs: 1200,
@@ -67,16 +73,38 @@ test("OLX worker persists only qualified Radar rows and finalizes through the Ra
 test("OLX worker records strict rejection reasons without persisting an unqualified offer", async () => {
   persisted = [];
   finalized = [];
+  districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
+  // A candidate missing a building type AND a district: with no building
+  // type, assessRadarDistrictOnlyCandidate must find it ineligible for the
+  // district queue, so this stays a genuine, counted rejection.
   const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
-    fetched: 1, listings: [{ ...candidate(), district: null } as never], warnings: [], durationMs: 1200,
+    fetched: 1, listings: [{ ...candidate(), district: null, buildingType: null, title: "Mieszkanie", description: "Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania. Rynek wtórny." } as never], warnings: [], durationMs: 1200,
   }, fakeDb() as never);
   assert.deepEqual(result, { source: "olx", status: "completed", fetched: 1, qualified: 0 });
   assert.equal(persisted.length, 0, "rejection diagnostics do not weaken or bypass qualification");
+  assert.equal(districtQueueUpserts.length, 0, "an offer missing more than just its district is never queued");
   const savedCheckpoint = finalized[0].p_checkpoint as Row;
   assert.deepEqual(savedCheckpoint.qualificationRejections, { olx: { district_not_confirmed: 1 } });
   assert.deepEqual((finalized[0].p_result_summary as Row).qualificationRejections, savedCheckpoint.qualificationRejections);
   assert.equal((finalized[0].p_qualified_count as number), 1, "the persisted run count remains the preexisting total plus zero new qualifications");
+});
+
+test("OLX worker queues (never rejects) a candidate missing ONLY its district -- every other Radar criterion already confirmed", async () => {
+  persisted = [];
+  finalized = [];
+  districtQueueUpserts = [];
+  currentRunToken = radarLeaseToken;
+  const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
+    fetched: 1, listings: [{ ...candidate(), district: null } as never], warnings: [], durationMs: 1200,
+  }, fakeDb() as never);
+  assert.deepEqual(result, { source: "olx", status: "completed", fetched: 1, qualified: 0 }, "a queued candidate is not yet a qualified Radar listing");
+  assert.equal(persisted.length, 0, "a district-only-missing candidate is never written straight to price_radar_listings");
+  assert.equal(districtQueueUpserts.length, 1, "it must be upserted into the district-assignment queue instead");
+  assert.equal((districtQueueUpserts[0].p_candidate as Row).source, "olx");
+  assert.equal((districtQueueUpserts[0].p_candidate as Row).building_type, "blok");
+  const savedCheckpoint = finalized[0].p_checkpoint as Row;
+  assert.deepEqual(savedCheckpoint.qualificationRejections, {}, "a queued candidate must never also be counted as a dead-end rejection");
 });
 
 test("OLX worker maps the portal's structured market parameter before strict Radar qualification", async () => {

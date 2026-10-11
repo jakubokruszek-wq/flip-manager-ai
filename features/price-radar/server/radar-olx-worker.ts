@@ -1,8 +1,9 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
+import { assessRadarDistrictOnlyCandidate, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import type { RadarCheckpoint, RadarRunStatus } from "@/features/price-radar/types";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -38,15 +39,32 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
     const sourceErrors = payload.warnings.map((warning) => warning.replace(/[\r\n\t]/g, " ").slice(0, 500));
     for (const listing of payload.listings) {
       const raw = listing.rawPayload ?? {};
-      const outcome = qualifyRadarCandidate({
+      const olxCandidate = {
         source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
         title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
         rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
         marketType: resolveOlxMarketType(raw),
         propertyType: typeof raw.propertyType === "string" ? raw.propertyType : null,
         rawPayload: raw, contentHash: listing.contentHash,
-      }, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
+      };
+      const outcome = qualifyRadarCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
       if (!outcome.qualified) {
+        // See collect.ts for the same rule: only a candidate missing ONLY
+        // its district (every other criterion already confirmed) ever
+        // reaches the manual district-assignment queue.
+        if (outcome.reason === "district_not_confirmed") {
+          const districtAssessment = assessRadarDistrictOnlyCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
+          if (districtAssessment.eligible) {
+            await upsertPendingDistrictCandidate(client, input.ownerId, {
+              source: "olx", externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+              title: listing.title, description: listing.description, price: listing.price!, area: listing.area!, rooms: listing.rooms,
+              city: listing.city!, contentHash: listing.contentHash, crossSourceIdentity: listing.crossSourceIdentity ?? null,
+              publishedAt: listing.publishedAt ?? null, sourceUpdatedAt: sourceDate(raw),
+              rawPayload: raw,
+            }, districtAssessment.confirmed, new Date().toISOString());
+            continue;
+          }
+        }
         recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, "olx", outcome.reason);
         continue;
       }
