@@ -582,7 +582,27 @@ export async function getFilterResults(filterId: string, includeArchived = false
     (result.source === "facebook" || isValidSalePrice(result.price)) && isWithinFinderPublicationWindow(result.publishedAt, now);
   const sortedResults = sortResults(groupedResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
   const reviewResults = sortResults(groupedResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
-  const archivedResults = includeArchived ? sortResults(groupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true || ((result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW") && !mainVisible(result))), "newest") : [];
+  // A listing can still be a genuine, live MATCHED/REVIEW candidate --
+  // is_current_match=true, lifecycle_status "ACTIVE", no manual decision --
+  // and yet fail mainVisible() purely because its own reported publication
+  // date is older than FINDER_PUBLICATION_MAX_AGE_DAYS (confirmed live in
+  // Production, 2026-10-11: two real OLX listings, 31 and 135 days old by
+  // their own sourcePublishedAt, both otherwise fully qualifying). Without
+  // this, such a listing's lifecycleStatus stays "ACTIVE" while it lands in
+  // archivedResults -- it inflates the archive's total count without being
+  // counted by any of the UI's own stale/archived/rejected sub-totals,
+  // which otherwise always sum to that total. Tagging it here keeps that
+  // sum honest and gives the operator the ACTUAL reason instead of a
+  // mysterious gap.
+  const isStalePublicationOnly = (result: FilterResult) =>
+    (result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW")
+    && !isArchivedLifecycle(result) && !result.sourceConflict && !mainVisible(result)
+    && (result.source === "facebook" || isValidSalePrice(result.price));
+  const archivedResults: FilterResult[] = includeArchived ? sortResults(groupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true || ((result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW") && !mainVisible(result))), "newest")
+    .map((result): FilterResult => isStalePublicationOnly(result) && result.canonicalDecisionDebug
+      ? { ...result, canonicalDecisionDebug: { ...result.canonicalDecisionDebug, reason: "stale_publication_date" } }
+      : result)
+    : [];
 
   return {
     filter,

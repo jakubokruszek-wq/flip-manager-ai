@@ -182,6 +182,63 @@ test("Finder counts include only priced, fresh MATCHED/REVIEW rows; exact 30 day
   assert.ok(history.archivedResults.some((result) => result.id === "missing-price-review"));
 });
 
+// Reproduces a confirmed Production read (filter 6ebf3a9c, 2026-10-11
+// ~22:11 Warsaw time): 4 real OLX listings all is_current_match=true,
+// lifecycle_status "ACTIVE", no manual decision, no removed_at/archived_at
+// -- yet only 2 were visible as MATCHED. The other 2 (31 and 135 days past
+// their own sourcePublishedAt) are correctly excluded by the 30-day
+// publication window, but before this fix their archived entry's
+// lifecycleStatus stayed "ACTIVE" and canonicalDecisionDebug.reason stayed
+// "current_filter_match" -- indistinguishable from a genuinely visible
+// match, and never counted by the archive view's own stale/archived/
+// rejected sub-totals, which otherwise always sum to the total shown.
+test("4 active, is_current_match OLX rows: the 2 within the publication window are MATCHED, the 2 older ones are archived with an honest, specific reason instead of looking like a live match", async () => {
+  const db = new FakeFacebookSupabase();
+  db.seed("search_filters", [{ ...FILTER_ROW, area_min: 30, area_max: 75, max_price_per_sqm: 6500, rooms: [1, 2, 3, 4], building_types: ["blok", "apartamentowiec"], ownership_types: ["pełna własność", "spółdzielcze"] }]);
+  const now = Date.parse("2026-10-11T20:11:00.000Z");
+  const rows = [
+    listingRow("teofilow", "olx", { title: "Najciekawsze Mieszkanie NA Teofilowie", area: 37.07, price: 238000, district: "Bałuty" }),
+    listingRow("okazyjna-cena", "olx", { title: "2 pokojowe mieszkanie w okazyjnej cenie Łódź", area: 47.19, price: 269000, rooms: 2, district: "Śródmieście" }),
+    listingRow("kawalerka-remont", "olx", { title: "Kawalerka Łódź-Górna do remontu", area: 37, price: 239000, rooms: 1, district: "Śródmieście" }),
+    listingRow("m4-loggia", "olx", { title: "M4 z loggią na dąbrowie", area: 52, price: 329000, rooms: 3, district: "Górna" }),
+  ];
+  db.seed("listings", rows);
+  db.seed("listing_filter_matches", rows.map((row) => membershipRow(row.id as string)));
+  db.seed("listing_snapshots", [
+    { listing_id: "teofilow", price: 238000, captured_at: "2026-10-09T18:19:39Z", raw_data: { sourcePublishedAt: "2026-05-29T19:56:11.000Z" } },
+    { listing_id: "okazyjna-cena", price: 269000, captured_at: "2026-10-10T13:02:40Z", raw_data: { sourcePublishedAt: "2026-10-01T21:57:40.000Z" } },
+    { listing_id: "kawalerka-remont", price: 239000, captured_at: "2026-10-10T11:54:06Z", raw_data: { sourcePublishedAt: "2026-09-19T11:30:56.000Z" } },
+    { listing_id: "m4-loggia", price: 329000, captured_at: "2026-10-08T17:04:32Z", raw_data: { sourcePublishedAt: "2026-09-10T14:37:40.000Z" } },
+  ]);
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID, false, now);
+  assert.ok(payload);
+  assert.deepEqual(new Set(payload.results.map((result) => result.id)), new Set(["okazyjna-cena", "kawalerka-remont"]), "the counter and the rendered set must be the exact same 2 listings");
+  assert.equal(payload.counts.active, 2, "the 'Dopasowane' counter must equal the number of cards actually returned, never a stale or separately-sourced number");
+  assert.equal(payload.reviewResults.length, 0);
+
+  const history = await getFilterResults(FILTER_ID, true, now);
+  assert.ok(history);
+  const archivedIds = new Set(history.archivedResults.map((result) => result.id));
+  assert.deepEqual(archivedIds, new Set(["teofilow", "m4-loggia"]), "the 2 listings older than the 30-day publication window land in the archive view, not nowhere");
+  const byId = new Map(history.archivedResults.map((entry) => [entry.id, entry]));
+  for (const staleId of ["teofilow", "m4-loggia"]) {
+    const archivedRow = byId.get(staleId);
+    assert.equal(archivedRow?.lifecycleStatus, "ACTIVE", "the listing's own DB lifecycle (still genuinely active) must not be overwritten -- it is honestly reported alongside the reason it's archived");
+    assert.equal(archivedRow?.canonicalDecisionDebug?.reason, "stale_publication_date", "must name the exact reason, not the misleading 'current_filter_match' a live match would have");
+  }
+  // The breakdown counts shown in the UI (stale/archived/rejected +
+  // stale_publication_date) must always sum to the total -- no listing
+  // silently inflates the archive count without being attributable to one
+  // of these reasons.
+  const stale = history.archivedResults.filter((result) => result.lifecycleStatus === "STALE").length;
+  const archivedLifecycle = history.archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length;
+  const rejected = history.archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length;
+  const stalePublication = history.archivedResults.filter((result) => result.canonicalDecisionDebug?.reason === "stale_publication_date").length;
+  assert.equal(stale + archivedLifecycle + rejected + stalePublication, history.archivedResults.length, "every archived row must be attributable to exactly one honest, visible reason");
+});
+
 test("a filter-cleared membership stays out of both current sections after reload and remains in that filter's history", async () => {
   const db = new FakeFacebookSupabase();
   db.seed("search_filters", [FILTER_ROW]);
