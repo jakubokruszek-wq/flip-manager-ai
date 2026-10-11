@@ -195,9 +195,17 @@ function normalizeItem(item: Record<string, unknown>): { listing: PropertySearch
 
 function normalizationReason(item: Record<string, unknown>): OtodomRejectionReason | null {
   const candidates = urlCandidates(item);
-  if (candidates.length === 0) return "invalid_url";
+  if (candidates.length === 0 && !slugOfferUrl(item)) return "invalid_url";
   const url = listingUrl(item);
   if (!url) {
+    // A whole-investment/development row (item.estate === "INVESTMENT") is a
+    // confirmed, deliberate exclusion, not a broken or unparseable URL -- its
+    // own href literally routes to "/investment/", never "/ad/" (verified
+    // live against otodom.pl's real search response, 2026-10-11). Reporting
+    // it as "placeholder_url" falsely implied every one of these rows was a
+    // genuine source-data gap, when most were actually recoverable (see
+    // slugOfferUrl below) and the rest are correctly-excluded project ads.
+    if (item.estate === "INVESTMENT") return "unsupported_listing";
     // Preserve the most useful diagnostic when every candidate is unusable,
     // but never let a bad `url` field mask a valid `href` in the same row.
     const reasons = candidates.map((candidate) => classifyOtodomUrl(candidate));
@@ -346,7 +354,42 @@ function listingUrl(row: Record<string, unknown>): string | null {
   }
   // Only a confirmed, dereferenceable single-offer URL is ever kept --
   // never synthesize one from a raw numeric id/adId/listingId field.
-  return null;
+  return slugOfferUrl(row);
+}
+
+/**
+ * Live-reproduced against the real otodom.pl Łódź search response
+ * (2026-10-11): the overwhelming majority of searchAds items carry no usable
+ * 'url' field and an 'href' of the literal, unsubstituted shape
+ * "[lang]/ad/<slug>" (otodom.pl's own i18n routing leaking a raw Next.js
+ * route segment) -- but every one of those rows also carries its own
+ * 'slug' field, the exact final path segment of a real, confirmed
+ * "/pl/oferta/<slug>" page (verified live: a 200, no further redirect).
+ * This builds that confirmed address directly from the portal's own stable
+ * identifier -- never by repairing/guessing at the broken href string (a
+ * blind "[lang]" -> "pl" substitution would not even have produced a live
+ * path: the broken href's own "/ad/" segment is not otodom.pl's current
+ * single-offer route at all, only "/oferta/" is).
+ *
+ * A row whose own item.estate is "INVESTMENT" (a whole development/project,
+ * e.g. "Murapol Forum") must never reach this fallback: the exact same
+ * "/pl/oferta/<slug>" address for one of those live-redirects to
+ * "/pl/inwestycja/<slug>", a development overview page, not a specific
+ * apartment -- confirmed live against otodom.pl for a real investment slug.
+ * Only item.estate === "FLAT" (the type this adapter's own search request
+ * already scopes to) is ever trusted here.
+ */
+function slugOfferUrl(row: Record<string, unknown>): string | null {
+  if (row.estate !== "FLAT") return null;
+  const slug = typeof row.slug === "string" ? row.slug.trim() : "";
+  if (!slug) return null;
+  let candidate: string;
+  try {
+    candidate = new URL(`/pl/oferta/${slug}`, "https://www.otodom.pl").toString();
+  } catch {
+    return null;
+  }
+  return isConfirmedOtodomOfferUrl(candidate) ? candidate : null;
 }
 
 function urlCandidates(row: Record<string, unknown>): string[] {

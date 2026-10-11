@@ -111,28 +111,59 @@ test("current Otodom rows with relative href and no url reach the normalized lis
   }
 });
 
-test("the real otodom.pl search response shape (href-only, '[lang]/ad/<slug>-ID<code>', no url field) is rejected as a genuinely broken source record, not a parser gap", async () => {
+test("the real otodom.pl search response shape (href-only, '[lang]/ad/<slug>', no url field) recovers a confirmed /pl/oferta/<slug> address from the portal's own stable slug, and still excludes a whole-investment row", async () => {
   // Live-reproduced against the real otodom.pl Łódź secondary-market search
-  // response on 2026-10-09: 26 of 27 raw searchAds items had no 'url' field
-  // at all, only an 'href' of the literal, unsubstituted shape
-  // "[lang]/ad/<slug>-ID<code>" or "[lang]/investment/<slug>-ID<code>" --
-  // otodom.pl's own i18n routing leaking a raw Next.js route segment into the
-  // page it serves, not something this codebase builds or can fix. This is
-  // the exact field shape observed (trimmed to what the adapter reads), to
-  // prove the rejection survives against real-world data, not just a
-  // hand-shaped /oferta/ fixture.
+  // response on 2026-10-11: every one of 21 raw searchAds items had no
+  // usable 'url' field, only an 'href' of the literal, unsubstituted shape
+  // "[lang]/ad/<slug>" or "[lang]/investment/<slug>" -- otodom.pl's own
+  // i18n routing leaking a raw Next.js route segment into the page it
+  // serves. An earlier version of this test concluded from exactly this
+  // shape that the row was "genuinely broken, not a parser gap" -- that
+  // was wrong: it had only compared id/title/href and never noticed the
+  // row's own 'slug' and 'estate' fields (both present on every real row,
+  // reproduced here), which this adapter now reads instead of trying to
+  // repair the broken href. "/pl/oferta/<slug>" for the individual-unit row
+  // below is confirmed live (200, no further redirect); the exact same
+  // construction for the investment row live-redirects to
+  // "/pl/inwestycja/<slug>" instead -- a development overview, not an
+  // apartment -- which is why item.estate gates this fallback.
   const originalFetch = globalThis.fetch;
   const items = [
-    { id: 67883390, title: "Mieszkanie 2 pokoje 46,55 m2, Łódź, ul. Grabieniec", href: "[lang]/ad/mieszkanie-2-pokoje-46-55-m2-lodz-ul-grabieniec-ID4APzo", totalPrice: 450000, areaInSquareMeters: 46.55 },
-    { id: 68123474, title: "Diasfera Łódzka", href: "[lang]/investment/diasfera-lodzka-ID4BQ1I", totalPrice: 399000, areaInSquareMeters: 38 },
+    { id: 67883390, title: "Mieszkanie 2 pokoje 46,55 m2, Łódź, ul. Grabieniec", slug: "mieszkanie-2-pokoje-46-55-m2-lodz-ul-grabieniec-ID4APzo", estate: "FLAT", href: "[lang]/ad/mieszkanie-2-pokoje-46-55-m2-lodz-ul-grabieniec-ID4APzo", totalPrice: 450000, areaInSquareMeters: 46.55 },
+    { id: 68123474, title: "Diasfera Łódzka", slug: "diasfera-lodzka-ID4BQ1I", estate: "INVESTMENT", href: "[lang]/investment/diasfera-lodzka-ID4BQ1I", totalPrice: 399000, areaInSquareMeters: 38 },
   ];
   globalThis.fetch = async () => responseFor(items);
   try {
     const result = await searchOtodom(filter);
     assert.equal(result.rawItems, 2);
-    assert.equal(result.listings.length, 0, "no [lang]-broken item may ever become a usable listing link");
-    assert.equal(result.rejectionReasons.placeholder_url, 2);
-    assert.deepEqual(result.warnings, ["Otodom: placeholder_url (2)"]);
+    assert.equal(result.listings.length, 1, "the individual FLAT row recovers a confirmed offer URL from its own slug");
+    assert.equal(result.listings[0]?.originalUrl, "https://otodom.pl/pl/oferta/mieszkanie-2-pokoje-46-55-m2-lodz-ul-grabieniec-ID4APzo");
+    // item.id is numeric on the real response, so text() (string-only) falls
+    // through to the id embedded in the now-confirmed URL itself -- the
+    // same stable "-ID<code>" suffix extractOtodomListingId already reads
+    // for every other Otodom row in this file.
+    assert.equal(result.listings[0]?.externalListingId, "4APzo");
+    assert.equal(result.rejectionReasons.placeholder_url, undefined, "a recoverable slug must never be reported as a broken/placeholder URL");
+    assert.equal(result.rejectionReasons.unsupported_listing, 1, "the whole-investment row is excluded under its own distinct, honest reason");
+    assert.deepEqual(result.warnings, ["Otodom: unsupported_listing (1)"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a FLAT row missing a slug, a malformed slug with no -ID<code> suffix, or an INVESTMENT row that happens to carry a slug, never receives a constructed offer URL", async () => {
+  const originalFetch = globalThis.fetch;
+  const items = [
+    { id: "no-slug", title: "Brak slug", estate: "FLAT", href: "[lang]/ad/brak-slug-ID1", totalPrice: 400000, areaInSquareMeters: 40 },
+    { id: "malformed-slug", title: "Zły slug", estate: "FLAT", slug: "brak-numeru-oferty", href: "[lang]/ad/brak-numeru-oferty", totalPrice: 400000, areaInSquareMeters: 40 },
+    { id: "investment-with-slug", title: "Inwestycja", estate: "INVESTMENT", slug: "inwestycja-ID2", href: "[lang]/investment/inwestycja-ID2", totalPrice: 400000, areaInSquareMeters: 40 },
+  ];
+  globalThis.fetch = async () => responseFor(items);
+  try {
+    const result = await searchOtodom(filter);
+    assert.equal(result.listings.length, 0);
+    assert.equal(result.rejectionReasons.unsupported_listing, 1, "only the confirmed investment row uses that reason");
+    assert.ok((result.rejectionReasons.placeholder_url ?? 0) + (result.rejectionReasons.missing_offer_id ?? 0) >= 2, "the two FLAT rows with no recoverable slug stay genuinely unconfirmed");
   } finally {
     globalThis.fetch = originalFetch;
   }
