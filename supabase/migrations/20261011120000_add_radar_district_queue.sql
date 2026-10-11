@@ -44,6 +44,16 @@ create table if not exists public.price_radar_district_queue (
   last_seen_at timestamptz not null default now(),
   raw_payload jsonb not null default '{}'::jsonb,
   status text not null default 'pending' check (status in ('pending', 'assigned', 'rejected')),
+  -- A best-effort automated guess at the missing district, shown to the
+  -- operator as a prefilled suggestion -- never auto-applied, and never
+  -- counted toward the A/B sample until the operator confirms it (or a
+  -- different district) via assign_price_radar_district_queue_candidate.
+  -- Recomputed by application code only when content_hash changes (see
+  -- upsertPendingDistrictCandidate), so an unchanged reimport never
+  -- re-invokes the GIS/AI lookup that produced it.
+  suggested_district text check (suggested_district is null or suggested_district in ('Bałuty','Górna','Polesie','Śródmieście','Widzew')),
+  suggestion_source text check (suggestion_source is null or suggestion_source in ('gis', 'ai')),
+  suggestion_evidence text,
   assigned_district text check (assigned_district is null or assigned_district in ('Bałuty','Górna','Polesie','Śródmieście','Widzew')),
   assigned_by uuid references auth.users(id) on delete set null,
   assigned_at timestamptz,
@@ -103,7 +113,14 @@ begin
       content_hash = p_candidate->>'content_hash', cross_source_identity = nullif(p_candidate->>'cross_source_identity', ''),
       published_at = nullif(p_candidate->>'published_at', '')::timestamptz, source_updated_at = nullif(p_candidate->>'source_updated_at', '')::timestamptz,
       collected_at = (p_candidate->>'collected_at')::timestamptz, last_seen_at = (p_candidate->>'last_seen_at')::timestamptz,
-      raw_payload = coalesce(p_candidate->'raw_payload', '{}'::jsonb)
+      raw_payload = coalesce(p_candidate->'raw_payload', '{}'::jsonb),
+      -- The caller (upsertPendingDistrictCandidate) already decided
+      -- whether to recompute these: it passes the PRIOR row's own values
+      -- back unchanged when content_hash is the same, so this is always a
+      -- plain overwrite here, never a conditional skip in SQL.
+      suggested_district = nullif(p_candidate->>'suggested_district', ''),
+      suggestion_source = nullif(p_candidate->>'suggestion_source', ''),
+      suggestion_evidence = nullif(p_candidate->>'suggestion_evidence', '')
       -- status/assigned_*/rejected_at/radar_listing_id intentionally
       -- untouched: a rescan must never silently reopen or discard a
       -- decision the operator already made.
@@ -113,14 +130,16 @@ begin
     insert into public.price_radar_district_queue (
       owner_id, source, external_listing_id, original_url, normalized_url, title, description,
       price, area, price_per_sqm, rooms, city, building_type, market_type, renovation_status,
-      content_hash, cross_source_identity, published_at, source_updated_at, collected_at, last_seen_at, raw_payload
+      content_hash, cross_source_identity, published_at, source_updated_at, collected_at, last_seen_at, raw_payload,
+      suggested_district, suggestion_source, suggestion_evidence
     ) values (
       p_owner_id, p_candidate->>'source', p_candidate->>'external_listing_id', p_candidate->>'original_url', p_candidate->>'normalized_url',
       p_candidate->>'title', p_candidate->>'description', (p_candidate->>'price')::numeric, (p_candidate->>'area')::numeric, (p_candidate->>'price_per_sqm')::numeric,
       nullif(p_candidate->>'rooms', '')::integer, p_candidate->>'city', p_candidate->>'building_type', p_candidate->>'market_type', p_candidate->>'renovation_status',
       p_candidate->>'content_hash', nullif(p_candidate->>'cross_source_identity', ''), nullif(p_candidate->>'published_at', '')::timestamptz,
       nullif(p_candidate->>'source_updated_at', '')::timestamptz, (p_candidate->>'collected_at')::timestamptz, (p_candidate->>'last_seen_at')::timestamptz,
-      coalesce(p_candidate->'raw_payload', '{}'::jsonb)
+      coalesce(p_candidate->'raw_payload', '{}'::jsonb),
+      nullif(p_candidate->>'suggested_district', ''), nullif(p_candidate->>'suggestion_source', ''), nullif(p_candidate->>'suggestion_evidence', '')
     ) returning id into saved_id;
   end if;
   return saved_id;

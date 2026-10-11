@@ -100,6 +100,56 @@ begin
   exception when others then
     insert into dryrun_results (result) values (case when sqlerrm = 'INVALID_DISTRICT' then 'TEST 7 PASSED: invalid district name rejected' else 'TEST 7 FAILED: wrong error ' || sqlerrm end);
   end;
+
+  -- TEST 8: suggestion_* columns (added alongside the AI/GIS district
+  -- recognition work) round-trip through the same upsert RPC on a
+  -- separate row, including the app-level "pass the prior suggestion back
+  -- unchanged" cache-reuse pattern upsertPendingDistrictCandidate uses.
+  perform public.upsert_price_radar_district_queue_candidate(test_owner, jsonb_build_object(
+    'source', 'domiporta', 'external_listing_id', 'dryrun-ext-2',
+    'original_url', 'https://example.test/dryrun-2', 'normalized_url', 'https://example.test/dryrun-2',
+    'title', 'Mieszkanie testowe 2', 'description', 'Opis testowy 2',
+    'price', 350000, 'area', 40, 'price_per_sqm', 8750, 'rooms', 1, 'city', 'Łódź',
+    'building_type', 'blok', 'market_type', 'secondary', 'renovation_status', 'fresh_renovation',
+    'content_hash', 'hash-dryrun-2a', 'collected_at', now()::text, 'last_seen_at', now()::text,
+    'suggested_district', 'Górna', 'suggestion_source', 'gis', 'suggestion_evidence', 'Piastów-Kurak'
+  ));
+  select count(*) into row_count from public.price_radar_district_queue
+   where owner_id = test_owner and source = 'domiporta' and external_listing_id = 'dryrun-ext-2'
+     and suggested_district = 'Górna' and suggestion_source = 'gis' and suggestion_evidence = 'Piastów-Kurak';
+  insert into dryrun_results (result) values (case when row_count = 1 then 'TEST 8a PASSED: suggestion fields stored on insert' else 'TEST 8a FAILED' end);
+
+  -- Same content_hash as above: the app layer would skip GIS/AI and pass
+  -- the SAME suggestion back unchanged -- the RPC just stores whatever it
+  -- is given, so this confirms that no-op round-trip leaves it intact.
+  perform public.upsert_price_radar_district_queue_candidate(test_owner, jsonb_build_object(
+    'source', 'domiporta', 'external_listing_id', 'dryrun-ext-2',
+    'original_url', 'https://example.test/dryrun-2', 'normalized_url', 'https://example.test/dryrun-2',
+    'title', 'Mieszkanie testowe 2', 'description', 'Opis testowy 2',
+    'price', 350000, 'area', 40, 'price_per_sqm', 8750, 'rooms', 1, 'city', 'Łódź',
+    'building_type', 'blok', 'market_type', 'secondary', 'renovation_status', 'fresh_renovation',
+    'content_hash', 'hash-dryrun-2a', 'collected_at', now()::text, 'last_seen_at', now()::text,
+    'suggested_district', 'Górna', 'suggestion_source', 'gis', 'suggestion_evidence', 'Piastów-Kurak'
+  ));
+  select count(*) into row_count from public.price_radar_district_queue
+   where owner_id = test_owner and source = 'domiporta' and external_listing_id = 'dryrun-ext-2' and suggested_district = 'Górna';
+  insert into dryrun_results (result) values (case when row_count = 1 then 'TEST 8b PASSED: unchanged-content cache reuse round-trips' else 'TEST 8b FAILED' end);
+
+  -- Content actually changed: the app layer would recompute and pass a
+  -- genuinely different suggestion.
+  perform public.upsert_price_radar_district_queue_candidate(test_owner, jsonb_build_object(
+    'source', 'domiporta', 'external_listing_id', 'dryrun-ext-2',
+    'original_url', 'https://example.test/dryrun-2', 'normalized_url', 'https://example.test/dryrun-2',
+    'title', 'Mieszkanie testowe 2', 'description', 'Opis zmieniony, blisko Manufaktury',
+    'price', 355000, 'area', 40, 'price_per_sqm', 8875, 'rooms', 1, 'city', 'Łódź',
+    'building_type', 'blok', 'market_type', 'secondary', 'renovation_status', 'fresh_renovation',
+    'content_hash', 'hash-dryrun-2b', 'collected_at', now()::text, 'last_seen_at', now()::text,
+    'suggested_district', 'Śródmieście', 'suggestion_source', 'ai', 'suggestion_evidence', 'blisko Manufaktury'
+  ));
+  select count(*) into row_count from public.price_radar_district_queue
+   where owner_id = test_owner and source = 'domiporta' and external_listing_id = 'dryrun-ext-2'
+     and suggested_district = 'Śródmieście' and suggestion_source = 'ai' and suggestion_evidence = 'blisko Manufaktury';
+  insert into dryrun_results (result) values (case when row_count = 1 then 'TEST 8c PASSED: changed-content reimport overwrites the suggestion' else 'TEST 8c FAILED' end);
 end $$;
 
 select result from dryrun_results order by line;

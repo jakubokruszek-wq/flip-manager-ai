@@ -196,6 +196,11 @@ export type RadarDistrictQueueItem = {
   sourceUpdatedAt: string | null;
   collectedAt: string;
   status: "pending" | "assigned" | "rejected";
+  /** A best-effort automated guess, shown as a prefilled suggestion only -- never auto-applied; the operator still chooses (or overrides) the district explicitly. */
+  suggestedDistrict: string | null;
+  suggestionSource: "gis" | "ai" | null;
+  /** The matched sub-area name (gis) or the AI's own quoted evidence (ai), shown to the operator so a wrong guess is easy to spot. */
+  suggestionEvidence: string | null;
   assignedDistrict: string | null;
   assignedAt: string | null;
   rejectedAt: string | null;

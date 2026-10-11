@@ -154,6 +154,63 @@ test("a reimport (re-upsert) of the same owner/source/externalListingId refreshe
   assert.equal(db.rows[0]?.price, 460_000, "the snapshot is refreshed");
 });
 
+test("a new candidate computes a fresh AI suggestion (within budget) and stores it on the row", async () => {
+  const db = fakeDb();
+  let calls = 0;
+  const suggest = async () => { calls += 1; return { district: "Bałuty", evidence: "Osiedle Teofilów" }; };
+  const upserted = await upsertPendingDistrictCandidate(db as never, ownerId, baseCandidate, baseConfirmed, "2026-10-11T10:00:00.000Z", { tryConsume: () => true }, suggest as never);
+  assert.equal(calls, 1);
+  assert.equal(upserted.ok, true);
+  const queueId = upserted.ok ? upserted.queueId : "";
+  const queue = await getRadarDistrictQueue(ownerId, db as never);
+  const row = queue.pending.find((item) => item.id === queueId);
+  assert.deepEqual(row && { suggestedDistrict: row.suggestedDistrict, suggestionSource: row.suggestionSource, suggestionEvidence: row.suggestionEvidence }, { suggestedDistrict: "Bałuty", suggestionSource: "ai", suggestionEvidence: "Osiedle Teofilów" });
+});
+
+test("a reimport with an UNCHANGED content hash reuses the stored suggestion and never re-invokes the AI resolver", async () => {
+  const db = fakeDb();
+  let calls = 0;
+  const suggest = async () => { calls += 1; return { district: "Górna", evidence: "Piastów-Kurak" }; };
+  await upsertPendingDistrictCandidate(db as never, ownerId, baseCandidate, baseConfirmed, "2026-10-11T10:00:00.000Z", { tryConsume: () => true }, suggest as never);
+  assert.equal(calls, 1, "first upsert for a new row computes a suggestion");
+  // Same contentHash as baseCandidate -- a plain rescan with nothing new to report.
+  await upsertPendingDistrictCandidate(db as never, ownerId, { ...baseCandidate }, baseConfirmed, "2026-10-11T11:00:00.000Z", { tryConsume: () => true }, suggest as never);
+  assert.equal(calls, 1, "an unchanged reimport must not spend a second AI call");
+  const queue = await getRadarDistrictQueue(ownerId, db as never);
+  assert.equal(queue.pending[0]?.suggestedDistrict, "Górna", "the previously computed suggestion survives the no-op reimport");
+});
+
+test("a reimport whose content hash actually changed recomputes the suggestion", async () => {
+  const db = fakeDb();
+  let calls = 0;
+  const suggest = async () => { calls += 1; return { district: calls === 1 ? "Górna" : "Widzew", evidence: calls === 1 ? "Piastów-Kurak" : "Zarzew" }; };
+  await upsertPendingDistrictCandidate(db as never, ownerId, baseCandidate, baseConfirmed, "2026-10-11T10:00:00.000Z", { tryConsume: () => true }, suggest as never);
+  await upsertPendingDistrictCandidate(db as never, ownerId, { ...baseCandidate, contentHash: "hash-1-changed" }, baseConfirmed, "2026-10-11T11:00:00.000Z", { tryConsume: () => true }, suggest as never);
+  assert.equal(calls, 2, "genuinely new content must recompute, never reuse a stale guess");
+  const queue = await getRadarDistrictQueue(ownerId, db as never);
+  assert.equal(queue.pending[0]?.suggestedDistrict, "Widzew");
+});
+
+test("an exhausted AI budget skips the suggestion attempt entirely -- the candidate is still queued", async () => {
+  const db = fakeDb();
+  let calls = 0;
+  const suggest = async () => { calls += 1; return { district: "Górna", evidence: "x" }; };
+  const upserted = await upsertPendingDistrictCandidate(db as never, ownerId, baseCandidate, baseConfirmed, "2026-10-11T10:00:00.000Z", { tryConsume: () => false }, suggest as never);
+  assert.equal(calls, 0, "a refused budget must never call the resolver");
+  assert.equal(upserted.ok, true, "the candidate itself is still queued successfully without a suggestion");
+  const queue = await getRadarDistrictQueue(ownerId, db as never);
+  assert.equal(queue.pending[0]?.suggestedDistrict, null);
+});
+
+test("a suggester that returns null (no confirmable district) leaves the row with no suggestion, never a save error", async () => {
+  const db = fakeDb();
+  const upserted = await upsertPendingDistrictCandidate(db as never, ownerId, baseCandidate, baseConfirmed, "2026-10-11T10:00:00.000Z", { tryConsume: () => true }, (async () => null) as never);
+  assert.equal(upserted.ok, true);
+  const queue = await getRadarDistrictQueue(ownerId, db as never);
+  assert.equal(queue.pending[0]?.suggestedDistrict, null);
+  assert.equal(queue.pending[0]?.suggestionSource, null);
+});
+
 test("assignRadarDistrictQueueCandidate re-qualifies the CURRENT row -- a candidate that no longer qualifies on another ground is refused, never silently approved by a district choice", async () => {
   const db = fakeDb();
   const upserted = await upsertPendingDistrictCandidate(db as never, ownerId, baseCandidate, baseConfirmed, "2026-10-11T10:00:00.000Z");

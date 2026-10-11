@@ -14,12 +14,15 @@ let currentRunToken = radarLeaseToken;
 function fakeDb() {
   return {
     from(table: string) {
-      assert.equal(table, "price_radar_runs", "the Radar OLX worker reads only its owned run checkpoint");
+      assert.ok(table === "price_radar_runs" || table === "price_radar_district_queue", "the Radar OLX worker reads only its owned run checkpoint and (for district suggestions) its own district queue");
       const filters: Array<(row: Row) => boolean> = [];
       const builder: Row = {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
-        maybeSingle: async () => ({ data: { id: runId, owner_id: ownerId, checkpoint: structuredClone(checkpoint), source_statuses: structuredClone(checkpoint.sourceStatuses), scanned_count: 2, qualified_count: 1, status: "running", lease_token: currentRunToken, lease_until: new Date(Date.now() + 60_000).toISOString() }, error: null }),
+        maybeSingle: async () => {
+          if (table === "price_radar_district_queue") return { data: null, error: null }; // no existing row -- every candidate here is "new" for caching purposes
+          return { data: { id: runId, owner_id: ownerId, checkpoint: structuredClone(checkpoint), source_statuses: structuredClone(checkpoint.sourceStatuses), scanned_count: 2, qualified_count: 1, status: "running", lease_token: currentRunToken, lease_until: new Date(Date.now() + 60_000).toISOString() }, error: null };
+        },
       };
       return builder;
     },

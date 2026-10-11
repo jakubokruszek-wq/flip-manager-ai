@@ -151,6 +151,12 @@ export function PriceRadarPage() {
       }
       setDistrictQueue(payload);
       setDistrictQueueError(null);
+      // Prefill the dropdown with a suggestion the operator has not yet
+      // overridden -- an explicit prior choice in state always wins, and
+      // this never auto-assigns: "Dodaj do porównań" still requires the
+      // operator's own click.
+      const suggested = Object.fromEntries(payload.pending.filter((item) => item.suggestedDistrict).map((item) => [item.id, item.suggestedDistrict as string]));
+      setDistrictChoices((current) => ({ ...suggested, ...current }));
     } catch (reason) {
       setDistrictQueueError(reason instanceof Error ? reason.message : "Nie udało się pobrać kolejki przypisania dzielnicy.");
     }
@@ -607,6 +613,13 @@ function DistrictQueueRow({ item, rejected, chosenDistrict, onChooseDistrict, on
         {item.city} · {item.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {item.buildingType === "blok" ? "Blok" : "Apartamentowiec"} · {qualityCategoryLabel(item.qualityCategory, item.marketType)}
       </p>
       <p className="mt-1 break-words text-xs font-medium text-amber-700 dark:text-amber-300">Dzielnica wymaga przypisania</p>
+      {item.suggestedDistrict ? (
+        <p className="mt-1 break-words text-xs text-muted-foreground">
+          Podpowiedź ({item.suggestionSource === "gis" ? "mapa Łodzi" : "AI"}): <span className="font-medium text-foreground">{item.suggestedDistrict}</span>
+          {item.suggestionEvidence ? <> — „{item.suggestionEvidence}”</> : null}. Wymaga potwierdzenia operatora.
+        </p>
+      ) : null}
+      {item.description ? <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">{item.description}</p> : null}
       <p className="mt-3 text-sm font-medium">
         {formatCurrency(item.price)} · {item.area} m² · {formatCurrency(item.pricePerSqm)}/m²{item.rooms ? ` · ${item.rooms} pok.` : ""}
       </p>

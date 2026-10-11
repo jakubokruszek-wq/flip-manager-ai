@@ -8,6 +8,7 @@ import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finde
 import { assessRadarDistrictOnlyCandidate, isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
@@ -186,6 +187,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), PORTION_BUDGET_MS);
   const attemptedSourceIds = new Set<RadarSource>();
+  // One shared cap on AI district-suggestion calls for this whole portion
+  // (not per candidate) -- bounds cost/latency the same way the portion's
+  // own time budget already bounds a single invocation's work.
+  const districtAiBudget = createRadarDistrictAiBudget();
   try {
     while (checkpoint.sourceQueue.length > 0) {
       if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) break;
@@ -297,7 +302,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                     city: listing.city!, contentHash: listing.contentHash, crossSourceIdentity: listing.crossSourceIdentity ?? null,
                     publishedAt: listing.publishedAt ?? null, sourceUpdatedAt: sourceDate(listing.rawPayload, ["updatedAt", "modifiedAt", "updated_at", "modified_at"]),
                     rawPayload: listing.rawPayload,
-                  }, districtAssessment.confirmed, new Date().toISOString());
+                  }, districtAssessment.confirmed, new Date().toISOString(), districtAiBudget);
                   continue;
                 }
               }

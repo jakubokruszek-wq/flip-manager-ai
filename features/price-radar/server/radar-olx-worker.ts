@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { assessRadarDistrictOnlyCandidate, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import type { RadarCheckpoint, RadarRunStatus } from "@/features/price-radar/types";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -37,6 +38,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
     queueStatus = "completed";
     fetched = payload.fetched;
     const sourceErrors = payload.warnings.map((warning) => warning.replace(/[\r\n\t]/g, " ").slice(0, 500));
+    const districtAiBudget = createRadarDistrictAiBudget();
     for (const listing of payload.listings) {
       const raw = listing.rawPayload ?? {};
       const olxCandidate = {
@@ -61,7 +63,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
               city: listing.city!, contentHash: listing.contentHash, crossSourceIdentity: listing.crossSourceIdentity ?? null,
               publishedAt: listing.publishedAt ?? null, sourceUpdatedAt: sourceDate(raw),
               rawPayload: raw,
-            }, districtAssessment.confirmed, new Date().toISOString());
+            }, districtAssessment.confirmed, new Date().toISOString(), districtAiBudget);
             continue;
           }
         }

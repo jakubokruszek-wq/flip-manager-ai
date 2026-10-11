@@ -212,6 +212,18 @@ function resolveDistrictSegment(text: string): string | null {
   return NEIGHBORHOOD_TO_DISTRICT[neighborhoodKey] ?? null;
 }
 
+/**
+ * Public entry point to the same district/sub-area vocabulary
+ * resolveDistrictSegment uses, for callers outside this file that need to
+ * check whether some OTHER source's free-text value (e.g. an AI location
+ * resolver's `district`/`neighborhood` field) names one of Radar's 5
+ * districts or a known sub-area of one -- never a separate, duplicated
+ * district list.
+ */
+export function resolveKnownRadarDistrict(value: string | null): string | null {
+  return value?.trim() ? resolveDistrictSegment(value.trim()) : null;
+}
+
 function normalizeDistrict(value: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();

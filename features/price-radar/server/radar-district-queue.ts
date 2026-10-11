@@ -3,11 +3,12 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { qualifyRadarCandidate, type QualificationCandidate } from "@/features/price-radar/qualification";
+import { createRadarDistrictAiBudget, suggestRadarDistrictWithAi, type RadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import { DEFAULT_RADAR_DISTRICTS, type RadarDistrictQueueItem } from "@/features/price-radar/types";
 
 type Row = Record<string, unknown>;
 
-const QUEUE_SELECT = "id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,building_type,market_type,renovation_status,content_hash,cross_source_identity,published_at,source_updated_at,collected_at,first_seen_at,last_seen_at,raw_payload,status,assigned_district,assigned_at,rejected_at";
+const QUEUE_SELECT = "id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,building_type,market_type,renovation_status,content_hash,cross_source_identity,published_at,source_updated_at,collected_at,first_seen_at,last_seen_at,raw_payload,status,suggested_district,suggestion_source,suggestion_evidence,assigned_district,assigned_at,rejected_at";
 
 /** True only for the exact PostgREST/Postgres "relation/function not found" codes this optional, not-yet-applied migration produces. Any other error is a real failure and must still throw. */
 function isSchemaUnavailable(error: { code?: unknown; message?: unknown } | null): boolean {
@@ -51,6 +52,18 @@ export type DistrictQueueCandidate = {
  * migration has not been applied yet -- a scan must keep working exactly
  * as before even though this feature does nothing until a human applies
  * supabase/migrations/20261011120000_add_radar_district_queue.sql.
+ *
+ * Also computes (or reuses) a best-effort AI district suggestion. The
+ * EXISTING row's content_hash is checked first: when it matches this
+ * candidate's own content_hash, the prior suggestion is carried forward
+ * unchanged and the AI is never re-invoked -- a reimport of an unchanged
+ * listing must not spend a call just to arrive at the same answer. Only
+ * a genuinely new row, or one whose content actually changed since it
+ * was last seen, triggers a fresh suggestion attempt, and that attempt
+ * is itself bounded by `aiBudget` (one shared budget per collection
+ * portion/job, never a per-candidate allowance) and by the AI resolver's
+ * own timeout. A missing/failed/budget-exhausted suggestion is never an
+ * error -- the candidate is queued regardless, simply without one.
  */
 export async function upsertPendingDistrictCandidate(
   supabase: SupabaseClient,
@@ -58,7 +71,36 @@ export async function upsertPendingDistrictCandidate(
   candidate: DistrictQueueCandidate,
   confirmed: { buildingType: string; marketType: string; renovationStatus: string; pricePerSqm: number },
   seenAt: string,
+  aiBudget: RadarDistrictAiBudget = createRadarDistrictAiBudget(),
+  suggest: typeof suggestRadarDistrictWithAi = suggestRadarDistrictWithAi,
 ): Promise<{ ok: true; queueId: string } | { ok: false; reason: "schema_unavailable" | "error" }> {
+  const { data: existing, error: readError } = await supabase.from("price_radar_district_queue")
+    .select("content_hash,suggested_district,suggestion_source,suggestion_evidence")
+    .eq("owner_id", ownerId).eq("source", candidate.source).eq("external_listing_id", candidate.externalListingId)
+    .maybeSingle();
+  if (readError && isSchemaUnavailable(readError)) return { ok: false, reason: "schema_unavailable" };
+
+  let suggestion: { district: string | null; source: "gis" | "ai" | null; evidence: string | null };
+  const existingRow = existing as Row | null;
+  if (existingRow && existingRow.content_hash === candidate.contentHash) {
+    suggestion = {
+      district: nullableString(existingRow.suggested_district),
+      source: existingRow.suggestion_source === "gis" || existingRow.suggestion_source === "ai" ? existingRow.suggestion_source : null,
+      evidence: nullableString(existingRow.suggestion_evidence),
+    };
+  } else if (aiBudget.tryConsume()) {
+    const aiSuggestion = await suggest(toQualificationCandidate({
+      source: candidate.source, external_listing_id: candidate.externalListingId,
+      original_url: candidate.originalUrl, normalized_url: candidate.normalizedUrl,
+      title: candidate.title, description: candidate.description,
+      content_hash: candidate.contentHash, building_type: confirmed.buildingType, market_type: confirmed.marketType,
+      city: candidate.city, price: candidate.price, area: candidate.area, price_per_sqm: confirmed.pricePerSqm, rooms: candidate.rooms,
+    }, null));
+    suggestion = aiSuggestion ? { district: aiSuggestion.district, source: "ai", evidence: aiSuggestion.evidence } : { district: null, source: null, evidence: null };
+  } else {
+    suggestion = { district: null, source: null, evidence: null };
+  }
+
   const { data, error } = await supabase.rpc("upsert_price_radar_district_queue_candidate", {
     p_owner_id: ownerId,
     p_candidate: {
@@ -83,6 +125,9 @@ export async function upsertPendingDistrictCandidate(
       collected_at: seenAt,
       last_seen_at: seenAt,
       raw_payload: candidate.rawPayload,
+      suggested_district: suggestion.district,
+      suggestion_source: suggestion.source,
+      suggestion_evidence: suggestion.evidence,
     },
   });
   if (error) {
@@ -212,7 +257,11 @@ function toQueueItem(row: Row): RadarDistrictQueueItem | null {
     price, area, pricePerSqm, rooms: nullableNumber(row.rooms), city, buildingType, marketType, renovationStatus,
     qualityCategory: marketType === "primary" || renovationStatus === "fresh_renovation" ? "fresh_renovation" : "ready_high_standard",
     firstSeenAt, lastSeenAt, publishedAt: nullableString(row.published_at), sourceUpdatedAt: nullableString(row.source_updated_at), collectedAt,
-    status, assignedDistrict: nullableString(row.assigned_district), assignedAt: nullableString(row.assigned_at), rejectedAt: nullableString(row.rejected_at),
+    status,
+    suggestedDistrict: nullableString(row.suggested_district),
+    suggestionSource: row.suggestion_source === "gis" || row.suggestion_source === "ai" ? row.suggestion_source : null,
+    suggestionEvidence: nullableString(row.suggestion_evidence),
+    assignedDistrict: nullableString(row.assigned_district), assignedAt: nullableString(row.assigned_at), rejectedAt: nullableString(row.rejected_at),
   };
 }
 
