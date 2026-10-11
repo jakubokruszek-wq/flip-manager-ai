@@ -497,6 +497,15 @@ function pageUrl(config: ExternalSourceConfig, criteria: ExternalPortalCriteria,
       base.searchParams.set("ps[number_of_rooms_to]", String(rooms.at(-1)));
     }
   }
+  if (config.id === "adresowo" && page > 1) {
+    // Confirmed against the real public page (2026-10-11): Adresowo's own
+    // rel="next"/"prev"/"canonical" links rotate through a path suffix
+    // (bare URL -> "/_l2" -> "/_l3" -> ...), not a "page" query string --
+    // the generic ?page=N below is silently ignored by the server, which
+    // would otherwise re-fetch the same first page on every later "page".
+    base.pathname = `${base.pathname.replace(/\/$/u, "")}/_l${page}`;
+    return base.toString();
+  }
   if (page > 1) base.searchParams.set("page", String(page));
   return base.toString();
 }
@@ -568,12 +577,31 @@ function parseAdresowo(html: string, fallbackCity: string): ExternalPortalPage {
   const $ = load(html); const cardCandidates: PortalCandidate[] = [];
   $("[data-offer-card]").each((_, element) => {
     const card = $(element);
-    const cardText = card.text().replace(/\s+/gu, " ").trim();
     const image = card.find("img").first();
     const href = card.find("a[href]").filter((__, link) => ($(link).attr("href") ?? "").includes("/o/")).first().attr("href") ?? card.find("a[href]").first().attr("href");
-    const price = cardText.match(/([\d\s\u00a0.,]+)\s*(?:zł|pln)\b/iu)?.[1];
-    const area = cardText.match(/(\d+(?:[.,]\d+)?)\s*(?:m²|m2|mkw)(?![\p{L}])/iu)?.[1];
-    const rooms = cardText.match(/(\d+(?:[.,]\d+)?)\s*pok\./iu)?.[1];
+    // Each field (price/area/rooms) lives in its own <p>; scanning the
+    // whole card's flattened text instead is unsafe for two reasons
+    // confirmed against the real public page (2026-10-11): a trailing
+    // word-boundary check never matches right after the currency
+    // suffix (its last letter is outside \w to the JS regex engine, so
+    // no boundary forms there), and even with that fixed, the card's
+    // own photo-count badge (e.g. "11" for 11 photos) sits right before
+    // the price in DOM order and gets swallowed into the same match as
+    // "11 228 000". Scoping each regex to the one <p> naming its own
+    // unit avoids both.
+    const fieldValue = (unitPattern: RegExp): string | undefined => {
+      let value: string | undefined;
+      card.find("p").each((__, fieldElement) => {
+        if (value !== undefined) return;
+        const fieldText = $(fieldElement).text().replace(/\s+/gu, " ").trim();
+        if (!unitPattern.test(fieldText)) return;
+        value = fieldText.match(/[\d\s.,]+/u)?.[0]?.trim();
+      });
+      return value;
+    };
+    const price = fieldValue(/pln|zł/iu);
+    const area = fieldValue(/m²|m2|mkw/iu);
+    const rooms = fieldValue(/pok/iu);
     cardCandidates.push({
       id: card.attr("data-id"),
       url: href,

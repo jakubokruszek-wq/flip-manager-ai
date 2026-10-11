@@ -152,7 +152,7 @@ test("every portal adapter paginates, keeps IDs stable, and deduplicates a repea
   try {
     for (const source of SOURCE_IDS) {
       const requested: string[] = [];
-      globalThis.fetch = async (input) => { const url = String(input); if (source === "oferty_net" && isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url); requested.push(url); const page = new URL(url).searchParams.get("page") === "2" ? 2 : 1; return new Response(fixture(source, page), { status: 200, headers: { "content-type": "text/html" } }); };
+      globalThis.fetch = async (input) => { const url = String(input); if (source === "oferty_net" && isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url); requested.push(url); const page = new URL(url).searchParams.get("page") === "2" || /\/_l2$/u.test(new URL(url).pathname) ? 2 : 1; return new Response(fixture(source, page), { status: 200, headers: { "content-type": "text/html" } }); };
       const result = await fetchExternalPortal(config(source), filter, undefined);
       assert.equal(requested.length, 2, source);
       assert.equal(result.listings.length, 2, source);
@@ -196,7 +196,13 @@ test("current public result-page structures reach persistListing and the Finder 
   const publicFixtures: Record<ExternalSourceId, string> = {
     domiporta: jsonLd({ "@graph": [{ "@type": "ItemList", itemListElement: [{ "@type": "ListItem", item: { "@type": ["Product", "RealEstateListing"], name: "Mieszkanie 3 pokoje 49 m² Łódź", description: "Oferta sprzedaży mieszkania.", image: "https://galeria.domiporta.pl/offer.jpg", datePosted: "2026-10-01", offers: { "@type": "Offer", price: 439000, priceCurrency: "PLN", itemOffered: { "@type": "Accommodation", numberOfRooms: 3, floorSize: { value: 49 }, address: { addressLocality: "Łódź", addressRegion: "łódzkie" } } }, url: "https://www.domiporta.pl/nieruchomosci/sprzedam-mieszkanie-lodz-49m2/156937475" } }] }] }),
     sprzedajemy: jsonLd({ "@type": "ItemList", itemListElement: [{ "@type": ["ListItem", "Offer"], name: "Mieszkanie 2 pokoje 46 m² Łódź", image: "https://thumbs.img-sprzedajemy.pl/offer.jpg", url: "https://sprzedajemy.pl/mieszkanie-2-pokoje-lodz-nr73909448", position: 1, price: 439000, priceCurrency: "PLN" }] }),
-    adresowo: `<div data-offer-card data-id="4224120"><a href="/o/mieszkanie-lodz-polesie-2-pokojowe-m3s4f8"><img src="https://s2.adresowo.pl/offer.webp" alt="Mieszkanie 2-pokojowe Łódź Polesie"></a><h2>Mieszkanie 2-pokojowe Łódź Polesie</h2><span class="font-bold">439 000</span><span> zł</span><span class="font-bold">46</span><span> m²</span><span class="font-bold">2</span><span> pok.</span></div>`,
+    // Real structure (confirmed against a live, read-only GET of
+    // adresowo.pl/mieszkania/<city>/, 2026-10-11): price/area/rooms each
+    // live in their own <p>, and a separate photo-count badge (e.g. "11"
+    // for 11 photos) sits earlier in DOM order, before the price -- this
+    // fixture keeps that badge to guard against the price match ever
+    // being scoped to the whole card's text again.
+    adresowo: `<div data-offer-card data-id="4224120"><span class="photo-count">11</span><a href="/o/mieszkanie-lodz-polesie-2-pokojowe-m3s4f8"><img src="https://s2.adresowo.pl/offer.webp" alt="Mieszkanie 2-pokojowe Łódź Polesie"></a><h2>Mieszkanie 2-pokojowe Łódź Polesie</h2><p><span class="font-bold">439&nbsp;000</span> <span>zł</span></p><p><span class="font-bold">46</span> <span>m²</span></p><p><span class="font-bold">2</span><span> pok.</span></p></div>`,
   } as Record<ExternalSourceId, string>;
   const rows: Record<string, unknown>[] = [];
   const db = fakeDb(rows);
@@ -1156,6 +1162,71 @@ test("the real domy.pl public page structure (<article class=\"propertyBox\"> ca
   const persisted = await persistListing(db as never, "filter-1", first!, true, [], "scan-1", "2026-10-03T10:00:00Z", AbortSignal.timeout(1000));
   assert.ok(persisted.listingId, "the real listing must reach the canonical listings table");
   assert.equal(rows[0]?.price, 240000);
+});
+
+// Real card excerpt (read-only GET of adresowo.pl/mieszkania/lodz/,
+// 2026-10-11): price/area/rooms each live in their own <p>, and a
+// photo-count badge ("11" for 11 photos) sits in a separate <div>,
+// earlier in DOM order than the price. The previous implementation
+// scanned the whole card's flattened text with a trailing \b after the
+// currency suffix: \b never matches there ("ł" is not a \w character to
+// the JS regex engine, so no boundary forms after it), which made every
+// real card fail price extraction outright (confirmed: 40/40 cards on
+// the live page, 100% of the Production INVALID_SALE_PRICE rejections).
+// Even with that fixed, matching against the whole card's text would
+// still swallow the unrelated photo-count digit into the price (space is
+// inside the matched character class), producing "11 228 000" instead of
+// "228 000". This fixture keeps both conditions to prove the fix scopes
+// extraction to the one <p> naming its own unit.
+const ADRESOWO_REAL_CARD = `<div data-offer-card="" data-id="4292074" class="relative flex h-[340px] shrink-0 flex-col overflow-hidden rounded-lg bg-white shadow-xl/5">
+  <div class="h-48 animate-shimmer rounded-t-lg">
+    <div class="absolute top-3 right-4 flex items-center text-white">
+      <span class="pt-0.5 pr-1 text-xs font-bold">11</span>
+    </div>
+    <img src="https://s2.adresowa.pl/oi/62/72/417dea_753d_cover@2x-1-pokojowe-mieszkanie-lodz-polesie-ul-drewnowska.webp" alt="Mieszkanie 1-pokojowe Łódź Polesie, ul. Drewnowska">
+  </div>
+  <div class="flex pb-1">
+    <div class="flex w-full items-center text-sm">
+      <p class="flex-auto text-base text-neutral-900"><span class="font-bold">228&nbsp;000</span> <span class="text-xs text-neutral-700">zł</span></p>
+      <p class="flex-auto text-base text-neutral-900"><span class="font-bold">37</span> <span class="text-xs text-neutral-700">m²</span></p>
+      <p class="flex-auto text-base text-neutral-900"><span class="font-bold">1</span><span class="text-xs text-neutral-700"> pok.</span></p>
+    </div>
+  </div>
+  <h2><a href="/o/mieszkanie-lodz-polesie-ul-drewnowska-1-pokoj-o9j8g8" data-track="offer-link">Łódź Polesie, ul. Drewnowska</a></h2>
+  <p class="mb-3 line-clamp-4 text-sm leading-relaxed text-neutral-600">Oferuję na sprzedaż przytulne mieszkanie o powierzchni 37 m². Znajduje się na parterze w czteropiętrowym bloku z cegły.</p>
+</div>`;
+
+test("the real adresowo.pl card structure (price/area/rooms each in their own <p>, a photo-count badge ahead of the price, captured 2026-10-11) parses the true price, not a photo-count-contaminated one", () => {
+  const parsed = EXTERNAL_PORTAL_PARSERS.adresowo(ADRESOWO_REAL_CARD, "Łódź");
+  assert.equal(parsed.listings.length, 1);
+  assert.equal(parsed.invalidSalePriceCount ?? 0, 0);
+  const listing = parsed.listings[0]!;
+  assert.equal(listing.price, 228000, "must read the <p> that names \"zł\", not \"11\" (the photo count) fused onto it");
+  assert.equal(listing.area, 37);
+  assert.equal(listing.rooms, 1);
+  assert.equal(listing.originalUrl, "https://adresowo.pl/o/mieszkanie-lodz-polesie-ul-drewnowska-1-pokoj-o9j8g8");
+});
+
+test("Adresowo's own pagination is a path suffix (/_l2, /_l3, ...), confirmed via its real rel=\"next\"/\"prev\" rotation -- the generic ?page=N query string is silently ignored by the server", async () => {
+  const previousFetch = globalThis.fetch;
+  const requested: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    const page = /\/_l(\d+)$/u.exec(new URL(url).pathname)?.[1];
+    const isFirst = !page;
+    const card = (id: string) => `<div data-offer-card data-id="${id}"><a href="/o/mieszkanie-${id}"><img src="https://s2.adresowa.pl/${id}.webp"></a><p><span class="font-bold">300&nbsp;000</span> <span>zł</span></p><p><span class="font-bold">40</span> <span>m²</span></p><p><span class="font-bold">2</span><span> pok.</span></p></div>`;
+    const next = isFirst || page === "2" ? `<a rel="next" href="/mieszkania/lodz/_l${isFirst ? 2 : 3}">next</a>` : "";
+    return new Response(`${card(isFirst ? "p1" : `p${page}`)}${next}`, { status: 200, headers: { "content-type": "text/html" } });
+  };
+  try {
+    const result = await fetchExternalPortal(config("adresowo"), filter, undefined);
+    assert.equal(requested.length, 3, "page 1, then /_l2, then /_l3");
+    assert.match(requested[1] ?? "", /\/mieszkania\/lodz\/_l2$/u, "the second request must use the path suffix, not ?page=2");
+    assert.match(requested[2] ?? "", /\/mieszkania\/lodz\/_l3$/u);
+    assert.ok(requested.every((url) => !url.includes("page=")), "the broken ?page=N query string must never be sent to Adresowo");
+    assert.equal(result.listings.length, 3);
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test("Oferty.net uses its public sale form, carries Radar/Finder bounds, follows numbered pages, deduplicates ids, and reports the five-page cap", async () => {
