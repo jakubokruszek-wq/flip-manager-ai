@@ -20,6 +20,13 @@ function isSchemaUnavailable(error: { code?: unknown; message?: unknown } | null
     && /does not exist|not find|schema cache/iu.test(message);
 }
 
+/** A bounded, non-sensitive diagnostic that keeps a missing/unwritable queue visible in the run. */
+export function radarDistrictQueueFailureWarning(reason: "schema_unavailable" | "error"): string {
+  return reason === "schema_unavailable"
+    ? "RADAR_DISTRICT_QUEUE_UNAVAILABLE: zastosuj lokalny draft supabase/migrations/20261011120000_add_radar_district_queue.sql przed użyciem kolejki"
+    : "RADAR_DISTRICT_QUEUE_SAVE_FAILED: zapis oferty wymagającej dzielnicy nie powiódł się";
+}
+
 export type DistrictQueueCandidate = {
   source: string;
   externalListingId: string;
@@ -48,9 +55,11 @@ export type DistrictQueueCandidate = {
  * status, assigned_district, assigned_at, or rejected_at, so an operator's prior decision always
  * survives a reimport untouched.
  *
- * Silently reports unavailability (never throws) when the optional
- * migration has not been applied yet -- a scan must keep working exactly
- * as before even though this feature does nothing until a human applies
+ * Returns a typed unavailable/error result (never throws) when the optional
+ * migration has not been applied or the write fails. Collection keeps its
+ * valid listings, but records a partial-coverage warning so operators can
+ * see that the missing-district candidate was not saved. The feature starts
+ * working only after a human applies
  * supabase/migrations/20261011120000_add_radar_district_queue.sql.
  *
  * Also computes (or reuses) a best-effort AI district suggestion. The

@@ -16,11 +16,24 @@ const session = {
 const activeSources = ["domiporta", "olx", "gratka"];
 let showObservedOfertyNetOffer = false;
 let showConflictingOfertyNetOffer = false;
+let showDistrictAssignedOffer = false;
+let districtQueueState = { available: false, pending: [], assigned: [], rejected: [] };
+const districtQueueAssignments = [];
+const districtQueueRejections = [];
 function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null }; }
 function listing(id, marketType) {
   return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: "Pełny opis źródłowy.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
 }
 function results(filters, excluded = false) {
+  if (showDistrictAssignedOffer) {
+    const assigned = {
+      ...listing("radar-district-queue-assigned", "secondary"),
+      district: "Widzew",
+      title: "Kandydat przypisany z kolejki dzielnic",
+      crossSourceAlternates: [],
+    };
+    return { listings: [assigned], excludedListings: [], stats: [{ district: "Widzew", marketType: "secondary", qualityCategory: "fresh_renovation", averagePricePerSqm: null, medianPricePerSqm: null, sampleSize: 1, isSmallSample: true, updatedAt: assigned.lastSeenAt }] };
+  }
   if (showConflictingOfertyNetOffer) {
     const offer = {
       ...listing("radar-oferty-net-1543068412", "secondary"), source: "oferty_net", externalListingId: "1543068412",
@@ -71,6 +84,10 @@ async function waitForServer(url) {
 }
 
 test("real Radar page persists settings, separates markets, excludes/restores listings, and has no horizontal overflow", { timeout: 600_000 }, async (t) => {
+  showDistrictAssignedOffer = false;
+  districtQueueState = { available: false, pending: [], assigned: [], rejected: [] };
+  districtQueueAssignments.length = 0;
+  districtQueueRejections.length = 0;
   const port = await freePort();
   const authPort = await freePort();
   const root = path.resolve(__dirname, "../../..");
@@ -119,6 +136,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   let excluded = false;
   let failNextSave = false;
   let radarRun = null;
+  let nextStopFailure = null;
   const requests = [];
   await page.route("**/api/price-radar/**", async (route) => {
     const request = route.request();
@@ -139,9 +157,52 @@ test("real Radar page persists settings, separates markets, excludes/restores li
       };
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(results(queryFilters, excluded)) });
     }
+    if (url.pathname === "/api/price-radar/district-queue" && request.method() === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(districtQueueState) });
+    }
+    if (url.pathname === "/api/price-radar/district-queue/assign" && request.method() === "POST") {
+      const body = request.postDataJSON();
+      districtQueueAssignments.push(body);
+      const item = districtQueueState.pending.find((candidate) => candidate.id === body.queueId);
+      if (!item || !districts.includes(body.district)) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ message: "assignment rejected" }) });
+      districtQueueState = {
+        ...districtQueueState,
+        pending: districtQueueState.pending.filter((candidate) => candidate.id !== item.id),
+        assigned: [...districtQueueState.assigned, { ...item, status: "assigned", assignedDistrict: body.district }],
+      };
+      showDistrictAssignedOffer = true;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, listingId: "radar-district-queue-assigned" }) });
+    }
+    if (url.pathname === "/api/price-radar/district-queue/reject" && request.method() === "POST") {
+      const body = request.postDataJSON();
+      districtQueueRejections.push(body);
+      const item = body.rejected === false
+        ? districtQueueState.rejected.find((candidate) => candidate.id === body.queueId)
+        : districtQueueState.pending.find((candidate) => candidate.id === body.queueId);
+      if (!item) return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "queue item not found" }) });
+      if (body.rejected === false) {
+        districtQueueState = {
+          ...districtQueueState,
+          rejected: districtQueueState.rejected.filter((candidate) => candidate.id !== item.id),
+          pending: [...districtQueueState.pending, { ...item, status: "pending", rejectedAt: null }],
+        };
+      } else {
+        districtQueueState = {
+          ...districtQueueState,
+          pending: districtQueueState.pending.filter((candidate) => candidate.id !== item.id),
+          rejected: [...districtQueueState.rejected, { ...item, status: "rejected", rejectedAt: new Date().toISOString() }],
+        };
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    }
     if (url.pathname === "/api/price-radar/run" && request.method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: radarRun }) });
     if (url.pathname === "/api/price-radar/run" && request.method() === "POST") {
       const body = request.postDataJSON() || {};
+      if (body.action === "stop" && nextStopFailure) {
+        const failure = nextStopFailure;
+        nextStopFailure = null;
+        return route.fulfill({ status: failure.status, contentType: "application/json", body: JSON.stringify(failure.body) });
+      }
       if (body.action === "stop" && radarRun?.id === body.runId && (radarRun.status === "running" || radarRun.status === "pending")) {
         radarRun = { ...radarRun, stopRequestedAt: new Date().toISOString() };
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: radarRun.id, status: "stopping" }) });
@@ -156,10 +217,15 @@ test("real Radar page persists settings, separates markets, excludes/restores li
     return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "unexpected Radar request" }) });
   });
 
+  const initialDistrictQueueRead = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/price-radar/district-queue" && response.request().method() === "GET");
   await page.goto(`http://127.0.0.1:${port}/price-radar`, { waitUntil: "domcontentloaded" });
   const selectPortalAndWaitForSave = async (name) => { const saved = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT"); await page.getByRole("button", { name }).click(); await saved; };
   await page.getByRole("heading", { name: "Radar cen po remoncie", level: 1 }).waitFor();
   assert.ok(await page.getByRole("link", { name: "Radar cen po remoncie" }).count(), "the Radar has a separate navigation entry");
+  const queueRead = await initialDistrictQueueRead;
+  assert.equal(queueRead.status(), 200, `the dashboard reads queue availability; requests=${JSON.stringify(requests)}`);
+  await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).waitFor();
+  assert.match(await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).innerText(), /20261011120000_add_radar_district_queue\.sql/u, "the UI states exactly which unapplied migration blocks this queue instance");
   await page.getByText("Mieszkanie secondary w bloku", { exact: false }).waitFor();
   await page.getByText("Mieszkanie primary w bloku", { exact: false }).waitFor();
   assert.equal(await page.locator("a[href^='https://example.test/']").count(), 3, "the confirmed cross-source group retains both concrete portal links");
@@ -250,6 +316,33 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.equal(await selectedSourceLinks.count(), 2, "the selected source keeps the group and its linked concrete URL");
   assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-domiporta"));
   assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-gratka"));
+
+  const queueItem = (id) => ({
+    id, source: "domiporta", externalListingId: `candidate-${id}`, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`,
+    title: `Oferta do przypisania ${id}`, description: "Blok na Teofilowie.", price: 419000, area: 45, pricePerSqm: 419000 / 45, rooms: 2,
+    city: "Łódź", buildingType: "blok", marketType: "secondary", renovationStatus: "fresh_renovation", qualityCategory: "fresh_renovation",
+    firstSeenAt: "2026-10-11T10:00:00.000Z", lastSeenAt: "2026-10-11T10:00:00.000Z", publishedAt: null, sourceUpdatedAt: null,
+    collectedAt: "2026-10-11T10:00:00.000Z", status: "pending", suggestedDistrict: "Bałuty", suggestionSource: "ai",
+    suggestionEvidence: "Opis zawiera nazwę Teofilów.", assignedDistrict: null, assignedAt: null, rejectedAt: null,
+  });
+  districtQueueState = { available: true, pending: [queueItem("queue-assign"), queueItem("queue-reject")], assigned: [], rejected: [] };
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Do przypisania dzielnicy (2)" }).waitFor();
+  await page.getByText(/Podpowiedź \(AI\): Bałuty.*Teofilów/u).first().waitFor();
+  await page.getByRole("button", { name: "Odrzuć" }).first().click();
+  await page.getByRole("heading", { name: "Do przypisania dzielnicy (1)" }).waitFor();
+  await page.getByText("Odrzucone z kolejki dzielnic (1)").waitFor();
+  assert.deepEqual(districtQueueRejections.at(-1), { queueId: "queue-assign", rejected: true }, "operator rejection is an explicit queue write");
+  await page.getByRole("button", { name: "Przywróć do kolejki" }).click();
+  await page.getByRole("heading", { name: "Do przypisania dzielnicy (2)" }).waitFor();
+  await page.locator("#district-queue-select-queue-assign").selectOption("Widzew");
+  await page.locator("article").filter({ hasText: "Oferta do przypisania queue-assign" }).getByRole("button", { name: "Dodaj do porównań" }).click();
+  await page.getByRole("heading", { name: "Kandydat przypisany z kolejki dzielnic" }).waitFor();
+  await page.getByRole("heading", { name: "Do przypisania dzielnicy (1)" }).waitFor();
+  await page.getByText("1 mieszkanie · brak ceny referencyjnej", { exact: false }).waitFor();
+  assert.deepEqual(districtQueueAssignments, [{ queueId: "queue-assign", district: "Widzew" }], "operator chose one of the allowed districts; the AI suggestion was not applied automatically");
+  assert.deepEqual(districtQueueRejections, [{ queueId: "queue-assign", rejected: true }, { queueId: "queue-assign", rejected: false }], "the UI supports rejection and explicit restore without assignment");
+  assert.equal(await page.getByText("Do weryfikacji · poza próbą A/B (0)").count(), 0, "the assigned candidate is reloaded through the results API instead of only moving its queue badge");
   assert.deepEqual(blockedExternalRequests, [], "the isolated browser never contacts a portal or remote Supabase");
   const runPosts = () => requests.filter((request) => request.path === "/api/price-radar/run" && request.method === "POST");
   assert.equal(runPosts().length, 0, "viewing and refreshing the page never starts or resumes a collection run");
@@ -259,13 +352,27 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Zatrzymaj" }).waitFor();
   assert.equal(runPosts().length, 0, "the active run is discovered by GET without starting another run");
-  await page.getByRole("button", { name: "Zatrzymaj" }).click();
+  nextStopFailure = { status: 409, body: { code: "not_active", message: "Serwer nie przyjął STOP dla aktywnego przebiegu." } };
+  await page.getByRole("button", { name: "Zatrzymaj" }).first().click();
+  await page.getByText(/not_active/).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Zatrzymaj" }).count(), 1, "a rejected server response does not optimistically change the UI to stopping");
+  assert.equal(radarRun.stopRequestedAt, null, "a rejected write leaves the authoritative run state unchanged");
+  nextStopFailure = { status: 500, body: { code: "RADAR_RUN_STOP_FAILED", message: "Nie udało się zapisać STOP." } };
+  await page.getByRole("button", { name: "Zatrzymaj" }).first().click();
+  await page.getByText(/RADAR_RUN_STOP_FAILED/).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Zatrzymaj" }).count(), 1, "a failed persistence response is shown without a false stopping state");
+  assert.equal(radarRun.stopRequestedAt, null);
+  await page.getByRole("button", { name: "Zatrzymaj" }).first().click();
   const stoppingButtons = page.getByRole("button", { name: "Zatrzymywanie…" });
   await stoppingButtons.first().waitFor();
-  assert.equal(await stoppingButtons.count(), 2, "both run controls reflect the same pending stop request");
+  assert.equal(await stoppingButtons.count(), 2, "the run controls reflect the same pending stop request");
   assert.deepEqual(await stoppingButtons.evaluateAll((buttons) => buttons.map((button) => (button).disabled)), [true, true], "a pending stop cannot be submitted twice");
-  assert.equal(runPosts().length, 1);
-  assert.deepEqual(runPosts().map((request) => request.body), [{ action: "stop", runId: stoppedRunId }]);
+  assert.equal(runPosts().length, 3);
+  assert.deepEqual(runPosts().map((request) => request.body), [
+    { action: "stop", runId: stoppedRunId },
+    { action: "stop", runId: stoppedRunId },
+    { action: "stop", runId: stoppedRunId },
+  ]);
   assert.equal(radarRun.status, "running", "the UI reports stopping, not stopped, until the backend acknowledges it");
 
   radarRun = { ...radarRun, status: "partial", errorMessage: "RADAR_STOPPED_BY_OPERATOR", finishedAt: new Date().toISOString(), leaseUntil: null };

@@ -350,10 +350,19 @@ export function PriceRadarPage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "stop", runId: run.id }),
       });
-      const payload = await response.json() as { status?: "stopping" | "stopped"; message?: string };
-      if (!response.ok || (payload.status !== "stopping" && payload.status !== "stopped")) throw new Error(payload.message || "Nie udało się zatrzymać przebiegu Radaru.");
-      if (payload.status === "stopped") await loadRunStatusNow();
-      else setRun((current) => current ? { ...current, stopRequestedAt: new Date().toISOString() } : current);
+      const payload = await response.json().catch(() => null) as { status?: "stopping" | "stopped"; code?: string; message?: string } | null;
+      if (!response.ok || (payload?.status !== "stopping" && payload?.status !== "stopped")) {
+        // A failed/blocked RPC must never leave the client displaying an
+        // optimistic stop state. Refresh the authoritative run first, then
+        // retain the server's bounded code and message for the operator.
+        await loadRunStatusNow().catch(() => undefined);
+        const serverMessage = [payload?.message, payload?.code].filter(Boolean).join(" · ");
+        throw new Error(serverMessage || "Nie udało się zatrzymać przebiegu Radaru.");
+      }
+      setAutoResumeMessage(payload.status === "stopped"
+        ? "Serwer potwierdził zatrzymanie przebiegu."
+        : "Serwer przyjął STOP; oczekuje na potwierdzenie stanu lease.");
+      await loadRunStatusNow();
       refreshRunNow.current?.();
       setError(null);
     } catch (reason) {
@@ -550,6 +559,12 @@ export function PriceRadarPage() {
 
       {districtQueueError ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{districtQueueError}</div>
+      ) : null}
+
+      {districtQueue && !districtQueue.available ? (
+        <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+          Kolejka przypisania dzielnicy jest niedostępna. Wymaga zastosowania migracji <code>20261011120000_add_radar_district_queue.sql</code>; kandydaci nie są obecnie zapisywani do kolejki.
+        </div>
       ) : null}
 
       {districtQueue && (districtQueue.pending.length > 0 || districtQueue.rejected.length > 0) ? (

@@ -6,6 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 
 const BASE = path.join(process.cwd(), "supabase/migrations/20261008000000_create_price_radar.sql");
 const DRAFT = path.join(process.cwd(), "supabase/migrations/20261012110000_add_price_radar_stop_resume.sql");
+const STOP_FIX = path.join(process.cwd(), "supabase/migrations/20261012120000_fix_price_radar_stop_without_current_source.sql");
 const OWNER = "00000000-0000-4000-8000-000000000071";
 const OTHER_OWNER = "00000000-0000-4000-8000-000000000072";
 const JOB_TOKEN = "00000000-0000-4000-8000-000000000091";
@@ -34,6 +35,7 @@ async function database(): Promise<PGlite> {
   `);
   await db.exec(fs.readFileSync(BASE, "utf8"));
   await db.exec(fs.readFileSync(DRAFT, "utf8"));
+  await db.exec(fs.readFileSync(STOP_FIX, "utf8"));
   return db;
 }
 
@@ -147,6 +149,56 @@ test("an expired run is finalized as stopped instead of leaving a blocking lease
     assert.equal((row.rows[0].checkpoint.sourceStatuses as Record<string, string>).oferty_net, "pending");
     const repeated = await db.query<{ result: string }>(`select public.request_price_radar_run_stop($1::uuid,$2::uuid) as result`, [OWNER, run.run_id]);
     assert.equal(repeated.rows[0].result, "stopped", "repeated stop is idempotent after acknowledgment");
+  } finally {
+    await db.close();
+  }
+});
+
+test("STOP finalizes the exact end-of-queue checkpoint with pending Domiporta and Oferty.net, preserving history and fencing late writes", async () => {
+  const db = await database();
+  try {
+    const run = await claim(db, OWNER, "domiporta");
+    const sourceQueue = ["olx", "morizon", "sprzedajemy", "allegro_lokalnie", "otodom", "adresowo", "gratka", "nieruchomosci_online", "domy", "domiporta", "oferty_net"];
+    const sourceStatuses = Object.fromEntries(sourceQueue.map((source, index) => [source, index < 9 ? "completed" : "pending"]));
+    const perSourceCursor = {
+      domiporta: { kind: "radar_detail_v1", page: 4, candidateIndex: 12 },
+      oferty_net: { kind: "radar_detail_v1", page: 2, candidateIndex: 0 },
+    };
+    const exactCheckpoint = {
+      sourceQueue, currentSourceIndex: sourceQueue.length, perSourceCursor, sourceStatuses,
+      sourceErrors: { quickly_disabled: "preserved historical diagnostic" }, buffer: [], bufferOffset: 0,
+    };
+    await db.query(`update price_radar_runs set checkpoint=$2::jsonb, source_statuses=$3::jsonb,
+      scanned_count=1074, qualified_count=0, lease_until=now()+interval '60 seconds' where id=$1`,
+    [run.run_id, JSON.stringify(exactCheckpoint), JSON.stringify(sourceStatuses)]);
+
+    const stop = await db.query<{ result: string }>(
+      `select public.request_price_radar_run_stop($1::uuid,$2::uuid) as result`, [OWNER, run.run_id],
+    );
+    assert.equal(stop.rows[0].result, "stopped", "an active run is stoppable even when the cursor equals queue.length and no source is running");
+
+    const saved = await db.query<{ status: string; error_message: string; stop_requested_at: string; lease_token: string | null; lease_until: string | null; scanned_count: number; checkpoint: Record<string, unknown>; source_statuses: Record<string, string> }>(
+      `select status,error_message,stop_requested_at,lease_token,lease_until,scanned_count,checkpoint,source_statuses from price_radar_runs where id=$1`, [run.run_id],
+    );
+    assert.deepEqual({ status: saved.rows[0].status, error_message: saved.rows[0].error_message, lease_token: saved.rows[0].lease_token, lease_until: saved.rows[0].lease_until, scanned_count: saved.rows[0].scanned_count }, {
+      status: "partial", error_message: STOP, lease_token: null, lease_until: null, scanned_count: 1074,
+    });
+    assert.ok(saved.rows[0].stop_requested_at, "the durable STOP timestamp is persisted before the run is finalized");
+    assert.equal(saved.rows[0].checkpoint.currentSourceIndex, sourceQueue.length, "STOP does not invent a new cursor or rewrite the historical pointer");
+    assert.deepEqual(saved.rows[0].checkpoint.perSourceCursor, perSourceCursor, "both pending source cursors survive unchanged");
+    assert.deepEqual(saved.rows[0].checkpoint.sourceStatuses, sourceStatuses, "completed and pending source states remain intact");
+    assert.deepEqual(saved.rows[0].source_statuses, sourceStatuses);
+    assert.deepEqual(saved.rows[0].checkpoint.sourceErrors, exactCheckpoint.sourceErrors, "existing source diagnostics remain intact");
+
+    const lateCheckpoint = await db.query<{ accepted: boolean }>(
+      `select public.checkpoint_price_radar_run($1::uuid,$2::uuid,$3::uuid,$4::jsonb,$5::jsonb,1075,0,'running',null,120) as accepted`,
+      [OWNER, run.run_id, run.lease_token, JSON.stringify(exactCheckpoint), JSON.stringify(sourceStatuses)],
+    );
+    assert.equal(lateCheckpoint.rows[0].accepted, false, "the former lease cannot overwrite a durable stop or advance counters/cursors");
+    const repeated = await db.query<{ result: string }>(
+      `select public.request_price_radar_run_stop($1::uuid,$2::uuid) as result`, [OWNER, run.run_id],
+    );
+    assert.equal(repeated.rows[0].result, "stopped", "repeating STOP is idempotent for this same stopped run");
   } finally {
     await db.close();
   }

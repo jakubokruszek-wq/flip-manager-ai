@@ -3,7 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assessRadarDistrictOnlyCandidate, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
-import { upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { radarDistrictQueueFailureWarning, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import type { RadarCheckpoint, RadarRunStatus } from "@/features/price-radar/types";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
@@ -40,7 +40,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
   let fetched = 0;
   let qualified = 0;
   let queueStatus: "completed" | "failed";
-  let sourceStatus: "completed" | "failed";
+  let sourceStatus: "completed" | "failed" | "partial";
   let errorCode: string | null = null;
   let errorMessage: string | null = null;
   let resultSummary: Record<string, unknown>;
@@ -55,6 +55,8 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
     queueStatus = "completed";
     fetched = payload.fetched;
     const sourceErrors = payload.warnings.map((warning) => warning.replace(/[\r\n\t]/g, " ").slice(0, 500));
+    const districtQueueWarnings: string[] = [];
+    let districtQueueCandidates = 0;
     const districtAiBudget = createRadarDistrictAiBudget();
     for (const listing of payload.listings) {
       const raw = listing.rawPayload ?? {};
@@ -74,13 +76,20 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
         if (outcome.reason === "district_not_confirmed") {
           const districtAssessment = assessRadarDistrictOnlyCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
           if (districtAssessment.eligible) {
-            await upsertPendingDistrictCandidate(client, input.ownerId, {
+            districtQueueCandidates += 1;
+            const queueResult = await upsertPendingDistrictCandidate(client, input.ownerId, {
               source: "olx", externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
               title: listing.title, description: listing.description, price: listing.price!, area: listing.area!, rooms: listing.rooms,
               city: listing.city!, contentHash: listing.contentHash, crossSourceIdentity: listing.crossSourceIdentity ?? null,
               publishedAt: listing.publishedAt ?? null, sourceUpdatedAt: sourceDate(raw),
               rawPayload: raw,
             }, districtAssessment.confirmed, new Date().toISOString(), districtAiBudget);
+            if (!queueResult.ok) {
+              const warning = radarDistrictQueueFailureWarning(queueResult.reason);
+              districtQueueWarnings.push(warning);
+              checkpoint.sourceWarnings ??= {};
+              checkpoint.sourceWarnings.olx = [...new Set([...(checkpoint.sourceWarnings.olx ?? []), warning])].slice(0, 20);
+            }
             continue;
           }
         }
@@ -96,10 +105,10 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
       }, { ownerId: input.ownerId, runId: input.runId, leaseToken: input.radarLeaseToken, seenAt: new Date().toISOString() });
       qualified += 1;
     }
-    sourceStatus = sourceErrors.length ? "failed" : "completed";
+    sourceStatus = sourceErrors.length ? "failed" : districtQueueWarnings.length ? "partial" : "completed";
     if (sourceErrors.length) checkpoint.sourceErrors.olx = sourceErrors.join("; ").slice(0, 1000);
     else delete checkpoint.sourceErrors.olx;
-    resultSummary = { source: "olx", status: "completed", fetched, normalized: qualified, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: Math.max(0, fetched - qualified), durationMs: payload.durationMs, errorCode: null, errorMessage: null, warnings: sourceErrors, qualificationRejections: checkpoint.qualificationRejections, matchDiagnostics: {} };
+    resultSummary = { source: "olx", status: "completed", fetched, normalized: qualified, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: Math.max(0, fetched - qualified - districtQueueCandidates), durationMs: payload.durationMs, errorCode: null, errorMessage: null, warnings: [...sourceErrors, ...districtQueueWarnings], qualificationRejections: checkpoint.qualificationRejections, matchDiagnostics: {} };
   }
 
   checkpoint.sourceStatuses.olx = sourceStatus;

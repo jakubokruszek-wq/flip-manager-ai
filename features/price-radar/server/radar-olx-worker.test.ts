@@ -9,6 +9,7 @@ const checkpoint = { sourceQueue: ["olx"], currentSourceIndex: 0, perSourceCurso
 let persisted: Row[] = [];
 let finalized: Row[] = [];
 let districtQueueUpserts: Row[] = [];
+let districtQueueSchemaUnavailable = false;
 let currentRunToken = radarLeaseToken;
 let runStopRequestedAt: string | null = null;
 
@@ -21,7 +22,9 @@ function fakeDb() {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
         maybeSingle: async () => {
-          if (table === "price_radar_district_queue") return { data: null, error: null }; // no existing row -- every candidate here is "new" for caching purposes
+          if (table === "price_radar_district_queue") return districtQueueSchemaUnavailable
+            ? { data: null, error: { code: "PGRST205", message: "Could not find the table 'public.price_radar_district_queue' in the schema cache" } }
+            : { data: null, error: null }; // no existing row -- every candidate here is "new" for caching purposes
           return { data: { id: runId, owner_id: ownerId, checkpoint: structuredClone(checkpoint), source_statuses: structuredClone(checkpoint.sourceStatuses), scanned_count: 2, qualified_count: 1, status: "running", lease_token: currentRunToken, lease_until: new Date(Date.now() + 60_000).toISOString(), stop_requested_at: runStopRequestedAt }, error: null };
         },
       };
@@ -58,6 +61,7 @@ test("OLX worker persists only qualified Radar rows and finalizes through the Ra
   districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
   runStopRequestedAt = null;
+  districtQueueSchemaUnavailable = false;
   const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
     fetched: 1, listings: [candidate() as never], warnings: [], durationMs: 1200,
   }, fakeDb() as never);
@@ -81,6 +85,7 @@ test("OLX worker records strict rejection reasons without persisting an unqualif
   districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
   runStopRequestedAt = null;
+  districtQueueSchemaUnavailable = false;
   // A candidate missing a building type AND a district: with no building
   // type, assessRadarDistrictOnlyCandidate must find it ineligible for the
   // district queue, so this stays a genuine, counted rejection.
@@ -102,6 +107,7 @@ test("OLX worker queues (never rejects) a candidate missing ONLY its district --
   districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
   runStopRequestedAt = null;
+  districtQueueSchemaUnavailable = false;
   const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
     fetched: 1, listings: [{ ...candidate(), district: null } as never], warnings: [], durationMs: 1200,
   }, fakeDb() as never);
@@ -112,6 +118,29 @@ test("OLX worker queues (never rejects) a candidate missing ONLY its district --
   assert.equal((districtQueueUpserts[0].p_candidate as Row).building_type, "blok");
   const savedCheckpoint = finalized[0].p_checkpoint as Row;
   assert.deepEqual(savedCheckpoint.qualificationRejections, {}, "a queued candidate must never also be counted as a dead-end rejection");
+});
+
+test("OLX finalizes the job but marks the Radar run partial and records the unapplied district queue schema", async () => {
+  persisted = [];
+  finalized = [];
+  districtQueueUpserts = [];
+  currentRunToken = radarLeaseToken;
+  runStopRequestedAt = null;
+  districtQueueSchemaUnavailable = true;
+  const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
+    fetched: 1, listings: [{ ...candidate(), district: null } as never], warnings: [], durationMs: 1200,
+  }, fakeDb() as never);
+
+  assert.deepEqual(result, { source: "olx", status: "completed", fetched: 1, qualified: 0 }, "the normal OLX task finishes; the Radar run separately reports incomplete queue persistence");
+  assert.equal(finalized[0].p_job_status, "completed");
+  assert.equal((finalized[0].p_source_statuses as Row).olx, "partial");
+  assert.equal(finalized[0].p_run_status, "partial");
+  assert.equal((finalized[0].p_checkpoint as Row).sourceWarnings && ((finalized[0].p_checkpoint as Row).sourceWarnings as Row).olx instanceof Array, true);
+  assert.match((((finalized[0].p_checkpoint as Row).sourceWarnings as Row).olx as string[]).join(" "), /RADAR_DISTRICT_QUEUE_UNAVAILABLE/u);
+  assert.match(((finalized[0].p_result_summary as Row).warnings as string[]).join(" "), /RADAR_DISTRICT_QUEUE_UNAVAILABLE/u);
+  assert.equal((finalized[0].p_result_summary as Row).rejected, 0, "a candidate awaiting district assignment is not mislabeled as a rejected offer when persistence is unavailable");
+  assert.equal(districtQueueUpserts.length, 0, "an absent table never appears to accept an upsert");
+  districtQueueSchemaUnavailable = false;
 });
 
 test("OLX worker maps the portal's structured market parameter before strict Radar qualification", async () => {

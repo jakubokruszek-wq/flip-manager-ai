@@ -7,7 +7,7 @@ import { activeSources } from "@/features/flip-finder/server/search-source-regis
 import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 import { assessRadarDistrictOnlyCandidate, isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
-import { upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { radarDistrictQueueFailureWarning, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
@@ -369,13 +369,16 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               if (outcome.reason === "district_not_confirmed") {
                 const districtAssessment = assessRadarDistrictOnlyCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
                 if (districtAssessment.eligible) {
-                  await upsertPendingDistrictCandidate(supabase, input.ownerId, {
+                  const queueResult = await upsertPendingDistrictCandidate(supabase, input.ownerId, {
                     source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
                     title: listing.title, description: listing.description, price: listing.price!, area: listing.area!, rooms: listing.rooms,
                     city: listing.city!, contentHash: listing.contentHash, crossSourceIdentity: listing.crossSourceIdentity ?? null,
                     publishedAt: listing.publishedAt ?? null, sourceUpdatedAt: sourceDate(listing.rawPayload, ["updatedAt", "modifiedAt", "updated_at", "modified_at"]),
                     rawPayload: listing.rawPayload,
                   }, districtAssessment.confirmed, new Date().toISOString(), districtAiBudget);
+                  if (!queueResult.ok) {
+                    recordRadarSourceWarnings(checkpoint, sourceId, [radarDistrictQueueFailureWarning(queueResult.reason)]);
+                  }
                   continue;
                 }
               }
@@ -439,8 +442,9 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         if (!emittedBatches) {
           addSourceRejectionCounts(checkpoint, sourceId, result.sourceRejectionCounts ?? sourceRejectionCountsFromWarnings(result.warnings));
         }
-        recordRadarSourceWarnings(checkpoint, sourceId, result.warnings);
-        checkpoint.sourceStatuses[sourceId] = radarSourceStatusFromWarnings(result.warnings);
+        const completionWarnings = [...result.warnings, ...(checkpoint.sourceWarnings?.[sourceId] ?? [])];
+        recordRadarSourceWarnings(checkpoint, sourceId, completionWarnings);
+        checkpoint.sourceStatuses[sourceId] = radarSourceStatusFromWarnings(completionWarnings);
         checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");

@@ -86,6 +86,9 @@ export async function POST(request: Request) {
     return Response.json({ runId: claim.run.id, ...portion });
   } catch (error) {
     console.error("PRICE RADAR RUN ROUTE ERROR:", error);
+    if (error instanceof Error && error.message === "RADAR_RUN_STOP_FAILED") {
+      return Response.json({ code: "RADAR_RUN_STOP_FAILED", message: "Nie udało się zapisać żądania zatrzymania Radaru." }, { status: 500 });
+    }
     return Response.json({ message: "Nie udało się uruchomić zbierania Radaru." }, { status: 500 });
   }
 }

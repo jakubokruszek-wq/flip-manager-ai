@@ -39,3 +39,13 @@ test("only known source-level row counts are parsed; malformed counts are not ac
     "INVALID_SALE_PRICE: pominięto 0 ofert.",
   ]), {});
 });
+
+test("district queue persistence/schema warnings remain visible as partial work, not a falsely completed source", () => {
+  const warnings = [
+    "RADAR_DISTRICT_QUEUE_UNAVAILABLE: apply the local district queue migration before queueing these candidates",
+    "RADAR_DISTRICT_QUEUE_SAVE_FAILED: a district-missing candidate could not be saved",
+  ];
+  assert.deepEqual(warnings.map(classifyRadarSourceWarning), ["coverage_limit", "coverage_limit"]);
+  assert.equal(radarSourceStatusFromWarnings(warnings), "partial");
+  assert.deepEqual(sourceRejectionCountsFromWarnings(warnings), {});
+});

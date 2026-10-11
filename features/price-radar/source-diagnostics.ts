@@ -24,6 +24,7 @@ export type RadarWarningClassification = "candidate_rejection" | "coverage_limit
 export function classifyRadarSourceWarning(warning: string): RadarWarningClassification {
   const value = warning.trim();
   if (value.includes(PAGE_LIMIT)) return "coverage_limit";
+  if (value.startsWith("RADAR_DISTRICT_QUEUE_UNAVAILABLE:") || value.startsWith("RADAR_DISTRICT_QUEUE_SAVE_FAILED:")) return "coverage_limit";
 
   const invalidPrice = value.match(/^INVALID_SALE_PRICE:\s*.*?\b(\d+)\s+ofert(?:\s|$)/iu);
   if (invalidPrice) return "candidate_rejection";

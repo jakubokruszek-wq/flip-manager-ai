@@ -8,6 +8,7 @@ let resumeResult: { kind: "claimed"; run: Run } | { kind: "blocked"; reason: str
 let resumeCalls: string[] = [];
 let stopCalls: Array<{ ownerId: string; runId: string }> = [];
 let stopResult: { kind: "stopping" | "stopped" } | { kind: "blocked"; reason: string } = { kind: "stopping" };
+let stopError: Error | null = null;
 let claimCalls: string[] = [];
 let claimCriteria: unknown[] = [];
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
@@ -19,7 +20,7 @@ mock.module("@/features/auth/operator", { namedExports: {
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria = [sources, criteria]; return { kind: "claimed", run: { id: "new-run", leaseToken: "new-token" } }; },
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
-  requestRadarRunStop: async (ownerId: string, runId: string) => { stopCalls.push({ ownerId, runId }); return stopResult; },
+  requestRadarRunStop: async (ownerId: string, runId: string) => { stopCalls.push({ ownerId, runId }); if (stopError) throw stopError; return stopResult; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
 let sourcesFilteredToEmpty = false;
@@ -38,6 +39,7 @@ function reset() {
   resumeCalls = [];
   stopCalls = [];
   stopResult = { kind: "stopping" };
+  stopError = null;
   claimCalls = [];
   claimCriteria = [];
   portionCalls = [];
@@ -79,6 +81,33 @@ test("a repeated stop is idempotent after the SQL layer confirms the run stopped
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { runId: "existing-run", status: "stopped" });
   assert.deepEqual(portionCalls, [], "a stop request never runs or resumes the collection portion");
+});
+
+test("a stop persistence failure is returned as an explicit server error, never as a successful stopping response", async () => {
+  reset();
+  stopError = new Error("RADAR_RUN_STOP_FAILED");
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "stop", runId: "existing-run" }),
+  }));
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    code: "RADAR_RUN_STOP_FAILED",
+    message: "Nie udało się zapisać żądania zatrzymania Radaru.",
+  });
+  assert.deepEqual(portionCalls, [], "a failed STOP write never resumes or starts collection work");
+});
+
+test("a stopped checkpoint is resumed only by an authenticated operator request for that same run ID", async () => {
+  reset();
+  latest = { id: "existing-run", status: "partial", leaseToken: null, leaseUntil: null, stopRequestedAt: "2026-10-11T13:00:00.000Z", errorMessage: "RADAR_STOPPED_BY_OPERATOR" };
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRunId: "existing-run" }),
+  }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(resumeCalls, ["existing-run"]);
+  assert.deepEqual(portionCalls, [{ runId: "existing-run", ownerId: "owner-1", leaseToken: "fresh-token" }]);
+  assert.deepEqual(claimCalls, [], "resuming after STOP must never claim/create another run");
 });
 
 test("auto-resume is bound to a live, nonterminal expected run ID and processes that ID only", async () => {

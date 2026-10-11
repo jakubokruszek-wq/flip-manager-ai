@@ -6,7 +6,7 @@ import type { RadarDetailDiagnostic } from "@/features/flip-finder/source-batche
 type Row = Record<string, unknown>;
 const ownerId = "owner-test";
 
-function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]; onListingPersisted?: (run: Row, candidate: Row) => void } = {}) {
+function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]; districtQueueRpcError?: { code: string; message: string }; onListingPersisted?: (run: Row, candidate: Row) => void } = {}) {
   const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [], price_radar_district_queue: initial.districtQueue ?? [] };
   const rpcCalls: Array<{ name: string; args: Row }> = [];
   let seq = 0;
@@ -43,6 +43,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
         return { data: row.id, error: null };
       }
       if (name === "upsert_price_radar_district_queue_candidate") {
+        if (initial.districtQueueRpcError) return { data: null, error: initial.districtQueueRpcError };
         const candidate = args.p_candidate as Row;
         let row = tables.price_radar_district_queue.find((entry) => entry.owner_id === args.p_owner_id && entry.source === candidate.source && entry.external_listing_id === candidate.external_listing_id);
         if (!row) { row = { id: `queue-${++seq}`, owner_id: args.p_owner_id, status: "pending", assigned_district: null }; tables.price_radar_district_queue.push(row); }
@@ -823,6 +824,22 @@ test("a candidate missing ONLY its district (every other Radar criterion confirm
   assert.equal(db.tables.price_radar_district_queue[0]?.source, "domiporta");
   assert.equal(db.tables.price_radar_district_queue[0]?.building_type, "blok");
   assert.equal(db.tables.price_radar_district_queue[0]?.status, "pending");
+});
+
+test("an unapplied district queue migration is surfaced as partial work instead of silently dropping an otherwise eligible candidate", async () => {
+  const db = fakeDb({ districtQueueRpcError: { code: "PGRST202", message: "Could not find the function public.upsert_price_radar_district_queue_candidate in the schema cache" } });
+  fakeSourceImpl = async (id) => ({ listings: [{ ...qualifyingListing(`${id}-nodist-no-schema`, id), district: null }], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.status, "partial", "a missing required queue schema is not reported as a clean, completed source");
+  assert.equal(result.sourceStatuses.domiporta, "partial");
+  assert.equal(db.tables.price_radar_district_queue.length, 0, "the test does not pretend an unavailable table accepted the candidate");
+  assert.equal(db.tables.price_radar_listings.length, 0, "a district-missing candidate is never promoted without operator confirmation");
+  assert.match(result.sourceWarnings?.domiporta?.join(" ") ?? "", /RADAR_DISTRICT_QUEUE_UNAVAILABLE/u);
+  assert.deepEqual(result.qualificationRejections, {}, "the candidate remains an actionable queue dependency, not a false rejection");
 });
 
 test("a candidate missing its district AND another criterion (e.g. an unconfirmed building type) is a genuine rejection, never queued", async () => {
