@@ -75,6 +75,41 @@ test("Szybko is absent from every runtime source registry while other verified s
   assert.deepEqual(activeSources({ ...filter, sources: ["oferty_net", "szybko", "domy", "allegro_lokalnie"] }).map((source) => source.id), ["oferty_net", "domy", "allegro_lokalnie"]);
 });
 
+test("Radar Otodom dispatch enriches an incomplete result row from that same confirmed detail URL", async () => {
+  const originalFetch = globalThis.fetch;
+  const url = "https://otodom.pl/pl/oferta/mieszkanie-lodz-gorna-dabrowa-ID4ABCD";
+  const item = { id: 67883390, slug: "mieszkanie-lodz-gorna-dabrowa-ID4ABCD", estate: "FLAT", href: "[lang]/ad/mieszkanie-lodz-gorna-dabrowa-ID4ABCD" };
+  const searchHtml = `<script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: { data: { searchAds: { items: [item] } } } } })}</script>`;
+  const detailHtml = `<title>Mieszkanie na sprzedaż, Łódź Górna</title><h1>Mieszkanie na sprzedaż, Łódź, Górna, Dąbrowa</h1><script id="__NEXT_DATA__">${JSON.stringify({ props: { pageProps: {
+    ad: { status: "active", title: "Mieszkanie na sprzedaż Łódź Górna", adCategory: { name: "FLAT", type: "SELL" }, attributes: { building_type: "block", market: "secondary", m: 41, rooms_num: 2, floor_no: "floor_1" }, location: { address: { city: { name: "Łódź" }, district: { name: "Górna" }, subdistrict: { name: "Dąbrowa" }, street: { name: "Przykładowa" } } } },
+    unifiedAd: { description: "Mieszkanie jest w pełni wykończone pod klucz, w wysokim standardzie i gotowe do zamieszkania.", price: { salePrice: { value: 425000 } } },
+  } } } )}</script>`;
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    const requested = String(input); requests.push(requested);
+    const body = requested.includes("/pl/oferta/") ? detailHtml : searchHtml;
+    return { status: 200, ok: true, url: requested, headers: new Headers({ "content-type": "text/html" }), text: async () => body } as Response;
+  };
+  try {
+    const batches = { purpose: "price_radar" as const, deadlineAt: Date.now() + 50_000, onBatch: async () => undefined };
+    const result = await SOURCES.find((source) => source.id === "otodom")!.fetch(filter, undefined, batches);
+    assert.equal(requests.length, 2, "the existing search fetch is followed by exactly one detail request");
+    assert.ok(requests[1]?.startsWith(url));
+    assert.equal(result.fetched, 1);
+    assert.equal(result.listings.length, 1);
+    const listing = result.listings[0]!;
+    assert.equal(listing.externalListingId, "4ABCD");
+    assert.equal(listing.price, 425_000);
+    assert.equal(listing.area, 41);
+    assert.equal(listing.rooms, 2);
+    assert.equal(listing.city, "Łódź");
+    assert.equal(listing.district, "Górna");
+    assert.equal(listing.buildingType, "blok");
+    assert.equal(listing.rawPayload.marketType, "secondary");
+    assert.equal(listing.rawPayload.detailVerified, true);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("a legacy filter cannot schedule unavailable or disabled sources while preserving active source IDs", () => {
   assert.deepEqual(
     activeSources({

@@ -9,7 +9,7 @@ import {
   type ExternalSourceConfig,
   type ExternalSourceId,
 } from "@/features/flip-finder/external-source-parser";
-import { fetchExternalPortal } from "@/features/flip-finder/external-source-adapters";
+import { fetchExternalPortal, fetchRadarOtodomDetails } from "@/features/flip-finder/external-source-adapters";
 import { fetchOfficialLodzGroup } from "@/features/flip-finder/official-lodz-adapters";
 import type { SourceBatchContext } from "@/features/flip-finder/source-batches";
 import { SCHEMA_READY_SOURCE_IDS as SHARED_SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
@@ -119,10 +119,14 @@ export function slugifyCity(city: string | null): string {
     .replace(/^-|-$/g, "") || "polska";
 }
 
-async function fetchOtodom(criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult> {
-  const result = await searchOtodom(criteria, signal);
-  if (isOtodomAdapterContractMismatch(result)) {
+async function fetchOtodom(criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext): Promise<SourceFetchResult> {
+  const radarDetailMode = batches?.purpose === "price_radar";
+  const result = await searchOtodom(criteria, signal, { includeIncompleteDetailCandidates: radarDetailMode });
+  if (isOtodomAdapterContractMismatch({ ...result, listings: result.detailCandidates ?? result.listings })) {
     throw new Error("OTODOM_ADAPTER_CONTRACT_MISMATCH: Adapter Otodom znormalizował oferty, ale nie przekazał ich do orkiestratora.");
+  }
+  if (radarDetailMode && batches) {
+    return fetchRadarOtodomDetails(result.detailCandidates ?? result.listings, signal, batches);
   }
   return {
     // The adapter has already normalized real source attributes. Keep them

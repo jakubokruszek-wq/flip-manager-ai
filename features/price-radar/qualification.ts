@@ -122,6 +122,10 @@ const UNUSED_AFTER_FULL_RENOVATION_PATTERN = /generaln\p{L}*\s+remon\p{L}*[\s\S]
 const MOVE_IN_READY_PATTERN = /gotow\p{L}*\s+do\s+zamieszkan\p{L}*|do\s+natychmiastow\p{L}*\s+wprowadzen\p{L}*/iu;
 const RENOVATION_CONFLICT_PATTERN = /(?:remont\s+(?:do\s+wykonania|konieczny|planowan\p{L}*|częściow\p{L}*)|w\s+trakcie\s+remontu|bez\s+generalnego\s+remontu|\bnie\s+po\s+(?:generalnym|kapitalnym)\s+remoncie)/iu;
 const STARTING_PRICE_PATTERN = /(?:^|[\s:])od\s+\d[\d\s.,]*\s*(?:zł|PLN)/iu;
+const TURNKEY_NEGATION_PATTERN = /\bnie\s+(?:(?:jest|byl|bylo|byli|zostal|zostalo|bedzie|zostanie)\s+)?(?:w\s+pelni\s+)?wykonczon\p{L}*\s+pod\s+klucz\b|\bbez\s+(?:pelnego\s+)?wykonczenia\s+pod\s+klucz\b/iu;
+const TURNKEY_FUTURE_PATTERN = /\b(?:bedzie|zostanie|ma\s+byc|moze\s+byc|planuje\s+sie|zaplanowano)\s+(?:w\s+pelni\s+)?wykonczon\p{L}*\s+pod\s+klucz\b|\bdo\s+wykonczenia\s+pod\s+klucz\b|\bwykonczenie\s+pod\s+klucz\s+(?:bedzie|zostanie|ma\s+byc|moze\s+byc)\b|\bwykonczon\p{L}*\s+pod\s+klucz[\s\S]{0,60}(?:bedzie|zostanie|w\s+przyszlosci|po\s+zakupie|dopiero|planowan\p{L}*)/iu;
+const MOVE_IN_NEGATION_PATTERN = /\bnie\s+(?:jest\s+)?gotow\p{L}*\s+do\s+(?:zamieszk\p{L}*|wprowadz\p{L}*)\b|\bbrak\s+(?:mozliwosci|gotowosci)\s+(?:do\s+)?(?:zamieszk\p{L}*|wprowadz\p{L}*)\b/iu;
+const INCOMPLETE_RENOVATION_PATTERN = /\bw\s+trakcie\s+remon\p{L}*|\bremon\p{L}*\s+(?:jest\s+)?w\s+trakcie\b|\b(?:nieukonczon\p{L}*|niedokonczon\p{L}*)\s+remon\p{L}*|\bremon\p{L}*\s+(?:nieukonczon\p{L}*|niedokonczon\p{L}*)/iu;
 
 // Confirmed live from this app's own stored listings (2026-10-11): most
 // portals never send a bare "Bałuty"/"Górna"/... value at all. domy.pl and
@@ -287,12 +291,38 @@ export function inspectRadarFinishEvidence(text: string): {
   turnkey: boolean;
 } {
   const fullRenovation = /(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(text);
+  const ownText = ownOfferEvidenceText({ title: null, description: text } as QualificationCandidate);
+  const normalizedOwnText = normalizeRadarEvidenceText(ownText);
+  const completedTurnkey = hasCompletedTurnkeyEvidence(ownText);
+  const explicitReadiness = MOVE_IN_READY_PATTERN.test(ownText) || /gotow\p{L}*\s+do\s+wprowadzen\p{L}*/iu.test(ownText);
   return {
     fullRenovation,
     freshFullRenovation: FRESH_FULL_RENOVATION_PATTERN.test(text) || UNUSED_AFTER_FULL_RENOVATION_PATTERN.test(text),
-    moveInReady: MOVE_IN_READY_PATTERN.test(text) || /gotow\p{L}*\s+do\s+wprowadzen\p{L}*/iu.test(text),
-    turnkey: TURNKEY_PATTERN.test(text),
+    moveInReady: completedTurnkey || (explicitReadiness
+      && !MOVE_IN_NEGATION_PATTERN.test(normalizedOwnText)
+      && !INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
+      && !FINISH_CONTRADICTION_PATTERN.test(ownText)
+      && !FINISH_CONTRADICTION_PATTERN.test(normalizedOwnText)),
+    turnkey: completedTurnkey,
   };
+}
+
+function normalizeRadarEvidenceText(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "").replace(/\u0142/gu, "l").toLocaleLowerCase("pl-PL");
+}
+
+/** A turnkey claim counts as readiness only when it describes completed,
+ * included work on this dwelling. Negated, future, contradictory, or
+ * separately priced finishing is never evidence of a habitable unit. */
+function hasCompletedTurnkeyEvidence(text: string): boolean {
+  const normalized = normalizeRadarEvidenceText(text);
+  return TURNKEY_PATTERN.test(text)
+    && !TURNKEY_NEGATION_PATTERN.test(normalized)
+    && !TURNKEY_FUTURE_PATTERN.test(normalized)
+    && !TURNKEY_EXTRA_COST_PATTERN.test(normalized)
+    && !INCOMPLETE_RENOVATION_PATTERN.test(normalized)
+    && !FINISH_CONTRADICTION_PATTERN.test(text)
+    && !FINISH_CONTRADICTION_PATTERN.test(normalized);
 }
 
 /** Category B has no renovation-date requirement, but must have three distinct
@@ -301,11 +331,16 @@ export function inspectRadarFinishEvidence(text: string): {
 export function hasCategoryBFinishEvidence(title: string | null, description: string | null): boolean {
   const ownText = ownOfferEvidenceText({ title, description } as QualificationCandidate);
   const finish = inspectRadarFinishEvidence(ownText);
+  const normalizedOwnText = normalizeRadarEvidenceText(ownText);
   return FULL_FINISH_PATTERN.test(ownText)
     && (finish.moveInReady || READY_NO_WORK_PATTERN.test(ownText))
     && HIGH_STANDARD_PATTERN.test(ownText)
     && !HIGH_STANDARD_NEGATION_PATTERN.test(ownText)
-    && !FINISH_CONTRADICTION_PATTERN.test(ownText);
+    && !FINISH_CONTRADICTION_PATTERN.test(ownText)
+    && !FINISH_CONTRADICTION_PATTERN.test(normalizedOwnText)
+    && !TURNKEY_FUTURE_PATTERN.test(normalizedOwnText)
+    && !TURNKEY_EXTRA_COST_PATTERN.test(normalizedOwnText)
+    && !INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText);
 }
 
 type RadarPreflightCandidate = Pick<QualificationCandidate, "title" | "description" | "buildingType" | "propertyType" | "rawPayload">;
@@ -334,7 +369,8 @@ export function preflightRadarCandidateRejection(candidate: RadarPreflightCandid
 }
 
 export function qualifyRadarCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2): QualificationResult {
-  if (candidate.source === "oferty_net" || candidate.source === "domiporta") {
+  const requiresConfirmedDetail = candidate.source === "oferty_net" || candidate.source === "domiporta" || candidate.source === "adresowo" || candidate.source === "allegro_lokalnie" || candidate.source === "otodom";
+  if (requiresConfirmedDetail) {
     const recordedConflicts = Array.isArray(candidate.rawPayload?.detailContradictions)
       ? candidate.rawPayload.detailContradictions.filter((item): item is string => typeof item === "string")
       : [];
@@ -343,13 +379,14 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate, quality
       area: candidate.area,
       rooms: candidate.rooms,
       floor: typeof evidence.floor === "number" ? evidence.floor : null,
+      price: candidate.price,
       locationText: typeof evidence.locationText === "string" ? evidence.locationText : typeof candidate.rawPayload?.detailLocationText === "string" ? candidate.rawPayload.detailLocationText : null,
       title: candidate.title,
       description: candidate.description,
     });
     if (recordedConflicts.length > 0 || conflicts.length > 0) return reject("detail_conflict");
   }
-  if ((candidate.source === "oferty_net" || candidate.source === "domiporta") && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
+  if (requiresConfirmedDetail && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
   if (candidate.price === null || !Number.isFinite(candidate.price) || candidate.price <= 0) return reject("price_missing");
   if (candidate.area === null || !Number.isFinite(candidate.area) || candidate.area <= 0) return reject("area_missing");
   const payload = candidate.rawPayload ?? {};
@@ -377,7 +414,7 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate, quality
   const marketType = resolveMarketType(candidate, text);
   if (!marketType) return reject("market_type_not_confirmed");
 
-  const explicitlyNeedsWork = NEEDS_RENOVATION_PATTERN.test(text);
+  const explicitlyNeedsWork = NEEDS_RENOVATION_PATTERN.test(text) || INCOMPLETE_RENOVATION_PATTERN.test(normalizeRadarEvidenceText(ownOfferEvidenceText(candidate)));
   if (DEVELOPER_STATE_PATTERN.test(text) || explicitlyNeedsWork) return reject("unfinished_or_needs_renovation");
 
   const finish = inspectRadarFinishEvidence(text);

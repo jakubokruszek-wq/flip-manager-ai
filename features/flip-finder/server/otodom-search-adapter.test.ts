@@ -111,6 +111,23 @@ test("current Otodom rows with relative href and no url reach the normalized lis
   }
 });
 
+test("Radar retains a confirmed Otodom offer URL when list-card title, price, and area are absent so its own detail can confirm them", async () => {
+  const originalFetch = globalThis.fetch;
+  const item = { id: 67883390, slug: "mieszkanie-lodz-polesie-ID4ABCD", estate: "FLAT", href: "[lang]/ad/mieszkanie-lodz-polesie-ID4ABCD" };
+  globalThis.fetch = async () => responseFor([item]);
+  try {
+    const finder = await searchOtodom(filter);
+    assert.equal(finder.listings.length, 0, "ordinary Finder results continue to reject an incomplete card");
+    assert.equal(finder.rejectionReasons.missing_title, 1);
+
+    const radar = await searchOtodom(filter, undefined, { includeIncompleteDetailCandidates: true });
+    assert.equal(radar.listings.length, 0, "Radar does not publish an incomplete listing as a visible Finder card at this stage");
+    assert.equal(radar.detailCandidates?.length, 1, "a confirmed single-offer URL and stable suffix are enough to request its own details");
+    assert.equal(radar.detailCandidates?.[0]?.originalUrl, "https://otodom.pl/pl/oferta/mieszkanie-lodz-polesie-ID4ABCD");
+    assert.equal(radar.rejectionReasons.missing_title, undefined, "a field recoverable from detail is not prematurely reported as a final rejection");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("the real otodom.pl search response shape (href-only, '[lang]/ad/<slug>', no url field) recovers a confirmed /pl/oferta/<slug> address from the portal's own stable slug, and still excludes a whole-investment row", async () => {
   // Live-reproduced against the real otodom.pl Łódź secondary-market search
   // response on 2026-10-11: every one of 21 raw searchAds items had no

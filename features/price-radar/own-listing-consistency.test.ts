@@ -33,3 +33,12 @@ test("an id reimport with changed property facts is flagged, but a price-only up
   assert.deepEqual(compareRadarIdentitySnapshots(previous, { ...previous, area: 46 }), [], "a one-square-metre portal rounding change is not a different dwelling");
   assert.deepEqual(compareRadarIdentitySnapshots(previous, { area: 57, rooms: 3, floor: 6, locationText: "Łódź, Bałuty-Doły, Zawiszy Czarnego" }), ["area", "rooms", "floor", "location"]);
 });
+
+test("an explicit conflicting asking price for this apartment is quarantined, while rent, accessories, other units, and ordinary reprice are not", () => {
+  const facts = { area: 45, rooms: 2, floor: 0, price: 432_000, locationText: "Łódź, Teofilów, Plantowa" };
+  assert.deepEqual(findRadarOwnListingConflicts({ ...facts, description: "Cena mieszkania: 419 000 zł. Lokal jest po remoncie." }), ["price"]);
+  assert.deepEqual(findRadarOwnListingConflicts({ ...facts, description: "Cena całkowita mieszkania wynosi 432 000 PLN." }), []);
+  assert.deepEqual(findRadarOwnListingConflicts({ ...facts, description: "Czynsz najmu 2 100 zł miesięcznie. Cena za miejsce postojowe 45 000 zł." }), []);
+  assert.deepEqual(findRadarOwnListingConflicts({ ...facts, description: "Inne mieszkanie ma cenę 419 000 zł. To mieszkanie ma 45 m²." }), []);
+  assert.deepEqual(compareRadarIdentitySnapshots({ ...facts, price: 419_000 }, facts), [], "price-only changes across reimports are not an identity mismatch");
+});

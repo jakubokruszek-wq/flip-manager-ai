@@ -2,17 +2,19 @@ export type RadarOwnListingFacts = {
   area: number | null;
   rooms: number | null;
   floor: number | null;
+  price?: number | null;
   locationText: string | null;
   title?: string | null;
   description?: string | null;
 };
 
-export type RadarOwnListingConflict = "area" | "rooms" | "floor" | "location";
+export type RadarOwnListingConflict = "area" | "rooms" | "floor" | "location" | "price";
 
 export type RadarIdentitySnapshot = Pick<RadarOwnListingFacts, "area" | "rooms" | "floor" | "locationText"> & { price?: number | null };
 
 const OTHER_UNIT = /(?:inne|drugie|kolejne|pozosta\w*|s\u0105siednie|przyk\u0142adowe)\s+(?:mieszkan\w*|lokal\w*)|(?:ofert\w*|wyb\w*r)\s+(?:innych\s+)?lokal\w*/iu;
 const PLANNED_LAYOUT = /(?:planowan\w*\s+uk\u0142ad|mo\u017cliwo\w*\s+(?:wydzielenia|przerobienia)|mo\u017cna\s+(?:wydzieli\u0107|przerobi\u0107)|do\s+adaptacji)/iu;
+const OWN_SALE_PRICE = /\b(?:cena(?:\s+(?:ofertowa|calkowita|sprzedazy|mieszkania|lokalu)){0,2}|kwota\s+sprzedazy)\s*(?:(?:wynosi|to|jest)\s+|:\s*|-\s*)?(\d[\d\s.]{2,})(?:,(\d{1,2}))?\s*(?:zl|pln)(?![\p{L}\p{N}])/iu;
 
 /**
  * Compares only explicit statements about this offer's dwelling with the
@@ -47,6 +49,19 @@ export function findRadarOwnListingConflicts(facts: RadarOwnListingFacts): Radar
     }
   }
 
+  if (facts.price !== null && facts.price !== undefined) {
+    for (const sentence of sentences) {
+      // A rent, fee, installment, garage, or other accessory price is not the
+      // asking price of the apartment. Requiring an explicit sale-price label
+      // prevents arbitrary amounts in descriptions from becoming conflicts.
+      if (/\b(?:czynsz|najem|wynaj\w*|miesieczn\w*|zaliczk\w*|rata\w*)\b/iu.test(sentence)) continue;
+      if (/\bcena\s+(?:za\s+)?(?:miejsce|garaz|komork\w*|piwnic\w*)/iu.test(sentence)) continue;
+      for (const statedPrice of ownSalePriceClaims(sentence)) {
+        if (Math.abs(statedPrice - facts.price) > Math.max(1, facts.price * 0.001)) conflicts.add("price");
+      }
+    }
+  }
+
   const detailArea = microdistrict(facts.locationText ?? "");
   if (detailArea) {
     for (const sentence of sentences) {
@@ -56,6 +71,17 @@ export function findRadarOwnListingConflicts(facts: RadarOwnListingFacts): Radar
   }
 
   return [...conflicts];
+}
+
+function ownSalePriceClaims(sentence: string): number[] {
+  const claims: number[] = [];
+  for (const match of sentence.matchAll(new RegExp(OWN_SALE_PRICE.source, "giu"))) {
+    const integerPart = (match[1] ?? "").replace(/[\s.]/gu, "");
+    const fraction = match[2];
+    const amount = Number(fraction ? `${integerPart}.${fraction}` : integerPart);
+    if (Number.isFinite(amount) && amount > 0) claims.push(amount);
+  }
+  return claims;
 }
 
 /** Compares stable dwelling facts between imports; asking-price changes alone

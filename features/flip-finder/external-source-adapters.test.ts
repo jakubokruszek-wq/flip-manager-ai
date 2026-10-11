@@ -4,7 +4,7 @@ import { fetchExternalPortal, EXTERNAL_PORTAL_PARSERS, parseRadarOfferDetail } f
 import { activeSources, EXTERNAL_SOURCE_CONFIGS, SOURCES } from "./server/search-source-registry.ts";
 import type { ExternalSourceId } from "./external-source-parser.ts";
 import type { RadarDetailDiagnostic } from "./source-batches.ts";
-import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
+import { assessRadarDistrictOnlyCandidate, qualifyRadarCandidate } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { getRadarResults } from "@/features/price-radar/server/radar-results";
 
@@ -417,6 +417,24 @@ const OFERTY_NET_DETAIL_LANOWA = `
   <p>Uk&#322;ad sprawdzi si&#281; tak&#380;e pod wynajem.</p>
 </div>`;
 
+const OFERTY_NET_DETAIL_KADLUBKA = `
+<title>Mieszkanie na sprzedaż - Kadłubka Dąbrowa, Górna, Łódź | oferty.net</title>
+<div class="header">
+  <span>Mieszkanie na sprzedaż</span>
+  <h1>łódzkie, Łódź, Górna, Dąbrowa, Kadłubka</h1>
+  <h3>Pow.: 41 m2, Cena: 425 000 PLN</h3>
+</div>
+<div class="param"><dl>
+  <dt>Powierzchnia użytkowa</dt><dd>41 m2</dd>
+  <dt>Liczba pokoi</dt><dd>2</dd>
+  <dt>Typ budynku</dt><dd>BLOK</dd>
+  <dt>Rynek pierwotny</dt><dd>Nie</dd>
+</dl></div>
+<div class="description">
+  <p>Mieszkanie świeżo po kapitalnym remoncie, wykończone pod klucz.</p>
+  <p>Wymienione instalacje, nowe podłogi, wyposażona kuchnia i nowe AGD.</p>
+</div>`;
+
 const OFERTY_NET_DETAIL_IDENTITY_CONFLICT = `
 <title>Mieszkanie na sprzedaż - Zawiszy Czarnego, Bałuty-Doły, Łódź</title>
 <div class="header">
@@ -458,7 +476,7 @@ function ofertyNetLocationContextResponse(url: string): Response {
 test("Oferty.net detail fetch overrides search-card values with confirmed total price/location/building/market and excludes unfinished stock", async () => {
   const previousFetch = globalThis.fetch;
   const urls: string[] = [];
-  const candidatePage = `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzeda&#380; &#321;&#243;d&#378;" src="https://cdn.example/oferta.jpg"></td><td class="cell_location"><a href="https://www.oferty.net/mieszkanie-lodz-srodmiescie-jaracza,offer-1" title="mieszkanie na sprzeda&#380;">Mieszkanie &#321;&#243;d&#378;</a></td><td class="cell_area">53 m2</td><td class="cell_rooms">2</td><td class="cell_price">489 000</td></tr></table>`;
+  const candidatePage = `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzeda&#380; &#321;&#243;d&#378;" src="https://cdn.example/oferta.jpg"></td><td class="cell_location"><a href="https://www.oferty.net/mieszkanie-lodz-srodmiescie-jaracza,offer-1" title="mieszkanie na sprzeda&#380;">Mieszkanie &#321;&#243;d&#378;</a></td><td class="cell_area">83 m2</td><td class="cell_rooms">2</td><td class="cell_price">489 000</td></tr></table>`;
   globalThis.fetch = async (input) => {
     const url = String(input);
     urls.push(url);
@@ -665,7 +683,8 @@ test("the existing detail adapter verifies a coherent category B offer without r
   const page = `<table><tr class="property"><td class="cell_location"><a href="${listingUrl}" title="mieszkanie na sprzedaż">Mieszkanie, Łódź, Bałuty</a></td><td class="cell_area">45 m2</td><td class="cell_rooms">2</td><td class="cell_price">419 000</td></tr></table>`;
   const categoryB = OFERTY_NET_DETAIL_LANOWA
     .replace("419 000 PLN", "419 000 PLN")
-    .replace(/<div class="description">[\s\S]*?<\/div>/u, "<div class=\"description\"><p>Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.</p></div>");
+    .replace(/<div class="description">[\s\S]*?<\/div>/u, "<div class=\"description\"><p>Mieszkanie w pełni wykończone pod klucz, wysoki standard. Rynek wtórny.</p></div>");
+  const diagnostics: RadarDetailDiagnostic[] = [];
   globalThis.fetch = async (input) => {
     const url = String(input);
     if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
@@ -673,10 +692,12 @@ test("the existing detail adapter verifies a coherent category B offer without r
   };
   try {
     const result = await fetchExternalPortal(config("oferty_net"), { city: "Łódź" }, undefined, {
-      purpose: "price_radar", deadlineAt: Date.now() + 50_000, onBatch: async () => undefined,
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
     });
     const listing = result.listings[0]!;
-    assert.equal(listing.rawPayload.detailVerified, true, "complete finish, readiness, and high standard establish the detail gate independently of renovation date");
+    assert.equal(listing.rawPayload.detailVerified, true, "completed turnkey finish plus high standard establishes category B without a separate move-in phrase or renovation date");
+    assert.deepEqual(diagnostics, [], "category B does not emit category-A renovation-date requirements as missing detail fields");
     assert.deepEqual(qualifyRadarCandidate({
       source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
       title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
@@ -684,6 +705,80 @@ test("the existing detail adapter verifies a coherent category B offer without r
       marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
       rawPayload: listing.rawPayload, contentHash: listing.contentHash,
     }, 2), { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "turnkey_finish", district: "Bałuty", pricePerSqm: 419_000 / 45 });
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("the actual Oferty.net result/detail adapter qualifies Kadłubka's completed fresh turnkey renovation as category A", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-na-sprzedaz-kadlubka-lodz-gorna-41m2-2-pokoje-425000-pln-ba,1543094322";
+  const resultRow = OFERTY_NET_REAL_PAGE_1.match(/<tr class="property[\s\S]*?1543094322[\s\S]*?<\/tr>/u)?.[0];
+  assert.ok(resultRow, "the offline candidate is the captured public Oferty.net result row");
+  const candidatePage = `<table>${resultRow}</table>`;
+  const urls: string[] = [];
+  const diagnostics: RadarDetailDiagnostic[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    if (url.includes("/mieszkania/szukaj")) return responseWithUrl(candidatePage, 200, url);
+    return responseWithUrl(OFERTY_NET_DETAIL_KADLUBKA, 200, url);
+  };
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), { city: "Łódź" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    assert.deepEqual(urls.filter((url) => url.includes("/mieszkania/szukaj")).length, 1);
+    assert.deepEqual(urls.filter((url) => url === listingUrl).length, 1, "the result-list parser's real ID/URL leads to one matching detail request");
+    const listing = result.listings.find((item) => item.externalListingId === "1543094322");
+    assert.ok(listing, "the actual Oferty.net parser retains the production candidate");
+    assert.equal(listing.price, 425_000);
+    assert.equal(listing.area, 41);
+    assert.equal(listing.rooms, 2);
+    assert.equal(listing.city, "Łódź");
+    assert.equal(listing.district, "Górna");
+    assert.equal(listing.buildingType, "blok");
+    assert.equal(listing.rawPayload.marketType, "secondary");
+    assert.equal(listing.rawPayload.detailVerified, true);
+    assert.deepEqual(diagnostics, [], "HTTP 200, same listing identity, and completed turnkey readiness leave no detail gap");
+    assert.deepEqual(qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
+      rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    }, 2), { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "fresh_renovation", district: "Górna", pricePerSqm: 425_000 / 41 });
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("an Oferty.net detail with confirmed sale facts but no canonical district reaches the district-only assessment", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://www.oferty.net/mieszkanie-na-sprzedaz-kadlubka-lodz-gorna-41m2-2-pokoje-425000-pln-ba,1543094322";
+  const candidatePage = `<table><tr class="property"><td class="cell_photo"><img alt="Mieszkanie na sprzeda&#380;, &#321;&oacute;d&#378;"></td><td class="cell_location"><a href="${listingUrl}" title="Mieszkanie na sprzeda&#380;, &#321;&oacute;d&#378;">Mieszkanie na sprzeda&#380;, &#321;&oacute;d&#378;</a></td><td class="cell_area">41 m2</td><td class="cell_rooms">2</td><td class="cell_price">425 000</td></tr></table>`;
+  const unmappedLocationDetail = OFERTY_NET_DETAIL_KADLUBKA.replace(/<h1>[\s\S]*?<\/h1>/u, "<h1>Łódź, nieznana lokalizacja, Kadłubka</h1>");
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (isOfertyNetLocationContext(url)) return ofertyNetLocationContextResponse(url);
+    return responseWithUrl(url.includes("/mieszkania/szukaj") ? candidatePage : unmappedLocationDetail, 200, url);
+  };
+  try {
+    const result = await fetchExternalPortal(config("oferty_net"), { city: "Łódź" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000, onBatch: async () => undefined,
+    });
+    const listing = result.listings.find((item) => item.externalListingId === "1543094322");
+    assert.ok(listing);
+    assert.equal(listing.district, null);
+    assert.equal(listing.rawPayload.detailVerified, true, "the detail page confirms the dwelling and sale facts; only canonical district resolution is missing");
+    const candidate = {
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType),
+      rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    };
+    assert.deepEqual(qualifyRadarCandidate(candidate, 2), { qualified: false, reason: "district_not_confirmed" });
+    const districtAssessment = assessRadarDistrictOnlyCandidate(candidate, 2);
+    assert.equal(districtAssessment.eligible, true, "the collector's district probe confirms no other rule is missing");
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -869,6 +964,91 @@ test("Domiporta detail parser marks an observed archived apartment inactive and 
   assert.equal(parsed.verified, false);
   assert.deepEqual(parsed.unconfirmedFields, ["building_type", "market_type", "finish_evidence"]);
   assert.deepEqual(parsed.contradictoryFields, ["active_listing"], "the archived marker is distinct from missing qualification data");
+});
+
+test("Adresowo Radar detail enriches an incomplete search card and preserves the exact 37.50 m² detail without inferring its market", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://adresowo.pl/o/mieszkanie-lodz-polesie-ul-stefana-zeromskiego-2-pokojowe-i5b6d9";
+  const resultPage = `<div data-offer-card data-id="4273020"><h2>Mieszkanie na sprzedaż, Łódź Polesie, ul. Stefana Żeromskiego</h2><a href="${listingUrl}">Oferta</a></div>`;
+  const detail = `<title>Sprzedam mieszkanie 2-pokojowe, Łódź Polesie</title><link rel="canonical" href="${listingUrl}"><meta name="description" content="Łódź Polesie, mieszkanie 2 pokoje, powierzchnia 37,50 m2"><main><h1>Mieszkanie na sprzedaż, Łódź Polesie, ul. Stefana Żeromskiego</h1></main><script type="application/ld+json">${JSON.stringify([
+    { "@type": "Place", name: "Mieszkanie 2-pokojowe, 37 m2, Łódź Polesie", description: "Blok. W pełni wykończone pod klucz i gotowe do zamieszkania.", address: { streetAddress: "ul. Stefana Żeromskiego, Łódź Polesie, łódzkie" } },
+    { "@type": "Offer", url: listingUrl, price: 425000 },
+  ])}</script>`;
+  const requested: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input); requested.push(url);
+    return responseWithUrl(url === listingUrl ? detail : resultPage, 200, url);
+  };
+  try {
+    const diagnostics: RadarDetailDiagnostic[] = [];
+    const result = await fetchExternalPortal(config("adresowo"), { city: "Łódź" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    assert.deepEqual(requested, ["https://adresowo.pl/mieszkania/lodz/", listingUrl], "the existing search adapter discovers the URL, then fetches only that offer's detail");
+    assert.equal(result.fetched, 1);
+    assert.equal(result.listings.length, 1);
+    const listing = result.listings[0]!;
+    assert.equal(listing.externalListingId, "4273020");
+    assert.equal(listing.area, 37.5, "the exact detail value wins over the rounded 37 m² Place name");
+    assert.equal(listing.price, 425_000);
+    assert.equal(listing.city, "Łódź");
+    assert.equal(listing.district, "Polesie");
+    assert.equal(listing.buildingType, "blok");
+    assert.equal(listing.rawPayload.detailVerified, false, "the page never confirms primary/secondary market, so details do not manufacture it");
+    assert.deepEqual(diagnostics[0]?.unconfirmedFields, ["market_type"]);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Adresowo detail parser quarantines a conflicting explicit own-unit asking price instead of force-qualifying the Plantowa-like listing", () => {
+  const url = "https://adresowo.pl/o/mieszkanie-lodz-teofilow-ul-plantowa-2-pokojowe-z9u2k7";
+  const html = `<title>Sprzedam mieszkanie 2-pokojowe, Łódź Teofilów</title><link rel="canonical" href="${url}"><meta name="description" content="Mieszkanie 2 pokoje, 45 m2, Łódź Teofilów"><main><h1>Mieszkanie na sprzedaż, Łódź Teofilów, ul. Plantowa</h1></main><script type="application/ld+json">${JSON.stringify([
+    { "@type": "Place", name: "Mieszkanie 2-pokojowe, 45 m2", description: "Blok po remoncie. Cena mieszkania: 419 000 zł.", address: { streetAddress: "ul. Plantowa, Łódź Teofilów, łódzkie" } },
+    { "@type": "Offer", url, price: 432000 },
+  ])}</script>`;
+  const parsed = parseRadarOfferDetail("adresowo", html);
+  assert.equal(parsed.price, 432_000, "the structured current price stays visible as source evidence");
+  assert.equal(parsed.area, 45);
+  assert.equal(parsed.district, "Bałuty", "the known Teofilów sub-area is resolved through the shared district vocabulary");
+  assert.equal(parsed.verified, false);
+  assert.ok(parsed.contradictoryFields.includes("price"), "an explicit conflicting price for this own apartment is a verification conflict");
+});
+
+test("Allegro Lokalnie detail adds rooms/building/market and category-B evidence missing from its search card", async () => {
+  const previousFetch = globalThis.fetch;
+  const listingUrl = "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-gorna-dabrowa-41-m2-test-5i3";
+  const resultPage = `<script type="application/ld+json">${JSON.stringify({ "@type": "ItemList", itemListElement: [{ "@type": "ListItem", item: { "@type": "Product", name: "Mieszkanie, Łódź, Górna, Dąbrowa, 41 m2", url: listingUrl, offers: { "@type": "Offer", price: 425000 }, image: "https://img.example/1.jpg" } }] })}</script><input class="ml-pagination__input" value="1"><span class="ml-pagination__count">z 1</span>`;
+  const detail = `<title>Mieszkanie na sprzedaż, Łódź Górna Dąbrowa</title><meta property="product:price:amount" content="425000"><main><h1>Mieszkanie na sprzedaż, Łódź, Górna, Dąbrowa</h1><table>
+    <tr class="mlc-params__parameter"><td class="mlc-params__parameter-name">Powierzchnia</td><td class="mlc-params__parameter-value">41 m2</td></tr>
+    <tr class="mlc-params__parameter"><td class="mlc-params__parameter-name">Liczba pokoi</td><td class="mlc-params__parameter-value">2</td></tr>
+    <tr class="mlc-params__parameter"><td class="mlc-params__parameter-name">Typ budynku</td><td class="mlc-params__parameter-value">blok</td></tr>
+    <tr class="mlc-params__parameter"><td class="mlc-params__parameter-name">Rynek</td><td class="mlc-params__parameter-value">wtórny</td></tr>
+    <tr class="mlc-params__parameter"><td class="mlc-params__parameter-name">Piętro</td><td class="mlc-params__parameter-value">1</td></tr></table>
+    <div class="ml-text-truncate__content">Mieszkanie jest w pełni wykończone pod klucz, w wysokim standardzie i gotowe do zamieszkania.</div></main>`;
+  const requested: string[] = [];
+  globalThis.fetch = async (input) => { const url = String(input); requested.push(url); return responseWithUrl(url === listingUrl ? detail : resultPage, 200, url); };
+  try {
+    const diagnostics: RadarDetailDiagnostic[] = [];
+    const result = await fetchExternalPortal(config("allegro_lokalnie"), { city: "Łódź" }, undefined, {
+      purpose: "price_radar", deadlineAt: Date.now() + 50_000,
+      onBatch: async (batch) => { diagnostics.push(...(batch.diagnostics ?? [])); },
+    });
+    assert.deepEqual(requested, ["https://allegrolokalnie.pl/oferty/nieruchomosci/mieszkania-na-sprzedaz-112739/lodz", listingUrl]);
+    const listing = result.listings[0]!;
+    assert.equal(listing.rooms, 2);
+    assert.equal(listing.area, 41);
+    assert.equal(listing.district, "Górna", "Radar keeps the canonical five-district value; the sub-area remains in the location evidence");
+    assert.equal(listing.buildingType, "blok");
+    assert.equal(listing.rawPayload.marketType, "secondary");
+    assert.equal(listing.rawPayload.detailVerified, true);
+    assert.deepEqual(diagnostics, []);
+    assert.deepEqual(qualifyRadarCandidate({
+      source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
+      title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
+      rooms: listing.rooms, city: listing.city, district: listing.district, buildingType: listing.buildingType,
+      marketType: String(listing.rawPayload.marketType), propertyType: String(listing.rawPayload.propertyType), rawPayload: listing.rawPayload, contentHash: listing.contentHash,
+    }), { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "turnkey_finish", district: "Górna", pricePerSqm: 425_000 / 41 });
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test("Radar detail year built is read only from an explicit construction-year field and is never guessed", () => {

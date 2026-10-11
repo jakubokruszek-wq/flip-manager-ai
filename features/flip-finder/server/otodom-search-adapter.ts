@@ -33,6 +33,8 @@ const OTODOM_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*
 
 export type OtodomSearchResponse = {
   listings: PropertySearchListing[];
+  /** Confirmed single-offer rows retained for Radar detail enrichment only. */
+  detailCandidates?: PropertySearchListing[];
   rawItems: number;
   normalizedItems: number;
   warnings: string[];
@@ -55,7 +57,7 @@ export class OtodomSearchError extends Error {
   }
 }
 
-export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal): Promise<OtodomSearchResponse> {
+export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal, options: { includeIncompleteDetailCandidates?: boolean } = {}): Promise<OtodomSearchResponse> {
   const requestedUrl = buildSearchUrl(filter);
   const startedAt = performance.now();
   let response: Response;
@@ -139,7 +141,7 @@ export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal): 
   }
 
   console.info("OTODOM ITEM SHAPE:", searchAds.items.slice(0, 3).map(itemShape));
-  const normalization = searchAds.items.map((item) => normalizeItem(item));
+  const normalization = searchAds.items.map((item) => normalizeItem(item, options.includeIncompleteDetailCandidates === true));
   const rejectionReasons: OtodomRejectionCounts = {};
   const normalized: PropertySearchListing[] = [];
   const seenExternalIds = new Set<string>();
@@ -159,12 +161,14 @@ export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal): 
     normalized.push(item.listing);
   }
   console.info("OTODOM NORMALIZATION SUMMARY:", { rawItems: searchAds.items.length, normalizedItems: normalized.length, rejectedItems: searchAds.items.length - normalized.length, rejectionReasons });
-  const listings = normalized.slice(0, MAX_LISTINGS);
+  const limited = normalized.slice(0, MAX_LISTINGS);
+  const detailCandidates = options.includeIncompleteDetailCandidates ? limited : undefined;
+  const listings = options.includeIncompleteDetailCandidates ? limited.filter(isCompleteFinderListing) : limited;
   const warnings: string[] = [...rejectionWarnings(rejectionReasons)];
 
   if (searchAds.items.length === 0) {
     warnings.push("Otodom zwrócił pustą pierwszą stronę wyników dla tego filtra.");
-  } else if (listings.length === 0 && Object.keys(rejectionReasons).length === 0) {
+  } else if ((detailCandidates?.length ?? listings.length) === 0 && Object.keys(rejectionReasons).length === 0) {
     warnings.push("Żadna oferta z pierwszej strony nie spełniła lokalnych warunków filtra.");
   }
 
@@ -177,23 +181,23 @@ export async function searchOtodom(filter: SearchFilter, signal?: AbortSignal): 
     firstExternalIdPresent: Boolean(listings[0]?.externalListingId),
     firstSourceUrlPresent: Boolean(listings[0]?.originalUrl),
   });
-  return { listings, rawItems: searchAds.items.length, normalizedItems: normalized.length, warnings, rejectionReasons };
+  return { listings, ...(detailCandidates ? { detailCandidates } : {}), rawItems: searchAds.items.length, normalizedItems: normalized.length, warnings, rejectionReasons };
 }
 
 function itemShape(item: Record<string, unknown>) {
   return { itemKeys: Object.keys(item), idType: typeof item.id, hasSlug: "slug" in item, hasUrl: "url" in item, totalPriceType: typeof item.totalPrice, priceType: typeof item.price, areaInSquareMetersType: typeof item.areaInSquareMeters, areaType: typeof item.area, roomsNumberType: typeof item.roomsNumber, floorNumberType: typeof item.floorNumber, locationKeys: isRecord(item.location) ? Object.keys(item.location) : [], imageKeys: Array.isArray(item.images) && isRecord(item.images[0]) ? Object.keys(item.images[0]) : [], totalPriceKeys: isRecord(item.totalPrice) ? Object.keys(item.totalPrice) : [], priceKeys: isRecord(item.price) ? Object.keys(item.price) : [], propertiesKeys: isRecord(item.properties) ? Object.keys(item.properties) : [], estateKeys: isRecord(item.estate) ? Object.keys(item.estate) : [] };
 }
 
-function normalizeItem(item: Record<string, unknown>): { listing: PropertySearchListing | null; reason: OtodomRejectionReason | null } {
+function normalizeItem(item: Record<string, unknown>, allowIncompleteDetails = false): { listing: PropertySearchListing | null; reason: OtodomRejectionReason | null } {
   try {
-    const reason = normalizationReason(item);
+    const reason = normalizationReason(item, allowIncompleteDetails);
     return reason ? { listing: null, reason } : { listing: toListing(item), reason: null };
   } catch {
     return { listing: null, reason: "parser_error" };
   }
 }
 
-function normalizationReason(item: Record<string, unknown>): OtodomRejectionReason | null {
+function normalizationReason(item: Record<string, unknown>, allowIncompleteDetails = false): OtodomRejectionReason | null {
   const candidates = urlCandidates(item);
   if (candidates.length === 0 && !slugOfferUrl(item)) return "invalid_url";
   const url = listingUrl(item);
@@ -216,12 +220,17 @@ function normalizationReason(item: Record<string, unknown>): OtodomRejectionReas
       ?? "invalid_url";
   }
   if (!text(item, "id", "adId", "listingId") && !extractOtodomListingId(url)) return "missing_offer_id";
+  if (allowIncompleteDetails) return null;
   if (!text(item, "title", "name")) return "missing_title";
   const price = numberValue(item.totalPrice ?? item.price);
   if (price === null || price <= 0) return "missing_price";
   const area = numberValue(item.areaInSquareMeters ?? item.area);
   if (area === null || area <= 0) return "missing_area";
   return null;
+}
+
+function isCompleteFinderListing(listing: PropertySearchListing): boolean {
+  return Boolean(listing.title?.trim()) && listing.price !== null && listing.price > 0 && listing.area !== null && listing.area > 0;
 }
 
 function readSearchAdsItems(html: string): SearchAdsItemsResult {

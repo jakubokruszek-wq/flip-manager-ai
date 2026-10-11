@@ -129,17 +129,18 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   await settingsSave;
   await page.locator("article").filter({ hasText: "A · Po świeżym remoncie" }).waitFor();
   await page.getByText("Oferty w próbie (1)").waitFor();
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByLabel("Min. cena ofertowa za m²").waitFor();
+  await page.waitForFunction(() => document.querySelector("#price-radar-min-price-per-sqm")?.value === "9500");
   assert.equal(await minimum.inputValue(), "9500", "the saved threshold survives refresh");
   await page.getByRole("button", { name: "Wyklucz z porównań" }).click();
   await page.getByText("Oferty w próbie (0)").waitFor();
   await page.getByText("Wykluczone z porównań (1)").waitFor();
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText("Wykluczone z porównań (1)").waitFor();
   await page.getByRole("button", { name: "Przywróć do porównań" }).click();
   await page.getByText("Oferty w próbie (1)").waitFor();
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText("Oferty w próbie (1)").waitFor();
 
   for (const width of [320, 375]) {

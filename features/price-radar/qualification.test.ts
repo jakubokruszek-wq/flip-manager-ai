@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assessRadarDistrictOnlyCandidate, normalizeRadarQualificationRejections, qualifyRadarCandidate, type QualificationCandidate } from "./qualification.ts";
+import { assessRadarDistrictOnlyCandidate, inspectRadarFinishEvidence, normalizeRadarQualificationRejections, qualifyRadarCandidate, type QualificationCandidate } from "./qualification.ts";
 
 function candidate(overrides: Partial<QualificationCandidate> = {}): QualificationCandidate {
   return {
@@ -45,7 +45,10 @@ test("rejects missing price or area, never fabricating a price/m2", () => {
 test("Oferty.net and Domiporta do not qualify from a result card until the specific offer detail fields are confirmed", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ source: "oferty_net", rawPayload: {} })), { qualified: false, reason: "detail_not_confirmed" });
-  assert.equal(qualifyRadarCandidate(candidate({ source: "morizon", rawPayload: {} })).qualified, true, "the detail gate is scoped to the two adapters that fetch details");
+  for (const source of ["adresowo", "allegro_lokalnie", "otodom"] as const) {
+    assert.deepEqual(qualifyRadarCandidate(candidate({ source, rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" }, `${source} cannot bypass the detail adapter`);
+  }
+  assert.equal(qualifyRadarCandidate(candidate({ source: "morizon", rawPayload: {} })).qualified, true, "the detail gate remains scoped to sources with a detail-enrichment adapter");
 });
 
 test("Radar excludes confirmed tenements even after renovation or with an elevator", () => {
@@ -196,6 +199,38 @@ test("category B accepts a fully finished, ready secondary apartment in an expli
     description: "Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard. Rynek wtórny.",
   }));
   assert.deepEqual(result, { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "turnkey_finish", district: "Bałuty", pricePerSqm: 9_000 });
+});
+
+test("a completed included turnkey finish confirms move-in readiness without requiring a separate ready-to-move phrase", () => {
+  const evidence = inspectRadarFinishEvidence("Wykończone pod klucz. Wymienione instalacje, nowe podłogi, wyposażona kuchnia i nowe AGD.");
+  assert.equal(evidence.turnkey, true);
+  assert.equal(evidence.moveInReady, true);
+  const result = qualifyRadarCandidate(candidate({
+    source: "oferty_net", externalListingId: "1543094322",
+    title: "Mieszkanie na sprzedaż, Kadłubka, Łódź Górna",
+    description: "Świeżo po kapitalnym remoncie. Wykończone pod klucz. Wymienione instalacje, nowe podłogi, wyposażona kuchnia i nowe AGD. Rynek wtórny.",
+    price: 425_000, area: 41, rooms: 2, city: "Łódź", district: "Górna", buildingType: "blok", marketType: "secondary",
+    rawPayload: { detailVerified: true },
+  }));
+  assert.deepEqual(result, { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "fresh_renovation", district: "Górna", pricePerSqm: 425_000 / 41 });
+});
+
+test("turnkey does not imply readiness when it is negated, future, unfinished, separately priced, or about another unit", () => {
+  const descriptions = [
+    "Świeżo po kapitalnym remoncie, ale lokal nie jest wykończony pod klucz. Rynek wtórny.",
+    "Świeżo po kapitalnym remoncie, wykończenie pod klucz zostanie wykonane po zakupie. Rynek wtórny.",
+    "Świeżo po kapitalnym remoncie, wykończone pod klucz zostanie dopiero po odbiorze. Rynek wtórny.",
+    "Świeżo po kapitalnym remoncie, mieszkanie do wykończenia pod klucz. Rynek wtórny.",
+    "Świeżo po kapitalnym remoncie, wykończone pod klucz za dopłatą. Rynek wtórny.",
+    "Świeżo po kapitalnym remoncie, wykończone pod klucz, ale remont jest w trakcie. Rynek wtórny.",
+    "Świeżo po kapitalnym remoncie. Inne mieszkanie w budynku jest wykończone pod klucz. Rynek wtórny.",
+    "Świeżo po kapitalnym remoncie, wykończone pod klucz, ale nie jest gotowe do zamieszkania. Rynek wtórny.",
+  ];
+  for (const description of descriptions) {
+    const evidence = inspectRadarFinishEvidence(description);
+    assert.equal(evidence.moveInReady, false, description);
+    assert.equal(qualifyRadarCandidate(candidate({ description })).qualified, false, description);
+  }
 });
 
 test("a directly negated repair requirement does not reject category A or B, but a separate contradictory repair requirement still rejects", () => {

@@ -1,13 +1,13 @@
 import { load } from "cheerio";
 import type { PropertySourceListing } from "@/features/properties/types/property";
-import { calculateContentHash } from "./otodom-search";
+import { calculateContentHash, extractOtodomListingId, isConfirmedOtodomOfferUrl, normalizeOtodomUrl } from "./otodom-search";
 import type { ExternalSourceConfig, ExternalSourceId } from "./external-source-parser";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatchContext } from "./source-batches";
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
 import { invalidSalePriceWarning } from "./sale-price";
 import { extractListingIdentityEvidence } from "./identity-evidence";
-import { hasCategoryBFinishEvidence, inspectRadarFinishEvidence, isRadarRentalTransactionText, preflightRadarCandidateRejection } from "@/features/price-radar/qualification";
-import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
+import { hasCategoryBFinishEvidence, inspectRadarFinishEvidence, isRadarRentalTransactionText, preflightRadarCandidateRejection, resolveKnownRadarDistrict } from "@/features/price-radar/qualification";
+import { compareRadarIdentitySnapshots, findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 
 export type ExternalPortalPage = { listings: PropertySourceListing[]; detailCandidates?: PropertySourceListing[]; hasNextPage: boolean; invalidSalePriceCount?: number };
 type PortalRecord = Record<string, unknown>;
@@ -17,7 +17,8 @@ type PortalParser = (html: string, fallbackCity: string) => ExternalPortalPage;
 const MAX_PAGES = 5;
 const RADAR_DETAIL_PAGE_LIMIT_PER_PORTION = 3;
 const RADAR_DETAIL_REQUEST_TIMEOUT_MS = 8_000;
-const RADAR_DETAIL_SOURCES = new Set<ExternalSourceId>(["oferty_net", "domiporta"]);
+const RADAR_DETAIL_SOURCES = new Set<ExternalSourceId>(["oferty_net", "domiporta", "adresowo", "allegro_lokalnie"]);
+type RadarDetailSource = "oferty_net" | "domiporta" | "adresowo" | "allegro_lokalnie" | "otodom";
 const TRACKING_PARAM = /^(utm_|fbclid|gclid|dclid|msclkid|yclid|ref$)/iu;
 
 /** Each portal has a separate parser. Only the final canonical mapping is shared. */
@@ -37,7 +38,7 @@ export type ExternalPortalCriteria = { city: string | null; areaMin?: number | n
 
 export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number; sourceRejectionCounts?: Record<string, number> }> {
   if (batches?.purpose === "price_radar" && RADAR_DETAIL_SOURCES.has(config.id)) {
-    return fetchRadarPortalDetails(config, criteria, signal, batches);
+    return fetchRadarPortalDetails(config as ExternalSourceConfig & { id: Exclude<ExternalSourceId, "gratka" | "nieruchomosci_online" | "sprzedajemy" | "bezposrednio" | "domy"> }, criteria, signal, batches);
   }
   const ofertyLocation = config.id === "oferty_net" && !batches?.ofertyNetLegacySearch ? await resolveOfertyNetLocation(config, criteria.city ?? "", signal) : null;
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
@@ -110,101 +111,20 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
         throw new SourceBatchYield("portion_budget");
       }
       const baseListing = candidates[candidateIndex]!;
-      const detailUrl = absoluteUrl(baseListing.originalUrl, config.id);
       const next = candidateIndex + 1 < candidates.length
         ? radarDetailCursor(page, candidateIndex + 1)
         : parsed.hasNextPage && page < MAX_PAGES ? radarDetailCursor(page + 1, 0) : null;
-      let detailListing: PropertySourceListing | null = null;
-      const candidateWarnings: string[] = [];
-      if (parsed.hasNextPage && page === MAX_PAGES && candidateIndex === candidates.length - 1) candidateWarnings.push(publicSearchPageLimitWarning(config));
-      const candidateFetched = 1;
-      let detailDiagnostic: RadarDetailDiagnostic | undefined;
-
-      const preflightRejection = preflightRadarCandidateRejection({
-        title: baseListing.title,
-        description: baseListing.description,
-        buildingType: baseListing.buildingType,
-        propertyType: typeof baseListing.rawPayload.propertyType === "string" ? baseListing.rawPayload.propertyType : null,
-        rawPayload: baseListing.rawPayload,
-      });
-      if (preflightRejection) {
-        fetched += candidateFetched;
-        await batches.onBatch({ listings: [], warnings: [], fetched: candidateFetched, rejectionReasons: [preflightRejection] }, next);
-        continue;
+      const candidateWarnings = parsed.hasNextPage && page === MAX_PAGES && candidateIndex === candidates.length - 1
+        ? [publicSearchPageLimitWarning(config)] : [];
+      const result = await processRadarDetailCandidate(config.id as RadarDetailSource, config.label, baseListing, page, candidateIndex, next, signal, batches, candidateWarnings);
+      fetched += result.batch.fetched;
+      warnings.push(...result.batch.warnings);
+      if (result.listing) {
+        const identity = `${result.listing.source}:${result.listing.externalListingId}:${result.listing.normalizedUrl}`;
+        if (!seen.has(identity)) { seen.add(identity); listings.push(result.listing); }
       }
-
-      if (detailUrl) {
-        let detailResponse: Response;
-        try {
-          detailResponse = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS);
-        } catch (error) {
-          detailDiagnostic = {
-            kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: null, httpStatus: null, identity: "not_checked",
-            unconfirmedFields: [], contradictoryFields: [], errorCode: isTimeoutError(error) ? "TIMEOUT" : "NETWORK_ERROR",
-          };
-          await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [detailDiagnostic] }, radarDetailCursor(page, candidateIndex));
-          throw error;
-        }
-        if (detailResponse.status === 404 || detailResponse.status === 410) {
-          // A listing removed between results and details is not a source outage and must not be qualified from stale card data.
-          detailDiagnostic = {
-            kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: detailResponse.url || detailUrl, httpStatus: detailResponse.status,
-            identity: "unconfirmed", unconfirmedFields: [], contradictoryFields: [], errorCode: detailResponse.status === 404 ? "NOT_FOUND" : "GONE",
-          };
-        } else if (!detailResponse.ok) {
-          detailDiagnostic = {
-            kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: detailResponse.url || detailUrl, httpStatus: detailResponse.status,
-            identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "HTTP_ERROR",
-          };
-          await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [detailDiagnostic] }, radarDetailCursor(page, candidateIndex));
-          throw new Error(`${config.label}: HTTP ${detailResponse.status} (detail).`);
-        } else {
-          const detailHtml = await detailResponse.text();
-          try {
-            assertNotAccessChallenge(config.label, detailHtml);
-          } catch (error) {
-            detailDiagnostic = {
-              kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: detailResponse.url || detailUrl, httpStatus: detailResponse.status,
-              identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "ACCESS_CHALLENGE",
-            };
-            await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [detailDiagnostic] }, radarDetailCursor(page, candidateIndex));
-            throw error;
-          }
-          const detail = parseRadarOfferDetail(config.id as "oferty_net" | "domiporta", detailHtml);
-          const finalUrl = detailResponse.url || detailUrl;
-          const identity = compareRadarDetailIdentity(config.id as "oferty_net" | "domiporta", baseListing, detailUrl, finalUrl);
-          if (identity === "mismatch") {
-            detailDiagnostic = {
-              kind: "detail_identity_mismatch", listingUrl: detailUrl, finalUrl, httpStatus: detailResponse.status, identity,
-              unconfirmedFields: ["identity"], contradictoryFields: ["identity"],
-            };
-            detailListing = withUnconfirmedRadarDetail(baseListing);
-          } else {
-            if (detail.active) detailListing = mergeRadarDetail(baseListing, detail);
-            if (!detail.verified || detail.unconfirmedFields.length > 0 || detail.contradictoryFields.length > 0) {
-              detailDiagnostic = {
-                kind: "detail_not_confirmed", listingUrl: detailUrl, finalUrl, httpStatus: detailResponse.status, identity,
-                unconfirmedFields: detail.unconfirmedFields, contradictoryFields: detail.contradictoryFields,
-              };
-            }
-          }
-        }
-      } else {
-        candidateWarnings.push(`DETAIL_URL_INVALID:${baseListing.externalListingId}`);
-        detailDiagnostic = {
-          kind: "detail_fetch_failed", listingUrl: baseListing.originalUrl || null, finalUrl: null, httpStatus: null, identity: "not_checked",
-          unconfirmedFields: [], contradictoryFields: [], errorCode: "INVALID_DETAIL_URL",
-        };
-      }
-
-      fetched += candidateFetched;
-      warnings.push(...candidateWarnings);
-      if (detailListing) {
-        const identity = `${detailListing.source}:${detailListing.externalListingId}:${detailListing.normalizedUrl}`;
-        if (!seen.has(identity)) { seen.add(identity); listings.push(detailListing); }
-      }
-      await batches.onBatch({ listings: detailListing ? [detailListing] : [], warnings: candidateWarnings, fetched: candidateFetched, ...(detailDiagnostic ? { diagnostics: [detailDiagnostic] } : {}) }, next);
-      detailPagesThisPortion += 1;
+      await batches.onBatch(result.batch, result.nextCursor);
+      if (result.detailFetched) detailPagesThisPortion += 1;
       if (detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) {
         throw new SourceBatchYield("detail_batch_limit");
       }
@@ -215,6 +135,105 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
 
   if (!sawCandidates) warnings.push(`${config.label}: brak ofert z prawidłowym adresem szczegółów.`);
   return { listings, warnings: [...new Set(warnings)], fetched };
+}
+
+export async function fetchRadarOtodomDetails(candidates: readonly PropertySourceListing[], signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+  const cursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1" as const, page: 1, candidateIndex: 0 };
+  if (cursor.page > 1 || cursor.candidateIndex >= candidates.length) {
+    await batches.onBatch({ listings: [], warnings: [], fetched: 0 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  }
+  const listings: PropertySourceListing[] = [];
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  let fetched = 0;
+  let detailPagesThisPortion = 0;
+  for (let candidateIndex = cursor.candidateIndex; candidateIndex < candidates.length; candidateIndex += 1) {
+    if (signal?.aborted) throw new Error("Otodom: request aborted.");
+    if (batches.deadlineAt && Date.now() + RADAR_DETAIL_REQUEST_TIMEOUT_MS >= batches.deadlineAt) throw new SourceBatchYield("portion_budget");
+    const next = candidateIndex + 1 < candidates.length ? radarDetailCursor(1, candidateIndex + 1) : null;
+    const result = await processRadarDetailCandidate("otodom", "Otodom", candidates[candidateIndex]!, 1, candidateIndex, next, signal, batches);
+    fetched += result.batch.fetched;
+    warnings.push(...result.batch.warnings);
+    if (result.listing) {
+      const key = `${result.listing.source}:${result.listing.externalListingId}:${result.listing.normalizedUrl}`;
+      if (!seen.has(key)) { seen.add(key); listings.push(result.listing); }
+    }
+    await batches.onBatch(result.batch, result.nextCursor);
+    if (result.detailFetched) detailPagesThisPortion += 1;
+    if (detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) throw new SourceBatchYield("detail_batch_limit");
+  }
+  return { listings, warnings: [...new Set(warnings)], fetched };
+}
+
+async function processRadarDetailCandidate(source: RadarDetailSource, label: string, base: PropertySourceListing, page: number, candidateIndex: number, nextCursor: RadarDetailCursor | null, signal: AbortSignal | undefined, batches: SourceBatchContext, warnings: string[] = []): Promise<{ batch: import("./source-batches").SourceBatch; nextCursor: RadarDetailCursor | null; listing: PropertySourceListing | null; detailFetched: boolean }> {
+  const currentCursor = radarDetailCursor(page, candidateIndex);
+  const propertyType = typeof base.rawPayload.propertyType === "string" ? base.rawPayload.propertyType : null;
+  const rejection = preflightRadarCandidateRejection({ title: base.title, description: base.description, buildingType: base.buildingType, propertyType, rawPayload: base.rawPayload });
+  if (rejection) return { batch: { listings: [], warnings, fetched: 1, rejectionReasons: [rejection] }, nextCursor, listing: null, detailFetched: false };
+
+  const detailUrl = radarDetailUrl(source, base.originalUrl);
+  if (!detailUrl) {
+    return {
+      batch: { listings: [], warnings: [...warnings, `DETAIL_URL_INVALID:${base.externalListingId}`], fetched: 1, diagnostics: [{ kind: "detail_fetch_failed", listingUrl: base.originalUrl || null, finalUrl: null, httpStatus: null, identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "INVALID_DETAIL_URL" }] },
+      nextCursor, listing: null, detailFetched: false,
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS);
+  } catch (error) {
+    const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: null, httpStatus: null, identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: isTimeoutError(error) ? "TIMEOUT" : "NETWORK_ERROR" };
+    await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, currentCursor);
+    throw error;
+  }
+  const finalUrl = response.url || detailUrl;
+  if (response.status === 404 || response.status === 410) {
+    const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity: "unconfirmed", unconfirmedFields: [], contradictoryFields: [], errorCode: response.status === 404 ? "NOT_FOUND" : "GONE" };
+    return { batch: { listings: [], warnings, fetched: 1, diagnostics: [diagnostic] }, nextCursor, listing: null, detailFetched: true };
+  }
+  if (!response.ok) {
+    const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "HTTP_ERROR" };
+    await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, currentCursor);
+    throw new Error(`${label}: HTTP ${response.status} (detail).`);
+  }
+  const html = await response.text();
+  try {
+    assertNotAccessChallenge(label, html);
+  } catch (error) {
+    const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "ACCESS_CHALLENGE" };
+    await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, currentCursor);
+    throw error;
+  }
+  const detail = parseRadarOfferDetail(source, html);
+  const identity = compareRadarDetailIdentity(source, base, detailUrl, finalUrl);
+  let listing: PropertySourceListing | null = null;
+  let diagnostic: RadarDetailDiagnostic | undefined;
+  if (identity === "mismatch") {
+    diagnostic = { kind: "detail_identity_mismatch", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity, unconfirmedFields: ["identity"], contradictoryFields: ["identity"] };
+    listing = withUnconfirmedRadarDetail(base, ["identity"]);
+  } else if (identity === "unconfirmed" || identity === "not_checked") {
+    diagnostic = { kind: "detail_not_confirmed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity, unconfirmedFields: ["identity"], contradictoryFields: [] };
+    listing = withUnconfirmedRadarDetail(base);
+  } else {
+    const conflicts = compareRadarIdentitySnapshots(
+      { area: base.area, rooms: base.rooms, floor: parseFloor(base.floor), locationText: base.locationText, price: base.price },
+      { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText, price: detail.price },
+    );
+    const resolvedDetail = { ...detail, contradictoryFields: [...new Set([...detail.contradictoryFields, ...conflicts])], verified: detail.verified && conflicts.length === 0 };
+    if (resolvedDetail.active) listing = mergeRadarDetail(base, resolvedDetail);
+    if (!resolvedDetail.verified || resolvedDetail.unconfirmedFields.length > 0 || resolvedDetail.contradictoryFields.length > 0) {
+      diagnostic = { kind: "detail_not_confirmed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity, unconfirmedFields: resolvedDetail.unconfirmedFields, contradictoryFields: resolvedDetail.contradictoryFields };
+    }
+  }
+  return { batch: { listings: listing ? [listing] : [], warnings, fetched: 1, ...(diagnostic ? { diagnostics: [diagnostic] } : {}) }, nextCursor, listing, detailFetched: true };
+}
+
+function radarDetailUrl(source: RadarDetailSource, value: string | null): string | null {
+  if (!value) return null;
+  if (source === "otodom") return isConfirmedOtodomOfferUrl(value) ? normalizeOtodomUrl(value) : null;
+  return absoluteUrl(value, source);
 }
 
 function radarDetailCursor(page: number, candidateIndex: number): RadarDetailCursor {
@@ -264,7 +283,10 @@ type ParsedRadarPortalDetail = {
  * for Radar qualification. The result-list parser remains the single source
  * of candidate IDs/URLs; this parser never discovers or crawls new pages.
  */
-export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: string): ParsedRadarPortalDetail {
+export function parseRadarOfferDetail(source: RadarDetailSource, html: string): ParsedRadarPortalDetail {
+  if (source === "adresowo") return parseAdresowoRadarDetail(html);
+  if (source === "allegro_lokalnie") return parseAllegroRadarDetail(html);
+  if (source === "otodom") return parseOtodomRadarDetail(html);
   const $ = load(html);
   const fieldValues = new Map<string, string>();
   const fields = source === "oferty_net" ? $(".param dt") : $(".features__item_name");
@@ -314,6 +336,7 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   const active = !$(".archive, .archive__title").length && !/ogłoszenie\s+(?:jest\s+)?już\s+nieaktualne|oferta\s+nieaktualna|archiwum\s+domiporta/iu.test(pageText);
   const finishText = `${conditionLabel ?? ""} ${description ?? ""}`;
   const finish = inspectRadarFinishEvidence(finishText);
+  const categoryBFinishConfirmed = marketType === "secondary" && hasCategoryBFinishEvidence(titleText, description);
   const normalizedFinishText = normalizeDetailLabel(finishText);
   const unfinishedEvidence = /stan deweloperski|do wykonczenia|do remontu|wymaga remontu/u.test(normalizedFinishText);
   // Detail verification means the source explicitly states a finish/condition
@@ -339,7 +362,7 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   }
   const positiveFinishEvidence = finish.fullRenovation || finish.turnkey || finish.freshFullRenovation || finish.moveInReady;
   if (positiveFinishEvidence && unfinishedEvidence) contradictoryFields.push("finish_evidence");
-  else if (marketType === "secondary") {
+  else if (marketType === "secondary" && !categoryBFinishConfirmed) {
     if (!finish.fullRenovation) unconfirmedFields.push("renovation_completion");
     if (!finish.freshFullRenovation) unconfirmedFields.push("renovation_recency");
     if (!finish.moveInReady) unconfirmedFields.push("move_in_readiness");
@@ -347,8 +370,189 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   else if (!marketType && !positiveFinishEvidence) unconfirmedFields.push("finish_evidence");
   if (!active) contradictoryFields.push("active_listing");
   contradictoryFields.push(...findRadarOwnListingConflicts({ area, rooms, floor, locationText, title: titleText, description }));
-  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed && contradictoryFields.length === 0;
+  // District is the only field allowed to remain unresolved for the operator
+  // queue. The collector re-runs qualification with a temporary district
+  // probe and queues the candidate only if every other rule passes.
+  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed && contradictoryFields.length === 0;
   return { active, verified, unconfirmedFields, contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, description };
+}
+
+function parseAdresowoRadarDetail(html: string): ParsedRadarPortalDetail {
+  const $ = load(html);
+  const records = jsonLdRecords(html);
+  const place = records.find((record) => hasType(record, "Place")) ?? {};
+  const canonical = $("link[rel='canonical']").attr("href") ?? "";
+  const offer = records.find((record) => hasType(record, "Offer") && (!canonical || !text(record, "url") || canonicalDetailUrl(text(record, "url")!) === canonicalDetailUrl(canonical)))
+    ?? records.find((record) => hasType(record, "Offer")) ?? {};
+  const titleText = [$("title").first().text(), $("h1").first().text(), text(place, "name")].filter(Boolean).join(" ");
+  const metaDescription = decodeDetailText($("meta[name='description']").attr("content") ?? "");
+  const description = stripHtml(text(place, "description") ?? $(".offer-description, .description, [data-testid='offer-description']").first().text()) || null;
+  const placeAddress = atPath(place, ["address"]);
+  const locationText = (isRecord(placeAddress) ? text(placeAddress, "streetAddress") : null) ?? text(place, "name") ?? $("h1").first().text();
+  const parsedLocation = parseRadarLocation(locationText);
+  const city = parsedLocation.city;
+  const district = parsedLocation.district;
+  const explicitMarket = labeledDetailValue($, ["rynek", "rynek pierwotny"]);
+  const marketType = parseMarketType(explicitMarket, `${explicitMarket ?? ""} ${titleText} ${description ?? ""}`);
+  const area = decimal(areaFromText(metaDescription) ?? areaFromText(text(place, "name")) ?? areaFromText(titleText));
+  const rooms = decimal(roomsFromText(metaDescription) ?? roomsFromText(text(place, "name")) ?? roomsFromText(titleText));
+  const floor = parseFloor(metaDescription) ?? parseFloor(text(place, "name"));
+  const price = portalMoney(offer.price ?? offer.lowPrice);
+  const buildingType = normalizePortalBuildingType(labeledDetailValue($, ["typ budynku", "rodzaj budynku"]), titleText, `${metaDescription} ${description ?? ""}`);
+  const active = !/og\u0142oszenie\s+(?:jest\s+)?ju\u017c\s+nieaktualne|oferta\s+nieaktualna|og\u0142oszenie\s+zako\u0144czone/iu.test($("main").text());
+  const propertyType = /mieszkan\p{L}*/iu.test(titleText) && /sprzed\p{L}*/iu.test(titleText) ? "apartment" : null;
+  const yearBuilt = parseExplicitConstructionYear(labeledDetailValue($, ["rok budowy"]) ?? "");
+  return buildRadarDetail({ source: "adresowo", active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, explicitMarket, areaLabel: metaDescription });
+}
+
+function parseAllegroRadarDetail(html: string): ParsedRadarPortalDetail {
+  const $ = load(html);
+  const titleText = [$("title").first().text(), $("h1").first().text()].filter(Boolean).join(" ");
+  const metaDescription = decodeDetailText($("meta[name='description']").attr("content") ?? $("meta[property='og:description']").attr("content") ?? "");
+  const fieldValues = new Map<string, string>();
+  $("tr.mlc-params__parameter").each((_, row) => {
+    const name = normalizeDetailLabel($(row).find(".mlc-params__parameter-name").first().text());
+    const value = $(row).find(".mlc-params__parameter-value").first().text().replace(/\s+/gu, " ").trim();
+    if (name && value) fieldValues.set(name, value);
+  });
+  const field = (...labels: string[]) => labels.map((label) => fieldValues.get(normalizeDetailLabel(label))).find(Boolean) ?? null;
+  const description = stripHtml($(".ml-text-truncate__content").first().text()) || null;
+  const locationText = $("h1").first().text().replace(/\s+/gu, " ").trim() || titleText;
+  const { city, district } = parseRadarLocation(locationText);
+  const area = decimal(areaFromText(field("Powierzchnia") ?? "") ?? areaFromText(titleText));
+  const rooms = decimal((field("Liczba pokoi") ?? "").match(/\d+(?:[.,]\d+)?/u)?.[0] ?? roomsFromText(titleText));
+  const floor = parseFloor(field("Piętro"));
+  const priceText = metaDescription.match(/\bza\s+([\d\s.,]+)\s*(?:zł|pln)\b/iu)?.[1] ?? $("meta[property='product:price:amount']").attr("content") ?? "";
+  const price = money(priceText);
+  const explicitMarket = field("Rynek");
+  const marketType = parseMarketType(null, explicitMarket);
+  const buildingType = normalizePortalBuildingType(field("Typ budynku"), titleText, description);
+  const pageText = $("main").text();
+  const active = Boolean($("h1").length) && !/og\u0142oszenie\s+(?:jest\s+)?zako\u0144czone|oferta\s+nieaktualna|przedmiot\s+nie\s+jest\s+dost\u0119pny/iu.test(pageText);
+  const saleEvidence = `${titleText} ${metaDescription}`;
+  const propertyType = /mieszkan\p{L}*/iu.test(titleText) && /sprzed\p{L}*/iu.test(saleEvidence) && !/\b(?:wynajem|wynajm\p{L}*|do\s+wynaj\u0119cia|najem)\b/iu.test(saleEvidence) ? "apartment" : null;
+  const yearBuilt = parseExplicitConstructionYear(field("Rok budowy") ?? "");
+  return buildRadarDetail({ source: "allegro_lokalnie", active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, explicitMarket, areaLabel: field("Powierzchnia") });
+}
+
+function parseOtodomRadarDetail(html: string): ParsedRadarPortalDetail {
+  const $ = load(html);
+  const next = nextData(html);
+  const pageProps = atPath(next, ["props", "pageProps"]);
+  const adValue = isRecord(pageProps) ? pageProps.ad : null;
+  const unifiedValue = isRecord(pageProps) ? pageProps.unifiedAd : null;
+  const ad = isRecord(adValue) ? adValue : {};
+  const unified = isRecord(unifiedValue) ? unifiedValue : {};
+  const attributes = isRecord(ad.attributes) ? ad.attributes : {};
+  const category = isRecord(ad.adCategory) ? ad.adCategory : {};
+  const addressValue = atPath(ad, ["location", "address"]);
+  const unifiedAddressValue = atPath(unified, ["location", "address"]);
+  const address = isRecord(addressValue) ? addressValue : isRecord(unifiedAddressValue) ? unifiedAddressValue : {};
+  const street = nestedName(address.street);
+  const subdistrict = nestedName(address.subdistrict);
+  const namedDistrict = nestedName(address.district);
+  const namedCity = nestedName(address.city);
+  const titleText = [$("title").first().text(), $("h1").first().text(), text(ad, "title"), text(unified, "title")].filter(Boolean).join(" ");
+  const description = stripHtml(text(unified, "description") ?? text(ad, "description") ?? "") || null;
+  const locationText = [namedCity, namedDistrict, subdistrict, street, $("h1").first().text()].filter(Boolean).join(", ");
+  const parsedLocation = parseRadarLocation(`${locationText} ${titleText}`);
+  const city = namedCity ? parseRadarLocation(namedCity).city ?? (/\u0141\u00f3d\u017a/iu.test(namedCity) ? "Łódź" : null) : parsedLocation.city;
+  const district = namedDistrict ? parseRadarLocation(namedDistrict).district ?? resolveKnownRadarDistrict(namedDistrict) : parsedLocation.district;
+  const marketRaw = text(attributes, "market");
+  const propertyType = normalizeDetailLabel(`${text(category, "name") ?? ""} ${text(category, "type") ?? ""}`) === "flat sell" ? "apartment" : null;
+  const buildingType = normalizePortalBuildingType(text(attributes, "building_type"), titleText, description);
+  const price = decimal(atPath(unified, ["price", "salePrice", "value"])) ?? decimal(atPath(ad, ["price", "salePrice", "value"]));
+  const area = decimal(attributes.m);
+  const rooms = decimal(attributes.rooms_num);
+  const floor = parseFloor(text(attributes, "floor_no"));
+  const yearBuilt = parseExplicitConstructionYear(text(attributes, "build_year") ?? "");
+  const active = normalizeDetailLabel(text(ad, "status") ?? "") === "active" && Boolean($("h1").length);
+  const marketType = parseMarketType(null, marketRaw);
+  return buildRadarDetail({ source: "otodom", active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, explicitMarket: marketRaw });
+}
+
+type RadarDetailFactsInput = Omit<ParsedRadarPortalDetail, "verified" | "unconfirmedFields" | "contradictoryFields"> & { source: RadarDetailSource; titleText: string; explicitMarket?: string | null; areaLabel?: string | null };
+
+function buildRadarDetail(input: RadarDetailFactsInput): ParsedRadarPortalDetail {
+  const { active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType } = input;
+  const finish = inspectRadarFinishEvidence(`${titleText} ${description ?? ""}`);
+  const categoryBFinishConfirmed = marketType === "secondary" && hasCategoryBFinishEvidence(titleText, description);
+  const normalizedFinishText = normalizeDetailLabel(`${titleText} ${description ?? ""}`);
+  const unfinishedEvidence = /stan deweloperski|do wykonczenia|do remontu|wymaga remontu|remont w trakcie/u.test(normalizedFinishText);
+  const finishStatusConfirmed = finish.fullRenovation || finish.turnkey || unfinishedEvidence || categoryBFinishConfirmed;
+  const unconfirmedFields: string[] = [];
+  const contradictoryFields: string[] = [];
+  if (price === null || price <= 0) unconfirmedFields.push("total_price");
+  if (area === null || area <= 0) unconfirmedFields.push("area");
+  if (city !== "Łódź") unconfirmedFields.push("city_lodz");
+  if (!district) unconfirmedFields.push("district");
+  if (!buildingType) unconfirmedFields.push("building_type");
+  else if (!["blok", "apartamentowiec"].includes(normalizeDetailLabel(buildingType))) contradictoryFields.push("building_type");
+  const marketEvidence = normalizeDetailLabel(`${input.explicitMarket ?? ""} ${titleText} ${description ?? ""}`);
+  const primaryEvidence = /rynek pierwotny|od dewelopera|nowa inwestycja|inwestycja deweloperska|primary market/u.test(marketEvidence);
+  const secondaryEvidence = /rynek wtorny|secondary market/u.test(marketEvidence);
+  if (primaryEvidence && secondaryEvidence) contradictoryFields.push("market_type");
+  else if (!marketType) unconfirmedFields.push("market_type");
+  if (propertyType !== "apartment") {
+    (/(?:na|do) wynaj|czynsz najmu|dom|dzialk|lokal uzytkow/iu.test(normalizeDetailLabel(titleText)) ? contradictoryFields : unconfirmedFields).push("apartment_sale");
+  }
+  const positiveFinishEvidence = finish.fullRenovation || finish.turnkey || finish.freshFullRenovation || finish.moveInReady;
+  if (positiveFinishEvidence && unfinishedEvidence) contradictoryFields.push("finish_evidence");
+  else if (marketType === "secondary" && !categoryBFinishConfirmed) {
+    if (!finish.fullRenovation) unconfirmedFields.push("renovation_completion");
+    if (!finish.freshFullRenovation) unconfirmedFields.push("renovation_recency");
+    if (!finish.moveInReady) unconfirmedFields.push("move_in_readiness");
+  } else if (marketType === "primary" && !finish.turnkey) unconfirmedFields.push("turnkey_finish");
+  else if (!marketType && !positiveFinishEvidence) unconfirmedFields.push("finish_evidence");
+  if (!active) contradictoryFields.push("active_listing");
+  contradictoryFields.push(...findRadarOwnListingConflicts({ price, area, rooms, floor, locationText, title: titleText, description }));
+  const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed && contradictoryFields.length === 0;
+  return { active, verified, unconfirmedFields: [...new Set(unconfirmedFields)], contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, description };
+}
+
+function labeledDetailValue($: ReturnType<typeof load>, labels: string[]): string | null {
+  let found: string | null = null;
+  $("dt, th, .mlc-params__parameter-name").each((_, element) => {
+    if (found) return;
+    const label = normalizeDetailLabel($(element).text());
+    if (!labels.some((candidate) => label === normalizeDetailLabel(candidate))) return;
+    const value = $(element).next("dd, td, .mlc-params__parameter-value").text().replace(/\s+/gu, " ").trim();
+    if (value) found = value;
+  });
+  return found;
+}
+
+function normalizePortalBuildingType(value: string | null, title: string, description: string | null): string | null {
+  const normalized = normalizeDetailLabel(value ?? "");
+  if (/^(?:block|blok)$/u.test(normalized)) return "blok";
+  if (/^(?:apartment building|apartamentowiec)$/u.test(normalized)) return "apartamentowiec";
+  if (/^(?:tenement|kamienica)$/u.test(normalized)) return "kamienica";
+  if (/^(?:house|dom)$/u.test(normalized)) return "dom";
+  return resolveBuildingType(value, title, description);
+}
+
+function nestedName(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() || null;
+  return isRecord(value) ? stringValue(value.name) ?? stringValue(value.label) ?? stringValue(value.value) : null;
+}
+
+function canonicalDetailUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    url.username = ""; url.password = ""; url.search = ""; url.hash = "";
+    url.hostname = url.hostname.toLowerCase().replace(/^www\./u, "");
+    url.pathname = url.pathname.replace(/\.html?$/iu, "").replace(/\/+$/u, "");
+    return `${url.hostname}${url.pathname.toLowerCase()}`;
+  } catch { return null; }
+}
+
+function decodeDetailText(value: string): string {
+  return load(`<div>${value}</div>`).text().replace(/&sup2;|&#178;/giu, "²").replace(/\s+/gu, " ").trim();
+}
+
+function portalMoney(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return typeof value === "string" ? money(value) : null;
 }
 
 /** Construction year is accepted only from a dedicated source field label. */
@@ -367,26 +571,20 @@ function parseFloor(value: string | null): number | null {
   return match ? Number(match[0]) : null;
 }
 
-function withUnconfirmedRadarDetail(base: PropertySourceListing): PropertySourceListing {
-  return { ...base, rawPayload: { ...base.rawPayload, detailAttempted: true, detailVerified: false } };
+function withUnconfirmedRadarDetail(base: PropertySourceListing, contradictions: string[] = []): PropertySourceListing {
+  return { ...base, rawPayload: { ...base.rawPayload, detailAttempted: true, detailVerified: false, detailContradictions: contradictions } };
 }
 
-function compareRadarDetailIdentity(source: "oferty_net" | "domiporta", listing: PropertySourceListing, requestedUrl: string, finalUrl: string): RadarDetailDiagnostic["identity"] {
-  const normalizeUrl = (value: string): string | null => {
-    try {
-      const url = new URL(value);
-      url.search = "";
-      url.hash = "";
-      url.pathname = url.pathname.replace(/\.html?$/iu, "").replace(/\/$/u, "");
-      return `${url.hostname.toLowerCase()}${url.pathname.toLowerCase()}`;
-    } catch { return null; }
-  };
-  if (normalizeUrl(requestedUrl) && normalizeUrl(requestedUrl) === normalizeUrl(finalUrl)) return "same_url";
+function compareRadarDetailIdentity(source: RadarDetailSource, listing: PropertySourceListing, requestedUrl: string, finalUrl: string): RadarDetailDiagnostic["identity"] {
+  if (canonicalDetailUrl(requestedUrl) && canonicalDetailUrl(requestedUrl) === canonicalDetailUrl(finalUrl)) return "same_url";
   const idFromUrl = (value: string): string | null => {
-    const id = source === "oferty_net" ? ofertyNetIdFromUrl(value) : lastPathSegmentId(value);
+    const id = source === "oferty_net" ? ofertyNetIdFromUrl(value)
+      : source === "domiporta" ? lastPathSegmentId(value)
+        : source === "otodom" ? extractOtodomListingId(value)
+          : null;
     return id?.replace(/\.html?$/iu, "").toLowerCase() ?? null;
   };
-  const expectedId = listing.externalListingId || idFromUrl(requestedUrl);
+  const expectedId = source === "adresowo" || source === "allegro_lokalnie" ? null : listing.externalListingId || idFromUrl(requestedUrl);
   const responseId = idFromUrl(finalUrl);
   if (expectedId && responseId) return expectedId.toLowerCase() === responseId ? "same_listing_id" : "mismatch";
   return "unconfirmed";
@@ -400,22 +598,27 @@ function isTimeoutError(error: unknown): boolean {
 function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortalDetail): PropertySourceListing {
   const raw = { ...base.rawPayload };
   const candidate = isRecord(raw.candidate) ? raw.candidate : {};
+  const resolvedCity = detail.city ?? base.city;
+  const resolvedDistrict = detail.district ?? base.district;
+  const resolvedLocationText = detail.locationText ?? base.locationText;
+  const resolvedBuildingType = detail.buildingType ?? base.buildingType;
+  const resolvedMarketType = detail.marketType ?? (typeof raw.marketType === "string" ? raw.marketType : null);
   const mergedCandidate = {
     ...candidate,
     price: detail.price ?? base.price,
     area: detail.area ?? base.area,
     rooms: detail.rooms ?? base.rooms,
     yearBuilt: detail.yearBuilt,
-    city: detail.city,
-    district: detail.district,
-    buildingType: detail.buildingType,
-    marketType: detail.marketType,
-    propertyType: detail.propertyType,
+    city: resolvedCity,
+    district: resolvedDistrict,
+    buildingType: resolvedBuildingType,
+    marketType: resolvedMarketType,
+    propertyType: detail.propertyType ?? candidate.propertyType,
     detailAttempted: true,
     detailVerified: detail.verified,
-    detailLocationText: detail.locationText,
+    detailLocationText: resolvedLocationText,
     detailContradictions: detail.contradictoryFields,
-    detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" },
+    detailEvidence: { area: detail.area ?? base.area, rooms: detail.rooms ?? base.rooms, floor: detail.floor ?? parseFloor(base.floor), locationText: resolvedLocationText, price: detail.price ?? base.price, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" },
   };
   const description = [base.description, detail.description].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
   const exactPrice = detail.price ?? base.price;
@@ -426,21 +629,32 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     area: exactArea,
     rooms: detail.rooms ?? base.rooms,
     pricePerSqm: exactPrice && exactArea ? exactPrice / exactArea : null,
-    city: detail.city,
-    district: detail.district,
-    locationText: [detail.district, detail.city].filter(Boolean).join(", ") || null,
-    buildingType: resolveBuildingType(detail.buildingType, base.title, description),
     description,
-    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: detail.locationText, detailContradictions: detail.contradictoryFields, detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" } },
+    rawPayload: { ...raw, source: base.source, candidate: mergedCandidate, marketType: resolvedMarketType, propertyType: detail.propertyType ?? candidate.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: resolvedLocationText, detailContradictions: detail.contradictoryFields, detailEvidence: { area: detail.area ?? base.area, rooms: detail.rooms ?? base.rooms, floor: detail.floor ?? parseFloor(base.floor), locationText: resolvedLocationText, price: detail.price ?? base.price, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" } },
+    city: resolvedCity,
+    district: resolvedDistrict,
+    locationText: resolvedLocationText,
+    buildingType: resolveBuildingType(resolvedBuildingType, base.title, description),
   };
 }
 
 function parseRadarLocation(value: string): { city: string | null; district: string | null } {
-  const parts = value.split(/[,;|\n]+/u).map(normalizeDetailLabel).filter(Boolean);
+  const rawParts = value.split(/[,;|\n]+/u).map((part) => part.trim()).filter(Boolean);
+  const parts = rawParts.map(normalizeDetailLabel).filter(Boolean);
   const city = parts.some((part) => part === "lodz" || part.startsWith("lodz ")) ? "\u0141\u00f3d\u017a" : null;
   const districts: Array<[string, string]> = [["baluty", "Ba\u0142uty"], ["gorna", "G\u00f3rna"], ["polesie", "Polesie"], ["srodmiescie", "\u015ar\u00f3dmie\u015bcie"], ["widzew", "Widzew"]];
   const tokens = new Set(parts.flatMap((part) => part.split(" ")));
-  const district = districts.find(([key]) => tokens.has(key))?.[1] ?? null;
+  const district = districts.find(([key]) => tokens.has(key))?.[1]
+    ?? rawParts
+      .flatMap((part) => {
+        const placeTokens = part.split(/\s+/u).filter((token) => {
+          const normalized = normalizeDetailLabel(token).replace(/[,.]+$/gu, "");
+          return normalized && normalized !== "lodz" && normalized !== "lodzkie" && normalized !== "ul";
+        });
+        return placeTokens.length ? [placeTokens.join(" "), ...placeTokens] : [];
+      })
+      .map(resolveKnownRadarDistrict).find((item): item is string => Boolean(item))
+    ?? null;
   return { city, district };
 }
 
@@ -449,8 +663,8 @@ function parseMarketType(primaryValue: string | null, marketValue: string | null
   if (["tak", "yes", "1"].includes(primary)) return "primary";
   if (["nie", "no", "0"].includes(primary)) return "secondary";
   const market = normalizeDetailLabel(marketValue ?? "");
-  if (/pierwotny|deweloperski/u.test(market)) return "primary";
-  if (/wtorny/u.test(market)) return "secondary";
+  if (/pierwotny|deweloperski|primary market|\bprimary\b/u.test(market)) return "primary";
+  if (/wtorny|secondary market|\bsecondary\b|\bresale\b/u.test(market)) return "secondary";
   return null;
 }
 
@@ -652,6 +866,7 @@ function parseOfertyNet(html: string, fallbackCity: string): ExternalPortalPage 
     const link = row.find("td.cell_location a").first();
     const url = link.attr("href");
     const locationTitle = link.attr("title") ?? "";
+    const districtLabel = locationTitle.match(/,\s*([^,]+)$/u)?.[1]?.trim() ?? null;
     const img = row.find("img").first();
     candidates.push({
       id: url ? ofertyNetIdFromUrl(url) : undefined,
@@ -662,7 +877,7 @@ function parseOfertyNet(html: string, fallbackCity: string): ExternalPortalPage 
       area: areaFromText(row.find("td.cell_area").first().text()),
       rooms: row.find("td.cell_rooms").first().text(),
       city: fallbackCity,
-      district: locationTitle.match(/,\s*([^,]+)$/u)?.[1]?.trim(),
+      district: districtLabel && !["lodz", "lodzkie"].includes(normalizeDetailLabel(districtLabel)) ? districtLabel : null,
       images: img.attr("data-original") ?? img.attr("src"),
       publishedAt: row.find("td.cell_added_at").first().text().match(/\d{4}-\d{2}-\d{2}/u)?.[0],
     });

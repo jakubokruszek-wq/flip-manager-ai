@@ -826,6 +826,28 @@ test("a candidate missing ONLY its district (every other Radar criterion confirm
   assert.equal(db.tables.price_radar_district_queue[0]?.status, "pending");
 });
 
+test("a verified Oferty.net category-B listing missing only its district reaches the operator queue", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async () => ({ listings: [{
+    ...qualifyingListing("oferty-b-no-district", "oferty_net"),
+    title: "Mieszkanie w bloku, Łódź",
+    description: "Sprzedaż mieszkania. Rynek wtórny. W pełni wykończone pod klucz, gotowe do zamieszkania, wysoki standard.",
+    district: null,
+    rawPayload: { detailVerified: true, marketType: "secondary", propertyType: "apartment" },
+  }], warnings: [], fetched: 1 });
+  const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never, { areaMin: null, areaMax: null, rooms: [], qualityRulesVersion: 2, minPricePerSqm: null });
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  assert.equal(result.qualifiedCount, 0, "the operator must confirm the district before the offer enters A/B statistics");
+  assert.equal(db.tables.price_radar_listings.length, 0);
+  assert.equal(db.tables.price_radar_district_queue.length, 1, "the missing district is the only unresolved criterion");
+  assert.equal(db.tables.price_radar_district_queue[0]?.source, "oferty_net");
+  assert.equal(db.tables.price_radar_district_queue[0]?.market_type, "secondary");
+  assert.equal(db.tables.price_radar_district_queue[0]?.renovation_status, "turnkey_finish", "category B needs no renovation date");
+  assert.deepEqual(result.qualificationRejections, {});
+});
+
 test("an unapplied district queue migration is surfaced as partial work instead of silently dropping an otherwise eligible candidate", async () => {
   const db = fakeDb({ districtQueueRpcError: { code: "PGRST202", message: "Could not find the function public.upsert_price_radar_district_queue_candidate in the schema cache" } });
   fakeSourceImpl = async (id) => ({ listings: [{ ...qualifyingListing(`${id}-nodist-no-schema`, id), district: null }], warnings: [], fetched: 1 });
