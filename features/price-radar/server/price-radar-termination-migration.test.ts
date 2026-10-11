@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 const BASE = path.join(process.cwd(), "supabase/migrations/20261008000000_create_price_radar.sql");
 const STOP = path.join(process.cwd(), "supabase/migrations/20261012110000_add_price_radar_stop_resume.sql");
 const STOP_FIX = path.join(process.cwd(), "supabase/migrations/20261012120000_fix_price_radar_stop_without_current_source.sql");
-const TERMINATION = path.join(process.cwd(), "supabase/migrations/20261013120000_add_terminal_price_radar_run_end.sql");
+const TERMINATION = path.join(process.cwd(), "supabase/migrations/20261011183209_add_terminal_price_radar_run_end.sql");
 const OWNER = "00000000-0000-4000-8000-000000000071";
 const OTHER_OWNER = "00000000-0000-4000-8000-000000000072";
 const JOB_TOKEN = "00000000-0000-4000-8000-000000000091";
