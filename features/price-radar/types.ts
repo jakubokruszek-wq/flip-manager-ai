@@ -115,6 +115,9 @@ export type RadarCheckpoint = {
   perSourceCursor: Record<string, unknown>;
   sourceStatuses: Record<string, RadarSourceStatus>;
   sourceErrors: Record<string, string>;
+  /** Non-fatal adapter notices and candidate-level rejections, separate from transport/parser failures. */
+  sourceWarnings?: Record<string, string[]>;
+  sourceRejectionCounts?: Record<string, Record<string, number>>;
   /** Runtime diagnostics stored in the existing checkpoint JSONB; no schema change required. */
   qualificationRejections?: RadarQualificationRejections;
   /** Optional for legacy runs; new runs persist their search bounds in the existing checkpoint JSONB. */
@@ -141,6 +144,8 @@ export type RadarRun = {
   errorMessage: string | null;
   sourceStatuses: Record<string, RadarSourceStatus>;
   sourceErrors: Record<string, string>;
+  sourceWarnings?: Record<string, string[]>;
+  sourceRejectionCounts?: Record<string, Record<string, number>>;
   qualificationRejections?: RadarQualificationRejections;
 };
 

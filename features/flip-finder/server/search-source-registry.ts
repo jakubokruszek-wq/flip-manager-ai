@@ -24,7 +24,7 @@ const SOURCE_MAX_ATTEMPTS = 2;
 
 export type SourceListing = PropertySourceListing;
 
-export type SourceFetchResult = { listings: SourceListing[]; warnings: string[]; fetched: number };
+export type SourceFetchResult = { listings: SourceListing[]; warnings: string[]; fetched: number; sourceRejectionCounts?: Record<string, number> };
 export type SearchSource = {
   id: Exclude<ListingSource, "facebook">;
   label: string;
@@ -130,6 +130,7 @@ async function fetchOtodom(criteria: SearchFilter, signal?: AbortSignal): Promis
     // filter decision, and Finder card disagree with the parser.
     listings: result.listings,
     warnings: result.warnings,
+    sourceRejectionCounts: Object.fromEntries(Object.entries(result.rejectionReasons).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0)),
     // Keep the raw count here. A page with 26 rows and zero normalized
     // listings must still show operators "26 found" plus the concrete
     // rejection reasons, rather than silently becoming "0 found".

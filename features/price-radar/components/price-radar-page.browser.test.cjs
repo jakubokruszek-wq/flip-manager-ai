@@ -328,7 +328,9 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
     leaseUntil: new Date(Date.now() - 5 * 60_000).toISOString(),
     scannedCount: 29, qualifiedCount: 0,
     sourceStatuses: { otodom: "failed", olx: "failed", morizon: "pending" },
-    sourceErrors: { otodom: "Otodom: placeholder_url (29)" },
+    sourceErrors: {},
+    sourceWarnings: { otodom: ["Otodom: duplicate (1)", "Otodom: unsupported_listing (2)"] },
+    sourceRejectionCounts: { otodom: { duplicate: 1, unsupported_listing: 2 } },
     qualificationRejections: { olx: { district_not_confirmed: 7, building_type_not_confirmed: 3 } },
     checkpoint: { sourceQueue: ["morizon"], currentSourceIndex: 0 },
     errorMessage: null,
@@ -368,6 +370,10 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   await rejectionDetails.locator("summary").click();
   await page.getByText("brak potwierdzonej dzielnicy Łodzi · 7", { exact: false }).waitFor();
   await page.getByText("brak potwierdzonego typu budynku · 3", { exact: false }).waitFor();
+  const sourceRejections = page.getByLabel("Odrzucone kandydatury źródeł");
+  await sourceRejections.locator("summary").click();
+  await page.getByText("duplikat w wynikach źródła · 1", { exact: false }).waitFor();
+  await page.getByText("nieobsługiwany typ ogłoszenia · 2", { exact: false }).waitFor();
   assert.equal(postCount, 1, "a stale nonterminal run is automatically continued without a manual click");
   assert.deepEqual(resumedRunIds, [orphanedRun.id], "auto-resume is bound to the same run ID, never to a new run request");
   assert.equal(orphanedRun.id, "93a7f1d5-0000-4000-8000-000000000001", "the current run identity remains unchanged");

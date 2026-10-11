@@ -14,6 +14,7 @@ import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queu
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
 import type { RadarCheckpoint, RadarRun, RadarRunStatus, RadarSearchCriteria, RadarSource } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
+import { classifyRadarSourceWarning, radarSourceStatusFromWarnings, sourceRejectionCountsFromWarnings } from "@/features/price-radar/source-diagnostics";
 
 type Row = Record<string, unknown>;
 const PORTION_BUDGET_MS = 42_000;
@@ -50,6 +51,8 @@ function defaultCheckpoint(sources: RadarSource[], searchCriteria?: RadarSearchC
     perSourceCursor: {},
     sourceStatuses: Object.fromEntries(sources.map((source) => [source, "pending"])),
     sourceErrors: {},
+    sourceWarnings: {},
+    sourceRejectionCounts: {},
     qualificationRejections: {},
     ...(searchCriteria ? { searchCriteria: { ...searchCriteria, rooms: [...searchCriteria.rooms] } } : {}),
     buffer: [],
@@ -78,6 +81,8 @@ function toRadarRun(row: Row): RadarRun {
     errorMessage: typeof row.error_message === "string" ? row.error_message : null,
     sourceStatuses: isRecord(row.source_statuses) ? row.source_statuses as RadarRun["sourceStatuses"] : checkpoint.sourceStatuses,
     sourceErrors: checkpoint.sourceErrors ?? {},
+    ...(isRecord(checkpoint.sourceWarnings) ? { sourceWarnings: checkpoint.sourceWarnings as RadarRun["sourceWarnings"] } : {}),
+    ...(isRecord(checkpoint.sourceRejectionCounts) ? { sourceRejectionCounts: checkpoint.sourceRejectionCounts as RadarRun["sourceRejectionCounts"] } : {}),
     qualificationRejections: normalizedCheckpoint.qualificationRejections,
   };
 }
@@ -86,15 +91,32 @@ function isRecord(value: unknown): value is Record<string, unknown> { return val
 function isRunStatus(value: unknown): value is RadarRunStatus { return value === "pending" || value === "running" || value === "completed" || value === "failed" || value === "partial"; }
 function rpcRow(value: unknown): Row | null { return Array.isArray(value) ? isRecord(value[0]) ? value[0] : null : isRecord(value) ? value : null; }
 function sourceError(error: unknown): string { return (error instanceof Error ? error.message : String(error)).replace(/[\r\n\t]/g, " ").slice(0, 500); }
-const PUBLIC_SEARCH_PAGE_LIMIT_MARKER = "PUBLIC_SEARCH_PAGE_LIMIT_REACHED";
-function sourceStatusFromWarnings(warnings: readonly string[]): "completed" | "failed" | "partial" {
-  if (warnings.length === 0) return "completed";
-  // The adapter has already parsed and checkpointed the pages it was allowed
-  // to request. A deliberate coverage cap is incomplete data, not a failed
-  // fetch, and the saved rows must remain usable. Other warnings retain the
-  // existing failure semantics; actual fetch/HTTP failures still throw.
-  return warnings.some((warning) => warning.includes(PUBLIC_SEARCH_PAGE_LIMIT_MARKER)) ? "partial" : "failed";
+function recordRadarSourceWarnings(checkpoint: RadarCheckpoint, sourceId: string, warnings: readonly string[]): void {
+  const informational: string[] = [];
+  const failures: string[] = [];
+  for (const warning of warnings) {
+    (classifyRadarSourceWarning(warning) === "source_error" ? failures : informational).push(sourceError(warning));
+  }
+  if (informational.length) {
+    checkpoint.sourceWarnings ??= {};
+    const existing = checkpoint.sourceWarnings[sourceId] ?? [];
+    checkpoint.sourceWarnings[sourceId] = [...new Set([...existing, ...informational])].slice(0, 20);
+  }
+  if (failures.length) {
+    const existing = checkpoint.sourceErrors[sourceId];
+    checkpoint.sourceErrors[sourceId] = [...new Set([...(existing ? [existing] : []), ...failures])].join("; ").slice(0, 1_000);
+  }
 }
+
+function addSourceRejectionCounts(checkpoint: RadarCheckpoint, sourceId: string, counts: Readonly<Record<string, number>>): void {
+  const valid = Object.entries(counts).filter((entry): entry is [string, number] => /^[a-z_]{1,64}$/u.test(entry[0]) && Number.isSafeInteger(entry[1]) && entry[1] > 0);
+  if (!valid.length) return;
+  checkpoint.sourceRejectionCounts ??= {};
+  const sourceCounts = checkpoint.sourceRejectionCounts[sourceId] ?? {};
+  for (const [reason, count] of valid) sourceCounts[reason] = (sourceCounts[reason] ?? 0) + count;
+  checkpoint.sourceRejectionCounts[sourceId] = sourceCounts;
+}
+
 function isRetryableTimeout(error: unknown, signal: AbortSignal): boolean { return signal.aborted || (error instanceof Error && (error.name === "AbortError" || /timeout|aborted/i.test(error.message))); }
 function isTerminalAccessError(error: unknown): boolean { return /\b403\b|forbidden|captcha|access denied/i.test(sourceError(error)); }
 function sourceDate(raw: Record<string, unknown>, keys: string[]): string | null {
@@ -185,7 +207,7 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
   return { kind: "claimed", run: toRadarRun(claimed.data as Row) };
 }
 
-export type RadarPortionResult = { status: "running" | "completed" | "failed" | "partial"; scannedCount: number; qualifiedCount: number; sourceStatuses: RadarRun["sourceStatuses"]; sourceErrors: Record<string, string>; qualificationRejections: NonNullable<RadarRun["qualificationRejections"]> };
+export type RadarPortionResult = { status: "running" | "completed" | "failed" | "partial"; scannedCount: number; qualifiedCount: number; sourceStatuses: RadarRun["sourceStatuses"]; sourceErrors: Record<string, string>; sourceWarnings?: RadarRun["sourceWarnings"]; sourceRejectionCounts?: RadarRun["sourceRejectionCounts"]; qualificationRejections: NonNullable<RadarRun["qualificationRejections"]> };
 
 /**
  * Runs one time-boxed source portion. Every listing write and every checkpoint
@@ -251,7 +273,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         if (!["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[sourceId] ?? "")) {
           const savedError = checkpoint.sourceErrors[sourceId];
           checkpoint.sourceStatuses[sourceId] = savedError
-            ? sourceStatusFromWarnings([savedError])
+            ? radarSourceStatusFromWarnings([savedError])
             : "completed";
         }
         checkpoint.currentSourceIndex += 1;
@@ -385,7 +407,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           for (const reason of batchRejectionReasons) {
             if (isRadarQualificationRejectionReason(reason)) recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, reason);
           }
-          for (const warning of batch.warnings) checkpoint.sourceErrors[sourceId] = sourceError(warning);
+          recordRadarSourceWarnings(checkpoint, sourceId, batch.warnings);
+          addSourceRejectionCounts(checkpoint, sourceId, batch.sourceRejectionCounts ?? {});
           if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);
           checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
           if (await radarStopRequested(supabase, input)) {
@@ -413,8 +436,11 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         if (!emittedBatches) {
           await processBatch({ listings: result.listings, warnings: result.warnings, fetched: result.fetched }, null);
         }
-        if (result.warnings.length > 0) checkpoint.sourceErrors[sourceId] = result.warnings.map(sourceError).join("; ").slice(0, 1000);
-        checkpoint.sourceStatuses[sourceId] = sourceStatusFromWarnings(result.warnings);
+        if (!emittedBatches) {
+          addSourceRejectionCounts(checkpoint, sourceId, result.sourceRejectionCounts ?? sourceRejectionCountsFromWarnings(result.warnings));
+        }
+        recordRadarSourceWarnings(checkpoint, sourceId, result.warnings);
+        checkpoint.sourceStatuses[sourceId] = radarSourceStatusFromWarnings(result.warnings);
         checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
@@ -498,6 +524,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       qualifiedCount: typeof latest.data?.qualified_count === "number" ? latest.data.qualified_count : qualified,
       sourceStatuses: savedStatuses,
       sourceErrors: savedCheckpoint.sourceErrors ?? {},
+      sourceWarnings: savedCheckpoint.sourceWarnings ?? {},
+      sourceRejectionCounts: savedCheckpoint.sourceRejectionCounts ?? {},
       qualificationRejections: savedCheckpoint.qualificationRejections ?? {},
     };
   }
@@ -523,10 +551,12 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       qualifiedCount: typeof latest.data?.qualified_count === "number" ? latest.data.qualified_count : qualified,
       sourceStatuses: latest.data && isRecord(latest.data.source_statuses) ? latest.data.source_statuses as RadarRun["sourceStatuses"] : savedCheckpoint.sourceStatuses,
       sourceErrors: savedCheckpoint.sourceErrors ?? {},
+      sourceWarnings: savedCheckpoint.sourceWarnings ?? {},
+      sourceRejectionCounts: savedCheckpoint.sourceRejectionCounts ?? {},
       qualificationRejections: savedCheckpoint.qualificationRejections ?? {},
     };
   }
-  return { status: finalStatus, scannedCount: scanned, qualifiedCount: qualified, sourceStatuses: checkpoint.sourceStatuses, sourceErrors: checkpoint.sourceErrors, qualificationRejections: checkpoint.qualificationRejections ?? {} };
+  return { status: finalStatus, scannedCount: scanned, qualifiedCount: qualified, sourceStatuses: checkpoint.sourceStatuses, sourceErrors: checkpoint.sourceErrors, sourceWarnings: checkpoint.sourceWarnings ?? {}, sourceRejectionCounts: checkpoint.sourceRejectionCounts ?? {}, qualificationRejections: checkpoint.qualificationRejections ?? {} };
 }
 
 async function saveCheckpoint(supabase: SupabaseClient, input: { runId: string; ownerId: string; leaseToken: string }, checkpoint: RadarCheckpoint, scanned: number, qualified: number, status: RadarRunStatus, errorMessage: string | null = null): Promise<"saved" | "stopped"> {
@@ -567,7 +597,7 @@ function isRadarStopError(error: unknown): boolean {
 }
 
 function resultOf(run: RadarRun): RadarPortionResult {
-  return { status: run.status === "pending" ? "running" : run.status, scannedCount: run.scannedCount, qualifiedCount: run.qualifiedCount, sourceStatuses: run.sourceStatuses, sourceErrors: run.sourceErrors, qualificationRejections: run.qualificationRejections ?? {} };
+  return { status: run.status === "pending" ? "running" : run.status, scannedCount: run.scannedCount, qualifiedCount: run.qualifiedCount, sourceStatuses: run.sourceStatuses, sourceErrors: run.sourceErrors, sourceWarnings: run.sourceWarnings ?? run.checkpoint.sourceWarnings ?? {}, sourceRejectionCounts: run.sourceRejectionCounts ?? run.checkpoint.sourceRejectionCounts ?? {}, qualificationRejections: run.qualificationRejections ?? {} };
 }
 
 function abortPromise(signal: AbortSignal): Promise<never> {

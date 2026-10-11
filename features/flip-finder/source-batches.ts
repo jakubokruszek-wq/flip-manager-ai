@@ -12,7 +12,15 @@ export type RadarDetailDiagnostic = {
   errorCode?: "INVALID_DETAIL_URL" | "NETWORK_ERROR" | "TIMEOUT" | "HTTP_ERROR" | "ACCESS_CHALLENGE" | "NOT_FOUND" | "GONE";
 };
 
-export type SourceBatch = { listings: PropertySourceListing[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[]; rejectionReasons?: string[] };
+export type SourceBatch = {
+  listings: PropertySourceListing[];
+  warnings: string[];
+  fetched: number;
+  diagnostics?: RadarDetailDiagnostic[];
+  rejectionReasons?: string[];
+  /** Parser-level candidate exclusions, separate from source/transport errors. */
+  sourceRejectionCounts?: Record<string, number>;
+};
 export type RadarDetailCursor = {
   kind: "radar_detail_v1";
   page: number;

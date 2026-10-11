@@ -127,7 +127,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
 
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("tests must pass an explicit fake db, never the real admin client"); } } });
 
-type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[]; rejectionReasons?: string[] };
+type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[]; rejectionReasons?: string[]; sourceRejectionCounts?: Record<string, number> };
 type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; ofertyNetLegacySearch?: boolean; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
 let fakeSourceImpl: (id: string, cursor?: number, batches?: FakeBatchContext, signal?: AbortSignal) => Promise<{ listings: unknown[]; warnings: string[]; fetched: number }>;
 let observedSearchCriteria: unknown = null;
@@ -380,7 +380,8 @@ test("public search page cap keeps saved offers and finishes the source/run as p
 
   assert.equal(result.status, "partial");
   assert.equal(result.sourceStatuses.oferty_net, "partial");
-  assert.match(result.sourceErrors.oferty_net ?? "", /PUBLIC_SEARCH_PAGE_LIMIT_REACHED/);
+  assert.equal(result.sourceErrors.oferty_net, undefined, "a deliberate page cap is coverage information, not a source failure");
+  assert.ok(result.sourceWarnings?.oferty_net?.some((warning) => warning.includes("PUBLIC_SEARCH_PAGE_LIMIT_REACHED")));
   assert.equal(result.scannedCount, 1);
   assert.equal(result.qualifiedCount, 1);
   assert.equal(db.tables.price_radar_listings.length, 1, "already parsed and qualified rows remain persisted");
@@ -390,6 +391,54 @@ test("public search page cap keeps saved offers and finishes the source/run as p
   const repeated = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
   assert.equal(repeated.status, "partial");
   assert.equal(fetchCount, 1, "terminal coverage caps are not automatically retried as a new scan");
+});
+
+test("candidate-level price rejections do not fail a source or discard its valid listings", async () => {
+  const db = fakeDb();
+  const invalidPriceWarning = "INVALID_SALE_PRICE: pominięto 7 ofert bez poprawnej całkowitej ceny sprzedaży.";
+  fakeSourceImpl = async (id, _cursor, batches) => {
+    const listing = qualifyingListing(`${id}-valid-mixed-batch`, id);
+    listing.rawPayload.detailVerified = true;
+    if (batches) {
+      await batches.onBatch({
+        listings: [listing], warnings: [invalidPriceWarning], fetched: 8,
+        sourceRejectionCounts: { invalid_sale_price: 7 },
+      }, null);
+    }
+    return { listings: [listing], warnings: [invalidPriceWarning], fetched: 8 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.sourceStatuses.oferty_net, "completed");
+  assert.equal(result.sourceErrors.oferty_net, undefined, "candidate exclusions must not be displayed as source errors");
+  assert.deepEqual(result.sourceRejectionCounts?.oferty_net, { invalid_sale_price: 7 });
+  assert.ok(result.sourceWarnings?.oferty_net?.includes(invalidPriceWarning));
+  assert.equal(result.scannedCount, 8);
+  assert.equal(result.qualifiedCount, 1);
+  assert.equal(db.tables.price_radar_listings.length, 1, "the valid listing in the mixed batch remains persisted");
+});
+
+test("a genuine unclassified warning remains a source failure while preserving valid rows", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id) => ({
+    listings: [{ ...qualifyingListing(`${id}-valid-before-source-warning`, id), rawPayload: { detailVerified: true } }],
+    warnings: ["Oferty.net: upstream parser contract changed."],
+    fetched: 1,
+  });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.sourceStatuses.oferty_net, "failed");
+  assert.match(result.sourceErrors.oferty_net ?? "", /parser contract changed/);
+  assert.equal(result.qualifiedCount, 1);
+  assert.equal(db.tables.price_radar_listings.length, 1, "a later source warning cannot roll back a qualified listing");
 });
 
 test("detail diagnostics retain at most five sanitized samples per source without changing scan counters", async () => {

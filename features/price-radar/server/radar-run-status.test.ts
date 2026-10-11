@@ -26,6 +26,8 @@ test("latest run exposes saved qualification rejection counts and ignores malfor
     id: "run-1", started_at: "2026-10-10T10:00:00.000Z", status: "partial", scanned_count: 12, qualified_count: 0,
     checkpoint: {
       sourceQueue: ["olx"], currentSourceIndex: 1, sourceStatuses: { olx: "completed" }, sourceErrors: {},
+      sourceWarnings: { otodom: ["Otodom: duplicate (1)"] },
+      sourceRejectionCounts: { otodom: { duplicate: 1 } },
       qualificationRejections: { olx: { district_not_confirmed: 7, invented_reason: 100 }, "bad source": { rental: 4 } },
       detailDiagnostics: { domiporta: [{ kind: "detail_not_confirmed", listingUrl: "https://domiporta.test/oferta/123", finalUrl: "https://domiporta.test/oferta/123", httpStatus: 200, identity: "same_url", unconfirmedFields: ["market_type"], contradictoryFields: [] }] },
     },
@@ -33,6 +35,8 @@ test("latest run exposes saved qualification rejection counts and ignores malfor
   }) as never);
   assert.deepEqual(run?.qualificationRejections, { olx: { district_not_confirmed: 7 } });
   assert.deepEqual(run?.checkpoint.qualificationRejections, { olx: { district_not_confirmed: 7 } });
+  assert.deepEqual(run?.sourceWarnings, { otodom: ["Otodom: duplicate (1)"] }, "latest-run GET exposes candidate warnings separately from failures");
+  assert.deepEqual(run?.sourceRejectionCounts, { otodom: { duplicate: 1 } }, "latest-run GET exposes parser rejection counts");
   assert.equal(run?.checkpoint.detailDiagnostics?.domiporta?.[0]?.httpStatus, 200, "latest-run GET preserves sanitized detail evidence stored in the checkpoint");
   assert.deepEqual(run?.checkpoint.detailDiagnostics?.domiporta?.[0]?.unconfirmedFields, ["market_type"]);
 });

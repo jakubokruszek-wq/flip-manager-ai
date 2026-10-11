@@ -35,7 +35,7 @@ export const EXTERNAL_PORTAL_PARSERS: Record<ExternalSourceId, PortalParser> = {
 
 export type ExternalPortalCriteria = { city: string | null; areaMin?: number | null; areaMax?: number | null; rooms?: readonly number[] };
 
-export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number; sourceRejectionCounts?: Record<string, number> }> {
   if (batches?.purpose === "price_radar" && RADAR_DETAIL_SOURCES.has(config.id)) {
     return fetchRadarPortalDetails(config, criteria, signal, batches);
   }
@@ -43,6 +43,7 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
+  const sourceRejectionCounts: Record<string, number> = {};
   const seen = new Set<string>();
   let fetched = 0;
   for (let page = batches?.cursor || 1; page <= MAX_PAGES; page += 1) {
@@ -52,11 +53,13 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
     if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status}.`);
     const parsed = parser(await response.text(), criteria.city ?? "");
     const pageWarnings = [invalidSalePriceWarning(parsed.invalidSalePriceCount ?? 0)].filter((warning): warning is string => Boolean(warning));
+    const invalidSalePriceCount = parsed.invalidSalePriceCount ?? 0;
+    if (invalidSalePriceCount > 0) sourceRejectionCounts.invalid_sale_price = (sourceRejectionCounts.invalid_sale_price ?? 0) + invalidSalePriceCount;
     if (parsed.hasNextPage && page === MAX_PAGES) pageWarnings.push(publicSearchPageLimitWarning(config));
     if (batches) {
-      await batches.onBatch({ listings: parsed.listings, warnings: pageWarnings, fetched: parsed.listings.length + (parsed.invalidSalePriceCount ?? 0) }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
+      await batches.onBatch({ listings: parsed.listings, warnings: pageWarnings, fetched: parsed.listings.length + invalidSalePriceCount, ...(invalidSalePriceCount > 0 ? { sourceRejectionCounts: { invalid_sale_price: invalidSalePriceCount } } : {}) }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
     }
-    fetched += parsed.listings.length + (parsed.invalidSalePriceCount ?? 0);
+    fetched += parsed.listings.length + invalidSalePriceCount;
     warnings.push(...pageWarnings);
     for (const listing of parsed.listings) {
       const identity = `${listing.source}:${listing.externalListingId}:${listing.normalizedUrl}`;
@@ -65,7 +68,7 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
     if (!parsed.hasNextPage) break;
   }
   if (!listings.length) warnings.push(`${config.label}: odpowiedź nie zawiera zweryfikowanych ofert sprzedaży.`);
-  return { listings, warnings: [...new Set(warnings)], fetched };
+  return { listings, warnings: [...new Set(warnings)], fetched, ...(Object.keys(sourceRejectionCounts).length ? { sourceRejectionCounts } : {}) };
 }
 
 async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {

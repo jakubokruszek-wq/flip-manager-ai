@@ -23,6 +23,8 @@ export async function latestRadarRun(ownerId: string, client = createAdminClient
     errorMessage: typeof data.error_message === "string" ? data.error_message : null,
     sourceStatuses: data.source_statuses && typeof data.source_statuses === "object" ? data.source_statuses as RadarRun["sourceStatuses"] : {},
     sourceErrors: record.sourceErrors && typeof record.sourceErrors === "object" ? record.sourceErrors as Record<string, string> : {},
+    sourceWarnings: record.sourceWarnings && typeof record.sourceWarnings === "object" ? record.sourceWarnings as RadarRun["sourceWarnings"] : {},
+    sourceRejectionCounts: record.sourceRejectionCounts && typeof record.sourceRejectionCounts === "object" ? record.sourceRejectionCounts as RadarRun["sourceRejectionCounts"] : {},
     qualificationRejections,
   };
 }
