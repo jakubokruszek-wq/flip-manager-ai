@@ -6,8 +6,8 @@ import type { RadarDetailDiagnostic } from "@/features/flip-finder/source-batche
 type Row = Record<string, unknown>;
 const ownerId = "owner-test";
 
-function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]; districtQueueRpcError?: { code: string; message: string }; onListingPersisted?: (run: Row, candidate: Row) => void } = {}) {
-  const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [], price_radar_district_queue: initial.districtQueue ?? [] };
+function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]; verificationQueue?: Row[]; districtQueueRpcError?: { code: string; message: string }; verificationQueueRpcError?: { code: string; message: string }; onListingPersisted?: (run: Row, candidate: Row) => void } = {}) {
+  const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [], price_radar_district_queue: initial.districtQueue ?? [], price_radar_verification_queue: initial.verificationQueue ?? [] };
   const rpcCalls: Array<{ name: string; args: Row }> = [];
   let seq = 0;
   return {
@@ -48,6 +48,17 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
         let row = tables.price_radar_district_queue.find((entry) => entry.owner_id === args.p_owner_id && entry.source === candidate.source && entry.external_listing_id === candidate.external_listing_id);
         if (!row) { row = { id: `queue-${++seq}`, owner_id: args.p_owner_id, status: "pending", assigned_district: null }; tables.price_radar_district_queue.push(row); }
         Object.assign(row, candidate);
+        return { data: row.id, error: null };
+      }
+      if (name === "upsert_price_radar_verification_candidate") {
+        if (initial.verificationQueueRpcError) return { data: null, error: initial.verificationQueueRpcError };
+        const candidate = args.p_candidate as Row;
+        let row = tables.price_radar_verification_queue.find((entry) => entry.owner_id === args.p_owner_id && entry.source === candidate.source && (entry.external_listing_id === candidate.external_listing_id || entry.normalized_url === candidate.normalized_url));
+        if (!row) {
+          row = { id: `verification-${++seq}`, owner_id: args.p_owner_id, status: "pending", operator_decision: null, radar_listing_id: null };
+          tables.price_radar_verification_queue.push(row);
+        }
+        Object.assign(row, candidate, { owner_id: args.p_owner_id, status: row.status, operator_decision: row.operator_decision, radar_listing_id: row.radar_listing_id });
         return { data: row.id, error: null };
       }
       throw new Error(`unexpected RPC ${name}`);
@@ -127,6 +138,12 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
 }
 
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("tests must pass an explicit fake db, never the real admin client"); } } });
+mock.module("@/features/price-radar/server/radar-district-ai", {
+  namedExports: {
+    createRadarDistrictAiBudget: () => ({ tryConsume: () => true }),
+    suggestRadarDistrictWithAi: async () => null,
+  },
+});
 
 type FakeBatch = { listings: unknown[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[]; rejectionReasons?: string[]; sourceRejectionCounts?: Record<string, number> };
 type FakeBatchContext = { cursor?: number; radarDetailCursor?: { kind: "radar_detail_v1"; page: number; candidateIndex: number }; ofertyNetLegacySearch?: boolean; onBatch(batch: FakeBatch, nextCursor: unknown): Promise<void> };
@@ -290,7 +307,9 @@ test("a legacy checkpoint with no qualification version keeps strict v1 rules wh
   if (claim.kind !== "claimed" || !claim.run.leaseToken) throw new Error("expected claimed legacy-style run");
   const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken }, db as never);
   assert.equal(portion.qualifiedCount, 0, "a pre-v2 active run is not silently broadened to category B");
-  assert.equal(portion.qualificationRejections.domiporta?.renovation_not_confirmed_fresh_full, 1);
+  assert.deepEqual(portion.qualificationRejections, {}, "uncertain finish is held for operator review instead of being discarded");
+  assert.equal(db.tables.price_radar_verification_queue.length, 1, "legacy qualification rules remain strict while the candidate can still be reviewed separately");
+  assert.equal(db.tables.price_radar_listings.length, 0);
 });
 
 test("a v2 checkpoint accepts a fully ready high-standard secondary listing without requiring a fresh renovation year", async () => {
@@ -757,7 +776,9 @@ test("a rejected contradictory reimport quarantines the previously counted dwell
   assert.equal(kept.area, 45);
   assert.equal(kept.price, 419_000);
   assert.deepEqual((kept.raw_payload as Row).identityVerificationIssues, ["area", "rooms", "floor", "location"]);
-  assert.deepEqual(result.qualificationRejections.oferty_net, { detail_conflict: 1 });
+  assert.deepEqual(result.qualificationRejections, {}, "a contradictory current source snapshot is held for manual review rather than discarded");
+  assert.equal(db.tables.price_radar_verification_queue.length, 1);
+  assert.deepEqual(db.tables.price_radar_verification_queue[0]?.contradictory_fields, ["area", "rooms", "floor", "location"]);
 
   const read = await getRadarResults(ownerId, { districts: ["Bałuty"], market: "both", areaMin: 30, areaMax: 80, rooms: [], sources: [], minPricePerSqm: null }, db as never);
   assert.equal(read.listings.length, 1, "the saved record and its evidence remain available for review");
@@ -882,6 +903,83 @@ test("a verified Oferty.net category-B listing missing only its district reaches
   assert.deepEqual(result.qualificationRejections, {});
 });
 
+test("an uncertain but credible apartment-sale candidate is saved only to the separate verification queue", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async () => ({ listings: [{
+    ...qualifyingListing("needs-verification-42", "oferty_net"),
+    title: "Mieszkanie na sprzedaż w Łodzi, Śródmieście",
+    description: "Pojedyncze mieszkanie w budynku. Część danych szczegółowych wymaga sprawdzenia.",
+    buildingType: null, marketType: null,
+    rawPayload: {
+      radarSearchScope: "apartment-sale", propertyType: "apartment", detailVerified: false,
+      marketType: null,
+      detailEvidence: { unconfirmedFields: ["building_type", "market_type", "finish_evidence"] },
+      detailResponse: { httpStatus: 200, finalUrl: "https://allegrolokalnie.pl/oferta/needs-verification-42", identity: "same_listing_id" },
+    },
+  }], warnings: [], fetched: 1 });
+  const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+
+  assert.equal(result.qualifiedCount, 0);
+  assert.equal(db.tables.price_radar_listings.length, 0, "unverified source data never reaches Radar comparisons");
+  assert.equal(db.tables.price_radar_district_queue.length, 0, "multiple missing facts do not masquerade as district-only work");
+  assert.equal(db.tables.price_radar_verification_queue.length, 1);
+  const queued = db.tables.price_radar_verification_queue[0]!;
+  assert.equal(queued.owner_id, ownerId);
+  assert.equal(queued.status, "pending");
+  assert.equal(queued.original_url, "https://example.test/needs-verification-42");
+  assert.equal((queued.source_snapshot as Row).sourceHttpStatus, 200);
+  assert.deepEqual(queued.missing_fields, ["building_type", "market_type", "standard"]);
+  assert.deepEqual(result.qualificationRejections, {}, "a successfully queued candidate is not counted as a discarded rejection");
+});
+
+test("a confirmed operator decision is reapplied on source reimport, promotes one listing, and stays visible below the 20-offer sample minimum", async () => {
+  const decision = {
+    apartmentSaleConfirmed: true, price: 440_000, area: 40, rooms: 2, city: "Łódź", district: "Bałuty",
+    buildingType: "blok", marketType: "secondary", qualityCategory: "ready_high_standard",
+  };
+  const db = fakeDb({ verificationQueue: [{
+    id: "verification-confirmed", owner_id: ownerId, source: "oferty_net", external_listing_id: "reimported-offer",
+    status: "confirmed", operator_decision: decision,
+  }] });
+  fakeSourceImpl = async () => ({ listings: [{
+    ...qualifyingListing("reimported-offer", "oferty_net"),
+    title: "Mieszkanie na sprzedaż w Łodzi",
+    description: "Pojedyncze mieszkanie na sprzedaż; wykończenie pod klucz, gotowe do zamieszkania, wysoki standard.",
+    price: 9_500, area: 40, pricePerSqm: 237.5, district: null, buildingType: null,
+    rawPayload: {
+      radarSearchScope: "apartment-sale", propertyType: "apartment", detailVerified: false,
+      priceIsStartingAt: true, priceKind: "from", priceUnit: "per_sqm", marketType: null,
+    },
+  }], warnings: [], fetched: 1 });
+  const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never, {
+    areaMin: 31, areaMax: 62, rooms: [1, 2, 3], qualityRulesVersion: 2, minPricePerSqm: 8_800,
+  });
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+
+  assert.equal(result.qualifiedCount, 1, "the persisted operator total price and corrected fields are applied before qualification");
+  assert.equal(db.tables.price_radar_listings.length, 1, "reimport updates/promotes one canonical Radar listing");
+  const saved = db.tables.price_radar_listings[0]!;
+  assert.equal(saved.price, 440_000);
+  assert.equal(saved.price_per_sqm, 11_000);
+  assert.equal(saved.district, "Bałuty");
+  assert.equal((saved.raw_payload as Row).priceKind, "total");
+  assert.equal(((saved.raw_payload as Row).operatorPriceEvidence as Row).priceKind, "from", "the original parser warning remains auditable");
+
+  const visible = await getRadarResults(ownerId, {
+    districts: ["Bałuty"], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: [], minPricePerSqm: 8_800,
+  }, db as never);
+  assert.equal(visible.listings.length, 1, "the confirmed offer is not hidden while its group has fewer than 20 records");
+  assert.equal(visible.stats.length, 1);
+  assert.equal(visible.stats[0]?.sampleSize, 1);
+  assert.equal(visible.stats[0]?.isSmallSample, true);
+  assert.equal(visible.stats[0]?.averagePricePerSqm, null, "a one-offer sample does not publish a reference price");
+});
+
 test("an unapplied district queue migration is surfaced as partial work instead of silently dropping an otherwise eligible candidate", async () => {
   const db = fakeDb({ districtQueueRpcError: { code: "PGRST202", message: "Could not find the function public.upsert_price_radar_district_queue_candidate in the schema cache" } });
   fakeSourceImpl = async (id) => ({ listings: [{ ...qualifyingListing(`${id}-nodist-no-schema`, id), district: null }], warnings: [], fetched: 1 });
@@ -898,7 +996,7 @@ test("an unapplied district queue migration is surfaced as partial work instead 
   assert.deepEqual(result.qualificationRejections, {}, "the candidate remains an actionable queue dependency, not a false rejection");
 });
 
-test("a candidate missing its district AND another criterion (e.g. an unconfirmed building type) is a genuine rejection, never queued", async () => {
+test("a candidate missing its district AND another criterion (e.g. an unconfirmed building type) enters the general verification queue, not the district-only queue", async () => {
   const db = fakeDb();
   fakeSourceImpl = async (id) => ({
     listings: [{ ...qualifyingListing(`${id}-nodist-nobuild`, id), district: null, title: "Mieszkanie", description: "Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania. Rynek wtórny." }],
@@ -909,6 +1007,7 @@ test("a candidate missing its district AND another criterion (e.g. an unconfirme
 
   const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
 
-  assert.equal(db.tables.price_radar_district_queue.length, 0, "missing more than just the district must never reach the queue");
-  assert.deepEqual(result.qualificationRejections, { domiporta: { district_not_confirmed: 1 } }, "district_not_confirmed is reported first, same as before -- the queue only intercepts a genuinely district-only gap");
+  assert.equal(db.tables.price_radar_district_queue.length, 0, "missing more than just the district must never enter the district-only queue");
+  assert.equal(db.tables.price_radar_verification_queue.length, 1, "the general queue handles multiple uncertain facts for a credible offer");
+  assert.deepEqual(result.qualificationRejections, {}, "a saved review candidate is not counted as discarded");
 });

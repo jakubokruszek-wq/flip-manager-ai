@@ -53,16 +53,19 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
     const response = await fetchExternalPage(url, signal);
     if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status}.`);
     const parsed = parser(await response.text(), criteria.city ?? "");
+    const parsedListings = batches?.purpose === "price_radar"
+      ? parsed.listings.map((listing) => ({ ...listing, rawPayload: { ...listing.rawPayload, radarSearchScope: "apartment-sale" } }))
+      : parsed.listings;
     const pageWarnings = [invalidSalePriceWarning(parsed.invalidSalePriceCount ?? 0)].filter((warning): warning is string => Boolean(warning));
     const invalidSalePriceCount = parsed.invalidSalePriceCount ?? 0;
     if (invalidSalePriceCount > 0) sourceRejectionCounts.invalid_sale_price = (sourceRejectionCounts.invalid_sale_price ?? 0) + invalidSalePriceCount;
     if (parsed.hasNextPage && page === MAX_PAGES) pageWarnings.push(publicSearchPageLimitWarning(config));
     if (batches) {
-      await batches.onBatch({ listings: parsed.listings, warnings: pageWarnings, fetched: parsed.listings.length + invalidSalePriceCount, ...(invalidSalePriceCount > 0 ? { sourceRejectionCounts: { invalid_sale_price: invalidSalePriceCount } } : {}) }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
+      await batches.onBatch({ listings: parsedListings, warnings: pageWarnings, fetched: parsed.listings.length + invalidSalePriceCount, ...(invalidSalePriceCount > 0 ? { sourceRejectionCounts: { invalid_sale_price: invalidSalePriceCount } } : {}) }, parsed.hasNextPage && page < MAX_PAGES ? page + 1 : null);
     }
     fetched += parsed.listings.length + invalidSalePriceCount;
     warnings.push(...pageWarnings);
-    for (const listing of parsed.listings) {
+    for (const listing of parsedListings) {
       const identity = `${listing.source}:${listing.externalListingId}:${listing.normalizedUrl}`;
       if (!seen.has(identity)) { seen.add(identity); listings.push(listing); }
     }
@@ -73,10 +76,11 @@ export async function fetchExternalPortal(config: ExternalSourceConfig, criteria
 }
 
 async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+  const cursor: RadarDetailCursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1", page: batches.cursor ?? 1, candidateIndex: 0 };
+  if (isRetryAfterPending(cursor)) throw new SourceBatchYield("detail_rate_limit");
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const city = criteria.city ?? "";
   const ofertyLocation = config.id === "oferty_net" && !batches.ofertyNetLegacySearch ? await resolveOfertyNetLocation(config, city, signal) : null;
-  const cursor: RadarDetailCursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1", page: batches.cursor ?? 1, candidateIndex: 0 };
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();
@@ -110,7 +114,8 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
       if (batches.deadlineAt && Date.now() + RADAR_DETAIL_REQUEST_TIMEOUT_MS >= batches.deadlineAt) {
         throw new SourceBatchYield("portion_budget");
       }
-      const baseListing = candidates[candidateIndex]!;
+      const sourceCandidate = candidates[candidateIndex]!;
+      const baseListing = { ...sourceCandidate, rawPayload: { ...sourceCandidate.rawPayload, radarSearchScope: "apartment-sale" } };
       const next = candidateIndex + 1 < candidates.length
         ? radarDetailCursor(page, candidateIndex + 1)
         : parsed.hasNextPage && page < MAX_PAGES ? radarDetailCursor(page + 1, 0) : null;
@@ -139,6 +144,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
 
 export async function fetchRadarOtodomDetails(candidates: readonly PropertySourceListing[], signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
   const cursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1" as const, page: 1, candidateIndex: 0 };
+  if (isRetryAfterPending(cursor)) throw new SourceBatchYield("detail_rate_limit");
   if (cursor.page > 1 || cursor.candidateIndex >= candidates.length) {
     await batches.onBatch({ listings: [], warnings: [], fetched: 0 }, null);
     return { listings: [], warnings: [], fetched: 0 };
@@ -167,7 +173,13 @@ export async function fetchRadarOtodomDetails(candidates: readonly PropertySourc
 }
 
 async function processRadarDetailCandidate(source: RadarDetailSource, label: string, base: PropertySourceListing, page: number, candidateIndex: number, nextCursor: RadarDetailCursor | null, signal: AbortSignal | undefined, batches: SourceBatchContext, warnings: string[] = []): Promise<{ batch: import("./source-batches").SourceBatch; nextCursor: RadarDetailCursor | null; listing: PropertySourceListing | null; detailFetched: boolean }> {
-  const currentCursor = radarDetailCursor(page, candidateIndex);
+  const savedCursor = batches.radarDetailCursor;
+  const isSameCursor = savedCursor?.page === page && savedCursor.candidateIndex === candidateIndex;
+  const currentCursor: RadarDetailCursor = isSameCursor ? { ...savedCursor } : radarDetailCursor(page, candidateIndex);
+  const retryAfterUntil = currentCursor.retryAfterUntil ? Date.parse(currentCursor.retryAfterUntil) : null;
+  if (retryAfterUntil !== null && Number.isFinite(retryAfterUntil) && retryAfterUntil > Date.now()) {
+    throw new SourceBatchYield("detail_rate_limit");
+  }
   const propertyType = typeof base.rawPayload.propertyType === "string" ? base.rawPayload.propertyType : null;
   const rejection = preflightRadarCandidateRejection({ title: base.title, description: base.description, buildingType: base.buildingType, propertyType, rawPayload: base.rawPayload });
   if (rejection) return { batch: { listings: [], warnings, fetched: 1, rejectionReasons: [rejection] }, nextCursor, listing: null, detailFetched: false };
@@ -182,13 +194,28 @@ async function processRadarDetailCandidate(source: RadarDetailSource, label: str
 
   let response: Response;
   try {
-    response = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS);
+    response = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS, false);
   } catch (error) {
     const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: null, httpStatus: null, identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: isTimeoutError(error) ? "TIMEOUT" : "NETWORK_ERROR" };
     await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, currentCursor);
     throw error;
   }
   const finalUrl = response.url || detailUrl;
+  if (response.status === 429) {
+    const retryAttempt = currentCursor.retryAttempt ?? 0;
+    const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl, httpStatus: 429, identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: "RATE_LIMITED" };
+    if (retryAttempt >= 1) {
+      await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, currentCursor);
+      throw new Error(`${label}: HTTP 429 (detail retry exhausted).`);
+    }
+    const retryCursor: RadarDetailCursor = {
+      ...radarDetailCursor(page, candidateIndex),
+      retryAttempt: 1,
+      retryAfterUntil: retryAfterDate(response.headers.get("retry-after"), Date.now()).toISOString(),
+    };
+    await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, retryCursor);
+    throw new SourceBatchYield("detail_rate_limit");
+  }
   if (response.status === 404 || response.status === 410) {
     const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity: "unconfirmed", unconfirmedFields: [], contradictoryFields: [], errorCode: response.status === 404 ? "NOT_FOUND" : "GONE" };
     return { batch: { listings: [], warnings, fetched: 1, diagnostics: [diagnostic] }, nextCursor, listing: null, detailFetched: true };
@@ -206,7 +233,7 @@ async function processRadarDetailCandidate(source: RadarDetailSource, label: str
     await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, currentCursor);
     throw error;
   }
-  const detail = parseRadarOfferDetail(source, html);
+  const detail = parseRadarOfferDetail(source, html, detailUrl);
   const identity = compareRadarDetailIdentity(source, base, detailUrl, finalUrl);
   let listing: PropertySourceListing | null = null;
   let diagnostic: RadarDetailDiagnostic | undefined;
@@ -222,7 +249,7 @@ async function processRadarDetailCandidate(source: RadarDetailSource, label: str
       { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText, price: detail.price },
     );
     const resolvedDetail = { ...detail, contradictoryFields: [...new Set([...detail.contradictoryFields, ...conflicts])], verified: detail.verified && conflicts.length === 0 };
-    if (resolvedDetail.active) listing = mergeRadarDetail(base, resolvedDetail);
+    if (resolvedDetail.active) listing = mergeRadarDetail(base, resolvedDetail, { listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity });
     if (!resolvedDetail.verified || resolvedDetail.unconfirmedFields.length > 0 || resolvedDetail.contradictoryFields.length > 0) {
       diagnostic = { kind: "detail_not_confirmed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity, unconfirmedFields: resolvedDetail.unconfirmedFields, contradictoryFields: resolvedDetail.contradictoryFields };
     }
@@ -240,16 +267,30 @@ function radarDetailCursor(page: number, candidateIndex: number): RadarDetailCur
   return { kind: "radar_detail_v1", page, candidateIndex };
 }
 
-async function fetchExternalPage(url: string, signal?: AbortSignal, timeoutMs = 20_000): Promise<Response> {
+function isRetryAfterPending(cursor: RadarDetailCursor): boolean {
+  const retryAt = cursor.retryAfterUntil ? Date.parse(cursor.retryAfterUntil) : NaN;
+  return Number.isFinite(retryAt) && retryAt > Date.now();
+}
+
+async function fetchExternalPage(url: string, signal?: AbortSignal, timeoutMs = 20_000, retryServerErrors = true): Promise<Response> {
   let response: Response | null = null;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (signal?.aborted) throw new Error("external source request aborted.");
     response = await fetch(url, { cache: "no-store", headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8", "User-Agent": "FlipManager/1.0" }, redirect: "follow", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
-    if ((response.status !== 429 && response.status < 500) || attempt === 2) return response;
+    if (!retryServerErrors || (response.status !== 429 && response.status < 500) || attempt === 2) return response;
     await retryDelay(attempt, signal);
   }
   if (!response) throw new Error("external source request did not return a response.");
   return response;
+}
+
+function retryAfterDate(value: string | null, now: number): Date {
+  if (value) {
+    const seconds = Number(value.trim());
+    const parsed = Number.isFinite(seconds) ? now + Math.max(0, seconds) * 1000 : Date.parse(value);
+    if (Number.isFinite(parsed)) return new Date(Math.max(now + 1_000, parsed));
+  }
+  return new Date(now + 60_000);
 }
 
 async function retryDelay(attempt: number, signal?: AbortSignal): Promise<void> {
@@ -283,10 +324,11 @@ type ParsedRadarPortalDetail = {
  * for Radar qualification. The result-list parser remains the single source
  * of candidate IDs/URLs; this parser never discovers or crawls new pages.
  */
-export function parseRadarOfferDetail(source: RadarDetailSource, html: string): ParsedRadarPortalDetail {
+export function parseRadarOfferDetail(source: RadarDetailSource, html: string, offerUrl?: string): ParsedRadarPortalDetail {
   if (source === "adresowo") return parseAdresowoRadarDetail(html);
   if (source === "allegro_lokalnie") return parseAllegroRadarDetail(html);
   if (source === "otodom") return parseOtodomRadarDetail(html);
+  if (source === "domiporta") return parseDomiportaRadarDetail(html, offerUrl ?? "");
   const $ = load(html);
   const fieldValues = new Map<string, string>();
   const fields = source === "oferty_net" ? $(".param dt") : $(".features__item_name");
@@ -320,9 +362,7 @@ export function parseRadarOfferDetail(source: RadarDetailSource, html: string): 
   const locationText = location.replace(/\s+/gu, " ").trim() || null;
   const { city, district } = parseRadarLocation(location);
   const titleText = [$("title").first().text(), $("h1").first().text(), source === "oferty_net" ? $(".header span").first().text() : ""].join(" ");
-  const detailDescription = source === "domiporta"
-    ? $(".description__container").first().text()
-    : $(".description, .offer_description, .offer-description, [itemprop='description']").first().text();
+  const detailDescription = $(".description, .offer_description, .offer-description, [itemprop='description']").first().text();
 
   const buildingType = textByLabels(["Typ budynku", "Rodzaj budynku", "Rodzaj zabudowy"])
     ?? resolveBuildingType(null, titleText, detailDescription);
@@ -405,32 +445,104 @@ function parseAdresowoRadarDetail(html: string): ParsedRadarPortalDetail {
   return buildRadarDetail({ source: "adresowo", active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, explicitMarket, areaLabel: metaDescription });
 }
 
+function parseDomiportaRadarDetail(html: string, offerUrl: string): ParsedRadarPortalDetail {
+  const $ = load(html);
+  const targetId = offerUrl.match(/(?:_|-|\/)(\d+)(?:[/?#]|$)/u)?.[1] ?? null;
+  const targetPath = canonicalDetailUrl(offerUrl);
+  const records = jsonLdRecords(html);
+  const structured = records.find((record) => {
+    if (!hasType(record, "Offer", "Product", "RealEstateListing", "Residence", "Apartment")) return false;
+    const url = text(record, "url") ?? text(record, "@id");
+    const identifier = typeof record.identifier === "string" ? record.identifier : isRecord(record.identifier) ? text(record.identifier, "value") : null;
+    return Boolean((url && canonicalDetailUrl(url) === targetPath) || (targetId && identifier === targetId));
+  }) ?? null;
+  const offer = isRecord(structured?.offers) ? structured.offers : {};
+  const unit = isRecord(offer.itemOffered) ? offer.itemOffered
+    : isRecord(structured?.itemOffered) ? structured.itemOffered
+      : structured ?? {};
+  const unitRoot = targetId ? $(`[data-offer-id="${targetId}"], [data-listing-id="${targetId}"], [data-unit-id="${targetId}"], [data-apartment-id="${targetId}"]`).first() : null;
+  const root = unitRoot?.length ? unitRoot : $("main").first().length ? $("main").first() : $("body");
+  const titleText = [$("title").first().text(), root.find("h1").first().text() || $("h1").first().text(), text(structured ?? {}, "name")].filter(Boolean).join(" ");
+  const description = stripHtml(text(unit, "description") ?? text(structured ?? {}, "description") ?? root.find(".description__container, .description, [itemprop='description']").first().text()) || null;
+  const fieldValues = new Map<string, string>();
+  root.find(".features__item_name, dt, [data-field-label]").each((_, element) => {
+    const labelElement = $(element);
+    const label = normalizeDetailLabel(labelElement.attr("data-field-label") ?? labelElement.text());
+    const value = labelElement.next("dd, .features__item_value").text().replace(/\s+/gu, " ").trim()
+      || labelElement.closest(".features__item, [data-field]").find(".features__item_value, [data-field-value]").first().text().replace(/\s+/gu, " ").trim();
+    if (label && value) fieldValues.set(label, value);
+  });
+  const field = (...labels: string[]) => labels.map((label) => fieldValues.get(normalizeDetailLabel(label))).find(Boolean) ?? null;
+  const priceText = (typeof offer.price === "string" || typeof offer.price === "number" ? String(offer.price) : null)
+    ?? (typeof structured?.price === "string" || typeof structured?.price === "number" ? String(structured.price) : null)
+    ?? root.find(".summary__price_number [itemprop='price']").first().attr("content")
+    ?? root.find(".summary__price_number, [data-price], [itemprop='price']").first().attr("data-price")
+    ?? root.find(".summary__price_number").first().text()
+    ?? field("Cena", "Cena całkowita")
+    ?? $("meta[property='product:price:amount']").attr("content") ?? "";
+  const price = money(priceText);
+  const areaValue = atPath(unit, ["floorSize", "value"]) ?? unit.area;
+  const areaText = (typeof areaValue === "number" ? String(areaValue) : stringValue(areaValue))
+    ?? field("Powierzchnia", "Powierzchnia użytkowa", "Metraż")
+    ?? root.find("[itemprop='floorSize']").first().attr("content") ?? "";
+  const area = decimal(areaFromText(areaText) ?? areaText) ?? decimal(areaFromText(titleText));
+  const roomsValue = unit.numberOfRooms ?? unit.rooms;
+  const rooms = decimal(roomsValue) ?? decimal((field("Liczba pokoi", "Pokoje") ?? "").match(/\d+(?:[.,]\d+)?/u)?.[0] ?? roomsFromText(titleText));
+  const floor = parseFloor(stringValue(unit.floorLevel) ?? field("Piętro", "Kondygnacja"));
+  const addressValue = isRecord(unit.address) ? unit.address : structured?.address;
+  const address = isRecord(addressValue) ? addressValue : {};
+  const locationText = [text(address, "addressLocality"), text(address, "addressSuburb"), text(address, "addressRegion"), text(address, "streetAddress"), field("Lokalizacja", "Adres"), root.find(".summary__location, [data-testid='offer-location']").first().text()].filter(Boolean).join(", ");
+  const parsedLocation = parseRadarLocation(locationText || titleText);
+  const city = parsedLocation.city;
+  const district = parsedLocation.district;
+  const explicitMarket = stringValue(unit.marketType) ?? stringValue(structured?.marketType) ?? field("Rynek", "Rynek pierwotny");
+  const marketType = parseMarketType(explicitMarket, `${explicitMarket ?? ""} ${titleText} ${description ?? ""}`);
+  const buildingType = normalizePortalBuildingType(stringValue(unit.buildingType) ?? field("Typ budynku", "Rodzaj budynku", "Rodzaj zabudowy"), titleText, description);
+  const saleEvidence = `${titleText} ${description ?? ""} ${root.text()}`;
+  const propertyType = (hasType(unit, "Apartment", "Residence") || /mieszkan\p{L}*/iu.test(saleEvidence))
+    && /na sprzedaż|sprzedam|sprzedaż mieszkań/iu.test(`${titleText} ${description ?? ""}`)
+    && !isRadarRentalTransactionText(`${titleText} ${description ?? ""}`) ? "apartment" : null;
+  const active = Boolean(root.find("h1").length || $("h1").length) && !/ogłoszenie\s+(?:jest\s+)?już\s+nieaktualne|oferta\s+nieaktualna|archiwum/iu.test($("body").text());
+  const yearBuilt = parseExplicitConstructionYear(field("Rok budowy") ?? "");
+  return buildRadarDetail({ source: "domiporta", active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText: locationText || null, buildingType, marketType, propertyType, explicitMarket, areaLabel: areaText });
+}
+
 function parseAllegroRadarDetail(html: string): ParsedRadarPortalDetail {
   const $ = load(html);
-  const titleText = [$("title").first().text(), $("h1").first().text()].filter(Boolean).join(" ");
+  const canonical = $("link[rel='canonical']").attr("href") ?? "";
+  const canonicalPath = canonicalDetailUrl(canonical);
+  const product = jsonLdRecords(html).find((record) => hasType(record, "Product", "Apartment", "Residence") && (!text(record, "url") || canonicalDetailUrl(text(record, "url")!) === canonicalPath)) ?? {};
+  const titleText = [$("title").first().text(), $("h1").first().text(), text(product, "name")].filter(Boolean).join(" ");
   const metaDescription = decodeDetailText($("meta[name='description']").attr("content") ?? $("meta[property='og:description']").attr("content") ?? "");
   const fieldValues = new Map<string, string>();
-  $("tr.mlc-params__parameter").each((_, row) => {
-    const name = normalizeDetailLabel($(row).find(".mlc-params__parameter-name").first().text());
-    const value = $(row).find(".mlc-params__parameter-value").first().text().replace(/\s+/gu, " ").trim();
+  $("tr.mlc-params__parameter, li.mlc-itembox__params__param, [data-testid='offer-parameter']").each((_, row) => {
+    const rowElement = $(row);
+    const name = normalizeDetailLabel(rowElement.find(".mlc-params__parameter-name, .mlc-itembox__params__param__name, [data-testid='parameter-name']").first().text() || rowElement.attr("data-label") || rowElement.clone().children().remove().end().text().split(":")[0]);
+    const value = (rowElement.find(".mlc-params__parameter-value, .mlc-itembox__params__param__name, [data-testid='parameter-value']").last().text()
+      || rowElement.text().replace(/^\s*[^:]+:\s*/u, "")).replace(/\s+/gu, " ").trim();
     if (name && value) fieldValues.set(name, value);
   });
   const field = (...labels: string[]) => labels.map((label) => fieldValues.get(normalizeDetailLabel(label))).find(Boolean) ?? null;
-  const description = stripHtml($(".ml-text-truncate__content").first().text()) || null;
-  const locationText = $("h1").first().text().replace(/\s+/gu, " ").trim() || titleText;
+  const description = stripHtml($(".ml-text-truncate__content, [data-testid='offer-description'], [itemprop='description']").first().text() || text(product, "description") || metaDescription) || null;
+  const locationText = $("[data-testid='offer-location'], .mlc-itembox__location, h1").first().text().replace(/\s+/gu, " ").trim() || titleText;
   const { city, district } = parseRadarLocation(locationText);
   const area = decimal(areaFromText(field("Powierzchnia") ?? "") ?? areaFromText(titleText));
   const rooms = decimal((field("Liczba pokoi") ?? "").match(/\d+(?:[.,]\d+)?/u)?.[0] ?? roomsFromText(titleText));
   const floor = parseFloor(field("Piętro"));
-  const priceText = metaDescription.match(/\bza\s+([\d\s.,]+)\s*(?:zł|pln)\b/iu)?.[1] ?? $("meta[property='product:price:amount']").attr("content") ?? "";
+  const offers = isRecord(product.offers) ? product.offers : {};
+  const priceText = field("Cena", "Cena całkowita")
+    ?? $("meta[property='product:price:amount'], meta[itemprop='price']").first().attr("content")
+    ?? (typeof offers.price === "string" || typeof offers.price === "number" ? String(offers.price) : null)
+    ?? metaDescription.match(/(?:^|\s)(?:za|cena)\s+([\d\s.,]+)\s*(?:zł|pln)(?!\s*\/\s*m)/iu)?.[1]
+    ?? "";
   const price = money(priceText);
-  const explicitMarket = field("Rynek");
-  const marketType = parseMarketType(null, explicitMarket);
+  const explicitMarket = field("Rynek", "Rynek pierwotny") ?? (/(?:rynek\s+wtórny|rynek\s+pierwotny)/iu.test(metaDescription) ? metaDescription : null);
+  const marketType = parseMarketType(explicitMarket, `${explicitMarket ?? ""} ${metaDescription}`);
   const buildingType = normalizePortalBuildingType(field("Typ budynku"), titleText, description);
-  const pageText = $("main").text();
+  const pageText = $("main").text() || $("body").text();
   const active = Boolean($("h1").length) && !/og\u0142oszenie\s+(?:jest\s+)?zako\u0144czone|oferta\s+nieaktualna|przedmiot\s+nie\s+jest\s+dost\u0119pny/iu.test(pageText);
-  const saleEvidence = `${titleText} ${metaDescription}`;
-  const propertyType = /mieszkan\p{L}*/iu.test(titleText) && /sprzed\p{L}*/iu.test(saleEvidence) && !/\b(?:wynajem|wynajm\p{L}*|do\s+wynaj\u0119cia|najem)\b/iu.test(saleEvidence) ? "apartment" : null;
+  const saleEvidence = `${titleText} ${metaDescription} ${field("Transakcja", "Rodzaj oferty", "Kategoria") ?? ""}`;
+  const propertyType = /mieszkan\p{L}*/iu.test(saleEvidence) && /sprzed\p{L}*/iu.test(saleEvidence) && !isRadarRentalTransactionText(saleEvidence) ? "apartment" : null;
   const yearBuilt = parseExplicitConstructionYear(field("Rok budowy") ?? "");
   return buildRadarDetail({ source: "allegro_lokalnie", active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, explicitMarket, areaLabel: field("Powierzchnia") });
 }
@@ -595,7 +707,7 @@ function isTimeoutError(error: unknown): boolean {
   return error.name === "TimeoutError" || error.name === "AbortError" || /timed?\s*out|timeout/iu.test(error.message);
 }
 
-function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortalDetail): PropertySourceListing {
+function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortalDetail, response: { listingUrl: string; finalUrl: string; httpStatus: number; identity: string }): PropertySourceListing {
   const raw = { ...base.rawPayload };
   const candidate = isRecord(raw.candidate) ? raw.candidate : {};
   const resolvedCity = detail.city ?? base.city;
@@ -618,7 +730,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     detailVerified: detail.verified,
     detailLocationText: resolvedLocationText,
     detailContradictions: detail.contradictoryFields,
-    detailEvidence: { area: detail.area ?? base.area, rooms: detail.rooms ?? base.rooms, floor: detail.floor ?? parseFloor(base.floor), locationText: resolvedLocationText, price: detail.price ?? base.price, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" },
+    detailEvidence: { area: detail.area ?? base.area, rooms: detail.rooms ?? base.rooms, floor: detail.floor ?? parseFloor(base.floor), locationText: resolvedLocationText, price: detail.price ?? base.price, city: resolvedCity, district: resolvedDistrict, buildingType: resolvedBuildingType, marketType: resolvedMarketType, propertyType: detail.propertyType ?? candidate.propertyType ?? null, unconfirmedFields: detail.unconfirmedFields, contradictoryFields: detail.contradictoryFields, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" },
   };
   const description = [base.description, detail.description].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
   const exactPrice = detail.price ?? base.price;
@@ -630,7 +742,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     rooms: detail.rooms ?? base.rooms,
     pricePerSqm: exactPrice && exactArea ? exactPrice / exactArea : null,
     description,
-    rawPayload: { ...raw, source: base.source, candidate: mergedCandidate, marketType: resolvedMarketType, propertyType: detail.propertyType ?? candidate.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: resolvedLocationText, detailContradictions: detail.contradictoryFields, detailEvidence: { area: detail.area ?? base.area, rooms: detail.rooms ?? base.rooms, floor: detail.floor ?? parseFloor(base.floor), locationText: resolvedLocationText, price: detail.price ?? base.price, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" } },
+    rawPayload: { ...raw, source: base.source, candidate: mergedCandidate, marketType: resolvedMarketType, propertyType: detail.propertyType ?? candidate.propertyType, detailAttempted: true, detailVerified: detail.verified, detailActive: detail.active, detailIdentity: response.identity, detailLocationText: resolvedLocationText, detailContradictions: detail.contradictoryFields, detailResponse: response, detailEvidence: { area: detail.area ?? base.area, rooms: detail.rooms ?? base.rooms, floor: detail.floor ?? parseFloor(base.floor), locationText: resolvedLocationText, price: detail.price ?? base.price, city: resolvedCity, district: resolvedDistrict, buildingType: resolvedBuildingType, marketType: resolvedMarketType, propertyType: detail.propertyType ?? candidate.propertyType ?? null, unconfirmedFields: detail.unconfirmedFields, contradictoryFields: detail.contradictoryFields, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" } },
     city: resolvedCity,
     district: resolvedDistrict,
     locationText: resolvedLocationText,

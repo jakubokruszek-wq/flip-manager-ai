@@ -182,7 +182,7 @@ function toRadarListing(row: Row): RadarListing | null {
     title: nullableString(row.title), description: nullableString(row.description),
     price, area, pricePerSqm, rooms: nullableNumber(row.rooms), city, district, buildingType, marketType, renovationStatus,
     yearBuilt, yearBuiltSourceField,
-    qualityCategory: marketType === "primary" || renovationStatus === "fresh_renovation" ? "fresh_renovation" : "ready_high_standard",
+    qualityCategory: renovationStatus === "fresh_renovation" ? "fresh_renovation" : "ready_high_standard",
     contentHash, firstSeenAt, lastSeenAt, publishedAt, sourceUpdatedAt, collectedAt, crossSourceIdentity, crossSourceAlternates: [], status,
     excludedAt: nullableString(row.excluded_at), excludedReason: nullableString(row.excluded_reason),
     verificationIssues,

@@ -3,7 +3,8 @@ import test, { mock } from "node:test";
 import { fetchExternalPortal, EXTERNAL_PORTAL_PARSERS, parseRadarOfferDetail } from "./external-source-adapters.ts";
 import { activeSources, EXTERNAL_SOURCE_CONFIGS, SOURCES } from "./server/search-source-registry.ts";
 import type { ExternalSourceId } from "./external-source-parser.ts";
-import type { RadarDetailDiagnostic } from "./source-batches.ts";
+import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic } from "./source-batches.ts";
+import type { PropertySourceListing } from "@/features/properties/types/property";
 import { assessRadarDistrictOnlyCandidate, qualifyRadarCandidate } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { getRadarResults } from "@/features/price-radar/server/radar-results";
@@ -1403,6 +1404,122 @@ test("Oferty.net refuses an unselected or redirected city context instead of sen
       "https://www.oferty.net/",
     );
     await assert.rejects(fetchExternalPortal(config("oferty_net"), { city: "\u0141\u00f3d\u017a" }), /CITY_SEARCH_CONTEXT_REDIRECTED/);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Allegro Lokalnie detail maps total price, sale transaction, secondary market and apartment building without fabricating A/B finish", () => {
+  const offerUrl = "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-srodmiescie-srodmiescie-wschod-35-m2-sbd";
+  const html = `<title>Mieszkanie na sprzedaż — Łódź Śródmieście</title>
+    <link rel="canonical" href="${offerUrl}">
+    <meta name="description" content="Mieszkanie na sprzedaż. Rynek wtórny. Apartamentowiec.">
+    <h1>Mieszkanie na sprzedaż, Łódź, Śródmieście, Śródmieście-Wschód</h1>
+    <script type="application/ld+json">${JSON.stringify({
+      "@type": "Product", url: offerUrl, name: "Mieszkanie na sprzedaż, 35 m²",
+      description: "Rynek wtórny. Apartamentowiec.", offers: { "@type": "Offer", price: 400000, priceCurrency: "PLN" },
+    })}</script>`;
+  const detail = parseRadarOfferDetail("allegro_lokalnie", html, offerUrl);
+  assert.equal(detail.price, 400000);
+  assert.equal(detail.area, 35);
+  assert.equal(detail.city, "Łódź");
+  assert.equal(detail.district, "Śródmieście");
+  assert.equal(detail.propertyType, "apartment");
+  assert.equal(detail.marketType, "secondary");
+  assert.equal(detail.buildingType, "apartamentowiec");
+  assert.ok(detail.unconfirmedFields.includes("move_in_readiness"), "price and apartment type never imply the finish category");
+  assert.ok(detail.unconfirmedFields.includes("renovation_completion"));
+});
+
+test("Domiporta detail reads selected unit 42 rather than sibling values and leaves unsupported building/finish unconfirmed", () => {
+  const offerUrl = "https://www.domiporta.pl/nowe/ogloszenie/botanic_park_lodz-polesie_612704";
+  const record = {
+    "@type": "Apartment", "@id": offerUrl, url: offerUrl,
+    name: "Mieszkanie na sprzedaż nr 42 — Łódź, Polesie",
+    description: "Lokal nr 42 w Botanic Park.",
+    offers: { "@type": "Offer", price: 417690, priceCurrency: "PLN", itemOffered: {
+      "@type": "Apartment", floorSize: { "@type": "QuantitativeValue", value: 39.78, unitCode: "MTK" },
+      numberOfRooms: 2, address: { addressLocality: "Łódź", addressSuburb: "Polesie", streetAddress: "Botanic Park" },
+    } },
+  };
+  const html = `<title>Botanic Park — lokal 42</title><main><h1>Mieszkanie nr 42 na sprzedaż, Łódź, Polesie</h1>
+    <script type="application/ld+json">${JSON.stringify(record)}</script>
+    <table><tr data-unit-id="other"><td>Inne mieszkanie</td><td>999 999 zł</td><td>99 m²</td></tr></table></main>`;
+  const detail = parseRadarOfferDetail("domiporta", html, offerUrl);
+  assert.equal(detail.price, 417690);
+  assert.equal(detail.area, 39.78);
+  assert.equal(detail.rooms, 2);
+  assert.equal(detail.city, "Łódź");
+  assert.equal(detail.district, "Polesie");
+  assert.equal(detail.propertyType, "apartment");
+  assert.equal(detail.buildingType, null, "the adapter does not infer a block from the investment name");
+  assert.equal(detail.marketType, null, "the selected unit contains no explicit market evidence");
+  assert.ok(detail.unconfirmedFields.includes("building_type"));
+  assert.ok(detail.unconfirmedFields.includes("finish_evidence"));
+});
+
+test("Allegro detail HTTP 429 persists one Retry-After checkpoint, sends no early request, then resumes that candidate once", async () => {
+  const offerUrl = "https://allegrolokalnie.pl/oferta/mieszkanie-lodz-polesie-test-35-m2-xyz";
+  const searchHtml = jsonLd({ "@type": "ItemList", itemListElement: [{ "@type": "ListItem", item: {
+    "@type": "Product", name: "Mieszkanie na sprzedaż, Łódź Polesie, 35 m²", url: offerUrl,
+    offers: { "@type": "Offer", price: 400000, priceCurrency: "PLN" },
+  } }] });
+  const detailHtml = `<title>Mieszkanie na sprzedaż — Łódź Polesie</title><link rel="canonical" href="${offerUrl}">
+    <meta name="description" content="Mieszkanie na sprzedaż, rynek wtórny, blok, wykończone pod klucz, gotowe do zamieszkania w wysokim standardzie.">
+    <h1>Mieszkanie na sprzedaż, Łódź, Polesie</h1><main><p>35 m², 2 pokoje</p></main>
+    <script type="application/ld+json">${JSON.stringify({ "@type": "Product", url: offerUrl, name: "Mieszkanie na sprzedaż, 35 m²", description: "Rynek wtórny, blok, wykończone pod klucz, gotowe do zamieszkania w wysokim standardzie.", offers: { price: 400000 } })}</script>`;
+  const previousFetch = globalThis.fetch;
+  const requests: string[] = [];
+  let detailCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("/oferta/")) {
+      detailCalls += 1;
+      if (detailCalls === 1) {
+        const response = new Response("rate limited", { status: 429, headers: { "Retry-After": "30" } });
+        Object.defineProperty(response, "url", { value: url });
+        return response;
+      }
+      return responseWithUrl(detailHtml, 200, url);
+    }
+    return responseWithUrl(searchHtml, 200, url);
+  };
+  try {
+    const savedCursor: { value: RadarDetailCursor | null } = { value: null };
+    let firstDiagnostic: RadarDetailDiagnostic | undefined;
+    const firstBatches = {
+      purpose: "price_radar" as const,
+      async onBatch(batch: { listings: PropertySourceListing[]; warnings: string[]; fetched: number; diagnostics?: RadarDetailDiagnostic[] }, next: number | RadarDetailCursor | null) {
+        if (next && typeof next !== "number") savedCursor.value = next;
+        firstDiagnostic = batch.diagnostics?.[0];
+      },
+    };
+    await assert.rejects(fetchExternalPortal(config("allegro_lokalnie"), filter, undefined, firstBatches), (error: unknown) => error instanceof SourceBatchYield && error.reason === "detail_rate_limit");
+    assert.equal(detailCalls, 1, "the 429 is not immediately retried or hidden by a tight loop");
+    assert.equal(firstDiagnostic?.httpStatus, 429);
+    assert.equal(firstDiagnostic?.errorCode, "RATE_LIMITED");
+    assert.equal(savedCursor.value?.page, 1);
+    assert.equal(savedCursor.value?.candidateIndex, 0);
+    assert.equal(savedCursor.value?.retryAttempt, 1);
+    assert.ok(Date.parse(savedCursor.value!.retryAfterUntil!) >= Date.now() + 25_000);
+
+    const beforeWaitingResume = requests.length;
+    const waitingBatches = { purpose: "price_radar" as const, radarDetailCursor: savedCursor.value!, async onBatch() { assert.fail("no checkpoint rewrite is necessary while waiting"); } };
+    await assert.rejects(fetchExternalPortal(config("allegro_lokalnie"), filter, undefined, waitingBatches), (error: unknown) => error instanceof SourceBatchYield && error.reason === "detail_rate_limit");
+    assert.equal(requests.length, beforeWaitingResume, "Retry-After is enforced before refetching the result page");
+
+    const expiredCursor: RadarDetailCursor = { ...savedCursor.value!, retryAfterUntil: new Date(Date.now() - 1_000).toISOString() };
+    const resumedListings: PropertySourceListing[] = [];
+    const resumedBatches = {
+      purpose: "price_radar" as const,
+      radarDetailCursor: expiredCursor,
+      async onBatch(batch: { listings: PropertySourceListing[]; warnings: string[]; fetched: number }) { resumedListings.push(...batch.listings); },
+    };
+    const resumed = await fetchExternalPortal(config("allegro_lokalnie"), filter, undefined, resumedBatches);
+    assert.equal(detailCalls, 2, "the checkpoint resumes exactly one detail request for the same candidate");
+    assert.equal(resumed.listings.length, 1);
+    assert.equal(resumedListings.length, 1);
+    assert.equal(resumed.listings[0]?.price, 400000);
+    assert.equal(resumed.listings[0]?.rawPayload.detailVerified, true);
   } finally { globalThis.fetch = previousFetch; }
 });
 

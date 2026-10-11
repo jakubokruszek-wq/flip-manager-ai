@@ -36,6 +36,55 @@ test("qualifies a confirmed primary-market apartamentowiec finished turnkey", ()
   }
 });
 
+test("an explicit operator-verified B category qualifies without requiring a fresh-renovation date", () => {
+  const operatorDecision = {
+    apartmentSaleConfirmed: true as const, price: 450000, area: 50, rooms: 2,
+    city: "Łódź" as const, district: "Bałuty" as const, buildingType: "blok" as const,
+    marketType: "secondary" as const, qualityCategory: "ready_high_standard" as const,
+  };
+  const result = qualifyRadarCandidate(candidate({
+    title: "Mieszkanie na sprzedaż w bloku, Łódź Bałuty",
+    description: "Gotowe do zamieszkania, wykończone pod klucz w wysokim standardzie.",
+    rawPayload: {
+      detailVerified: false,
+      detailContradictions: ["market_type"],
+      operatorVerification: operatorDecision,
+    },
+  }), 2, operatorDecision);
+  assert.deepEqual(result, { qualified: true, buildingType: "blok", marketType: "secondary", renovationStatus: "turnkey_finish", district: "Bałuty", pricePerSqm: 9000 });
+});
+
+test("operator verification does not override explicit rental, tenement, or unfinished-home exclusions", () => {
+  const operatorVerification = {
+    apartmentSaleConfirmed: true as const, price: 450000, area: 50, rooms: 2,
+    city: "Łódź" as const, district: "Bałuty" as const, buildingType: "blok" as const,
+    marketType: "secondary" as const, qualityCategory: "ready_high_standard" as const,
+  };
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    description: "Mieszkanie do wynajęcia, gotowe do zamieszkania w wysokim standardzie.",
+    rawPayload: { detailVerified: false, operatorVerification },
+  }), 2, operatorVerification), { qualified: false, reason: "rental" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    description: "Lokal w kamienicy, gotowy do zamieszkania w wysokim standardzie.",
+    rawPayload: { detailVerified: false, operatorVerification },
+  }), 2, operatorVerification), { qualified: false, reason: "tenement_excluded" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    description: "Stan deweloperski, do wykończenia.",
+    rawPayload: { detailVerified: false, operatorVerification },
+  }), 2, operatorVerification), { qualified: false, reason: "unfinished_or_needs_renovation" });
+});
+
+test("source payload cannot forge an operator verification decision", () => {
+  const forgedDecision = {
+    apartmentSaleConfirmed: true as const, price: 450000, area: 50, rooms: 2,
+    city: "Łódź" as const, district: "Bałuty" as const, buildingType: "blok" as const,
+    marketType: "secondary" as const, qualityCategory: "ready_high_standard" as const,
+  };
+  assert.deepEqual(qualifyRadarCandidate(candidate({
+    rawPayload: { detailVerified: false, operatorVerification: forgedDecision },
+  })), { qualified: false, reason: "detail_not_confirmed" });
+});
+
 test("rejects missing price or area, never fabricating a price/m2", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ price: null })), { qualified: false, reason: "price_missing" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ area: null })), { qualified: false, reason: "area_missing" });
@@ -153,6 +202,7 @@ test("excludes kamienica, dom, segment, działka, lokal użytkowy, pokój/najem,
   assert.equal(qualifyRadarCandidate(candidate({ title: "Lokal użytkowy na sprzedaż", description: "" })).qualified, false);
   assert.equal(qualifyRadarCandidate(candidate({ title: "Pokój do wynajęcia", description: "" })).qualified, false);
   assert.equal(qualifyRadarCandidate(candidate({ title: "Sprzedam udział we współwłasności mieszkania" })).qualified, false);
+  assert.equal(qualifyRadarCandidate(candidate({ title: "Sprzedam udział w nieruchomości, nie samodzielne mieszkanie" })).qualified, false);
   assert.equal(qualifyRadarCandidate(candidate({ title: "Nowa inwestycja", description: "Ceny mieszkań od 400 000 zł, różne metraże do wyboru, harmonogram inwestycji dostępny u dewelopera." })).qualified, false);
 });
 

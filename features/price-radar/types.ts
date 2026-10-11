@@ -216,3 +216,54 @@ export type RadarDistrictQueueItem = {
   assignedAt: string | null;
   rejectedAt: string | null;
 };
+
+export type RadarVerificationFieldEvidence = Record<string, string>;
+export type RadarVerificationDecision = {
+  apartmentSaleConfirmed: true;
+  price: number;
+  area: number;
+  rooms: number;
+  city: "Łódź";
+  district: RadarDistrict;
+  buildingType: RadarBuildingType;
+  marketType: MarketType;
+  qualityCategory: RadarQualityCategory;
+};
+export type RadarVerificationQueueItem = {
+  id: string;
+  source: RadarSource;
+  externalListingId: string;
+  originalUrl: string;
+  title: string | null;
+  status: "pending" | "confirmed" | "rejected";
+  firstSeenAt: string;
+  lastSeenAt: string;
+  snapshot: {
+    description: string | null;
+    price: number | null;
+    pricePerSqm: number | null;
+    area: number | null;
+    rooms: number | null;
+    city: string | null;
+    district: string | null;
+    buildingType: string | null;
+    marketType: string | null;
+    qualityCategory: RadarQualityCategory | null;
+    publishedAt: string | null;
+    sourceUpdatedAt: string | null;
+    collectedAt: string | null;
+    sourceHttpStatus: number | null;
+    finalUrl: string | null;
+    sourceIdentity: string | null;
+    confirmedFields: string[];
+    missingFields: string[];
+    contradictoryFields: string[];
+    fieldEvidence: RadarVerificationFieldEvidence;
+    routingReasons: string[];
+    suggestedDistrict: string | null;
+    suggestionEvidence: string | null;
+  };
+  decision: RadarVerificationDecision | null;
+  decisionAt: string | null;
+  rejectedAt: string | null;
+};

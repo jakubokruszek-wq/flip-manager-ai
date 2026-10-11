@@ -6,6 +6,7 @@ import {
   type RadarQualificationRejectionReason,
   type RadarQualificationRejections,
   type RadarRenovationStatus,
+  type RadarVerificationDecision,
 } from "./types";
 import type { MarketType } from "@/features/flip-finder";
 import { findRadarOwnListingConflicts } from "./own-listing-consistency";
@@ -92,11 +93,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const RENTAL_PATTERN = /wynajem|wynajm\p{L}*|do wynaj\p{L}*|najem\b|czynsz najmu|sublokat\p{L}*|pokój\s+(?:do\s+wynaj\p{L}*|w\s+mieszkaniu)/iu;
-const SHARE_PATTERN = /\budzia\p{L}*\s+we?\s+wsp\p{L}*w\p{L}*asno\p{L}*/iu;
+const SHARE_PATTERN = /\budzia\p{L}*\s+(?:we?\s+(?:wsp\p{L}*w\p{L}*asno\p{L}*|nieruchomo\p{L}*|lokal\p{L}*|mieszk\p{L}*)|w\s+prawie\s+(?:do\s+)?nieruchomo\p{L}*)/iu;
 const COMMERCIAL_PATTERN = /lokal\s+u\p{L}*ytkow\p{L}*|lokal\s+us\p{L}*ug\p{L}*|biuro\s+na\s+sprzeda\p{L}*|magazyn|hala\s+produkcyj\p{L}*/iu;
 const PLOT_PATTERN = /dzia\p{L}*k\p{L}*\s+(?:budowlan\p{L}*|rolna\p{L}*|inwestycyjn\p{L}*)/iu;
 const HOUSE_LIKE_PATTERN = /\bdom\p{L}*\b|szeregow\p{L}*|bli\p{L}*niacz\p{L}*|segment\p{L}*\b/iu;
-const BULK_INVESTMENT_PATTERN = /ceny\s+mieszka\p{L}*\s+od|harmonogram\s+inwestycj\p{L}*|wybierz\s+(?:swoje\s+)?mieszkanie|r\p{L}*\p{L}*ne\s+metra\p{L}*e\s+do\s+wyboru|kilka\s+mieszka\p{L}*\s+w\s+ofercie|wiele\s+lokali\s+w\s+ofercie/iu;
+const BULK_INVESTMENT_PATTERN = /ceny\s+mieszka\p{L}*\s+od|harmonogram\s+inwestycj\p{L}*|wybierz\s+(?:swoje\s+)?mieszkanie|r\p{L}*\p{L}*ne\s+metra\p{L}*e\s+do\s+wyboru|kilka\s+mieszka\p{L}*\s+w\s+ofercie|wiele\s+lokali\s+w\s+ofercie|sprzeda\p{L}*\s+(?:ca\p{L}*\s+)?inwestycj\p{L}*|inwestycj\p{L}*\s+(?:mieszkaniow\p{L}*\s+)?na\s+sprzeda\p{L}*/iu;
 const APARTMENT_PATTERN = /\bmieszkan\p{L}*\b/iu;
 const APARTMENT_NEGATION_PATTERN = /(?:to\s+nie|nie\s+jest|brak)\s+(?:konkretnego\s+)?mieszkan\p{L}*/iu;
 
@@ -368,9 +369,19 @@ export function preflightRadarCandidateRejection(candidate: RadarPreflightCandid
   return null;
 }
 
-export function qualifyRadarCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2): QualificationResult {
+export function qualifyRadarCandidate(
+  candidate: QualificationCandidate,
+  qualityRulesVersion: 1 | 2 = 2,
+  trustedOperatorDecision?: RadarVerificationDecision,
+): QualificationResult {
   const requiresConfirmedDetail = candidate.source === "oferty_net" || candidate.source === "domiporta" || candidate.source === "adresowo" || candidate.source === "allegro_lokalnie" || candidate.source === "otodom";
-  if (requiresConfirmedDetail) {
+  // Raw source payloads are untrusted, even if they happen to contain a field
+  // named operatorVerification. Only a decision read from the owner-scoped
+  // verification queue may bypass the source-detail confirmation gate.
+  const operatorDecision = trustedOperatorDecision && isRadarVerificationDecision(trustedOperatorDecision)
+    ? trustedOperatorDecision
+    : null;
+  if (requiresConfirmedDetail && !operatorDecision) {
     const recordedConflicts = Array.isArray(candidate.rawPayload?.detailContradictions)
       ? candidate.rawPayload.detailContradictions.filter((item): item is string => typeof item === "string")
       : [];
@@ -386,9 +397,11 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate, quality
     });
     if (recordedConflicts.length > 0 || conflicts.length > 0) return reject("detail_conflict");
   }
-  if (requiresConfirmedDetail && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
-  if (candidate.price === null || !Number.isFinite(candidate.price) || candidate.price <= 0) return reject("price_missing");
-  if (candidate.area === null || !Number.isFinite(candidate.area) || candidate.area <= 0) return reject("area_missing");
+  if (requiresConfirmedDetail && !operatorDecision && candidate.rawPayload?.detailVerified !== true) return reject("detail_not_confirmed");
+  const confirmedPrice = operatorDecision?.price ?? candidate.price;
+  const confirmedArea = operatorDecision?.area ?? candidate.area;
+  if (confirmedPrice === null || !Number.isFinite(confirmedPrice) || confirmedPrice <= 0) return reject("price_missing");
+  if (confirmedArea === null || !Number.isFinite(confirmedArea) || confirmedArea <= 0) return reject("area_missing");
   const payload = candidate.rawPayload ?? {};
   if (payload.priceIsStartingAt === true || payload.priceKind === "from" || payload.priceUnit === "per_sqm") return reject("price_is_not_total_offer_price");
   const text = `${candidate.title ?? ""} ${candidate.description ?? ""}`;
@@ -396,26 +409,50 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate, quality
   // The total asking price and verified floor area are authoritative. A
   // portal's denormalized price/m² value can be stale or refer to a different
   // unit, so it must never replace their ratio in the Radar sample.
-  const pricePerSqm = candidate.price / candidate.area;
+  const pricePerSqm = confirmedPrice / confirmedArea;
   if (!Number.isFinite(pricePerSqm) || pricePerSqm <= 0) return reject("price_per_sqm_invalid");
 
-  const district = normalizeDistrict(candidate.district);
+  const district = normalizeDistrict(operatorDecision?.district ?? candidate.district);
   if (!district) return reject("district_not_confirmed");
-  if (!candidate.city || candidate.city.trim().toLocaleLowerCase("pl-PL") !== "łódź") return reject("city_not_lodz");
+  const confirmedCity = operatorDecision?.city ?? candidate.city;
+  if (!confirmedCity || confirmedCity.trim().toLocaleLowerCase("pl-PL") !== "łódź") return reject("city_not_lodz");
 
   const preflightRejection = preflightRadarCandidateRejection(candidate);
   if (preflightRejection) return reject(preflightRejection);
   const structuredPropertyType = candidate.propertyType?.trim().toLocaleLowerCase("pl-PL") ?? null;
   if (!structuredPropertyType && !APARTMENT_PATTERN.test(text)) return reject("apartment_not_confirmed");
 
-  const buildingType = resolveBuildingTypeForRadar(candidate, text);
+  const buildingType = operatorDecision
+    ? operatorDecision.buildingType
+    : resolveBuildingTypeForRadar(candidate, text);
   if (!buildingType) return reject("building_type_not_confirmed");
 
-  const marketType = resolveMarketType(candidate, text);
+  const marketType = operatorDecision
+    ? operatorDecision.marketType
+    : resolveMarketType(candidate, text);
   if (!marketType) return reject("market_type_not_confirmed");
 
-  const explicitlyNeedsWork = NEEDS_RENOVATION_PATTERN.test(text) || INCOMPLETE_RENOVATION_PATTERN.test(normalizeRadarEvidenceText(ownOfferEvidenceText(candidate)));
+  const normalizedOwnText = normalizeRadarEvidenceText(ownOfferEvidenceText(candidate));
+  const explicitlyNeedsWork = NEEDS_RENOVATION_PATTERN.test(text)
+    || INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
+    || (operatorDecision && (RENOVATION_CONFLICT_PATTERN.test(normalizedOwnText)
+      || TURNKEY_NEGATION_PATTERN.test(normalizedOwnText)
+      || TURNKEY_FUTURE_PATTERN.test(normalizedOwnText)
+      || MOVE_IN_NEGATION_PATTERN.test(normalizedOwnText)
+      || FINISH_CONTRADICTION_PATTERN.test(normalizedOwnText)));
   if (DEVELOPER_STATE_PATTERN.test(text) || explicitlyNeedsWork) return reject("unfinished_or_needs_renovation");
+
+  // An explicit, owner-scoped operator decision can resolve missing or
+  // contradictory portal facts. It never bypasses sale/property exclusions,
+  // positive price/area, location, building, market or unfinished-state
+  // checks above; it only supplies the fact that the operator reviewed.
+  if (operatorDecision) {
+    if (operatorDecision.qualityCategory === "fresh_renovation") {
+      if (marketType !== "secondary") return reject("renovation_not_confirmed_fresh_full");
+      return { qualified: true, buildingType, marketType, renovationStatus: "fresh_renovation", district, pricePerSqm };
+    }
+    return { qualified: true, buildingType, marketType, renovationStatus: "turnkey_finish", district, pricePerSqm };
+  }
 
   const finish = inspectRadarFinishEvidence(text);
   if (marketType === "secondary") {
@@ -438,6 +475,19 @@ export function qualifyRadarCandidate(candidate: QualificationCandidate, quality
   const normalizedText = text.normalize("NFD").replace(/\p{M}/gu, "").replace(/[łŁ]/gu, "l");
   if (!finish.turnkey || TURNKEY_EXTRA_COST_PATTERN.test(normalizedText)) return reject("turnkey_not_confirmed");
   return { qualified: true, buildingType, marketType, renovationStatus: "turnkey_finish", district, pricePerSqm };
+}
+
+function isRadarVerificationDecision(value: unknown): value is RadarVerificationDecision {
+  if (!isRecord(value)) return false;
+  return value.apartmentSaleConfirmed === true
+    && typeof value.price === "number" && Number.isFinite(value.price) && value.price > 0
+    && typeof value.area === "number" && Number.isFinite(value.area) && value.area > 0
+    && typeof value.rooms === "number" && Number.isInteger(value.rooms) && value.rooms > 0
+    && value.city === "Łódź"
+    && DEFAULT_RADAR_DISTRICTS.includes(value.district as (typeof DEFAULT_RADAR_DISTRICTS)[number])
+    && (value.buildingType === "blok" || value.buildingType === "apartamentowiec")
+    && (value.marketType === "primary" || value.marketType === "secondary")
+    && (value.qualityCategory === "fresh_renovation" || value.qualityCategory === "ready_high_standard");
 }
 
 export type RadarDistrictOnlyAssessment =

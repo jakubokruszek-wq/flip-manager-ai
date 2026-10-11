@@ -111,7 +111,7 @@ test("the optional minimum asking price per square metre filters cards and match
   assert.equal(payload.stats[0]?.sampleSize, 1, "the stat count and card list use the same price-filtered unique set");
 });
 
-test("secondary turnkey records are assigned to category B while fresh secondary and turnkey primary records remain category A", async () => {
+test("A/B stats stay separated by market and standard, with turnkey primary treated as category B", async () => {
   currentDb = fakeDb([
     row({ id: "fresh-secondary" }),
     row({ id: "ready-secondary", external_listing_id: "ready", original_url: "https://domy.pl/ready", normalized_url: "https://domy.pl/ready", renovation_status: "turnkey_finish" }),
@@ -121,7 +121,7 @@ test("secondary turnkey records are assigned to category B while fresh secondary
   assert.deepEqual(payload.listings.map(({ id, qualityCategory }) => [id, qualityCategory]), [
     ["fresh-secondary", "fresh_renovation"],
     ["ready-secondary", "ready_high_standard"],
-    ["turnkey-primary", "fresh_renovation"],
+    ["turnkey-primary", "ready_high_standard"],
   ]);
   assert.equal(payload.stats.length, 3, "district, market, and quality category are independent groups");
 });

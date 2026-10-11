@@ -9,6 +9,7 @@ import { assessRadarDistrictOnlyCandidate, isRadarQualificationRejectionReason, 
 import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { radarDistrictQueueFailureWarning, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
+import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
@@ -363,7 +364,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           emittedBatches = true;
           const batchRejectionReasons = [...(batch.rejectionReasons ?? [])];
           let batchQualified = 0;
-          for (const listing of batch.listings) {
+          const verificationDecisions = await confirmedRadarVerificationDecisions(supabase, input.ownerId, sourceId, batch.listings.map((listing) => listing.externalListingId));
+          for (const sourceListing of batch.listings) {
+            const manualDecision = verificationDecisions.get(sourceListing.externalListingId);
+            const listing = manualDecision ? applyRadarVerificationDecision(sourceListing, manualDecision) : sourceListing;
             controller.signal.throwIfAborted();
             if (await radarRunUserTerminated(supabase, input)) {
               userTerminationDetected = true;
@@ -377,7 +381,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               propertyType: typeof listing.rawPayload.propertyType === "string" ? listing.rawPayload.propertyType : null,
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
             };
-            const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1);
+            const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, manualDecision);
             if (!outcome.qualified) {
               if (outcome.reason === "detail_conflict" && (listing.source === "oferty_net" || listing.source === "domiporta")) {
                 const evidence = isRecord(listing.rawPayload.detailEvidence) ? listing.rawPayload.detailEvidence : {};
@@ -418,6 +422,22 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                   }
                   continue;
                 }
+              }
+              const verificationInput = {
+                listing,
+                reason: outcome.reason,
+                detailUnconfirmedFields: isRecord(listing.rawPayload.detailEvidence) && Array.isArray(listing.rawPayload.detailEvidence.unconfirmedFields)
+                  ? listing.rawPayload.detailEvidence.unconfirmedFields.filter((field): field is string => typeof field === "string") : [],
+                detailContradictoryFields: Array.isArray(listing.rawPayload.detailContradictions)
+                  ? listing.rawPayload.detailContradictions.filter((field): field is string => typeof field === "string") : [],
+                seenAt: new Date().toISOString(),
+              };
+              if (isReviewableRadarVerificationCandidate(verificationInput)) {
+                const queueResult = await upsertPendingRadarVerificationCandidate(supabase, input.ownerId, verificationInput, districtAiBudget);
+                if (!queueResult.ok) recordRadarSourceWarnings(checkpoint, sourceId, [queueResult.reason === "schema_unavailable"
+                  ? "RADAR_VERIFICATION_QUEUE_UNAVAILABLE: kolejka wymaga lokalnego draftu 20261012130000_add_price_radar_verification_queue.sql"
+                  : "RADAR_VERIFICATION_QUEUE_SAVE_FAILED: kandydat nie został zapisany do weryfikacji"]);
+                if (queueResult.ok) continue;
               }
               batchRejectionReasons.push(outcome.reason);
               continue;
@@ -678,7 +698,10 @@ function abortPromise(signal: AbortSignal): Promise<never> {
 function isRadarDetailCursor(value: unknown): value is RadarDetailCursor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const cursor = value as Partial<RadarDetailCursor>;
-  return cursor.kind === "radar_detail_v1" && Number.isInteger(cursor.page) && Number(cursor.page) > 0 && Number.isInteger(cursor.candidateIndex) && Number(cursor.candidateIndex) >= 0;
+  if (cursor.kind !== "radar_detail_v1" || !Number.isInteger(cursor.page) || Number(cursor.page) <= 0 || !Number.isInteger(cursor.candidateIndex) || Number(cursor.candidateIndex) < 0) return false;
+  if (cursor.retryAttempt !== undefined && cursor.retryAttempt !== 1) return false;
+  if (cursor.retryAfterUntil !== undefined && (cursor.retryAttempt !== 1 || typeof cursor.retryAfterUntil !== "string" || !Number.isFinite(Date.parse(cursor.retryAfterUntil)))) return false;
+  return true;
 }
 
 function appendDetailDiagnostics(checkpoint: RadarCheckpoint, sourceId: string, diagnostics: RadarDetailDiagnostic[]): void {
@@ -695,7 +718,7 @@ function appendDetailDiagnostics(checkpoint: RadarCheckpoint, sourceId: string, 
       identity: ["same_url", "same_listing_id", "mismatch", "unconfirmed", "not_checked"].includes(diagnostic.identity) ? diagnostic.identity : "unconfirmed",
       unconfirmedFields: [...new Set(diagnostic.unconfirmedFields.filter((field) => DETAIL_DIAGNOSTIC_FIELDS.has(field)))].slice(0, DETAIL_DIAGNOSTIC_FIELDS.size),
       contradictoryFields: [...new Set(diagnostic.contradictoryFields.filter((field) => DETAIL_DIAGNOSTIC_FIELDS.has(field)))].slice(0, DETAIL_DIAGNOSTIC_FIELDS.size),
-      ...(diagnostic.errorCode && ["INVALID_DETAIL_URL", "NETWORK_ERROR", "TIMEOUT", "HTTP_ERROR", "ACCESS_CHALLENGE", "NOT_FOUND", "GONE"].includes(diagnostic.errorCode) ? { errorCode: diagnostic.errorCode } : {}),
+      ...(diagnostic.errorCode && ["INVALID_DETAIL_URL", "NETWORK_ERROR", "TIMEOUT", "HTTP_ERROR", "RATE_LIMITED", "ACCESS_CHALLENGE", "NOT_FOUND", "GONE"].includes(diagnostic.errorCode) ? { errorCode: diagnostic.errorCode } : {}),
     };
     const key = `${safe.kind}|${safe.listingUrl ?? ""}|${safe.httpStatus ?? ""}|${safe.errorCode ?? ""}`;
     if (seen.has(key)) continue;

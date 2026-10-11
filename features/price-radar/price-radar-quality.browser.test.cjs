@@ -75,6 +75,28 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   let savedFilters = { districts: ["Bałuty"], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: ["oferty_net"], minPricePerSqm: null };
   let excluded = false;
   let runPostCount = 0;
+  const verificationDecisionPosts = [];
+  const verificationCandidate = {
+    id: "verification-offer-42", source: "oferty_net", externalListingId: "offer-42",
+    originalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-lodz-42m2,offer-42",
+    title: "Mieszkanie do ręcznego sprawdzenia — Łódź",
+    status: "pending", firstSeenAt: "2026-10-10T09:00:00Z", lastSeenAt: "2026-10-10T12:00:00Z",
+    snapshot: {
+      description: "Pojedyncze mieszkanie na sprzedaż. Sprawdź cenę i metraż w źródle.", price: 400_000,
+      pricePerSqm: null, area: 40, rooms: 2, city: null, district: null, buildingType: null, marketType: null,
+      qualityCategory: null, publishedAt: null, sourceUpdatedAt: null, collectedAt: "2026-10-10T12:00:00Z",
+      sourceHttpStatus: 200, finalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-lodz-42m2,offer-42?detail=1", sourceIdentity: "same_listing_id",
+      confirmedFields: [], missingFields: ["total_price", "area", "rooms", "city_lodz", "district", "building_type", "market_type", "standard"],
+      contradictoryFields: ["area"],
+      fieldEvidence: { total_price: "Cena wymaga sprawdzenia.", area: "Sprzeczne wartości powierzchni.", rooms: "Brak potwierdzenia." },
+      routingReasons: ["detail_conflict", "missing:standard"], suggestedDistrict: "Bałuty", suggestionEvidence: "Źródłowy cytat z lokalizacją: Bałuty, Łódź.",
+    }, decision: null, decisionAt: null, rejectedAt: null,
+  };
+  const secondVerificationCandidate = {
+    ...verificationCandidate, id: "verification-offer-rejected", externalListingId: "offer-rejected",
+    originalUrl: "https://www.oferty.net/of,offer-rejected", title: "Oferta do odrzucenia z kolejki",
+  };
+  let verificationQueue = { available: true, pending: [verificationCandidate], confirmed: [], rejected: [] };
   const listing = (id, pricePerSqm, qualityCategory, renovationStatus) => ({
     id, source: "oferty_net", externalListingId: id, originalUrl: `https://www.oferty.net/${id}`, normalizedUrl: `https://www.oferty.net/${id}`,
     title: id === "fresh-a" ? "Łanowa · świeży remont" : "Elsnera · wysoki standard", description: null,
@@ -116,11 +138,43 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
     excluded = Boolean(body.excluded);
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
+  await page.route("**/api/price-radar/verification-queue", async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(verificationQueue) });
+    }
+    return route.fulfill({ status: 405, contentType: "application/json", body: JSON.stringify({ message: "method not allowed" }) });
+  });
+  await page.route("**/api/price-radar/verification-queue/resolve", async (route) => {
+    const body = route.request().postDataJSON();
+    verificationDecisionPosts.push(body);
+    if (body.queueId !== verificationCandidate.id || body.decision?.apartmentSaleConfirmed !== true) {
+      return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ message: "explicit confirmation required" }) });
+    }
+    const decision = { ...body.decision, confirmedAt: new Date().toISOString() };
+    verificationQueue = {
+      available: true, pending: [], rejected: [],
+      confirmed: [{ ...verificationCandidate, status: "confirmed", decision, decisionAt: decision.confirmedAt }],
+    };
+    all.push({
+      ...listing("verified-from-queue", 10_000, "ready_high_standard", "turnkey_finish"),
+      source: "oferty_net", externalListingId: "offer-42", originalUrl: verificationCandidate.originalUrl,
+      title: "Mieszkanie ręcznie potwierdzone z kolejki", price: 400_000, area: 40, pricePerSqm: 10_000,
+      city: "Łódź", district: "Bałuty", buildingType: "blok", marketType: "secondary", rooms: 2,
+    });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, listingId: "verified-from-queue" }) });
+  });
+  await page.route("**/api/price-radar/verification-queue/reject", async (route) => {
+    const body = route.request().postDataJSON();
+    const target = [verificationCandidate, secondVerificationCandidate].find((item) => item.id === body.queueId);
+    if (!target) return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    verificationQueue = { available: true, pending: verificationQueue.pending.filter((item) => item.id !== target.id), confirmed: verificationQueue.confirmed, rejected: [...verificationQueue.rejected, { ...target, status: "rejected", rejectedAt: new Date().toISOString() }] };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
 
   await page.goto(`${baseUrl}/price-radar`);
   await page.locator("article").filter({ hasText: "A · Po świeżym remoncie" }).waitFor();
   await page.locator("article").filter({ hasText: "B · Gotowe — wysoki standard" }).waitFor();
-  assert.equal(await page.locator("article").count(), 2, "both quality categories retain visible cards below the 20-item threshold");
+  assert.equal(await page.locator('section[aria-label="Oferty w próbie"] article').count(), 2, "both quality categories retain visible cards below the 20-item threshold; the separate review queue is not counted as a comparison card");
   assert.equal(runPostCount, 0, "viewing the Radar does not start or resume a run");
 
   const minimum = page.getByLabel("Min. cena ofertowa za m²");
@@ -142,6 +196,39 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   await page.getByText("Oferty w próbie (1)").waitFor();
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText("Oferty w próbie (1)").waitFor();
+
+  await page.getByRole("heading", { name: "Do weryfikacji danych i standardu (1)" }).waitFor();
+  await page.getByText("Pola i dowody źródłowe").waitFor();
+  assert.equal(await page.getByText(/HTTP źródła: 200/u).count(), 1, "the specific response status appears with the offer evidence");
+  const verificationCard = page.locator('section[aria-label="Do weryfikacji danych i standardu"] article').filter({ hasText: "Mieszkanie do ręcznego sprawdzenia" });
+  assert.equal(await verificationCard.getByLabel("Cena całkowita, zł").inputValue(), "", "a conflicting source amount is not silently prefilled as confirmed total price");
+  assert.equal(await verificationCard.getByLabel("Powierzchnia, m²").inputValue(), "", "a conflicting area is not silently prefilled as confirmed");
+  await verificationCard.getByLabel("Cena całkowita, zł").fill("400000");
+  await verificationCard.getByLabel("Powierzchnia, m²").fill("40");
+  await verificationCard.getByLabel("Pokoje").fill("2");
+  await verificationCard.getByLabel("Miasto — potwierdź z ogłoszenia").fill("Łódź");
+  await verificationCard.getByLabel("Dzielnica").selectOption("Bałuty");
+  await verificationCard.getByLabel("Typ budynku").selectOption("blok");
+  await verificationCard.locator("label").filter({ hasText: "Rynek" }).locator("select").selectOption("secondary");
+  await verificationCard.locator("label").filter({ hasText: "Standard" }).locator("select").selectOption("ready_high_standard");
+  await verificationCard.getByRole("checkbox", { name: /Potwierdzam z ogłoszenia/u }).check();
+  await page.getByText("Podgląd ceny/m² po zatwierdzeniu danych: 10 000 zł/m²").waitFor();
+  await page.getByRole("button", { name: "Potwierdź i dodaj do porównań" }).click();
+  await page.getByRole("heading", { name: "Potwierdzone i dodane do porównań (1)" }).waitFor();
+  await page.getByText("Mieszkanie ręcznie potwierdzone z kolejki").waitFor();
+  assert.deepEqual(verificationDecisionPosts[0].decision, {
+    apartmentSaleConfirmed: true, price: 400000, area: 40, rooms: 2, city: "Łódź", district: "Bałuty",
+    buildingType: "blok", marketType: "secondary", qualityCategory: "ready_high_standard",
+  }, "the browser sends the explicit operator-selected facts and category B");
+  assert.ok(all.some((item) => item.id === "verified-from-queue"), "only after explicit confirmation does the re-read include the Radar comparison");
+  assert.equal(await page.getByText("Oferty w próbie (2)").count(), 1, "the newly confirmed offer is visible below the 20-item sample threshold");
+
+  verificationQueue = { ...verificationQueue, pending: [secondVerificationCandidate] };
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const rejectCard = page.locator("article").filter({ hasText: "Oferta do odrzucenia z kolejki" });
+  await rejectCard.getByRole("button", { name: "Odrzuć" }).click();
+  await page.getByRole("heading", { name: "Odrzucone z weryfikacji (1)" }).waitFor();
+  await page.getByText("Oferta do odrzucenia z kolejki").last().waitFor();
 
   for (const width of [320, 375]) {
     await page.setViewportSize({ width, height: 900 });

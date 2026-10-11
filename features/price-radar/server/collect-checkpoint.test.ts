@@ -41,13 +41,15 @@ function fakeDb() {
     },
     from(table: string) {
       accessedTables.add(table);
-      const rows = tables[table] ?? (tables[table] = []);
+      const queueSchemaMissing = table === "price_radar_verification_queue";
+      const rows = queueSchemaMissing ? [] : tables[table] ?? (tables[table] = []);
       const filters: Array<(row: Row) => boolean> = [];
       let op: "select" | "insert" = "select";
       let payload: Row | null = null;
       const builder: Row = {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
+        in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return builder; },
         order: () => builder,
         maybeSingle: async () => ({ data: rows.find((row) => filters.every((filter) => filter(row))) ?? null, error: null }),
         insert: (value: Row) => { op = "insert"; payload = value; return builder; },
@@ -59,6 +61,9 @@ function fakeDb() {
           rows.push(row);
           return { data: row, error: null };
         },
+        then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve(queueSchemaMissing
+          ? { data: null, error: { code: "42P01", message: "relation price_radar_verification_queue does not exist" } }
+          : { data: rows.filter((row) => filters.every((filter) => filter(row))), error: null }).then(resolve, reject),
       };
       return builder;
     },
