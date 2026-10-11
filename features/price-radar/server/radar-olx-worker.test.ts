@@ -10,6 +10,7 @@ let persisted: Row[] = [];
 let finalized: Row[] = [];
 let districtQueueUpserts: Row[] = [];
 let currentRunToken = radarLeaseToken;
+let runStopRequestedAt: string | null = null;
 
 function fakeDb() {
   return {
@@ -21,7 +22,7 @@ function fakeDb() {
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
         maybeSingle: async () => {
           if (table === "price_radar_district_queue") return { data: null, error: null }; // no existing row -- every candidate here is "new" for caching purposes
-          return { data: { id: runId, owner_id: ownerId, checkpoint: structuredClone(checkpoint), source_statuses: structuredClone(checkpoint.sourceStatuses), scanned_count: 2, qualified_count: 1, status: "running", lease_token: currentRunToken, lease_until: new Date(Date.now() + 60_000).toISOString() }, error: null };
+          return { data: { id: runId, owner_id: ownerId, checkpoint: structuredClone(checkpoint), source_statuses: structuredClone(checkpoint.sourceStatuses), scanned_count: 2, qualified_count: 1, status: "running", lease_token: currentRunToken, lease_until: new Date(Date.now() + 60_000).toISOString(), stop_requested_at: runStopRequestedAt }, error: null };
         },
       };
       return builder;
@@ -56,6 +57,7 @@ test("OLX worker persists only qualified Radar rows and finalizes through the Ra
   finalized = [];
   districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
+  runStopRequestedAt = null;
   const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
     fetched: 1, listings: [candidate() as never], warnings: [], durationMs: 1200,
   }, fakeDb() as never);
@@ -78,6 +80,7 @@ test("OLX worker records strict rejection reasons without persisting an unqualif
   finalized = [];
   districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
+  runStopRequestedAt = null;
   // A candidate missing a building type AND a district: with no building
   // type, assessRadarDistrictOnlyCandidate must find it ineligible for the
   // district queue, so this stays a genuine, counted rejection.
@@ -98,6 +101,7 @@ test("OLX worker queues (never rejects) a candidate missing ONLY its district --
   finalized = [];
   districtQueueUpserts = [];
   currentRunToken = radarLeaseToken;
+  runStopRequestedAt = null;
   const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
     fetched: 1, listings: [{ ...candidate(), district: null } as never], warnings: [], durationMs: 1200,
   }, fakeDb() as never);
@@ -114,6 +118,7 @@ test("OLX worker maps the portal's structured market parameter before strict Rad
   persisted = [];
   finalized = [];
   currentRunToken = radarLeaseToken;
+  runStopRequestedAt = null;
   const olxListing = {
     ...candidate(),
     description: "Sprzedaż mieszkania. Świeżo po generalnym remoncie w 2025, nowe instalacje, gotowe do zamieszkania.",
@@ -130,6 +135,7 @@ test("a stale Radar lease cannot persist or finalize an OLX worker result", asyn
   persisted = [];
   finalized = [];
   currentRunToken = "new-owner-token";
+  runStopRequestedAt = null;
   await assert.rejects(
     finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "old-job-token", workerId: "old-worker", ownerId, runId, radarLeaseToken }, {
       fetched: 1, listings: [candidate() as never], warnings: [], durationMs: 100,
@@ -144,6 +150,7 @@ test("a worker-reported terminal 403 fails the OLX source without retrying or pe
   persisted = [];
   finalized = [];
   currentRunToken = radarLeaseToken;
+  runStopRequestedAt = null;
   const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
     errorCode: "HTTP_403", errorMessage: "Forbidden",
   }, fakeDb() as never);
@@ -152,4 +159,24 @@ test("a worker-reported terminal 403 fails the OLX source without retrying or pe
   assert.equal(finalized[0].p_job_status, "failed");
   assert.equal((finalized[0].p_source_statuses as Record<string, unknown>).olx, "failed");
   assert.equal((finalized[0].p_checkpoint as typeof checkpoint).currentSourceIndex, 1);
+});
+
+test("an OLX worker acknowledges an operator stop before it qualifies or persists payload listings", async () => {
+  persisted = [];
+  finalized = [];
+  districtQueueUpserts = [];
+  currentRunToken = radarLeaseToken;
+  runStopRequestedAt = new Date().toISOString();
+  const result = await finishRadarOlxJob({ jobId: "job-1", jobLeaseToken: "job-lease-1", workerId: "worker-1", ownerId, runId, radarLeaseToken }, {
+    fetched: 1, listings: [candidate() as never], warnings: [], durationMs: 1200,
+  }, fakeDb() as never);
+  assert.deepEqual(result, { source: "olx", status: "failed", fetched: 0, qualified: 0 });
+  assert.equal(persisted.length, 0, "a stop request prevents any payload candidate from reaching Radar persistence");
+  assert.equal(districtQueueUpserts.length, 0, "a stop request cannot enqueue district-review work");
+  assert.equal(finalized.length, 1);
+  assert.equal(finalized[0].p_run_status, "partial");
+  assert.equal(finalized[0].p_error_message, "RADAR_STOPPED_BY_OPERATOR");
+  assert.equal(finalized[0].p_job_status, "failed");
+  assert.equal(finalized[0].p_error_code, "RADAR_STOPPED_BY_OPERATOR");
+  assert.equal(finalized[0].p_run_id, runId, "the stopped worker finalizes only its existing run");
 });

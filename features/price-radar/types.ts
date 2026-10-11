@@ -38,6 +38,9 @@ export type RadarListing = {
   area: number;
   pricePerSqm: number;
   rooms: number | null;
+  /** Read from an explicit source field; null is not guessed from text or age. */
+  yearBuilt: number | null;
+  yearBuiltSourceField: "Rok budowy" | null;
   city: string;
   district: string;
   buildingType: RadarBuildingType;
@@ -128,6 +131,7 @@ export type RadarRun = {
   leaseToken: string | null;
   /** Null once finished; otherwise when the current claim's lease expires -- an orphaned "running" run (e.g. a dead OLX worker) is reclaimable past this instant, not stuck forever. */
   leaseUntil: string | null;
+  stopRequestedAt: string | null;
   status: RadarRunStatus;
   startedAt: string;
   finishedAt: string | null;

@@ -5,7 +5,7 @@ import { parseExternalSourceJsonLd, type ExternalSourceConfig, type ExternalSour
 
 const sourceIds: ExternalSourceId[] = [
   "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo",
-  "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie",
+  "oferty_net", "bezposrednio", "domy", "allegro_lokalnie",
 ];
 
 function config(id: ExternalSourceId): ExternalSourceConfig {

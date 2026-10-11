@@ -14,6 +14,7 @@ export async function latestRadarRun(ownerId: string, client = createAdminClient
   return {
     id: String(data.id), ownerId, leaseToken: null,
     leaseUntil: typeof data.lease_until === "string" ? data.lease_until : null,
+    stopRequestedAt: typeof data.stop_requested_at === "string" ? data.stop_requested_at : null,
     status: data.status === "pending" || data.status === "running" || data.status === "completed" || data.status === "failed" || data.status === "partial" ? data.status : "failed",
     startedAt: String(data.started_at), finishedAt: typeof data.finished_at === "string" ? data.finished_at : null,
     checkpoint: { ...record, qualificationRejections } as unknown as RadarRun["checkpoint"],

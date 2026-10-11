@@ -49,6 +49,11 @@ test("the exact regression: a real Allegro Lokalnie listing (the source named in
   assert.equal(listing?.source, "allegro_lokalnie");
 });
 
+test("Finder read path preserves an explicitly stored construction year for filtering and underwriting", () => {
+  const listing = toListingRow(listingRow({ year_built: 1897 }));
+  assert.equal(listing?.yearBuilt, 1897);
+});
+
 test("an unknown/invalid source is still correctly rejected, proving this is an allowlist fix, not a bypass of validation", () => {
   const listing = toListingRow(listingRow({ source: "not-a-real-source" }));
   assert.equal(listing, null);

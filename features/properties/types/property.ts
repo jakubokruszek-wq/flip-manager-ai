@@ -166,6 +166,7 @@ export type NormalizedFacebookPropertyImport = FacebookCollectorPropertyPayload 
 
 /** Listing matched by a Flip Finder filter and ready for display. */
 export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "area" | "rooms" | "floor" | "totalFloors" | "buildingType" | "ownership" | "description" | "images" | "pricePerSqm" | "locationText" | "address" | "city" | "district" | "thumbnailUrl"> & {
+  yearBuilt?: PropertyFields["yearBuilt"];
   id: string;
   publishedAt?: string | null;
   originalUrl: string | null;

@@ -110,6 +110,7 @@ type ListingRow = Pick<
   parameterFingerprint?: string | null;
   facebookPostId?: string | null;
   listingIntent?: string | null;
+  yearBuilt?: number | null;
   sourceMetadataCollectedAt?: string | null;
   sourcePostUrl?: string | null;
   /**
@@ -228,13 +229,13 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const lifecycleStatuses = includeArchived
     ? ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]
     : ["ACTIVE", "REVIEW"];
-  const baseListingColumns =
-    "id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count";
-  const buildListingQuery = (idChunk: string[], identityColumns: "both" | "cross" | "none") =>
+  const baseListingColumns = (includeYearBuilt: boolean) =>
+    `id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type${includeYearBuilt ? ",year_built" : ""},ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count`;
+  const buildListingQuery = (idChunk: string[], identityColumns: "both" | "cross" | "none", includeYearBuilt = true) =>
     supabase
       .from("listings")
       .select(
-        `${baseListingColumns}${identityColumns === "both" ? ",cross_source_identity,identity_evidence" : identityColumns === "cross" ? ",cross_source_identity" : ""}`,
+        `${baseListingColumns(includeYearBuilt)}${identityColumns === "both" ? ",cross_source_identity,identity_evidence" : identityColumns === "cross" ? ",cross_source_identity" : ""}`,
       )
       .in("id", idChunk)
       .eq("status", "active")
@@ -258,14 +259,27 @@ export async function getFilterResults(filterId: string, includeArchived = false
     ),
   ]);
   let listingsResult = initialListingsResult;
-  let identityEvidenceAvailable = !initialListingsResult.error;
-  if (isMissingSelectedColumn(listingsResult.error, "identity_evidence")) {
-    identityEvidenceAvailable = false;
-    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, "cross"));
-  }
-  if (isMissingSelectedColumn(listingsResult.error, "cross_source_identity")) {
-    identityEvidenceAvailable = false;
-    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, "none"));
+  let identityEvidenceAvailable = true;
+  let identityColumns: "both" | "cross" | "none" = "both";
+  let yearBuiltAvailable = true;
+  // These columns were introduced by independent, optional migrations. Retry
+  // only when PostgREST identifies the specific missing column, retaining all
+  // other available evidence. This lets the deployed read path remain usable
+  // before the year-built draft is applied, while still exposing the value
+  // immediately on schemas that have it.
+  for (let attempt = 0; listingsResult.error && attempt < 3; attempt += 1) {
+    if (identityColumns === "both" && isMissingSelectedColumn(listingsResult.error, "identity_evidence")) {
+      identityColumns = "cross";
+      identityEvidenceAvailable = false;
+    } else if (identityColumns !== "none" && isMissingSelectedColumn(listingsResult.error, "cross_source_identity")) {
+      identityColumns = "none";
+      identityEvidenceAvailable = false;
+    } else if (yearBuiltAvailable && isMissingSelectedColumn(listingsResult.error, "year_built")) {
+      yearBuiltAvailable = false;
+    } else {
+      break;
+    }
+    listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, identityColumns, yearBuiltAvailable));
   }
   if (listingsResult.error?.code === "42703" || listingsResult.error?.code === "PGRST204") {
     // Compatibility for pre-lifecycle schemas remains separate from optional
@@ -425,6 +439,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         description: listing.description,
         locationText,
         buildingType: listing.buildingType,
+        yearBuilt: listing.yearBuilt ?? null,
         ownership: listing.ownership,
         listingIntent: listing.listingIntent,
       },
@@ -469,6 +484,7 @@ export async function getFilterResults(filterId: string, includeArchived = false
         floor: listing.floor,
         totalFloors: null,
         buildingType: listing.buildingType,
+        yearBuilt: listing.yearBuilt ?? null,
         ownership: listing.ownership,
         description: listing.description,
         images: listing.images,
@@ -687,6 +703,7 @@ export function toListingRow(row: Row): ListingRow | null {
     // description explicitly identifies a tenement from resurfacing as a
     // confirmed match after an older import/recalculation.
     buildingType: resolveBuildingType(row.building_type, nullableString(row.title), nullableString(row.description)),
+    yearBuilt: nullableNumber(row.year_built),
     ownership: nullableString(row.ownership),
     description: nullableString(row.description),
     pricePerSqm: nullableNumber(row.price_per_sqm),

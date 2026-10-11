@@ -39,6 +39,7 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   t.after(() => auth.server.close());
   const root = path.resolve(__dirname, "../..");
   const nextBin = require.resolve("next/dist/bin/next");
+  const offlinePreload = path.resolve(root, "features/test-support/offline-next.cjs");
   const env = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
@@ -47,13 +48,13 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
     TMP: process.env.TMP,
     USERPROFILE: process.env.USERPROFILE,
     NODE_ENV: "test",
-    NODE_OPTIONS: "--use-system-ca",
+    NODE_OPTIONS: `--use-system-ca --require=${offlinePreload}`,
     NEXT_TELEMETRY_DISABLED: "1",
     NEXT_PUBLIC_SUPABASE_URL: auth.url,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "price-radar-browser-test-key",
   };
   await new Promise((resolve, reject) => {
-    const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+    const build = spawn(process.execPath, [nextBin, "build", "--webpack"], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     build.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8_000); });
     build.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8_000); });

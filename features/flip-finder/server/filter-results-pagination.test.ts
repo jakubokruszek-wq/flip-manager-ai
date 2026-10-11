@@ -106,6 +106,21 @@ test("a filter with fewer than 1000 matches is completely unaffected (no acciden
   assert.deepEqual(new Set(payload?.results.map((result) => result.id)), new Set(["small-1", "small-2"]));
 });
 
+test("Finder remains readable before the optional year_built migration is applied", async () => {
+  const db = new FakeFacebookSupabase();
+  db.seed("search_filters", [FILTER_ROW]);
+  const listing = listingRow("legacy-schema-listing", "otodom");
+  db.seed("listings", [listing]);
+  db.seed("listing_filter_matches", [membershipRow("legacy-schema-listing")]);
+  db.failNext("listings", "select", "Could not find the 'year_built' column of 'listings' in the schema cache", 1, "PGRST204");
+  currentDb = db;
+
+  const payload = await getFilterResults(FILTER_ID);
+  assert.equal(payload?.results.length, 1, "a missing optional column must not hide an otherwise valid listing");
+  assert.equal(payload?.results[0]?.id, "legacy-schema-listing");
+  assert.equal(payload?.results[0]?.yearBuilt, null, "without the column the UI must honestly report no construction year");
+});
+
 test("exactly 1000 matches (the old cap's exact boundary) are all returned, none dropped at the edge", async () => {
   const db = new FakeFacebookSupabase();
   db.seed("search_filters", [FILTER_ROW]);
@@ -118,7 +133,7 @@ test("exactly 1000 matches (the old cap's exact boundary) are all returned, none
   assert.equal(payload?.total, 1000);
 });
 
-test("Finder counts include only priced, fresh MATCHED/REVIEW rows; exact 21 days and unknown dates stay visible, including Facebook unknown price", async () => {
+test("Finder counts include only priced, fresh MATCHED/REVIEW rows; exact 30 days and unknown dates stay visible, including Facebook unknown price", async () => {
   const db = new FakeFacebookSupabase();
   db.seed("search_filters", [{ ...FILTER_ROW, area_min: 30, sources: ["otodom", "olx", "official_uml", "facebook"] }]);
   const now = Date.parse("2026-10-07T12:00:00.000Z");
@@ -136,8 +151,8 @@ test("Finder counts include only priced, fresh MATCHED/REVIEW rows; exact 21 day
   db.seed("listing_filter_matches", rows.map((row) => row.lifecycle_status === "REVIEW"
     ? { ...membershipRow(row.id as string), is_current_match: false, match_reasons: ["review", "unknown_area"] }
     : membershipRow(row.id as string)));
-  const exactCutoff = new Date(now - 21 * 86_400_000).toISOString();
-  const tooOld = new Date(now - 21 * 86_400_000 - 1).toISOString();
+  const exactCutoff = new Date(now - 30 * 86_400_000).toISOString();
+  const tooOld = new Date(now - 30 * 86_400_000 - 1).toISOString();
   db.seed("listing_snapshots", [
     { listing_id: "fresh-cutoff", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: exactCutoff } },
     { listing_id: "old-matched", price: 400000, captured_at: "2026-10-07T11:00:00Z", raw_data: { sourcePublishedAt: tooOld } },

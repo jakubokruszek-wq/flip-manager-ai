@@ -5,10 +5,10 @@ import { earliestPublicationDate, formatPublicationLabel, isWithinFinderPublicat
 const now = Date.parse("2026-10-07T12:00:00.000Z");
 const day = 86_400_000;
 
-test("publication freshness includes the exact 21-day boundary and excludes older confirmed dates", () => {
-  assert.equal(isWithinFinderPublicationWindow(new Date(now - 21 * day).toISOString(), now), true);
-  assert.equal(isWithinFinderPublicationWindow(new Date(now - 21 * day - 1).toISOString(), now), false);
-  assert.equal(isWithinFinderPublicationWindow(new Date(now - 22 * day).toISOString(), now), false);
+test("Finder freshness includes the exact 30-day boundary and excludes older confirmed dates", () => {
+  assert.equal(isWithinFinderPublicationWindow(new Date(now - 30 * day).toISOString(), now), true);
+  assert.equal(isWithinFinderPublicationWindow(new Date(now - 30 * day - 1).toISOString(), now), false);
+  assert.equal(isWithinFinderPublicationWindow(new Date(now - 31 * day).toISOString(), now), false);
 });
 
 test("unknown, malformed and future publication dates remain unknown and visible", () => {

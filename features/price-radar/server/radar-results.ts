@@ -151,6 +151,11 @@ function toRadarListing(row: Row): RadarListing | null {
   const status = row.status === "active" || row.status === "removed" ? row.status : null;
   const rawPayload = asRecord(row.raw_payload);
   const detailEvidence = asRecord(rawPayload.detailEvidence);
+  const candidate = asRecord(rawPayload.candidate);
+  const yearBuilt = validatedYear(detailEvidence.yearBuilt) ?? validatedYear(candidate.yearBuilt);
+  const yearBuiltSourceField = yearBuilt !== null && detailEvidence.yearBuiltSourceField === "Rok budowy"
+    ? "Rok budowy"
+    : null;
 
   if (!id || !source || !externalListingId || !originalUrl || !normalizedUrl || !city || !district || !buildingType || !marketType || !renovationStatus || price === null || area === null || pricePerSqm === null || !contentHash || !firstSeenAt || !lastSeenAt || !collectedAt || !status) {
     return null;
@@ -176,11 +181,16 @@ function toRadarListing(row: Row): RadarListing | null {
     id, source: source as RadarListing["source"], externalListingId, originalUrl, normalizedUrl,
     title: nullableString(row.title), description: nullableString(row.description),
     price, area, pricePerSqm, rooms: nullableNumber(row.rooms), city, district, buildingType, marketType, renovationStatus,
+    yearBuilt, yearBuiltSourceField,
     qualityCategory: marketType === "primary" || renovationStatus === "fresh_renovation" ? "fresh_renovation" : "ready_high_standard",
     contentHash, firstSeenAt, lastSeenAt, publishedAt, sourceUpdatedAt, collectedAt, crossSourceIdentity, crossSourceAlternates: [], status,
     excludedAt: nullableString(row.excluded_at), excludedReason: nullableString(row.excluded_reason),
     verificationIssues,
   };
+}
+
+function validatedYear(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1700 && value <= 2100 ? value : null;
 }
 
 function asRecord(value: unknown): Row {

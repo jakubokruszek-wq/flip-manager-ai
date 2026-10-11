@@ -23,6 +23,7 @@ const LEASE_SECONDS = 75;
 const YIELD_MARGIN_MS = 8_000;
 const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
 const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
+export const RADAR_STOPPED_BY_OPERATOR = "RADAR_STOPPED_BY_OPERATOR";
 const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "rooms", "floor", "location", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
 
 /** Radar may only use sources that are both in the shared schema gate and have a registered adapter. */
@@ -67,6 +68,7 @@ function toRadarRun(row: Row): RadarRun {
     ownerId: String(row.owner_id),
     leaseToken: typeof row.lease_token === "string" ? row.lease_token : null,
     leaseUntil: typeof row.lease_until === "string" ? row.lease_until : null,
+    stopRequestedAt: typeof row.stop_requested_at === "string" ? row.stop_requested_at : null,
     status: isRunStatus(row.status) ? row.status : "pending",
     startedAt: String(row.started_at),
     finishedAt: typeof row.finished_at === "string" ? row.finished_at : null,
@@ -105,6 +107,20 @@ function sourceDate(raw: Record<string, unknown>, keys: string[]): string | null
 
 export type RadarClaimResult = { kind: "claimed"; run: RadarRun } | { kind: "blocked" };
 export type RadarResumeResult = { kind: "claimed"; run: RadarRun } | { kind: "blocked"; reason: "run_changed" | "lease_active" | "olx_queue_owns_source" | "inconsistent_run" };
+export type RadarStopResult = { kind: "stopping" | "stopped" } | { kind: "blocked"; reason: "run_changed" | "not_active" };
+
+/** Requests a stop for only the authenticated owner's exact Radar run. */
+export async function requestRadarRunStop(ownerId: string, expectedRunId: string, supabase: SupabaseClient = createAdminClient()): Promise<RadarStopResult> {
+  const { data, error } = await supabase.rpc("request_price_radar_run_stop", {
+    p_owner_id: ownerId,
+    p_run_id: expectedRunId,
+  });
+  if (error) throw new Error("RADAR_RUN_STOP_FAILED");
+  const result = typeof data === "string" ? data : rpcRow(data)?.result;
+  if (result === "stopping" || result === "stopped") return { kind: result };
+  if (result === "not_active") return { kind: "blocked", reason: "not_active" };
+  return { kind: "blocked", reason: "run_changed" };
+}
 
 /** The DB RPC serializes claims by owner and returns a fenced lease token. */
 export async function claimOrCreateRadarRun(ownerId: string, selectedSources: readonly RadarSource[] = RADAR_SOURCES, supabase: SupabaseClient = createAdminClient(), searchCriteria?: RadarSearchCriteria): Promise<RadarClaimResult> {
@@ -132,7 +148,9 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
   const selected = await supabase.from("price_radar_runs").select("*").eq("id", expectedRunId).eq("owner_id", ownerId).maybeSingle();
   if (selected.error || !selected.data) return { kind: "blocked", reason: "run_changed" };
   const row = selected.data as Row;
-  if (row.status !== "pending" && row.status !== "running") return { kind: "blocked", reason: "run_changed" };
+  const stoppedRun = row.status === "partial" && row.error_message === RADAR_STOPPED_BY_OPERATOR && typeof row.stop_requested_at === "string";
+  if (row.stop_requested_at && !stoppedRun) return { kind: "blocked", reason: "run_changed" };
+  if (row.status !== "pending" && row.status !== "running" && !stoppedRun) return { kind: "blocked", reason: "run_changed" };
 
   const run = toRadarRun(row);
   const now = Date.now();
@@ -155,6 +173,8 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
     lease_token: leaseToken,
     lease_until: new Date(now + LEASE_SECONDS * 1000).toISOString(),
     error_message: null,
+    finished_at: null,
+    stop_requested_at: null,
   }).eq("id", expectedRunId).eq("owner_id", ownerId).eq("status", row.status);
   update = row.lease_token === null || row.lease_token === undefined ? update.is("lease_token", null) : update.eq("lease_token", row.lease_token);
   if (oldLeaseUntil === null) update = update.is("lease_until", null);
@@ -186,6 +206,22 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   let qualified = run.qualifiedCount;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), PORTION_BUDGET_MS);
+  let stopCheckInFlight = false;
+  let operatorStopDetected = false;
+  const stopCheckId = setInterval(() => {
+    if (stopCheckInFlight || operatorStopDetected) return;
+    stopCheckInFlight = true;
+    void Promise.resolve(supabase.from("price_radar_runs").select("status,lease_token,stop_requested_at,error_message")
+      .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle())
+      .then(({ data: current, error: stopReadError }) => {
+        if (stopReadError || !current) return;
+        if (current.stop_requested_at || current.status !== "running" || current.lease_token !== input.leaseToken) {
+          operatorStopDetected = Boolean(current.stop_requested_at || current.error_message === RADAR_STOPPED_BY_OPERATOR);
+          if (operatorStopDetected) controller.abort(new DOMException("Radar stop requested", "AbortError"));
+        }
+      })
+      .finally(() => { stopCheckInFlight = false; });
+  }, 1_000);
   const attemptedSourceIds = new Set<RadarSource>();
   // One shared cap on AI district-suggestion calls for this whole portion
   // (not per candidate) -- bounds cost/latency the same way the portion's
@@ -194,6 +230,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   try {
     while (checkpoint.sourceQueue.length > 0) {
       if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) break;
+      if (operatorStopDetected) break;
       const currentSourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
       if (!currentSourceId || attemptedSourceIds.has(currentSourceId)) {
         const nextIndex = nextUnfinishedSourceIndex(checkpoint, currentSourceId ? checkpoint.currentSourceIndex + 1 : 0, attemptedSourceIds);
@@ -204,6 +241,12 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         checkpoint.currentSourceIndex = nextIndex;
       }
       const sourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex]!;
+      if (await radarStopRequested(supabase, input)) {
+        operatorStopDetected = true;
+        if (checkpoint.sourceStatuses[sourceId] === "running") checkpoint.sourceStatuses[sourceId] = "pending";
+        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
+        break;
+      }
       if (checkpoint.perSourceCursor[sourceId] === SOURCE_DONE_CURSOR) {
         if (!["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[sourceId] ?? "")) {
           const savedError = checkpoint.sourceErrors[sourceId];
@@ -240,6 +283,12 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       if (!isRadarDetailCursor(checkpoint.perSourceCursor[sourceId]) || checkpoint.sourceErrors[sourceId]?.startsWith("RADAR_PORTION_TIME_BUDGET_EXCEEDED:")) delete checkpoint.sourceErrors[sourceId];
       await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
       try {
+        if (await radarStopRequested(supabase, input)) {
+          operatorStopDetected = true;
+          checkpoint.sourceStatuses[sourceId] = "pending";
+          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR);
+          break;
+        }
         if (sourceId === "olx") {
           await enqueueRadarOlxJob({ ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, city: "Łódź" }, supabase);
           checkpoint.sourceStatuses.olx = "running";
@@ -247,16 +296,18 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           break;
         }
         let emittedBatches = false;
-        const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
+      const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
+          if (operatorStopDetected || await radarStopRequested(supabase, input)) {
+            operatorStopDetected = true;
+            throw new Error(RADAR_STOPPED_BY_OPERATOR);
+          }
           if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) {
             controller.abort();
             throw new Error("RADAR_PORTION_BUDGET_YIELD");
           }
           emittedBatches = true;
-          scanned += batch.fetched;
-          for (const reason of batch.rejectionReasons ?? []) {
-            if (isRadarQualificationRejectionReason(reason)) recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, reason);
-          }
+          const batchRejectionReasons = [...(batch.rejectionReasons ?? [])];
+          let batchQualified = 0;
           for (const listing of batch.listings) {
             controller.signal.throwIfAborted();
             const qualificationCandidate = {
@@ -306,7 +357,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                   continue;
                 }
               }
-              recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, outcome.reason);
+              batchRejectionReasons.push(outcome.reason);
               continue;
             }
             const raw = listing.rawPayload;
@@ -323,11 +374,26 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, "listing_identity_changed");
               continue;
             }
-            qualified += 1;
+            batchQualified += 1;
+          }
+          // Only checkpoint counters when every row in the page batch has
+          // been processed. If STOP lands mid-batch, its cursor remains at
+          // the previous committed page and an idempotent replay must not
+          // count already-persisted rows twice.
+          scanned += batch.fetched;
+          qualified += batchQualified;
+          for (const reason of batchRejectionReasons) {
+            if (isRadarQualificationRejectionReason(reason)) recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, reason);
           }
           for (const warning of batch.warnings) checkpoint.sourceErrors[sourceId] = sourceError(warning);
           if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);
           checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
+          if (await radarStopRequested(supabase, input)) {
+            operatorStopDetected = true;
+            checkpoint.sourceStatuses[sourceId] = "pending";
+            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR);
+            throw new Error(RADAR_STOPPED_BY_OPERATOR);
+          }
           await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
         };
         // The underlying adapter must honor the passed AbortSignal. We also
@@ -353,6 +419,16 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         checkpoint.currentSourceIndex += 1;
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
       } catch (reason) {
+        if (operatorStopDetected || isRadarStopError(reason) || await radarStopRequested(supabase, input)) {
+          operatorStopDetected = true;
+          checkpoint.sourceStatuses[sourceId] = "pending";
+          // The stop RPC owns the persisted checkpoint when it finalizes an
+          // expired/queued run. For a live worker, the fenced checkpoint RPC
+          // accepts this terminal partial state only while stop_requested_at
+          // is present. The source cursor remains the last committed cursor.
+          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
+          break;
+        }
         if (reason instanceof SourceBatchYield) {
           checkpoint.sourceStatuses[sourceId] = "pending";
           const currentIndex = checkpoint.currentSourceIndex;
@@ -405,6 +481,25 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
     }
   } finally {
     clearTimeout(timeoutId);
+    clearInterval(stopCheckId);
+  }
+
+  if (operatorStopDetected) {
+    const currentSource = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
+    if (currentSource && checkpoint.sourceStatuses[currentSource] === "running") checkpoint.sourceStatuses[currentSource] = "pending";
+    await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
+    const latest = await supabase.from("price_radar_runs").select("scanned_count,qualified_count,checkpoint,source_statuses")
+      .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
+    const savedCheckpoint = latest.data && isRecord(latest.data.checkpoint) ? latest.data.checkpoint as unknown as RadarCheckpoint : checkpoint;
+    const savedStatuses = latest.data && isRecord(latest.data.source_statuses) ? latest.data.source_statuses as RadarRun["sourceStatuses"] : savedCheckpoint.sourceStatuses;
+    return {
+      status: "partial",
+      scannedCount: typeof latest.data?.scanned_count === "number" ? latest.data.scanned_count : scanned,
+      qualifiedCount: typeof latest.data?.qualified_count === "number" ? latest.data.qualified_count : qualified,
+      sourceStatuses: savedStatuses,
+      sourceErrors: savedCheckpoint.sourceErrors ?? {},
+      qualificationRejections: savedCheckpoint.qualificationRejections ?? {},
+    };
   }
 
   const done = checkpoint.sourceQueue.every((source) => checkpoint.sourceStatuses[source] === "completed" || checkpoint.sourceStatuses[source] === "failed" || checkpoint.sourceStatuses[source] === "partial");
@@ -417,18 +512,58 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         : "completed"
     : "running";
   const errorMessage = Object.entries(checkpoint.sourceErrors).map(([sourceId, message]) => `${sourceId}: ${message}`).join("\n").slice(0, 2000) || null;
-  await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, finalStatus, errorMessage);
+  const finalSave = await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, finalStatus, errorMessage);
+  if (finalSave === "stopped") {
+    const latest = await supabase.from("price_radar_runs").select("scanned_count,qualified_count,checkpoint,source_statuses")
+      .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
+    const savedCheckpoint = latest.data && isRecord(latest.data.checkpoint) ? latest.data.checkpoint as unknown as RadarCheckpoint : checkpoint;
+    return {
+      status: "partial",
+      scannedCount: typeof latest.data?.scanned_count === "number" ? latest.data.scanned_count : scanned,
+      qualifiedCount: typeof latest.data?.qualified_count === "number" ? latest.data.qualified_count : qualified,
+      sourceStatuses: latest.data && isRecord(latest.data.source_statuses) ? latest.data.source_statuses as RadarRun["sourceStatuses"] : savedCheckpoint.sourceStatuses,
+      sourceErrors: savedCheckpoint.sourceErrors ?? {},
+      qualificationRejections: savedCheckpoint.qualificationRejections ?? {},
+    };
+  }
   return { status: finalStatus, scannedCount: scanned, qualifiedCount: qualified, sourceStatuses: checkpoint.sourceStatuses, sourceErrors: checkpoint.sourceErrors, qualificationRejections: checkpoint.qualificationRejections ?? {} };
 }
 
-async function saveCheckpoint(supabase: SupabaseClient, input: { runId: string; ownerId: string; leaseToken: string }, checkpoint: RadarCheckpoint, scanned: number, qualified: number, status: RadarRunStatus, errorMessage: string | null = null): Promise<void> {
-  const { data, error } = await supabase.rpc("checkpoint_price_radar_run", {
+async function saveCheckpoint(supabase: SupabaseClient, input: { runId: string; ownerId: string; leaseToken: string }, checkpoint: RadarCheckpoint, scanned: number, qualified: number, status: RadarRunStatus, errorMessage: string | null = null): Promise<"saved" | "stopped"> {
+  const params = {
     p_owner_id: input.ownerId, p_run_id: input.runId, p_lease_token: input.leaseToken,
     p_checkpoint: checkpoint, p_source_statuses: checkpoint.sourceStatuses,
     p_scanned_count: scanned, p_qualified_count: qualified, p_status: status,
     p_error_message: errorMessage, p_lease_seconds: LEASE_SECONDS,
-  });
-  if (error || data !== true) throw new Error("RADAR_LEASE_LOST");
+  };
+  const { data, error } = await supabase.rpc("checkpoint_price_radar_run", params);
+  if (!error && data === true) return "saved";
+  // A stop request races safely with the normal checkpoint RPC. The SQL
+  // predicate rejects any new "running" checkpoint after the request; this
+  // lease owner then commits one final partial checkpoint and releases itself.
+  if (await radarStopRequested(supabase, input)) {
+    const currentSource = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
+    if (currentSource && checkpoint.sourceStatuses[currentSource] === "running") checkpoint.sourceStatuses[currentSource] = "pending";
+    const stopped = await supabase.rpc("checkpoint_price_radar_run", {
+      ...params,
+      p_checkpoint: checkpoint,
+      p_source_statuses: checkpoint.sourceStatuses,
+      p_status: "partial",
+      p_error_message: RADAR_STOPPED_BY_OPERATOR,
+    });
+    if (!stopped.error && stopped.data === true) return "stopped";
+  }
+  throw new Error("RADAR_LEASE_LOST");
+}
+
+async function radarStopRequested(supabase: SupabaseClient, input: { runId: string; ownerId: string }): Promise<boolean> {
+  const { data, error } = await supabase.from("price_radar_runs").select("stop_requested_at,error_message,status")
+    .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
+  return !error && Boolean(data && (data.stop_requested_at || data.error_message === RADAR_STOPPED_BY_OPERATOR || data.status === "partial" && data.error_message === RADAR_STOPPED_BY_OPERATOR));
+}
+
+function isRadarStopError(error: unknown): boolean {
+  return error instanceof Error && (error.message === RADAR_STOPPED_BY_OPERATOR || error.message === "RADAR_RUN_STOP_REQUESTED");
 }
 
 function resultOf(run: RadarRun): RadarPortionResult {

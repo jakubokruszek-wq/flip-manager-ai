@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 
-type Run = { id: string; status: string; leaseToken: string | null; leaseUntil: string | null };
+type Run = { id: string; status: string; leaseToken: string | null; leaseUntil: string | null; stopRequestedAt?: string | null; errorMessage?: string | null };
 let latest: Run | null = null;
 let operatorError: Error | null = null;
 let resumeResult: { kind: "claimed"; run: Run } | { kind: "blocked"; reason: string } = { kind: "blocked", reason: "run_changed" };
 let resumeCalls: string[] = [];
+let stopCalls: Array<{ ownerId: string; runId: string }> = [];
+let stopResult: { kind: "stopping" | "stopped" } | { kind: "blocked"; reason: string } = { kind: "stopping" };
 let claimCalls: string[] = [];
 let claimCriteria: unknown[] = [];
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
@@ -17,6 +19,7 @@ mock.module("@/features/auth/operator", { namedExports: {
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria = [sources, criteria]; return { kind: "claimed", run: { id: "new-run", leaseToken: "new-token" } }; },
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
+  requestRadarRunStop: async (ownerId: string, runId: string) => { stopCalls.push({ ownerId, runId }); return stopResult; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
 } });
 let sourcesFilteredToEmpty = false;
@@ -29,10 +32,12 @@ mock.module("@/features/price-radar/server/radar-run-status", { namedExports: { 
 const route = await import("../../../app/api/price-radar/run/route.ts");
 
 function reset() {
-  latest = { id: "existing-run", status: "running", leaseToken: null, leaseUntil: "2026-10-10T10:00:00.000Z" };
+  latest = { id: "existing-run", status: "running", leaseToken: null, leaseUntil: "2026-10-10T10:00:00.000Z", stopRequestedAt: null, errorMessage: null };
   operatorError = null;
   resumeResult = { kind: "claimed", run: { id: "existing-run", status: "running", leaseToken: "fresh-token", leaseUntil: "2026-10-10T10:02:00.000Z" } };
   resumeCalls = [];
+  stopCalls = [];
+  stopResult = { kind: "stopping" };
   claimCalls = [];
   claimCriteria = [];
   portionCalls = [];
@@ -49,6 +54,33 @@ test("anonymous auto-resume does not claim or process a Radar run", async () => 
   assert.deepEqual(portionCalls, []);
 });
 
+test("only an authenticated operator can request a stop for one exact run; stopping never starts a collection portion", async () => {
+  reset();
+  operatorError = new Error("unauthorized");
+  const anonymous = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "stop", runId: "existing-run" }) }));
+  assert.equal(anonymous.status, 401);
+  assert.deepEqual(stopCalls, []);
+  assert.deepEqual(portionCalls, []);
+
+  reset();
+  const stopping = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "stop", runId: "existing-run" }) }));
+  assert.equal(stopping.status, 200);
+  assert.deepEqual(await stopping.json(), { runId: "existing-run", status: "stopping" });
+  assert.deepEqual(stopCalls, [{ ownerId: "owner-1", runId: "existing-run" }]);
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(resumeCalls, []);
+  assert.deepEqual(portionCalls, []);
+});
+
+test("a repeated stop is idempotent after the SQL layer confirms the run stopped", async () => {
+  reset();
+  stopResult = { kind: "stopped" };
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "stop", runId: "existing-run" }) }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { runId: "existing-run", status: "stopped" });
+  assert.deepEqual(portionCalls, [], "a stop request never runs or resumes the collection portion");
+});
+
 test("auto-resume is bound to a live, nonterminal expected run ID and processes that ID only", async () => {
   reset();
   const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRunId: "existing-run" }) }));
@@ -56,6 +88,18 @@ test("auto-resume is bound to a live, nonterminal expected run ID and processes 
   assert.deepEqual(resumeCalls, ["existing-run"]);
   assert.deepEqual(claimCalls, [], "the resume-only path never calls claim-or-create");
   assert.deepEqual(portionCalls, [{ runId: "existing-run", ownerId: "owner-1", leaseToken: "fresh-token" }]);
+});
+
+test("a pending STOP request cannot be cancelled by an automatic or manual resume request", async () => {
+  reset();
+  latest = { ...latest!, stopRequestedAt: "2026-10-10T10:00:00.000Z" };
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRunId: "existing-run" }),
+  }));
+  assert.equal(response.status, 409);
+  assert.deepEqual(resumeCalls, [], "the explicit stop request is not cleared before the worker acknowledges it");
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(portionCalls, []);
 });
 
 test("changed/terminal run IDs and OLX-owned work are refused without starting another run", async () => {

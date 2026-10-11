@@ -9,7 +9,6 @@ export type ExternalSourceId =
   | "sprzedajemy"
   | "adresowo"
   | "oferty_net"
-  | "szybko"
   | "bezposrednio"
   | "domy"
   | "allegro_lokalnie";

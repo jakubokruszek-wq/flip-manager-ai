@@ -27,18 +27,14 @@ test("the other sources keep their plain source-name labels — only Facebook ne
   assert.equal(labels.morizon, "Morizon");
 });
 
-// Szybko.pl was deliberately turned off everywhere (SCHEMA_READY_SOURCE_IDS
-// no longer lists it). Its option keeps its plain label -- a saved filter
-// or historical scan referencing "szybko" must still render a readable
-// name -- but it must never be selectable again.
-test("Szybko keeps a plain, readable label for historical data, but is disabled -- it is deliberately off, not merely unavailable", () => {
-  const szybko = SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === "szybko");
-  assert.equal(szybko?.label, "Szybko.pl");
-  assert.equal(szybko?.disabled, true);
+// Szybko remains in persisted ListingSource history, but cannot be selected
+// for a new filter or scan.
+test("Szybko is absent from the selectable source catalog", () => {
+  assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.some((option) => (option.value as string) === "szybko"), false);
 });
 
 test("legacy unavailable source options are disabled while active sources remain selectable", () => {
-  const unavailable = ["bezposrednio", "official_auction", "szybko"];
+  const unavailable = ["bezposrednio", "official_auction"];
   const active = ["otodom", "olx", "morizon", "facebook", "domiporta", "sprzedajemy", "adresowo", "gratka", "nieruchomosci_online", "oferty_net", "domy", "allegro_lokalnie", "official_cooperative", "official_uml"];
   for (const source of unavailable) {
     assert.equal(SEARCH_FILTER_SOURCE_OPTIONS.find((option) => option.value === source)?.disabled, true, `${source} must be disabled`);

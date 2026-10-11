@@ -1,4 +1,4 @@
-export const FINDER_PUBLICATION_MAX_AGE_DAYS = 21;
+export const FINDER_PUBLICATION_MAX_AGE_DAYS = 30;
 const DAY_MS = 86_400_000;
 
 /** Accept only source-provided publication timestamps, never import/update dates. */
@@ -9,7 +9,7 @@ export function normalizePublicationDate(value: unknown, now = Date.now()): stri
   return new Date(timestamp).toISOString();
 }
 
-/** Missing/invalid dates remain visible; known listings older than 21 days do not. */
+/** Missing/invalid dates remain visible; known listings older than 30 days do not. */
 export function isWithinFinderPublicationWindow(value: unknown, now = Date.now()): boolean {
   const normalized = normalizePublicationDate(value, now);
   return normalized === null || Date.parse(normalized) >= now - FINDER_PUBLICATION_MAX_AGE_DAYS * DAY_MS;

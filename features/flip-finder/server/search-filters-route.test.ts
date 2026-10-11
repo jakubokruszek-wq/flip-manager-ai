@@ -38,6 +38,7 @@ mock.module("@/features/auth/operator", {
 type WriteResult = { data: Record<string, unknown> | null; error: { code: string; message: string } | null };
 let insertResult: WriteResult = { data: null, error: null };
 let updateResult: WriteResult = { data: null, error: null };
+let insertedPayload: Record<string, unknown> | null = null;
 
 // Shared, stateful backing store standing in for the database: a create
 // through the admin client appends here, and a subsequent list read through
@@ -70,9 +71,10 @@ function fakeAdminClient() {
   if (adminClientThrowMessage) throw new Error(adminClientThrowMessage);
   return {
     from: () => ({
-      insert: () => ({
+      insert: (payload: Record<string, unknown>) => ({
         select: () => ({
           single: async () => {
+            insertedPayload = payload;
             if (insertResult.data) searchFiltersTable.push(insertResult.data);
             return insertResult;
           },
@@ -231,6 +233,23 @@ test("an authorized operator can create a filter", async () => {
   assert.equal(response.status, 201);
   const body = await response.json();
   assert.equal(body.filter.name, "Test filter");
+});
+
+test("saving a mixed legacy filter strips disabled Szybko without widening the source selection", async () => {
+  operatorOutcome = "authorized";
+  insertResult = { data: validRow, error: null };
+  insertedPayload = null;
+  const response = await collectionRoute.POST(postRequest({ ...validPayload, sources: ["szybko", "otodom"] }));
+  assert.equal(response.status, 201);
+  assert.deepEqual((insertedPayload as Record<string, unknown> | null)?.sources, ["otodom"]);
+});
+
+test("a legacy Szybko-only selection is rejected rather than expanding to every Finder source", async () => {
+  operatorOutcome = "authorized";
+  insertedPayload = null;
+  const response = await collectionRoute.POST(postRequest({ ...validPayload, sources: ["szybko"] }));
+  assert.equal(response.status, 400);
+  assert.equal(insertedPayload, null, "the invalid disabled-only request must not reach database insert");
 });
 
 // Section 2 of the auth-stability/auto-recalculation mission: a brand-new

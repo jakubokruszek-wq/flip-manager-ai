@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { SearchFilter } from "@/features/flip-finder";
-import { activeSources, EXTERNAL_SOURCE_STATUS, SOURCES, slugifyCity } from "./search-source-registry.ts";
+import { activeSources, EXTERNAL_SOURCE_CONFIGS, EXTERNAL_SOURCE_STATUS, SOURCES, slugifyCity } from "./search-source-registry.ts";
 
 const filter: SearchFilter = {
   id: "00000000-0000-4000-8000-000000000002",
@@ -43,7 +43,7 @@ test("Otodom source preserves raw rows for 26-to-zero diagnostics", async () => 
 test("registry exposes every requested external adapter without touching the network", () => {
   assert.deepEqual(
     SOURCES.map((source) => source.id),
-    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "szybko", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"],
+    ["otodom", "olx", "morizon", "gratka", "nieruchomosci_online", "domiporta", "sprzedajemy", "adresowo", "oferty_net", "bezposrednio", "domy", "allegro_lokalnie", "official_cooperative", "official_uml", "official_auction"],
   );
 });
 
@@ -52,7 +52,7 @@ test("source paths use the stable Łódź slug", () => {
   assert.equal(slugifyCity("Łódź-Bałuty"), "lodz-baluty");
 });
 
-test("only complete schema-ready adapters are schedulable -- szybko is explicitly requested but never scheduled, since it was deliberately disabled", () => {
+test("only complete schema-ready adapters are schedulable; legacy Szybko IDs have no runtime entry", () => {
   assert.deepEqual(
     activeSources({
       ...filter,
@@ -63,16 +63,15 @@ test("only complete schema-ready adapters are schedulable -- szybko is explicitl
   assert.deepEqual(activeSources({ ...filter, sources: ["bezposrednio", "official_cooperative", "official_uml", "official_auction"] }).map((source) => source.id), ["official_cooperative", "official_uml"]);
 });
 
-// Szybko.pl's adapter is still fully built and registered (EXTERNAL_SOURCE_STATUS
-// reflects implementation completeness, a separate concern from whether a
-// source is currently allowed to run) -- but it was deliberately disabled
-// everywhere, so activeSources() must never schedule it even when a caller
-// explicitly asks for it by name.
-test("Oferty.net, Domy.pl and Allegro Lokalnie are active now that their real city-scoped URLs and parsers are verified; Szybko keeps its built adapter but is deliberately never scheduled", () => {
+// Szybko remains a recognized historical ListingSource, but its old saved
+// source ID has no parser/config/worker registration and cannot be scheduled.
+test("Szybko is absent from every runtime source registry while other verified sources remain active", () => {
   assert.equal(EXTERNAL_SOURCE_STATUS.oferty_net, "public_html_adapter");
-  assert.equal(EXTERNAL_SOURCE_STATUS.szybko, "public_html_adapter", "the adapter itself was not removed -- only turned off");
+  assert.equal(Object.hasOwn(EXTERNAL_SOURCE_STATUS, "szybko"), false);
   assert.equal(EXTERNAL_SOURCE_STATUS.domy, "public_html_adapter");
   assert.equal(EXTERNAL_SOURCE_STATUS.allegro_lokalnie, "public_html_adapter");
+  assert.equal(EXTERNAL_SOURCE_CONFIGS.some((source) => (source.id as string) === "szybko"), false);
+  assert.equal(SOURCES.some((source) => (source.id as string) === "szybko"), false);
   assert.deepEqual(activeSources({ ...filter, sources: ["oferty_net", "szybko", "domy", "allegro_lokalnie"] }).map((source) => source.id), ["oferty_net", "domy", "allegro_lokalnie"]);
 });
 

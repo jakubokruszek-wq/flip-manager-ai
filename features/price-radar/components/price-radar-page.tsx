@@ -15,7 +15,7 @@ type ResultsResponse = {
   disabledSourceNote: string;
 };
 type DistrictQueueResponse = { available: boolean; pending: RadarDistrictQueueItem[]; assigned: RadarDistrictQueueItem[]; rejected: RadarDistrictQueueItem[] };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
@@ -29,7 +29,6 @@ const SOURCE_OPTIONS: { value: RadarSource; label: string }[] = [
   { value: "gratka", label: "Gratka" },
   { value: "nieruchomosci_online", label: "Nieruchomosci-online.pl" },
   { value: "oferty_net", label: "Oferty.net" },
-  { value: "szybko", label: "Szybko.pl" },
   { value: "domy", label: "Domy.pl" },
   { value: "allegro_lokalnie", label: "Allegro Lokalnie" },
   { value: "official_cooperative", label: "Spółdzielnie Łódź" },
@@ -55,8 +54,10 @@ export function PriceRadarPage() {
   const [disabledSourceNote, setDisabledSourceNote] = useState("");
   const [run, setRun] = useState<RunStatus | null>(null);
   const [runStarting, setRunStarting] = useState(false);
+  const [runStopping, setRunStopping] = useState(false);
   const [autoResumeMessage, setAutoResumeMessage] = useState<string | null>(null);
   const autoResumeInFlight = useRef(false);
+  const stopFinalizeInFlight = useRef(false);
   const lastAutoResumeAttempt = useRef<{ key: string; at: number } | null>(null);
   const refreshRunNow = useRef<(() => void) | null>(null);
   const [districtQueue, setDistrictQueue] = useState<DistrictQueueResponse | null>(null);
@@ -228,11 +229,14 @@ export function PriceRadarPage() {
         const currentSource = latest?.checkpoint?.sourceQueue?.[currentSourceIndex];
         const olxWorkerOwnsSource = currentSource === "olx" && latest?.sourceStatuses.olx === "running";
         if (olxWorkerOwnsSource && !cancelled) setAutoResumeMessage("OLX: dalszy krok nale\u017cy do kolejki workera; sprawdz jej stan.");
+        else if (latest?.stopRequestedAt && !cancelled) setAutoResumeMessage(leaseExpired
+          ? "Zatrzymywanie oczekuje na zakończenie lease'u. Ponów żądanie zatrzymania, jeśli stan nie zmieni się po jego wygaśnięciu."
+          : "Zatrzymywanie; bieżąca porcja kończy się bez rozpoczynania kolejnej pracy.");
         else if (!cancelled) setAutoResumeMessage(null);
         const attemptKey = latest ? `${latest.id}:${latest.leaseUntil ?? "none"}` : "";
         const priorAttempt = lastAutoResumeAttempt.current;
         const retryDelayElapsed = !priorAttempt || priorAttempt.key !== attemptKey || Date.now() - priorAttempt.at >= 30_000;
-        if (!cancelled && leaseExpired && latest && !olxWorkerOwnsSource && !autoResumeInFlight.current && retryDelayElapsed) {
+        if (!cancelled && leaseExpired && latest && !latest.stopRequestedAt && !olxWorkerOwnsSource && !autoResumeInFlight.current && retryDelayElapsed) {
           autoResumeInFlight.current = true;
           lastAutoResumeAttempt.current = { key: attemptKey, at: Date.now() };
           if (!cancelled) { setRunStarting(true); setAutoResumeMessage(null); }
@@ -258,6 +262,27 @@ export function PriceRadarPage() {
           } finally {
             autoResumeInFlight.current = false;
             setRunStarting(false);
+          }
+        }
+        if (!cancelled && leaseExpired && latest?.stopRequestedAt && !stopFinalizeInFlight.current) {
+          // A worker can die after accepting STOP. The same owner-scoped,
+          // idempotent STOP RPC finalizes the run after lease expiry; it never
+          // claims or resumes collection work.
+          stopFinalizeInFlight.current = true;
+          try {
+            const finalized = await apiFetch("/api/price-radar/run", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "stop", runId: latest.id }),
+            });
+            if (!finalized.ok && finalized.status !== 409) throw new Error("Nie udało się dokończyć zatrzymywania Radaru.");
+            const refreshed = await apiFetch("/api/price-radar/run");
+            const refreshedPayload = await refreshed.json() as { run?: RunStatus | null };
+            if (!refreshed.ok) throw new Error("Nie udało się odświeżyć stanu zatrzymywania Radaru.");
+            if (!cancelled) setRun(refreshedPayload.run ?? null);
+            nextDelay = refreshedPayload.run?.status === "running" || refreshedPayload.run?.status === "pending" ? 5_000 : 60_000;
+            shouldPoll = refreshedPayload.run?.status === "running" || refreshedPayload.run?.status === "pending";
+          } finally {
+            stopFinalizeInFlight.current = false;
           }
         }
       } catch (reason) {
@@ -296,7 +321,11 @@ export function PriceRadarPage() {
     autoResumeInFlight.current = true;
     setRunStarting(true);
     try {
-      const response = await apiFetch("/api/price-radar/run", { method: "POST" });
+      const stoppedRun = run && run.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" && run.stopRequestedAt ? run : null;
+      const response = await apiFetch("/api/price-radar/run", {
+        method: "POST",
+        ...(stoppedRun ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRunId: stoppedRun.id }) } : {}),
+      });
       const payload = await response.json() as { runId?: string; status?: RadarRunStatus; message?: string };
       if (!response.ok) throw new Error(payload.message || "Nie udało się rozpocząć zbierania Radaru.");
       const status = await apiFetch("/api/price-radar/run");
@@ -310,6 +339,33 @@ export function PriceRadarPage() {
       autoResumeInFlight.current = false;
       setRunStarting(false);
     }
+  };
+
+  const stopCollection = async () => {
+    if (!run || (run.status !== "running" && run.status !== "pending") || runStopping) return;
+    setRunStopping(true);
+    setAutoResumeMessage("Zatrzymywanie; zachowuję wyniki i checkpoint bieżącego przebiegu.");
+    try {
+      const response = await apiFetch("/api/price-radar/run", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "stop", runId: run.id }),
+      });
+      const payload = await response.json() as { status?: "stopping" | "stopped"; message?: string };
+      if (!response.ok || (payload.status !== "stopping" && payload.status !== "stopped")) throw new Error(payload.message || "Nie udało się zatrzymać przebiegu Radaru.");
+      if (payload.status === "stopped") await loadRunStatusNow();
+      else setRun((current) => current ? { ...current, stopRequestedAt: new Date().toISOString() } : current);
+      refreshRunNow.current?.();
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Nie udało się zatrzymać przebiegu Radaru.");
+    } finally { setRunStopping(false); }
+  };
+
+  const loadRunStatusNow = async () => {
+    const response = await apiFetch("/api/price-radar/run");
+    const payload = await response.json() as { run?: RunStatus | null };
+    if (!response.ok) throw new Error("Nie udało się odczytać stanu Radaru.");
+    setRun(payload.run ?? null);
   };
 
   const setExclusion = async (listingId: string, excluded: boolean) => {
@@ -431,15 +487,20 @@ export function PriceRadarPage() {
       <section aria-label="Zbieranie ofert Radaru" className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
         <div className="min-w-0">
           <h2 className="font-semibold">Zbieranie Radaru</h2>
-          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runStatusLabel(run.status)}${(run.status === "running" || run.status === "pending") && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
+          <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" ? "Zatrzymany" : run.stopRequestedAt ? "Zatrzymywanie" : runStatusLabel(run.status)}${(run.status === "running" || run.status === "pending") && !run.stopRequestedAt && !isRunActuallyActive(run) ? " (przerwany, gotowy do wznowienia)" : ""} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)}` : "Brak uruchomionego przebiegu."}</p>
           {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
           {run?.qualificationRejections && Object.values(run.qualificationRejections).some((counts) => Object.keys(counts).length > 0) ? <details aria-label="Powody odrzucenia ofert" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Powody odrzucenia w kwalifikacji</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.qualificationRejections).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${qualificationRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
           {autoResumeMessage ? <p className="mt-2 text-xs text-muted-foreground">{autoResumeMessage}</p> : null}
           {settingsSaving ? <p className="mt-1 text-xs text-muted-foreground">Zapisywanie ustawień…</p> : settingsDirty ? <p className="mt-1 text-xs text-destructive">Ustawienia nie zostały zapisane. Zmiana zostanie ponowiona po kolejnej edycji.</p> : null}
         </div>
-        <Button disabled={runStarting || isRunActuallyActive(run) || !settingsLoaded} onClick={() => void startCollection()}>
-          {runStarting ? "Uruchamianie…" : isRunActuallyActive(run) ? "Przebieg trwa" : "Uruchom / wznów zbieranie"}
+        <Button disabled={runStarting || runStopping || Boolean(run?.stopRequestedAt && (run.status === "running" || run.status === "pending")) || (isRunActuallyActive(run) && !(run?.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR")) || !settingsLoaded} onClick={() => void startCollection()}>
+          {runStarting ? "Uruchamianie…" : run?.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" ? "Wznów zatrzymany przebieg" : run?.stopRequestedAt && (run.status === "running" || run.status === "pending") ? "Zatrzymywanie…" : isRunActuallyActive(run) ? "Przebieg trwa" : "Uruchom / wznów zbieranie"}
         </Button>
+        {(run?.status === "running" || run?.status === "pending") ? (
+          <Button variant="outline" disabled={runStopping || Boolean(run.stopRequestedAt && isRunActuallyActive(run))} onClick={() => void stopCollection()}>
+            {runStopping ? "Zatrzymywanie…" : run.stopRequestedAt && !isRunActuallyActive(run) ? "Dokończ zatrzymanie" : run.stopRequestedAt ? "Zatrzymywanie…" : "Zatrzymaj"}
+          </Button>
+        ) : null}
         {run?.sourceStatuses ? <div className="flex w-full min-w-0 flex-wrap gap-2 text-xs">{Object.entries(run.sourceStatuses).map(([source, status]) => <span className="max-w-full break-words rounded-full border px-2 py-1" key={source}>{source}: {statusLabel(status)}</span>)}</div> : null}
       </section>
 
@@ -575,7 +636,7 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
           {listing.verificationIssues?.length ? <span className="max-w-48 break-words rounded-full border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300" title={`Poza statystykami A/B: ${listing.verificationIssues.map(verificationIssueLabel).join(", ")}`}>Wymaga weryfikacji · poza próbą A/B</span> : null}
         </div>
       </div>
-      <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"}{listing.verificationIssues?.length ? " · poza klasyfikacją A/B do czasu weryfikacji" : ` · ${qualityCategoryLabel(listing.qualityCategory, listing.marketType)}`}</p>
+      <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"}{listing.yearBuilt !== null ? ` · Rok budowy: ${listing.yearBuilt}` : " · Rok budowy: brak danych"}{listing.verificationIssues?.length ? " · poza klasyfikacją A/B do czasu weryfikacji" : ` · ${qualityCategoryLabel(listing.qualityCategory, listing.marketType)}`}</p>
       {listing.verificationIssues?.length ? <p className="mt-1 break-words text-xs text-amber-700 dark:text-amber-300">Sprzeczne dane: {listing.verificationIssues.map(verificationIssueLabel).join(", ")}. Oferta pozostaje zachowana, ale nie wchodzi do statystyk.</p> : null}
       <p className="mt-3 text-sm font-medium">
         {formatCurrency(listing.price)} · {listing.area} m² · {formatCurrency(listing.pricePerSqm)}/m²{listing.rooms ? ` · ${listing.rooms} pok.` : ""}

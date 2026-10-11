@@ -276,9 +276,17 @@ export function parseSearchFilterInput(value: unknown): SearchFilterInput {
     throw new Error("Nieprawidłowe dane filtra.");
   }
 
+  const requestedSources = stringArray(value.sources, "Źródła");
+  const recognizedSources = requestedSources.filter(isListingSource);
+  if (recognizedSources.length !== requestedSources.length) {
+    throw new Error("Wybierz wyłącznie rozpoznawane źródła ofert.");
+  }
+
   const input: SearchFilterInput = {
     name: requiredString(value.name, "Nazwa"),
-    sources: stringArray(value.sources, "Źródła").filter(isListingSource),
+    // Retain legacy IDs when reading saved filters, but never accept an
+    // unavailable/disabled source as a new selection on create/update.
+    sources: recognizedSources.filter(isActiveFilterSource),
     city: requiredString(value.city, "Miasto"),
     districts: stringArray(value.districts, "Dzielnice"),
     priceMin: nullableNumber(value.priceMin, "Cena minimalna"),
@@ -310,7 +318,6 @@ export function parseSearchFilterInput(value: unknown): SearchFilterInput {
   };
 
   if (
-    input.sources.length !== stringArray(value.sources, "Źródła").length ||
     input.sources.length === 0
   ) {
     throw new Error("Wybierz co najmniej jedno obsługiwane źródło.");

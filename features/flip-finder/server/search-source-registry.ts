@@ -53,15 +53,6 @@ export const EXTERNAL_SOURCE_CONFIGS: ExternalSourceConfig[] = [
   // requested through the public /mieszkania/szukaj GET form with sale,
   // apartment, area, room, and location filters set explicitly.
   { id: "oferty_net", label: "Oferty.net", hostnames: ["oferty.net"], searchPath: (city) => `/mieszkania,${slugifyCity(city)}` },
-  // Re-investigated (read-only, 2026-10-03): the previously registered path
-  // 302-redirects to the homepage -- a wrong path, not merely an unfiltered
-  // one. Submitting the site's own real GET form (id="formSearch",
-  // action="/form", fields assetCategory=na-sprzedaz&assetType=lokal-mieszkalny
-  // &localization_search_text=<city>) resolves to the real, working,
-  // genuinely city-scoped pattern: /l/na-sprzedaz/lokal-mieszkalny/<city>
-  // (465 ofert for Łódź vs 63622+ nationwide; confirmed a plain ASCII slug
-  // is accepted, no diacritics required). Activated below.
-  { id: "szybko", label: "Szybko.pl", hostnames: ["szybko.pl"], searchPath: (city) => `/l/na-sprzedaz/lokal-mieszkalny/${slugifyCity(city)}` },
   // Confirmed (read-only, 2026-10-03): returns HTTP 403 on every request
   // (this session's own User-Agent included) -- bot/scraper blocking, not a
   // wrong URL. Matches the existing access_limited_without_authentication
@@ -97,11 +88,10 @@ export const EXTERNAL_SOURCE_STATUS = {
   sprzedajemy: "public_html_adapter",
   adresowo: "public_html_adapter",
   oferty_net: "public_html_adapter",
-  szybko: "public_html_adapter",
   bezposrednio: "access_limited_without_authentication",
   domy: "public_html_adapter",
   allegro_lokalnie: "public_html_adapter",
-} as const satisfies Record<ExternalSourceId, string>;
+} as const satisfies Partial<Record<ExternalSourceId, string>>;
 
 export const SOURCES: SearchSource[] = [
   { id: "otodom", label: "Otodom", fetch: fetchOtodom },

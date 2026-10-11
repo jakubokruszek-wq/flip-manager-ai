@@ -96,7 +96,8 @@ test("the migration is schema-only and the runtime gate lists only locally compl
   assert.doesNotMatch(availability.slice(gateStart, gateEnd), /"bezposrednio"/);
   const registry = fs.readFileSync(path.join(root, "features/flip-finder/server/search-source-registry.ts"), "utf8");
   assert.match(registry, /bezposrednio:\s*"access_limited_without_authentication"/);
-  assert.match(registry, /szybko:\s*"public_html_adapter"/);
+  assert.doesNotMatch(registry, /szybko:\s*"/,
+    "Szybko stays in the historical SQL source constraint, but no longer has a runtime adapter/status registration");
   assert.match(registry, /oferty_net:\s*"public_html_adapter"/);
   for (const source of REGISTERED_EXTERNAL_SOURCES) {
     assert.match(migration, new RegExp(`['"]${source}['"]`));

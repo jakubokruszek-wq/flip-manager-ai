@@ -218,6 +218,7 @@ test("real Finder observes automatic runs using GET, preserves manual monitoring
     authServer.listen(authPort, "127.0.0.1", resolve);
   });
   t.after(() => authServer.close());
+  const offlinePreload = path.resolve(root, "features/test-support/offline-next.cjs");
   const childEnv = {
     PATH: process.env.PATH,
     SYSTEMROOT: process.env.SYSTEMROOT,
@@ -227,12 +228,14 @@ test("real Finder observes automatic runs using GET, preserves manual monitoring
     USERPROFILE: process.env.USERPROFILE,
     LOCALAPPDATA: process.env.LOCALAPPDATA,
     APPDATA: process.env.APPDATA,
+    NODE_ENV: "test",
+    NODE_OPTIONS: `--use-system-ca --require=${offlinePreload}`,
     NEXT_TELEMETRY_DISABLED: "1",
     NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "browser-test-publishable-key",
   };
   await new Promise((resolve, reject) => {
-    const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+    const build = spawn(process.execPath, [nextBin, "build", "--webpack"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     let buildOutput = "";
     build.stdout.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });
     build.stderr.on("data", (chunk) => { buildOutput = `${buildOutput}${chunk}`.slice(-8_000); });

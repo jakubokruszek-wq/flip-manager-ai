@@ -86,9 +86,10 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   // or read the developer's .env.local because the runner uses an isolated copy.
   // NODE_ENV=test is intentional: Next.js does not load .env.local in test mode.
   // The runner passes only this loopback Supabase mock and never inherits secrets.
-  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: "test", NODE_OPTIONS: "--use-system-ca", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
+  const offlinePreload = path.resolve(root, "features/test-support/offline-next.cjs");
+  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: "test", NODE_OPTIONS: `--use-system-ca --require=${offlinePreload}`, NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
   await new Promise((resolve, reject) => {
-    const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+    const build = spawn(process.execPath, [nextBin, "build", "--webpack"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     build.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8000); });
     build.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8000); });
@@ -117,11 +118,12 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   let savedFilters = defaultFilters();
   let excluded = false;
   let failNextSave = false;
+  let radarRun = null;
   const requests = [];
   await page.route("**/api/price-radar/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    requests.push({ path: url.pathname, method: request.method() });
+    requests.push({ path: url.pathname, method: request.method(), ...(request.method() === "POST" ? { body: request.postDataJSON() } : {}) });
     if (url.pathname === "/api/price-radar/settings" && request.method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ filters: savedFilters, activeSources, disabledSourceNote: "Wyłączone portale pozostają nieaktywne." }) });
     if (url.pathname === "/api/price-radar/settings" && request.method() === "PUT") {
       if (failNextSave) { failNextSave = false; return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "Błąd zapisu ustawień." }) }); }
@@ -137,7 +139,19 @@ test("real Radar page persists settings, separates markets, excludes/restores li
       };
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(results(queryFilters, excluded)) });
     }
-    if (url.pathname === "/api/price-radar/run") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: null }) });
+    if (url.pathname === "/api/price-radar/run" && request.method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: radarRun }) });
+    if (url.pathname === "/api/price-radar/run" && request.method() === "POST") {
+      const body = request.postDataJSON() || {};
+      if (body.action === "stop" && radarRun?.id === body.runId && (radarRun.status === "running" || radarRun.status === "pending")) {
+        radarRun = { ...radarRun, stopRequestedAt: new Date().toISOString() };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: radarRun.id, status: "stopping" }) });
+      }
+      if (body.expectedRunId && radarRun?.id === body.expectedRunId && radarRun.errorMessage === "RADAR_STOPPED_BY_OPERATOR") {
+        radarRun = { ...radarRun, status: "running", errorMessage: null, stopRequestedAt: null, leaseUntil: new Date(Date.now() + 120000).toISOString() };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ runId: radarRun.id, status: "running" }) });
+      }
+      return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ message: "run changed" }) });
+    }
     if (url.pathname === "/api/price-radar/exclude" && request.method() === "POST") { excluded = JSON.parse(request.postData() || "{}").excluded; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }); }
     return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "unexpected Radar request" }) });
   });
@@ -237,7 +251,38 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-domiporta"));
   assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-gratka"));
   assert.deepEqual(blockedExternalRequests, [], "the isolated browser never contacts a portal or remote Supabase");
-  assert.equal(requests.some((request) => request.path === "/api/price-radar/run" && request.method === "POST"), false, "viewing and refreshing the page never starts a collection run");
+  const runPosts = () => requests.filter((request) => request.path === "/api/price-radar/run" && request.method === "POST");
+  assert.equal(runPosts().length, 0, "viewing and refreshing the page never starts or resumes a collection run");
+
+  const stoppedRunId = "radar-stop-browser-run";
+  radarRun = { id: stoppedRunId, status: "running", startedAt: new Date().toISOString(), finishedAt: null, leaseUntil: new Date(Date.now() + 120000).toISOString(), stopRequestedAt: null, scannedCount: 17, qualifiedCount: 1, sourceStatuses: { domiporta: "running" }, sourceErrors: {}, errorMessage: null, checkpoint: { sourceQueue: ["domiporta"], currentSourceIndex: 0 } };
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "Zatrzymaj" }).waitFor();
+  assert.equal(runPosts().length, 0, "the active run is discovered by GET without starting another run");
+  await page.getByRole("button", { name: "Zatrzymaj" }).click();
+  const stoppingButtons = page.getByRole("button", { name: "Zatrzymywanie…" });
+  await stoppingButtons.first().waitFor();
+  assert.equal(await stoppingButtons.count(), 2, "both run controls reflect the same pending stop request");
+  assert.deepEqual(await stoppingButtons.evaluateAll((buttons) => buttons.map((button) => (button).disabled)), [true, true], "a pending stop cannot be submitted twice");
+  assert.equal(runPosts().length, 1);
+  assert.deepEqual(runPosts().map((request) => request.body), [{ action: "stop", runId: stoppedRunId }]);
+  assert.equal(radarRun.status, "running", "the UI reports stopping, not stopped, until the backend acknowledges it");
+
+  radarRun = { ...radarRun, status: "partial", errorMessage: "RADAR_STOPPED_BY_OPERATOR", finishedAt: new Date().toISOString(), leaseUntil: null };
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "Wznów zatrzymany przebieg" }).waitFor();
+  assert.ok(await page.getByText(/Zatrzymany/).count(), "the acknowledged backend state is rendered as stopped");
+  const postsBeforeStoppedRefresh = runPosts().length;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "Wznów zatrzymany przebieg" }).waitFor();
+  assert.equal(runPosts().length, postsBeforeStoppedRefresh, "refreshing a stopped run does not resume it automatically");
+
+  await page.getByRole("button", { name: "Wznów zatrzymany przebieg" }).click();
+  await page.getByRole("button", { name: "Zatrzymaj" }).waitFor();
+  const stopResumePosts = runPosts();
+  assert.equal(stopResumePosts.length, postsBeforeStoppedRefresh + 1, "resume happens only after the explicit operator click");
+  assert.deepEqual(stopResumePosts.at(-1)?.body, { expectedRunId: stoppedRunId }, "resume continues the same scan_run_id");
+  assert.equal(radarRun.id, stoppedRunId, "resume cannot allocate a new run ID");
 });
 
 test("an expired nonterminal Radar run resumes automatically in place without a manual click", { timeout: 600_000 }, async (t) => {
@@ -253,9 +298,10 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   await new Promise((resolve, reject) => { authServer.once("error", reject); authServer.listen(authPort, "127.0.0.1", resolve); });
   t.after(() => authServer.close());
   // Match the first browser case: the test environment suppresses .env.local.
-  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: "test", NODE_OPTIONS: "--use-system-ca", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
+  const offlinePreload = path.resolve(root, "features/test-support/offline-next.cjs");
+  const childEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: "test", NODE_OPTIONS: `--use-system-ca --require=${offlinePreload}`, NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${authPort}`, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "radar-browser-test-publishable-key" };
   await new Promise((resolve, reject) => {
-    const build = spawn(process.execPath, [nextBin, "build"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+    const build = spawn(process.execPath, [nextBin, "build", "--webpack"], { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     build.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8000); });
     build.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-8000); });

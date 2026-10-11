@@ -28,7 +28,6 @@ export const EXTERNAL_PORTAL_PARSERS: Record<ExternalSourceId, PortalParser> = {
   sprzedajemy: parseSprzedajemy,
   adresowo: parseAdresowo,
   oferty_net: parseOfertyNet,
-  szybko: parseSzybko,
   bezposrednio: parseBezposrednio,
   domy: parseDomy,
   allegro_lokalnie: parseAllegroLokalnie,
@@ -247,6 +246,7 @@ type ParsedRadarPortalDetail = {
   area: number | null;
   rooms: number | null;
   floor: number | null;
+  yearBuilt: number | null;
   city: string | null;
   district: string | null;
   locationText: string | null;
@@ -289,6 +289,8 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   const rooms = roomsText ? decimal(roomsText.match(/\d+(?:[.,]\d+)?/u)?.[0] ?? roomsText) : null;
   const floorText = textByLabels(["Piętro", "Kondygnacja", "Poziom"]);
   const floor = parseFloor(floorText);
+  const yearBuiltText = textByLabels(["Rok budowy"]);
+  const yearBuilt = yearBuiltText ? parseExplicitConstructionYear(yearBuiltText) : null;
   const location = source === "oferty_net" ? $(".header h1").first().text() : $(".summary__location").first().text();
   const locationText = location.replace(/\s+/gu, " ").trim() || null;
   const { city, district } = parseRadarLocation(location);
@@ -343,7 +345,15 @@ export function parseRadarOfferDetail(source: "oferty_net" | "domiporta", html: 
   if (!active) contradictoryFields.push("active_listing");
   contradictoryFields.push(...findRadarOwnListingConflicts({ area, rooms, floor, locationText, title: titleText, description }));
   const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(district) && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed && contradictoryFields.length === 0;
-  return { active, verified, unconfirmedFields, contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, city, district, locationText, buildingType, marketType, propertyType, description };
+  return { active, verified, unconfirmedFields, contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, description };
+}
+
+/** Construction year is accepted only from a dedicated source field label. */
+function parseExplicitConstructionYear(value: string): number | null {
+  const match = value.match(/\b(?:17|18|19|20|21)\d{2}\b/u);
+  if (!match) return null;
+  const year = Number(match[0]);
+  return Number.isInteger(year) && year >= 1700 && year <= 2100 ? year : null;
 }
 
 function parseFloor(value: string | null): number | null {
@@ -392,6 +402,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     price: detail.price ?? base.price,
     area: detail.area ?? base.area,
     rooms: detail.rooms ?? base.rooms,
+    yearBuilt: detail.yearBuilt,
     city: detail.city,
     district: detail.district,
     buildingType: detail.buildingType,
@@ -401,7 +412,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     detailVerified: detail.verified,
     detailLocationText: detail.locationText,
     detailContradictions: detail.contradictoryFields,
-    detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText },
+    detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" },
   };
   const description = [base.description, detail.description].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index).join(" ") || null;
   const exactPrice = detail.price ?? base.price;
@@ -417,7 +428,7 @@ function mergeRadarDetail(base: PropertySourceListing, detail: ParsedRadarPortal
     locationText: [detail.district, detail.city].filter(Boolean).join(", ") || null,
     buildingType: resolveBuildingType(detail.buildingType, base.title, description),
     description,
-    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: detail.locationText, detailContradictions: detail.contradictoryFields, detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText } },
+    rawPayload: { source: base.source, candidate: mergedCandidate, marketType: detail.marketType, propertyType: detail.propertyType, detailAttempted: true, detailVerified: detail.verified, detailLocationText: detail.locationText, detailContradictions: detail.contradictoryFields, detailEvidence: { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText, yearBuilt: detail.yearBuilt, yearBuiltSourceField: detail.yearBuilt === null ? null : "Rok budowy" } },
   };
 }
 
@@ -518,7 +529,7 @@ function publicSearchPageLimitWarning(config: ExternalSourceConfig): string {
 // (read-only GET, 2026-10-03): the page embeds exactly one schema.org Product
 // whose `offers` is a single AggregateOffer carrying every visible listing as
 // its own nested Offer in `offers.offers[]` -- never an ItemList, and never one
-// JSON-LD record per listing the way domiporta/adresowo/szybko/domy render.
+// JSON-LD record per listing the way domiporta/adresowo/domy render.
 // jsonLdRecords() only recurses into `@graph`, so it hands back that one
 // top-level Product record; its own `offers`/`itemOffered` fields are the
 // page-level aggregate (lowPrice/highPrice, no single listing), not a listing
@@ -659,50 +670,6 @@ function parseOfertyNet(html: string, fallbackCity: string): ExternalPortalPage 
   return fromCandidates("oferty_net", candidates, fallbackCity, Number.isFinite(current) && maxPage > current);
 }
 function ofertyNetIdFromUrl(url: string): string | null { try { return new URL(url).pathname.match(/,([^,/]+)$/u)?.[1] ?? lastPathSegmentId(url); } catch { return lastPathSegmentId(url); } }
-
-// Real public structure, confirmed against szybko.pl's own GET search form
-// (read-only, 2026-10-03): the previously registered <city>/mieszkania/sprzedaz
-// path 302-redirects to the homepage -- an outright wrong path, not just an
-// unfiltered one. The site's real form (id="formSearch", action="/form",
-// method="GET") reveals the working pattern once submitted:
-// /l/na-sprzedaz/lokal-mieszkalny/<city>, confirmed genuinely city-scoped
-// (465 ofert for "lodz"/"Łódź" vs 63622+ nationwide; a plain ASCII slug is
-// accepted, no diacritics required). That page has no JSON-LD or
-// __NEXT_DATA__ at all (the previous parser's ItemList assumption never
-// matched anything real) -- listings are schema.org Microdata
-// (itemscope/itemprop on the rendered HTML itself), a third, distinct shape
-// from every other portal in this file, so it needs its own cheerio-based
-// extraction rather than a JSON record mapper.
-function parseSzybko(html: string, fallbackCity: string): ExternalPortalPage {
-  const $ = load(html);
-  const candidates: PortalCandidate[] = [];
-  $("[data-assetid]").each((_, element) => {
-    const card = $(element);
-    const [city, district] = parseSzybkoAddress(card.find(".popup-gmaps").first().text());
-    candidates.push({
-      id: card.attr("data-assetid"),
-      url: card.find(".listing-title-heading[href]").first().attr("href"),
-      title: card.find("[itemprop='name']").first().text() || card.find(".listing-title-heading").first().text(),
-      description: card.find("[itemprop='description']").first().text(),
-      price: card.find("[itemprop='price']").first().attr("content"),
-      area: areaFromText(card.find(".asset-feature.area").first().text()),
-      rooms: card.find(".asset-feature.rooms").first().text(),
-      city: city ?? fallbackCity,
-      district,
-      images: card.find("[itemprop='image']").first().attr("href"),
-    });
-  });
-  return fromCandidates("szybko", candidates, fallbackCity, hasNextMarker(html));
-}
-
-// "Łódź (Widzew) (Łódzkie, gm. Łódź)" -> city "Łódź", district "Widzew".
-// Sampled across a full result page: the city-plus-district prefix before
-// the first parenthesis is consistent even when the voivodeship/street
-// suffix that follows it varies ("(Łódzkie, gm. Łódź)" vs ", <street>").
-function parseSzybkoAddress(value: string): [string | null, string | null] {
-  const match = value.replace(/\s+/gu, " ").trim().match(/^([^(]+?)\s*\(([^)]+)\)/u);
-  return match ? [stringValue(match[1]), stringValue(match[2])] : [stringValue(value), null];
-}
 
 function parseBezposrednio(html: string, fallbackCity: string): ExternalPortalPage {
   const data = nextData(html); const rows = arrayAt(data, ["props", "pageProps", "listings"]) ?? arrayAt(data, ["props", "pageProps", "results"]) ?? [];
@@ -997,4 +964,4 @@ function stripHtml(value: string): string { return value.replace(/<[^>]+>/gu, " 
 function decodeEntities(value: string): string { return value.replace(/&quot;/gu, '"').replace(/&#34;/gu, '"').replace(/&amp;/gu, "&").replace(/&#39;/gu, "'").replace(/&lt;/gu, "<").replace(/&gt;/gu, ">"); }
 function isRecord(value: unknown): value is PortalRecord { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 
-const SOURCE_HOSTS: Record<ExternalSourceId, string> = { gratka: "gratka.pl", nieruchomosci_online: "nieruchomosci-online.pl", domiporta: "domiporta.pl", sprzedajemy: "sprzedajemy.pl", adresowo: "adresowo.pl", oferty_net: "oferty.net", szybko: "szybko.pl", bezposrednio: "bezposrednio.net.pl", domy: "domy.pl", allegro_lokalnie: "allegrolokalnie.pl" };
+const SOURCE_HOSTS: Record<ExternalSourceId, string> = { gratka: "gratka.pl", nieruchomosci_online: "nieruchomosci-online.pl", domiporta: "domiporta.pl", sprzedajemy: "sprzedajemy.pl", adresowo: "adresowo.pl", oferty_net: "oferty.net", bezposrednio: "bezposrednio.net.pl", domy: "domy.pl", allegro_lokalnie: "allegrolokalnie.pl" };

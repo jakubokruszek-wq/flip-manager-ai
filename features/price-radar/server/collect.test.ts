@@ -6,7 +6,7 @@ import type { RadarDetailDiagnostic } from "@/features/flip-finder/source-batche
 type Row = Record<string, unknown>;
 const ownerId = "owner-test";
 
-function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[] } = {}) {
+function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]; onListingPersisted?: (run: Row, candidate: Row) => void } = {}) {
   const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [], price_radar_district_queue: initial.districtQueue ?? [] };
   const rpcCalls: Array<{ name: string; args: Row }> = [];
   let seq = 0;
@@ -26,6 +26,7 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
       if (name === "checkpoint_price_radar_run") {
         const row = tables.price_radar_runs.find((entry) => entry.id === args.p_run_id && entry.owner_id === args.p_owner_id && entry.lease_token === args.p_lease_token && entry.status === "running");
         if (!row) return { data: false, error: null };
+        if (row.stop_requested_at && !(args.p_status === "partial" && args.p_error_message === "RADAR_STOPPED_BY_OPERATOR")) return { data: false, error: null };
         Object.assign(row, { checkpoint: args.p_checkpoint, source_statuses: args.p_source_statuses, scanned_count: args.p_scanned_count, qualified_count: args.p_qualified_count, status: args.p_status, error_message: args.p_error_message, finished_at: ["completed", "partial", "failed"].includes(String(args.p_status)) ? new Date().toISOString() : null });
         if (row.finished_at) Object.assign(row, { lease_token: null, lease_until: null });
         else row.lease_until = new Date(Date.now() + Number(args.p_lease_seconds) * 1000).toISOString();
@@ -33,11 +34,12 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
       }
       if (name === "persist_price_radar_listing") {
         const run = tables.price_radar_runs.find((entry) => entry.id === args.p_run_id && entry.owner_id === args.p_owner_id && entry.lease_token === args.p_lease_token && entry.status === "running");
-        if (!run) return { data: null, error: { message: "RADAR_LEASE_LOST" } };
+        if (!run || run.stop_requested_at) return { data: null, error: { message: "RADAR_LEASE_LOST" } };
         const candidate = args.p_listing as Row;
         let row = tables.price_radar_listings.find((entry) => entry.owner_id === args.p_owner_id && entry.source === candidate.source && (entry.external_listing_id === candidate.external_listing_id || entry.normalized_url === candidate.normalized_url));
         if (!row) { row = { id: `listing-${++seq}`, owner_id: args.p_owner_id }; tables.price_radar_listings.push(row); }
         Object.assign(row, candidate, { excluded_at: row.excluded_at ?? null, excluded_reason: row.excluded_reason ?? null, status: "active", first_seen_at: row.first_seen_at ?? candidate.collected_at });
+        initial.onListingPersisted?.(run, candidate);
         return { data: row.id, error: null };
       }
       if (name === "upsert_price_radar_district_queue_candidate") {
@@ -179,6 +181,51 @@ test("claim and continuation checkpoints use the 75-second lease for a 42-second
   const leaseCalls = db.rpcCalls.filter(({ name }) => name === "claim_price_radar_run" || name === "checkpoint_price_radar_run");
   assert.ok(leaseCalls.length >= 2);
   assert.ok(leaseCalls.every(({ args }) => args.p_lease_seconds === 75), "every claim and checkpoint must retain the shorter lease window");
+});
+
+test("a persisted STOP request prevents the next source fetch and releases the same run as resumable partial", async () => {
+  const db = fakeDb();
+  let fetchCalls = 0;
+  fakeSourceImpl = async () => { fetchCalls += 1; return { listings: [qualifyingListing("must-not-fetch", "domiporta")], warnings: [], fetched: 1 }; };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+  const savedRun = db.tables.price_radar_runs[0]!;
+  savedRun.stop_requested_at = new Date().toISOString();
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never);
+  assert.equal(fetchCalls, 0, "a stop persisted before a new source starts prevents any portal request");
+  assert.equal(result.status, "partial");
+  assert.equal(result.sourceStatuses.domiporta, "pending");
+  assert.equal(savedRun.id, claimed.run.id, "STOP preserves the existing run rather than allocating a new one");
+  assert.equal(savedRun.status, "partial");
+  assert.equal(savedRun.error_message, "RADAR_STOPPED_BY_OPERATOR");
+  assert.equal(savedRun.lease_token, null, "acknowledgment releases the lease instead of leaving an orphaned lock");
+  assert.deepEqual((savedRun.checkpoint as { sourceQueue: string[] }).sourceQueue, ["domiporta"]);
+});
+
+test("a STOP racing with persistence does not advance a partial page cursor or double-count it on replay", async () => {
+  let stopAfterFirstPersist = true;
+  const db = fakeDb({ onListingPersisted: (run) => {
+    if (stopAfterFirstPersist) {
+      stopAfterFirstPersist = false;
+      run.stop_requested_at = new Date().toISOString();
+    }
+  } });
+  fakeSourceImpl = async (_id, _cursor, batches) => {
+    await batches?.onBatch({ listings: [qualifyingListing("stop-page-1", "domiporta"), qualifyingListing("stop-page-2", "domiporta")], warnings: [], fetched: 2 }, { kind: "radar_detail_v1", page: 2, candidateIndex: 0 });
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never);
+  const run = db.tables.price_radar_runs[0]!;
+  const savedCheckpoint = run.checkpoint as { perSourceCursor: Record<string, unknown>; sourceStatuses: Record<string, string> };
+  assert.equal(result.status, "partial");
+  assert.equal(result.sourceStatuses.domiporta, "pending");
+  assert.equal(db.tables.price_radar_listings.length, 1, "a listing persisted before STOP remains intact and is not deleted");
+  assert.deepEqual(savedCheckpoint.perSourceCursor, {}, "a partially processed page is not committed past its prior cursor");
+  assert.equal(run.scanned_count, 0, "an interrupted batch is replayed without inflating scanned counters");
+  assert.equal(run.qualified_count, 0, "qualified count commits only after the batch is fully processed");
 });
 
 test("new Radar runs snapshot selected area and room bounds and reuse them for source fetches", async () => {

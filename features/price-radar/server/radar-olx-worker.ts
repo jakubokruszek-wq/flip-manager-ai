@@ -9,16 +9,33 @@ import type { RadarCheckpoint, RadarRunStatus } from "@/features/price-radar/typ
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+export const RADAR_STOPPED_BY_OPERATOR = "RADAR_STOPPED_BY_OPERATOR";
+
 type JobInput = { jobId: string; jobLeaseToken: string; workerId: string; ownerId: string; runId: string; radarLeaseToken: string };
 type OlxPayload = { fetched: number; listings: SourceListing[]; warnings: string[]; durationMs: number };
 
 /** Saves OLX results into Radar-owned rows only and atomically checkpoints the OLX queue task. */
 export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | { errorCode: string; errorMessage: string }, client: SupabaseClient = createAdminClient()): Promise<{ source: "olx"; status: "completed" | "failed"; fetched: number; qualified: number }> {
-  const { data: runRow, error: runError } = await client.from("price_radar_runs").select("checkpoint,source_statuses,scanned_count,qualified_count,status,lease_token,lease_until")
+  const { data: runRow, error: runError } = await client.from("price_radar_runs").select("checkpoint,source_statuses,scanned_count,qualified_count,status,lease_token,lease_until,stop_requested_at")
     .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
   if (runError || !runRow || runRow.status !== "running" || runRow.lease_token !== input.radarLeaseToken || !isFuture(runRow.lease_until)) throw new Error("RADAR_LEASE_LOST");
   const checkpoint = parseCheckpoint(runRow.checkpoint);
   if (checkpoint.sourceQueue[checkpoint.currentSourceIndex] !== "olx" || checkpoint.sourceStatuses.olx !== "running") throw new Error("RADAR_OLX_CHECKPOINT_MISMATCH");
+
+  if (runRow.stop_requested_at) {
+    checkpoint.sourceStatuses.olx = "pending";
+    const { data, error } = await client.rpc("finalize_price_radar_olx_job", {
+      p_owner_id: input.ownerId, p_run_id: input.runId, p_radar_lease_token: input.radarLeaseToken,
+      p_job_id: input.jobId, p_worker_id: input.workerId, p_job_lease_token: input.jobLeaseToken,
+      p_checkpoint: checkpoint, p_source_statuses: checkpoint.sourceStatuses,
+      p_scanned_count: Number(runRow.scanned_count ?? 0), p_qualified_count: Number(runRow.qualified_count ?? 0),
+      p_run_status: "partial", p_error_message: RADAR_STOPPED_BY_OPERATOR,
+      p_job_status: "failed", p_result_summary: { source: "olx", status: "stopped", retainedResults: true },
+      p_error_code: RADAR_STOPPED_BY_OPERATOR, p_job_error_message: "Operator stopped this Radar run",
+    });
+    if (error || data !== true) throw new Error("RADAR_LEASE_LOST");
+    return { source: "olx", status: "failed", fetched: 0, qualified: 0 };
+  }
 
   let fetched = 0;
   let qualified = 0;

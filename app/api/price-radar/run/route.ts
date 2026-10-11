@@ -1,5 +1,5 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
-import { claimOrCreateRadarRun, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
+import { claimOrCreateRadarRun, requestRadarRunStop, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
 import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
@@ -38,13 +38,25 @@ export async function POST(request: Request) {
   }
   try {
     const body = await request.json().catch(() => undefined) as unknown;
+    if (body && typeof body === "object" && "action" in body && body.action === "stop") {
+      if (!("runId" in body) || typeof body.runId !== "string" || !body.runId.trim()) {
+        return Response.json({ code: "INVALID_STOP_REQUEST" }, { status: 400 });
+      }
+      const stopped = await requestRadarRunStop(operator.id, body.runId);
+      if (stopped.kind === "blocked") {
+        return Response.json({ code: stopped.reason, message: "The requested Radar run is no longer active." }, { status: 409 });
+      }
+      return Response.json({ runId: body.runId, status: stopped.kind });
+    }
     if (body !== undefined && (!body || typeof body !== "object" || !("expectedRunId" in body) || typeof body.expectedRunId !== "string" || !body.expectedRunId.trim())) {
       return Response.json({ code: "INVALID_RESUME_REQUEST" }, { status: 400 });
     }
     const expectedRunId = body && typeof body === "object" && "expectedRunId" in body ? body.expectedRunId : null;
     if (typeof expectedRunId === "string") {
       const latest = await latestRadarRun(operator.id);
-      if (!latest || latest.id !== expectedRunId || (latest.status !== "pending" && latest.status !== "running")) {
+      const stoppedRun = latest?.status === "partial" && latest.errorMessage === "RADAR_STOPPED_BY_OPERATOR" && typeof latest.stopRequestedAt === "string";
+      const stopStillPending = Boolean(latest?.stopRequestedAt && (latest.status === "pending" || latest.status === "running"));
+      if (!latest || latest.id !== expectedRunId || stopStillPending || (latest.status !== "pending" && latest.status !== "running" && !stoppedRun)) {
         return Response.json({ code: "RADAR_RUN_CHANGED", message: "The requested Radar run is no longer resumable." }, { status: 409 });
       }
       const resumed = await resumeExistingRadarRun(operator.id, expectedRunId);
