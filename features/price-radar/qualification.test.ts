@@ -110,11 +110,32 @@ test("a bare sub-area followed by its own street ('Teofilów, Rojna') still reso
   if (result.qualified) assert.equal(result.district, "Bałuty");
 });
 
-test("a city name alone, or a sub-area with no internal cross-validated district pairing, stays unconfirmed rather than guessed", () => {
+test("a city name alone, or a sub-area with no confirmed district pairing at all, stays unconfirmed rather than guessed", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Łódź" })), { qualified: false, reason: "district_not_confirmed" });
-  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Stoki" })), { qualified: false, reason: "district_not_confirmed" }, "never observed paired with a canonical district in this app's own data -- must not be guessed from outside geography knowledge");
-  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Górniak" })), { qualified: false, reason: "district_not_confirmed" });
-  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "Górniak, ul. Grabowa" })), { qualified: false, reason: "district_not_confirmed" }, "an unvalidated leading sub-area with its own street must stay unconfirmed too, never fall back to a different segment");
+  // "nr 33" is one of the 2 (of 36) osiedla from mapa.lodz.pl's own GIS
+  // roster with no independent confirmation of its district (see
+  // NEIGHBORHOOD_TO_DISTRICT's comment) -- it must stay unconfirmed too,
+  // never guessed just because its sibling osiedla are now mapped.
+  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "nr 33" })), { qualified: false, reason: "district_not_confirmed" }, "no independent confirmation of this osiedle's district -- must not be guessed");
+  assert.deepEqual(qualifyRadarCandidate(candidate({ district: "nr 33, ul. Grabowa" })), { qualified: false, reason: "district_not_confirmed" }, "an unconfirmed leading sub-area with its own street must stay unconfirmed too, never fall back to a different segment");
+});
+
+test("sub-areas confirmed via mapa.lodz.pl's own GIS roster (point-in-polygon cross-check + an independently published osiedle list, 2026-10-11) now resolve a district", () => {
+  const stoki = qualifyRadarCandidate(candidate({ district: "Stoki" }));
+  assert.equal(stoki.qualified, true, "confirmed Widzew via GIS + independent roster -- previously left unmapped for lack of this proof");
+  if (stoki.qualified) assert.equal(stoki.district, "Widzew");
+
+  const gorniak = qualifyRadarCandidate(candidate({ district: "Górniak" }));
+  assert.equal(gorniak.qualified, true, "confirmed Górna via GIS + independent roster -- previously left unmapped for lack of this proof");
+  if (gorniak.qualified) assert.equal(gorniak.district, "Górna");
+
+  const piastowKurak = qualifyRadarCandidate(candidate({ district: "Piastów-Kurak" }));
+  assert.equal(piastowKurak.qualified, true, "confirmed Górna by a live point-in-polygon geocode of this mission's own example address (Pabianicka 50, stated as Górna)");
+  if (piastowKurak.qualified) assert.equal(piastowKurak.district, "Górna");
+
+  const withStreet = qualifyRadarCandidate(candidate({ district: "Górniak, ul. Grabowa" }));
+  assert.equal(withStreet.qualified, true, "a confirmed leading sub-area with its own street resolves the same way");
+  if (withStreet.qualified) assert.equal(withStreet.district, "Górna");
 });
 
 test("rejects a city other than Łódź", () => {

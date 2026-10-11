@@ -132,12 +132,27 @@ const STARTING_PRICE_PATTERN = /(?:^|[\s:])od\s+\d[\d\s.,]*\s*(?:zł|PLN)/iu;
 // canonical names caught none of these, so most candidates with real,
 // specific location text still failed "district_not_confirmed".
 //
-// Every key below is a sub-area this app has directly observed paired with
-// its district as "MainDistrict, <this sub-area>" in another source's own
-// structured field for the SAME district -- never guessed from outside
-// Łódź geography knowledge alone. A sub-area with no such internal
-// cross-validation (e.g. "Stoki", "Górniak", "Piastów-Kurak", seen only as
-// bare, unpaired values) is deliberately left unmapped rather than guessed.
+// Every key in the first group below is a sub-area this app has directly
+// observed paired with its district as "MainDistrict, <this sub-area>" in
+// another source's own structured field for the SAME district -- never
+// guessed from outside Łódź geography knowledge alone.
+//
+// The second group is the city's own full roster of "jednostki pomocnicze"
+// (osiedla) -- confirmed 2026-10-11 directly from mapa.lodz.pl's public
+// ArcGIS service (Intersit/MapServer layer 4, "Jednostki pomocnicze";
+// osiedle boundary polygons, 36 features) cross-checked two ways: (a) a
+// live point-in-polygon query (geocode a street address via
+// MapyPodkladowe/MapaBazowaSzukaj, then query which osiedle polygon
+// contains that point) correctly placed this mission's own example address
+// ("Pabianicka 50", stated as Górna) inside the "Piastów-Kurak" polygon --
+// resolving the exact two names ("Stoki", "Piastów-Kurak") the comment
+// above once named as deliberately left unmapped; (b) the resulting
+// osiedle-per-district counts (Bałuty 8, Górna 8, Polesie 7, Śródmieście 2)
+// match an independently published osiedle roster. 2 of the GIS layer's 36
+// names ("nr 33" and the estate named for Józef Montwiłł-Mirecki) had no
+// independent confirmation of their district and are deliberately left out
+// rather than guessed; they fall through to AI/manual review like any
+// other unmapped sub-area.
 const NEIGHBORHOOD_TO_DISTRICT: Record<string, string> = {
   "teofilów": "Bałuty",
   "julianów marysin rogi": "Bałuty",
@@ -157,6 +172,28 @@ const NEIGHBORHOOD_TO_DISTRICT: Record<string, string> = {
   "olechów janów": "Widzew",
   "zarzew": "Widzew",
   "os. katedralna": "Śródmieście",
+  // mapa.lodz.pl "Jednostki pomocnicze" roster (see comment above):
+  "bałuty zachodnie": "Bałuty",
+  "bałuty centrum": "Bałuty",
+  "bałuty doły": "Bałuty",
+  "teofilów wielkopolska": "Bałuty",
+  "wzniesień łódzkich": "Bałuty",
+  "górniak": "Górna",
+  "nad nerem": "Górna",
+  "piastów kurak": "Górna",
+  "wiskitno": "Górna",
+  "retkinia zachód smulsko": "Polesie",
+  "zdrowie mania": "Polesie",
+  "katedralna": "Śródmieście",
+  "śródmieście wschód": "Śródmieście",
+  "andrzejów": "Widzew",
+  "dolina łódki": "Widzew",
+  "mileszki": "Widzew",
+  "nowosolna": "Widzew",
+  "stary widzew": "Widzew",
+  "stoki sikawa podgórze": "Widzew",
+  "stoki": "Widzew",
+  "widzew wschód": "Widzew",
 };
 
 /** A canonical name appearing anywhere in `text` as its own whole word --
