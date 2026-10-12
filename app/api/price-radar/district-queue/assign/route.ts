@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     if (!queueId || !district) return Response.json({ message: "Brak identyfikatora oferty lub dzielnicy." }, { status: 400 });
 
     const settings = await readRadarSettings(operator.id);
-    const result = await assignRadarDistrictQueueCandidate(operator.id, queueId, district, operator.id, RADAR_QUALITY_RULES_VERSION, undefined, settings.minPricePerSqm);
+    const result = await assignRadarDistrictQueueCandidate(operator.id, queueId, district, operator.id, RADAR_QUALITY_RULES_VERSION, undefined, settings.minPricePerSqm, settings.districts);
     if (!result.ok) {
       if (result.reason === "schema_unavailable") return Response.json({ message: "Kolejka przypisania dzielnicy nie jest jeszcze dostępna (wymagana migracja bazy)." }, { status: 503 });
       if (result.reason === "not_found") return Response.json({ message: "Nie znaleziono oferty w kolejce." }, { status: 404 });

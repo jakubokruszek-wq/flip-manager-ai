@@ -374,6 +374,10 @@ export function qualifyRadarCandidate(
   qualityRulesVersion: 1 | 2 = 2,
   trustedOperatorDecision?: RadarVerificationDecision,
   minPricePerSqm?: number | null,
+  // Empty/undefined means "no narrowing" -- the operator's saved Radar
+  // settings default to all 5 districts, so an empty selection there is a
+  // deliberate "everything" choice, never treated as "nothing selected".
+  selectedDistricts?: readonly string[] | null,
 ): QualificationResult {
   const requiresConfirmedDetail = candidate.source === "oferty_net" || candidate.source === "domiporta" || candidate.source === "adresowo" || candidate.source === "allegro_lokalnie" || candidate.source === "otodom";
   // Raw source payloads are untrusted, even if they happen to contain a field
@@ -427,6 +431,19 @@ export function qualifyRadarCandidate(
 
   const district = normalizeDistrict(operatorDecision?.district ?? candidate.district);
   if (!district) return reject("district_not_confirmed");
+  // Confirmed Production gap (2026-10-12): Radar accepted ANY of the 5
+  // supported Łódź districts regardless of which ones the operator actually
+  // selected in their saved settings -- a filter narrowed to Górna/Widzew
+  // still let a confirmed Bałuty listing through. A CONFIRMED district
+  // outside the selection is a definitive, hard exclusion (never "send to
+  // review": the data is not uncertain, it is simply out of scope), so this
+  // is never added to the reviewable-reasons set. An unconfirmed district
+  // is untouched by this check -- it still only ever reaches
+  // "district_not_confirmed" above, and assessRadarDistrictOnlyCandidate's
+  // own probe (see below) already only ever offers a selected district.
+  if (selectedDistricts && selectedDistricts.length > 0 && !selectedDistricts.includes(district)) {
+    return reject("district_not_in_selected_scope");
+  }
   const confirmedCity = operatorDecision?.city ?? candidate.city;
   if (!confirmedCity || confirmedCity.trim().toLocaleLowerCase("pl-PL") !== "łódź") return reject("city_not_lodz");
 
@@ -528,10 +545,16 @@ const DISTRICT_PROBE = DEFAULT_RADAR_DISTRICTS[0];
  * approved by a district choice alone; this returns ineligible for all of
  * those, exactly like qualifyRadarCandidate itself would.
  */
-export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2, minPricePerSqm?: number | null): RadarDistrictOnlyAssessment {
-  const direct = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm);
+export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2, minPricePerSqm?: number | null, selectedDistricts?: readonly string[] | null): RadarDistrictOnlyAssessment {
+  const direct = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts);
   if (direct.qualified || direct.reason !== "district_not_confirmed") return { eligible: false };
-  const probed = qualifyRadarCandidate({ ...candidate, district: DISTRICT_PROBE }, qualityRulesVersion, undefined, minPricePerSqm);
+  // The probe must itself be one of the operator's selected districts (when
+  // narrowed) -- otherwise a saved selection that happens to exclude
+  // DISTRICT_PROBE's own value ("Bałuty") would wrongly fail this inert
+  // placeholder check and never offer an otherwise-eligible candidate for
+  // manual assignment at all.
+  const probeDistrict = selectedDistricts && selectedDistricts.length > 0 ? selectedDistricts[0]! : DISTRICT_PROBE;
+  const probed = qualifyRadarCandidate({ ...candidate, district: probeDistrict }, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts);
   if (!probed.qualified) return { eligible: false };
   const { district: _district, pricePerSqm, ...confirmed } = probed;
   void _district;

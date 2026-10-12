@@ -126,7 +126,7 @@ test("the owner and collection scope come only from the server-trusted price_rad
   });
   assert.deepEqual(settingsCalls, ["owner-trusted"]);
   assert.deepEqual(claimCalls, ["owner-trusted"]);
-  assert.deepEqual(claimCriteria, [{ ownerId: "owner-trusted", sources: ["oferty_net"], criteria: { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, qualityRulesVersion: 2 } }]);
+  assert.deepEqual(claimCriteria, [{ ownerId: "owner-trusted", sources: ["oferty_net"], criteria: { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, districts: [], qualityRulesVersion: 2 } }]);
 });
 
 test("an owner whose Radar run is already active is skipped in favor of the next owner (existing lock/idempotency honored)", async () => {

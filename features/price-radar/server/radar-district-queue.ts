@@ -182,13 +182,15 @@ export async function assignRadarDistrictQueueCandidate(
   assignedBy: string,
   qualityRulesVersion: 1 | 2 = 2,
   supabase: SupabaseClient = createAdminClient(),
-  // The operator's CURRENT saved threshold, read by the caller (not here --
-  // reading it in this module would import radar-settings.ts -> settings.ts,
-  // which itself imports RADAR_SOURCES back from collect.ts, which imports
-  // THIS module, a real circular-import TDZ crash) rather than trusting
-  // whatever was true when this row was first queued -- the operator may
-  // have tightened their Radar filter since then.
+  // The operator's CURRENT saved threshold/district selection, read by the
+  // caller (not here -- reading it in this module would import
+  // radar-settings.ts -> settings.ts, which itself imports RADAR_SOURCES
+  // back from collect.ts, which imports THIS module, a real circular-import
+  // TDZ crash) rather than trusting whatever was true when this row was
+  // first queued -- the operator may have tightened their Radar filter
+  // since then.
   minPricePerSqm?: number | null,
+  selectedDistricts?: readonly string[] | null,
 ): Promise<AssignDistrictResult> {
   if (!(DEFAULT_RADAR_DISTRICTS as readonly string[]).includes(district)) return { ok: false, reason: "invalid_district" };
 
@@ -200,7 +202,7 @@ export async function assignRadarDistrictQueueCandidate(
   if (!row) return { ok: false, reason: "not_found" };
 
   const candidate = toQualificationCandidate(row as Row, district);
-  const outcome = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm);
+  const outcome = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts);
   if (!outcome.qualified) {
     return { ok: false, reason: "no_longer_qualifies", detail: outcome.reason };
   }

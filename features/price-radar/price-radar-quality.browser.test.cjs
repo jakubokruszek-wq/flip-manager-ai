@@ -150,6 +150,14 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
     if (body.queueId !== verificationCandidate.id || body.decision?.apartmentSaleConfirmed !== true) {
       return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ message: "explicit confirmation required" }) });
     }
+    // The operator's saved minimum price/m2 (8 800 zł/m²) is re-checked
+    // server-side on every confirm attempt -- a sub-threshold decision is
+    // refused, the card must stay in the pending queue, never silently
+    // approved just because the operator typed it in by hand.
+    const decisionPricePerSqm = body.decision.price / body.decision.area;
+    if (decisionPricePerSqm < 8_800) {
+      return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ message: "Oferta po ponownej kwalifikacji nie spełnia kryteriów Radaru.", reason: "price_per_sqm_below_minimum" }) });
+    }
     const decision = { ...body.decision, confirmedAt: new Date().toISOString() };
     verificationQueue = {
       available: true, pending: [], rejected: [],
@@ -198,12 +206,27 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   await page.getByText("Oferty w próbie (1)").waitFor();
 
   await page.getByRole("heading", { name: "Do weryfikacji danych i standardu (1)" }).waitFor();
-  await page.getByText("Pola i dowody źródłowe").waitFor();
-  assert.equal(await page.getByText(/HTTP źródła: 200/u).count(), 1, "the specific response status appears with the offer evidence");
+  // The simplified card must show only the operator-facing fields -- none
+  // of the removed technical evidence/diagnostics/AI-suggestion text.
+  assert.equal(await page.getByText("Pola i dowody źródłowe").count(), 0, "technical field-evidence block must no longer render in the main view");
+  assert.equal(await page.getByText(/HTTP źródła/u).count(), 0, "source HTTP/identity diagnostics must no longer render in the main view");
+  assert.equal(await page.getByText(/Sugestia AI/u).count(), 0, "the AI suggestion text must no longer render in the main view");
+  assert.equal(await page.getByText(/Powód skierowania/u).count(), 0, "the routing reason must no longer render in the main view");
   const verificationCard = page.locator('section[aria-label="Do weryfikacji danych i standardu"] article').filter({ hasText: "Mieszkanie do ręcznego sprawdzenia" });
+  for (const label of ["Cena całkowita, zł", "Powierzchnia, m²", "Pokoje", "Miasto — potwierdź z ogłoszenia", "Dzielnica", "Typ budynku"]) {
+    await verificationCard.getByLabel(label).waitFor();
+  }
+  await verificationCard.getByRole("checkbox", { name: /Potwierdzam z ogłoszenia/u }).waitFor();
+  await verificationCard.getByRole("button", { name: "Potwierdź i dodaj do porównań" }).waitFor();
+  await verificationCard.getByRole("button", { name: "Odrzuć" }).waitFor();
   assert.equal(await verificationCard.getByLabel("Cena całkowita, zł").inputValue(), "", "a conflicting source amount is not silently prefilled as confirmed total price");
   assert.equal(await verificationCard.getByLabel("Powierzchnia, m²").inputValue(), "", "a conflicting area is not silently prefilled as confirmed");
-  await verificationCard.getByLabel("Cena całkowita, zł").fill("400000");
+
+  // 1. A sub-threshold confirm (240 000 zł / 40 m² = 6 000 zł/m², below the
+  // saved 8 800 zł/m² minimum) is refused server-side; the card must stay
+  // in the visible pending queue with its count unchanged, never silently
+  // removed or approved.
+  await verificationCard.getByLabel("Cena całkowita, zł").fill("240000");
   await verificationCard.getByLabel("Powierzchnia, m²").fill("40");
   await verificationCard.getByLabel("Pokoje").fill("2");
   await verificationCard.getByLabel("Miasto — potwierdź z ogłoszenia").fill("Łódź");
@@ -212,25 +235,49 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   await verificationCard.locator("label").filter({ hasText: "Rynek" }).locator("select").selectOption("secondary");
   await verificationCard.locator("label").filter({ hasText: "Standard" }).locator("select").selectOption("ready_high_standard");
   await verificationCard.getByRole("checkbox", { name: /Potwierdzam z ogłoszenia/u }).check();
-  await page.getByText("Podgląd ceny/m² po zatwierdzeniu danych: 10 000 zł/m²").waitFor();
-  await page.getByRole("button", { name: "Potwierdź i dodaj do porównań" }).click();
-  await page.getByRole("heading", { name: "Potwierdzone i dodane do porównań (1)" }).waitFor();
-  await page.getByText("Mieszkanie ręcznie potwierdzone z kolejki").waitFor();
-  assert.deepEqual(verificationDecisionPosts[0].decision, {
+  await verificationCard.getByRole("button", { name: "Potwierdź i dodaj do porównań" }).click();
+  await page.getByText(/nie spełnia kryteriów Radaru/u).waitFor();
+  await page.getByRole("heading", { name: "Do weryfikacji danych i standardu (1)" }).waitFor();
+  assert.equal(await verificationCard.count(), 1, "a refused (sub-threshold) confirm must not remove the card from the queue");
+
+  // 2. Correct the price above the saved minimum and confirm for real.
+  await verificationCard.getByLabel("Cena całkowita, zł").fill("400000");
+  await verificationCard.getByRole("button", { name: "Potwierdź i dodaj do porównań" }).click();
+  await page.getByText("Oferty w próbie (2)").waitFor();
+  assert.equal(await page.locator('section[aria-label="Do weryfikacji danych i standardu"]').count(), 0, "the section itself disappears once the queue is empty, not just the one card");
+  assert.equal(await page.getByText("Mieszkanie do ręcznego sprawdzenia").count(), 0, "a confirmed card must disappear from the visible queue immediately, with no lingering 'confirmed' section");
+  assert.equal(await page.getByText(/Potwierdzone i dodane do porównań/u).count(), 0, "no lingering confirmed section in the default view");
+  assert.deepEqual(verificationDecisionPosts.at(-1).decision, {
     apartmentSaleConfirmed: true, price: 400000, area: 40, rooms: 2, city: "Łódź", district: "Bałuty",
     buildingType: "blok", marketType: "secondary", qualityCategory: "ready_high_standard",
   }, "the browser sends the explicit operator-selected facts and category B");
   assert.ok(all.some((item) => item.id === "verified-from-queue"), "only after explicit confirmation does the re-read include the Radar comparison");
   assert.equal(await page.getByText("Oferty w próbie (2)").count(), 1, "the newly confirmed offer is visible below the 20-item sample threshold");
 
+  // 3. Reload must not resurrect the already-confirmed card (the mocked
+  // GET already reflects the server's post-confirm state, exactly like a
+  // real reimport/refresh would).
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByText("Oferty w próbie (2)").waitFor();
+  assert.equal(await page.getByText("Mieszkanie do ręcznego sprawdzenia").count(), 0, "refresh must not restore an already-resolved card");
+
+  // 4. Reject a second candidate -- the card and its counter must disappear
+  // immediately, with no grayed-out "rejected" card left visible below.
   verificationQueue = { ...verificationQueue, pending: [secondVerificationCandidate] };
   await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Do weryfikacji danych i standardu (1)" }).waitFor();
   const rejectCard = page.locator("article").filter({ hasText: "Oferta do odrzucenia z kolejki" });
   await rejectCard.getByRole("button", { name: "Odrzuć" }).click();
-  await page.getByRole("heading", { name: "Odrzucone z weryfikacji (1)" }).waitFor();
-  await page.getByText("Oferta do odrzucenia z kolejki").last().waitFor();
+  await page.getByText("Oferta do odrzucenia z kolejki").waitFor({ state: "detached" });
+  assert.equal(await page.locator('section[aria-label="Do weryfikacji danych i standardu"]').count(), 0, "the queue section disappears once empty after a reject");
+  assert.equal(await page.getByText(/Odrzucone z weryfikacji/u).count(), 0, "no lingering grayed-out rejected section in the default view");
 
-  for (const width of [320, 375]) {
+  // 5. Reload must not resurrect the rejected card either.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  assert.equal(await page.getByText("Oferta do odrzucenia z kolejki").count(), 0, "refresh must not restore an already-rejected card");
+
+  // 6. Desktop and mobile widths both render without horizontal overflow.
+  for (const width of [1280, 375, 320]) {
     await page.setViewportSize({ width, height: 900 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(overflow <= 1, `Radar should not overflow at ${width}px (overflow ${overflow}px)`);

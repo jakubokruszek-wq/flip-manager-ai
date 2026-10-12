@@ -30,6 +30,7 @@ export async function POST(request: Request) {
       areaMax: settings.areaMax,
       rooms: settings.rooms,
       minPricePerSqm: settings.minPricePerSqm,
+      districts: settings.districts,
       qualityRulesVersion: RADAR_QUALITY_RULES_VERSION,
     });
     if (claim.kind === "blocked" || !claim.run.leaseToken) continue;

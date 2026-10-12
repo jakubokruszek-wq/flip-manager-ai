@@ -126,6 +126,41 @@ test("assessRadarDistrictOnlyCandidate also respects the saved minimum -- a dist
   assert.deepEqual(result, { eligible: false });
 });
 
+// Confirmed Production gap (2026-10-12): a filter saved as Górna+Widzew
+// still let a confirmed Bałuty listing through -- Radar accepted ANY of
+// the 5 supported districts regardless of the operator's own selection.
+test("a confirmed district outside the operator's saved selection is a hard rejection, never a review-worthy queue item", () => {
+  const result = qualifyRadarCandidate(candidate({ district: "Bałuty" }), 2, undefined, undefined, ["Górna", "Widzew"]);
+  assert.deepEqual(result, { qualified: false, reason: "district_not_in_selected_scope" });
+});
+
+test("a confirmed district that IS within the operator's saved selection still qualifies normally", () => {
+  const result = qualifyRadarCandidate(candidate({ district: "Górna" }), 2, undefined, undefined, ["Górna", "Widzew"]);
+  assert.equal(result.qualified, true);
+  if (result.qualified) assert.equal(result.district, "Górna");
+});
+
+test("an empty or missing selection means no narrowing -- all 5 districts still qualify, exactly like before this fix", () => {
+  assert.equal(qualifyRadarCandidate(candidate({ district: "Bałuty" }), 2, undefined, undefined, []).qualified, true);
+  assert.equal(qualifyRadarCandidate(candidate({ district: "Bałuty" }), 2, undefined, undefined, undefined).qualified, true);
+  assert.equal(qualifyRadarCandidate(candidate({ district: "Bałuty" }), 2, undefined, undefined, null).qualified, true);
+});
+
+test("a genuinely unconfirmed district is untouched by the selection check -- it still reaches district_not_confirmed, never district_not_in_selected_scope", () => {
+  const result = qualifyRadarCandidate(candidate({ district: null }), 2, undefined, undefined, ["Górna", "Widzew"]);
+  assert.deepEqual(result, { qualified: false, reason: "district_not_confirmed" });
+});
+
+test("assessRadarDistrictOnlyCandidate's probe uses a SELECTED district, not the hardcoded default -- a candidate missing its district is still offered for manual assignment when the default probe district (Bałuty) is not in scope", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: null }), 2, undefined, ["Górna", "Widzew"]);
+  assert.equal(result.eligible, true, "must not be wrongly rejected just because DISTRICT_PROBE's own value happens to be excluded from this operator's selection");
+});
+
+test("assessRadarDistrictOnlyCandidate never offers manual assignment for a district that is already confirmed but simply out of scope -- that is a hard rejection, not a missing-data case", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: "Bałuty" }), 2, undefined, ["Górna", "Widzew"]);
+  assert.deepEqual(result, { eligible: false });
+});
+
 test("Oferty.net and Domiporta do not qualify from a result card until the specific offer detail fields are confirmed", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ source: "oferty_net", rawPayload: {} })), { qualified: false, reason: "detail_not_confirmed" });

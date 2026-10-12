@@ -80,6 +80,7 @@ export const RADAR_QUALIFICATION_REJECTION_REASONS = [
   "price_per_sqm_invalid",
   "price_per_sqm_below_minimum",
   "district_not_confirmed",
+  "district_not_in_selected_scope",
   "city_not_lodz",
   "rental",
   "share",
@@ -107,6 +108,8 @@ export type RadarSearchCriteria = {
   /** Missing on legacy runs; those continue under v1 qualification rules. */
   qualityRulesVersion?: 1 | 2;
   minPricePerSqm?: number | null;
+  /** Empty/missing means "no narrowing" (all 5 default districts), matching the saved-settings default. */
+  districts?: string[];
 };
 
 export type RadarCheckpoint = {

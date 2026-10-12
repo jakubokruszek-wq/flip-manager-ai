@@ -68,13 +68,13 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
         propertyType: typeof raw.propertyType === "string" ? raw.propertyType : null,
         rawPayload: raw, contentHash: listing.contentHash,
       };
-      const outcome = qualifyRadarCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, undefined, checkpoint.searchCriteria?.minPricePerSqm);
+      const outcome = qualifyRadarCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, undefined, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts);
       if (!outcome.qualified) {
         // See collect.ts for the same rule: only a candidate missing ONLY
         // its district (every other criterion already confirmed) ever
         // reaches the manual district-assignment queue.
         if (outcome.reason === "district_not_confirmed") {
-          const districtAssessment = assessRadarDistrictOnlyCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, checkpoint.searchCriteria?.minPricePerSqm);
+          const districtAssessment = assessRadarDistrictOnlyCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts);
           if (districtAssessment.eligible) {
             districtQueueCandidates += 1;
             const queueResult = await upsertPendingDistrictCandidate(client, input.ownerId, {

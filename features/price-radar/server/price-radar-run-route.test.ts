@@ -29,7 +29,7 @@ mock.module("@/features/price-radar/server/collect", { namedExports: {
 } });
 let sourcesFilteredToEmpty = false;
 mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
-  readRadarSettings: async () => ({ sources: ["morizon"], areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800 }),
+  readRadarSettings: async () => ({ sources: ["morizon"], areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, districts: ["Górna", "Widzew"] }),
   radarSettingsSourcesWereFilteredToEmpty: async () => sourcesFilteredToEmpty,
 } });
 mock.module("@/features/price-radar/server/radar-run-status", { namedExports: { latestRadarRun: async () => latest } });
@@ -197,7 +197,7 @@ test("manual start without expectedRunId retains the existing claim-or-create pa
   const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST" }));
   assert.equal(response.status, 200);
   assert.deepEqual(claimCalls, ["owner-1"]);
-  assert.deepEqual(claimCriteria, [["morizon"], { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, qualityRulesVersion: 2 }], "a new run freezes saved bounds, the unit-price filter, and the current qualification rules version");
+  assert.deepEqual(claimCriteria, [["morizon"], { areaMin: 31, areaMax: 62, rooms: [1, 2, 3], minPricePerSqm: 8_800, districts: ["Górna", "Widzew"], qualityRulesVersion: 2 }], "a new run freezes saved bounds, the unit-price filter, the selected districts, and the current qualification rules version");
   assert.deepEqual(resumeCalls, []);
   assert.deepEqual(portionCalls, [{ runId: "new-run", ownerId: "owner-1", leaseToken: "new-token" }]);
 });
