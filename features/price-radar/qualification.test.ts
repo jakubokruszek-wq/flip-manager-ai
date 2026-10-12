@@ -161,6 +161,50 @@ test("assessRadarDistrictOnlyCandidate never offers manual assignment for a dist
   assert.deepEqual(result, { eligible: false });
 });
 
+// Confirmed Production gap (2026-10-12): areaMin/areaMax were already sent
+// to each portal as the adapter's own search-query bound, but never
+// re-verified at qualification -- a 35-50 m² filter still let a 27 m² or
+// a 65 m² listing qualify (an imprecise portal filter, or a listing
+// re-scanned later with an updated area).
+test("rejects a confirmed area below the operator's saved minimum", () => {
+  const result = qualifyRadarCandidate(candidate({ area: 27 }), 2, undefined, undefined, undefined, 35, 50);
+  assert.deepEqual(result, { qualified: false, reason: "area_outside_selected_range" });
+});
+
+test("rejects a confirmed area above the operator's saved maximum", () => {
+  const result = qualifyRadarCandidate(candidate({ area: 65 }), 2, undefined, undefined, undefined, 35, 50);
+  assert.deepEqual(result, { qualified: false, reason: "area_outside_selected_range" });
+});
+
+test("the saved area range is inclusive of both boundary values -- exactly 35 and exactly 50 both qualify", () => {
+  const atMin = qualifyRadarCandidate(candidate({ area: 35 }), 2, undefined, undefined, undefined, 35, 50);
+  assert.equal(atMin.qualified, true);
+  const atMax = qualifyRadarCandidate(candidate({ area: 50 }), 2, undefined, undefined, undefined, 35, 50);
+  assert.equal(atMax.qualified, true);
+});
+
+test("no saved area bounds (null/undefined) never rejects on area", () => {
+  assert.equal(qualifyRadarCandidate(candidate({ area: 27 }), 2, undefined, undefined, undefined, null, null).qualified, true);
+  assert.equal(qualifyRadarCandidate(candidate({ area: 65 }), 2, undefined, undefined, undefined, undefined, undefined).qualified, true);
+});
+
+test("a one-sided area bound (only min or only max saved) is enforced independently", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({ area: 27 }), 2, undefined, undefined, undefined, 35, null), { qualified: false, reason: "area_outside_selected_range" });
+  assert.equal(qualifyRadarCandidate(candidate({ area: 65 }), 2, undefined, undefined, undefined, 35, null).qualified, true);
+  assert.deepEqual(qualifyRadarCandidate(candidate({ area: 65 }), 2, undefined, undefined, undefined, null, 50), { qualified: false, reason: "area_outside_selected_range" });
+  assert.equal(qualifyRadarCandidate(candidate({ area: 27 }), 2, undefined, undefined, undefined, null, 50).qualified, true);
+});
+
+test("an uncertain or missing area never gets a hasty out-of-range verdict -- it stays on the existing area_missing path", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({ area: null }), 2, undefined, undefined, undefined, 35, 50), { qualified: false, reason: "area_missing" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({ area: 0 }), 2, undefined, undefined, undefined, 35, 50), { qualified: false, reason: "area_missing" });
+});
+
+test("assessRadarDistrictOnlyCandidate also respects the saved area range -- a district-only-missing candidate that is ALSO outside the saved area range is never eligible for the district queue", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: null, area: 65 }), 2, undefined, undefined, 35, 50);
+  assert.deepEqual(result, { eligible: false });
+});
+
 test("Oferty.net and Domiporta do not qualify from a result card until the specific offer detail fields are confirmed", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ source: "oferty_net", rawPayload: {} })), { qualified: false, reason: "detail_not_confirmed" });

@@ -13,7 +13,7 @@ export async function POST(request: Request) {
       return Response.json({ message: "Uzupełnij potwierdzenie mieszkania na sprzedaż, cenę, metraż, dzielnicę, budynek, rynek i standard." }, { status: 400 });
     }
     const settings = await readRadarSettings(operator.id);
-    const result = await resolveRadarVerificationCandidate(operator.id, body.queueId, decision, undefined, settings.minPricePerSqm, settings.districts);
+    const result = await resolveRadarVerificationCandidate(operator.id, body.queueId, decision, undefined, settings.minPricePerSqm, settings.districts, settings.areaMin, settings.areaMax);
     if (!result.ok) {
       if (result.reason === "schema_unavailable") return Response.json({ message: "Kolejka weryfikacji wymaga migracji bazy." }, { status: 503 });
       if (result.reason === "not_found") return Response.json({ message: "Nie znaleziono oczekującej oferty do weryfikacji." }, { status: 404 });

@@ -378,6 +378,8 @@ export function qualifyRadarCandidate(
   // settings default to all 5 districts, so an empty selection there is a
   // deliberate "everything" choice, never treated as "nothing selected".
   selectedDistricts?: readonly string[] | null,
+  areaMin?: number | null,
+  areaMax?: number | null,
 ): QualificationResult {
   const requiresConfirmedDetail = candidate.source === "oferty_net" || candidate.source === "domiporta" || candidate.source === "adresowo" || candidate.source === "allegro_lokalnie" || candidate.source === "otodom";
   // Raw source payloads are untrusted, even if they happen to contain a field
@@ -407,6 +409,17 @@ export function qualifyRadarCandidate(
   const confirmedArea = operatorDecision?.area ?? candidate.area;
   if (confirmedPrice === null || !Number.isFinite(confirmedPrice) || confirmedPrice <= 0) return reject("price_missing");
   if (confirmedArea === null || !Number.isFinite(confirmedArea) || confirmedArea <= 0) return reject("area_missing");
+  // The operator's saved Radar area filter: already sent to each portal as
+  // its own search-query bound (syntheticCriteria in collect.ts), but never
+  // re-verified here -- a portal's own area filtering can be imprecise, and
+  // a listing can be re-scanned with an updated area later. Confirmed
+  // Production gap (2026-10-12): a 35-50 m² filter still let a 27 m² or
+  // 65 m² listing qualify. Checked only once area is already confirmed
+  // above (never a hasty call on uncertain/missing area, which already
+  // returned area_missing before this point); the range is inclusive of
+  // both bounds.
+  if (typeof areaMin === "number" && Number.isFinite(areaMin) && confirmedArea < areaMin) return reject("area_outside_selected_range");
+  if (typeof areaMax === "number" && Number.isFinite(areaMax) && confirmedArea > areaMax) return reject("area_outside_selected_range");
   const payload = candidate.rawPayload ?? {};
   if (payload.priceIsStartingAt === true || payload.priceKind === "from" || payload.priceUnit === "per_sqm") return reject("price_is_not_total_offer_price");
   const text = `${candidate.title ?? ""} ${candidate.description ?? ""}`;
@@ -545,8 +558,8 @@ const DISTRICT_PROBE = DEFAULT_RADAR_DISTRICTS[0];
  * approved by a district choice alone; this returns ineligible for all of
  * those, exactly like qualifyRadarCandidate itself would.
  */
-export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2, minPricePerSqm?: number | null, selectedDistricts?: readonly string[] | null): RadarDistrictOnlyAssessment {
-  const direct = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts);
+export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2, minPricePerSqm?: number | null, selectedDistricts?: readonly string[] | null, areaMin?: number | null, areaMax?: number | null): RadarDistrictOnlyAssessment {
+  const direct = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts, areaMin, areaMax);
   if (direct.qualified || direct.reason !== "district_not_confirmed") return { eligible: false };
   // The probe must itself be one of the operator's selected districts (when
   // narrowed) -- otherwise a saved selection that happens to exclude
@@ -554,7 +567,7 @@ export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandida
   // placeholder check and never offer an otherwise-eligible candidate for
   // manual assignment at all.
   const probeDistrict = selectedDistricts && selectedDistricts.length > 0 ? selectedDistricts[0]! : DISTRICT_PROBE;
-  const probed = qualifyRadarCandidate({ ...candidate, district: probeDistrict }, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts);
+  const probed = qualifyRadarCandidate({ ...candidate, district: probeDistrict }, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts, areaMin, areaMax);
   if (!probed.qualified) return { eligible: false };
   const { district: _district, pricePerSqm, ...confirmed } = probed;
   void _district;

@@ -221,6 +221,7 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   await verificationCard.getByRole("button", { name: "Odrzuć" }).waitFor();
   assert.equal(await verificationCard.getByLabel("Cena całkowita, zł").inputValue(), "", "a conflicting source amount is not silently prefilled as confirmed total price");
   assert.equal(await verificationCard.getByLabel("Powierzchnia, m²").inputValue(), "", "a conflicting area is not silently prefilled as confirmed");
+  await verificationCard.getByText("Uzupełnij poprawną cenę i metraż").waitFor();
 
   // 1. A sub-threshold confirm (240 000 zł / 40 m² = 6 000 zł/m², below the
   // saved 8 800 zł/m² minimum) is refused server-side; the card must stay
@@ -228,6 +229,7 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   // removed or approved.
   await verificationCard.getByLabel("Cena całkowita, zł").fill("240000");
   await verificationCard.getByLabel("Powierzchnia, m²").fill("40");
+  await verificationCard.getByText("6 000 zł/m²", { exact: false }).waitFor();
   await verificationCard.getByLabel("Pokoje").fill("2");
   await verificationCard.getByLabel("Miasto — potwierdź z ogłoszenia").fill("Łódź");
   await verificationCard.getByLabel("Dzielnica").selectOption("Bałuty");
@@ -240,8 +242,10 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   await page.getByRole("heading", { name: "Do weryfikacji danych i standardu (1)" }).waitFor();
   assert.equal(await verificationCard.count(), 1, "a refused (sub-threshold) confirm must not remove the card from the queue");
 
-  // 2. Correct the price above the saved minimum and confirm for real.
+  // 2. Correct the price above the saved minimum -- the read-only price/m²
+  // field recalculates live, before the confirm click, then confirm for real.
   await verificationCard.getByLabel("Cena całkowita, zł").fill("400000");
+  await verificationCard.getByText("10 000 zł/m²", { exact: false }).waitFor();
   await verificationCard.getByRole("button", { name: "Potwierdź i dodaj do porównań" }).click();
   await page.getByText("Oferty w próbie (2)").waitFor();
   assert.equal(await page.locator('section[aria-label="Do weryfikacji danych i standardu"]').count(), 0, "the section itself disappears once the queue is empty, not just the one card");

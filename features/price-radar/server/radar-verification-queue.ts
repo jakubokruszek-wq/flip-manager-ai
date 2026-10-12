@@ -230,6 +230,8 @@ export async function resolveRadarVerificationCandidate(
   // 2026-10-12).
   minPricePerSqm?: number | null,
   selectedDistricts?: readonly string[] | null,
+  areaMin?: number | null,
+  areaMax?: number | null,
 ): Promise<ResolveRadarVerificationResult> {
   const { data: row, error } = await supabase.from("price_radar_verification_queue").select(SELECT).eq("owner_id", ownerId).eq("id", queueId).maybeSingle();
   if (error) return { ok: false, reason: isSchemaUnavailable(error) ? "schema_unavailable" : "not_found" };
@@ -261,7 +263,7 @@ export async function resolveRadarVerificationCandidate(
     },
     contentHash: String(snapshot.contentHash ?? `${source}:${row.external_listing_id}`),
   };
-  const outcome = qualifyRadarCandidate(candidate, 2, decision, minPricePerSqm, selectedDistricts);
+  const outcome = qualifyRadarCandidate(candidate, 2, decision, minPricePerSqm, selectedDistricts, areaMin, areaMax);
   if (!outcome.qualified) return { ok: false, reason: "no_longer_qualifies", detail: outcome.reason };
   const { data, error: saveError } = await supabase.rpc("resolve_price_radar_verification_candidate", {
     p_owner_id: ownerId,

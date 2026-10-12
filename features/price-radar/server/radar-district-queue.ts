@@ -191,6 +191,8 @@ export async function assignRadarDistrictQueueCandidate(
   // since then.
   minPricePerSqm?: number | null,
   selectedDistricts?: readonly string[] | null,
+  areaMin?: number | null,
+  areaMax?: number | null,
 ): Promise<AssignDistrictResult> {
   if (!(DEFAULT_RADAR_DISTRICTS as readonly string[]).includes(district)) return { ok: false, reason: "invalid_district" };
 
@@ -202,7 +204,7 @@ export async function assignRadarDistrictQueueCandidate(
   if (!row) return { ok: false, reason: "not_found" };
 
   const candidate = toQualificationCandidate(row as Row, district);
-  const outcome = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts);
+  const outcome = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm, selectedDistricts, areaMin, areaMax);
   if (!outcome.qualified) {
     return { ok: false, reason: "no_longer_qualifies", detail: outcome.reason };
   }

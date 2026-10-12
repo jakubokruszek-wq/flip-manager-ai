@@ -381,7 +381,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               propertyType: typeof listing.rawPayload.propertyType === "string" ? listing.rawPayload.propertyType : null,
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
             };
-            const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, manualDecision, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts);
+            const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, manualDecision, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
             if (!outcome.qualified) {
               if (outcome.reason === "detail_conflict" && (listing.source === "oferty_net" || listing.source === "domiporta")) {
                 const evidence = isRecord(listing.rawPayload.detailEvidence) ? listing.rawPayload.detailEvidence : {};
@@ -408,7 +408,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               // market, finish, rental, ...) keeps its normal rejection
               // reason and is never queued.
               if (outcome.reason === "district_not_confirmed") {
-                const districtAssessment = assessRadarDistrictOnlyCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts);
+                const districtAssessment = assessRadarDistrictOnlyCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
                 if (districtAssessment.eligible) {
                   const queueResult = await upsertPendingDistrictCandidate(supabase, input.ownerId, {
                     source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,

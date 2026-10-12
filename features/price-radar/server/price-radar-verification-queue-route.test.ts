@@ -5,8 +5,8 @@ let operatorError: Error | null = null;
 let queueReadResult: unknown = { available: true, pending: [], confirmed: [], rejected: [] };
 let resolveResult: unknown = { ok: true, listingId: "listing-1" };
 let rejectResult: unknown = { ok: true };
-let settings: { minPricePerSqm: number | null; districts: string[] } = { minPricePerSqm: 8_800, districts: ["Górna", "Widzew"] };
-const resolveCalls: Array<{ ownerId: string; queueId: string; decision: unknown; minPricePerSqm: unknown; districts: unknown }> = [];
+let settings: { minPricePerSqm: number | null; districts: string[]; areaMin: number | null; areaMax: number | null } = { minPricePerSqm: 8_800, districts: ["Górna", "Widzew"], areaMin: 35, areaMax: 50 };
+const resolveCalls: Array<{ ownerId: string; queueId: string; decision: unknown; minPricePerSqm: unknown; districts: unknown; areaMin: unknown; areaMax: unknown }> = [];
 const rejectCalls: Array<{ ownerId: string; queueId: string; rejected: boolean }> = [];
 const settingsReadsFor: string[] = [];
 
@@ -16,8 +16,8 @@ mock.module("@/features/auth/operator", { namedExports: {
 } });
 mock.module("@/features/price-radar/server/radar-verification-queue", { namedExports: {
   getRadarVerificationQueue: async () => queueReadResult,
-  resolveRadarVerificationCandidate: async (ownerId: string, queueId: string, decision: unknown, _supabase: unknown, minPricePerSqm: unknown, districts: unknown) => {
-    resolveCalls.push({ ownerId, queueId, decision, minPricePerSqm, districts });
+  resolveRadarVerificationCandidate: async (ownerId: string, queueId: string, decision: unknown, _supabase: unknown, minPricePerSqm: unknown, districts: unknown, areaMin: unknown, areaMax: unknown) => {
+    resolveCalls.push({ ownerId, queueId, decision, minPricePerSqm, districts, areaMin, areaMax });
     return resolveResult;
   },
   setRadarVerificationQueueRejection: async (ownerId: string, queueId: string, rejected: boolean) => { rejectCalls.push({ ownerId, queueId, rejected }); return rejectResult; },
@@ -35,7 +35,7 @@ function reset() {
   queueReadResult = { available: true, pending: [], confirmed: [], rejected: [] };
   resolveResult = { ok: true, listingId: "listing-1" };
   rejectResult = { ok: true };
-  settings = { minPricePerSqm: 8_800, districts: ["Górna", "Widzew"] };
+  settings = { minPricePerSqm: 8_800, districts: ["Górna", "Widzew"], areaMin: 35, areaMax: 50 };
   resolveCalls.length = 0;
   rejectCalls.length = 0;
   settingsReadsFor.length = 0;
@@ -119,13 +119,15 @@ test("resolve passes the session-derived owner id, never a client-supplied one",
   assert.equal(resolveCalls[0]?.ownerId, "owner-1");
 });
 
-test("resolve re-reads the operator's CURRENT saved min price/m2 and selected districts and forwards them to re-qualification -- never a stale or client-supplied value", async () => {
+test("resolve re-reads the operator's CURRENT saved min price/m2, selected districts, and area range and forwards them to re-qualification -- never a stale or client-supplied value", async () => {
   reset();
-  settings = { minPricePerSqm: 9_500, districts: ["Bałuty"] };
-  await postResolve({ queueId: "q-1", decision: validDecision(), minPricePerSqm: 1, districts: ["Widzew"] });
+  settings = { minPricePerSqm: 9_500, districts: ["Bałuty"], areaMin: 40, areaMax: 60 };
+  await postResolve({ queueId: "q-1", decision: validDecision(), minPricePerSqm: 1, districts: ["Widzew"], areaMin: 1, areaMax: 999 });
   assert.deepEqual(settingsReadsFor, ["owner-1"]);
   assert.equal(resolveCalls[0]?.minPricePerSqm, 9_500, "the server's own saved threshold must be used, not anything the client sent");
   assert.deepEqual(resolveCalls[0]?.districts, ["Bałuty"], "the server's own saved district selection must be used, not anything the client sent");
+  assert.equal(resolveCalls[0]?.areaMin, 40, "the server's own saved area minimum must be used, not anything the client sent");
+  assert.equal(resolveCalls[0]?.areaMax, 60, "the server's own saved area maximum must be used, not anything the client sent");
 });
 
 test("resolve maps each failure reason to a distinct, honest status code -- a save error never looks like success", async () => {
@@ -150,6 +152,15 @@ test("a confirmed offer no longer meeting the operator's current price/m2 or dis
   assert.equal(response.status, 409);
   const body = await response.json() as { reason?: string };
   assert.equal(body.reason, "district_not_in_selected_scope");
+});
+
+test("a confirmed offer with an area outside the operator's current saved range is also reported as no_longer_qualifies, not silently approved", async () => {
+  reset();
+  resolveResult = { ok: false, reason: "no_longer_qualifies", detail: "area_outside_selected_range" };
+  const response = await postResolve({ queueId: "q-1", decision: validDecision({ area: 65 }) });
+  assert.equal(response.status, 409);
+  const body = await response.json() as { reason?: string };
+  assert.equal(body.reason, "area_outside_selected_range");
 });
 
 test("reject requires queueId and defaults to rejecting (not undoing)", async () => {

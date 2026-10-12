@@ -890,6 +890,12 @@ function VerificationQueueRow({ item, pending, onResolve, onReject }: {
       <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
         <label className="grid gap-1 text-xs">Cena całkowita, zł<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="1" value={price} disabled={pending} onChange={(event) => setPrice(event.target.value)} /></label>
         <label className="grid gap-1 text-xs">Powierzchnia, m²<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="0.01" value={area} disabled={pending} onChange={(event) => setArea(event.target.value)} /></label>
+        <div className="grid gap-1 text-xs">
+          <span id={`${item.id}-price-per-sqm-label`}>Cena za m²</span>
+          <div aria-labelledby={`${item.id}-price-per-sqm-label`} className="flex h-9 min-w-0 items-center rounded-lg border border-input bg-muted/40 px-2 text-sm tabular-nums">
+            {pricePerSqm === null ? "Uzupełnij poprawną cenę i metraż" : `${formatCurrency(pricePerSqm)}/m²`}
+          </div>
+        </div>
         <label className="grid gap-1 text-xs">Pokoje<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" max="20" step="1" value={rooms} disabled={pending} onChange={(event) => setRooms(event.target.value)} /></label>
         <label className="grid gap-1 text-xs">Miasto — potwierdź z ogłoszenia<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={city} disabled={pending} onChange={(event) => setCity(event.target.value)} /></label>
         <label className="grid gap-1 text-xs">Dzielnica<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={district} disabled={pending} onChange={(event) => setDistrict(event.target.value)}><option value="">Wybierz</option>{DEFAULT_RADAR_DISTRICTS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
