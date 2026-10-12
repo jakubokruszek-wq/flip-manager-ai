@@ -302,6 +302,31 @@ export async function confirmedRadarVerificationDecisions(
   return decisions;
 }
 
+/**
+ * A candidate the operator already rejected here must stay rejected even once its data later
+ * becomes fully confirmed and would otherwise qualify directly, bypassing this queue entirely.
+ */
+export async function rejectedRadarVerificationExternalIds(
+  supabase: SupabaseClient,
+  ownerId: string,
+  source: string,
+  externalIds: readonly string[],
+): Promise<Set<string>> {
+  if (!externalIds.length) return new Set();
+  const { data, error } = await supabase.from("price_radar_verification_queue")
+    .select("external_listing_id").eq("owner_id", ownerId).eq("source", source).eq("status", "rejected")
+    .in("external_listing_id", [...new Set(externalIds)]);
+  if (error) {
+    if (isSchemaUnavailable(error)) return new Set();
+    throw new Error("Nie udało się odczytać odrzuconych ofert z kolejki weryfikacji Radaru.");
+  }
+  const rejected = new Set<string>();
+  for (const row of Array.isArray(data) ? data as Row[] : []) {
+    if (typeof row.external_listing_id === "string") rejected.add(row.external_listing_id);
+  }
+  return rejected;
+}
+
 export function applyRadarVerificationDecision(listing: PropertySourceListing, decision: RadarVerificationDecision): PropertySourceListing {
   return {
     ...listing,

@@ -980,6 +980,38 @@ test("a confirmed operator decision is reapplied on source reimport, promotes on
   assert.equal(visible.stats[0]?.averagePricePerSqm, null, "a one-offer sample does not publish a reference price");
 });
 
+test("a candidate already rejected in the verification queue stays rejected even once a later scan fully confirms it, instead of silently qualifying directly", async () => {
+  const db = fakeDb({ verificationQueue: [{
+    id: "verification-rejected", owner_id: ownerId, source: "domiporta", external_listing_id: "now-confirmed-offer",
+    status: "rejected", operator_decision: null,
+  }] });
+  fakeSourceImpl = async () => ({ listings: [qualifyingListing("now-confirmed-offer", "domiporta")], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.qualifiedCount, 0, "a listing the operator already rejected in the verification queue must never qualify directly, even once fully confirmed");
+  assert.equal(db.tables.price_radar_listings.length, 0);
+  assert.deepEqual(result.qualificationRejections, { domiporta: { previously_rejected_by_operator: 1 } });
+});
+
+test("a candidate already rejected in the district-assignment queue stays rejected even once its district later becomes confirmed, instead of silently qualifying directly", async () => {
+  const db = fakeDb({ districtQueue: [{
+    id: "district-rejected", owner_id: ownerId, source: "domiporta", external_listing_id: "now-district-confirmed",
+    status: "rejected", assigned_district: null,
+  }] });
+  fakeSourceImpl = async () => ({ listings: [qualifyingListing("now-district-confirmed", "domiporta")], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.qualifiedCount, 0, "a listing the operator already rejected in the district-assignment queue must never qualify directly, even once its district is later confirmed");
+  assert.equal(db.tables.price_radar_listings.length, 0);
+  assert.deepEqual(result.qualificationRejections, { domiporta: { previously_rejected_by_operator: 1 } });
+});
+
 test("an unapplied district queue migration is surfaced as partial work instead of silently dropping an otherwise eligible candidate", async () => {
   const db = fakeDb({ districtQueueRpcError: { code: "PGRST202", message: "Could not find the function public.upsert_price_radar_district_queue_candidate in the schema cache" } });
   fakeSourceImpl = async (id) => ({ listings: [{ ...qualifyingListing(`${id}-nodist-no-schema`, id), district: null }], warnings: [], fetched: 1 });

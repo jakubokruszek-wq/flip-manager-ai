@@ -238,6 +238,31 @@ export async function setRadarDistrictQueueRejection(ownerId: string, queueId: s
   return data === true ? { ok: true } : { ok: false, reason: "not_found" };
 }
 
+/**
+ * A candidate the operator already rejected here must stay rejected even once its district later
+ * becomes confirmed and would otherwise qualify directly, bypassing this queue entirely.
+ */
+export async function rejectedRadarDistrictQueueExternalIds(
+  supabase: SupabaseClient,
+  ownerId: string,
+  source: string,
+  externalIds: readonly string[],
+): Promise<Set<string>> {
+  if (!externalIds.length) return new Set();
+  const { data, error } = await supabase.from("price_radar_district_queue")
+    .select("external_listing_id").eq("owner_id", ownerId).eq("source", source).eq("status", "rejected")
+    .in("external_listing_id", [...new Set(externalIds)]);
+  if (error) {
+    if (isSchemaUnavailable(error)) return new Set();
+    throw new Error("Nie udało się odczytać odrzuconych kandydatów z kolejki dzielnic Radaru.");
+  }
+  const rejected = new Set<string>();
+  for (const row of Array.isArray(data) ? data as Row[] : []) {
+    if (typeof row.external_listing_id === "string") rejected.add(row.external_listing_id);
+  }
+  return rejected;
+}
+
 function toQualificationCandidate(row: Row, district: string | null): QualificationCandidate {
   return {
     source: String(row.source), externalListingId: String(row.external_listing_id),

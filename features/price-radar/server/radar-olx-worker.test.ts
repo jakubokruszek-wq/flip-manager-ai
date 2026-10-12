@@ -16,11 +16,13 @@ let runStopRequestedAt: string | null = null;
 function fakeDb() {
   return {
     from(table: string) {
-      assert.ok(table === "price_radar_runs" || table === "price_radar_district_queue", "the Radar OLX worker reads only its owned run checkpoint and (for district suggestions) its own district queue");
+      assert.ok(table === "price_radar_runs" || table === "price_radar_district_queue" || table === "price_radar_verification_queue", "the Radar OLX worker reads only its owned run checkpoint, its own district queue, and the verification queue's prior rejections");
       const filters: Array<(row: Row) => boolean> = [];
       const builder: Row = {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
+        // No test here seeds a pre-rejected candidate, so the rejected-ids lookup always comes back empty.
+        in: async () => ({ data: [], error: null }),
         maybeSingle: async () => {
           if (table === "price_radar_district_queue") return districtQueueSchemaUnavailable
             ? { data: null, error: { code: "PGRST205", message: "Could not find the table 'public.price_radar_district_queue' in the schema cache" } }

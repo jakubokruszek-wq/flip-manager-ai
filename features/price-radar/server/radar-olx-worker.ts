@@ -3,7 +3,8 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assessRadarDistrictOnlyCandidate, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
-import { radarDistrictQueueFailureWarning, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { rejectedRadarVerificationExternalIds } from "@/features/price-radar/server/radar-verification-queue";
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import type { RadarCheckpoint, RadarRunStatus } from "@/features/price-radar/types";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
@@ -58,6 +59,11 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
     const districtQueueWarnings: string[] = [];
     let districtQueueCandidates = 0;
     const districtAiBudget = createRadarDistrictAiBudget();
+    const olxExternalIds = payload.listings.map((listing) => listing.externalListingId);
+    const [rejectedVerificationIds, rejectedDistrictIds] = await Promise.all([
+      rejectedRadarVerificationExternalIds(client, input.ownerId, "olx", olxExternalIds),
+      rejectedRadarDistrictQueueExternalIds(client, input.ownerId, "olx", olxExternalIds),
+    ]);
     for (const listing of payload.listings) {
       const raw = listing.rawPayload ?? {};
       const olxCandidate = {
@@ -94,6 +100,10 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
           }
         }
         recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, "olx", outcome.reason);
+        continue;
+      }
+      if (rejectedVerificationIds.has(listing.externalListingId) || rejectedDistrictIds.has(listing.externalListingId)) {
+        recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, "olx", "previously_rejected_by_operator");
         continue;
       }
       const crossSourceIdentity = listing.crossSourceIdentity ?? null;

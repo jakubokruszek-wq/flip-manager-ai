@@ -97,6 +97,7 @@ export const RADAR_QUALIFICATION_REJECTION_REASONS = [
   "renovation_exclusion",
   "renovation_not_confirmed_fresh_full",
   "turnkey_not_confirmed",
+  "previously_rejected_by_operator",
 ] as const;
 export type RadarQualificationRejectionReason = (typeof RADAR_QUALIFICATION_REJECTION_REASONS)[number];
 export type RadarQualificationRejections = Record<string, Partial<Record<RadarQualificationRejectionReason, number>>>;

@@ -7,9 +7,9 @@ import { activeSources } from "@/features/flip-finder/server/search-source-regis
 import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 import { assessRadarDistrictOnlyCandidate, isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
-import { radarDistrictQueueFailureWarning, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
-import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
+import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, rejectedRadarVerificationExternalIds, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
@@ -364,7 +364,12 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           emittedBatches = true;
           const batchRejectionReasons = [...(batch.rejectionReasons ?? [])];
           let batchQualified = 0;
-          const verificationDecisions = await confirmedRadarVerificationDecisions(supabase, input.ownerId, sourceId, batch.listings.map((listing) => listing.externalListingId));
+          const batchExternalIds = batch.listings.map((listing) => listing.externalListingId);
+          const [verificationDecisions, rejectedVerificationIds, rejectedDistrictIds] = await Promise.all([
+            confirmedRadarVerificationDecisions(supabase, input.ownerId, sourceId, batchExternalIds),
+            rejectedRadarVerificationExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
+            rejectedRadarDistrictQueueExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
+          ]);
           for (const sourceListing of batch.listings) {
             const manualDecision = verificationDecisions.get(sourceListing.externalListingId);
             const listing = manualDecision ? applyRadarVerificationDecision(sourceListing, manualDecision) : sourceListing;
@@ -440,6 +445,13 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                 if (queueResult.ok) continue;
               }
               batchRejectionReasons.push(outcome.reason);
+              continue;
+            }
+            // An operator's prior rejection in either manual queue must not be bypassed just
+            // because a later scan found the previously missing detail, since that would let
+            // the same listing qualify directly here without ever reconsulting the decision.
+            if (rejectedVerificationIds.has(listing.externalListingId) || rejectedDistrictIds.has(listing.externalListingId)) {
+              batchRejectionReasons.push("previously_rejected_by_operator");
               continue;
             }
             const raw = listing.rawPayload;
