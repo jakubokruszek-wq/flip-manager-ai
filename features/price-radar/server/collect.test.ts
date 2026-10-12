@@ -385,6 +385,9 @@ test("runRadarCollectionPortion processes every mocked source, persists qualifie
   assert.equal(db.tables.price_radar_listings.length, MOCKED_SOURCE_COUNT * 2);
   assert.equal(db.tables.price_radar_runs[0].status, "completed");
   assert.ok(db.tables.price_radar_runs[0].finished_at);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, 0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount, 0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount, 0);
 });
 
 test("a non-qualifying candidate is scanned but never persisted", async () => {
@@ -401,6 +404,7 @@ test("a non-qualifying candidate is scanned but never persisted", async () => {
   assert.equal(result.scannedCount, MOCKED_SOURCE_COUNT);
   assert.deepEqual(result.qualificationRejections, { domiporta: { rental: 1 }, morizon: { rental: 1 } }, "each source records the exact first strict rejection reason without persisting rejected candidates");
   assert.deepEqual((db.tables.price_radar_runs[0].checkpoint as Row).qualificationRejections, result.qualificationRejections, "reason counts survive in the existing durable JSON checkpoint");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, MOCKED_SOURCE_COUNT, "the exact rejected-candidate total is saved alongside reason details");
 });
 
 test("preflight exclusions are checkpointed with their concrete reason and never trigger persistence", async () => {
@@ -419,6 +423,7 @@ test("preflight exclusions are checkpointed with their concrete reason and never
   assert.equal(result.scannedCount, 1, "the candidate rejected before detail is still included in the scanned count");
   assert.equal(result.qualifiedCount, 0);
   assert.deepEqual(result.qualificationRejections, { domiporta: { house_excluded: 1 } });
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, 1);
   assert.equal(db.tables.price_radar_listings.length, 0, "an explicitly ineligible candidate is never persisted");
   assert.equal(db.rpcCalls.some(({ name }) => name === "persist_price_radar_listing"), false, "the persistence RPC is not called for a preflight rejection");
 });
@@ -497,6 +502,7 @@ test("candidate-level price rejections do not fail a source or discard its valid
   assert.equal(result.scannedCount, 8);
   assert.equal(result.qualifiedCount, 1);
   assert.equal(db.tables.price_radar_listings.length, 1, "the valid listing in the mixed batch remains persisted");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, 7, "parser-level rejected candidates are included exactly once in the durable count");
 });
 
 test("a genuine unclassified warning remains a source failure while preserving valid rows", async () => {
@@ -901,6 +907,9 @@ test("a candidate missing ONLY its district (every other Radar criterion confirm
   assert.equal(db.tables.price_radar_district_queue[0]?.source, "domiporta");
   assert.equal(db.tables.price_radar_district_queue[0]?.building_type, "blok");
   assert.equal(db.tables.price_radar_district_queue[0]?.status, "pending");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount, 1);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount, 0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, 0);
 });
 
 test("a verified Oferty.net category-B listing missing only its district reaches the operator queue", async () => {
@@ -955,6 +964,8 @@ test("an uncertain but credible apartment-sale candidate is saved only to the se
   assert.equal((queued.source_snapshot as Row).sourceHttpStatus, 200);
   assert.deepEqual(queued.missing_fields, ["building_type", "market_type", "standard"]);
   assert.deepEqual(result.qualificationRejections, {}, "a successfully queued candidate is not counted as a discarded rejection");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount, 1);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, 0);
 });
 
 test("a confirmed operator decision is reapplied on source reimport, promotes one listing, and stays visible below the 20-offer sample minimum", async () => {

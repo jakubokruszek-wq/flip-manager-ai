@@ -2,10 +2,15 @@ import { claimOrCreateRadarRun, resumeExistingRadarRun, runRadarCollectionPortio
 import { createAdminClient } from "@/lib/supabase/admin";
 import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
-import { radarRunStartedTodayInWarsaw } from "@/features/price-radar/server/radar-scheduler";
+import { isRadarDailyScanDue, radarRunStartedTodayInWarsaw } from "@/features/price-radar/server/radar-scheduler";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
 
-/** Protected one-portion entry point used by the daily GitHub Actions scheduler. */
+/**
+ * Protected one-portion entry point used by the GitHub Actions Radar scheduler.
+ * Authorized by its own PRICE_RADAR_CRON_SECRET, deliberately separate from the
+ * shared CRON_SECRET used by Finder/Facebook Watch -- a leak or rotation of
+ * one never affects the other, and this endpoint accepts no other credential.
+ */
 export const runtime = "nodejs";
 export const maxDuration = 55;
 
@@ -14,11 +19,11 @@ const ACTIVE = new Set(["pending", "running"]);
 const TERMINAL = new Set(["completed", "failed", "partial"]);
 
 export async function POST(request: Request) {
-  if (!process.env.CRON_SECRET) return Response.json({ error: "Brak CRON_SECRET w konfiguracji serwera." }, { status: 503 });
+  if (!process.env.PRICE_RADAR_CRON_SECRET) return Response.json({ error: "Brak PRICE_RADAR_CRON_SECRET w konfiguracji serwera." }, { status: 503 });
   const authorization = request.headers.get("authorization");
   const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
   const suppliedSecret = bearer ?? request.headers.get("x-cron-secret");
-  if (suppliedSecret !== process.env.CRON_SECRET) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (suppliedSecret !== process.env.PRICE_RADAR_CRON_SECRET) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   let body: unknown = {};
   const rawBody = await request.text();
@@ -39,9 +44,13 @@ export async function POST(request: Request) {
   let waitingRun: { runId: string; status: "waiting"; retryAfterSeconds: number } | null = null;
   let waitingForOlxRun: { runId: string; status: "waiting_for_olx"; retryAfterSeconds: number } | null = null;
   let skippedForToday = false;
+  let skippedBeforeSchedule = false;
+  let skippedBecauseDisabled = false;
   let pausedRun: { runId: string; status: "paused_by_operator" } | null = null;
   for (const row of owners ?? []) {
     if (typeof row.owner_id !== "string") continue;
+    const settings = await readRadarSettings(row.owner_id, admin);
+    if (!settings.automaticScanEnabled) { skippedBecauseDisabled = true; continue; }
     // A saved selection containing only disabled sources must not silently
     // turn into a full-portfolio run when the automatic scheduler calls in.
     if (await radarSettingsSourcesWereFilteredToEmpty(row.owner_id, admin)) continue;
@@ -71,7 +80,10 @@ export async function POST(request: Request) {
       }
     }
 
-    const settings = await readRadarSettings(row.owner_id, admin);
+    if (!isRadarDailyScanDue({ enabled: true, time: settings.automaticScanTime, lastStartedAt: latest?.startedAt })) {
+      skippedBeforeSchedule = true;
+      continue;
+    }
     const claim = await claimOrCreateRadarRun(row.owner_id, settings.sources, admin, {
       areaMin: settings.areaMin,
       areaMax: settings.areaMax,
@@ -92,6 +104,8 @@ export async function POST(request: Request) {
   if (waitingRun) return Response.json(waitingRun);
   if (pausedRun) return Response.json(pausedRun);
   if (skippedForToday) return Response.json({ status: "already_ran_today" });
+  if (skippedBeforeSchedule) return Response.json({ status: "not_due" });
+  if (skippedBecauseDisabled) return Response.json({ status: "automation_disabled" });
   return Response.json({ status: "idle", message: "Brak właściciela Radaru gotowego do pobrania porcji." });
 }
 
@@ -112,6 +126,8 @@ async function continueExactRun(runId: string, admin: ReturnType<typeof createAd
     });
   }
   if (!ACTIVE.has(String(row.status))) return Response.json({ runId, status: "run_not_active", terminal: true });
+  const settings = await readRadarSettings(row.owner_id, admin);
+  if (!settings.automaticScanEnabled) return Response.json({ runId, status: "automation_disabled" });
   const leaseUntil = typeof row.lease_until === "string" ? Date.parse(row.lease_until) : 0;
   if (Number.isFinite(leaseUntil) && leaseUntil > Date.now()) {
     return Response.json({ runId, status: "waiting", retryAfterSeconds: Math.max(5, Math.ceil((leaseUntil - Date.now()) / 1000) + 2) });

@@ -55,6 +55,9 @@ function defaultCheckpoint(sources: RadarSource[], searchCriteria?: RadarSearchC
     sourceWarnings: {},
     sourceRejectionCounts: {},
     qualificationRejections: {},
+    rejectedCount: 0,
+    verificationQueuedCount: 0,
+    districtQueuedCount: 0,
     ...(searchCriteria ? { searchCriteria: { ...searchCriteria, rooms: [...searchCriteria.rooms] } } : {}),
     buffer: [],
     bufferOffset: 0,
@@ -385,6 +388,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           emittedBatches = true;
           const batchRejectionReasons = [...(batch.rejectionReasons ?? [])];
           let batchQualified = 0;
+          let batchVerificationQueued = 0;
+          let batchDistrictQueued = 0;
           const batchExternalIds = batch.listings.map((listing) => listing.externalListingId);
           const [verificationDecisions, rejectedVerificationIds, rejectedDistrictIds, activeAnalysisIds] = await Promise.all([
             confirmedRadarVerificationDecisions(supabase, input.ownerId, sourceId, batchExternalIds),
@@ -463,7 +468,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                   }, districtAssessment.confirmed, new Date().toISOString(), districtAiBudget);
                   if (!queueResult.ok) {
                     recordRadarSourceWarnings(checkpoint, sourceId, [radarDistrictQueueFailureWarning(queueResult.reason)]);
-                  }
+                  } else batchDistrictQueued += 1;
                   continue;
                 }
               }
@@ -472,7 +477,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                 if (!queueResult.ok) recordRadarSourceWarnings(checkpoint, sourceId, [queueResult.reason === "schema_unavailable"
                   ? "RADAR_VERIFICATION_QUEUE_UNAVAILABLE: kolejka wymaga lokalnego draftu 20261012130000_add_price_radar_verification_queue.sql"
                   : "RADAR_VERIFICATION_QUEUE_SAVE_FAILED: kandydat nie został zapisany do weryfikacji"]);
-                if (queueResult.ok) continue;
+                if (queueResult.ok) { batchVerificationQueued += 1; continue; }
               }
               batchRejectionReasons.push(outcome.reason);
               continue;
@@ -495,7 +500,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               crossSourceIdentity, rawPayload: raw,
             }, { ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString() }, controller.signal);
             if (persisted.identityConflictFields?.length) {
-              recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, "listing_identity_changed");
+              batchRejectionReasons.push("listing_identity_changed");
               continue;
             }
             batchQualified += 1;
@@ -509,6 +514,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           for (const reason of batchRejectionReasons) {
             if (isRadarQualificationRejectionReason(reason)) recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, sourceId, reason);
           }
+          const sourceRejectedCount = Object.values(batch.sourceRejectionCounts ?? sourceRejectionCountsFromWarnings(batch.warnings)).reduce((sum, count) => sum + (Number.isFinite(count) && count > 0 ? count : 0), 0);
+          if (typeof checkpoint.rejectedCount === "number") checkpoint.rejectedCount += batchRejectionReasons.length + sourceRejectedCount;
+          if (typeof checkpoint.verificationQueuedCount === "number") checkpoint.verificationQueuedCount += batchVerificationQueued;
+          if (typeof checkpoint.districtQueuedCount === "number") checkpoint.districtQueuedCount += batchDistrictQueued;
           recordRadarSourceWarnings(checkpoint, sourceId, batch.warnings);
           addSourceRejectionCounts(checkpoint, sourceId, batch.sourceRejectionCounts ?? {});
           if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);
@@ -536,10 +545,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         const result = await Promise.race([sourcePromise, abortPromise(controller.signal)]);
         controller.signal.throwIfAborted();
         if (!emittedBatches) {
-          await processBatch({ listings: result.listings, warnings: result.warnings, fetched: result.fetched }, null);
-        }
-        if (!emittedBatches) {
-          addSourceRejectionCounts(checkpoint, sourceId, result.sourceRejectionCounts ?? sourceRejectionCountsFromWarnings(result.warnings));
+          await processBatch({ listings: result.listings, warnings: result.warnings, fetched: result.fetched, sourceRejectionCounts: result.sourceRejectionCounts ?? sourceRejectionCountsFromWarnings(result.warnings) }, null);
         }
         const completionWarnings = [...result.warnings, ...(checkpoint.sourceWarnings?.[sourceId] ?? [])];
         recordRadarSourceWarnings(checkpoint, sourceId, completionWarnings);

@@ -20,7 +20,7 @@ let showDistrictAssignedOffer = false;
 let districtQueueState = { available: false, pending: [], assigned: [], rejected: [] };
 const districtQueueAssignments = [];
 const districtQueueRejections = [];
-function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null }; }
+function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null, automaticScanEnabled: true, automaticScanTime: "05:00" }; }
 function listing(id, marketType) {
   return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: "Pełny opis źródłowy.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
 }
@@ -241,6 +241,27 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   const selectPortalAndWaitForSave = async (name) => { const saved = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT"); await page.getByRole("button", { name }).click(); await saved; };
   await page.getByRole("heading", { name: "Radar cen po remoncie", level: 1 }).waitFor();
   assert.ok(await page.getByRole("link", { name: "Radar cen po remoncie" }).count(), "the Radar has a separate navigation entry");
+  await page.getByRole("region", { name: "Automatyczne skanowanie" }).waitFor();
+  await page.waitForFunction(() => document.querySelector('input[aria-label="Automatyczny skan"]')?.disabled === false);
+  assert.equal(await page.getByLabel("Godzina codziennego skanowania").inputValue(), "05:00", "the UI reads the persisted daily time");
+  const timeSaved = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT");
+  await page.getByLabel("Godzina codziennego skanowania").fill("06:35");
+  await timeSaved;
+  assert.equal(savedFilters.automaticScanTime, "06:35", "the selected Warsaw time is persisted by the existing settings API");
+  const disabledSaved = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT");
+  await page.getByLabel("Automatyczny skan").uncheck();
+  await disabledSaved;
+  assert.equal(savedFilters.automaticScanEnabled, false, "the scheduler toggle is persisted");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Radar cen po remoncie", level: 1 }).waitFor();
+  await page.getByLabel("Automatyczny skan").waitFor();
+  await page.waitForFunction(() => document.querySelector('input[aria-label="Automatyczny skan"]')?.checked === false && document.querySelector('input[aria-label="Godzina codziennego skanowania"]')?.value === "06:35");
+  assert.equal(await page.getByLabel("Automatyczny skan").isChecked(), false, "the disabled state survives a reload");
+  assert.equal(await page.getByLabel("Godzina codziennego skanowania").inputValue(), "06:35", "the saved time survives a reload");
+  const enabledSaved = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT");
+  await page.getByLabel("Automatyczny skan").check();
+  await enabledSaved;
+  assert.equal(savedFilters.automaticScanEnabled, true);
   const queueRead = await initialDistrictQueueRead;
   assert.equal(queueRead.status(), 200, `the dashboard reads queue availability; requests=${JSON.stringify(requests)}`);
   await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).waitFor();
@@ -486,7 +507,7 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
     sourceWarnings: { otodom: ["Otodom: duplicate (1)", "Otodom: unsupported_listing (2)"] },
     sourceRejectionCounts: { otodom: { duplicate: 1, unsupported_listing: 2 } },
     qualificationRejections: { olx: { district_not_confirmed: 7, building_type_not_confirmed: 3 } },
-    checkpoint: { sourceQueue: ["morizon"], currentSourceIndex: 0 },
+    checkpoint: { sourceQueue: ["morizon"], currentSourceIndex: 0, rejectedCount: 12, verificationQueuedCount: 4, districtQueuedCount: 2 },
     errorMessage: null,
   };
   let postCount = 0;
@@ -520,6 +541,11 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   // so this assertion isn't racing that fetch's resolution.
   await page.getByText("Zakończono częściowo", { exact: false }).waitFor();
   await page.waitForFunction(() => document.body.textContent?.includes("OFFLINE_FIXTURE_FAILURE"));
+  const automationSummary = await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText();
+  assert.match(automationSummary, /Sprawdzono\s+29/u);
+  assert.match(automationSummary, /Zakwalifikowano\s+0/u);
+  assert.match(automationSummary, /Odrzucono\s+12/u);
+  assert.match(automationSummary, /Skierowano do weryfikacji\s+6/u);
   const rejectionDetails = page.getByLabel("Powody odrzucenia ofert");
   await rejectionDetails.locator("summary").click();
   await page.getByText("brak potwierdzonej dzielnicy Łodzi · 7", { exact: false }).waitFor();

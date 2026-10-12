@@ -49,6 +49,19 @@ test("the optional minimum price per m² round-trips through the owner-scoped JS
   assert.deepEqual(reread, saved, "refresh reads the persisted threshold back through the normalizer");
 });
 
+test("automatic enabled state and the daily Warsaw time round-trip in the existing owner JSON settings field", async () => {
+  const db = settingsDb();
+  const saved = await writeRadarSettings("operator-automation", {
+    districts: ["Bałuty"], sources: ["oferty_net"], automaticScanEnabled: false, automaticScanTime: "06:35",
+  }, db as never);
+  assert.equal(saved.automaticScanEnabled, false);
+  assert.equal(saved.automaticScanTime, "06:35");
+  assert.deepEqual((db.rows[0]?.filters as Row), saved, "no database column or second settings row is introduced");
+  const reread = await readRadarSettings("operator-automation", db as never);
+  assert.equal(reread.automaticScanEnabled, false);
+  assert.equal(reread.automaticScanTime, "06:35");
+});
+
 test("a legacy saved JSON settings row without the optional minimum remains disabled", async () => {
   const db = settingsDb();
   db.rows.push({ owner_id: "operator-1", filters: { districts: ["Bałuty"], sources: ["oferty_net"] } });

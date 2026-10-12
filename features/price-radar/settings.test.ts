@@ -12,7 +12,19 @@ test("Radar defaults are Łódź districts, both markets, no narrow limits, and 
   assert.deepEqual(DEFAULT_RADAR_FILTERS.rooms, []);
   assert.deepEqual(DEFAULT_RADAR_FILTERS.sources, []);
   assert.equal(DEFAULT_RADAR_FILTERS.minPricePerSqm, null, "the optional unit-price filter is off by default");
+  assert.equal(DEFAULT_RADAR_FILTERS.automaticScanEnabled, true, "the existing daily automation remains enabled for legacy users");
+  assert.equal(DEFAULT_RADAR_FILTERS.automaticScanTime, "05:00");
   assert.deepEqual(normalizeRadarFilters(null), DEFAULT_RADAR_FILTERS);
+});
+
+test("automation settings round-trip and malformed clocks fall back to 05:00", () => {
+  const saved = normalizeRadarFilters({ automaticScanEnabled: false, automaticScanTime: "06:35" });
+  assert.equal(saved.automaticScanEnabled, false);
+  assert.equal(saved.automaticScanTime, "06:35");
+  assert.equal(normalizeRadarFilters({ automaticScanEnabled: true, automaticScanTime: "23:59" }).automaticScanTime, "23:59");
+  for (const time of ["24:00", "12:60", "5:00", "05:0x", ""])
+    assert.equal(normalizeRadarFilters({ automaticScanTime: time }).automaticScanTime, "05:00", `${time} is rejected`);
+  assert.equal(normalizeRadarFilters({ automaticScanEnabled: "false" }).automaticScanEnabled, true);
 });
 
 test("saved filters retain only actually registered, schema-ready Radar adapters and normalize comparison bounds", () => {

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const TERMINAL = new Set(["completed", "partial", "failed", "already_ran_today", "idle", "paused_by_operator"]);
+const STOP_TICK = new Set(["completed", "partial", "failed", "already_ran_today", "idle", "paused_by_operator", "not_due", "automation_disabled"]);
 const MAX_RETRY_AFTER_SECONDS = 300;
 const REQUEST_TIMEOUT_MS = 58_000;
 
@@ -12,7 +12,7 @@ const REQUEST_TIMEOUT_MS = 58_000;
  */
 export async function runPriceRadarScheduler({
   url = process.env.PRICE_RADAR_COLLECT_URL,
-  secret = process.env.CRON_SECRET,
+  secret = process.env.PRICE_RADAR_CRON_SECRET,
   fetchImpl = globalThis.fetch,
   sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = () => Date.now(),
@@ -20,7 +20,7 @@ export async function runPriceRadarScheduler({
   maxRequests = Number(process.env.MAX_REQUESTS ?? 24),
   maxElapsedMs = Number(process.env.MAX_ELAPSED_MS ?? 3_300_000),
 } = {}) {
-  if (typeof secret !== "string" || !secret.trim()) throw new Error("CRON_SECRET is not configured; no request was sent.");
+  if (typeof secret !== "string" || !secret.trim()) throw new Error("PRICE_RADAR_CRON_SECRET is not configured; no request was sent.");
   if (!url || typeof fetchImpl !== "function") throw new Error("Radar scheduler URL or fetch implementation is unavailable.");
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 30) throw new Error("MAX_REQUESTS must be between 1 and 30.");
   if (!Number.isFinite(maxElapsedMs) || maxElapsedMs < 1_000 || maxElapsedMs > 3_300_000) throw new Error("MAX_ELAPSED_MS must be between 1 second and 55 minutes.");
@@ -54,7 +54,7 @@ export async function runPriceRadarScheduler({
     if (response.status === 503) {
       const unavailable = await response.clone().json().catch(() => null);
       if (typeof unavailable?.error === "string" && /CRON_SECRET/u.test(unavailable.error)) {
-        throw new Error("Radar scheduler configuration is missing CRON_SECRET (HTTP 503).");
+        throw new Error("Radar scheduler configuration is missing PRICE_RADAR_CRON_SECRET (HTTP 503).");
       }
     }
     if (!response.ok) {
@@ -82,7 +82,9 @@ export async function runPriceRadarScheduler({
     }
     log(`Radar tick ${requests}: status=${String(status ?? "missing")}, run=${runId}, scanned=${Number(payload.scannedCount ?? 0)}, qualified=${Number(payload.qualifiedCount ?? 0)}.`);
 
-    if (TERMINAL.has(status)) return { status, runId: payload.runId ?? null, requests, terminal: true };
+    // A schedule tick with no due/enabled work is a successful no-op, not a
+    // claim that the durable Radar run completed.
+    if (STOP_TICK.has(status)) return { status, runId: payload.runId ?? null, requests, terminal: true };
     // OLX is deliberately the last Radar source and runs only in its existing
     // worker queue. That worker finalizes its own checkpoint; do not burn the
     // GitHub runner polling a worker that is offline.
@@ -102,7 +104,8 @@ export async function runPriceRadarScheduler({
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   runPriceRadarScheduler().then((result) => {
     if (!result.terminal) process.exitCode = 2;
-    else console.log(`Radar scheduler stopped at explicit state=${result.status}; terminal=${result.terminal}.`);
+    else if (result.status === "not_due" || result.status === "automation_disabled" || result.status === "idle") console.log(`Radar scheduler skipped this tick: status=${result.status}.`);
+    else console.log(`Radar scheduler stopped at explicit run state=${result.status}.`);
   }).catch((error) => {
     console.error(error instanceof Error ? error.message : "Radar scheduler failed.");
     process.exitCode = 1;

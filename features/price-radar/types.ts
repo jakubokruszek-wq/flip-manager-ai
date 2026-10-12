@@ -127,6 +127,10 @@ export type RadarCheckpoint = {
   sourceRejectionCounts?: Record<string, Record<string, number>>;
   /** Runtime diagnostics stored in the existing checkpoint JSONB; no schema change required. */
   qualificationRejections?: RadarQualificationRejections;
+  /** Exact per-run candidate counters. Missing on legacy checkpoints means unknown, not zero. */
+  rejectedCount?: number;
+  verificationQueuedCount?: number;
+  districtQueuedCount?: number;
   /** Optional for legacy runs; new runs persist their search bounds in the existing checkpoint JSONB. */
   searchCriteria?: RadarSearchCriteria;
   /** At most five sanitized detail examples per source; never stores page HTML or contact data. */
@@ -160,7 +164,7 @@ export type RadarRun = {
 
 export type RadarMarketFilter = "secondary" | "primary" | "both";
 
-export type RadarFilters = {
+export type RadarFilterCriteria = {
   districts: string[];
   market: RadarMarketFilter;
   areaMin: number | null;
@@ -170,6 +174,17 @@ export type RadarFilters = {
   /** Optional display/sample filter; null means disabled. */
   minPricePerSqm: number | null;
 };
+
+export type RadarAutomationSettings = {
+  /** Daily automatic collection is enabled by default to preserve the existing scheduler behavior. */
+  automaticScanEnabled: boolean;
+  /** Wall-clock time in Europe/Warsaw, HH:mm. */
+  automaticScanTime: string;
+};
+
+/** Search endpoints accept the filter criteria alone; persisted settings also include automation. */
+export type RadarFilters = RadarFilterCriteria & Partial<RadarAutomationSettings>;
+export type NormalizedRadarFilters = RadarFilterCriteria & RadarAutomationSettings;
 
 export const MIN_RADAR_SAMPLE_SIZE = 10;
 

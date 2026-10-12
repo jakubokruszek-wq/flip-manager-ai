@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
 import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
+import { isRadarDailyScanDue, nextRadarDailyScanAt } from "@/features/price-radar/server/radar-scheduler";
 
 type ResultsResponse = {
   listings: RadarListing[];
@@ -16,8 +17,8 @@ type ResultsResponse = {
 };
 type DistrictQueueResponse = { available: boolean; pending: RadarDistrictQueueItem[]; assigned: RadarDistrictQueueItem[]; rejected: RadarDistrictQueueItem[] };
 type VerificationQueueResponse = { available: boolean; pending: RadarVerificationQueueItem[]; confirmed: RadarVerificationQueueItem[]; rejected: RadarVerificationQueueItem[] };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number } };
-type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null }; activeSources: RadarSource[]; disabledSourceNote: string };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number; rejectedCount?: number; verificationQueuedCount?: number; districtQueuedCount?: number } };
+type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null; automaticScanEnabled: boolean; automaticScanTime: string }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
 const SOURCE_OPTIONS: { value: RadarSource; label: string }[] = [
@@ -42,6 +43,9 @@ export function PriceRadarPage() {
   const [areaMin, setAreaMin] = useState("");
   const [areaMax, setAreaMax] = useState("");
   const [minPricePerSqm, setMinPricePerSqm] = useState("");
+  const [automaticScanEnabled, setAutomaticScanEnabled] = useState(true);
+  const [automaticScanTime, setAutomaticScanTime] = useState("05:00");
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const [rooms, setRooms] = useState<number[]>([]);
   const [sources, setSources] = useState<RadarSource[]>([]);
   const [data, setData] = useState<ResultsResponse | null>(null);
@@ -81,6 +85,8 @@ export function PriceRadarPage() {
       setAreaMin(payload.filters.areaMin === null ? "" : String(payload.filters.areaMin));
       setAreaMax(payload.filters.areaMax === null ? "" : String(payload.filters.areaMax));
       setMinPricePerSqm(payload.filters.minPricePerSqm === null ? "" : String(payload.filters.minPricePerSqm));
+      setAutomaticScanEnabled(payload.filters.automaticScanEnabled);
+      setAutomaticScanTime(payload.filters.automaticScanTime);
       setRooms(payload.filters.rooms);
       setSources(payload.filters.sources);
       setActiveSourceIds(payload.activeSources);
@@ -97,7 +103,7 @@ export function PriceRadarPage() {
     try {
       const response = await apiFetch("/api/price-radar/settings", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filters: { districts, market, areaMin: areaMin ? Number(areaMin) : null, areaMax: areaMax ? Number(areaMax) : null, rooms, sources, minPricePerSqm: minPricePerSqm ? Number(minPricePerSqm) : null } }),
+        body: JSON.stringify({ filters: { districts, market, areaMin: areaMin ? Number(areaMin) : null, areaMax: areaMax ? Number(areaMax) : null, rooms, sources, minPricePerSqm: minPricePerSqm ? Number(minPricePerSqm) : null, automaticScanEnabled, automaticScanTime } }),
       });
       const payload = await response.json() as { filters?: SettingsResponse["filters"]; message?: string };
       if (!response.ok || !payload.filters) throw new Error(payload.message || "Nie udało się zapisać filtrów Radaru.");
@@ -106,7 +112,12 @@ export function PriceRadarPage() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Nie udało się zapisać filtrów Radaru.");
     } finally { setSettingsSaving(false); }
-  }, [districts, market, areaMin, areaMax, rooms, sources, minPricePerSqm]);
+  }, [districts, market, areaMin, areaMax, rooms, sources, minPricePerSqm, automaticScanEnabled, automaticScanTime]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setClockNow(Date.now()), 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     if (!settingsLoaded || !settingsDirty) return;
@@ -575,6 +586,59 @@ export function PriceRadarPage() {
         </div>
       </section>
 
+      <section aria-label="Automatyczne skanowanie" className="min-w-0 space-y-4 rounded-xl border bg-card p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Automatyczne skanowanie</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Godziny według czasu polskiego (Europe/Warsaw)</p>
+          </div>
+          <span className={automaticScanEnabled ? "rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300" : "rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground"}>
+            {automaticScanEnabled ? "Harmonogram włączony" : "Harmonogram wyłączony"}
+          </span>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]">
+          <label className="flex min-h-10 items-center justify-between gap-3 font-medium">
+            Automatyczny skan
+            <span className="flex items-center gap-2">
+              <input
+                aria-label="Automatyczny skan"
+                checked={automaticScanEnabled}
+                disabled={!settingsLoaded}
+                onChange={(event) => { setAutomaticScanEnabled(event.target.checked); setSettingsDirty(true); }}
+                type="checkbox"
+              />
+              <span>{automaticScanEnabled ? "Włączony" : "Wyłączony"}</span>
+            </span>
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            Godzina codziennego skanowania
+            <input
+              aria-label="Godzina codziennego skanowania"
+              className="h-10 rounded-full border bg-background px-4"
+              disabled={!settingsLoaded || !automaticScanEnabled}
+              onChange={(event) => { setAutomaticScanTime(event.target.value); setSettingsDirty(true); }}
+              type="time"
+              value={automaticScanTime}
+            />
+          </label>
+        </div>
+        <div className="grid gap-3 border-t pt-4 sm:grid-cols-2 xl:grid-cols-4">
+          <AutomationMetric label="Ostatni skan" value={run ? formatDate(run.startedAt) : "Brak potwierdzonych danych"} />
+          <AutomationMetric label="Czas trwania" value={run ? formatDuration(run.startedAt, run.finishedAt ?? run.userTerminatedAt, clockNow) : "—"} />
+          <AutomationMetric label="Status" value={radarAutomationStatus(run)} />
+          <AutomationMetric label="Następny skan" value={radarNextScanLabel(run, automaticScanEnabled, automaticScanTime, new Date(clockNow))} />
+        </div>
+        <div className="grid gap-3 border-t pt-4 sm:grid-cols-2 xl:grid-cols-4">
+          <AutomationMetric label="Sprawdzono" value={run ? String(run.scannedCount) : "—"} />
+          <AutomationMetric label="Zakwalifikowano" value={run ? String(run.qualifiedCount) : "—"} />
+          <AutomationMetric label="Odrzucono" value={typeof run?.checkpoint?.rejectedCount === "number" ? String(run.checkpoint.rejectedCount) : "—"} />
+          <AutomationMetric label="Skierowano do weryfikacji" value={run && typeof run.checkpoint?.verificationQueuedCount === "number" && typeof run.checkpoint?.districtQueuedCount === "number" ? String(run.checkpoint.verificationQueuedCount + run.checkpoint.districtQueuedCount) : "—"} />
+        </div>
+        <p aria-live="polite" className="text-xs text-muted-foreground">
+          {settingsSaving ? "Zapisywanie ustawień…" : settingsDirty ? "Zmiany oczekują na zapis." : "Godzina jest zapisana w ustawieniach Radaru. Kontroler sprawdza harmonogram co 5 minut; kontynuacja używa tego samego checkpointu."}
+        </p>
+      </section>
+
       <section aria-label="Zbieranie ofert Radaru" className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
         <div className="min-w-0">
           <h2 className="font-semibold">Zbieranie Radaru</h2>
@@ -931,6 +995,42 @@ function verificationIssueLabel(issue: string): string {
 
 function runStatusLabel(status: RadarRunStatus): string {
   return ({ pending: "Oczekuje", running: "Trwa", completed: "Zakończono", partial: "Zakończono częściowo", failed: "Niepowodzenie" })[status];
+}
+
+function AutomationMetric({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 break-words font-medium">{value}</p></div>;
+}
+
+function formatDuration(startedAt: string, finishedAt: string | null, now: number): string {
+  const started = Date.parse(startedAt);
+  const ended = finishedAt ? Date.parse(finishedAt) : now;
+  if (!Number.isFinite(started) || !Number.isFinite(ended)) return "—";
+  const totalMinutes = Math.max(0, Math.floor((ended - started) / 60_000));
+  if (totalMinutes < 1) return "mniej niż minutę";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return String(minutes) + " min";
+  return minutes === 0 ? String(hours) + " godz." : String(hours) + " godz. " + String(minutes) + " min";
+}
+
+function radarAutomationStatus(run: RunStatus | null): string {
+  if (!run) return "Oczekuje na pierwszy skan";
+  if (run.userTerminatedAt) return "Zakończony przez użytkownika";
+  if (run.errorMessage === "RADAR_STOPPED_BY_OPERATOR" || run.stopRequestedAt) return "Wstrzymany przez operatora";
+  if ((run.status === "running" || run.status === "pending") && run.sourceStatuses.olx === "running") return "Oczekuje na worker OLX";
+  return runStatusLabel(run.status);
+}
+
+function radarNextScanLabel(run: RunStatus | null, enabled: boolean, time: string, now: Date): string {
+  if (!enabled) return "Wyłączony";
+  if (run?.stopRequestedAt || run?.errorMessage === "RADAR_STOPPED_BY_OPERATOR") return "Wymaga wznowienia przez operatora";
+  if (run && (run.status === "running" || run.status === "pending") && !run.userTerminatedAt) {
+    return run.sourceStatuses.olx === "running" ? "Oczekuje na worker OLX" : isRunActuallyActive(run) ? "Kontynuuje ten sam przebieg" : "Wznowienie checkpointu przy najbliższym ticku";
+  }
+  const input = { enabled, time, lastStartedAt: run?.startedAt };
+  if (isRadarDailyScanDue(input, now)) return "Oczekuje na kontroler (co 5 min)";
+  const next = nextRadarDailyScanAt(input, now);
+  return next ? formatDate(next.toISOString()) : "Nie można wyznaczyć";
 }
 
 /**
