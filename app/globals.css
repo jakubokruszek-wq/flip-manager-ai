@@ -239,3 +239,56 @@ input[type="search"]::-webkit-search-cancel-button {
 .mobile-bottom-nav {
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+@media (max-width: 639px) {
+  :root {
+    --type-display: clamp(2.3rem, 3.68vw, 3.45rem);
+    --type-page-title: clamp(1.61rem, 2.484vw, 2.07rem);
+    --type-section-title: clamp(1.035rem, 1.426vw, 1.265rem);
+    --type-card-title: 0.8625rem;
+    --type-body: 0.8625rem;
+    --type-caption: 0.75rem;
+    --type-badge: 0.75rem;
+  }
+
+  body {
+    font-size: 0.92rem;
+  }
+
+  .text-sm:where(:not(.type-financial-standard):not(.type-financial-hero):not(.tabular-nums)) {
+    font-size: calc(0.875rem * 0.92);
+  }
+
+  .text-base:not(.tabular-nums) {
+    font-size: calc(1rem * 0.92);
+  }
+
+  .text-lg:not(.tabular-nums) {
+    font-size: calc(1.125rem * 0.92);
+  }
+
+  .brand-signature {
+    font-size: 0.75rem;
+  }
+
+  [class~="text-[9px]"],
+  [class~="text-[10px]"],
+  [class~="text-[11px]"],
+  [class~="text-[0.8rem]"] {
+    font-size: 0.75rem;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+  select,
+  select.text-sm,
+  textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  button,
+  [role="button"],
+  [role="tab"] {
+    min-height: 44px;
+  }
+}

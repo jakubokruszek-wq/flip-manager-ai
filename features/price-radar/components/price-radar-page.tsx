@@ -827,7 +827,7 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
       </div>
       <p className="mt-1 break-words text-sm text-muted-foreground">{listing.district}, {listing.city} · {listing.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {listing.buildingType === "blok" ? "Blok" : "Apartamentowiec"}{listing.yearBuilt !== null ? ` · Rok budowy: ${listing.yearBuilt}` : " · Rok budowy: brak danych"}{listing.verificationIssues?.length ? " · poza klasyfikacją A/B do czasu weryfikacji" : ` · ${qualityCategoryLabel(listing.qualityCategory, listing.marketType)}`}</p>
       {listing.verificationIssues?.length ? <p className="mt-1 break-words text-xs text-amber-700 dark:text-amber-300">Sprzeczne dane: {listing.verificationIssues.map(verificationIssueLabel).join(", ")}. Oferta pozostaje zachowana, ale nie wchodzi do statystyk.</p> : null}
-      <p className="mt-3 text-sm font-medium">
+      <p className="type-financial-standard mt-3 text-sm font-medium tabular-nums">
         {formatCurrency(listing.price)} · {listing.area} m² · {formatCurrency(listing.pricePerSqm)}/m²{listing.rooms ? ` · ${listing.rooms} pok.` : ""}
       </p>
       <dl className="mt-3 grid gap-1 text-xs text-muted-foreground">
@@ -870,7 +870,7 @@ function DistrictQueueRow({ item, rejected, chosenDistrict, onChooseDistrict, on
         </p>
       ) : null}
       {item.description ? <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">{item.description}</p> : null}
-      <p className="mt-3 text-sm font-medium">
+      <p className="type-financial-standard mt-3 text-sm font-medium tabular-nums">
         {formatCurrency(item.price)} · {item.area} m² · {formatCurrency(item.pricePerSqm)}/m²{item.rooms ? ` · ${item.rooms} pok.` : ""}
       </p>
       <dl className="mt-3 grid gap-1 text-xs text-muted-foreground">

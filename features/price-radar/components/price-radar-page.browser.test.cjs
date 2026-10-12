@@ -347,10 +347,47 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("a[href^='https://example.test/']").first().waitFor();
 
-  for (const width of [320, 375, 768, 1280, 1440]) {
+  for (const width of [320, 360, 375, 390, 430, 768, 1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    const overflow = await page.evaluate(() => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - document.documentElement.clientWidth);
+    const metrics = await page.evaluate(() => {
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const article = document.querySelector("article");
+      const smallText = [...(article?.querySelectorAll(".text-sm") ?? [])].find((element) => !element.classList.contains("type-financial-standard") && !element.classList.contains("tabular-nums"));
+      const price = article?.querySelector(".type-financial-standard");
+      const inputs = [...document.querySelectorAll('input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), select, textarea')].filter(isVisible);
+      const buttons = [...document.querySelectorAll("button, [role=button], [role=tab]")].filter(isVisible);
+      const undersizedText = [...document.querySelectorAll("body *")].filter((element) => {
+        if (!isVisible(element) || element.closest(".sr-only") || ["SVG", "PATH", "INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)) return false;
+        return Boolean(element.textContent?.trim()) && Number.parseFloat(getComputedStyle(element).fontSize) < 12;
+      }).map((element) => ({ tag: element.tagName, text: element.textContent?.trim().slice(0, 36), font: getComputedStyle(element).fontSize }));
+      return {
+        width: document.documentElement.clientWidth,
+        scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+        bodyFont: getComputedStyle(document.body).fontSize,
+        smallTextFont: smallText ? getComputedStyle(smallText).fontSize : null,
+        keyPriceFont: price ? getComputedStyle(price).fontSize : null,
+        inputMetrics: inputs.map((element) => ({ font: getComputedStyle(element).fontSize, height: element.getBoundingClientRect().height })),
+        buttonHeights: buttons.map((element) => element.getBoundingClientRect().height),
+        undersizedText,
+      };
+    });
+    const overflow = metrics.scrollWidth - metrics.width;
     assert.ok(overflow <= 1, `Radar page must not horizontally overflow at ${width}px; Next server output: ${serverOutput}`);
+    if (width < 640) {
+      assert.ok(Math.abs(Number.parseFloat(metrics.bodyFont) - 14.72) < 0.1, `mobile body text should reduce by about 8% at ${width}px: ${JSON.stringify(metrics)}`);
+      assert.ok(metrics.smallTextFont && Math.abs(Number.parseFloat(metrics.smallTextFont) - 12.88) < 0.1, `small descriptive text should reduce by about 8% at ${width}px: ${JSON.stringify(metrics)}`);
+      assert.ok(metrics.keyPriceFont && Number.parseFloat(metrics.keyPriceFont) >= 14, `financial values must keep their readable size at ${width}px: ${JSON.stringify(metrics)}`);
+      assert.ok(metrics.inputMetrics.every((input) => Number.parseFloat(input.font) >= 16 && input.height >= 44), `form controls must stay at least 16px and 44px high at ${width}px: ${JSON.stringify(metrics.inputMetrics)}`);
+      assert.ok(metrics.buttonHeights.every((height) => height >= 44), `buttons must stay at least 44px high at ${width}px: ${JSON.stringify(metrics.buttonHeights)}`);
+      assert.deepEqual(metrics.undersizedText, [], `visible text must not fall below 12px at ${width}px: ${JSON.stringify(metrics.undersizedText)}`);
+    } else {
+      assert.equal(metrics.bodyFont, "16px", `desktop body typography must remain unchanged at ${width}px`);
+      assert.equal(metrics.smallTextFont, "14px", `desktop small text must remain unchanged at ${width}px`);
+    }
   }
   const selectedSourceLinks = page.locator("a[href^='https://example.test/']");
   assert.equal(await selectedSourceLinks.count(), 2, "the selected source keeps the group and its linked concrete URL");

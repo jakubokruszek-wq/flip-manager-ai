@@ -316,7 +316,10 @@ test("Flip Finder card border: real browser comparison of a current (active) car
 
   const viewports = [
     { width: 320, height: 844 },
+    { width: 360, height: 844 },
     { width: 375, height: 844 },
+    { width: 390, height: 844 },
+    { width: 430, height: 844 },
     { width: 768, height: 1024 },
     { width: 1280, height: 900 },
     { width: 1440, height: 900 },
@@ -345,6 +348,38 @@ test("Flip Finder card border: real browser comparison of a current (active) car
 
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.ok(overflow <= 1, `no horizontal overflow expected at ${viewport.width}px, found ${overflow}px`);
+      const typography = await page.evaluate((listingId) => {
+        const card = document.querySelector(`[data-testid="finder-card"][data-listing-id="${listingId}"]`);
+        const visible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        };
+        const price = card?.querySelector("p.text-2xl");
+        const navLabel = document.querySelector(".mobile-bottom-nav a span");
+        const undersizedText = [...document.querySelectorAll("body *")].filter((element) => {
+          if (!visible(element) || element.closest(".sr-only") || ["SVG", "PATH", "INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)) return false;
+          return Boolean(element.textContent?.trim()) && Number.parseFloat(getComputedStyle(element).fontSize) < 12;
+        }).map((element) => ({ tag: element.tagName, text: element.textContent?.trim().slice(0, 36), font: getComputedStyle(element).fontSize }));
+        const buttonHeights = [...document.querySelectorAll("button, [role=button], [role=tab]")].filter(visible).map((element) => element.getBoundingClientRect().height);
+        return {
+          bodyFont: getComputedStyle(document.body).fontSize,
+          priceFont: price ? getComputedStyle(price).fontSize : null,
+          navLabelFont: navLabel && visible(navLabel) ? getComputedStyle(navLabel).fontSize : null,
+          buttonHeights,
+          undersizedText,
+        };
+      }, activeId);
+      if (viewport.width < 640) {
+        assert.ok(Math.abs(Number.parseFloat(typography.bodyFont) - 14.72) < 0.1, `mobile body text should reduce by about 8% at ${viewport.width}px: ${JSON.stringify(typography)}`);
+        assert.equal(typography.priceFont, "24px", `the offer price must retain its original 24px size at ${viewport.width}px`);
+        assert.equal(typography.navLabelFont, "12px", `mobile navigation labels must remain readable at ${viewport.width}px`);
+        assert.ok(typography.buttonHeights.every((height) => height >= 44), `buttons must stay at least 44px high at ${viewport.width}px`);
+        assert.deepEqual(typography.undersizedText, [], `visible text must not fall below 12px at ${viewport.width}px: ${JSON.stringify(typography.undersizedText)}`);
+      } else {
+        assert.equal(typography.bodyFont, "16px", `desktop body typography must remain unchanged at ${viewport.width}px`);
+        assert.equal(typography.priceFont, "30px", `desktop offer price must retain its existing sm:text-3xl size at ${viewport.width}px`);
+      }
       const layout = await page.locator(`[data-testid="finder-card"][data-listing-id="${activeId}"]`).evaluate((card) => {
         const title = card.querySelector("h2");
         const content = card.querySelector("article");
