@@ -274,7 +274,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.match(alternateDetails.normalize("NFKC"), /Gratka \u00b7 Kopia Gratka \u00b7 455\s*000 z\u0142 \u00b7 50\.5 m2/, "alternate price and area remain together as that source-specific values");
   assert.equal(await page.getByText("Średnia zł/m²").count(), 2, "both market groups are visibly independent");
   assert.equal(await page.getByText("Niewystarczająca próba").count(), 2);
-  assert.equal(await page.getByText(/brak ceny referencyjnej \(minimum 20\)/).count(), 2);
+  assert.equal(await page.getByText(/brak ceny referencyjnej \(minimum 10\)/).count(), 2, "the UI reports the current configured sample threshold");
 
   await page.getByLabel("Rynek").selectOption("secondary");
   await page.getByText("Mieszkanie secondary w bloku", { exact: false }).waitFor();
@@ -440,7 +440,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
 
   const terminationsBeforeSuccess = runPosts().filter((request) => request.body?.action === "terminate").length;
   await page.getByRole("button", { name: "Zakończ przebieg" }).click();
-  await page.getByText(/Zakończony przez użytkownika/).waitFor();
+  await page.getByText("Zakończony przez użytkownika", { exact: true }).waitFor();
   assert.ok(radarRun.userTerminatedAt, "the browser only shows the terminal state after the server confirms it");
   assert.equal(radarRun.id, stoppedRunId, "termination preserves the run ID");
   assert.equal(radarRun.scannedCount, 17);
@@ -449,7 +449,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.equal(await page.getByRole("button", { name: "Zakończ przebieg" }).count(), 0, "a terminal run cannot be ended again through a stale UI state");
   assert.equal(await page.getByRole("button", { name: "Uruchom nowy przebieg" }).count(), 1, "the next start is explicitly a new run, never a resume of this ID");
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByText(/Zakończony przez użytkownika/).waitFor();
+  await page.getByText("Zakończony przez użytkownika", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Uruchom nowy przebieg" }).count(), 1, "the terminal state and end date survive a full page refresh");
   assert.equal(runPosts().filter((request) => request.body?.action === "terminate").length, terminationsBeforeSuccess + 1, "refresh reads terminal state but does not repeat the terminal write");
   assert.equal(runPosts().filter((request) => request.body?.expectedRunId === stoppedRunId).length, 1, "refreshing an ended run never resumes its old ID");
@@ -539,7 +539,7 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   // The run status arrives via its own async fetch after settings load. Wait
   // for its resulting, run-derived text before reading the button's state,
   // so this assertion isn't racing that fetch's resolution.
-  await page.getByText("Zakończono częściowo", { exact: false }).waitFor();
+  await page.getByText("Zakończono częściowo", { exact: true }).waitFor();
   await page.waitForFunction(() => document.body.textContent?.includes("OFFLINE_FIXTURE_FAILURE"));
   const automationSummary = await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText();
   assert.match(automationSummary, /Sprawdzono\s+29/u);
