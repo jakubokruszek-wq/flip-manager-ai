@@ -776,9 +776,8 @@ test("a rejected contradictory reimport quarantines the previously counted dwell
   assert.equal(kept.area, 45);
   assert.equal(kept.price, 419_000);
   assert.deepEqual((kept.raw_payload as Row).identityVerificationIssues, ["area", "rooms", "floor", "location"]);
-  assert.deepEqual(result.qualificationRejections, {}, "a contradictory current source snapshot is held for manual review rather than discarded");
-  assert.equal(db.tables.price_radar_verification_queue.length, 1);
-  assert.deepEqual(db.tables.price_radar_verification_queue[0]?.contradictory_fields, ["area", "rooms", "floor", "location"]);
+  assert.deepEqual(result.qualificationRejections, { oferty_net: { already_in_analysis: 1 } }, "the conflict is flagged inline on the already-active row, never queued a second time as a fresh pending card");
+  assert.equal(db.tables.price_radar_verification_queue.length, 0, "a listing already active in the analysis is never also queued for a separate review decision");
 
   const read = await getRadarResults(ownerId, { districts: ["Bałuty"], market: "both", areaMin: 30, areaMax: 80, rooms: [], sources: [], minPricePerSqm: null }, db as never);
   assert.equal(read.listings.length, 1, "the saved record and its evidence remain available for review");
@@ -1010,6 +1009,28 @@ test("a candidate already rejected in the district-assignment queue stays reject
   assert.equal(result.qualifiedCount, 0, "a listing the operator already rejected in the district-assignment queue must never qualify directly, even once its district is later confirmed");
   assert.equal(db.tables.price_radar_listings.length, 0);
   assert.deepEqual(result.qualificationRejections, { domiporta: { previously_rejected_by_operator: 1 } });
+});
+
+test("a candidate otherwise reviewable (e.g. a missing price) is never queued for a separate decision when it already has an active row in the comparison analysis", async () => {
+  const existing = {
+    id: "radar-existing-active", owner_id: ownerId, source: "domiporta", external_listing_id: "already-active-offer",
+    original_url: "https://example.test/already-active-offer", normalized_url: "https://example.test/already-active-offer",
+    title: "Mieszkanie w bloku, Łódź Bałuty", description: "Świeżo po remoncie.", price: 450_000, area: 50,
+    price_per_sqm: 9_000, rooms: 2, city: "Łódź", district: "Bałuty", building_type: "blok", market_type: "secondary",
+    renovation_status: "fresh_renovation", content_hash: "old-hash", first_seen_at: "2026-10-01T00:00:00Z",
+    last_seen_at: "2026-10-01T00:00:00Z", collected_at: "2026-10-01T00:00:00Z", cross_source_identity: null,
+    raw_payload: { detailVerified: true }, status: "active", excluded_at: null, excluded_reason: null,
+  };
+  const db = fakeDb({ listings: [existing] });
+  fakeSourceImpl = async () => ({ listings: [{ ...qualifyingListing("already-active-offer", "domiporta"), price: null }], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+
+  assert.equal(result.qualifiedCount, 0);
+  assert.equal(db.tables.price_radar_verification_queue.length, 0, "already represented in the analysis -- never queued again as a fresh pending card");
+  assert.deepEqual(result.qualificationRejections, { domiporta: { already_in_analysis: 1 } });
 });
 
 test("an unapplied district queue migration is surfaced as partial work instead of silently dropping an otherwise eligible candidate", async () => {

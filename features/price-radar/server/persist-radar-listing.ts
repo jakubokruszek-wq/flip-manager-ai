@@ -24,6 +24,29 @@ export type RadarPersistCandidate = QualifiedListing & {
 };
 
 /**
+ * A candidate already represented by an active row here is already part of the comparison
+ * analysis -- queuing it again for manual review would just duplicate a decision the operator
+ * never needs to make twice for the same listing.
+ */
+export async function activeRadarListingExternalIds(
+  supabase: SupabaseClient,
+  ownerId: string,
+  source: string,
+  externalIds: readonly string[],
+): Promise<Set<string>> {
+  if (!externalIds.length) return new Set();
+  const { data, error } = await supabase.from("price_radar_listings")
+    .select("external_listing_id").eq("owner_id", ownerId).eq("source", source).eq("status", "active")
+    .in("external_listing_id", [...new Set(externalIds)]);
+  if (error) throw new Error("Nie udało się zweryfikować istniejących ofert Radaru.");
+  const active = new Set<string>();
+  for (const row of Array.isArray(data) ? data as Record<string, unknown>[] : []) {
+    if (typeof row.external_listing_id === "string") active.add(row.external_listing_id);
+  }
+  return active;
+}
+
+/**
  * A conflicting detail response is rejected before normal qualification and
  * therefore never reaches persistRadarListing. If the same portal identity
  * already has an active saved row, attach the exact conflict marker to that

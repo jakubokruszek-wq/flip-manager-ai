@@ -16,12 +16,12 @@ let runStopRequestedAt: string | null = null;
 function fakeDb() {
   return {
     from(table: string) {
-      assert.ok(table === "price_radar_runs" || table === "price_radar_district_queue" || table === "price_radar_verification_queue", "the Radar OLX worker reads only its owned run checkpoint, its own district queue, and the verification queue's prior rejections");
+      assert.ok(table === "price_radar_runs" || table === "price_radar_district_queue" || table === "price_radar_verification_queue" || table === "price_radar_listings", "the Radar OLX worker reads only its owned run checkpoint, its own district queue, the verification queue's prior rejections, and the active comparison analysis");
       const filters: Array<(row: Row) => boolean> = [];
       const builder: Row = {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
-        // No test here seeds a pre-rejected candidate, so the rejected-ids lookup always comes back empty.
+        // No test here seeds a pre-rejected candidate or an already-active analysis row, so the ids lookup always comes back empty.
         in: async () => ({ data: [], error: null }),
         maybeSingle: async () => {
           if (table === "price_radar_district_queue") return districtQueueSchemaUnavailable
@@ -45,7 +45,11 @@ function fakeDb() {
 }
 
 mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => { throw new Error("worker tests inject a fake DB"); } } });
-mock.module("@/features/price-radar/server/persist-radar-listing", { namedExports: { persistRadarListing: async (_client: unknown, listing: Row, lease: Row) => { persisted.push({ listing, lease }); } } });
+mock.module("@/features/price-radar/server/persist-radar-listing", { namedExports: {
+  persistRadarListing: async (_client: unknown, listing: Row, lease: Row) => { persisted.push({ listing, lease }); },
+  // No test here seeds a pre-existing active analysis row, so this always comes back empty.
+  activeRadarListingExternalIds: async () => new Set<string>(),
+} });
 const { finishRadarOlxJob } = await import("./radar-olx-worker.ts");
 
 function candidate() {

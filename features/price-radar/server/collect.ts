@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 import { assessRadarDistrictOnlyCandidate, isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
-import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { activeRadarListingExternalIds, markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, rejectedRadarVerificationExternalIds, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
@@ -365,10 +365,11 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           const batchRejectionReasons = [...(batch.rejectionReasons ?? [])];
           let batchQualified = 0;
           const batchExternalIds = batch.listings.map((listing) => listing.externalListingId);
-          const [verificationDecisions, rejectedVerificationIds, rejectedDistrictIds] = await Promise.all([
+          const [verificationDecisions, rejectedVerificationIds, rejectedDistrictIds, activeAnalysisIds] = await Promise.all([
             confirmedRadarVerificationDecisions(supabase, input.ownerId, sourceId, batchExternalIds),
             rejectedRadarVerificationExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
             rejectedRadarDistrictQueueExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
+            activeRadarListingExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
           ]);
           for (const sourceListing of batch.listings) {
             const manualDecision = verificationDecisions.get(sourceListing.externalListingId);
@@ -405,6 +406,23 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                   ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString(),
                 }, { source: listing.source, externalListingId: listing.externalListingId, issueFields: conflicts }, controller.signal);
               }
+              const verificationInput = {
+                listing,
+                reason: outcome.reason,
+                detailUnconfirmedFields: isRecord(listing.rawPayload.detailEvidence) && Array.isArray(listing.rawPayload.detailEvidence.unconfirmedFields)
+                  ? listing.rawPayload.detailEvidence.unconfirmedFields.filter((field): field is string => typeof field === "string") : [],
+                detailContradictoryFields: Array.isArray(listing.rawPayload.detailContradictions)
+                  ? listing.rawPayload.detailContradictions.filter((field): field is string => typeof field === "string") : [],
+                seenAt: new Date().toISOString(),
+              };
+              const isReviewable = isReviewableRadarVerificationCandidate(verificationInput);
+              // A listing already represented by an active row in the comparison analysis must
+              // never be queued again for manual review -- that would just duplicate a decision
+              // the operator already made (or never needed to make) for the same listing.
+              if (isReviewable && activeAnalysisIds.has(listing.externalListingId)) {
+                batchRejectionReasons.push("already_in_analysis");
+                continue;
+              }
               // A candidate missing ONLY its district (every other criterion
               // already confirmed) goes to the manual district-assignment
               // queue instead of a dead-end rejection count -- it is an
@@ -428,16 +446,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                   continue;
                 }
               }
-              const verificationInput = {
-                listing,
-                reason: outcome.reason,
-                detailUnconfirmedFields: isRecord(listing.rawPayload.detailEvidence) && Array.isArray(listing.rawPayload.detailEvidence.unconfirmedFields)
-                  ? listing.rawPayload.detailEvidence.unconfirmedFields.filter((field): field is string => typeof field === "string") : [],
-                detailContradictoryFields: Array.isArray(listing.rawPayload.detailContradictions)
-                  ? listing.rawPayload.detailContradictions.filter((field): field is string => typeof field === "string") : [],
-                seenAt: new Date().toISOString(),
-              };
-              if (isReviewableRadarVerificationCandidate(verificationInput)) {
+              if (isReviewable) {
                 const queueResult = await upsertPendingRadarVerificationCandidate(supabase, input.ownerId, verificationInput, districtAiBudget);
                 if (!queueResult.ok) recordRadarSourceWarnings(checkpoint, sourceId, [queueResult.reason === "schema_unavailable"
                   ? "RADAR_VERIFICATION_QUEUE_UNAVAILABLE: kolejka wymaga lokalnego draftu 20261012130000_add_price_radar_verification_queue.sql"

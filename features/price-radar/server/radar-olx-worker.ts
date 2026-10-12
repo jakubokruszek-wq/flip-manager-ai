@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assessRadarDistrictOnlyCandidate, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
-import { persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { activeRadarListingExternalIds, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
 import { rejectedRadarVerificationExternalIds } from "@/features/price-radar/server/radar-verification-queue";
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
@@ -60,9 +60,10 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
     let districtQueueCandidates = 0;
     const districtAiBudget = createRadarDistrictAiBudget();
     const olxExternalIds = payload.listings.map((listing) => listing.externalListingId);
-    const [rejectedVerificationIds, rejectedDistrictIds] = await Promise.all([
+    const [rejectedVerificationIds, rejectedDistrictIds, activeAnalysisIds] = await Promise.all([
       rejectedRadarVerificationExternalIds(client, input.ownerId, "olx", olxExternalIds),
       rejectedRadarDistrictQueueExternalIds(client, input.ownerId, "olx", olxExternalIds),
+      activeRadarListingExternalIds(client, input.ownerId, "olx", olxExternalIds),
     ]);
     for (const listing of payload.listings) {
       const raw = listing.rawPayload ?? {};
@@ -79,7 +80,7 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
         // See collect.ts for the same rule: only a candidate missing ONLY
         // its district (every other criterion already confirmed) ever
         // reaches the manual district-assignment queue.
-        if (outcome.reason === "district_not_confirmed") {
+        if (outcome.reason === "district_not_confirmed" && !activeAnalysisIds.has(listing.externalListingId)) {
           const districtAssessment = assessRadarDistrictOnlyCandidate(olxCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
           if (districtAssessment.eligible) {
             districtQueueCandidates += 1;
@@ -98,6 +99,12 @@ export async function finishRadarOlxJob(input: JobInput, payload: OlxPayload | {
             }
             continue;
           }
+        }
+        if (outcome.reason === "district_not_confirmed" && activeAnalysisIds.has(listing.externalListingId)) {
+          // Already represented by an active row in the comparison analysis -- queuing it again
+          // for manual district assignment would just duplicate a decision the operator already made.
+          recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, "olx", "already_in_analysis");
+          continue;
         }
         recordRadarQualificationRejection(checkpoint.qualificationRejections ??= {}, "olx", outcome.reason);
         continue;
