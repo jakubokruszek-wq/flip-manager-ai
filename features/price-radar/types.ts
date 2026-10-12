@@ -170,7 +170,7 @@ export type RadarFilters = {
   minPricePerSqm: number | null;
 };
 
-export const MIN_RADAR_SAMPLE_SIZE = 20;
+export const MIN_RADAR_SAMPLE_SIZE = 10;
 
 export type RadarStatGroup = {
   district: string;
