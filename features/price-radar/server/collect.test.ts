@@ -6,8 +6,8 @@ import type { RadarDetailDiagnostic } from "@/features/flip-finder/source-batche
 type Row = Record<string, unknown>;
 const ownerId = "owner-test";
 
-function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]; verificationQueue?: Row[]; districtQueueRpcError?: { code: string; message: string }; verificationQueueRpcError?: { code: string; message: string }; onListingPersisted?: (run: Row, candidate: Row) => void } = {}) {
-  const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: [], price_radar_district_queue: initial.districtQueue ?? [], price_radar_verification_queue: initial.verificationQueue ?? [] };
+function fakeDb(initial: { runs?: Row[]; listings?: Row[]; olxJobs?: Row[]; districtQueue?: Row[]; verificationQueue?: Row[]; districtQueueRpcError?: { code: string; message: string }; verificationQueueRpcError?: { code: string; message: string }; onListingPersisted?: (run: Row, candidate: Row) => void } = {}) {
+  const tables: Record<string, Row[]> = { price_radar_runs: initial.runs ?? [], price_radar_listings: initial.listings ?? [], olx_scan_jobs: initial.olxJobs ?? [], price_radar_district_queue: initial.districtQueue ?? [], price_radar_verification_queue: initial.verificationQueue ?? [] };
   const rpcCalls: Array<{ name: string; args: Row }> = [];
   let seq = 0;
   return {
@@ -72,6 +72,8 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
       const builder: Row = {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
+        is: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
+        lte: (key: string, value: string) => { filters.push((row) => typeof row[key] === "string" && Date.parse(String(row[key])) <= Date.parse(value)); return builder; },
         in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return builder; },
         order: () => builder,
         range: async () => {
@@ -83,6 +85,11 @@ function fakeDb(initial: { runs?: Row[]; listings?: Row[]; districtQueue?: Row[]
         update: (value: Row) => { op = "update"; payload = value; return builder; },
         upsert: (value: Row, options?: { onConflict?: string }) => { op = "upsert"; payload = value; onConflict = options?.onConflict?.split(",") ?? null; return builder; },
         maybeSingle: async () => {
+          if (op === "update" && payload) {
+            const matched = rows.find((row) => filters.every((filter) => filter(row))) ?? null;
+            if (matched) Object.assign(matched, payload);
+            return { data: matched, error: null };
+          }
           if (op === "insert" && payload) {
             // Simulate the DB's partial unique index: reject a second concurrent pending/running row.
             if (payload.status && ["pending", "running"].includes(String(payload.status)) && rows.some((row) => ["pending", "running"].includes(String(row.status)))) {
@@ -154,6 +161,8 @@ const mockedSources = [
   { id: "morizon", label: "Morizon", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("morizon", batches?.cursor, batches, signal); } },
   { id: "olx", label: "OLX", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("olx", batches?.cursor, batches, signal); } },
   { id: "oferty_net", label: "Oferty.net", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("oferty_net", batches?.cursor, batches, signal); } },
+  { id: "adresowo", label: "Adresowo.pl", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("adresowo", batches?.cursor, batches, signal); } },
+  { id: "allegro_lokalnie", label: "Allegro Lokalnie", fetch: async (criteria: unknown, signal?: AbortSignal, batches?: FakeBatchContext) => { observedSearchCriteria = criteria; return fakeSourceImpl("allegro_lokalnie", batches?.cursor, batches, signal); } },
 ];
 mock.module("@/features/flip-finder/server/search-source-registry", {
   namedExports: {
@@ -163,7 +172,7 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
   },
 });
 
-const { claimOrCreateRadarRun, runRadarCollectionPortion, RADAR_SOURCES } = await import("./collect.ts");
+const { claimOrCreateRadarRun, resumeExistingRadarRun, runRadarCollectionPortion, RADAR_SOURCES } = await import("./collect.ts");
 const { getRadarResults } = await import("./radar-results.ts");
 
 function qualifyingListing(id: string, source: string) {
@@ -196,9 +205,38 @@ test("claim and continuation checkpoints use the 75-second lease for a 42-second
   const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
 
   assert.equal(result.status, "completed");
+  const savedCheckpoint = db.tables.price_radar_runs[0]?.checkpoint as Row;
+  assert.ok(typeof savedCheckpoint.lastProgressAt === "string" && Number.isFinite(Date.parse(savedCheckpoint.lastProgressAt)), "each durable checkpoint stores a progress timestamp without a schema migration");
   const leaseCalls = db.rpcCalls.filter(({ name }) => name === "claim_price_radar_run" || name === "checkpoint_price_radar_run");
   assert.ok(leaseCalls.length >= 2);
   assert.ok(leaseCalls.every(({ args }) => args.p_lease_seconds === 75), "every claim and checkpoint must retain the shorter lease window");
+});
+
+test("terminal CAPTCHA and HTTP 429 failures are recorded once while pending portals keep advancing", async () => {
+  const db = fakeDb();
+  const attempts: Record<string, number> = {};
+  fakeSourceImpl = async (id) => {
+    attempts[id] = (attempts[id] ?? 0) + 1;
+    if (id === "adresowo") throw new Error("HTTP 403 CAPTCHA_OR_ACCESS_DENIED");
+    if (id === "allegro_lokalnie") throw new Error("HTTP 429 Too Many Requests");
+    return { listings: [qualifyingListing(`${id}-long-run`, id)], warnings: [], fetched: 1 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["adresowo", "allegro_lokalnie", "domiporta", "oferty_net"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+
+  const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  assert.equal(result.status, "partial");
+  assert.equal(result.sourceStatuses.adresowo, "failed");
+  assert.equal(result.sourceStatuses.allegro_lokalnie, "failed");
+  assert.equal(result.sourceStatuses.domiporta, "completed", "a terminal access failure cannot hold later sources");
+  assert.equal(result.sourceStatuses.oferty_net, "completed", "the last pending portal still advances in the same run");
+  assert.match(result.sourceErrors.adresowo ?? "", /TERMINAL_ACCESS_ERROR/u);
+  assert.match(result.sourceErrors.allegro_lokalnie ?? "", /429/u);
+  assert.deepEqual(attempts, { adresowo: 1, allegro_lokalnie: 1, domiporta: 1, oferty_net: 1 });
+
+  const repeated = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+  assert.equal(repeated.status, "partial");
+  assert.deepEqual(attempts, { adresowo: 1, allegro_lokalnie: 1, domiporta: 1, oferty_net: 1 }, "terminal failures and completed portals are never retried inside the same run");
 });
 
 test("a pending OLX reservation is deferred behind unfinished portals, then uses only its existing worker queue", async () => {
@@ -857,6 +895,80 @@ test("resuming after the OLX worker exhausted its lease (claim_olx_scan_job's ow
   assert.equal(result.sourceStatuses.morizon, "completed");
   assert.equal(result.status, "partial", "one dead source among otherwise-successful ones ends the run partial, not stuck in 'running'");
   assert.notEqual(db.tables.price_radar_runs[0].status, "running", "the run must reach a terminal status instead of waiting on OLX forever");
+});
+
+test("normal expired-run resume releases a terminal OLX job and continues pending portals without repeating completed sources", async () => {
+  const runId = "run-olx-terminal-resume";
+  const checkpoint = {
+    sourceQueue: ["morizon", "olx", "oferty_net"], currentSourceIndex: 1,
+    sourceStatuses: { morizon: "completed", olx: "running", oferty_net: "pending" },
+    sourceErrors: {}, perSourceCursor: { morizon: "__RADAR_SOURCE_DONE__" },
+    qualificationRejections: {}, buffer: [], bufferOffset: 0,
+  };
+  const row = {
+    id: runId, owner_id: ownerId, status: "running", started_at: "2026-10-12T20:00:00.000Z",
+    lease_token: "expired-radar-lease", lease_until: new Date(Date.now() - 60_000).toISOString(),
+    finished_at: null, scanned_count: 1, qualified_count: 1, error_message: null,
+    checkpoint, source_statuses: checkpoint.sourceStatuses,
+  };
+  const db = fakeDb({ runs: [row], olxJobs: [{
+    id: "terminal-olx-job", context_type: "price_radar", radar_owner_id: ownerId, radar_run_id: runId,
+    idempotency_key: `price-radar:${ownerId}:olx:${runId}`, status: "failed", error_code: "LEASE_EXHAUSTED",
+  }] });
+  let morizonCalls = 0;
+  let ofertyCalls = 0;
+  fakeSourceImpl = async (id) => {
+    if (id === "morizon") morizonCalls += 1;
+    if (id === "oferty_net") ofertyCalls += 1;
+    return { listings: [qualifyingListing(`${id}-after-olx-failure`, id)], warnings: [], fetched: 1 };
+  };
+
+  const resumed = await resumeExistingRadarRun(ownerId, runId, db as never);
+  assert.equal(resumed.kind, "claimed", "a terminal worker result cannot permanently lock the Radar run");
+  if (resumed.kind !== "claimed") return;
+  const result = await runRadarCollectionPortion({ runId, ownerId, leaseToken: resumed.run.leaseToken! }, db as never);
+  assert.equal(result.status, "partial");
+  assert.equal(result.sourceStatuses.olx, "failed");
+  assert.match(result.sourceErrors.olx ?? "", /RADAR_OLX_JOB_ALREADY_FAILED/u);
+  assert.equal(result.sourceStatuses.oferty_net, "completed", "a terminal OLX job cannot block the remaining portal");
+  assert.equal(morizonCalls, 0, "the already-completed source is not fetched again");
+  assert.equal(ofertyCalls, 1);
+  assert.equal(db.tables.olx_scan_jobs.length, 1, "resume never creates a duplicate OLX reservation");
+  assert.equal(db.tables.olx_scan_jobs[0]?.status, "failed", "Radar does not rewrite the worker's terminal job status");
+});
+
+test("a completed OLX reservation is checkpointed as completed before later sources continue", async () => {
+  const runId = "run-olx-completed-checkpoint";
+  const checkpoint = {
+    sourceQueue: ["olx", "oferty_net"], currentSourceIndex: 0,
+    sourceStatuses: { olx: "running", oferty_net: "pending" }, sourceErrors: {}, perSourceCursor: {},
+    qualificationRejections: {}, buffer: [], bufferOffset: 0,
+  };
+  const row = {
+    id: runId, owner_id: ownerId, status: "running", started_at: "2026-10-12T20:00:00.000Z",
+    lease_token: "expired-radar-lease", lease_until: new Date(Date.now() - 60_000).toISOString(),
+    finished_at: null, scanned_count: 1, qualified_count: 0, error_message: null,
+    checkpoint, source_statuses: checkpoint.sourceStatuses,
+  };
+  const db = fakeDb({ runs: [row], olxJobs: [{
+    id: "completed-olx-job", context_type: "price_radar", radar_owner_id: ownerId, radar_run_id: runId,
+    idempotency_key: `price-radar:${ownerId}:olx:${runId}`, status: "completed",
+  }] });
+  let ofertyCalls = 0;
+  fakeSourceImpl = async (id) => {
+    if (id === "oferty_net") ofertyCalls += 1;
+    return { listings: [qualifyingListing(`${id}-completed-olx`, id)], warnings: [], fetched: 1 };
+  };
+
+  const resumed = await resumeExistingRadarRun(ownerId, runId, db as never);
+  assert.equal(resumed.kind, "claimed");
+  if (resumed.kind !== "claimed") return;
+  const result = await runRadarCollectionPortion({ runId, ownerId, leaseToken: resumed.run.leaseToken! }, db as never);
+  assert.equal(result.status, "completed");
+  assert.equal(result.sourceStatuses.olx, "completed");
+  assert.equal(result.sourceStatuses.oferty_net, "completed");
+  assert.equal(ofertyCalls, 1);
+  assert.equal(db.tables.olx_scan_jobs.length, 1, "the completed worker reservation is reused rather than duplicated");
 });
 
 test("resuming a legacy checkpoint that still queues a now-disabled source (szybko) skips it with an honest reason, fetches nothing from it, and still runs the rest of the queue", async () => {

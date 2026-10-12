@@ -544,10 +544,14 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
     sourceWarnings: { otodom: ["Otodom: duplicate (1)", "Otodom: unsupported_listing (2)"] },
     sourceRejectionCounts: { otodom: { duplicate: 1, unsupported_listing: 2 } },
     qualificationRejections: { olx: { district_not_confirmed: 7, building_type_not_confirmed: 3 } },
-    checkpoint: { sourceQueue: ["morizon"], currentSourceIndex: 0, rejectedCount: 12, verificationQueuedCount: 4, districtQueuedCount: 2 },
+    checkpoint: { sourceQueue: ["morizon"], currentSourceIndex: 0, lastProgressAt: "2026-10-12T22:00:00.000Z", rejectedCount: 12, verificationQueuedCount: 4, districtQueuedCount: 2 },
     errorMessage: null,
   };
   let postCount = 0;
+  let resolveResumeStarted;
+  let resolveResumeResponse;
+  const resumeStarted = new Promise((resolve) => { resolveResumeStarted = resolve; });
+  const resumeResponseGate = new Promise((resolve) => { resolveResumeResponse = resolve; });
   const resumedRunIds = [];
   await page.route("**/api/price-radar/**", async (route) => {
     const request = route.request();
@@ -558,6 +562,8 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
     if (url.pathname === "/api/price-radar/run" && request.method() === "POST") {
       postCount += 1;
       resumedRunIds.push(request.postDataJSON()?.expectedRunId ?? null);
+      resolveResumeStarted();
+      await resumeResponseGate;
       orphanedRun.status = "partial";
       orphanedRun.finishedAt = new Date().toISOString();
       orphanedRun.leaseUntil = null;
@@ -573,10 +579,19 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   // Settings load asynchronously and gate the button too (disabled={... || !settingsLoaded}).
   // Wait for a settings-derived element so this test's own assertion isn't racing that load.
   await page.getByRole("button", { name: districts[0] }).waitFor();
+  await resumeStarted;
+  const waitingSummary = await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText();
+  assert.match(waitingSummary, /Status\s+Oczekiwanie na kontynuację/u, "an expired lease must not be labeled as active scanning");
+  assert.match(waitingSummary, /Ostatni zapis postępu/u);
+  const expectedProgressLabel = new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(orphanedRun.checkpoint.lastProgressAt));
+  assert.ok(waitingSummary.includes(expectedProgressLabel), "the UI shows the durable checkpoint time in the browser's local timezone, not just run start");
+  assert.match(waitingSummary, /Aktualne źródło\s+Morizon/u);
+  assert.match(waitingSummary, /Pozostałe źródła\s+1/u);
+  resolveResumeResponse();
   // The run status arrives via its own async fetch after settings load. Wait
   // for its resulting, run-derived text before reading the button's state,
   // so this assertion isn't racing that fetch's resolution.
-  await page.getByText("Zakończono częściowo", { exact: true }).waitFor();
+  await page.getByText("Częściowe pokrycie", { exact: true }).waitFor();
   await page.waitForFunction(() => document.body.textContent?.includes("OFFLINE_FIXTURE_FAILURE"));
   const automationSummary = await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText();
   assert.match(automationSummary, /Sprawdzono\s+29/u);
@@ -596,5 +611,20 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   assert.equal(orphanedRun.id, "93a7f1d5-0000-4000-8000-000000000001", "the current run identity remains unchanged");
   await page.getByRole("button", { name: "Uruchom / wznów zbieranie" }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Uruchamianie…" }).count(), 0, "the automatic resume must release the UI's busy state after the terminal response");
+
+  Object.assign(orphanedRun, {
+    status: "running",
+    leaseUntil: new Date(Date.now() + 60_000).toISOString(),
+    sourceStatuses: { domiporta: "completed", olx: "completed", morizon: "running", gratka: "pending" },
+    checkpoint: { sourceQueue: ["domiporta", "olx", "morizon", "gratka"], currentSourceIndex: 2, lastProgressAt: new Date().toISOString() },
+    sourceErrors: {},
+    olxJobStatus: undefined,
+    olxJobLeaseUntil: null,
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("region", { name: "Automatyczne skanowanie" }).getByText("Skanowanie trwa — morizon", { exact: false }).first().waitFor();
+  const activeSummary = await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText();
+  assert.match(activeSummary, /Pozostałe źródła\s+2/u, "completed sources are excluded from the remaining count");
+  assert.equal(postCount, 1, "a fresh active lease is observed without a second continuation request");
   assert.equal(serverOutput.includes("Error:"), false, serverOutput);
 });

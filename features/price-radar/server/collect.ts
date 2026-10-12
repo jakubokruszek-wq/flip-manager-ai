@@ -80,6 +80,7 @@ function toRadarRun(row: Row): RadarRun {
     status: isRunStatus(row.status) ? row.status : "pending",
     startedAt: String(row.started_at),
     finishedAt: typeof row.finished_at === "string" ? row.finished_at : null,
+    lastProgressAt: typeof checkpoint.lastProgressAt === "string" ? checkpoint.lastProgressAt : null,
     checkpoint: normalizedCheckpoint,
     scannedCount: typeof row.scanned_count === "number" ? row.scanned_count : 0,
     qualifiedCount: typeof row.qualified_count === "number" ? row.qualified_count : 0,
@@ -207,7 +208,15 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
     || checkpoint.sourceQueue.some((source) => !Object.hasOwn(checkpoint.sourceStatuses, source))) return { kind: "blocked", reason: "inconsistent_run" };
   if (nextUnfinishedSourceIndex(checkpoint, checkpoint.currentSourceIndex) === null) return { kind: "blocked", reason: "inconsistent_run" };
   if (checkpoint.sourceQueue.some((source) => source === "olx" && checkpoint.sourceStatuses.olx === "running")) {
-    return { kind: "blocked", reason: "olx_queue_owns_source" };
+    const job = await supabase.from("olx_scan_jobs").select("status")
+      .eq("context_type", "price_radar").eq("radar_owner_id", ownerId).eq("radar_run_id", expectedRunId)
+      .maybeSingle();
+    // The separate worker keeps ownership while a queued/running reservation
+    // exists. A terminal job, however, must release the Radar checkpoint so
+    // collect() can record its actual outcome and continue later portals.
+    if (job.error || (job.data?.status !== "failed" && job.data?.status !== "completed")) {
+      return { kind: "blocked", reason: "olx_queue_owns_source" };
+    }
   }
 
   const leaseToken = randomUUID();
@@ -366,7 +375,14 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           break;
         }
         if (sourceId === "olx") {
-          await enqueueRadarOlxJob({ ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, city: "Łódź" }, supabase);
+          const job = await enqueueRadarOlxJob({ ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, city: "Łódź" }, supabase);
+          if (job.status === "completed") {
+            checkpoint.sourceStatuses.olx = "completed";
+            checkpoint.perSourceCursor.olx = SOURCE_DONE_CURSOR;
+            checkpoint.currentSourceIndex += 1;
+            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+            continue;
+          }
           checkpoint.sourceStatuses.olx = "running";
           await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
           break;
@@ -683,6 +699,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
 }
 
 async function saveCheckpoint(supabase: SupabaseClient, input: { runId: string; ownerId: string; leaseToken: string }, checkpoint: RadarCheckpoint, scanned: number, qualified: number, status: RadarRunStatus, errorMessage: string | null = null): Promise<"saved" | "stopped"> {
+  checkpoint.lastProgressAt = new Date().toISOString();
   const params = {
     p_owner_id: input.ownerId, p_run_id: input.runId, p_lease_token: input.leaseToken,
     p_checkpoint: checkpoint, p_source_statuses: checkpoint.sourceStatuses,

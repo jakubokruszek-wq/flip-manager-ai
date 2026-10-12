@@ -9,12 +9,14 @@ const { resumeExistingRadarRun } = await import("./collect.ts");
 
 function fakeDb(initial: Row) {
   const rows = [structuredClone(initial)];
+  const olxJobs = Array.isArray(initial.olx_scan_jobs) ? initial.olx_scan_jobs as Row[] : [];
   let updates = 0;
   const db = {
     rows,
     get updates() { return updates; },
     from(table: string) {
-      assert.equal(table, "price_radar_runs");
+      assert.ok(table === "price_radar_runs" || table === "olx_scan_jobs");
+      const tableRows = table === "price_radar_runs" ? rows : olxJobs;
       const filters: Array<(row: Row) => boolean> = [];
       let payload: Row | null = null;
       const builder: Row = {
@@ -24,8 +26,8 @@ function fakeDb(initial: Row) {
         is: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
         lte: (key: string, value: string) => { filters.push((row) => typeof row[key] === "string" && Date.parse(String(row[key])) <= Date.parse(value)); return builder; },
         maybeSingle: async () => {
-          const row = rows.find((candidate) => filters.every((filter) => filter(candidate))) ?? null;
-          if (payload && row) { Object.assign(row, payload); updates += 1; }
+          const row = tableRows.find((candidate) => filters.every((filter) => filter(candidate))) ?? null;
+          if (payload && row && table === "price_radar_runs") { Object.assign(row, payload); updates += 1; }
           return { data: row ? structuredClone(row) : null, error: null };
         },
       };
@@ -107,8 +109,8 @@ test("a live lease, terminal run, mismatched run ID, or active OLX queue source 
     ["live lease", run({ lease_until: new Date(Date.now() + 60_000).toISOString() }), "lease_active"],
     ["terminal run", run({ status: "partial" }), "run_changed"],
     ["user-terminated run", run({ status: "partial", user_terminated_at: new Date().toISOString() }), "run_changed"],
-    ["OLX queue source", run({ checkpoint: { sourceQueue: ["olx"], currentSourceIndex: 0, sourceStatuses: { olx: "running" }, sourceErrors: {}, perSourceCursor: {} } }), "olx_queue_owns_source"],
-    ["OLX queue source behind rotated pointer", run({ checkpoint: { sourceQueue: ["morizon", "olx"], currentSourceIndex: 2, sourceStatuses: { morizon: "completed", olx: "running" }, sourceErrors: {}, perSourceCursor: {} } }), "olx_queue_owns_source"],
+    ["OLX queue source", run({ checkpoint: { sourceQueue: ["olx"], currentSourceIndex: 0, sourceStatuses: { olx: "running" }, sourceErrors: {}, perSourceCursor: {} }, olx_scan_jobs: [{ context_type: "price_radar", radar_owner_id: "owner-1", radar_run_id: "radar-run-current", status: "queued" }] }), "olx_queue_owns_source"],
+    ["OLX queue source behind rotated pointer", run({ checkpoint: { sourceQueue: ["morizon", "olx"], currentSourceIndex: 2, sourceStatuses: { morizon: "completed", olx: "running" }, sourceErrors: {}, perSourceCursor: {} }, olx_scan_jobs: [{ context_type: "price_radar", radar_owner_id: "owner-1", radar_run_id: "radar-run-current", status: "running" }] }), "olx_queue_owns_source"],
   ];
   for (const [label, row, reason] of cases) await t.test(label, async () => {
     const db = fakeDb(row);
@@ -119,4 +121,18 @@ test("a live lease, terminal run, mismatched run ID, or active OLX queue source 
   const mismatched = fakeDb(run());
   assert.deepEqual(await resumeExistingRadarRun("owner-1", "another-run", mismatched as never), { kind: "blocked", reason: "run_changed" });
   assert.equal(mismatched.updates, 0);
+});
+
+test("a terminal failed OLX job releases the same expired Radar checkpoint for the normal error path", async () => {
+  const row = run({
+    checkpoint: { sourceQueue: ["morizon", "olx", "oferty_net"], currentSourceIndex: 1, sourceStatuses: { morizon: "completed", olx: "running", oferty_net: "pending" }, sourceErrors: {}, perSourceCursor: {} },
+    source_statuses: { morizon: "completed", olx: "running", oferty_net: "pending" },
+    olx_scan_jobs: [{ context_type: "price_radar", radar_owner_id: "owner-1", radar_run_id: "radar-run-current", status: "failed" }],
+  });
+  const db = fakeDb(row);
+  const resumed = await resumeExistingRadarRun("owner-1", "radar-run-current", db as never);
+  assert.equal(resumed.kind, "claimed", "a terminal worker result cannot permanently lock the Radar run");
+  if (resumed.kind !== "claimed") return;
+  assert.equal(resumed.run.id, "radar-run-current");
+  assert.deepEqual((db.rows[0].checkpoint as Row).sourceQueue, ["morizon", "olx", "oferty_net"], "resume keeps the source queue and cursor intact");
 });

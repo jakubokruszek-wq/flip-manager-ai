@@ -280,7 +280,7 @@ test("an exact-run continuation stops after automation is disabled and preserves
 test("a terminal run already started today in Warsaw cannot be replaced by a duplicate daily start", async () => {
   reset();
   ownerRows = [{ owner_id: "owner-a" }];
-  latestRuns["owner-a"] = { id: "same-day-run", status: "partial", startedAt: "2026-10-12T03:10:00.000Z", stopRequestedAt: null, userTerminatedAt: null, leaseUntil: null, errorMessage: "oferty_net: source returned partial coverage" };
+  latestRuns["owner-a"] = { id: "same-day-run", status: "partial", startedAt: new Date().toISOString(), stopRequestedAt: null, userTerminatedAt: null, leaseUntil: null, errorMessage: "oferty_net: source returned partial coverage" };
   await withRadarCronSecret("test-secret", async () => {
     const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
     assert.equal(response.status, 200);

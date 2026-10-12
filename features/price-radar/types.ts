@@ -135,6 +135,8 @@ export type RadarCheckpoint = {
   searchCriteria?: RadarSearchCriteria;
   /** At most five sanitized detail examples per source; never stores page HTML or contact data. */
   detailDiagnostics?: Record<string, RadarDetailDiagnostic[]>;
+  /** Timestamp of the last durable collection checkpoint; absent on legacy runs. */
+  lastProgressAt?: string;
   buffer: unknown[];
   bufferOffset: number;
 };
@@ -151,6 +153,11 @@ export type RadarRun = {
   status: RadarRunStatus;
   startedAt: string;
   finishedAt: string | null;
+  /** Last persisted checkpoint, distinct from a worker heartbeat. */
+  lastProgressAt: string | null;
+  /** Latest OLX job state for this Radar run, read-only status metadata. */
+  olxJobStatus?: "queued" | "running" | "completed" | "failed" | "missing" | "unavailable";
+  olxJobLeaseUntil?: string | null;
   checkpoint: RadarCheckpoint;
   scannedCount: number;
   qualifiedCount: number;
