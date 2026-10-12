@@ -201,6 +201,29 @@ test("claim and continuation checkpoints use the 75-second lease for a 42-second
   assert.ok(leaseCalls.every(({ args }) => args.p_lease_seconds === 75), "every claim and checkpoint must retain the shorter lease window");
 });
 
+test("a pending OLX reservation is deferred behind unfinished portals, then uses only its existing worker queue", async () => {
+  let nonOlxPersisted = false;
+  const db = fakeDb({ onListingPersisted: (_run, candidate) => {
+    if (candidate.source !== "olx") {
+      nonOlxPersisted = true;
+      assert.equal(db.tables.olx_scan_jobs.length, 0, "OLX is not queued before another portal has had a collection turn");
+    }
+  } });
+  fakeSourceImpl = async (id) => ({ listings: [qualifyingListing(`${id}-before-olx`, id)], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["olx", "domiporta"], db as never);
+  if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never);
+  const saved = db.tables.price_radar_runs[0]!;
+  const checkpoint = saved.checkpoint as { sourceQueue: string[]; sourceStatuses: Record<string, string> };
+  assert.equal(nonOlxPersisted, true);
+  assert.deepEqual(checkpoint.sourceQueue, ["domiporta", "olx"], "legacy source order is rotated in-place while keeping the same run");
+  assert.equal(result.sourceStatuses.domiporta, "completed");
+  assert.equal(result.sourceStatuses.olx, "running", "an unavailable worker remains visibly pending/running instead of claiming completion");
+  assert.equal(db.tables.olx_scan_jobs.length, 1, "OLX still gets exactly one idempotent reservation in its existing queue");
+  assert.equal(result.status, "running");
+});
+
 test("a persisted STOP request prevents the next source fetch and releases the same run as resumable partial", async () => {
   const db = fakeDb();
   let fetchCalls = 0;

@@ -1,0 +1,30 @@
+name: Daily Price Radar collection
+
+on:
+  schedule:
+    # GitHub evaluates this in the IANA timezone, so the local start remains
+    # 05:00 across Poland's CET/CEST transitions.
+    - cron: "0 5 * * *"
+      timezone: "Europe/Warsaw"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: price-radar-daily-collection
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: github.repository == 'jakubokruszek-wq/flip-manager-ai' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Continue the durable Radar checkpoint
+        env:
+          PRICE_RADAR_COLLECT_URL: https://flip-manager-ai.vercel.app/api/jobs/price-radar-collect
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MAX_REQUESTS: "24"
+          MAX_ELAPSED_MS: "3300000"
+        run: node scripts/price-radar-scheduler.mjs

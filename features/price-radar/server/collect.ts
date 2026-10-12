@@ -316,6 +316,27 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
         continue;
       }
+      // OLX is owned by its separate durable worker queue. Defer a pending
+      // OLX reservation until every other unfinished portal has had a turn;
+      // otherwise a queued-but-unclaimed OLX job would stop this run before
+      // later portals could be collected. Legacy checkpoints are rotated in
+      // place, preserving their IDs, cursors and all completed source rows.
+      if (sourceId === "olx" && checkpoint.sourceStatuses.olx !== "running"
+        && checkpoint.sourceQueue.some((candidate) => candidate !== "olx"
+          && !["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[candidate] ?? ""))) {
+        const currentIndex = checkpoint.currentSourceIndex;
+        const [deferredSource] = checkpoint.sourceQueue.splice(currentIndex, 1);
+        if (deferredSource) checkpoint.sourceQueue.push(deferredSource);
+        const nextIndex = nextUnfinishedSourceIndex(checkpoint, currentIndex, attemptedSourceIds);
+        if (nextIndex === null) {
+          checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
+          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+          break;
+        }
+        checkpoint.currentSourceIndex = nextIndex;
+        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+        continue;
+      }
       attemptedSourceIds.add(sourceId);
       const source = activeSources(syntheticCriteria(sourceId, checkpoint.searchCriteria)).find((candidate) => candidate.id === sourceId);
       if (!source) {

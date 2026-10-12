@@ -4,12 +4,17 @@ import test, { mock } from "node:test";
 type Row = Record<string, unknown>;
 
 let ownerRows: Row[] = [];
+let runRows: Row[] = [];
 let adminCalls: Array<{ op: string; table: string; payload?: Row; filters: Row }> = [];
 let settingsCalls: string[] = [];
 let claimCalls: string[] = [];
+let resumeCalls: Array<{ ownerId: string; runId: string }> = [];
 let claimCriteria: Array<{ ownerId: string; sources: unknown; criteria: unknown }> = [];
 let claimResults: Record<string, { kind: "claimed"; run: { id: string; leaseToken: string } } | { kind: "blocked" }> = {};
+let resumeResults: Record<string, { kind: "claimed"; run: { id: string; leaseToken: string } } | { kind: "blocked"; reason: string }> = {};
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
+let portionResult: Row = { status: "completed", scannedCount: 3, qualifiedCount: 1, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} };
+let latestRuns: Record<string, Row | null> = {};
 let filteredToEmptyOwners: Set<string> = new Set();
 
 function fakeAdmin() {
@@ -28,6 +33,11 @@ function fakeAdmin() {
           return { eq: async () => ({ data: null, error: null }) };
         },
         eq: (key: string, value: unknown) => { filters[key] = value; return builder; },
+        maybeSingle: async () => {
+          adminCalls.push({ op: "maybeSingle", table, filters: { ...filters } });
+          const row = (table === "price_radar_runs" ? runRows : []).find((candidate) => Object.entries(filters).every(([key, value]) => candidate[key] === value)) ?? null;
+          return { data: row, error: null };
+        },
       };
       return builder;
     },
@@ -41,21 +51,30 @@ mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
   readRadarSettings: async (ownerId: string) => { settingsCalls.push(ownerId); return { districts: [], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: ["oferty_net"], minPricePerSqm: 8_800 }; },
   radarSettingsSourcesWereFilteredToEmpty: async (ownerId: string) => filteredToEmptyOwners.has(ownerId),
 } });
+mock.module("@/features/price-radar/server/radar-run-status", { namedExports: {
+  latestRadarRun: async (ownerId: string) => latestRuns[ownerId] ?? null,
+} });
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria.push({ ownerId, sources, criteria }); return claimResults[ownerId] ?? { kind: "blocked" }; },
-  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "completed", scannedCount: 3, qualifiedCount: 1, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
+  resumeExistingRadarRun: async (ownerId: string, runId: string) => { resumeCalls.push({ ownerId, runId }); return resumeResults[runId] ?? { kind: "claimed", run: { id: runId, leaseToken: "resumed-lease" } }; },
+  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return portionResult; },
 } });
 
 const route = await import("../../../app/api/jobs/price-radar-collect/route.ts");
 
 function reset() {
   ownerRows = [];
+  runRows = [];
   adminCalls = [];
   settingsCalls = [];
   claimCalls = [];
+  resumeCalls = [];
   claimCriteria = [];
   claimResults = {};
+  resumeResults = {};
   portionCalls = [];
+  portionResult = { status: "completed", scannedCount: 3, qualifiedCount: 1, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} };
+  latestRuns = {};
   filteredToEmptyOwners = new Set();
 }
 
@@ -169,4 +188,119 @@ test("no owner ready for a portion reports idle without error", async () => {
     assert.equal(body.status, "idle");
   });
   assert.deepEqual(portionCalls, []);
+});
+
+test("a terminal run already started today in Warsaw cannot be replaced by a duplicate daily start", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  latestRuns["owner-a"] = { id: "same-day-run", status: "partial", startedAt: "2026-10-12T03:10:00.000Z", stopRequestedAt: null, userTerminatedAt: null, leaseUntil: null, errorMessage: "oferty_net: source returned partial coverage" };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { status: "already_ran_today" });
+  });
+  assert.deepEqual(claimCalls, [], "same-day retries must not allocate a second run");
+  assert.deepEqual(portionCalls, []);
+});
+
+test("an active lease is reported as waiting and is never claimed a second time", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  latestRuns["owner-a"] = { id: "active-run", status: "running", startedAt: "2026-10-11T03:10:00.000Z", stopRequestedAt: null, userTerminatedAt: null, leaseUntil: new Date(Date.now() + 30_000).toISOString(), errorMessage: null };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    const body = await response.json();
+    assert.equal(body.runId, "active-run");
+    assert.equal(body.status, "waiting");
+    assert.ok(body.retryAfterSeconds >= 30 && body.retryAfterSeconds <= 32);
+  });
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(portionCalls, []);
+});
+
+test("an expired active checkpoint resumes its existing run ID instead of allocating a fresh run", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  latestRuns["owner-a"] = { id: "checkpoint-run", status: "running", startedAt: "2026-10-11T03:10:00.000Z", stopRequestedAt: null, userTerminatedAt: null, leaseUntil: new Date(Date.now() - 1_000).toISOString(), errorMessage: null };
+  resumeResults["checkpoint-run"] = { kind: "claimed", run: { id: "checkpoint-run", leaseToken: "new-fenced-lease" } };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    assert.equal((await response.json()).runId, "checkpoint-run");
+  });
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(resumeCalls, [{ ownerId: "owner-a", runId: "checkpoint-run" }]);
+  assert.deepEqual(portionCalls, [{ runId: "checkpoint-run", ownerId: "owner-a", leaseToken: "new-fenced-lease" }]);
+});
+
+test("a scheduler continuation is restricted to its exact server-owned run ID", async () => {
+  reset();
+  const runId = "123e4567-e89b-42d3-a456-426614174000";
+  runRows = [{ id: runId, owner_id: "owner-from-db", status: "running", lease_until: new Date(Date.now() - 1_000).toISOString(), stop_requested_at: null, user_terminated_at: null, checkpoint: {}, source_statuses: {} }];
+  resumeResults[runId] = { kind: "claimed", run: { id: runId, leaseToken: "exact-run-lease" } };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", {
+      method: "POST",
+      headers: { authorization: "Bearer test-secret", "content-type": "application/json" },
+      body: JSON.stringify({ runId, ownerId: "caller-cannot-pick-owner", sources: ["facebook"] }),
+    }));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).runId, runId);
+  });
+  assert.deepEqual(resumeCalls, [{ ownerId: "owner-from-db", runId }]);
+  assert.deepEqual(claimCalls, [], "an exact continuation path cannot create a replacement run");
+  assert.deepEqual(settingsCalls, [], "saved filter criteria are not replaced from request input");
+  assert.deepEqual(portionCalls, [{ runId, ownerId: "owner-from-db", leaseToken: "exact-run-lease" }]);
+});
+
+test("an exact terminal run returns its actual final state without resuming or creating work", async () => {
+  reset();
+  const runId = "123e4567-e89b-42d3-a456-426614174000";
+  runRows = [{ id: runId, owner_id: "owner-from-db", status: "partial", lease_until: null, stop_requested_at: null, user_terminated_at: null, scanned_count: 12, qualified_count: 2, source_statuses: { morizon: "failed" }, checkpoint: { sourceErrors: { morizon: "HTTP 503" } } }];
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", {
+      method: "POST", headers: { authorization: "Bearer test-secret", "content-type": "application/json" }, body: JSON.stringify({ runId }),
+    }));
+    const body = await response.json();
+    assert.equal(body.status, "partial");
+    assert.equal(body.terminal, true);
+    assert.equal(body.scannedCount, 12);
+  });
+  assert.deepEqual(resumeCalls, []);
+  assert.deepEqual(portionCalls, []);
+  assert.deepEqual(claimCalls, []);
+});
+
+test("an explicit operator pause is not automatically resumed", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  latestRuns["owner-a"] = { id: "paused-run", status: "partial", startedAt: "2026-10-10T03:10:00.000Z", stopRequestedAt: "2026-10-10T04:00:00.000Z", userTerminatedAt: null, leaseUntil: null, errorMessage: "RADAR_STOPPED_BY_OPERATOR" };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    assert.deepEqual(await response.json(), { runId: "paused-run", status: "paused_by_operator" });
+  });
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(portionCalls, []);
+});
+
+test("portal partial errors stay terminal and OLX waiting is reported without claiming the whole run complete", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  claimResults = { "owner-a": { kind: "claimed", run: { id: "run-partial", leaseToken: "lease" } } };
+  portionResult = { status: "partial", scannedCount: 8, qualifiedCount: 2, sourceStatuses: { morizon: "failed" }, sourceErrors: { morizon: "HTTP 503" }, qualificationRejections: {} };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    assert.equal((await response.json()).status, "partial");
+  });
+
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  claimResults = { "owner-a": { kind: "claimed", run: { id: "run-olx", leaseToken: "lease" } } };
+  portionResult = { status: "running", scannedCount: 8, qualifiedCount: 2, sourceStatuses: { olx: "running" }, sourceErrors: {}, qualificationRejections: {} };
+  await withCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    const body = await response.json();
+    assert.equal(body.status, "waiting_for_olx");
+    assert.equal(body.runId, "run-olx");
+    assert.equal(body.retryAfterSeconds, 300);
+  });
 });
