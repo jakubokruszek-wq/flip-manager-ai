@@ -361,7 +361,7 @@ test("Flip Finder card border: real browser comparison of a current (active) car
           if (!visible(element) || element.closest(".sr-only") || ["SVG", "PATH", "INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)) return false;
           return Boolean(element.textContent?.trim()) && Number.parseFloat(getComputedStyle(element).fontSize) < 12;
         }).map((element) => ({ tag: element.tagName, text: element.textContent?.trim().slice(0, 36), font: getComputedStyle(element).fontSize }));
-        const buttonHeights = [...document.querySelectorAll("button, [role=button], [role=tab]")].filter(visible).map((element) => element.getBoundingClientRect().height);
+        const buttonHeights = [...document.querySelectorAll("button, [role=button], [role=tab], a.flex, a.inline-flex")].filter(visible).map((element) => element.getBoundingClientRect().height);
         return {
           bodyFont: getComputedStyle(document.body).fontSize,
           priceFont: price ? getComputedStyle(price).fontSize : null,

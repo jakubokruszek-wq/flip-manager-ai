@@ -359,7 +359,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
       const smallText = [...(article?.querySelectorAll(".text-sm") ?? [])].find((element) => !element.classList.contains("type-financial-standard") && !element.classList.contains("tabular-nums"));
       const price = article?.querySelector(".type-financial-standard");
       const inputs = [...document.querySelectorAll('input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), select, textarea')].filter(isVisible);
-      const buttons = [...document.querySelectorAll("button, [role=button], [role=tab]")].filter(isVisible);
+      const buttons = [...document.querySelectorAll("button, [role=button], [role=tab], a.flex, a.inline-flex")].filter(isVisible);
       const undersizedText = [...document.querySelectorAll("body *")].filter((element) => {
         if (!isVisible(element) || element.closest(".sr-only") || ["SVG", "PATH", "INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)) return false;
         return Boolean(element.textContent?.trim()) && Number.parseFloat(getComputedStyle(element).fontSize) < 12;
