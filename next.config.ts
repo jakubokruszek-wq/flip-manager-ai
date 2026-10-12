@@ -6,6 +6,14 @@ const supabaseImageHost = (() => {
 })();
 
 const nextConfig: NextConfig = {
+  deploymentId: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
+  env: {
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA:
+      process.env.VERCEL_GIT_COMMIT_SHA ??
+      process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ??
+      process.env.NEXT_PUBLIC_COMMIT_SHA ??
+      "local",
+  },
   images: {
     remotePatterns: [
       {
