@@ -9,13 +9,15 @@ function fakeDb(initial: Row[] = []) {
   return {
     rows,
     from(table: string) {
-      assert.equal(table, "price_radar_district_queue");
+      assert.ok(table === "price_radar_district_queue" || table === "price_radar_settings", `unexpected table ${table}`);
       const filters: Array<(row: Row) => boolean> = [];
       const builder: Row = {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
         order: () => builder,
-        maybeSingle: async () => ({ data: rows.find((row) => filters.every((filter) => filter(row))) ?? null, error: null }),
+        maybeSingle: async () => table === "price_radar_settings"
+          ? { data: null, error: null } // no saved settings row -- readRadarSettings falls back to its defaults (minPricePerSqm: null)
+          : { data: rows.find((row) => filters.every((filter) => filter(row))) ?? null, error: null },
         then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
           Promise.resolve({ data: rows.filter((row) => filters.every((filter) => filter(row))), error: null }).then(resolve, reject),
       };

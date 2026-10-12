@@ -704,32 +704,16 @@ export function PriceRadarPage() {
           Kolejka weryfikacji danych i standardu wymaga lokalnego draftu <code>20261012130000_add_price_radar_verification_queue.sql</code>. Nie została zastosowana w Production.
         </div>
       ) : null}
-      {verificationQueue?.available && (verificationQueue.pending.length > 0 || verificationQueue.confirmed.length > 0 || verificationQueue.rejected.length > 0) ? (
+      {verificationQueue?.available && verificationQueue.pending.length > 0 ? (
         <section aria-label="Do weryfikacji danych i standardu" className="space-y-3">
           <h2 className="text-lg font-semibold">Do weryfikacji danych i standardu ({verificationQueue.pending.length})</h2>
-          <p className="text-sm text-muted-foreground">To nie są jeszcze porównania ani próbka statystyczna. Potwierdź konkretne wartości z ogłoszenia; sugestia AI nie podejmuje decyzji.</p>
+          <p className="text-sm text-muted-foreground">To nie są jeszcze porównania ani próbka statystyczna. Potwierdź konkretne wartości z ogłoszenia.</p>
           <div className="grid gap-4 lg:grid-cols-2">
             {verificationQueue.pending.map((item) => (
               <VerificationQueueRow key={item.id} item={item} pending={verificationPending === item.id}
                 onResolve={(decision) => void resolveVerification(item.id, decision)} onReject={() => void setVerificationRejection(item.id, true)} />
             ))}
           </div>
-          {verificationQueue.confirmed.length > 0 ? (
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-muted-foreground">Potwierdzone i dodane do porównań ({verificationQueue.confirmed.length})</h3>
-              <div className="grid gap-4 lg:grid-cols-2">
-                {verificationQueue.confirmed.map((item) => <VerificationQueueRow key={item.id} item={item} pending={false} confirmed />)}
-              </div>
-            </div>
-          ) : null}
-          {verificationQueue.rejected.length > 0 ? (
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-muted-foreground">Odrzucone z weryfikacji ({verificationQueue.rejected.length})</h3>
-              <div className="grid gap-4 lg:grid-cols-2">
-                {verificationQueue.rejected.map((item) => <VerificationQueueRow key={item.id} item={item} pending={verificationPending === item.id} rejected onRestore={() => void setVerificationRejection(item.id, false)} />)}
-              </div>
-            </div>
-          ) : null}
         </section>
       ) : null}
 
@@ -866,23 +850,25 @@ function DistrictQueueRow({ item, rejected, chosenDistrict, onChooseDistrict, on
   );
 }
 
-function VerificationQueueRow({ item, pending, confirmed, rejected, onResolve, onReject, onRestore }: {
+// Pokazuje wyłącznie pola operatora: nazwę, link, edytowalne dane i
+// potwierdzenie zgodności. Techniczne dowody źródłowe, powód skierowania i
+// sugestia AI pozostają w snapshocie (backend, testy), ale nie są tu
+// renderowane -- operator ocenia ofertę z samego ogłoszenia, nie z
+// diagnostyki parsera.
+function VerificationQueueRow({ item, pending, onResolve, onReject }: {
   item: RadarVerificationQueueItem;
   pending: boolean;
-  confirmed?: boolean;
-  rejected?: boolean;
-  onResolve?: (decision: RadarVerificationDecision) => void;
-  onReject?: () => void;
-  onRestore?: () => void;
+  onResolve: (decision: RadarVerificationDecision) => void;
+  onReject: () => void;
 }) {
-  const [price, setPrice] = useState(item.decision?.price ? String(item.decision.price) : item.snapshot.confirmedFields.includes("total_price") && item.snapshot.price ? String(item.snapshot.price) : "");
-  const [area, setArea] = useState(item.decision?.area ? String(item.decision.area) : item.snapshot.confirmedFields.includes("area") && item.snapshot.area ? String(item.snapshot.area) : "");
-  const [rooms, setRooms] = useState(item.decision?.rooms ? String(item.decision.rooms) : item.snapshot.confirmedFields.includes("rooms") && item.snapshot.rooms ? String(item.snapshot.rooms) : "");
-  const [city, setCity] = useState(item.decision?.city ?? (item.snapshot.confirmedFields.includes("city_lodz") && item.snapshot.city === "Łódź" ? "Łódź" : ""));
-  const [district, setDistrict] = useState(item.decision?.district ?? (item.snapshot.confirmedFields.includes("district") ? item.snapshot.district ?? "" : item.snapshot.suggestedDistrict ?? ""));
-  const [buildingType, setBuildingType] = useState(item.decision?.buildingType ?? (item.snapshot.confirmedFields.includes("building_type") && (item.snapshot.buildingType === "blok" || item.snapshot.buildingType === "apartamentowiec") ? item.snapshot.buildingType : ""));
-  const [marketType, setMarketType] = useState(item.decision?.marketType ?? (item.snapshot.confirmedFields.includes("market_type") && (item.snapshot.marketType === "primary" || item.snapshot.marketType === "secondary") ? item.snapshot.marketType : ""));
-  const [qualityCategory, setQualityCategory] = useState(item.decision?.qualityCategory ?? (item.snapshot.confirmedFields.includes("standard") ? item.snapshot.qualityCategory ?? "" : ""));
+  const [price, setPrice] = useState(item.snapshot.confirmedFields.includes("total_price") && item.snapshot.price ? String(item.snapshot.price) : "");
+  const [area, setArea] = useState(item.snapshot.confirmedFields.includes("area") && item.snapshot.area ? String(item.snapshot.area) : "");
+  const [rooms, setRooms] = useState(item.snapshot.confirmedFields.includes("rooms") && item.snapshot.rooms ? String(item.snapshot.rooms) : "");
+  const [city, setCity] = useState(item.snapshot.confirmedFields.includes("city_lodz") && item.snapshot.city === "Łódź" ? "Łódź" : "");
+  const [district, setDistrict] = useState(item.snapshot.confirmedFields.includes("district") ? item.snapshot.district ?? "" : item.snapshot.suggestedDistrict ?? "");
+  const [buildingType, setBuildingType] = useState(item.snapshot.confirmedFields.includes("building_type") && (item.snapshot.buildingType === "blok" || item.snapshot.buildingType === "apartamentowiec") ? item.snapshot.buildingType : "");
+  const [marketType, setMarketType] = useState(item.snapshot.confirmedFields.includes("market_type") && (item.snapshot.marketType === "primary" || item.snapshot.marketType === "secondary") ? item.snapshot.marketType : "");
+  const [qualityCategory, setQualityCategory] = useState(item.snapshot.confirmedFields.includes("standard") ? item.snapshot.qualityCategory ?? "" : "");
   const [apartmentSaleConfirmed, setApartmentSaleConfirmed] = useState(false);
   const parsedPrice = Number(price);
   const parsedArea = Number(area);
@@ -893,67 +879,29 @@ function VerificationQueueRow({ item, pending, confirmed, rejected, onResolve, o
     && (buildingType === "blok" || buildingType === "apartamentowiec")
     && (marketType === "primary" || marketType === "secondary")
     && (qualityCategory === "fresh_renovation" || qualityCategory === "ready_high_standard");
-  const statuses = new Set([...item.snapshot.confirmedFields, ...item.snapshot.missingFields, ...item.snapshot.contradictoryFields]);
-  const fieldLabels: Record<string, string> = {
-    total_price: "Cena całkowita", area: "Metraż", rooms: "Pokoje", city_lodz: "Miasto Łódź", district: "Dzielnica",
-    building_type: "Typ budynku", market_type: "Rynek", apartment_sale: "Mieszkanie na sprzedaż", standard: "Standard A/B",
-  };
 
   return (
-    <article className={`min-w-0 overflow-hidden rounded-xl border bg-card p-4 ${rejected ? "opacity-70" : ""}`}>
+    <article className="min-w-0 overflow-hidden rounded-xl border bg-card p-4">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{item.title ?? "Oferta bez tytułu"}</h3>
-        <div className="flex flex-wrap gap-1">
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{sourceLabel(item.source)}</span>
-          {confirmed ? <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-700">Dodano do porównań</span> : null}
-          {rejected ? <span className="rounded-full bg-muted px-2 py-0.5 text-xs">Odrzucona</span> : null}
-        </div>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{sourceLabel(item.source)}</span>
       </div>
       <a className="mt-2 block break-all text-xs text-primary underline" href={item.originalUrl} target="_blank" rel="noopener noreferrer">Otwórz konkretne ogłoszenie</a>
-      <p className="mt-1 break-words text-xs text-muted-foreground">HTTP źródła: {item.snapshot.sourceHttpStatus === null ? "nieznany" : item.snapshot.sourceHttpStatus}{item.snapshot.sourceIdentity ? ` · tożsamość: ${item.snapshot.sourceIdentity}` : ""}</p>
-      {item.snapshot.finalUrl ? <a className="block break-all text-xs text-muted-foreground underline" href={item.snapshot.finalUrl} target="_blank" rel="noopener noreferrer">Końcowy URL: {item.snapshot.finalUrl}</a> : null}
-      <p className="mt-2 break-words text-sm text-muted-foreground">
-        Źródło: {formatDate(item.snapshot.publishedAt)} · zmiana: {formatDate(item.snapshot.sourceUpdatedAt)} · pobrano: {formatDate(item.snapshot.collectedAt)}
-      </p>
-      <p className="mt-2 break-words text-sm font-medium">
-        Cena źródłowa: {item.snapshot.price === null ? "brak" : formatCurrency(item.snapshot.price)} · {item.snapshot.area === null ? "brak metrażu" : `${item.snapshot.area} m²`}
-        {item.snapshot.rooms ? ` · ${item.snapshot.rooms} pok.` : " · liczba pokoi niepotwierdzona"}
-      </p>
-      <p className="mt-1 text-sm">Podgląd ceny/m² po zatwierdzeniu danych: {pricePerSqm === null ? "uzupełnij potwierdzoną cenę całkowitą i metraż" : `${formatCurrency(pricePerSqm)}/m²`} · filtr próby: 8 800 zł/m²</p>
-      {item.snapshot.city || item.snapshot.district ? <p className="mt-1 break-words text-sm text-muted-foreground">Lokalizacja źródłowa: {[item.snapshot.city, item.snapshot.district].filter(Boolean).join(" · ")}</p> : null}
-      <div className="mt-3 rounded-lg border border-border/70 p-3">
-        <p className="text-xs font-semibold">Pola i dowody źródłowe</p>
-        <ul className="mt-2 space-y-1 text-xs">
-          {["total_price", "area", "rooms", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "standard"].map((field) => {
-            const isConflict = item.snapshot.contradictoryFields.includes(field);
-            const isMissing = item.snapshot.missingFields.includes(field) || (!statuses.has(field) && !item.snapshot.confirmedFields.includes(field));
-            return <li key={field} className="break-words"><span className="font-medium">{fieldLabels[field]}:</span> {isConflict ? "sprzeczne" : isMissing ? "brak potwierdzenia" : "odczytane"} · {item.snapshot.fieldEvidence[field] ?? "Brak jednoznacznego cytatu."}</li>;
-          })}
-        </ul>
-        {item.snapshot.contradictoryFields.length ? <p className="mt-2 break-words text-xs text-destructive">Sprzeczności: {item.snapshot.contradictoryFields.map((field) => fieldLabels[field] ?? field).join(", ")}</p> : null}
-        <p className="mt-2 break-words text-xs text-muted-foreground">Powód skierowania: {item.snapshot.routingReasons.join(", ") || "brak kompletu potwierdzeń"}</p>
-        {item.snapshot.suggestedDistrict ? <p className="mt-2 break-words text-xs text-muted-foreground">Sugestia AI: {item.snapshot.suggestedDistrict} · dowód: „{item.snapshot.suggestionEvidence ?? "brak cytatu"}”. Wymaga ręcznego wyboru.</p> : null}
-      </div>
-      {item.snapshot.description ? <p className="mt-3 max-h-24 overflow-auto break-words text-xs text-muted-foreground">{item.snapshot.description}</p> : null}
-      {!confirmed && !rejected ? (
-        <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
-          <label className="grid gap-1 text-xs">Cena całkowita, zł<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="1" value={price} disabled={pending} onChange={(event) => setPrice(event.target.value)} /></label>
-          <label className="grid gap-1 text-xs">Powierzchnia, m²<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="0.01" value={area} disabled={pending} onChange={(event) => setArea(event.target.value)} /></label>
-          <label className="grid gap-1 text-xs">Pokoje<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" max="20" step="1" value={rooms} disabled={pending} onChange={(event) => setRooms(event.target.value)} /></label>
-          <label className="grid gap-1 text-xs">Miasto — potwierdź z ogłoszenia<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={city} disabled={pending} onChange={(event) => setCity(event.target.value)} /></label>
-          <label className="grid gap-1 text-xs">Dzielnica<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={district} disabled={pending} onChange={(event) => setDistrict(event.target.value)}><option value="">Wybierz</option>{DEFAULT_RADAR_DISTRICTS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-          <label className="grid gap-1 text-xs">Typ budynku<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={buildingType} disabled={pending} onChange={(event) => setBuildingType(event.target.value)}><option value="">Wybierz</option><option value="blok">Blok</option><option value="apartamentowiec">Apartamentowiec</option></select></label>
-          <label className="grid gap-1 text-xs">Rynek<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={marketType} disabled={pending} onChange={(event) => setMarketType(event.target.value)}><option value="">Wybierz</option><option value="secondary">Wtórny</option><option value="primary">Pierwotny</option></select></label>
-          <label className="grid gap-1 text-xs">Standard<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={qualityCategory} disabled={pending} onChange={(event) => setQualityCategory(event.target.value)}><option value="">Wybierz</option><option value="fresh_renovation">A · świeży pełny remont</option><option value="ready_high_standard">B · gotowe, wysoki standard</option></select></label>
-          <label className="flex min-w-0 items-start gap-2 text-xs sm:col-span-2"><input type="checkbox" checked={apartmentSaleConfirmed} disabled={pending} onChange={(event) => setApartmentSaleConfirmed(event.target.checked)} /><span>Potwierdzam z ogłoszenia, że to konkretne mieszkanie na sprzedaż, a wybrane wartości i standard dotyczą tego lokalu.</span></label>
-          <div className="flex flex-wrap gap-2 sm:col-span-2">
-            <Button size="sm" disabled={pending || !canSubmit} onClick={() => onResolve?.({ apartmentSaleConfirmed: true, price: parsedPrice, area: parsedArea, rooms: Number(rooms), city: "Łódź", district: district as RadarVerificationDecision["district"], buildingType: buildingType as RadarVerificationDecision["buildingType"], marketType: marketType as RadarVerificationDecision["marketType"], qualityCategory: qualityCategory as RadarQualityCategory })}>Potwierdź i dodaj do porównań</Button>
-            <Button size="sm" variant="outline" disabled={pending} onClick={onReject}>Odrzuć</Button>
-          </div>
+      <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
+        <label className="grid gap-1 text-xs">Cena całkowita, zł<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="1" value={price} disabled={pending} onChange={(event) => setPrice(event.target.value)} /></label>
+        <label className="grid gap-1 text-xs">Powierzchnia, m²<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="0.01" value={area} disabled={pending} onChange={(event) => setArea(event.target.value)} /></label>
+        <label className="grid gap-1 text-xs">Pokoje<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" max="20" step="1" value={rooms} disabled={pending} onChange={(event) => setRooms(event.target.value)} /></label>
+        <label className="grid gap-1 text-xs">Miasto — potwierdź z ogłoszenia<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={city} disabled={pending} onChange={(event) => setCity(event.target.value)} /></label>
+        <label className="grid gap-1 text-xs">Dzielnica<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={district} disabled={pending} onChange={(event) => setDistrict(event.target.value)}><option value="">Wybierz</option>{DEFAULT_RADAR_DISTRICTS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label className="grid gap-1 text-xs">Typ budynku<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={buildingType} disabled={pending} onChange={(event) => setBuildingType(event.target.value)}><option value="">Wybierz</option><option value="blok">Blok</option><option value="apartamentowiec">Apartamentowiec</option></select></label>
+        <label className="grid gap-1 text-xs">Rynek<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={marketType} disabled={pending} onChange={(event) => setMarketType(event.target.value)}><option value="">Wybierz</option><option value="secondary">Wtórny</option><option value="primary">Pierwotny</option></select></label>
+        <label className="grid gap-1 text-xs">Standard<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={qualityCategory} disabled={pending} onChange={(event) => setQualityCategory(event.target.value)}><option value="">Wybierz</option><option value="fresh_renovation">A · świeży pełny remont</option><option value="ready_high_standard">B · gotowe, wysoki standard</option></select></label>
+        <label className="flex min-w-0 items-start gap-2 text-xs sm:col-span-2"><input type="checkbox" checked={apartmentSaleConfirmed} disabled={pending} onChange={(event) => setApartmentSaleConfirmed(event.target.checked)} /><span>Potwierdzam z ogłoszenia, że to konkretne mieszkanie na sprzedaż, a wybrane wartości i standard dotyczą tego lokalu.</span></label>
+        <div className="flex flex-wrap gap-2 sm:col-span-2">
+          <Button size="sm" disabled={pending || !canSubmit} onClick={() => onResolve({ apartmentSaleConfirmed: true, price: parsedPrice, area: parsedArea, rooms: Number(rooms), city: "Łódź", district: district as RadarVerificationDecision["district"], buildingType: buildingType as RadarVerificationDecision["buildingType"], marketType: marketType as RadarVerificationDecision["marketType"], qualityCategory: qualityCategory as RadarQualityCategory })}>Potwierdź i dodaj do porównań</Button>
+          <Button size="sm" variant="outline" disabled={pending} onClick={onReject}>Odrzuć</Button>
         </div>
-      ) : null}
-      {rejected ? <div className="mt-3"><Button size="sm" variant="outline" disabled={pending} onClick={onRestore}>Przywróć do weryfikacji</Button></div> : null}
-      {confirmed && item.decision ? <p className="mt-3 break-words text-xs text-muted-foreground">Potwierdzono: {formatCurrency(item.decision.price)} · {item.decision.area} m² · {item.decision.rooms} pok. · {item.decision.district} · {item.decision.marketType} · {qualityCategoryLabel(item.decision.qualityCategory, item.decision.marketType)} · {item.decisionAt ? formatDate(item.decisionAt) : "data nieznana"}</p> : null}
+      </div>
     </article>
   );
 }

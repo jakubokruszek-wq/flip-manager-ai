@@ -91,6 +91,41 @@ test("rejects missing price or area, never fabricating a price/m2", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ price: 0 })), { qualified: false, reason: "price_missing" });
 });
 
+// Confirmed Production gap (2026-10-12): the operator's saved Radar
+// minPricePerSqm threshold was threaded into every run's checkpoint but
+// never actually read back by qualifyRadarCandidate, so a listing far
+// below the saved floor qualified (or reached a manual queue) like any
+// other candidate -- a hard, clearly-failing offer must never reach the
+// verification queue at all.
+test("rejects a confirmed price/m2 below the operator's saved minimum -- a hard condition, never a review-worthy queue item", () => {
+  // 240 000 zł / 40 m² = 6 000 zł/m², below an 8 800 zł/m² saved minimum.
+  const result = qualifyRadarCandidate(candidate({ price: 240_000, area: 40 }), 2, undefined, 8_800);
+  assert.deepEqual(result, { qualified: false, reason: "price_per_sqm_below_minimum" });
+});
+
+test("a price/m2 exactly at or above the saved minimum is never rejected by it", () => {
+  // 240 000 zł / 40 m² = 6 000 zł/m², set the threshold to exactly that.
+  const atThreshold = qualifyRadarCandidate(candidate({ price: 240_000, area: 40 }), 2, undefined, 6_000);
+  assert.equal(atThreshold.qualified, true);
+  const aboveThreshold = qualifyRadarCandidate(candidate({ price: 240_000, area: 40 }), 2, undefined, 5_999);
+  assert.equal(aboveThreshold.qualified, true);
+});
+
+test("no saved minimum (null/undefined, matching 'disabled') never rejects on price/m2", () => {
+  assert.equal(qualifyRadarCandidate(candidate({ price: 240_000, area: 40 }), 2, undefined, null).qualified, true);
+  assert.equal(qualifyRadarCandidate(candidate({ price: 240_000, area: 40 }), 2, undefined, undefined).qualified, true);
+});
+
+test("uncertain/missing price or area never gets a hasty price/m2-below-minimum verdict -- it stays on the existing price_missing/area_missing path", () => {
+  assert.deepEqual(qualifyRadarCandidate(candidate({ price: null, area: 40 }), 2, undefined, 8_800), { qualified: false, reason: "price_missing" });
+  assert.deepEqual(qualifyRadarCandidate(candidate({ price: 240_000, area: null }), 2, undefined, 8_800), { qualified: false, reason: "area_missing" });
+});
+
+test("assessRadarDistrictOnlyCandidate also respects the saved minimum -- a district-only-missing candidate that is ALSO too cheap is never eligible for the district queue", () => {
+  const result = assessRadarDistrictOnlyCandidate(candidate({ district: null, price: 240_000, area: 40 }), 2, 8_800);
+  assert.deepEqual(result, { eligible: false });
+});
+
 test("Oferty.net and Domiporta do not qualify from a result card until the specific offer detail fields are confirmed", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ source: "oferty_net", rawPayload: {} })), { qualified: false, reason: "detail_not_confirmed" });

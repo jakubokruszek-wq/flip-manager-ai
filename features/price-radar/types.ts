@@ -78,6 +78,7 @@ export const RADAR_QUALIFICATION_REJECTION_REASONS = [
   "price_is_not_total_offer_price",
   "price_is_starting_price",
   "price_per_sqm_invalid",
+  "price_per_sqm_below_minimum",
   "district_not_confirmed",
   "city_not_lodz",
   "rental",

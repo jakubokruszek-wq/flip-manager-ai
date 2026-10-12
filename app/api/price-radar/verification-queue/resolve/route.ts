@@ -1,6 +1,7 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 import { DEFAULT_RADAR_DISTRICTS, type RadarQualityCategory, type RadarVerificationDecision } from "@/features/price-radar/types";
 import { resolveRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
+import { readRadarSettings } from "@/features/price-radar/server/radar-settings";
 
 export async function POST(request: Request) {
   let operator;
@@ -11,7 +12,8 @@ export async function POST(request: Request) {
     if (typeof body.queueId !== "string" || !body.queueId || !decision) {
       return Response.json({ message: "Uzupełnij potwierdzenie mieszkania na sprzedaż, cenę, metraż, dzielnicę, budynek, rynek i standard." }, { status: 400 });
     }
-    const result = await resolveRadarVerificationCandidate(operator.id, body.queueId, decision);
+    const settings = await readRadarSettings(operator.id);
+    const result = await resolveRadarVerificationCandidate(operator.id, body.queueId, decision, undefined, settings.minPricePerSqm);
     if (!result.ok) {
       if (result.reason === "schema_unavailable") return Response.json({ message: "Kolejka weryfikacji wymaga migracji bazy." }, { status: 503 });
       if (result.reason === "not_found") return Response.json({ message: "Nie znaleziono oczekującej oferty do weryfikacji." }, { status: 404 });

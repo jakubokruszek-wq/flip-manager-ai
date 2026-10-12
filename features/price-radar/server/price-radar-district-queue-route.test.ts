@@ -17,6 +17,15 @@ mock.module("@/features/price-radar/server/radar-district-queue", { namedExports
   assignRadarDistrictQueueCandidate: async (ownerId: string, queueId: string, district: string) => { assignCalls.push({ ownerId, queueId, district }); return assignResult; },
   setRadarDistrictQueueRejection: async (ownerId: string, queueId: string, rejected: boolean) => { rejectCalls.push({ ownerId, queueId, rejected }); return rejectResult; },
 } });
+// The assign route also reads the operator's saved minPricePerSqm to pass
+// into qualification. Mocked here rather than left real: the real settings
+// module imports RADAR_SOURCES from collect.ts, which imports the REAL
+// radar-district-queue module (including radarDistrictQueueFailureWarning,
+// not part of the partial mock above) -- loading it for real here would
+// crash on that missing export despite this test never exercising it.
+mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
+  readRadarSettings: async () => ({ districts: [], market: "both", areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null }),
+} });
 
 const readRoute = await import("../../../app/api/price-radar/district-queue/route.ts");
 const assignRoute = await import("../../../app/api/price-radar/district-queue/assign/route.ts");

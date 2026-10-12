@@ -7,7 +7,90 @@ mock.module("@/lib/supabase/admin", {
   namedExports: { createAdminClient: () => { throw new Error("this unit test must stay offline"); } },
 });
 
-const { applyRadarVerificationDecision, buildRadarVerificationSnapshot, isReviewableRadarVerificationCandidate, upsertPendingRadarVerificationCandidate } = await import("./radar-verification-queue.ts");
+const { applyRadarVerificationDecision, buildRadarVerificationSnapshot, isReviewableRadarVerificationCandidate, upsertPendingRadarVerificationCandidate, getRadarVerificationQueue, setRadarVerificationQueueRejection } = await import("./radar-verification-queue.ts");
+
+// A minimal, row-store fake of price_radar_verification_queue, mirroring the
+// upsert/select/rpc surface the module actually calls -- enough to prove the
+// queue's own bucketing (pending/confirmed/rejected) and decision
+// persistence across a reimport, without needing the full qualification
+// pipeline a real "confirm" also exercises (already covered end to end by
+// the migration's own dry-run tests against real linked Production).
+function fakeVerificationDb(initial: Record<string, unknown>[] = []) {
+  const rows = initial;
+  let seq = 0;
+  return {
+    rows,
+    from(table: string) {
+      assert.equal(table, "price_radar_verification_queue");
+      const filters: Array<(row: Record<string, unknown>) => boolean> = [];
+      const builder: Record<string, unknown> = {
+        select: () => builder,
+        eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
+        order: () => builder,
+        maybeSingle: async () => ({ data: rows.find((row) => filters.every((filter) => filter(row))) ?? null, error: null }),
+        then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: rows.filter((row) => filters.every((filter) => filter(row))), error: null }).then(resolve),
+      };
+      return builder;
+    },
+    async rpc(name: string, args: Record<string, unknown>) {
+      if (name === "upsert_price_radar_verification_candidate") {
+        const candidate = args.p_candidate as Record<string, unknown>;
+        let row = rows.find((item) => item.owner_id === args.p_owner_id && item.source === candidate.source && item.external_listing_id === candidate.external_listing_id);
+        if (!row) {
+          row = { id: `queue-${++seq}`, owner_id: args.p_owner_id, status: "pending", operator_decision: null, decision_at: null, rejected_at: null, first_seen_at: candidate.collected_at ?? "2026-10-12T10:00:00.000Z" };
+          rows.push(row);
+        }
+        Object.assign(row, candidate);
+        return { data: row.id, error: null };
+      }
+      if (name === "set_price_radar_verification_queue_rejection") {
+        const row = rows.find((item) => item.id === args.p_queue_id && item.owner_id === args.p_owner_id && (item.status === "pending" || item.status === "rejected"));
+        if (!row) return { data: false, error: null };
+        row.status = args.p_rejected ? "rejected" : "pending";
+        row.rejected_at = args.p_rejected ? "2026-10-12T10:05:00.000Z" : null;
+        return { data: true, error: null };
+      }
+      throw new Error(`unexpected RPC ${name}`);
+    },
+  };
+}
+
+test("a rejected candidate is immediately removed from the visible pending queue and moved to rejected", async () => {
+  const db = fakeVerificationDb();
+  const input = candidate();
+  const upserted = await upsertPendingRadarVerificationCandidate(db as never, "owner-1", input, { tryConsume: () => true }, async () => null);
+  assert.equal(upserted.ok, true);
+  const queueId = upserted.ok ? upserted.queueId : "";
+
+  const beforeReject = await getRadarVerificationQueue("owner-1", db as never);
+  assert.equal(beforeReject.pending.length, 1);
+  assert.equal(beforeReject.rejected.length, 0);
+
+  const rejected = await setRadarVerificationQueueRejection("owner-1", queueId, true, db as never);
+  assert.deepEqual(rejected, { ok: true });
+
+  const afterReject = await getRadarVerificationQueue("owner-1", db as never);
+  assert.equal(afterReject.pending.length, 0, "a rejected candidate must disappear from the pending queue immediately");
+  assert.equal(afterReject.rejected.length, 1);
+  assert.equal(afterReject.rejected[0]?.id, queueId);
+});
+
+test("a rejection survives a reimport (re-upsert) of the same listing -- it is not silently restored to pending", async () => {
+  const db = fakeVerificationDb();
+  const input = candidate();
+  const upserted = await upsertPendingRadarVerificationCandidate(db as never, "owner-1", input, { tryConsume: () => true }, async () => null);
+  const queueId = upserted.ok ? upserted.queueId : "";
+  await setRadarVerificationQueueRejection("owner-1", queueId, true, db as never);
+
+  // A later scan reimports the same (owner, source, externalListingId) --
+  // e.g. the listing is still live and keeps getting re-seen.
+  const reimported = await upsertPendingRadarVerificationCandidate(db as never, "owner-1", candidate({ price: 410_000 }), { tryConsume: () => true }, async () => null);
+  assert.equal(reimported.ok && reimported.queueId, queueId, "the same queue row is refreshed, never duplicated");
+
+  const afterReimport = await getRadarVerificationQueue("owner-1", db as never);
+  assert.equal(afterReimport.pending.length, 0, "the operator's rejection must not be silently reopened by a reimport without a justified state change");
+  assert.equal(afterReimport.rejected.length, 1);
+});
 
 function candidate(overrides: Partial<PropertySourceListing> = {}, reason = "detail_not_confirmed") {
   const listing: PropertySourceListing = {

@@ -373,6 +373,7 @@ export function qualifyRadarCandidate(
   candidate: QualificationCandidate,
   qualityRulesVersion: 1 | 2 = 2,
   trustedOperatorDecision?: RadarVerificationDecision,
+  minPricePerSqm?: number | null,
 ): QualificationResult {
   const requiresConfirmedDetail = candidate.source === "oferty_net" || candidate.source === "domiporta" || candidate.source === "adresowo" || candidate.source === "allegro_lokalnie" || candidate.source === "otodom";
   // Raw source payloads are untrusted, even if they happen to contain a field
@@ -411,6 +412,18 @@ export function qualifyRadarCandidate(
   // unit, so it must never replace their ratio in the Radar sample.
   const pricePerSqm = confirmedPrice / confirmedArea;
   if (!Number.isFinite(pricePerSqm) || pricePerSqm <= 0) return reject("price_per_sqm_invalid");
+  // The operator's saved Radar filter threshold, confirmed Production gap
+  // (2026-10-12): minPricePerSqm was threaded into every run's checkpoint
+  // but never actually read back here, so a listing far below the saved
+  // floor (e.g. 240 000 zł / 40 m² = 6 000 zł/m² against a saved minimum
+  // of 8 800 zł/m²) qualified or reached the manual queues like any other
+  // candidate. Checked only once price AND area are both confirmed above
+  // (never estimated from an uncertain/missing one), so an uncertain
+  // price/m² still falls through to its own price_missing/area_missing
+  // path instead of a false rejection here.
+  if (typeof minPricePerSqm === "number" && Number.isFinite(minPricePerSqm) && minPricePerSqm > 0 && pricePerSqm < minPricePerSqm) {
+    return reject("price_per_sqm_below_minimum");
+  }
 
   const district = normalizeDistrict(operatorDecision?.district ?? candidate.district);
   if (!district) return reject("district_not_confirmed");
@@ -515,10 +528,10 @@ const DISTRICT_PROBE = DEFAULT_RADAR_DISTRICTS[0];
  * approved by a district choice alone; this returns ineligible for all of
  * those, exactly like qualifyRadarCandidate itself would.
  */
-export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2): RadarDistrictOnlyAssessment {
-  const direct = qualifyRadarCandidate(candidate, qualityRulesVersion);
+export function assessRadarDistrictOnlyCandidate(candidate: QualificationCandidate, qualityRulesVersion: 1 | 2 = 2, minPricePerSqm?: number | null): RadarDistrictOnlyAssessment {
+  const direct = qualifyRadarCandidate(candidate, qualityRulesVersion, undefined, minPricePerSqm);
   if (direct.qualified || direct.reason !== "district_not_confirmed") return { eligible: false };
-  const probed = qualifyRadarCandidate({ ...candidate, district: DISTRICT_PROBE }, qualityRulesVersion);
+  const probed = qualifyRadarCandidate({ ...candidate, district: DISTRICT_PROBE }, qualityRulesVersion, undefined, minPricePerSqm);
   if (!probed.qualified) return { eligible: false };
   const { district: _district, pricePerSqm, ...confirmed } = probed;
   void _district;

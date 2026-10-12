@@ -1,5 +1,6 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 import { assignRadarDistrictQueueCandidate } from "@/features/price-radar/server/radar-district-queue";
+import { readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
 
 export async function POST(request: Request) {
@@ -15,7 +16,8 @@ export async function POST(request: Request) {
     const district = typeof body.district === "string" ? body.district : null;
     if (!queueId || !district) return Response.json({ message: "Brak identyfikatora oferty lub dzielnicy." }, { status: 400 });
 
-    const result = await assignRadarDistrictQueueCandidate(operator.id, queueId, district, operator.id, RADAR_QUALITY_RULES_VERSION);
+    const settings = await readRadarSettings(operator.id);
+    const result = await assignRadarDistrictQueueCandidate(operator.id, queueId, district, operator.id, RADAR_QUALITY_RULES_VERSION, undefined, settings.minPricePerSqm);
     if (!result.ok) {
       if (result.reason === "schema_unavailable") return Response.json({ message: "Kolejka przypisania dzielnicy nie jest jeszcze dostępna (wymagana migracja bazy)." }, { status: 503 });
       if (result.reason === "not_found") return Response.json({ message: "Nie znaleziono oferty w kolejce." }, { status: 404 });
