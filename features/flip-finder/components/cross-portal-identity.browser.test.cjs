@@ -93,16 +93,17 @@ const listing = (id, source, originalUrl, overrides = {}) => ({
 });
 
 const candidateA = listing(listingA, "gratka", sourceUrlA, {
-  identityCandidates: [{ id: listingB, source: "morizon", title: "Dwupokojowe mieszkanie Tuwima 12/4", price: 389_000, area: 50.2, rooms: 2, originalUrl: sourceUrlB, reason: "same_building_photos_and_parameters" }],
+  identityCandidates: [{ id: listingB, source: "morizon", title: "Dwupokojowe mieszkanie Tuwima 12/4", price: 389_000, area: 50.2, rooms: 2, originalUrl: sourceUrlB, reason: "cross_portal_partial_evidence", evidence: ["identyczny metraż", "ta sama cena", "to samo piętro"] }],
 });
 const candidateB = listing(listingB, "morizon", sourceUrlB, {
   identityCandidates: [{ id: listingA, source: "gratka", title: "Dwupokojowe mieszkanie Tuwima 12/4", price: 365_000, area: 50.2, rooms: 2, originalUrl: sourceUrlA, reason: "same_building_photos_and_parameters" }],
 });
 const grouped = listing(listingA, "gratka", sourceUrlA, {
   identityGroupId: "44444444-4444-4444-8444-444444444444",
+  identityManualListingIds: [listingA, listingB],
   linkedListings: [candidateA.linkedListings[0], candidateB.linkedListings[0]],
 });
-const automaticGroup = { ...grouped, identityGroupId: null };
+const automaticGroup = { ...grouped, identityGroupId: null, identityManualListingIds: [] };
 
 async function freePort() {
   return new Promise((resolve, reject) => {
@@ -205,6 +206,8 @@ test("Finder browser: candidate confirmation links one card, source links surviv
   assert.equal(await page.getByTestId("finder-card").count(), 1, "automatic grouping survives refresh according to the GET response");
 
   state = "candidate";
+  // Phone first: the possible duplicate must be readable and actionable at 375 px.
+  await page.setViewportSize({ width: 375, height: 812 });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText(filter.name, { exact: true }).first().waitFor({ state: "visible", timeout: 60_000 });
   try {
@@ -212,11 +215,28 @@ test("Finder browser: candidate confirmation links one card, source links surviv
   } catch {
     throw new Error(`Finder did not render fixture cards. requests=${JSON.stringify(requests)} errors=${JSON.stringify(pageErrors)} body=${(await page.locator("body").innerText()).slice(-5000)}`);
   }
+  assert.equal(await page.getByTestId("finder-identity-candidate-badge").first().innerText(), "Możliwy duplikat: 1", "the collapsed card already says there is a possible duplicate");
   await page.getByRole("button", { name: "Analizuj" }).first().click();
   await page.getByRole("heading", { name: /Mo.*liwy duplikat/ }).waitFor({ state: "visible" });
   const candidateSection = page.getByRole("region", { name: "Możliwe duplikaty do weryfikacji" });
-  await candidateSection.getByRole("link", { name: "Otwórz źródłową ofertę" }).waitFor({ state: "visible" });
-  assert.equal(await candidateSection.getByRole("link", { name: "Otwórz źródłową ofertę" }).getAttribute("href"), sourceUrlB);
+  await candidateSection.getByRole("link", { name: "Otwórz w Morizon" }).waitFor({ state: "visible" });
+  assert.equal(await candidateSection.getByRole("link", { name: "Otwórz w Morizon" }).getAttribute("href"), sourceUrlB);
+  assert.deepEqual(await candidateSection.getByTestId("finder-identity-candidate-evidence").locator("li").allInnerTexts(), ["identyczny metraż", "ta sama cena", "to samo piętro"]);
+  // Measure after the dialog's open animation (it scales the content while opening).
+  await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
+  const phone = await candidateSection.evaluate((section) => {
+    const box = section.getBoundingClientRect();
+    const targets = [...section.querySelectorAll("a, button")].map((element) => { const rect = element.getBoundingClientRect(); return { text: element.textContent?.trim(), height: element.offsetHeight, width: rect.width, left: rect.left, right: rect.right }; });
+    return { sectionLeft: box.left, sectionRight: box.right, scrollWidth: section.scrollWidth, clientWidth: section.clientWidth, viewport: window.innerWidth, targets };
+  });
+  assert.ok(phone.scrollWidth <= phone.clientWidth, `the candidate section does not scroll sideways on a phone: ${JSON.stringify(phone)}`);
+  assert.ok(phone.sectionRight <= phone.viewport, "the section fits the phone screen");
+  for (const target of phone.targets) {
+    assert.ok(target.height >= 44, `touch target "${target.text}" is at least 44 px high (${target.height})`);
+    assert.ok(target.right <= phone.sectionRight && target.left >= phone.sectionLeft, `"${target.text}" stays inside the section`);
+  }
+  if (process.env.FINDER_SCREENSHOT_DIR) await candidateSection.screenshot({ path: `${process.env.FINDER_SCREENSHOT_DIR}/finder-possible-duplicate-375.png` });
+  await page.setViewportSize({ width: 1280, height: 900 });
   page.on("dialog", (dialog) => dialog.accept());
   await candidateSection.getByRole("button", { name: /Po.*oferty/ }).click();
   await page.getByRole("heading", { name: /Znaleziono tak.*na/ }).waitFor({ state: "visible" });

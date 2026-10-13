@@ -52,8 +52,8 @@ Zmiany:
   „na IV piętrze” / „piętro: IV” oraz liczebniki („na czwartym piętrze”). „4-piętrowy blok”, „i piętro wyżej” nie są piętrem.
 - Czyszczenie wyników z zakresem portalu (`source`) odmawia ukrycia kopii z innych portali bez potwierdzenia
   `includeLinkedCopies` i podaje listę portali. Odpowiedź zawiera `bySource` i `linkedCopiesFromOtherSources`.
-- Ostrzeżenie „Wyczyść historię wyszukiwania” mówi wprost, że trwale usuwa wszystkie oferty ze wszystkich filtrów
-  i portali (działanie tego przycisku nie zostało zmienione — było tak już na main).
+- Przycisk „Wyczyść historię wyszukiwania” (trwale usuwa oferty wszystkich filtrów i portali — tak było już na main)
+  jest zabezpieczany w osobnej poprawce, poza tym PR.
 
 ## Diagnostyka READ-ONLY
 
@@ -76,3 +76,47 @@ node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --exper
 cenie i metrażu). Test `filter-results-production-replay.test.ts` odtwarza je przez tę samą ścieżkę odczytu; do czasu
 dodania eksportu jest pomijany z komunikatem. Po ręcznym sprawdzeniu ofert można wpisać w pliku `expected.groups`
 oczekiwane grupy — test zacznie je egzekwować.
+
+## Parametry siedmiu rekordów z Production (13.10) i wynik
+
+Przekazane parametry (tylko one są danymi produkcyjnymi; treść opisów i adresy zdjęć w testach są syntetyczne,
+o tej samej długości i z tą samą własnością „wspólny / brak wspólnego fragmentu”; pola nieprzekazane — pokoje,
+tytuł, dzielnica, adres — w testach są nieznane):
+
+| Oferta | Opis (znaki) | Piętro | Zdjęcia | Wspólny opis |
+| --- | --- | --- | --- | --- |
+| OLX 238 000 | 1129 | floor_4 | 17 | z Gratka i N-o |
+| Gratka 238 000 | 298 | — | 1 | z OLX i N-o |
+| Nieruchomości-online 238 000 | 428 | — | 1 | z OLX i Gratka |
+| Otodom 238 000 | 0 | FOURTH | 3 | brak |
+| OLX 298 000 | 3258 | floor_3 | — | brak |
+| Domy.pl 298 000 | 56 | — | — | brak |
+| Oferty.net 298 000 | 91 | — | — | brak |
+
+Wynik przy niezmienionych progach (test `filter-results-cross-portal.test.ts`):
+- przed: 7 kart, po: 7 kart — nic nie łączy się automatycznie;
+- OLX / Gratka / N-o: 6 pkt (identyczny metraż 2 + cena 1 + wspólny opis 3) < 7. Nawet przy założeniu
+  „2 pokoje wszędzie” jest 7 pkt, ale dowód lokalizacyjno-treściowy to tylko opis (3 < 3,5);
+- Otodom: identyczny metraż + cena + to samo piętro (floor_4 = FOURTH) = 4,5 pkt — „Możliwy duplikat”;
+- 298 000: tylko metraż i cena — każda kopia pokazuje dwie pozostałe jako „Możliwy duplikat”.
+Każda para jest dostępna do ręcznej decyzji. Automatyczne połączenie wymagałoby dodatkowej zgodności (piętro,
+ulica, dzielnica, tytuł, wspólne zdjęcie lub numer oferty) albo świadomej zmiany progów.
+
+## Ręczne decyzje (poprawione)
+- „Połącz” możliwego duplikatu z kartą zgrupowaną automatycznie nie rozbija już karty: grupa operatora przyjmuje
+  kopie potwierdzone dowodami (wcześniej powstawały dwie karty).
+- „Nie łącz” z dowolną kopią karty usuwa kandydata z całej karty (wcześniej wracał przez inne kopie).
+- „Rozłącz” dotyczy tylko kopii połączonych ręcznie (`identityManualListingIds`); kopie połączone dowodami mają
+  „Nie łącz tych ofert” — wcześniej w karcie mieszanej API zwracało błąd.
+- Decyzje są trwałe (tabele `finder_listing_identity_groups/decisions`) i przetrwają nowy skan oraz zmianę ceny.
+- Test `finder-identity-manual-decisions.test.ts` używa prawdziwej funkcji SQL `manage_finder_listing_identity`
+  (PGlite) i ścieżki odczytu Findera.
+
+## Widok na telefonie
+Karta pokazuje plakietki „N portale” i „Możliwy duplikat: N” bez rozwijania. Sekcja „Możliwy duplikat” ma jedną kolumnę,
+portal i zgodne dane jako etykiety, przyciski „Otwórz w …”, „Połącz oferty”, „Nie łącz tych ofert” na całą szerokość
+i min. 44 px wysokości (sprawdzane w Playwright przy 375 px).
+
+## „Wyczyść wyniki”
+Ukrywa karty (oznacza członkostwa `finder_cleared`). Nie usuwa ofert, zdjęć, historii cen ani wierszy członkostw;
+oferty są dalej w „Historia ofert” (test przez trasę API, tak jak wywołuje ją UI).

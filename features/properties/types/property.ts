@@ -199,6 +199,8 @@ export type PropertyListingResult = Pick<PropertyFields, "title" | "price" | "ar
   crossSourceIdentity?: string | null;
   identityEvidence?: import("@/features/flip-finder/identity-evidence").ListingIdentityEvidence;
   identityGroupId?: string | null;
+  /** Copies linked by an operator decision (can be unlinked); the other copies are linked by evidence. */
+  identityManualListingIds?: string[];
   identityCandidates?: Array<{ id: string; source: PropertyFinderSource; title: string | null; price: number | null; area: number | null; rooms: number | null; originalUrl: string | null; publishedAt?: string | null; firstSeenAt?: string | null; lastSeenAt?: string | null; reason: string; evidence?: string[] }>;
   linkedListings?: Array<{
     id: string;

@@ -56,15 +56,68 @@ export function productionScenarioRows(overrides: Record<string, Record<string, 
   };
 }
 
-// Facts read from Production on 13.10 (lengths only; the texts below are stand-ins of the same length).
-export const DOMY_298_SHORT = "Mieszkanie 2 pokoje, Teofilów, 46,55 m2, do odświeżenia.";
-export const OFERTY_298_SHORT = "Mieszkanie dwupokojowe 46,55 m2 na Teofilowie, 2 piętro, blok z cegły. Pełna własność......";
+/**
+ * PRODUCTION PARAMETERS of the seven listings, as read from Supabase on
+ * 13.10.2026 (operator report). Only the values in this object are
+ * production facts. Everything not listed here (rooms, title, district,
+ * address, the wording of the descriptions, photo URLs) was not provided and
+ * is either left unknown (null) or generated synthetically with the stated
+ * property (exact length, overlapping or not) — never presented as real text.
+ */
+export const PRODUCTION_PARAMETERS = {
+  "olx-238": { source: "olx", price: 238000, area: 37.07, descriptionLength: 1129, floor: "floor_4", photos: 17 },
+  "gratka-238": { source: "gratka", price: 238000, area: 37.07, descriptionLength: 298, floor: null, photos: 1 },
+  "nol-238": { source: "nieruchomosci_online", price: 238000, area: 37.07, descriptionLength: 428, floor: null, photos: 1 },
+  "otodom-238": { source: "otodom", price: 238000, area: 37.07, descriptionLength: 0, floor: "FOURTH", photos: 3 },
+  "olx-298": { source: "olx", price: 298000, area: 46.55, descriptionLength: 3258, floor: "floor_3", photos: null },
+  "domy-298": { source: "domy", price: 298000, area: 46.55, descriptionLength: 56, floor: null, photos: null },
+  "oferty-298": { source: "oferty_net", price: 298000, area: 46.55, descriptionLength: 91, floor: null, photos: null },
+} as const;
+/** Production facts about shared content: OLX, Gratka and Nieruchomości-online (238 000) share most of one description; nothing else shares description fragments or photo paths. */
+export const PRODUCTION_SHARED_DESCRIPTION = ["olx-238", "gratka-238", "nol-238"] as const;
 
-export function productionFactsRows(): Record<string, Record<string, unknown>[]> {
-  return productionScenarioRows({
-    "otodom-238": { description: "", address: null },
-    "domy-298": { description: DOMY_298_SHORT },
-    "oferty-298": { description: OFERTY_298_SHORT },
+type ProductionId = keyof typeof PRODUCTION_PARAMETERS;
+
+// SYNTHETIC wording. It states no rooms, floor, street or district, so it adds no evidence the real texts were not reported to carry.
+const SYNTHETIC_SHARED_238 = "Na sprzedaż mieszkanie w zadbanym budynku. W pobliżu przystanki komunikacji miejskiej, szkoła, przedszkole oraz sklepy. Lokal wymaga odświeżenia, sprawdzi się pod inwestycję lub na wynajem. Niski czynsz administracyjny, uregulowany stan prawny, możliwy szybki termin wydania. Zapraszamy na prezentację. ";
+
+/** Synthetic text of an exact length; the filler words are unique per listing, so they never create shared phrases. */
+export function syntheticText(id: string, length: number, prefix = ""): string {
+  if (length === 0) return "";
+  const tag = id.replace(/[^a-z]/gu, "");
+  let text = prefix;
+  for (let index = 1; text.length < length; index += 1) text += `${tag}${index} `;
+  return text.slice(0, length);
+}
+
+function productionListing(id: ProductionId, extra: Record<string, unknown>): Record<string, unknown> {
+  const facts = PRODUCTION_PARAMETERS[id];
+  const shared = (PRODUCTION_SHARED_DESCRIPTION as readonly string[]).includes(id);
+  const photoCount = facts.photos ?? 1;
+  return listing(id, facts.source, {
+    price: facts.price, area: facts.area, floor: facts.floor, rooms: null, title: null, district: null, address: null,
+    // The listings were found by the Łódź filter; city equality is never evidence of one flat, only a missing contradiction.
+    city: "Łódź", building_type: "blok",
+    description: syntheticText(id, facts.descriptionLength, shared ? SYNTHETIC_SHARED_238 : ""),
+    images: Array.from({ length: photoCount }, (_, index) => `https://${DOMAIN[facts.source]}/photos/${id}/${index + 1}.jpg`),
+    ...extra,
   });
 }
 
+/**
+ * The seven listings with their production parameters. Unknown fields stay
+ * unknown. `assumeRooms` adds a room count to every record for the variant
+ * where the portals publish one (not reported, so it is an explicit hypothesis).
+ */
+export function productionFactsRows(options: { assumeRooms?: number } = {}): Record<string, Record<string, unknown>[]> {
+  const extra = options.assumeRooms === undefined ? {} : { rooms: options.assumeRooms };
+  const ids = Object.keys(PRODUCTION_PARAMETERS) as ProductionId[];
+  const listings = ids.map((id) => productionListing(id, extra));
+  return {
+    search_filters: [{ ...FILTER, rooms: [], building_types: [], max_price_per_sqm: null }],
+    listings,
+    listing_filter_matches: ids.map((id) => matched(id)),
+    listing_snapshots: listings.map((row) => ({ id: `snapshot-${row.id as string}`, listing_id: row.id, price: row.price, captured_at: "2026-10-12T20:00:00Z", raw_data: { sourcePublishedAt: "2026-10-01T10:00:00Z" } })),
+    source_scans: [], resale_comps: [], finder_listing_identity_groups: [], finder_listing_identity_decisions: [], finder_building_type_confirmations: [],
+  };
+}

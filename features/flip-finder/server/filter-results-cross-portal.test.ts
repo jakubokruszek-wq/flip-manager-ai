@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { FakeFacebookSupabase } from "../../facebook-watcher/server/facebook-fake-supabase.ts";
-import { DOMY_298_SHORT, FILTER_ID, NOW, OFERTY_298_SHORT, productionFactsRows, productionScenarioRows } from "./finder-dedup-scenario.fixture.ts";
+import { FILTER_ID, NOW, PRODUCTION_PARAMETERS, productionFactsRows, productionScenarioRows } from "./finder-dedup-scenario.fixture.ts";
+import type { IdentityPairDiagnostic } from "../property-identity.ts";
 
 /**
  * Production 13.10.2026: the same flats were shown as separate cards in
@@ -19,12 +20,6 @@ import { DOMY_298_SHORT, FILTER_ID, NOW, OFERTY_298_SHORT, productionFactsRows, 
 function productionDb(overrides: Record<string, Record<string, unknown>> = {}): FakeFacebookSupabase {
   const db = new FakeFacebookSupabase();
   for (const [table, rows] of Object.entries(productionScenarioRows(overrides))) db.seed(table, rows);
-  return db;
-}
-
-function productionFactsDb(): FakeFacebookSupabase {
-  const db = new FakeFacebookSupabase();
-  for (const [table, rows] of Object.entries(productionFactsRows())) db.seed(table, rows);
   return db;
 }
 
@@ -96,30 +91,87 @@ test("a confirmed clear archives every linked portal copy, so a grouped card doe
   assert.equal(currentDb.rows("listings").length, 8, "no listing is deleted");
 });
 
-test("Production facts: an empty or very short description never auto-links a copy; it is offered as a possible duplicate instead", async () => {
-  assert.equal(DOMY_298_SHORT.length, 56);
-  assert.equal(OFERTY_298_SHORT.length, 91);
+async function readCards(db: FakeFacebookSupabase) {
   resetFinderReadCachesForTests();
-  currentDb = productionFactsDb();
-  const payload = await getFilterResults(FILTER_ID, false, NOW, "operator-test");
+  currentDb = db;
+  const pairs: IdentityPairDiagnostic[] = [];
+  const payload = await getFilterResults(FILTER_ID, false, NOW, "operator-test", { identity: { onPairAssessed: (pair) => pairs.push(pair) } });
   assert.ok(payload);
   const all = [...payload.results, ...payload.reviewResults, ...payload.buildingVerificationResults];
   const cardOf = (id: string) => all.find((card) => (card.linkedListings ?? [{ id: card.id }]).some((item) => item.id === id));
+  const membersOf = (id: string) => (cardOf(id)?.linkedListings ?? []).map((item) => item.id).sort();
   const candidateIds = (id: string) => (cardOf(id)?.identityCandidates ?? []).map((candidate) => candidate.id).sort();
+  const pair = (a: string, b: string) => pairs.find((item) => [item.leftId, item.rightId].sort().join("|") === [a, b].sort().join("|"));
+  return { payload, all, cardOf, membersOf, candidateIds, pair };
+}
 
-  // 238 000 zł: OLX, Gratka and Nieruchomości-online share the agency description; Otodom has none.
-  assert.deepEqual(cardOf("olx-238")?.linkedListings?.map((item) => item.source).sort(), ["gratka", "nieruchomosci_online", "olx"]);
-  assert.equal(cardOf("otodom-238")?.linkedListings?.length ?? 1, 1, "the Otodom copy without a description is not linked automatically");
-  assert.ok(candidateIds("otodom-238").some((id) => ["olx-238", "gratka-238", "nol-238"].includes(id)), "…but it is shown as a possible duplicate of the grouped card");
-  assert.ok(candidateIds("olx-238").includes("otodom-238"), "and the grouped card points back to it");
-
-  // 298 000 zł: no shared description, photo, address or offer number, so nothing links automatically.
-  for (const id of ["olx-298", "domy-298", "oferty-298"]) {
-    assert.equal(cardOf(id)?.linkedListings?.length ?? 1, 1, `${id} stays its own card`);
-    assert.equal(candidateIds(id).length, 2, `${id} lists both other portal copies for a manual decision`);
+test("production parameters are reproduced exactly (lengths, floors, photo counts) and nothing else is invented", () => {
+  const rows = productionFactsRows().listings;
+  for (const row of rows) {
+    const facts = PRODUCTION_PARAMETERS[row.id as keyof typeof PRODUCTION_PARAMETERS];
+    assert.equal((row.description as string).length, facts.descriptionLength, `${row.id as string} description length`);
+    assert.equal(row.floor, facts.floor);
+    if (facts.photos !== null) assert.equal((row.images as string[]).length, facts.photos);
+    assert.equal(row.rooms, null, "rooms were not reported");
+    assert.equal(row.title, null, "titles were not reported");
+    assert.equal(row.district, null, "districts were not reported");
   }
-  // The flat on Retkinia with the same price and area is contradicted (district, floor) and never offered.
-  assert.ok(!all.some((card) => card.id !== "other-238" && (card.identityCandidates ?? []).some((candidate) => candidate.id === "other-238")));
-  assert.equal(new Set(all.map((card) => card.id)).size, all.length, "every listing is shown exactly once");
-  assert.equal(all.reduce((sum, card) => sum + (card.linkedListings?.length ?? 1), 0), 8, "no listing disappears");
+  assert.equal(rows.length, 7);
+});
+
+test("production parameters, unknown fields left unknown: no automatic link (score below the unchanged threshold), every copy offered as a possible duplicate", async () => {
+  const { all, membersOf, candidateIds, pair } = await readCards(productionDb7());
+  assert.equal(all.length, 7, "7 cards before and after: nothing is linked automatically without enough evidence");
+  for (const id of Object.keys(PRODUCTION_PARAMETERS)) assert.deepEqual(membersOf(id), [id]);
+  // 238 000: the shared description is strong, but area + price + description = 6 points < 7 (threshold not lowered).
+  const olxGratka = pair("olx-238", "gratka-238");
+  assert.equal(olxGratka?.kind, "candidate");
+  assert.equal(olxGratka?.score, 6);
+  assert.deepEqual(olxGratka?.evidence, ["exact_area", "price_equal", "description"]);
+  assert.equal(pair("gratka-238", "nol-238")?.kind, "candidate");
+  // floor_4 (OLX) and FOURTH (Otodom) are the same floor.
+  assert.deepEqual(pair("olx-238", "otodom-238")?.evidence, ["exact_area", "price_equal", "floor"]);
+  assert.deepEqual(candidateIds("otodom-238"), ["gratka-238", "nol-238", "olx-238"]);
+  assert.deepEqual(candidateIds("olx-238"), ["gratka-238", "nol-238", "otodom-238"]);
+  // 298 000: only area and price agree.
+  assert.deepEqual(pair("olx-298", "domy-298")?.evidence, ["exact_area", "price_equal"]);
+  for (const id of ["olx-298", "domy-298", "oferty-298"]) assert.equal(candidateIds(id).length, 2, `${id} lists both other copies`);
+  assert.ok(!candidateIds("olx-238").some((id) => id.endsWith("298")), "different flats are never offered");
+});
+
+test("production parameters with the hypothesis that every portal states 2 rooms: still no automatic link — the description is the only location/content evidence (3 < 3.5)", async () => {
+  const { all, membersOf, candidateIds, pair } = await readCards(productionDb7({ assumeRooms: 2 }));
+  const olxGratka = pair("olx-238", "gratka-238");
+  assert.equal(olxGratka?.kind, "candidate");
+  assert.equal(olxGratka?.score, 7, "enough points…");
+  assert.deepEqual(olxGratka?.evidence, ["exact_area", "rooms", "price_equal", "description"], "…but no floor, street, district, title or photo agrees, so corroboration stays at 3");
+  assert.deepEqual(membersOf("olx-238"), ["olx-238"]);
+  assert.deepEqual(candidateIds("olx-238"), ["gratka-238", "nol-238", "otodom-238"]);
+  for (const id of ["olx-298", "domy-298", "oferty-298"]) assert.equal(candidateIds(id).length, 2);
+  assert.equal(all.length, 7);
+});
+
+function productionDb7(options: { assumeRooms?: number } = {}): FakeFacebookSupabase {
+  const db = new FakeFacebookSupabase();
+  for (const [table, rows] of Object.entries(productionFactsRows(options))) db.seed(table, rows);
+  return db;
+}
+
+test("„Wyczyść wyniki” as the UI sends it (no scope, through the API route) hides cards only: no listing, photo, price snapshot or membership is deleted and the offers stay in the history", async () => {
+  resetFinderReadCachesForTests();
+  currentDb = productionDb7();
+  const before = structuredClone({ listings: currentDb.rows("listings"), snapshots: currentDb.rows("listing_snapshots"), memberships: currentDb.rows("listing_filter_matches") });
+  const { POST } = await import("../../../app/api/flip-finder/search-filters/[id]/clear-results/route.ts");
+  const response = await POST(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/clear-results`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }), { params: Promise.resolve({ id: FILTER_ID }) });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { archivedCount: number; bySource: Record<string, number> };
+  assert.equal(body.archivedCount, 7);
+  assert.deepEqual(body.bySource, { olx: 2, gratka: 1, nieruchomosci_online: 1, otodom: 1, domy: 1, oferty_net: 1 });
+  assert.deepEqual(currentDb.rows("listings"), before.listings, "listings (including photos and descriptions) are unchanged");
+  assert.deepEqual(currentDb.rows("listing_snapshots"), before.snapshots, "price history is unchanged");
+  assert.equal(currentDb.rows("listing_filter_matches").length, before.memberships.length, "no membership row is deleted");
+  assert.ok(currentDb.rows("listing_filter_matches").every((row) => row.is_current_match === false && (row.match_reasons as string[]).includes("finder_cleared")), "memberships are only marked as cleared");
+  resetFinderReadCachesForTests();
+  const archive = await getFilterResults(FILTER_ID, false, NOW, "operator-test", { view: "archive" });
+  assert.equal(archive?.archive?.total, 7, "every cleared offer is still listed in the history");
 });

@@ -71,7 +71,7 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
   matchReasons?: string[];
   unknownFields?: string[];
   isNew?: boolean;
-}>(rows: readonly T[], options: PropertyIdentityGroupOptions = {}): Array<ConfirmedPropertyGroupResult<T> & { identityGroupId: string | null; identityCandidates: IdentityCandidate[] }> {
+}>(rows: readonly T[], options: PropertyIdentityGroupOptions = {}): Array<ConfirmedPropertyGroupResult<T> & { identityGroupId: string | null; identityManualListingIds: string[]; identityCandidates: IdentityCandidate[] }> {
   const blocked = options.blockedPairs ?? new Set<string>();
   const manualGroupByListing = options.manualGroupByListing ?? new Map<string, string>();
   const orderedRows = [...rows].sort((a, b) => a.id.localeCompare(b.id));
@@ -154,6 +154,10 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
 
   const groups: T[][] = [];
   const assigned = new Set<string>();
+  /** Index -> operator group id, for groups seeded from a persisted manual decision. */
+  const manualGroupIndexes = new Map<number, string>();
+  /** Partially visible manual groups: their remaining member stays alone. */
+  const lockedGroupIndexes = new Set<number>();
   const manualBuckets = new Map<string, T[]>();
   for (const row of orderedRows) {
     const groupId = manualGroupByListing.get(row.id);
@@ -162,10 +166,11 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     bucket.push(row);
     manualBuckets.set(groupId, bucket);
   }
-  for (const bucket of manualBuckets.values()) {
+  for (const [groupId, bucket] of manualBuckets) {
     if (bucket.length < 2) continue;
     const compatible = bucket.every((left, index) => bucket.slice(index + 1).every((right) => !hasHardConflict(left.identityEvidence ?? emptyEvidence(), right.identityEvidence ?? emptyEvidence())));
     if (compatible) {
+      manualGroupIndexes.set(groups.length, groupId);
       groups.push(bucket);
       bucket.forEach((row) => assigned.add(row.id));
     }
@@ -180,6 +185,7 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     // filter). Do not let automatic evidence silently rebuild a different
     // group around its remaining member.
     if (manualGroupByListing.has(row.id)) {
+      lockedGroupIndexes.add(groups.length);
       groups.push([row]);
       groupIndexById.set(row.id, groups.length - 1);
       assigned.add(row.id);
@@ -195,9 +201,12 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     // contradicts none of them (four portal copies rarely all describe each
     // other equally well). A missing assessment means the pair shared no key
     // at all, which is treated as "separate", never as a silent link.
+    // An operator-linked group accepts automatically confirmed copies too
+    // (linking a possible duplicate to a grouped card must not split that
+    // card); an operator "do not link" decision is a blocked, "separate" pair.
     const clusterIndex = neighbourGroups.find((index) => {
       const members = groups[index];
-      if (members.some((member) => manualGroupByListing.has(member.id))) return false;
+      if (lockedGroupIndexes.has(index)) return false;
       return members.every((member) => {
         const kind = assessments.get(identityPairKey(row.id, member.id))?.kind;
         return kind === "confirmed" || kind === "candidate";
@@ -213,12 +222,12 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     assigned.add(row.id);
   }
 
-  return groups.map((members) => {
+  return groups.map((members, groupIndex) => {
     const identity = members.length > 1
       ? normalizeConfirmedPropertyIdentity(members[0].crossSourceIdentity)
       : null;
-    const manualGroup = members.length > 1 ? manualGroupByListing.get(members[0].id) ?? null : null;
-    const isManual = Boolean(manualGroup && members.every((member) => manualGroupByListing.get(member.id) === manualGroup));
+    const manualGroup = manualGroupIndexes.get(groupIndex) ?? null;
+    const identityManualListingIds = manualGroup ? members.filter((member) => manualGroupByListing.get(member.id) === manualGroup).map((member) => member.id) : [];
     // A MATCHED member represents the property (its price/area are the ones
     // that satisfy the filter); completeness only breaks ties within a bucket.
     const representative = [...members].sort((a, b) => bucketRank(a.decisionBucket) - bucketRank(b.decisionBucket) || completeness(b) - completeness(a) || a.source.localeCompare(b.source) || a.id.localeCompare(b.id))[0];
@@ -227,13 +236,16 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     const candidatesById = new Map<string, IdentityCandidate>();
     for (const member of members) {
       for (const candidate of candidates.get(member.id) ?? []) {
-        if (!memberIds.has(candidate.id) && !candidatesById.has(candidate.id)) candidatesById.set(candidate.id, candidate);
+        if (memberIds.has(candidate.id) || candidatesById.has(candidate.id)) continue;
+        // "Nie łącz" with any copy of this card settles the candidate for the whole card.
+        if (members.some((other) => blocked.has(identityPairKey(candidate.id, other.id)))) continue;
+        candidatesById.set(candidate.id, candidate);
       }
     }
     const identityCandidates = [...candidatesById.values()]
       .sort((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id))
       .slice(0, 8);
-    return { ...groupResult, identityGroupId: isManual ? manualGroup : null, identityCandidates };
+    return { ...groupResult, identityGroupId: manualGroup, identityManualListingIds, identityCandidates };
   });
 }
 

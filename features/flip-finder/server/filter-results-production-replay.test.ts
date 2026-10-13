@@ -59,7 +59,7 @@ test("an export recorded through the read-only client replays to the same Finder
   const live = await readBoth({ exportedAt: "", now: "2026-10-13T12:00:00.000Z", filterId: "6ebf3a9c-5418-4ae6-a0bf-1989b6603367", operatorId: "operator-test", cases: [], tables: {}, expected: null });
   const cases = [{ price: 238000, area: 37.07 }, { price: 298000, area: 46.55 }];
   const ids = focusListingIds(live.after, live.pairs, cases);
-  assert.deepEqual([...ids].sort(), ["domy-298", "gratka-238", "nol-238", "oferty-298", "olx-238", "olx-298", "other-238", "otodom-238"], "the export holds the seven Production listings and every other flat with the same price and area, so the report shows why it stays apart");
+  assert.deepEqual([...ids].sort(), ["domy-298", "gratka-238", "nol-238", "oferty-298", "olx-238", "olx-298", "otodom-238"], "the export holds the seven Production listings and every listing assessed against them with evidence");
   const fixture = buildDedupFixture({ recorded, ids, filterId: "6ebf3a9c-5418-4ae6-a0bf-1989b6603367", operatorId: "operator-test", now: Date.parse("2026-10-13T12:00:00.000Z"), cases });
   assert.deepEqual(Object.fromEntries(FINDER_READ_TABLES.map((table) => [table, source.rows(table)])), snapshot, "recording never changes the source");
 
