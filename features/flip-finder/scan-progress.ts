@@ -1,6 +1,7 @@
 import type { ListingSource } from "@/features/flip-finder";
 import type { FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 import { resolveFacebookGroupDisplayName } from "@/features/facebook-groups/display-name";
+import type { ListingScanStats } from "@/features/flip-finder/olx-batch";
 
 export type ScanProgressStatus = "queued" | "running" | "completed" | "partial" | "failed";
 export type WorkerJobStatus = "queued" | "running" | "completed" | "failed";
@@ -328,6 +329,10 @@ export type ScanProgressResponse = {
     normalized: number;
     processed: number;
     errorMessage: string | null;
+    /** result_summary.stats of a completed OLX job (null for older jobs without it). */
+    stats?: ListingScanStats | null;
+    /** result_summary.warnings (duplicates merged, scan stats line, ...). */
+    warnings?: string[];
   };
   totals: {
     scanned: number;

@@ -104,3 +104,73 @@ export function formatListingScanStats(stats: ListingScanStats): string {
     + `nowe ${stats.created}, zaktualizowane ${stats.updated}, bez zmian ${stats.unchanged}; `
     + `dopasowane ${stats.matched}, do weryfikacji ${stats.review}, odrzucone przez filtr ${stats.rejectedByFilter}.`;
 }
+
+const STATS_KEYS = ["read", "skippedInvalid", "unique", "duplicates", "created", "updated", "unchanged", "matched", "review", "rejectedByFilter"] as const satisfies ReadonlyArray<keyof ListingScanStats>;
+
+/**
+ * Reads `olx_scan_jobs.result_summary.stats` (untrusted JSON). Older jobs have
+ * no stats: null, so the UI falls back to the plain counters instead of
+ * showing invented zeros.
+ */
+export function parseListingScanStats(value: unknown): ListingScanStats | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const stats = emptyListingScanStats();
+  for (const key of STATS_KEYS) {
+    const count = record[key];
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) return null;
+    stats[key] = count;
+  }
+  return stats;
+}
+
+/** Labels shown by the Finder source diagnostic card: source data, then the filter outcome. */
+export function listingScanStatsGroups(stats: ListingScanStats): Array<{ title: string; items: Array<[string, number]> }> {
+  return [
+    { title: "Dane źródłowe", items: [["Odczytane", stats.read], ["Unikalne", stats.unique], ["Powtórzenia", stats.duplicates], ["Nowe rekordy", stats.created], ["Zaktualizowane", stats.updated], ["Bez zmian", stats.unchanged]] },
+    { title: "Ocena filtra", items: [["Dopasowane", stats.matched], ["Do weryfikacji", stats.review], ["Odrzucone przez filtr", stats.rejectedByFilter]] },
+  ];
+}
+
+type OlxProgressLike = {
+  status: "queued" | "running" | "completed" | "failed" | null;
+  raw: number;
+  normalized: number;
+  errorMessage: string | null;
+  stats?: ListingScanStats | null;
+  warnings?: string[];
+};
+
+export type OlxSourceResult = {
+  source: "olx";
+  status: "pending" | "completed" | "failed";
+  fetched: number;
+  normalized: number;
+  matched?: number;
+  rejected?: number;
+  warnings?: string[];
+  errorMessage: string | null;
+  stats?: ListingScanStats;
+};
+
+/**
+ * OLX finishes asynchronously (its own queue, e.g. the Cloudflare worker), so
+ * the Finder page only learns its result from GET /api/flip-finder/scans/:runId.
+ * This turns that progress block into the source result the diagnostic card
+ * renders; without it the stored stats never reached the screen.
+ */
+export function olxSourceResultsFromProgress(olx: OlxProgressLike): OlxSourceResult[] {
+  if (olx.status === null) return [];
+  if (olx.status === "queued" || olx.status === "running") return [{ source: "olx", status: "pending", fetched: 0, normalized: 0, errorMessage: olx.errorMessage }];
+  if (olx.status === "failed") return [{ source: "olx", status: "failed", fetched: olx.raw, normalized: olx.normalized, errorMessage: olx.errorMessage }];
+  const stats = olx.stats ?? undefined;
+  return [{
+    source: "olx",
+    status: "completed",
+    fetched: stats?.read ?? olx.raw,
+    normalized: olx.normalized,
+    ...(stats ? { matched: stats.matched, rejected: stats.rejectedByFilter, stats } : {}),
+    ...(olx.warnings?.length ? { warnings: olx.warnings } : {}),
+    errorMessage: null,
+  }];
+}

@@ -33,7 +33,7 @@ import { fetchScanProgress, waitUntilScanTerminal } from "@/features/flip-finder
 import { observeFinderRuns } from "@/features/flip-finder/finder-run-observer";
 import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 import { activeFilterSources } from "@/features/flip-finder/source-availability";
-import type { ListingScanStats } from "@/features/flip-finder/olx-batch";
+import { listingScanStatsGroups, olxSourceResultsFromProgress, type ListingScanStats } from "@/features/flip-finder/olx-batch";
 
 type ScanResponse = {
   runId?: string;
@@ -847,6 +847,8 @@ function scanResponseFromProgress(progress: ScanProgressResponse): ScanResponse 
     accountingMode: collector?.accountingMode ?? "LEGACY",
     accountingError: collector?.accountingError ?? null,
     partialReason: progress.partialReason,
+    // OLX completes asynchronously; its stored result reaches the source diagnostic card only through progress.
+    sourceResults: olxSourceResultsFromProgress(progress.olx),
   };
 }
 
@@ -984,11 +986,7 @@ function DiagnosticBar({ analyzed, count, label }: { analyzed: number; count: nu
 
 /** Source records (stored whatever the filter says) apart from the filter outcome (Finder sections). */
 function SourceScanStatsList({ stats }: { stats: ListingScanStats }) {
-  const groups: Array<{ title: string; items: Array<[string, number]> }> = [
-    { title: "Dane źródłowe", items: [["Odczytane", stats.read], ["Unikalne", stats.unique], ["Powtórzenia", stats.duplicates], ["Nowe rekordy", stats.created], ["Zaktualizowane", stats.updated], ["Bez zmian", stats.unchanged]] },
-    { title: "Ocena filtra", items: [["Dopasowane", stats.matched], ["Do weryfikacji", stats.review], ["Odrzucone przez filtr", stats.rejectedByFilter]] },
-  ];
-  return <div className="mt-3 space-y-2">{groups.map((group) => <div key={group.title}><p className="text-xs font-semibold text-muted-foreground">{group.title}</p><dl className="mt-1 grid grid-cols-3 gap-2 text-xs">{group.items.map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="tabular-nums font-semibold">{formatNumber(value)}</dd></div>)}</dl></div>)}</div>;
+  return <div className="mt-3 space-y-2">{listingScanStatsGroups(stats).map((group) => <div key={group.title}><p className="text-xs font-semibold text-muted-foreground">{group.title}</p><dl className="mt-1 grid grid-cols-3 gap-2 text-xs">{group.items.map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="tabular-nums font-semibold">{formatNumber(value)}</dd></div>)}</dl></div>)}</div>;
 }
 
 function SourceDiagnosticCard({ source }: { source: NonNullable<ScanResponse["sourceResults"]>[number] }) {

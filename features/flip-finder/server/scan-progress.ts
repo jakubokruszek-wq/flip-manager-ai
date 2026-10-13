@@ -28,6 +28,7 @@ import { explainPartialFacebookScan } from "@/features/facebook-worker/scan-acco
 import { projectPersistedFacebookAccounting } from "./scan-accounting-projection";
 import { scanHeartbeatAt } from "./scan-lifecycle";
 import { CONTINUATION_ORPHAN_GRACE_MS, SOURCE_INVOCATION_CEILING_MS, isContinuationExpired, isContinuationPending, isGenuinelyAwaitingContinuation } from "./scan-continuation";
+import { parseListingScanStats } from "@/features/flip-finder/olx-batch";
 
 type Row = Record<string, unknown>;
 const FACEBOOK_PENDING_TIMEOUT_MS = 90_000;
@@ -160,6 +161,8 @@ export async function getScanProgress(runId: string, options: { finderFilterId?:
       normalized: number(olxSummary?.normalized),
       processed: number(olxSummary?.normalized),
       errorMessage: string(olxRow?.error_message),
+      stats: parseListingScanStats(olxSummary?.stats),
+      warnings: Array.isArray(olxSummary?.warnings) ? olxSummary.warnings.filter((warning): warning is string => typeof warning === "string").slice(0, 20) : [],
     },
     totals: {
       scanned: sum(scanRows, "scanned_count"),
