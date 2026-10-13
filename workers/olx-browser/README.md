@@ -1,4 +1,8 @@
-# OLX local browser worker — etap 1
+# OLX browser worker
+
+**Chmura (Railway, działa przy wyłączonym komputerze):** zobacz [`docs/olx-worker-railway.md`](../../docs/olx-worker-railway.md) — Dockerfile, `railway.json`, zmienne, weryfikacja, wyłączenie workera Windows.
+
+## Lokalnie (Windows)
 
 Worker działa wyłącznie outbound: odpytuje HTTPS API Flip Managera, otwiera dozwolony URL OLX w świeżym headless Chromium i odsyła znormalizowane oferty. Nie otwiera lokalnego portu i nie używa profilu ani cookies użytkownika.
 
@@ -18,4 +22,4 @@ $env:OLX_WORKER_ONCE='1'
 npm run olx-worker
 ```
 
-Autostart Windows i scheduler nie należą do etapu 1.
+Opcjonalne zmienne (`OLX_WORKER_ID`, `OLX_WORKER_POLL_INTERVAL_MS`, `OLX_WORKER_BLOCK_COOLDOWN_MS`, `OLX_WORKER_STATUS_LOG_INTERVAL_MS`) i zachowanie przy błędach opisuje ten sam dokument.

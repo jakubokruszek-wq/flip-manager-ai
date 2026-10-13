@@ -1,0 +1,21 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "workers/olx-browser/Dockerfile",
+    "watchPatterns": [
+      "workers/olx-browser/**",
+      "workers/shared/**",
+      "features/flip-finder/**",
+      "features/properties/**",
+      ".dockerignore"
+    ]
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ALWAYS",
+    "sleepApplication": false,
+    "overlapSeconds": 0,
+    "drainingSeconds": 30
+  }
+}

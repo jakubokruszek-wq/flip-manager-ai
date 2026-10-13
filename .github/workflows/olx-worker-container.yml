@@ -1,0 +1,55 @@
+name: OLX cloud worker (container)
+
+# Builds the Railway image of the OLX worker and runs it against a local fake
+# of the worker API with fixture OLX pages, plus a real multi-connection
+# PostgreSQL race on claim_olx_scan_job. Never contacts OLX, Supabase, Vercel
+# or Railway, and uses no repository secrets.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "workers/olx-browser/**"
+      - "workers/shared/**"
+      - "features/flip-finder/olx-*.ts"
+      - "supabase/migrations/20260810190000_create_olx_local_worker_queue.sql"
+      - ".dockerignore"
+      - ".github/workflows/olx-worker-container.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "workers/olx-browser/**"
+      - "workers/shared/**"
+      - "features/flip-finder/**"
+      - "features/properties/**"
+      - ".dockerignore"
+      - ".github/workflows/olx-worker-container.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: olx-worker-container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install worker dependencies
+        run: npm ci --prefix workers/olx-browser --ignore-scripts --no-audit --no-fund
+      - name: Unit tests
+        run: node --test --experimental-strip-types --experimental-test-module-mocks --disable-warning=ExperimentalWarning workers/olx-browser/src/*.test.ts workers/shared/*.test.ts
+      - name: Real PostgreSQL claim race (no duplicates, lease recovery)
+        run: workers/olx-browser/test/claim-race.sh
+      - name: Build image
+        run: docker build -f workers/olx-browser/Dockerfile -t flip-olx-worker:test .
+      - name: Container end-to-end tests
+        run: OLX_CONTAINER_E2E=1 node --test --experimental-strip-types --disable-warning=ExperimentalWarning workers/olx-browser/test/container.e2e.test.ts
