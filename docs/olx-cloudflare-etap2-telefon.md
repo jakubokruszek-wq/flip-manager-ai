@@ -9,9 +9,41 @@ Nie zmienia `flip-manager-olx-cloud`, `flip-manager-olx-cloud-stage1`, Vercel an
 | `deploy-disabled` | kontrola konfiguracji i dry-run → wdrożenie Workera **wyłączonego** (`ENABLED=0`, `manual`, bez Cron) → sekrety Workera → weryfikacja `/status` |
 | `check` | `/status` (musi być wyłączony) + **jedno** `POST /selftest?selective=1`: podpisany heartbeat losowego ID (oczekiwane 409) i próba `claim-selective` z losowym ID (oczekiwane `{ job: null }`) |
 | `run-one-job` | wymaga `job_id` (UUID) i `confirm = URUCHOM-1-ZADANIE`; kontrola jak w `check` + limit dzienny niewykorzystany → włączenie tylko na ten przebieg → **jedno** `POST /run-once?jobId=…` bez ponawiania → **zawsze** ponowne wdrożenie wyłączonego Workera (także po błędzie lub anulowaniu) → podsumowanie |
+| `enable-probe` | diagnostyka: kontrola stanu wyłączonego → włączenie tylko na ten przebieg → potwierdzenie stanu włączonego → **zawsze** ponowne wyłączenie i jego potwierdzenie. **Bez** `/run-once`, bez `/selftest`, bez pobierania zadań |
 | `disable` | awaryjne ponowne wdrożenie wyłączonego Workera |
 
 Zwykłe `/claim` i selektor filtra **nie są używane**. Worker odrzuca każdy parametr inny niż `jobId`.
+
+## Kontrola wersji (poprawka po przebiegu 38455654010)
+
+Przebieg 38455654010: `wrangler deploy --var OLX_CLOUD_ENABLED:1` się powiódł, ale 12 kontroli `/status`
+nie potwierdziło włączenia, więc `/run-once` pominięto. Worker został wyłączony, a zadania pozostały
+`queued` z `attempts = 0`.
+
+- `--var` działa poprawnie. Wrangler 4.143 wysyła zmienną jako zwykły tekst `"1"`, a w logu tylko ukrywa
+  wartość (`"(hidden)"`).
+- Wyłącznik czyta Durable Object ze **swojego** środowiska. Gdy instancja DO jest stale budzona
+  (odpytywanie co 5 s), może jeszcze chwilę działać na poprzedniej, wyłączonej wersji. Najbardziej
+  prawdopodobne jest właśnie to: wyłączenie po teście potwierdziło się już przy pierwszej próbie, czyli
+  DO wciąż miał wyłączone środowisko. Stary workflow nie wypisywał treści `/status`, dlatego nie da się
+  tego udowodnić wprost. Nowa diagnostyka to rozstrzygnie.
+
+Poprawka:
+- `/status` ma blok `version`: `worker` (wersja wdrożona), `runner` (wersja Durable Object), `matches`,
+  `runnerReset`. Wartości pochodzą z wiązania `CF_VERSION_METADATA`.
+- Przed każdym żądaniem administracyjnym Worker przekazuje DO swoją wersję. Bezczynny DO na innej wersji
+  resetuje się sam (`ctx.abort`), a następne wywołanie trafia do świeżej instancji. Trwające zadanie nie
+  jest nigdy przerywane.
+- `/run-once` i `/selftest` odmawiają (`OLX_CLOUD_RUNNER_VERSION_MISMATCH`), gdy wersja DO jest inna niż
+  wersja Workera.
+- Workflow odczytuje `Current Version ID` z każdego wdrożenia. Uznaje stan za potwierdzony dopiero wtedy,
+  gdy **i Worker, i DO** działają na tej wersji (24 próby co 5 s). Każda próba wypisuje: HTTP, `ok`,
+  `code`, `killSwitch`, tryb, limity, `running`, `nextAlarm` i wersje. Sekretów w logu nie ma: `/status`
+  pokazuje je wyłącznie jako `set`/`missing`.
+- Kontrole są w `workers/olx-cloudflare/scripts/stage2-status.sh` i mają testy regresyjne.
+
+**Po scaleniu tej poprawki** zacznij od `deploy-disabled`. Stara wersja Workera nie ma bloku `version`,
+więc `check` odmówi do czasu ponownego wdrożenia.
 
 ## Bezpieczeństwo ponownego uruchomienia
 
@@ -65,13 +97,15 @@ Zadania Radaru (`context_type = 'price_radar'`) są nietykalne — funkcja SQL i
 4. Dodaj sekrety (tabela wyżej).
 5. **Actions** → **OLX Cloudflare — etap 2 …** → **Run workflow** → `action = deploy-disabled`.
    Summary: „Worker WYŁĄCZONY”.
-6. `action = check`. Summary: HMAC ok (409), claim-selective dostępny. Błąd 503 (brak funkcji SQL) albo 404
+6. `action = enable-probe` (opcjonalnie, zalecane po tej poprawce). Summary: „Włączenie: POTWIERDZONE”
+   i „Worker po próbie: WYŁĄCZONY”. Nic nie jest pobierane.
+7. `action = check`. Summary: HMAC ok (409), claim-selective dostępny. Błąd 503 (brak funkcji SQL) albo 404
    (brak endpointu) oznacza, że krok 1 lub 2 nie został wykonany.
-7. Odczytaj `id` zadania (SQL wyżej).
-8. `action = run-one-job`, `job_id = <id>`, `confirm = URUCHOM-1-ZADANIE`.
-9. Summary: `claimed 1`, `completed 1`, czas przeglądarki (spodziewane ~10–40 s), zdarzenia, „Worker po
+8. Odczytaj `id` zadania (SQL wyżej).
+9. `action = run-one-job`, `job_id = <id>`, `confirm = URUCHOM-1-ZADANIE`.
+10. Summary: `claimed 1`, `completed 1`, czas przeglądarki (spodziewane ~10–40 s), zdarzenia, „Worker po
    teście: WYŁĄCZONY ✅”. Uruchom podane zapytania SQL (tylko odczyt) i sprawdź oferty w Finderze.
-10. Jeśli cokolwiek wygląda źle: `action = disable`.
+11. Jeśli cokolwiek wygląda źle: `action = disable`.
 
 ## Koszt (Cloudflare Workers Free)
 
