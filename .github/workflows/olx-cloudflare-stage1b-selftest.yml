@@ -1,0 +1,127 @@
+name: OLX Cloudflare — etap 1b (self-test Workera testowego)
+
+# Manual only. Read-only verification of the locked stage-1 test Worker
+# "flip-manager-olx-cloud-stage1":
+#   1. GET /status and confirm: stage-1 lock, kill switch off, manual mode,
+#      zero jobs today, worker secret present, nothing running.
+#   2. Exactly ONE POST /selftest (no ?browser=1, no retry): a signed heartbeat
+#      for a random, non-existent job; the app must answer 409 OLX_JOB_LEASE_LOST
+#      (HMAC accepted, no job claimed or changed).
+#   3. GET /status again and confirm the Worker is still locked and idle.
+# No OLX request, no claim, no deploy; nothing in Vercel, Cloudflare or
+# Supabase is modified. The only side effect in the app is the single-use
+# HMAC nonce the heartbeat route stores and deletes after 5 minutes.
+#
+# Required repository secret: OLX_CLOUD_ADMIN_TOKEN_STAGE1 (set by the stage-1 deploy).
+# Prerequisite (manual, Cloudflare dashboard): secret OLX_WORKER_SECRET on the
+# stage-1 Worker. Without it the workflow stops before /selftest.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: olx-cloudflare-stage1-selftest
+  cancel-in-progress: false
+
+env:
+  STAGE1_URL: https://flip-manager-olx-cloud-stage1.jakub-okruszek.workers.dev
+  # Shared by the checks before and after /selftest. `ledger` is null until the
+  # Worker records anything; every job counter must be 0 and no session open.
+  STATUS_FILTER: >-
+    .code == "OLX_CLOUD_STAGE1_LOCKED"
+    and .configCheck.stage1Lock == true
+    and .configCheck.killSwitch == "disabled"
+    and .configCheck.valid == true
+    and .configCheck.workerSecret == "set"
+    and .configCheck.adminToken == "set"
+    and .config.claimMode == "manual"
+    and .config.workerId == "cloudflare-olx-stage1"
+    and .running == false
+    and .nextAlarm == null
+    and (.ledger == null or (
+      (.ledger.jobsClaimed // 0) == 0 and (.ledger.jobsCompleted // 0) == 0
+      and (.ledger.jobsFailed // 0) == 0 and (.ledger.jobsRejected // 0) == 0
+      and .ledger.openSession == null))
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: olx-cloudflare-stage1
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Kontrola sekretu GitHub (bez wypisywania wartości)
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE1 }}
+        run: |
+          set -euo pipefail
+          [ "${#ADMIN_TOKEN}" -ge 32 ] || { echo "::error::Brak lub zbyt krótki sekret OLX_CLOUD_ADMIN_TOKEN_STAGE1"; exit 1; }
+          [[ "$STAGE1_URL" =~ ^https://flip-manager-olx-cloud-stage1\.[a-z0-9-]+\.workers\.dev$ ]] || { echo "::error::Nieoczekiwany adres Workera"; exit 1; }
+          echo "Sekret obecny. Worker: $STAGE1_URL"
+
+      - name: 1–2. /status przed testem (blokada, tryb, 0 zadań, sekret, brak aktywnego zadania)
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE1 }}
+        run: |
+          set -euo pipefail
+          noauth="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$STAGE1_URL/status")"
+          [ "$noauth" = "404" ] || { echo "::error::/status bez tokenu zwrócił $noauth zamiast 404"; exit 1; }
+          code="$(curl -sS -o status-before.json -w '%{http_code}' --max-time 20 -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE1_URL/status")"
+          [ "$code" = "200" ] || { echo "::error::/status zwrócił HTTP $code"; exit 1; }
+          echo "Stan przed testem:"
+          jq '{code, configCheck, claimMode: .config.claimMode, workerId: .config.workerId, maxJobsPerDay: .config.maxJobsPerDay, running, nextAlarm, ledger}' status-before.json
+          if ! jq -e "$STATUS_FILTER" status-before.json >/dev/null; then
+            if jq -e '.configCheck.workerSecret != "set"' status-before.json >/dev/null; then
+              echo "::error::Worker testowy nie ma sekretu OLX_WORKER_SECRET. Dodaj go w panelu Cloudflare (instrukcja w docs/olx-cloudflare-etap1b-telefon.md). /selftest NIE został wysłany."
+            else
+              echo "::error::Stan Workera nie spełnia warunków etapu 1b. /selftest NIE został wysłany."
+            fi
+            exit 1
+          fi
+          echo "Warunki spełnione: STAGE1_LOCK=1, ENABLED=0, manual, 0 zadań, sekret obecny, brak aktywnego zadania."
+
+      - name: 3–4. Dokładnie jedno POST /selftest (bez browser=1, bez ponawiania)
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE1 }}
+        run: |
+          set -euo pipefail
+          # One request only: no --retry, no loop. A failure is reported, never repeated.
+          code="$(curl -sS -X POST -o selftest.json -w '%{http_code}' --max-time 60 --retry 0 \
+            -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE1_URL/selftest")" || { echo "::error::Żądanie /selftest nie powiodło się (bez ponowienia)"; exit 1; }
+          [ "$code" = "200" ] || { echo "::error::/selftest zwrócił HTTP $code"; exit 1; }
+          echo "Wynik /selftest:"
+          jq '{queueApi, browserRun, config: {killSwitch: .config.killSwitch, stage1Lock: .config.stage1Lock, valid: .config.valid}}' selftest.json
+          jq -e '.browserRun == null' selftest.json >/dev/null || { echo "::error::Nieoczekiwany test przeglądarki"; exit 1; }
+          jq -e '.queueApi.ok == true and .queueApi.status == 409' selftest.json >/dev/null \
+            || { echo "::error::queueApi nie potwierdza 409 OLX_JOB_LEASE_LOST (HMAC/adres/sekret)"; exit 1; }
+          echo "queueApi.ok=true, status=409 (OLX_JOB_LEASE_LOST): HMAC przyjęty, żadne zadanie nie zostało pobrane ani zmienione."
+
+      - name: 5. /status po teście (blokada nadal aktywna)
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE1 }}
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o status-after.json -w '%{http_code}' --max-time 20 -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE1_URL/status")"
+          [ "$code" = "200" ] || { echo "::error::/status zwrócił HTTP $code"; exit 1; }
+          jq '{code, configCheck, claimMode: .config.claimMode, running, nextAlarm, ledger}' status-after.json
+          jq -e "$STATUS_FILTER" status-after.json >/dev/null || { echo "::error::Po teście Worker nie spełnia warunków blokady"; exit 1; }
+          {
+            echo "## OLX Cloudflare — etap 1b zaliczony"
+            echo ""
+            echo "- Worker: \`flip-manager-olx-cloud-stage1\` ($STAGE1_URL)"
+            echo "- Przed i po teście: \`OLX_CLOUD_STAGE1_LOCKED\`, ENABLED=0, tryb \`manual\`, 0 zadań, sekret obecny, brak aktywnego zadania"
+            echo "- \`POST /selftest\` (1 żądanie, bez przeglądarki): \`queueApi.ok=true\`, \`status=409\` (\`OLX_JOB_LEASE_LOST\`)"
+            echo ""
+            echo "### /selftest"
+            echo '```json'
+            jq '{queueApi, browserRun}' selftest.json
+            echo '```'
+            echo "### /status po teście"
+            echo '```json'
+            jq '{code, configCheck, claimMode: .config.claimMode, running, nextAlarm, ledger}' status-after.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
