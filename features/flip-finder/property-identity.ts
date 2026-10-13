@@ -1,5 +1,6 @@
 import type { ListingSource } from "./index.ts";
-import { assessListingIdentityPair, hasHardConflict, type ListingIdentityEvidence, type PairIdentityAssessment } from "./identity-evidence.ts";
+import { assessListingIdentityPair, hasHardConflict, type ListingIdentityEvidence } from "./identity-evidence.ts";
+import { assessCrossPortalPair, crossPortalAreaBuckets, crossPortalEvidenceLabel, type CrossPortalEvidence } from "./cross-portal-identity.ts";
 
 export const CONFIRMED_PROPERTY_IDENTITY_KINDS = ["canonical_unit_id", "portal_shared_unit_id"] as const;
 export type ConfirmedPropertyIdentityKind = (typeof CONFIRMED_PROPERTY_IDENTITY_KINDS)[number];
@@ -36,7 +37,17 @@ export function identityPairKey(leftId: string, rightId: string): string {
  * single-linkage (A≈B and B≈C must not collapse contradictory A/C).
  * Weak attributes never confirm a pair; shared photos produce candidates.
  */
+type PairAssessment = { kind: "confirmed" | "candidate" | "separate"; reason: string; evidence: CrossPortalEvidence[] };
+
+export type IdentityCandidate = ConfirmedPropertyMember & { reason: string; evidence?: string[] };
+
 export function groupPropertyResults<T extends ConfirmedPropertyMember & {
+  floor?: string | null;
+  address?: string | null;
+  district?: string | null;
+  city?: string | null;
+  description?: string | null;
+  images?: readonly string[] | null;
   crossSourceIdentity?: string | null;
   identityEvidence?: ListingIdentityEvidence;
   decisionBucket?: "MATCHED" | "REVIEW" | "REJECTED";
@@ -45,17 +56,16 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
   matchReasons?: string[];
   unknownFields?: string[];
   isNew?: boolean;
-}>(rows: readonly T[], options: PropertyIdentityGroupOptions = {}): Array<ConfirmedPropertyGroupResult<T> & { identityGroupId: string | null; identityCandidates: Array<ConfirmedPropertyMember & { reason: string }> }> {
+}>(rows: readonly T[], options: PropertyIdentityGroupOptions = {}): Array<ConfirmedPropertyGroupResult<T> & { identityGroupId: string | null; identityCandidates: IdentityCandidate[] }> {
   const blocked = options.blockedPairs ?? new Set<string>();
   const manualGroupByListing = options.manualGroupByListing ?? new Map<string, string>();
   const orderedRows = [...rows].sort((a, b) => a.id.localeCompare(b.id));
-  const assessments = new Map<string, PairIdentityAssessment>();
-  const candidates = new Map<string, Array<ConfirmedPropertyMember & { reason: string }>>();
-  // assessListingIdentityPair can only return "confirmed"/"candidate" for two
-  // rows that share an explicit identity, an agency reference, a unit key or
-  // a building key; every other pair is "separate" by construction. Only
-  // those pairs are assessed, which keeps grouping near-linear instead of
-  // comparing every pair of rows (O(n²)) on each Finder read.
+  const assessments = new Map<string, PairAssessment>();
+  const candidates = new Map<string, IdentityCandidate[]>();
+  // A pair can only be linked when it shares an explicit identity, an agency
+  // reference, a unit or building key, or (cross-portal evidence) a
+  // compatible area. Only pairs sharing such a key are assessed, which keeps
+  // grouping near-linear instead of comparing every pair of rows (O(n²)).
   const comparablePairs = new Set<string>();
   const buckets = new Map<string, number[]>();
   orderedRows.forEach((row, index) => {
@@ -74,6 +84,19 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
       else buckets.set(key, [index]);
     }
   });
+  // Cross-portal evidence needs a compatible area and a price within 25%, so
+  // only rows sharing such a bucket are compared. A bucket
+  // that is still very large (many identical stub listings) is skipped:
+  // those rows simply stay separate cards, never a guessed link.
+  const crossPortalBuckets = new Map<string, number[]>();
+  orderedRows.forEach((row, index) => {
+    for (const key of crossPortalBucketKeys(row)) {
+      const members = crossPortalBuckets.get(key);
+      if (members) members.push(index);
+      else crossPortalBuckets.set(key, [index]);
+    }
+  });
+  for (const members of crossPortalBuckets.values()) if (members.length <= CROSS_PORTAL_BUCKET_LIMIT) buckets.set(`cross:${buckets.size}`, members);
   for (const members of buckets.values()) {
     for (let i = 0; i < members.length; i += 1) for (let j = i + 1; j < members.length; j += 1) comparablePairs.add(`${members[i]}:${members[j]}`);
   }
@@ -86,21 +109,23 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
       const key = identityPairKey(left.id, right.id);
       const leftIdentity = normalizeConfirmedPropertyIdentity(left.crossSourceIdentity);
       const rightIdentity = normalizeConfirmedPropertyIdentity(right.crossSourceIdentity);
-      const assessment = assessListingIdentityPair(left.identityEvidence ?? emptyEvidence(), right.identityEvidence ?? emptyEvidence(), {
+      const explicit = assessListingIdentityPair(left.identityEvidence ?? emptyEvidence(), right.identityEvidence ?? emptyEvidence(), {
         sameExplicitIdentity: Boolean(leftIdentity && leftIdentity === rightIdentity),
         blocked: blocked.has(key),
       });
+      const assessment = combineAssessments(explicit, blocked.has(key) ? null : assessCrossPortalPair(left, right));
       assessments.set(key, assessment);
       if (assessment.kind === "confirmed") {
         confirmedNeighbours.set(left.id, (confirmedNeighbours.get(left.id) ?? new Set()).add(right.id));
         confirmedNeighbours.set(right.id, (confirmedNeighbours.get(right.id) ?? new Set()).add(left.id));
       }
       if (assessment.kind === "candidate") {
+        const evidenceLabels = assessment.evidence.map(crossPortalEvidenceLabel);
         const leftList = candidates.get(left.id) ?? [];
-        leftList.push({ ...toMember(right), reason: assessment.reason });
+        leftList.push({ ...toMember(right), reason: assessment.reason, evidence: evidenceLabels });
         candidates.set(left.id, leftList);
         const rightList = candidates.get(right.id) ?? [];
-        rightList.push({ ...toMember(left), reason: assessment.reason });
+        rightList.push({ ...toMember(left), reason: assessment.reason, evidence: evidenceLabels });
         candidates.set(right.id, rightList);
       }
     }
@@ -145,10 +170,17 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
       .map((id) => groupIndexById.get(id))
       .filter((index): index is number => index !== undefined)
       .sort((a, b) => a - b);
+    // A row joins a group when it is confirmed with at least one member and
+    // contradicts none of them (four portal copies rarely all describe each
+    // other equally well). A missing assessment means the pair shared no key
+    // at all, which is treated as "separate", never as a silent link.
     const clusterIndex = neighbourGroups.find((index) => {
       const members = groups[index];
       if (members.some((member) => manualGroupByListing.has(member.id))) return false;
-      return members.every((member) => assessments.get(identityPairKey(row.id, member.id))?.kind === "confirmed");
+      return members.every((member) => {
+        const kind = assessments.get(identityPairKey(row.id, member.id))?.kind;
+        return kind === "confirmed" || kind === "candidate";
+      });
     });
     if (clusterIndex !== undefined) {
       groups[clusterIndex].push(row);
@@ -171,7 +203,7 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     const representative = [...members].sort((a, b) => bucketRank(a.decisionBucket) - bucketRank(b.decisionBucket) || completeness(b) - completeness(a) || a.source.localeCompare(b.source) || a.id.localeCompare(b.id))[0];
     const groupResult = members.length > 1 ? mergeResultMembers(representative, members, identity) : { ...representative, crossSourceIdentity: identity, linkedListings: [toMember(representative)] };
     const memberIds = new Set(members.map((member) => member.id));
-    const candidatesById = new Map<string, ConfirmedPropertyMember & { reason: string }>();
+    const candidatesById = new Map<string, IdentityCandidate>();
     for (const member of members) {
       for (const candidate of candidates.get(member.id) ?? []) {
         if (!memberIds.has(candidate.id) && !candidatesById.has(candidate.id)) candidatesById.set(candidate.id, candidate);
@@ -206,6 +238,38 @@ function mergeResultMembers<T extends ConfirmedPropertyMember & { decisionBucket
 
 function bucketRank(bucket: "MATCHED" | "REVIEW" | "REJECTED" | undefined): number {
   return bucket === "MATCHED" ? 0 : bucket === "REVIEW" ? 1 : bucket === "REJECTED" ? 2 : 1;
+}
+
+const CROSS_PORTAL_BUCKET_LIMIT = 60;
+
+function crossPortalBucketKeys(row: { area: number | null; price: number | null }): string[] {
+  const areaKeys = crossPortalAreaBuckets(row.area);
+  if (!areaKeys.length) return [];
+  // Rooms are deliberately not part of the key: a portal that omits them
+  // must still be compared (the room count may come from its text).
+  // 10% price bands; a pair within 25% falls into bands at most two apart.
+  const band = row.price && row.price > 0 ? Math.round(Math.log(row.price) / Math.log(1.1)) : null;
+  const priceKeys = band === null ? ["p:?"] : [band - 1, band, band + 1].map((value) => `p:${value}`);
+  return areaKeys.flatMap((area) => priceKeys.map((price) => `${area}|${price}`));
+}
+
+/**
+ * Explicit identity (shared portal unit id, agency offer reference, exact
+ * apartment address) keeps its authority, including an explicit conflict.
+ * Otherwise the multi-evidence cross-portal assessment decides; a
+ * contradiction found there always keeps the listings apart.
+ */
+function combineAssessments(
+  explicit: ReturnType<typeof assessListingIdentityPair>,
+  crossPortal: ReturnType<typeof assessCrossPortalPair> | null,
+): PairAssessment {
+  if (explicit.kind === "confirmed") return { kind: "confirmed", reason: explicit.reason, evidence: [] };
+  if (explicit.reason === "explicit_conflict" || crossPortal === null) return { kind: "separate", reason: explicit.reason, evidence: [] };
+  if (crossPortal.kind === "confirmed") return { kind: "confirmed", reason: crossPortal.reason, evidence: crossPortal.evidence };
+  if (crossPortal.kind === "separate" && crossPortal.conflicts.length > 0) return { kind: "separate", reason: crossPortal.reason, evidence: crossPortal.evidence };
+  if (explicit.kind === "candidate") return { kind: "candidate", reason: explicit.reason, evidence: crossPortal.evidence };
+  if (crossPortal.kind === "candidate") return { kind: "candidate", reason: crossPortal.reason, evidence: crossPortal.evidence };
+  return { kind: "separate", reason: crossPortal.reason, evidence: crossPortal.evidence };
 }
 
 function emptyEvidence(): ListingIdentityEvidence {

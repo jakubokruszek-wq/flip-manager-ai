@@ -33,13 +33,16 @@ export async function clearFilterResults(filterId: string, scope: ClearResultsSc
     ? Date.now() - scope.olderThanDays * 86_400_000
     : null;
   const targets = [...new Set([...payload.results, ...payload.reviewResults, ...payload.buildingVerificationResults]
-    .filter((result) => !scope.source || result.source === scope.source)
+    // Same rule as the Finder's source filter: a card belongs to every portal it links.
+    .filter((result) => !scope.source || result.source === scope.source || Boolean(result.linkedListings?.some((listing) => listing.source === scope.source)))
     .filter((result) => {
       if (cutoff === null) return true;
       const lastSeen = Date.parse(result.lastSeenAt);
       return Number.isFinite(lastSeen) && lastSeen < cutoff;
     })
-    .map((result) => result.id))];
+    // A grouped card stands for every linked portal copy; clearing only its
+    // representative would bring the other copies back as a separate card.
+    .flatMap((result) => [result.id, ...(result.linkedListings ?? []).map((listing) => listing.id)]))];
   if (!targets.length) return { archivedCount: 0 };
 
   // Recheck after the read/target computation. The SQL canonical RPC also

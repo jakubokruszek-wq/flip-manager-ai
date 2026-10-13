@@ -140,8 +140,12 @@ test("real adapter records auto-group the same agency offer reference, but an eq
   async function cardsFor(agencyNameB: string) {
     db = new FakeFacebookSupabase();
     installCanonicalReconciliationRpc(db);
+    // The second agency publishes its own photos: identical image files
+    // would themselves be cross-portal evidence of one flat, and this test is
+    // about the reference number alone.
     const makeAgencyOffer = (url: string, agency: string) => ({
       ...offer(url, url, null, 365000),
+      ...(agency === "Biuro Łódź" ? {} : { image: ["https://cdn.other-agency.test/flat/a.jpg", "https://cdn.other-agency.test/flat/b.jpg"] }),
       seller: { "@type": "RealEstateAgent", name: agency, additionalProperty: [{ name: "Numer oferty", value: "BIO-71" }] },
     });
     const gratka = EXTERNAL_PORTAL_PARSERS.gratka(asJsonLd({ "@type": "Product", offers: { "@type": "AggregateOffer", offers: [makeAgencyOffer("https://gratka.pl/nieruchomosci/mieszkanie/ob/gr-agency-1", "Biuro Łódź") ] } }), "Łódź");
@@ -163,5 +167,7 @@ test("real adapter records auto-group the same agency offer reference, but an eq
   assert.equal(sameAgencyCards[0]?.linkedListings.length, 2);
   const differentAgencyCards = await cardsFor("Inne Biuro");
   assert.equal(differentAgencyCards.length, 2, "the same text number without the same agency namespace is not a shared offer identity");
+  // Same street, area, rooms and price without shared content is ambiguous: a manual-verification candidate, never an automatic link.
+  assert.ok(differentAgencyCards.some((card) => ((card as { identityCandidates?: unknown[] }).identityCandidates ?? []).length === 1));
   assert.ok(differentAgencyCards.every((card) => card.linkedListings.length === 1));
 });
