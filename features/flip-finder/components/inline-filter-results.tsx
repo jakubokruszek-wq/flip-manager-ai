@@ -818,6 +818,42 @@ function isGalleryState(value: unknown): value is GalleryState {
 // accept/reject decision actions are REVIEW-specific, rendered outside it --
 // exactly the way the Facebook Watcher renders its own workflow actions
 // outside this same shared card, never inside a second, duplicated component.
+type IdentityCandidateView = NonNullable<FilterResult["identityCandidates"]>[number];
+
+/**
+ * Possible duplicates for a manual decision. Phone-first: one column, the
+ * portal and the agreeing facts first, touch targets of at least 44 px and
+ * full-width actions; side by side only from the sm breakpoint.
+ */
+function IdentityCandidatesSection({ candidates, busy, managementAvailable, onLink, onSeparate }: { candidates: IdentityCandidateView[]; busy: boolean; managementAvailable: boolean; onLink: (candidateId: string) => void; onSeparate: (candidateId: string) => void }) {
+  return (
+    <section aria-label="Możliwe duplikaty do weryfikacji" className="min-w-0 rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-3 sm:p-5" data-testid="finder-identity-candidates">
+      <h3 className="text-sm font-semibold">Możliwy duplikat ({candidates.length}) · porównaj przed połączeniem</h3>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Część danych się zgadza, ale to za mało, by połączyć oferty automatycznie (sama cena i metraż nigdy nie wystarczają). Otwórz ogłoszenie, porównaj zdjęcia i opis, potem zdecyduj.</p>
+      <ul className="mt-3 space-y-3">
+        {candidates.map((candidate) => (
+          <li className="min-w-0 rounded-lg border border-border/60 bg-background/60 p-3" data-testid="finder-identity-candidate" key={candidate.id}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">{sourceLabel(candidate.source)}</p>
+            <p className="mt-1 break-words text-sm font-medium [overflow-wrap:anywhere]">{cleanDisplayText(candidate.title) || "Oferta bez tytułu"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{currency(candidate.price)} · {measure(candidate.area, "m²")} · {measure(candidate.rooms, "pok.")}</p>
+            {candidate.evidence?.length ? (
+              <ul aria-label="Zgodne dane" className="mt-2 flex flex-wrap gap-1.5" data-testid="finder-identity-candidate-evidence">
+                {candidate.evidence.map((item) => <li className="rounded-full border border-emerald-500/25 bg-emerald-500/[0.08] px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:text-emerald-200" key={item}>{item}</li>)}
+              </ul>
+            ) : null}
+            <div className="mt-3 grid gap-2 sm:flex sm:flex-wrap">
+              {candidate.originalUrl ? <a className="inline-flex min-h-[44px] w-full items-center justify-center rounded-md border border-primary/30 px-3 text-sm font-semibold text-primary underline-offset-2 hover:underline sm:w-auto" href={candidate.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz w {sourceLabel(candidate.source)}</a> : null}
+              <Button className="min-h-[44px] w-full sm:w-auto" disabled={!managementAvailable || busy} onClick={() => onLink(candidate.id)} type="button">Połącz oferty</Button>
+              <Button className="min-h-[44px] w-full sm:w-auto" disabled={!managementAvailable || busy} onClick={() => onSeparate(candidate.id)} type="button" variant="outline">Nie łącz tych ofert</Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {!managementAvailable ? <p className="mt-2 text-xs text-amber-700" role="status">Zapisy ręcznej weryfikacji są niedostępne: wymagany draft migracji nie został jeszcze potwierdzony.</p> : null}
+    </section>
+  );
+}
+
 function ReviewListingCard({ result, onChanged, autoOpen = false, averagePricePerSqm, marketType, filter, identityManagementAvailable = false }: { result: FilterResult; onChanged: () => void; autoOpen?: boolean; averagePricePerSqm: number | null; marketType: SearchFilter["marketType"]; filter?: SearchFilter | null; identityManagementAvailable?: boolean }) {
   const [busy, setBusy] = useState(false);
   const decide = async (decision: "ACCEPTED" | "REJECTED") => {
@@ -1092,6 +1128,8 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
             <SourceBadge source={result.source} />
             {shouldShowGenericStatusBadge(variant) ? <StatusBadge status={result.listingStatus} /> : null}
             {variant === "watcher" ? null : result.isNew ? <Badge label="Nowa" /> : result.hasPriceDrop ? <Badge label="Obniżka" /> : null}
+            {variant === "standalone" && (result.linkedListings?.length ?? 0) > 1 ? <span className="rounded-full border border-primary/25 bg-primary/[0.06] px-2.5 py-1 text-xs font-semibold text-primary" data-testid="finder-linked-sources-badge">{result.linkedListings?.length} {(result.linkedListings?.length ?? 0) >= 5 ? "portali" : "portale"}</span> : null}
+            {variant === "standalone" && result.identityCandidates?.length ? <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:text-amber-200" data-testid="finder-identity-candidate-badge">Możliwy duplikat: {result.identityCandidates.length}</span> : null}
           </div>
           <div className="min-w-0"><h2 className="min-w-0 whitespace-normal break-words text-base font-semibold leading-snug tracking-tight [overflow-wrap:anywhere] sm:text-lg">{title}</h2></div>
           <div className="mt-3">
@@ -1143,8 +1181,13 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
             <div className="rounded-xl border border-border/70 bg-muted/30 p-4"><p className="text-xs text-muted-foreground">Pokoje</p><p className="mt-1 font-semibold tracking-tight">{measure(result.rooms, "pok.")}</p></div>
           </div>
           <div className="rounded-xl border border-border/70 bg-muted/20 p-4 sm:p-5"><p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Opis ogłoszenia</p><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/80">{cleanDisplayText(formatListingDescription(result.description)) || "Brak opisu ogłoszenia."}</p></div>
-          {result.linkedListings && result.linkedListings.length > 1 ? <section aria-label="Potwierdzone ogłoszenia tej samej nieruchomości" className="rounded-xl border border-primary/25 bg-primary/[0.03] p-4 sm:p-5"><h3 className="text-sm font-semibold">Znaleziono także na: {[...new Set(result.linkedListings.map((item) => sourceLabel(item.source)).filter((label) => label !== sourceLabel(result.source)))].join(", ") || sourceLabel(result.source)}</h3><ul className="mt-3 space-y-2">{result.linkedListings.map((item) => <li className="grid min-w-0 gap-1 rounded-lg border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" key={item.id}><div className="min-w-0"><p className="break-words text-sm font-medium">{sourceLabel(item.source)}{item.title ? ` · ${cleanDisplayText(item.title)}` : ""}</p><p className="text-xs text-muted-foreground">Cena: {currency(item.price)} · metraż: {measure(item.area, "m²")}{item.rooms ? ` · ${measure(item.rooms, "pok.")}` : ""}</p><p className="text-xs text-muted-foreground">Publikacja: {item.publishedAt ? dateTime(item.publishedAt) : "nie podano"} · pobrano: {item.lastSeenAt ? dateTime(item.lastSeenAt) : "nie podano"}</p></div>{item.originalUrl ? <a className="min-h-11 break-all text-sm font-semibold text-primary underline" href={item.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz {sourceLabel(item.source)}</a> : <span className="text-xs text-muted-foreground">Brak potwierdzonego linku</span>}{variant === "standalone" && item.id !== result.id ? <Button className="sm:col-span-2" disabled={!identityManagementAvailable || identityBusy} onClick={() => void manageIdentity(result.identityGroupId ? "unlink" : "not_link", item.id, result.identityGroupId ? undefined : result.id)} type="button" variant="outline">{result.identityGroupId ? "Rozłącz ofertę z grupy" : "Nie łącz tych ofert"}</Button> : null}</li>)}</ul></section> : null}
-          {variant === "standalone" && result.identityCandidates?.length ? <section aria-label="Możliwe duplikaty do weryfikacji" className="rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-4 sm:p-5"><h3 className="text-sm font-semibold">Możliwy duplikat · porównaj przed połączeniem</h3><p className="mt-1 text-xs text-muted-foreground">Kandydatura wynika ze wspólnych zdjęć i zgodnych danych lokalu. Nie została automatycznie połączona.</p><ul className="mt-3 space-y-3">{result.identityCandidates.map((candidate) => <li className="grid min-w-0 gap-2 rounded-lg border border-border/60 p-3" key={candidate.id}><div className="min-w-0"><p className="break-words text-sm font-medium">{sourceLabel(candidate.source)} · {cleanDisplayText(candidate.title) || "Oferta bez tytułu"}</p><p className="text-xs text-muted-foreground">{currency(candidate.price)} · {measure(candidate.area, "m²")} · {measure(candidate.rooms, "pok.")}</p>{candidate.originalUrl ? <a className="break-all text-xs font-semibold text-primary underline" href={candidate.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz źródłową ofertę</a> : null}</div><div className="flex flex-wrap gap-2"><Button disabled={!identityManagementAvailable || identityBusy} onClick={() => void manageIdentity("link", result.id, candidate.id)} type="button">Połącz oferty</Button><Button disabled={!identityManagementAvailable || identityBusy} onClick={() => void manageIdentity("not_link", result.id, candidate.id)} type="button" variant="outline">Nie łącz tych ofert</Button></div></li>)}</ul>{!identityManagementAvailable ? <p className="mt-2 text-xs text-amber-700" role="status">Zapisy ręcznej weryfikacji są niedostępne: wymagany draft migracji nie został jeszcze potwierdzony.</p> : null}</section> : null}
+          {result.linkedListings && result.linkedListings.length > 1 ? <section aria-label="Potwierdzone ogłoszenia tej samej nieruchomości" className="rounded-xl border border-primary/25 bg-primary/[0.03] p-4 sm:p-5"><h3 className="text-sm font-semibold">Znaleziono także na: {[...new Set(result.linkedListings.map((item) => sourceLabel(item.source)).filter((label) => label !== sourceLabel(result.source)))].join(", ") || sourceLabel(result.source)}</h3><ul className="mt-3 space-y-2">{result.linkedListings.map((item) => <li className="grid min-w-0 gap-1 rounded-lg border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" key={item.id}><div className="min-w-0"><p className="break-words text-sm font-medium">{sourceLabel(item.source)}{item.title ? ` · ${cleanDisplayText(item.title)}` : ""}</p><p className="text-xs text-muted-foreground">Cena: {currency(item.price)} · metraż: {measure(item.area, "m²")}{item.rooms ? ` · ${measure(item.rooms, "pok.")}` : ""}</p><p className="text-xs text-muted-foreground">Publikacja: {item.publishedAt ? dateTime(item.publishedAt) : "nie podano"} · pobrano: {item.lastSeenAt ? dateTime(item.lastSeenAt) : "nie podano"}</p></div>{item.originalUrl ? <a className="min-h-11 break-all text-sm font-semibold text-primary underline" href={item.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz {sourceLabel(item.source)}</a> : <span className="text-xs text-muted-foreground">Brak potwierdzonego linku</span>}{variant === "standalone" && item.id !== result.id ? (() => {
+            // A copy linked by an operator decision is unlinked from that group;
+            // a copy linked by evidence is separated with a durable "do not link".
+            const manual = Boolean(result.identityGroupId && result.identityManualListingIds?.includes(item.id));
+            return <Button className="min-h-[44px] w-full sm:col-span-2 sm:w-auto" data-testid="finder-identity-separate" disabled={!identityManagementAvailable || identityBusy} onClick={() => void manageIdentity(manual ? "unlink" : "not_link", item.id, manual ? undefined : result.id)} type="button" variant="outline">{manual ? "Rozłącz ofertę z grupy" : "Nie łącz tych ofert"}</Button>;
+          })() : null}</li>)}</ul></section> : null}
+          {variant === "standalone" && result.identityCandidates?.length ? <IdentityCandidatesSection busy={identityBusy} candidates={result.identityCandidates} managementAvailable={identityManagementAvailable} onLink={(candidateId) => void manageIdentity("link", result.id, candidateId)} onSeparate={(candidateId) => void manageIdentity("not_link", result.id, candidateId)} /> : null}
           {identityMessage ? <p className="rounded-lg border border-border/60 p-3 text-sm" role="status">{identityMessage}</p> : null}
           <div className="grid gap-3 rounded-xl bg-muted/40 p-4 text-sm sm:grid-cols-2"><Metric label="Piętro" value={result.floor ?? "—"} /><Metric label="Liczba pięter" value={result.totalFloors ?? "—"} /><Metric label="Typ budynku" value={result.buildingType ?? "—"} /><Metric label="Rok budowy" value={result.yearBuilt?.toString() ?? "Brak danych"} /><Metric label="Własność" value={result.ownership ?? "—"} /></div>
           <DetailList

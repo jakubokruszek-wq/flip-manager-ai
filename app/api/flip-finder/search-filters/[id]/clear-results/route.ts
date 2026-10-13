@@ -1,6 +1,6 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 
-import { ClearResultsConflictError, clearFilterResults } from "@/features/flip-finder/server/clear-results";
+import { ClearResultsConflictError, ClearResultsLinkedCopiesError, clearFilterResults } from "@/features/flip-finder/server/clear-results";
 import { LISTING_SOURCES } from "@/features/flip-finder";
 
 type Context = { params: Promise<{ id: string }> };
@@ -13,13 +13,16 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
     return operatorAuthorizationResponse(error);
   }
   const filterId = (await params).id;
-  const body = await request.json().catch(() => null) as { source?: unknown; olderThanDays?: unknown } | null;
+  const body = await request.json().catch(() => null) as { source?: unknown; olderThanDays?: unknown; includeLinkedCopies?: unknown } | null;
   const source = typeof body?.source === "string" && (LISTING_SOURCES as readonly string[]).includes(body.source) ? body.source as (typeof LISTING_SOURCES)[number] : undefined;
   const olderThanDays = typeof body?.olderThanDays === "number" && Number.isFinite(body.olderThanDays) && body.olderThanDays > 0 ? body.olderThanDays : undefined;
   try {
-    const result = await clearFilterResults(filterId, { source, olderThanDays }, operator.id);
+    const result = await clearFilterResults(filterId, { source, olderThanDays, includeLinkedCopies: body?.includeLinkedCopies === true }, operator.id);
     return Response.json({ ok: true, ...result });
   } catch (error) {
+    if (error instanceof ClearResultsLinkedCopiesError) {
+      return Response.json({ code: error.code, message: error.message, linkedCards: error.linkedCards, otherSources: error.otherSources }, { status: error.status });
+    }
     if (error instanceof ClearResultsConflictError) {
       return Response.json({ message: error.message }, { status: error.status });
     }
