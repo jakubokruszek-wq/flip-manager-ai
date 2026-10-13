@@ -19,6 +19,12 @@ let latestRuns: Record<string, Row | null> = {};
 let filteredToEmptyOwners: Set<string> = new Set();
 let settingsByOwner: Record<string, Row> = {};
 let scheduleDue = true;
+let releaseCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
+let releaseSucceeds = true;
+let scheduledContinuations: Array<{ runId: string; hop: number }> = [];
+let awaitedContinuations: Array<{ runId: string; hop: number }> = [];
+let afterTasks: Array<() => Promise<unknown>> = [];
+let resumeSequence: Array<{ kind: "claimed"; run: { id: string; leaseToken: string } } | { kind: "blocked"; reason: string }> = [];
 
 function fakeAdmin() {
   return {
@@ -63,8 +69,18 @@ mock.module("@/features/price-radar/server/radar-run-status", { namedExports: {
 } });
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria.push({ ownerId, sources, criteria }); return claimResults[ownerId] ?? { kind: "blocked" }; },
-  resumeExistingRadarRun: async (ownerId: string, runId: string) => { resumeCalls.push({ ownerId, runId }); return resumeResults[runId] ?? { kind: "claimed", run: { id: runId, leaseToken: "resumed-lease" } }; },
+  resumeExistingRadarRun: async (ownerId: string, runId: string) => { resumeCalls.push({ ownerId, runId }); return resumeSequence.shift() ?? resumeResults[runId] ?? { kind: "claimed", run: { id: runId, leaseToken: "resumed-lease" } }; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return portionResult; },
+  releaseRadarRunLease: async (input: { runId: string; ownerId: string; leaseToken: string }) => { releaseCalls.push(input); return releaseSucceeds; },
+} });
+mock.module("@/features/price-radar/server/radar-continuation", { namedExports: {
+  RADAR_CONTINUATION_HOP_HEADER: "x-radar-continuation-hop",
+  parseRadarContinuationHop: (value: string | null) => value !== null && /^[0-9]+$/u.test(value) && Number(value) >= 1 && Number(value) <= 300 ? Number(value) : null,
+  scheduleRadarContinuation: (input: { runId: string; hop: number }) => { scheduledContinuations.push(input); },
+  requestRadarContinuation: async (input: { runId: string; hop: number }) => { awaitedContinuations.push(input); return true; },
+} });
+mock.module("@/features/facebook-watcher/run-after-response", { namedExports: {
+  runAfterResponse: (task: () => Promise<unknown>) => { afterTasks.push(task); },
 } });
 
 const route = await import("../../../app/api/jobs/price-radar-collect/route.ts");
@@ -85,6 +101,12 @@ function reset() {
   filteredToEmptyOwners = new Set();
   settingsByOwner = {};
   scheduleDue = true;
+  releaseCalls = [];
+  releaseSucceeds = true;
+  scheduledContinuations = [];
+  awaitedContinuations = [];
+  afterTasks = [];
+  resumeSequence = [];
 }
 
 function withRadarCronSecret<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
@@ -390,4 +412,124 @@ test("portal partial errors stay terminal and OLX waiting is reported without cl
     assert.equal(body.runId, "run-olx");
     assert.equal(body.retryAfterSeconds, 300);
   });
+});
+
+// Production 2026-10-13, run 97183d20: last checkpoint 08:18:04, lease expired
+// 08:19:19, status still "running", no browser and no scheduler tick after it.
+const STALLED_RUN_ID = "97183d20-ae89-4e59-b970-8271be828921";
+function stalledRunRow(): Row {
+  return { id: STALLED_RUN_ID, owner_id: "owner-a", status: "running", lease_until: new Date(Date.now() - 120_000).toISOString(), stop_requested_at: null, user_terminated_at: null, scanned_count: 440, qualified_count: 27, checkpoint: {}, source_statuses: { domy: "pending", adresowo: "failed", olx: "pending" } };
+}
+function hopRequest(hop: string | null, body: Row = { runId: STALLED_RUN_ID }, secret = "test-secret") {
+  return new Request("http://localhost/api/jobs/price-radar-collect", {
+    method: "POST",
+    headers: { authorization: `Bearer ${secret}`, "content-type": "application/json", ...(hop === null ? {} : { "x-radar-continuation-hop": hop }) },
+    body: JSON.stringify(body),
+  });
+}
+
+test("an expired lease on a running run is resumed in place by the scheduler and then continued by the server itself", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  latestRuns["owner-a"] = { id: STALLED_RUN_ID, status: "running", startedAt: "2026-10-13T06:08:00.000Z", stopRequestedAt: null, userTerminatedAt: null, leaseUntil: "2026-10-13T06:19:19.000Z", errorMessage: null };
+  resumeResults[STALLED_RUN_ID] = { kind: "claimed", run: { id: STALLED_RUN_ID, leaseToken: "lease-after-expiry" } };
+  portionResult = { status: "running", scannedCount: 452, qualifiedCount: 28, sourceStatuses: { domy: "pending", olx: "pending" }, sourceErrors: {}, qualificationRejections: {} };
+  await withRadarCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    const body = await response.json();
+    assert.equal(body.runId, STALLED_RUN_ID);
+    assert.equal(body.status, "running");
+  });
+  assert.deepEqual(claimCalls, [], "an expired lease never creates a parallel run");
+  assert.deepEqual(portionCalls, [{ runId: STALLED_RUN_ID, ownerId: "owner-a", leaseToken: "lease-after-expiry" }]);
+  assert.deepEqual(releaseCalls, [{ runId: STALLED_RUN_ID, ownerId: "owner-a", leaseToken: "lease-after-expiry" }]);
+  assert.deepEqual(scheduledContinuations, [{ runId: STALLED_RUN_ID, hop: 1 }], "the server keeps going without a browser or another cron tick");
+});
+
+test("a server continuation hop is acknowledged at once and runs one portion of the exact run after the response", async () => {
+  reset();
+  runRows = [stalledRunRow()];
+  settingsByOwner["owner-a"] = { automaticScanEnabled: false };
+  portionResult = { status: "running", scannedCount: 452, qualifiedCount: 28, sourceStatuses: { domy: "pending" }, sourceErrors: {}, qualificationRejections: {} };
+  await withRadarCronSecret("test-secret", async () => {
+    const response = await route.POST(hopRequest("7"));
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { runId: STALLED_RUN_ID, status: "accepted" });
+    assert.deepEqual(portionCalls, [], "no portion work happens before the acknowledgement");
+    assert.equal(afterTasks.length, 1);
+    await afterTasks[0]!();
+  });
+  assert.deepEqual(resumeCalls, [{ ownerId: "owner-a", runId: STALLED_RUN_ID }]);
+  assert.deepEqual(portionCalls, [{ runId: STALLED_RUN_ID, ownerId: "owner-a", leaseToken: "resumed-lease" }]);
+  assert.deepEqual(claimCalls, []);
+  assert.deepEqual(settingsCalls, [], "finishing an already started run does not depend on the daily automation switch");
+  assert.deepEqual(awaitedContinuations, [{ runId: STALLED_RUN_ID, hop: 8 }], "inside the post-response task the next hop is awaited, not nested in another after()");
+  assert.deepEqual(scheduledContinuations, []);
+});
+
+test("parallel continuation requests for the same run execute exactly one portion; the loser ends without spawning work", async () => {
+  reset();
+  runRows = [stalledRunRow()];
+  portionResult = { status: "running", scannedCount: 452, qualifiedCount: 28, sourceStatuses: { domy: "pending" }, sourceErrors: {}, qualificationRejections: {} };
+  resumeSequence = [
+    { kind: "claimed", run: { id: STALLED_RUN_ID, leaseToken: "winner" } },
+    { kind: "blocked", reason: "run_changed" },
+    { kind: "blocked", reason: "lease_active" },
+  ];
+  await withRadarCronSecret("test-secret", async () => {
+    const responses = await Promise.all([route.POST(hopRequest("1")), route.POST(hopRequest("1")), route.POST(hopRequest("2"))]);
+    assert.deepEqual(responses.map((response) => response.status), [202, 202, 202]);
+    await Promise.all(afterTasks.map((task) => task()));
+  });
+  assert.equal(resumeCalls.length, 3);
+  assert.deepEqual(portionCalls, [{ runId: STALLED_RUN_ID, ownerId: "owner-a", leaseToken: "winner" }], "the fenced lease admits a single worker");
+  assert.deepEqual(claimCalls, [], "no request may create a replacement run");
+  assert.deepEqual(awaitedContinuations, [{ runId: STALLED_RUN_ID, hop: 2 }], "only the winner continues the chain");
+});
+
+test("a continuation hop never resumes a stopped, terminated or finished run", async () => {
+  for (const patch of [{ stop_requested_at: "2026-10-13T06:20:00.000Z" }, { user_terminated_at: "2026-10-13T06:20:00.000Z" }, { status: "completed", lease_until: null }]) {
+    reset();
+    runRows = [{ ...stalledRunRow(), ...patch }];
+    await withRadarCronSecret("test-secret", async () => {
+      assert.equal((await route.POST(hopRequest("3"))).status, 202);
+      await Promise.all(afterTasks.map((task) => task()));
+    });
+    assert.deepEqual(resumeCalls, [], JSON.stringify(patch));
+    assert.deepEqual(portionCalls, []);
+    assert.deepEqual(awaitedContinuations, []);
+  }
+});
+
+test("a continuation hop requires the Radar secret, a valid hop number and an exact run ID", async () => {
+  reset();
+  runRows = [stalledRunRow()];
+  await withRadarCronSecret("test-secret", async () => {
+    assert.equal((await route.POST(hopRequest("1", { runId: STALLED_RUN_ID }, "wrong"))).status, 401);
+    assert.equal((await route.POST(hopRequest("0"))).status, 400);
+    assert.equal((await route.POST(hopRequest("abc"))).status, 400);
+    assert.equal((await route.POST(hopRequest("301"))).status, 400, "a runaway chain stops at the hop limit");
+    assert.equal((await route.POST(hopRequest("1", {}))).status, 400, "a hop cannot pick a run by owner or start one");
+  });
+  assert.deepEqual(afterTasks, []);
+  assert.deepEqual(portionCalls, []);
+});
+
+test("a finished portion, an OLX-owned wait or a lost lease release never chains another hop", async () => {
+  for (const [result, release] of [
+    [{ status: "completed", scannedCount: 500, qualifiedCount: 30, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }, true],
+    [{ status: "running", scannedCount: 500, qualifiedCount: 30, sourceStatuses: { olx: "running" }, sourceErrors: {}, qualificationRejections: {} }, true],
+    [{ status: "running", scannedCount: 500, qualifiedCount: 30, sourceStatuses: { domy: "pending" }, sourceErrors: {}, qualificationRejections: {} }, false],
+  ] as const) {
+    reset();
+    runRows = [stalledRunRow()];
+    portionResult = { ...result };
+    releaseSucceeds = release;
+    await withRadarCronSecret("test-secret", async () => {
+      await route.POST(hopRequest("4"));
+      await Promise.all(afterTasks.map((task) => task()));
+    });
+    assert.equal(portionCalls.length, 1);
+    assert.deepEqual(awaitedContinuations, [], JSON.stringify(result.sourceStatuses));
+  }
 });

@@ -15,6 +15,10 @@ let terminationError: Error | null = null;
 let claimCalls: string[] = [];
 let claimCriteria: unknown[] = [];
 let portionCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
+let portionStatus = "running";
+let portionSourceStatuses: Record<string, string> = {};
+let releaseCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
+let continuationCalls: Array<{ runId: string; hop: number }> = [];
 
 mock.module("@/features/auth/operator", { namedExports: {
   requireOperator: async () => { if (operatorError) throw operatorError; return { id: "owner-1" }; },
@@ -25,7 +29,11 @@ mock.module("@/features/price-radar/server/collect", { namedExports: {
   resumeExistingRadarRun: async (_ownerId: string, runId: string) => { resumeCalls.push(runId); return resumeResult; },
   requestRadarRunStop: async (ownerId: string, runId: string) => { stopCalls.push({ ownerId, runId }); if (stopError) throw stopError; return stopResult; },
   requestRadarRunTermination: async (ownerId: string, runId: string) => { terminationCalls.push({ ownerId, runId }); if (terminationError) throw terminationError; return terminationResult; },
-  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: "running", scannedCount: 12, qualifiedCount: 2, sourceStatuses: {}, sourceErrors: {}, qualificationRejections: {} }; },
+  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: portionStatus, scannedCount: 12, qualifiedCount: 2, sourceStatuses: portionSourceStatuses, sourceErrors: {}, qualificationRejections: {} }; },
+  releaseRadarRunLease: async (input: { runId: string; ownerId: string; leaseToken: string }) => { releaseCalls.push(input); return true; },
+} });
+mock.module("@/features/price-radar/server/radar-continuation", { namedExports: {
+  scheduleRadarContinuation: (input: { runId: string; hop: number }) => { continuationCalls.push(input); },
 } });
 let sourcesFilteredToEmpty = false;
 mock.module("@/features/price-radar/server/radar-settings", { namedExports: {
@@ -50,6 +58,10 @@ function reset() {
   claimCalls = [];
   claimCriteria = [];
   portionCalls = [];
+  portionStatus = "running";
+  portionSourceStatuses = {};
+  releaseCalls = [];
+  continuationCalls = [];
   sourcesFilteredToEmpty = false;
 }
 
@@ -234,4 +246,24 @@ test("a saved selection filtered to empty by a disabled source (e.g. szybko) is 
   assert.match(body.message ?? "", /wyłączone/i);
   assert.deepEqual(claimCalls, [], "claim-or-create must never run -- that is the exact path that would reinterpret an empty list as 'all sources'");
   assert.deepEqual(portionCalls, []);
+});
+
+test("a PWA-started portion that leaves the run unfinished hands the same run to the server, so the phone may sleep", async () => {
+  reset();
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRunId: "existing-run" }) }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(releaseCalls, [{ runId: "existing-run", ownerId: "owner-1", leaseToken: "fresh-token" }], "only this request's own lease is released");
+  assert.deepEqual(continuationCalls, [{ runId: "existing-run", hop: 1 }], "the server continues the exact same run ID");
+});
+
+test("a finished portion or an OLX-owned wait never schedules a server continuation", async () => {
+  for (const [status, sourceStatuses] of [["completed", {}], ["partial", {}], ["running", { olx: "running" }]] as const) {
+    reset();
+    portionStatus = status;
+    portionSourceStatuses = { ...sourceStatuses };
+    const response = await route.POST(new Request("http://localhost/api/price-radar/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRunId: "existing-run" }) }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(releaseCalls, [], `${status} must keep its lease semantics`);
+    assert.deepEqual(continuationCalls, []);
+  }
 });

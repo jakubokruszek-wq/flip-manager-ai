@@ -24,6 +24,13 @@ const PORTION_BUDGET_MS = 42_000;
 const LEASE_SECONDS = 75;
 const YIELD_MARGIN_MS = 8_000;
 const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
+// Confirmed on Production (run 0938a6b6, 2026-10-13): a portal that times out
+// on every portion without committing a batch was retried forever, so the run
+// stayed "running" at the same counts and OLX (always last) never started.
+// After this many consecutive no-progress timeouts the source is closed for
+// this run only; other portals continue and the run can finish as partial.
+export const RADAR_SOURCE_TIMEOUT_LIMIT = 3;
+export const RADAR_SOURCE_TIMEOUT_LIMIT_ERROR = "RADAR_SOURCE_TIMEOUT_LIMIT";
 const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
 export const RADAR_STOPPED_BY_OPERATOR = "RADAR_STOPPED_BY_OPERATOR";
 const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "rooms", "floor", "location", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
@@ -237,7 +244,21 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
   return { kind: "claimed", run: toRadarRun(claimed.data as Row) };
 }
 
-export type RadarPortionResult = { status: "running" | "completed" | "failed" | "partial"; scannedCount: number; qualifiedCount: number; sourceStatuses: RadarRun["sourceStatuses"]; sourceErrors: Record<string, string>; sourceWarnings?: RadarRun["sourceWarnings"]; sourceRejectionCounts?: RadarRun["sourceRejectionCounts"]; qualificationRejections: NonNullable<RadarRun["qualificationRejections"]> };
+/**
+ * Ends the caller's own lease right after its portion returned "running", so
+ * the very next continuation (server chain, scheduler or browser) can claim
+ * the same checkpoint immediately instead of waiting for the lease to expire.
+ * Fenced by the exact lease token: it can never release another worker's
+ * lease, and it keeps the token so resumeExistingRadarRun's CAS stays exact.
+ */
+export async function releaseRadarRunLease(input: { runId: string; ownerId: string; leaseToken: string }, supabase: SupabaseClient = createAdminClient()): Promise<boolean> {
+  const released = await supabase.from("price_radar_runs").update({ lease_until: new Date().toISOString() })
+    .eq("id", input.runId).eq("owner_id", input.ownerId).eq("status", "running").eq("lease_token", input.leaseToken)
+    .select("id").maybeSingle();
+  return !released.error && Boolean(released.data);
+}
+
+export type RadarPortionResult ={ status: "running" | "completed" | "failed" | "partial"; scannedCount: number; qualifiedCount: number; sourceStatuses: RadarRun["sourceStatuses"]; sourceErrors: Record<string, string>; sourceWarnings?: RadarRun["sourceWarnings"]; sourceRejectionCounts?: RadarRun["sourceRejectionCounts"]; qualificationRejections: NonNullable<RadarRun["qualificationRejections"]> };
 
 /**
  * Runs one time-boxed source portion. Every listing write and every checkpoint
@@ -339,6 +360,13 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         const currentIndex = checkpoint.currentSourceIndex;
         const [deferredSource] = checkpoint.sourceQueue.splice(currentIndex, 1);
         if (deferredSource) checkpoint.sourceQueue.push(deferredSource);
+        // When every other unfinished portal was already tried in this portion
+        // (e.g. it timed out), OLX was picked again at once and rotated in a
+        // loop of checkpoint writes until the portion budget ran out, with no
+        // progress. Then OLX waits for the next portion instead.
+        if (!checkpoint.sourceQueue.some((candidate) => candidate !== "olx" && !attemptedSourceIds.has(candidate)
+          && !["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[candidate] ?? "")
+          && checkpoint.perSourceCursor[candidate] !== SOURCE_DONE_CURSOR)) attemptedSourceIds.add("olx");
         const nextIndex = nextUnfinishedSourceIndex(checkpoint, currentIndex, attemptedSourceIds);
         if (nextIndex === null) {
           checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
@@ -538,6 +566,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           addSourceRejectionCounts(checkpoint, sourceId, batch.sourceRejectionCounts ?? {});
           if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);
           checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
+          if (checkpoint.sourceTimeoutStreaks?.[sourceId]) delete checkpoint.sourceTimeoutStreaks[sourceId];
           if (await radarStopRequested(supabase, input)) {
             operatorStopDetected = true;
             checkpoint.sourceStatuses[sourceId] = "pending";
@@ -602,6 +631,20 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           continue;
         }
         if (isRetryableTimeout(reason, controller.signal)) {
+          checkpoint.sourceTimeoutStreaks ??= {};
+          const timeoutStreak = (checkpoint.sourceTimeoutStreaks[sourceId] ?? 0) + 1;
+          checkpoint.sourceTimeoutStreaks[sourceId] = timeoutStreak;
+          if (timeoutStreak >= RADAR_SOURCE_TIMEOUT_LIMIT) {
+            // Rows already committed for this source stay; only its remaining
+            // pages are skipped for this run. Never retried by later portions.
+            const committedProgress = checkpoint.perSourceCursor[sourceId] !== undefined;
+            checkpoint.sourceStatuses[sourceId] = committedProgress ? "partial" : "failed";
+            checkpoint.sourceErrors[sourceId] = `${RADAR_SOURCE_TIMEOUT_LIMIT_ERROR}: portal nie odpowiedział w ${timeoutStreak} kolejnych porcjach; pominięto go w tym przebiegu, pozostałe portale są kontynuowane.`;
+            checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
+            checkpoint.currentSourceIndex += 1;
+            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+            continue;
+          }
           checkpoint.sourceStatuses[sourceId] = "pending";
           // Confirmed by the owning run's own history (93a7f1d5...): this
           // source resumed and reached a real terminal result within the

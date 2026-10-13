@@ -28,7 +28,8 @@ test("the GitHub schedule checks saved Warsaw settings every five minutes and st
   assert.match(workflow, /MAX_REQUESTS:\s*["']24["']/u);
   assert.match(workflow, /MAX_ELAPSED_MS:\s*["']3300000["']/u);
   assert.match(runner, /AbortSignal\.timeout\(REQUEST_TIMEOUT_MS\)/u);
-  assert.match(runner, /REQUEST_TIMEOUT_MS\s*=\s*58_000/u, "an HTTP call must time out just after the endpoint's 55-second function bound");
+  assert.match(endpoint, /maxDuration = 60;/u);
+  assert.match(runner, /REQUEST_TIMEOUT_MS\s*=\s*62_000/u, "an HTTP call must time out just after the endpoint's 60-second function bound");
 });
 
 test("the runner resumes durable portions and stops only after an explicit terminal status", async () => {
@@ -173,4 +174,29 @@ test("authorization failures and safe request/time caps stop without reporting c
     sleepImpl: async (ms) => { requestClock += ms; }, now: () => requestClock, log: () => {},
   }), /safe limit after 2 requests/u);
   assert.equal(requestCount, 2);
+});
+
+test("a 409 from the exact-run continuation means another worker owns the run, not a scheduler failure", async () => {
+  const logs = [];
+  const responses = [
+    json(200, { runId: "same-run", status: "running", scannedCount: 440, qualifiedCount: 27, retryAfterSeconds: 80 }),
+    json(409, { runId: "same-run", status: "run_changed" }),
+  ];
+  const result = await runPriceRadarScheduler({
+    url: "https://radar.test/api/jobs/price-radar-collect", secret: "secret",
+    fetchImpl: async () => responses.shift(), sleepImpl: async () => undefined, now: () => 0, log: (line) => logs.push(line),
+  });
+  assert.deepEqual(result, { status: "run_changed", runId: "same-run", requests: 2, terminal: true });
+  assert.match(logs.at(-1), /continued by another worker/u);
+});
+
+test("a user-terminated or no-longer-active run stops the runner cleanly", async () => {
+  for (const status of ["user_terminated", "run_not_active"]) {
+    const result = await runPriceRadarScheduler({
+      url: "https://radar.test/api/jobs/price-radar-collect", secret: "secret",
+      fetchImpl: async () => json(200, { runId: "same-run", status, terminal: true }), sleepImpl: async () => undefined, now: () => 0, log: () => undefined,
+    });
+    assert.equal(result.status, status);
+    assert.equal(result.terminal, true);
+  }
 });

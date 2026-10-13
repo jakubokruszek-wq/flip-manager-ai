@@ -172,7 +172,7 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
   },
 });
 
-const { claimOrCreateRadarRun, resumeExistingRadarRun, runRadarCollectionPortion, RADAR_SOURCES } = await import("./collect.ts");
+const { claimOrCreateRadarRun, releaseRadarRunLease, resumeExistingRadarRun, runRadarCollectionPortion, RADAR_SOURCES, RADAR_SOURCE_TIMEOUT_LIMIT } = await import("./collect.ts");
 const { getRadarResults } = await import("./radar-results.ts");
 
 function qualifyingListing(id: string, source: string) {
@@ -1209,4 +1209,89 @@ test("a candidate missing its district AND another criterion (e.g. an unconfirme
   assert.equal(db.tables.price_radar_district_queue.length, 0, "missing more than just the district must never enter the district-only queue");
   assert.equal(db.tables.price_radar_verification_queue.length, 1, "the general queue handles multiple uncertain facts for a credible offer");
   assert.deepEqual(result.qualificationRejections, {}, "a saved review candidate is not counted as discarded");
+});
+
+test("a portal that times out on every portion is closed after a bounded number of tries so the run, OLX and other portals are never blocked", async () => {
+  // Production 2026-10-13: run 0938a6b6 returned "running" 443/27 for 24
+  // consecutive scheduler portions because Domy.pl timed out each time and a
+  // timeout was always retried; OLX (always last) could never start.
+  // Oferty.net stands in for that portal here; Adresowo is CAPTCHA-blocked.
+  const db = fakeDb();
+  const attempts: Record<string, number> = {};
+  fakeSourceImpl = async (id) => {
+    attempts[id] = (attempts[id] ?? 0) + 1;
+    if (id === "oferty_net") { const error = new Error("The operation was aborted due to timeout"); error.name = "TimeoutError"; throw error; }
+    if (id === "adresowo") throw new Error("HTTP 403 CAPTCHA_OR_ACCESS_DENIED");
+    return { listings: [qualifyingListing(`${id}-ok`, id)], warnings: [], fetched: 1 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net", "adresowo", "domiporta", "olx"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+  const input = { runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! };
+
+  const portions = [];
+  for (let portion = 0; portion < RADAR_SOURCE_TIMEOUT_LIMIT + 2; portion += 1) {
+    const startedAt = Date.now();
+    const result = await runRadarCollectionPortion(input, db as never);
+    assert.ok(Date.now() - startedAt < 5_000, "a deferred OLX source must not spin checkpoint writes until the 34 s portion budget is spent");
+    portions.push(result);
+    if (result.sourceStatuses.olx === "running") break;
+  }
+  const last = portions.at(-1)!;
+  assert.equal(attempts.oferty_net, RADAR_SOURCE_TIMEOUT_LIMIT, "the timing-out portal is tried exactly up to the limit, never forever");
+  assert.equal(last.sourceStatuses.oferty_net, "failed");
+  assert.match(last.sourceErrors.oferty_net ?? "", /^RADAR_SOURCE_TIMEOUT_LIMIT:/u);
+  assert.equal(last.sourceStatuses.adresowo, "failed");
+  assert.match(last.sourceErrors.adresowo ?? "", /TERMINAL_ACCESS_ERROR/u, "a CAPTCHA is recorded, never bypassed or retried");
+  assert.equal(attempts.adresowo, 1);
+  assert.equal(last.sourceStatuses.domiporta, "completed");
+  assert.equal(attempts.domiporta, 1, "a completed portal is never fetched again by later portions");
+  assert.equal(last.sourceStatuses.olx, "running", "OLX finally reaches its worker queue instead of being deferred forever");
+  assert.equal(db.tables.olx_scan_jobs.length, 1);
+  assert.equal(db.tables.price_radar_runs.length, 1, "all portions continued the one run");
+  assert.equal(db.tables.price_radar_runs[0]?.id, claim.run.id);
+});
+
+test("a portal that commits progress between timeouts is not closed; only consecutive no-progress timeouts count", async () => {
+  const db = fakeDb();
+  let calls = 0;
+  fakeSourceImpl = async (id, cursor, batches) => {
+    if (id !== "domiporta") return { listings: [], warnings: [], fetched: 0 };
+    calls += 1;
+    // Each attempt commits one page and then runs out of time on the next.
+    await batches!.onBatch({ listings: [qualifyingListing(`page-${calls}`, "domiporta")], warnings: [], fetched: 1 }, (cursor ?? 1) + 1);
+    if (calls <= RADAR_SOURCE_TIMEOUT_LIMIT + 1) { const error = new Error("timeout"); error.name = "AbortError"; throw error; }
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+  let result;
+  for (let portion = 0; portion < RADAR_SOURCE_TIMEOUT_LIMIT + 3; portion += 1) {
+    result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+    if (result.status !== "running") break;
+  }
+  assert.equal(result?.status, "completed", "a slow but progressing portal finishes normally");
+  assert.equal(result?.scannedCount, RADAR_SOURCE_TIMEOUT_LIMIT + 2);
+});
+
+test("releasing a lease after a portion lets the next continuation claim the same run at once, fenced by the exact lease token", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async () => ({ listings: [], warnings: [], fetched: 0 });
+  const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claim.kind !== "claimed") throw new Error("expected claimed");
+  const row = db.tables.price_radar_runs[0]!;
+  const blocked = await resumeExistingRadarRun(ownerId, claim.run.id, db as never);
+  assert.deepEqual(blocked, { kind: "blocked", reason: "lease_active" }, "an active lease is never taken over");
+
+  assert.equal(await releaseRadarRunLease({ runId: claim.run.id, ownerId, leaseToken: "someone-elses-token" }, db as never), false);
+  assert.ok(Date.parse(String(row.lease_until)) > Date.now(), "a foreign token cannot release the lease");
+
+  assert.equal(await releaseRadarRunLease({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never), true);
+  const resumed = await resumeExistingRadarRun(ownerId, claim.run.id, db as never);
+  assert.equal(resumed.kind, "claimed");
+  if (resumed.kind !== "claimed") return;
+  assert.equal(resumed.run.id, claim.run.id, "the same run continues; no parallel run is created");
+  assert.notEqual(resumed.run.leaseToken, claim.run.leaseToken);
+  const second = await resumeExistingRadarRun(ownerId, claim.run.id, db as never);
+  assert.equal(second.kind, "blocked", "a concurrent second continuation loses the CAS");
+  assert.equal(db.tables.price_radar_runs.length, 1);
 });

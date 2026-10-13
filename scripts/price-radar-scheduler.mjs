@@ -1,9 +1,9 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const STOP_TICK = new Set(["completed", "partial", "failed", "already_ran_today", "idle", "paused_by_operator", "not_due", "automation_disabled"]);
+const STOP_TICK = new Set(["completed", "partial", "failed", "already_ran_today", "idle", "paused_by_operator", "not_due", "automation_disabled", "user_terminated", "run_not_active"]);
 const MAX_RETRY_AFTER_SECONDS = 300;
-const REQUEST_TIMEOUT_MS = 58_000;
+const REQUEST_TIMEOUT_MS = 62_000;
 
 /**
  * Drives the protected Radar collection endpoint until its durable checkpoint
@@ -56,6 +56,12 @@ export async function runPriceRadarScheduler({
       if (typeof unavailable?.error === "string" && /CRON_SECRET/u.test(unavailable.error)) {
         throw new Error("Radar scheduler configuration is missing PRICE_RADAR_CRON_SECRET (HTTP 503).");
       }
+    }
+    // 409 means another worker (the server's own continuation or an open PWA)
+    // changed this exact run between our read and claim. It keeps going there.
+    if (response.status === 409 && expectedRunId) {
+      log(`Radar tick ${requests}: run ${expectedRunId} is being continued by another worker.`);
+      return { status: "run_changed", runId: expectedRunId, requests, terminal: true };
     }
     if (!response.ok) {
       consecutiveFailures += 1;
