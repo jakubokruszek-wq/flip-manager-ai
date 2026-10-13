@@ -13,7 +13,10 @@ export async function authenticateFacebookWorkerRequest(request: Request): Promi
     const result = await verifyFacebookWorkerAuth({
       secret, method: request.method, pathname: new URL(request.url).pathname, body, headers: request.headers,
       useNonce: async (nonce, expiresAt) => {
-        await supabase.from("facebook_worker_nonces").delete().lt("expires_at", new Date().toISOString());
+        const cleanup = await supabase.from("facebook_worker_nonces").delete().lt("expires_at", new Date().toISOString());
+        // Never block authentication on cleanup, but never hide it either:
+        // a silently failing cleanup let expired nonces accumulate.
+        if (cleanup?.error) console.error("FACEBOOK NONCE CLEANUP ERROR", { code: cleanup.error.code, message: cleanup.error.message });
         const inserted = await supabase.from("facebook_worker_nonces").insert({ nonce, expires_at: new Date(expiresAt).toISOString() });
         if (inserted.error) console.error("FACEBOOK NONCE STORE ERROR", { code: inserted.error.code, message: inserted.error.message, details: inserted.error.details, hint: inserted.error.hint });
         return resolveFacebookNonceStoreResult(inserted.error);

@@ -152,4 +152,17 @@ function sameCity(left: string | null, right: string | null): boolean {
 }
 function isTenement(value: string | null): boolean { return Boolean(value && /kamienic|tenement/i.test(value)); }
 function isNonTenement(value: string | null | undefined): boolean { return Boolean(value && !isTenement(value)); }
-function normalize(value: string): string { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l").replace(/\s+/g, " ").trim(); }
+// normalize() runs for every subject x comparable pair (Finder scores ~100
+// listings against up to 500 comps per read) and locale-aware lowercasing
+// dominated the profile. It is pure, so a bounded memo returns identical
+// results without recomputing the same city/district/street strings.
+const NORMALIZE_CACHE_LIMIT = 5_000;
+const normalizeCache = new Map<string, string>();
+function normalize(value: string): string {
+  const cached = normalizeCache.get(value);
+  if (cached !== undefined) return cached;
+  const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l").replace(/\s+/g, " ").trim();
+  if (normalizeCache.size >= NORMALIZE_CACHE_LIMIT) normalizeCache.clear();
+  normalizeCache.set(value, normalized);
+  return normalized;
+}

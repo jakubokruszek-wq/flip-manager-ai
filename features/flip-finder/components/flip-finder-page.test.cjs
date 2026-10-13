@@ -58,8 +58,9 @@ test("saved listings database is labeled independently from the latest scan", ()
   assert.match(inlineResults, /BAZA OFERT/);
   assert.match(inlineResults, /AKTYWNE \/ DOPASOWANE/);
   assert.doesNotMatch(inlineResults, /AKTYWNE \/ MATCHED/);
-  assert.match(inlineResults, /Widoczne oferty:/);
-  assert.match(inlineResults, /Razem · Dopasowane: \$\{sourceCounts\.total\.matched\} · Do oceny: \$\{sourceCounts\.total\.review\}/);
+  assert.match(inlineResults, /data-testid="finder-section-counts">Dopasowane: <strong className="text-foreground">\{sourceCounts\.total\.matched\}<\/strong> · Do oceny: <strong className="text-foreground">\{sourceCounts\.total\.review\}<\/strong> · Do weryfikacji budynku: <strong className="text-foreground">\{sourceCounts\.total\.buildingVerification\}<\/strong> · Archiwalne:/);
+  assert.match(inlineResults, /const sourceLine = \(counts: \{ matched: number; review: number; buildingVerification: number \}\) => `Dopasowane: \$\{counts\.matched\} · Do oceny: \$\{counts\.review\} · Weryfikacja budynku: \$\{counts\.buildingVerification\}`/);
+  assert.match(inlineResults, /label=\{`Razem · \$\{sourceLine\(sourceCounts\.total\)\}`\}/);
   assert.doesNotMatch(inlineResults, /Aktywne zapisane oferty:/);
   assert.doesNotMatch(inlineResults, /Znalezione oferty:/);
 });
@@ -107,23 +108,26 @@ test("search history can be cleared explicitly without deleting filters or sourc
   assert.match(historyRoute, /createAdminClient/);
 });
 
-test("archive is opt-in and fetched separately from the main finder", () => {
+test("archive is opt-in, fetched separately from the main finder, and paged on the server", () => {
   assert.match(inlineResults, /Historia ofert/);
-  assert.match(inlineResults, /view=archive/);
-  // Semantic properties (see also results.test.ts, which exercises the real
-  // sortResults(...) call this expression makes, behaviorally): archive stays
-  // empty while collapsed, and once opened it is sorted, not just passed
-  // through raw — using the currently selected `sort` state, not a fixed one.
-  assert.match(inlineResults, /archiveOpen \? sortResults\(data\?\.archivedResults \?\? \[\], sort\) : \[\]/, "archive must be sorted with the live `sort` state, and empty while collapsed");
-  assert.match(inlineResults, /const archivedResults = useMemo\(\(\) => archiveOpen \? sortResults\([^;]+\[archiveOpen, data\?\.archivedResults, sort\]\)/, "the memo must recompute when the selected sort changes, not only when archiveOpen/data change");
+  assert.match(inlineResults, /view=archive&offset=\$\{offset\}&limit=\$\{ARCHIVE_PAGE_SIZE\}/);
+  // The main (active) request never asks for the archive: opening history
+  // must not re-download the active sections or thousands of old rows.
+  assert.match(inlineResults, /fetchFinderJson\(`\/api\/flip-finder\/search-filters\/\$\{filterId\}\/results`, "Nie udało się pobrać ofert\."\)/);
+  assert.match(inlineResults, /if \(next && archive === null\) void loadArchivePage\(0\);/, "the first archive page is requested only when the archive is opened");
+  // Archive stays empty while collapsed and is sorted with the live `sort` state once opened.
+  assert.match(inlineResults, /const archivedResults = useMemo\(\(\) => archiveOpen \? sortResults\(archive\?\.results \?\? \[\], sort\) : \[\], \[archiveOpen, archive\?\.results, sort\]\)/);
+  assert.match(inlineResults, /Pokaż kolejne archiwalne oferty/);
   assert.doesNotMatch(inlineResults, /<h2 className="font-semibold">ARCHIWUM<\/h2>/);
 });
 
 test("review counter and rendered cards use the same current-filter dataset", () => {
-  assert.match(inlineResults, /Potencjalne oferty bez kompletu danych: \{reviewCount\}/);
+  assert.match(inlineResults, /Potencjalne oferty bez kompletu danych \(typ budynku potwierdzony\): \{reviewCount\}/);
   assert.match(inlineResults, /visibleReviewResults = sortedReviewResults/);
   assert.match(inlineResults, /visibleReviewResults\.map\(\(result\) => <ReviewListingCard/);
-  assert.match(inlineResults, /counts\?: \{ active: number; review: number; archived: number \}/);
+  assert.match(inlineResults, /counts\?: \{ active: number; review: number; buildingVerification\?: number; excluded\?: number; archived: number \}/);
+  assert.match(inlineResults, /DO WERYFIKACJI BUDYNKU/);
+  assert.match(inlineResults, /Zapisane dopasowania niewidoczne w wynikach: \{excludedResults\.length\} \(z powodem\)/);
 });
 
 // REVIEW now renders through the exact same ExpandableListingCard as

@@ -58,6 +58,7 @@ function chainable(result: unknown) {
     select: () => builder,
     eq: () => builder,
     not: () => builder,
+    is: () => builder,
     order: () => builder,
     limit: () => builder,
     range: () => builder,

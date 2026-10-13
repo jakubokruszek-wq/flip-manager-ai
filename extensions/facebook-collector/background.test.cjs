@@ -886,7 +886,9 @@ test("gallery root failures expose bounded, non-sensitive diagnostics", () => {
 });
 
 test("gallery button reads terminal status without browser cache", () => {
-  assert.match(inlineFilterResults, /search-filters\/\$\{filterId\}\/results\$\{archiveOpen \? "\?view=archive" : ""\}`, \{ cache: "no-store" \}\)/);
+  // Finder results (active view and archive pages) go through one helper that never uses the browser cache.
+  assert.match(inlineFilterResults, /await fetch\(url, \{ cache: "no-store", signal: controller\.signal \}\)/);
+  assert.match(inlineFilterResults, /fetchFinderJson\(`\/api\/flip-finder\/search-filters\/\$\{filterId\}\/results`/);
   assert.match(inlineFilterResults, /listings\/\$\{result\.id\}\/gallery`, \{ cache: "no-store" \}\)/);
   assert.match(inlineFilterResults, /GALLERY_BUTTON_RENDERED[\s\S]*disabled[\s\S]*pointerEvents/);
 });

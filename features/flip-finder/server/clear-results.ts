@@ -32,7 +32,7 @@ export async function clearFilterResults(filterId: string, scope: ClearResultsSc
   const cutoff = typeof scope.olderThanDays === "number" && scope.olderThanDays > 0
     ? Date.now() - scope.olderThanDays * 86_400_000
     : null;
-  const targets = [...new Set([...payload.results, ...payload.reviewResults]
+  const targets = [...new Set([...payload.results, ...payload.reviewResults, ...payload.buildingVerificationResults]
     .filter((result) => !scope.source || result.source === scope.source)
     .filter((result) => {
       if (cutoff === null) return true;

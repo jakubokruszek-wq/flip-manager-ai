@@ -48,7 +48,7 @@ function baseListing(overrides: Record<string, unknown> = {}) {
     price: 300000, area: 50, price_per_sqm: 6000, city: "Łódź", district: null,
     original_url: null, flip_score: 40, created_at: "2026-09-19T00:00:00Z",
     first_seen_at: "2026-09-19T00:00:00Z", status: "active",
-    lifecycle_status: "ACTIVE", manual_decision: null,
+    lifecycle_status: "ACTIVE", manual_decision: null, building_type: "blok",
     ...overrides,
   };
 }
@@ -182,4 +182,21 @@ test("persistOrOverlay keeps an existing alert unchanged when the same event_key
   await getAlerts();
 
   assert.equal(JSON.stringify(currentDb.rows("alerts")), before, "a regenerated duplicate must not overwrite the historical alert row");
+});
+
+test("a stored canonical_match alert for a listing whose own text confirms a tenement is hidden (never pushed), but kept in the database", async () => {
+  reset();
+  currentDb.seed("listings", [anchorListing(), baseListing({ id: "l-tenement", lifecycle_status: "ACTIVE", building_type: "blok", description: "Mieszkanie w odnowionej kamienicy z 1910 roku." })]);
+  currentDb.seed("alerts", [historicalAlert({ id: "a-t", type: "canonical_match", event_key: "l-tenement:canonical_match:v1", listing_id: "l-tenement" })]);
+  const alerts = await getAlerts();
+  assert.equal(alerts.some((a) => a.listingId === "l-tenement"), false, "no alert or push for a confirmed tenement, even with a stale ACTIVE lifecycle");
+  assert.ok(currentDb.rows("alerts").some((row) => row.event_key === "l-tenement:canonical_match:v1"), "history is never deleted");
+});
+
+test("an ACTIVE listing with an unverified building type does not generate a canonical_match push", async () => {
+  reset();
+  currentDb.seed("listings", [anchorListing(), baseListing({ id: "l-unknown", lifecycle_status: "ACTIVE", building_type: null })]);
+  const alerts = await getAlerts();
+  assert.equal(alerts.some((a) => a.listingId === "l-unknown" && a.type === "canonical_match"), false);
+  assert.ok(alerts.some((a) => a.listingId === "anchor-active" && a.type === "canonical_match"), "a confirmed block still alerts");
 });

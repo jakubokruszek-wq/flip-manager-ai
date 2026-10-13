@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { AlertType, InvestmentAlert } from "./types.ts";
+import { qualifyBuildingType } from "../flip-finder/building-type-qualification.ts";
 
-export type AlertListing = { id:string;title:string;description:string|null;source:string;price:number|null;area:number|null;pricePerSqm:number|null;city:string|null;district:string|null;originalUrl:string|null;flipScore:number|null;createdAt:string;firstSeenAt:string;sellerType:string|null;condition:string|null;opportunityScore:number|null;neighborhood:string|null;facebookUrl:string|null;groupName:string|null;groupPriority:string|null;flags:string[];lifecycleStatus:string|null;manualDecision:string|null };
+export type AlertListing = { id:string;title:string;description:string|null;source:string;price:number|null;area:number|null;pricePerSqm:number|null;city:string|null;district:string|null;originalUrl:string|null;flipScore:number|null;createdAt:string;firstSeenAt:string;sellerType:string|null;condition:string|null;opportunityScore:number|null;neighborhood:string|null;facebookUrl:string|null;groupName:string|null;groupPriority:string|null;flags:string[];lifecycleStatus:string|null;manualDecision:string|null;buildingType?:string|null };
 export type PricePoint = { price:number|null; capturedAt:string };
 
 /**
@@ -14,16 +15,32 @@ export type PricePoint = { price:number|null; capturedAt:string };
  * alert can never exist for a listing the user wouldn't even see as
  * actionable in the Finder.
  */
-export function isCanonicallyActionable(listing:Pick<AlertListing,"lifecycleStatus"|"manualDecision">):boolean{
+type BuildingEvidence={buildingType?:string|null;title?:string|null;description?:string|null};
+export function isCanonicallyActionable(listing:Pick<AlertListing,"lifecycleStatus"|"manualDecision">&BuildingEvidence):boolean{
   if(listing.manualDecision==="REJECTED")return false;
+  if(alertBuildingStatus(listing)==="rejected")return false;
   return listing.lifecycleStatus==="ACTIVE"||listing.lifecycleStatus==="REVIEW"||listing.lifecycleStatus===null;
+}
+
+/**
+ * Investment alerts and pushes follow the Finder's building rule (only
+ * confirmed blocks and apartment buildings): a listing whose own data or
+ * text confirms a tenement/house never alerts, and a "canonical_match" push
+ * additionally needs a confirmed allowed building type, so a stale ACTIVE
+ * lifecycle from older rules cannot push a tenement or an unverified building.
+ */
+export const ALERT_ALLOWED_BUILDING_TYPES=["blok","apartamentowiec"] as const;
+export function alertBuildingStatus(listing:BuildingEvidence):"confirmed"|"rejected"|"unverified"{
+  if(listing.buildingType===undefined&&listing.title===undefined&&listing.description===undefined)return"unverified";
+  const qualification=qualifyBuildingType({structuredValue:listing.buildingType??null,title:listing.title??null,description:listing.description??null},ALERT_ALLOWED_BUILDING_TYPES);
+  return qualification.status==="rejected"?"rejected":qualification.status==="confirmed"?"confirmed":"unverified";
 }
 
 export function createAlertsForListing(listing:AlertListing,snapshots:PricePoint[],now=Date.now()):InvestmentAlert[]{
   if(!isCanonicallyActionable(listing))return[];
   const alerts:InvestmentAlert[]=[]; const searchable=[listing.title,listing.description,...listing.flags].filter(Boolean).join(" ").toLocaleLowerCase("pl-PL");
   const keyword=/bezpośrednio|bez pośredników|po babci|pilnie|do remontu/.test(searchable);
-  if(listing.lifecycleStatus==="ACTIVE") alerts.push(make("canonical_match",listing,listing.createdAt,"v1"));
+  if(listing.lifecycleStatus==="ACTIVE"&&alertBuildingStatus(listing)==="confirmed") alerts.push(make("canonical_match",listing,listing.createdAt,"v1"));
   if((listing.opportunityScore??0)>=85||(listing.source==="facebook"&&keyword)) alerts.push(make("facebook_opportunity",listing,listing.createdAt,"v1"));
   if((listing.flipScore??0)>=85) alerts.push(make("high_flip_score",listing,listing.createdAt,"v1"));
   if(listing.sellerType==="private"&&listing.condition==="renovation") alerts.push(make("private_seller",listing,listing.createdAt,"v1"));

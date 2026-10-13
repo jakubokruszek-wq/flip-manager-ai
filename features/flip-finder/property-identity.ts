@@ -51,8 +51,36 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
   const orderedRows = [...rows].sort((a, b) => a.id.localeCompare(b.id));
   const assessments = new Map<string, PairIdentityAssessment>();
   const candidates = new Map<string, Array<ConfirmedPropertyMember & { reason: string }>>();
-  for (let i = 0; i < orderedRows.length; i += 1) {
-    for (let j = i + 1; j < orderedRows.length; j += 1) {
+  // assessListingIdentityPair can only return "confirmed"/"candidate" for two
+  // rows that share an explicit identity, an agency reference, a unit key or
+  // a building key; every other pair is "separate" by construction. Only
+  // those pairs are assessed, which keeps grouping near-linear instead of
+  // comparing every pair of rows (O(n²)) on each Finder read.
+  const comparablePairs = new Set<string>();
+  const buckets = new Map<string, number[]>();
+  orderedRows.forEach((row, index) => {
+    const evidence = row.identityEvidence;
+    const identity = normalizeConfirmedPropertyIdentity(row.crossSourceIdentity);
+    const keys = [
+      identity ? `identity:${identity}` : null,
+      evidence?.agencyReference ? `agency:${evidence.agencyReference.agency}\u0000${evidence.agencyReference.number}` : null,
+      evidence?.unitKey ? `unit:${evidence.unitKey}` : null,
+      evidence?.buildingKey ? `building:${evidence.buildingKey}` : null,
+    ];
+    for (const key of keys) {
+      if (!key) continue;
+      const members = buckets.get(key);
+      if (members) members.push(index);
+      else buckets.set(key, [index]);
+    }
+  });
+  for (const members of buckets.values()) {
+    for (let i = 0; i < members.length; i += 1) for (let j = i + 1; j < members.length; j += 1) comparablePairs.add(`${members[i]}:${members[j]}`);
+  }
+  const pairs = [...comparablePairs].map((pair) => pair.split(":").map(Number) as [number, number]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const confirmedNeighbours = new Map<string, Set<string>>();
+  for (const [i, j] of pairs) {
+    {
       const left = orderedRows[i];
       const right = orderedRows[j];
       const key = identityPairKey(left.id, right.id);
@@ -63,6 +91,10 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
         blocked: blocked.has(key),
       });
       assessments.set(key, assessment);
+      if (assessment.kind === "confirmed") {
+        confirmedNeighbours.set(left.id, (confirmedNeighbours.get(left.id) ?? new Set()).add(right.id));
+        confirmedNeighbours.set(right.id, (confirmedNeighbours.get(right.id) ?? new Set()).add(left.id));
+      }
       if (assessment.kind === "candidate") {
         const leftList = candidates.get(left.id) ?? [];
         leftList.push({ ...toMember(right), reason: assessment.reason });
@@ -93,6 +125,8 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     }
   }
 
+  const groupIndexById = new Map<string, number>();
+  groups.forEach((members, index) => members.forEach((member) => groupIndexById.set(member.id, index)));
   for (const row of orderedRows) {
     if (assigned.has(row.id)) continue;
     // A persisted manual group may be only partially visible in this result
@@ -101,20 +135,29 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
     // group around its remaining member.
     if (manualGroupByListing.has(row.id)) {
       groups.push([row]);
+      groupIndexById.set(row.id, groups.length - 1);
       assigned.add(row.id);
       continue;
     }
-    const cluster = groups.find((members) => {
+    // Only a group that already contains a confirmed neighbour of this row
+    // can accept it (same first-fit order as before, without scanning every group).
+    const neighbourGroups = [...(confirmedNeighbours.get(row.id) ?? [])]
+      .map((id) => groupIndexById.get(id))
+      .filter((index): index is number => index !== undefined)
+      .sort((a, b) => a - b);
+    const clusterIndex = neighbourGroups.find((index) => {
+      const members = groups[index];
       if (members.some((member) => manualGroupByListing.has(member.id))) return false;
       return members.every((member) => assessments.get(identityPairKey(row.id, member.id))?.kind === "confirmed");
     });
-    if (cluster) {
-      cluster.push(row);
-      assigned.add(row.id);
+    if (clusterIndex !== undefined) {
+      groups[clusterIndex].push(row);
+      groupIndexById.set(row.id, clusterIndex);
     } else {
       groups.push([row]);
-      assigned.add(row.id);
+      groupIndexById.set(row.id, groups.length - 1);
     }
+    assigned.add(row.id);
   }
 
   return groups.map((members) => {
@@ -123,7 +166,9 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
       : null;
     const manualGroup = members.length > 1 ? manualGroupByListing.get(members[0].id) ?? null : null;
     const isManual = Boolean(manualGroup && members.every((member) => manualGroupByListing.get(member.id) === manualGroup));
-    const representative = [...members].sort((a, b) => completeness(b) - completeness(a) || a.source.localeCompare(b.source) || a.id.localeCompare(b.id))[0];
+    // A MATCHED member represents the property (its price/area are the ones
+    // that satisfy the filter); completeness only breaks ties within a bucket.
+    const representative = [...members].sort((a, b) => bucketRank(a.decisionBucket) - bucketRank(b.decisionBucket) || completeness(b) - completeness(a) || a.source.localeCompare(b.source) || a.id.localeCompare(b.id))[0];
     const groupResult = members.length > 1 ? mergeResultMembers(representative, members, identity) : { ...representative, crossSourceIdentity: identity, linkedListings: [toMember(representative)] };
     const memberIds = new Set(members.map((member) => member.id));
     const candidatesById = new Map<string, ConfirmedPropertyMember & { reason: string }>();
@@ -142,7 +187,10 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
 function mergeResultMembers<T extends ConfirmedPropertyMember & { decisionBucket?: "MATCHED" | "REVIEW" | "REJECTED"; lifecycleStatus?: "ACTIVE" | "REVIEW" | "STALE" | "ARCHIVED" | "REJECTED"; manualDecision?: "ACCEPTED" | "REJECTED" | null; matchReasons?: string[]; unknownFields?: string[]; isNew?: boolean }>(representative: T, members: T[], identity: string | null): ConfirmedPropertyGroupResult<T> {
   const rejected = members.some((member) => member.manualDecision === "REJECTED" || member.decisionBucket === "REJECTED" || member.lifecycleStatus === "REJECTED");
   const archived = members.some((member) => member.lifecycleStatus === "ARCHIVED" || member.lifecycleStatus === "STALE" || member.matchReasons?.includes("finder_cleared"));
-  const bucket = rejected ? "REJECTED" : members.some((member) => member.decisionBucket === "REVIEW") ? "REVIEW" : "MATCHED";
+  // One confirmed property: if any portal's copy satisfies the filter the
+  // property matches. A REVIEW copy on another portal (e.g. missing a field
+  // the matched copy has) must not demote or hide the match.
+  const bucket = rejected ? "REJECTED" : members.some((member) => member.decisionBucket === "MATCHED") ? "MATCHED" : members.some((member) => member.decisionBucket === "REVIEW") ? "REVIEW" : "MATCHED";
   return {
     ...representative,
     crossSourceIdentity: identity,
@@ -152,8 +200,12 @@ function mergeResultMembers<T extends ConfirmedPropertyMember & { decisionBucket
     manualDecision: members.some((member) => member.manualDecision === "REJECTED") ? "REJECTED" : members.every((member) => member.manualDecision === "ACCEPTED") ? "ACCEPTED" : null,
     isNew: members.some((member) => member.isNew === true),
     matchReasons: [...new Set(members.flatMap((member) => member.matchReasons ?? []))],
-    unknownFields: [...new Set(members.flatMap((member) => member.unknownFields ?? []))],
+    unknownFields: bucket === "MATCHED" ? [...(representative.unknownFields ?? [])] : [...new Set(members.flatMap((member) => member.unknownFields ?? []))],
   };
+}
+
+function bucketRank(bucket: "MATCHED" | "REVIEW" | "REJECTED" | undefined): number {
+  return bucket === "MATCHED" ? 0 : bucket === "REVIEW" ? 1 : bucket === "REJECTED" ? 2 : 1;
 }
 
 function emptyEvidence(): ListingIdentityEvidence {

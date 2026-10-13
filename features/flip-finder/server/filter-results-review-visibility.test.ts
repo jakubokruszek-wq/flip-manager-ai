@@ -188,11 +188,14 @@ test("filter-list counts use the same grouped visible MATCHED + REVIEW read path
   assert.equal(listAfter.filters[0]?.membershipRows, 4, "clearing preserves all audit membership rows while both visible counters stay zero");
 
   const detailResponse = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
-  const detail = await detailResponse.json() as { results: unknown[]; reviewResults: unknown[]; counts: { active: number; review: number } };
+  const detail = await detailResponse.json() as { results: unknown[]; reviewResults: unknown[]; counts: Record<string, number> };
   assert.equal(detailResponse.status, 200);
   assert.deepEqual(detail.results, []);
   assert.deepEqual(detail.reviewResults, []);
-  assert.deepEqual(detail.counts, { active: 0, review: 0, archived: 0 });
+  // The two cleared memberships move to the archive; the inconsistent
+  // "current + finder_cleared" row and the manual rejection stay listed as
+  // explicit exclusions with reasons instead of vanishing.
+  assert.deepEqual(detail.counts, { active: 0, review: 0, buildingVerification: 0, excluded: 2, archived: 2 });
 });
 
 test("filter-list membership diagnostics page past the PostgREST row cap before deciding a filter is empty", async () => {
@@ -276,9 +279,9 @@ test("pre-migration identity columns and tables leave ordinary Finder results vi
   currentDb = db;
   const response = await getFilterResultsRoute(new Request(`http://localhost/api/flip-finder/search-filters/${FILTER_ID}/results`), { params: Promise.resolve({ id: FILTER_ID }) });
   assert.equal(response.status, 200, "missing optional identity schema must not break ordinary offer reads");
-  const payload = await response.json() as { results: Array<{ id: string }>; reviewResults: Array<{ id: string }>; identityFeatures: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean } };
-  assert.deepEqual([...payload.results, ...payload.reviewResults].map((row) => row.id), ["legacy-identity-schema"]);
-  assert.deepEqual(payload.identityFeatures, { automaticEvidenceAvailable: false, manualReviewAvailable: false }, "the API reports precise unavailable feature flags instead of returning empty results or claiming a successful write");
+  const payload = await response.json() as { results: Array<{ id: string }>; reviewResults: Array<{ id: string }>; buildingVerificationResults: Array<{ id: string }>; identityFeatures: Record<string, boolean> };
+  assert.deepEqual([...payload.results, ...payload.reviewResults, ...payload.buildingVerificationResults].map((row) => row.id), ["legacy-identity-schema"]);
+  assert.deepEqual(payload.identityFeatures, { automaticEvidenceAvailable: false, manualReviewAvailable: false, buildingConfirmationAvailable: true }, "the API reports precise unavailable feature flags instead of returning empty results or claiming a successful write");
 });
 
 test("manual identity read surfaces permission and transport errors instead of disguising them as migration-unavailable", async () => {
@@ -381,7 +384,7 @@ test("endpoint E2E: an official canonical listing survives the real Finder resul
   assert.equal(payload.results[0]?.id, "listing-official-dabrowa");
   assert.equal(payload.results[0]?.source, "official_cooperative");
 });
-test("A: a Chóralna-like canonical REVIEW listing (missing buildingType/ownership, is_current_match=false, match_reasons contains 'review') is surfaced by the real getFilterResults(), never dropped", async () => {
+test("A: a Chóralna-like canonical REVIEW listing (missing buildingType/ownership, is_current_match=false, match_reasons contains 'review') is surfaced in the separate building-verification queue, never dropped and never mixed into Do oceny", async () => {
   const db = freshDb();
   db.seed("listings", [listingRow()]);
   db.seed("listing_filter_matches", [membershipRow("listing-choralna")]);
@@ -390,11 +393,14 @@ test("A: a Chóralna-like canonical REVIEW listing (missing buildingType/ownersh
   const payload = await getFilterResults(FILTER_ID);
   assert.ok(payload);
   assert.equal(payload.results.length, 0);
-  assert.equal(payload.reviewResults.length, 1);
-  assert.equal(payload.reviewResults[0].id, "listing-choralna");
-  assert.equal(payload.reviewResults[0].decisionBucket, "REVIEW");
-  assert.deepEqual(payload.reviewResults[0].missingFields, ["buildingType", "ownership"]);
-  assert.equal(payload.counts.review, 1);
+  assert.equal(payload.reviewResults.length, 0, "an unconfirmed building type never reaches the main Do oceny list");
+  assert.equal(payload.buildingVerificationResults.length, 1);
+  assert.equal(payload.buildingVerificationResults[0].id, "listing-choralna");
+  assert.equal(payload.buildingVerificationResults[0].decisionBucket, "REVIEW");
+  assert.equal(payload.buildingVerificationResults[0].finderSection, "BUILDING_VERIFICATION");
+  assert.deepEqual(payload.buildingVerificationResults[0].missingFields, ["buildingType", "ownership"]);
+  assert.equal(payload.counts.buildingVerification, 1);
+  assert.equal(payload.counts.review, 0);
   assert.equal(payload.counts.active, 0);
 });
 
@@ -431,7 +437,7 @@ test("D: a REVIEW listing preserves its missing-field badges/reasons in the retu
   currentDb = db;
 
   const payload = await getFilterResults(FILTER_ID);
-  const result = payload?.reviewResults.find((item) => item.id === "listing-review-2");
+  const result = payload?.buildingVerificationResults.find((item) => item.id === "listing-review-2");
   assert.ok(result);
   assert.deepEqual(result.missingFields, ["buildingType", "ownership"]);
   assert.deepEqual(result.unknownFields, ["buildingType", "ownership"]);
@@ -448,11 +454,11 @@ test("E: the same listing matched under two different filters produces independe
 
   const payloadA = await getFilterResults(FILTER_ID);
   const payloadB = await getFilterResults(filterBId);
-  assert.equal(payloadA?.reviewResults.filter((item) => item.id === "listing-shared").length, 1);
-  assert.equal(payloadB?.reviewResults.filter((item) => item.id === "listing-shared").length, 1);
+  assert.equal(payloadA?.buildingVerificationResults.filter((item) => item.id === "listing-shared").length, 1);
+  assert.equal(payloadB?.buildingVerificationResults.filter((item) => item.id === "listing-shared").length, 1);
 });
 
-test("F: STALE/ARCHIVED lifecycle listings keep their existing visibility semantics — absent by default, present only in archivedResults when requested", async () => {
+test("F: a STALE listing behind a current membership is excluded from every active section with an explicit reason, and is not repeated in the archive page", async () => {
   const db = freshDb();
   db.seed("listings", [listingRow({ id: "listing-stale", lifecycle_status: "STALE" })]);
   db.seed("listing_filter_matches", [membershipRow("listing-stale")]);
@@ -461,39 +467,35 @@ test("F: STALE/ARCHIVED lifecycle listings keep their existing visibility semant
   const defaultPayload = await getFilterResults(FILTER_ID);
   assert.equal(defaultPayload?.results.length, 0);
   assert.equal(defaultPayload?.reviewResults.length, 0);
+  assert.equal(defaultPayload?.buildingVerificationResults.length, 0);
+  const excluded = defaultPayload?.excludedResults.find((item) => item.id === "listing-stale");
+  assert.equal(excluded?.code, "lifecycle_stale", "a current membership never disappears silently: the reason is reported");
+  assert.match(excluded?.label ?? "", /nieaktualna/u);
 
+  // The archive page lists historical (non-current) memberships only, so the
+  // same listing is never rendered twice on screen.
   const archivePayload = await getFilterResults(FILTER_ID, true);
-  assert.equal(archivePayload?.archivedResults.some((item) => item.id === "listing-stale"), true);
-  // Duplicate-listing mission: this fixture's own missing buildingType/
-  // ownership makes the live filter decision REVIEW, not just STALE. Proven
-  // live in production before this fix: an includeArchived=true call let a
-  // listing this same shape into BOTH reviewResults and archivedResults at
-  // once (44 real listings, one filter). archivedResults having it is not
-  // enough — reviewResults (and results) must never also claim it, or the
-  // exact same canonical listing renders twice on screen.
-  assert.equal(archivePayload?.reviewResults.some((item) => item.id === "listing-stale"), false, "a STALE-lifecycle listing must never also appear in reviewResults, even when its live filter decision would otherwise be REVIEW");
-  assert.equal(archivePayload?.results.some((item) => item.id === "listing-stale"), false, "a STALE-lifecycle listing must never also appear in results (MATCHED)");
+  assert.equal(archivePayload?.archivedResults.some((item) => item.id === "listing-stale"), false);
+  assert.equal(archivePayload?.reviewResults.some((item) => item.id === "listing-stale"), false);
+  assert.equal(archivePayload?.results.some((item) => item.id === "listing-stale"), false);
 });
 
-test("H (duplicate-listing regression): an ARCHIVED-lifecycle listing whose live filter decision is REVIEW appears in exactly one bucket, never both", async () => {
+test("H (duplicate-listing regression): an ARCHIVED-lifecycle listing whose live filter decision is REVIEW appears in exactly one place", async () => {
   const db = freshDb();
-  // building_type/ownership present and matching, so the live filterDecision
-  // is REVIEW purely from missing-field-free evidence being otherwise
-  // sufficient to be a real (not review-by-missing-fields) match — using the
-  // base fixture's own missing buildingType/ownership, which is exactly the
-  // production shape that produced the live overlap.
   db.seed("listings", [listingRow({ id: "listing-archived-review", lifecycle_status: "ARCHIVED" })]);
   db.seed("listing_filter_matches", [membershipRow("listing-archived-review")]);
   currentDb = db;
 
-  const payload = await getFilterResults(FILTER_ID, true);
+  const payload = await getFilterResults(FILTER_ID);
   assert.ok(payload);
-  const inResults = payload.results.some((item) => item.id === "listing-archived-review");
-  const inReview = payload.reviewResults.some((item) => item.id === "listing-archived-review");
-  const inArchived = payload.archivedResults.some((item) => item.id === "listing-archived-review");
-  assert.equal(inArchived, true, "an ARCHIVED-lifecycle listing must appear in archivedResults");
-  assert.equal(inResults, false, "and never simultaneously in results");
-  assert.equal(inReview, false, "and never simultaneously in reviewResults — one canonical listing, exactly one bucket");
+  const places = [
+    payload.results.some((item) => item.id === "listing-archived-review"),
+    payload.reviewResults.some((item) => item.id === "listing-archived-review"),
+    payload.buildingVerificationResults.some((item) => item.id === "listing-archived-review"),
+    payload.excludedResults.some((item) => item.id === "listing-archived-review"),
+  ];
+  assert.deepEqual(places, [false, false, false, true], "one canonical listing, exactly one place: the explicit exclusion list");
+  assert.equal(payload.excludedResults[0]?.code, "lifecycle_archived");
 });
 
 test("I (duplicate-listing regression): a duplicated listing_filter_matches row for the same listing under the same filter never produces two results", async () => {
@@ -511,7 +513,7 @@ test("I (duplicate-listing regression): a duplicated listing_filter_matches row 
 
   const payload = await getFilterResults(FILTER_ID);
   assert.ok(payload);
-  assert.equal(payload.reviewResults.filter((item) => item.id === "listing-dup-row").length, 1, "a duplicated match row must never produce two entries for the same canonical listing");
+  assert.equal(payload.buildingVerificationResults.filter((item) => item.id === "listing-dup-row").length, 1, "a duplicated match row must never produce two entries for the same canonical listing");
 });
 
 test("same Facebook source URL is one Finder card, while a below-minimum price is absent", async () => {
@@ -534,9 +536,9 @@ test("same Facebook source URL is one Finder card, while a below-minimum price i
   currentDb = db;
 
   const payload = await getFilterResults(FILTER_ID);
-  assert.equal(payload?.reviewResults.filter((item) => item.id === "listing-source-new").length, 1);
-  assert.equal(payload?.reviewResults.some((item) => item.id === "listing-source-old"), false);
-  assert.equal(payload?.reviewResults.some((item) => item.id === "listing-too-cheap"), false);
+  assert.equal(payload?.buildingVerificationResults.filter((item) => item.id === "listing-source-new").length, 1);
+  assert.equal(payload?.buildingVerificationResults.some((item) => item.id === "listing-source-old"), false);
+  assert.equal(payload?.buildingVerificationResults.some((item) => item.id === "listing-too-cheap"), false);
 });
 
 test("read path rejects an existing legacy row whose stored block type conflicts with its own tenement description", async () => {
@@ -669,6 +671,7 @@ test("G: a manual_decision=REJECTED listing stays excluded regardless of otherwi
   const payload = await getFilterResults(FILTER_ID);
   assert.equal(payload?.results.length, 0);
   assert.equal(payload?.reviewResults.length, 0);
+  assert.equal(payload?.excludedResults.find((item) => item.id === "listing-manual-reject")?.code, "manual_rejected");
 });
 
 // Task 4: price/m² fallback safety, exercised through the real getFilterResults()
@@ -680,7 +683,7 @@ async function pricePerSqmFor(overrides: Record<string, unknown>): Promise<numbe
   db.seed("listing_filter_matches", [membershipRow("listing-price")]);
   currentDb = db;
   const payload = await getFilterResults(FILTER_ID);
-  return payload?.reviewResults[0]?.pricePerSqm ?? null;
+  return payload?.buildingVerificationResults[0]?.pricePerSqm ?? null;
 }
 
 test("Task 4: a valid canonical price_per_sqm is used as-is, even if it disagrees with price/area", async () => {
@@ -724,7 +727,7 @@ test("Section 7: a gallery stuck PENDING for far longer than the timeout display
   currentDb = db;
 
   const payload = await getFilterResults(FILTER_ID);
-  const result = payload?.reviewResults.find((item) => item.id === "listing-gallery-stuck");
+  const result = payload?.buildingVerificationResults.find((item) => item.id === "listing-gallery-stuck");
   assert.ok(result);
   assert.equal(result.galleryStatus, "FAILED");
   assert.equal(result.galleryError, "FACEBOOK_GALLERY_TIMEOUT");
@@ -740,7 +743,7 @@ test("Section 7: a gallery recently requested and still PENDING is left unchange
   currentDb = db;
 
   const payload = await getFilterResults(FILTER_ID);
-  const result = payload?.reviewResults.find((item) => item.id === "listing-gallery-fresh");
+  const result = payload?.buildingVerificationResults.find((item) => item.id === "listing-gallery-fresh");
   assert.ok(result);
   assert.equal(result.galleryStatus, "PENDING");
   assert.equal(result.galleryError, undefined);
@@ -756,7 +759,7 @@ test("Section 7: an already-terminal gallery failure keeps its real diagnostic c
   currentDb = db;
 
   const payload = await getFilterResults(FILTER_ID);
-  const result = payload?.reviewResults.find((item) => item.id === "listing-gallery-real-failure");
+  const result = payload?.buildingVerificationResults.find((item) => item.id === "listing-gallery-real-failure");
   assert.ok(result);
   assert.equal(result.galleryStatus, "FAILED");
   assert.equal(result.galleryError, "FACEBOOK_GALLERY_ROOT_AMBIGUOUS");

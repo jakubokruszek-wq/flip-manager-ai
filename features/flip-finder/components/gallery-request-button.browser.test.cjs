@@ -472,12 +472,12 @@ test("real Flip Finder gallery button keeps business click independent from trac
     assert.equal(testPage.clearResultsRequestCount(), 1, "a rapid double-click must still send exactly one clear-results request");
     await testPage.page.waitForFunction(() => document.querySelectorAll('[data-testid="finder-card"]').length === 0, null, { timeout: 10_000 });
     assert.match(await testPage.page.locator("body").innerText(), /Historia i CRM pozostają zachowane/);
-    assert.equal(await testPage.page.getByTestId("finder-source-count-all").innerText(), "Razem · Dopasowane: 0 · Do oceny: 0", "the server refresh must clear both counters, not just remove the cards");
-    assert.equal(await testPage.page.getByTestId("finder-source-count-facebook").innerText(), "Facebook · Dopasowane: 0 · Do oceny: 0");
+    assert.equal(await testPage.page.getByTestId("finder-source-count-all").innerText(), "Razem · Dopasowane: 0 · Do oceny: 0 · Weryfikacja budynku: 0", "the server refresh must clear both counters, not just remove the cards");
+    assert.equal(await testPage.page.getByTestId("finder-source-count-facebook").innerText(), "Facebook · Dopasowane: 0 · Do oceny: 0 · Weryfikacja budynku: 0");
     await testPage.page.reload({ waitUntil: "domcontentloaded" });
     await testPage.page.waitForFunction(() => document.querySelectorAll('[data-testid="finder-card"]').length === 0, null, { timeout: 10_000 });
-    assert.equal(await testPage.page.getByTestId("finder-source-count-all").innerText(), "Razem · Dopasowane: 0 · Do oceny: 0", "a fresh GET after reload must keep both totals at zero");
-    assert.equal(await testPage.page.getByTestId("finder-source-count-facebook").innerText(), "Facebook · Dopasowane: 0 · Do oceny: 0");
+    assert.equal(await testPage.page.getByTestId("finder-source-count-all").innerText(), "Razem · Dopasowane: 0 · Do oceny: 0 · Weryfikacja budynku: 0", "a fresh GET after reload must keep both totals at zero");
+    assert.equal(await testPage.page.getByTestId("finder-source-count-facebook").innerText(), "Facebook · Dopasowane: 0 · Do oceny: 0 · Weryfikacja budynku: 0");
     assert.equal(testPage.clearResultsRequestCount(), 1, "reload must not clear again or recreate hidden results");
 
     await confirmButton.click().catch(() => {});
@@ -524,10 +524,10 @@ test("real Flip Finder gallery button keeps business click independent from trac
     const domiportaCounts = countButton("domiporta");
 
     await allCounts.waitFor({ state: "visible", timeout: 10_000 });
-    assert.equal(await allCounts.innerText(), "Razem · Dopasowane: 1 · Do oceny: 1");
-    assert.equal(await gratkaCounts.innerText(), "Gratka · Dopasowane: 1 · Do oceny: 0");
-    assert.equal(await olxCounts.innerText(), "OLX · Dopasowane: 0 · Do oceny: 1");
-    assert.equal(await domiportaCounts.innerText(), "Domiporta · Dopasowane: 0 · Do oceny: 0", "an active source with no cards stays visible");
+    assert.equal(await allCounts.innerText(), "Razem · Dopasowane: 1 · Do oceny: 1 · Weryfikacja budynku: 0");
+    assert.equal(await gratkaCounts.innerText(), "Gratka · Dopasowane: 1 · Do oceny: 0 · Weryfikacja budynku: 0");
+    assert.equal(await olxCounts.innerText(), "OLX · Dopasowane: 0 · Do oceny: 1 · Weryfikacja budynku: 0");
+    assert.equal(await domiportaCounts.innerText(), "Domiporta · Dopasowane: 0 · Do oceny: 0 · Weryfikacja budynku: 0", "an active source with no cards stays visible");
     assert.equal(await testPage.page.locator('[data-listing-id="matched-gratka"]').count(), 1);
     assert.equal(await testPage.page.locator('[data-listing-id="review-olx"]').count(), 1);
 
@@ -588,12 +588,12 @@ test("real Flip Finder gallery button keeps business click independent from trac
     const testPage = await preparePage(browser, baseUrl, { resultsPayloadOverride: payload, waitForGalleryButton: false });
     const counts = (name) => testPage.page.getByTestId(`finder-source-count-${name}`);
     await counts("all").waitFor({ state: "visible", timeout: 10_000 });
-    assert.equal(await counts("all").innerText(), "Razem · Dopasowane: 1 · Do oceny: 1");
-    assert.equal(await counts("gratka").innerText(), "Gratka · Dopasowane: 1 · Do oceny: 0");
-    assert.equal(await counts("morizon").innerText(), "Morizon · Dopasowane: 1 · Do oceny: 0");
-    assert.equal(await counts("nieruchomosci_online").innerText(), "Nieruchomosci-online.pl · Dopasowane: 1 · Do oceny: 0");
-    assert.equal(await counts("olx").innerText(), "OLX · Dopasowane: 0 · Do oceny: 1");
-    assert.equal(await counts("otodom").innerText(), "Otodom · Dopasowane: 0 · Do oceny: 1");
+    assert.equal(await counts("all").innerText(), "Razem · Dopasowane: 1 · Do oceny: 1 · Weryfikacja budynku: 0");
+    assert.equal(await counts("gratka").innerText(), "Gratka · Dopasowane: 1 · Do oceny: 0 · Weryfikacja budynku: 0");
+    assert.equal(await counts("morizon").innerText(), "Morizon · Dopasowane: 1 · Do oceny: 0 · Weryfikacja budynku: 0");
+    assert.equal(await counts("nieruchomosci_online").innerText(), "Nieruchomosci-online.pl · Dopasowane: 1 · Do oceny: 0 · Weryfikacja budynku: 0");
+    assert.equal(await counts("olx").innerText(), "OLX · Dopasowane: 0 · Do oceny: 1 · Weryfikacja budynku: 0");
+    assert.equal(await counts("otodom").innerText(), "Otodom · Dopasowane: 0 · Do oceny: 1 · Weryfikacja budynku: 0");
     assert.equal(await testPage.page.locator('[data-testid="finder-card"]').count(), 2, "one API group renders once in its resolved MATCHED or REVIEW section");
 
     await counts("morizon").click();

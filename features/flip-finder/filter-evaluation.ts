@@ -1,6 +1,6 @@
 import type { SearchFilter } from "@/features/flip-finder";
 import type { PropertyFields } from "@/features/properties/types/property";
-import { assessBuildingType } from "./listing-attribute-extraction.ts";
+import { qualifyBuildingType, type BuildingQualification } from "./building-type-qualification.ts";
 import { LODZ_CONTEXT, OUTSIDE_LODZ_TOWN } from "@/features/location-intelligence/lodz-satellite-towns";
 import { OTHER_POLISH_CITY } from "@/features/location-intelligence/other-polish-cities";
 import { decisionBucket, type DecisionBucket } from "./decision-model.ts";
@@ -27,6 +27,8 @@ export type FilterCandidate = Pick<
   listingIntent?: string | null;
   /** Only sources with an explicit construction-year label ever set this (see external-source-adapters.ts's Allegro Lokalnie parser); absent is treated the same as null -- unknown. */
   yearBuilt?: PropertyFields["yearBuilt"];
+  /** Operator-confirmed canonical building type (finder_building_type_confirmations); wins over source data. */
+  buildingTypeConfirmedByOperator?: string | null;
 };
 
 export type FilterDecision = {
@@ -35,6 +37,7 @@ export type FilterDecision = {
   reasons: string[];
   unknownFields: string[];
   missingFields: string[];
+  buildingQualification?: BuildingQualification;
 };
 
 export type CanonicalListingDecision = {
@@ -42,6 +45,8 @@ export type CanonicalListingDecision = {
   reasons: string[];
   missingFields: string[];
   hardRejectReasons: string[];
+  /** Present on every decision produced by evaluateCanonicalListingDecision; absent on hand-built decisions. */
+  buildingQualification?: BuildingQualification;
 };
 
 /**
@@ -59,6 +64,7 @@ export function evaluateCanonicalListingDecision(
     reasons: decision.reasons,
     missingFields: decision.missingFields,
     hardRejectReasons: decision.bucket === "REJECTED" ? decision.reasons : [],
+    buildingQualification: decision.buildingQualification,
   };
 }
 
@@ -143,23 +149,18 @@ export function evaluateListingAgainstFilter(
     markUnknown("topFloor");
   }
 
-  const buildingType = assessBuildingType(candidate.buildingType, candidate.title, candidate.description);
-  const excludesTenement = filter.buildingTypes.length > 0
-    && !filter.buildingTypes.some((value) => value.trim().toLocaleLowerCase("pl-PL") === "kamienica");
-  if (buildingType.conflict && buildingType.tenementEvidence && excludesTenement) {
-    // A directly described tenement contradicting a stale structured label
-    // must never slip into either MATCHED or REVIEW for a non-tenement filter.
-    // The category remains unknown rather than rewriting it to either type.
-    reject(true, "building_type_conflict");
-  }
-  evaluateKnownChoice(
-    buildingType.value,
-    filter.buildingTypes,
-    "buildingType",
-    "building_type",
-    markUnknown,
-    reject,
-  );
+  // Shared, source-agnostic building rule (building-type-qualification.ts).
+  // Confirmed disallowed types and direct tenement evidence reject; unknown,
+  // contradictory or ambiguous evidence is REVIEW with unknown buildingType,
+  // which Finder routes to its separate "Do weryfikacji budynku" queue.
+  const buildingQualification = qualifyBuildingType({
+    structuredValue: candidate.buildingType,
+    title: candidate.title,
+    description: candidate.description,
+    operatorConfirmedType: candidate.buildingTypeConfirmedByOperator ?? null,
+  }, filter.buildingTypes);
+  if (buildingQualification.status === "rejected") reject(true, buildingQualification.reason);
+  else if (buildingQualification.status === "needs_verification") markUnknown("buildingType");
 
   // A known year below the filter's minimum is an outright rejection (old
   // tenement buildings must never reach active results), never merely a
@@ -268,7 +269,7 @@ export function evaluateListingAgainstFilter(
   const reasonList = [...reasons];
   const unknownList = [...unknownFields];
   const bucket = decisionBucket({ reasons: reasonList, unknownFields: unknownList });
-  return { matches: bucket === "MATCHED", bucket, reasons: reasonList, unknownFields: unknownList, missingFields: unknownList };
+  return { matches: bucket === "MATCHED", bucket, reasons: reasonList, unknownFields: unknownList, missingFields: unknownList, buildingQualification };
 }
 
 export const evaluateFilter = evaluateListingAgainstFilter;

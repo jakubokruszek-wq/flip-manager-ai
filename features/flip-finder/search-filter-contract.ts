@@ -10,8 +10,12 @@ import { isActiveFilterSource } from "@/features/flip-finder/source-availability
 export type SearchFilterInput = Omit<SearchFilter, "id" | "lastScannedAt" | "createdAt" | "updatedAt">;
 
 export type SearchFilterListItem = SearchFilter & {
-  /** Number of final, grouped cards visible in MATCHED + REVIEW for this filter. */
+  /** Number of final, grouped cards visible in Dopasowane + Do oceny + Do weryfikacji budynku for this filter. */
   totalMatches: number;
+  /** Per-section visible counts from the same read path as the results view. */
+  visibleCounts?: { matched: number; review: number; buildingVerification: number; excluded: number };
+  /** Set when this filter's counts could not be read; the dashboard shows it instead of a fake zero. */
+  countsError?: string | null;
   /** Diagnostic count of current membership rows before visibility and grouping rules. */
   currentMembershipRows?: number;
   /** Diagnostic count of all saved membership rows; an empty filter has no visible cards. */
