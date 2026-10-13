@@ -1,0 +1,63 @@
+# Flip Manager — OLX worker on Cloudflare Workers Free + Browser Run.
+# Deploy only after review (see docs/olx-worker-cloudflare.md). Secrets are
+# never stored here: use `wrangler secret put` (OLX_WORKER_SECRET, OLX_CLOUD_ADMIN_TOKEN).
+name = "flip-manager-olx-cloud"
+main = "src/index.ts"
+# >= 2026-03-17: @cloudflare/playwright >= 1.3 talks plain CDP to Browser Run.
+compatibility_date = "2026-09-15"
+compatibility_flags = ["nodejs_compat"]
+# Only /health is public; /status and /run-once require the admin bearer token.
+workers_dev = true
+preview_urls = false
+
+# Bundles Finder's OLX parser for in-page evaluation (see src/olx-page.ts).
+[build]
+command = "node scripts/build-in-page-bundle.mjs"
+watch_dir = ["src", "../../features/flip-finder"]
+
+[browser]
+binding = "BROWSER"
+
+[[durable_objects.bindings]]
+name = "OLX_RUNNER"
+class_name = "OlxCloudRunner"
+
+# SQLite-backed Durable Objects are available on Workers Free.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OlxCloudRunner"]
+
+# Safety net only: re-arms the runner's alarm if it was ever lost. The alarm
+# itself polls the queue every OLX_CLOUD_IDLE_POLL_SECONDS (default 20 s).
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+
+[vars]
+# Kill switch. Stays "0" until the limited production trial is approved.
+OLX_CLOUD_ENABLED = "0"
+# Public HTTPS address of the Flip Manager app (the same host the local worker uses).
+OLX_WORKER_API_URL = ""
+OLX_CLOUD_WORKER_ID = "cloudflare-olx-1"
+OLX_CLOUD_IDLE_POLL_SECONDS = "20"
+# Workers Free: 600 s of Browser Run per UTC day. We stop at 480 s.
+OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS = "600"
+OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS = "480"
+OLX_CLOUD_SCRAPE_RESERVE_SECONDS = "35"
+OLX_CLOUD_SESSION_MAX_SECONDS = "45"
+OLX_CLOUD_KEEP_ALIVE_SECONDS = "20"
+# 0 = no cap. Set e.g. "2" for the limited production trial.
+OLX_CLOUD_MAX_JOBS_PER_DAY = "0"
+# Workers Free: ~10 ms CPU per invocation, ~3-5 ms per job -> 2 jobs per alarm.
+OLX_CLOUD_MAX_HELD_JOBS = "2"
+OLX_CLOUD_MAX_JOBS_PER_INVOCATION = "2"
+# fail_jobs: jobs arriving after the budget is spent are failed with an explicit
+# OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED message. leave_queued: leave them for a
+# fallback worker (local Windows / Railway) if one is running.
+OLX_CLOUD_ON_BUDGET_EXHAUSTED = "fail_jobs"
+OLX_CLOUD_BLOCK_HEAVY_RESOURCES = "1"
+# "1" runs OLX's own page scripts. Off: the data is in the server-rendered HTML.
+OLX_CLOUD_PAGE_JAVASCRIPT = "0"
+OLX_CLOUD_RESTRICT_TO_OLX_DOMAINS = "0"

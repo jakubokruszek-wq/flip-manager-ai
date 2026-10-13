@@ -1,0 +1,325 @@
+/**
+ * Step 2: the cloud runner against a fictitious queue over real HTTP (HMAC,
+ * nonces, leases, heartbeats) with a local Chromium standing in for Browser
+ * Run. Nothing here talks to Supabase, Vercel, Cloudflare or OLX.
+ */
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test, { after, afterEach, before, beforeEach } from "node:test";
+
+import { createApiClient } from "../../olx-browser/src/api-client.ts";
+import type { Ledger } from "../src/budget.ts";
+import { loadCloudConfig, type CloudConfig } from "../src/config.ts";
+import { createLogger } from "../src/logger.ts";
+import { runBatch, type LedgerStore, type RunnerDeps } from "../src/runner.ts";
+import type { BrowserProvider } from "../src/browser-session.ts";
+import { buildChallengePage } from "./fixtures/generate-olx-fixture.ts";
+import { FAKE_SECRET, startFakeQueue, type FakeQueue } from "./helpers/fake-queue.ts";
+import { localChromium, type FixtureResponse, type LocalChromium } from "./helpers/local-chromium.ts";
+
+const FIXTURE = readFileSync(new URL("./fixtures/olx-lodz-sprzedaz.sample.html", import.meta.url), "utf8");
+const OK_PAGE = (): FixtureResponse => ({ status: 200, body: FIXTURE });
+console.info = () => undefined;
+
+let chromium: LocalChromium | null = null;
+let queue: FakeQueue;
+before(async () => { chromium = await localChromium(); });
+after(async () => { await chromium?.close(); });
+beforeEach(async () => { queue = await startFakeQueue(); });
+afterEach(async () => { await queue.close(); });
+
+function config(overrides: Record<string, string> = {}): CloudConfig {
+  const loaded = loadCloudConfig({ OLX_CLOUD_ENABLED: "1", OLX_WORKER_API_URL: queue.url, OLX_WORKER_SECRET: FAKE_SECRET, OLX_CLOUD_WORKER_ID: "cloudflare-test-1", ...overrides });
+  if (!loaded.ok) throw new Error(loaded.message);
+  return loaded.config;
+}
+
+function memoryStore(initial?: Ledger): LedgerStore & { value: Ledger | undefined; writes: number } {
+  const store = {
+    value: initial,
+    writes: 0,
+    async load() { return store.value ? structuredClone(store.value) : undefined; },
+    async save(ledger: Ledger) { store.writes += 1; store.value = structuredClone(ledger); },
+  };
+  return store;
+}
+
+function deps(cfg: CloudConfig, provider: BrowserProvider, store: LedgerStore, lines: string[] = []): RunnerDeps {
+  const logger = createLogger((line) => lines.push(line));
+  return { config: cfg, api: createApiClient({ apiUrl: cfg.apiUrl, secret: cfg.secret, workerId: cfg.workerId, pollIntervalMs: 10_000, once: false }), provider, store, log: logger.log };
+}
+
+function today(partial: Partial<Ledger>): Ledger {
+  return { day: new Date().toISOString().slice(0, 10), browserMs: 0, sessions: 0, jobsClaimed: 0, jobsCompleted: 0, jobsFailed: 0, jobsRejected: 0, openSession: null, stop: null, ...partial };
+}
+
+function requireChromium(t: { skip(message: string): void }): LocalChromium | null {
+  if (!chromium) t.skip("local Chromium unavailable");
+  return chromium;
+}
+
+test("claims Finder and Radar jobs, scrapes them in ONE browser session and completes them with verified listings", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ id: "finder-1", idempotencyKey: "scan-a:olx" });
+  queue.enqueue({ id: "finder-2", idempotencyKey: "scan-b:olx" });
+  queue.enqueue({ id: "radar-1", idempotencyKey: "radar-run-1:olx", contextType: "price_radar" });
+  const provider = browser.provider(OK_PAGE);
+  const store = memoryStore();
+  const lines: string[] = [];
+
+  const summary = await runBatch(deps(config({ OLX_CLOUD_MAX_HELD_JOBS: "3", OLX_CLOUD_MAX_JOBS_PER_INVOCATION: "3" }), provider, store, lines));
+
+  assert.equal(summary.outcome, "max_jobs");
+  assert.deepEqual({ claimed: summary.claimed, completed: summary.completed, failed: summary.failed }, { claimed: 3, completed: 3, failed: 0 });
+  assert.equal(provider.stats.launches, 1, "one Browser Run session for all held jobs (Free: 1 new browser / 20 s)");
+  assert.equal(provider.stats.closes, 1);
+  assert.equal(provider.stats.olxRequests.length, 3);
+  assert.deepEqual(queue.jobs.map((job) => job.status), ["completed", "completed", "completed"]);
+  assert.deepEqual(queue.authFailures, [], "every request carried a valid HMAC signature and a fresh nonce");
+
+  const completion = queue.jobs[0].completion as { fetched: number; listings: Array<Record<string, unknown>>; warnings: string[]; workerId: string };
+  assert.equal(completion.fetched, 40);
+  assert.equal(completion.listings.length, 40);
+  assert.deepEqual(completion.warnings, []);
+  assert.equal(completion.workerId, "cloudflare-test-1");
+  const first = completion.listings[0];
+  assert.deepEqual(
+    { price: first.price, area: first.area, rooms: first.rooms, district: first.district, publishedAt: first.publishedAt, buildingType: first.buildingType, url: first.originalUrl },
+    { price: 250_000, area: 28, rooms: 1, district: "Bałuty", publishedAt: "2026-10-12T12:00:00.000Z", buildingType: "blok", url: "https://www.olx.pl/d/oferta/mieszkanie-one-pokoje-baluty-CID3-IDLFLS.html" },
+  );
+  assert.ok((queue.jobs[2].completion as { radarLeaseToken?: string }).radarLeaseToken, "Radar jobs send their run lease");
+
+  assert.equal(store.value?.sessions, 1);
+  assert.equal(store.value?.jobsCompleted, 3);
+  assert.ok((store.value?.browserMs ?? 0) > 0, "browser time is charged");
+  assert.equal(store.value?.openSession, null);
+
+  const log = lines.join("\n");
+  for (const job of queue.jobs) assert.ok(!log.includes(String(job.radarLeaseToken ?? "@@none@@")), "no Radar lease token in logs");
+  assert.ok(!/"leaseToken"/.test(log), "no lease token field in logs");
+  assert.ok(!log.includes(FAKE_SECRET));
+  assert.match(log, /"event":"OLX_PAGE_VERIFIED".*"rawItems":40.*"domCards":40/);
+
+  const second = await runBatch(deps(config(), provider, store));
+  assert.equal(second.outcome, "idle");
+  assert.equal(provider.stats.launches, 1, "an empty queue costs no browser time");
+});
+
+test("idempotency: a duplicate enqueue is ignored and a completed job cannot be completed twice", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  assert.ok(queue.enqueue({ id: "job-1", idempotencyKey: "scan-a:olx" }));
+  assert.equal(queue.enqueue({ id: "job-1-dup", idempotencyKey: "scan-a:olx" }), null);
+  const provider = browser.provider(OK_PAGE);
+  const summary = await runBatch(deps(config(), provider, memoryStore()));
+  assert.equal(summary.completed, 1);
+  assert.equal(provider.stats.olxRequests.length, 1);
+  const completes = queue.requests.filter((request) => request.path === "/api/olx-worker/complete");
+  assert.equal(completes.length, 1);
+  // Replaying the exact signed request is refused by the nonce store.
+  const replay = await fetch(`${queue.url}/api/olx-worker/claim`, { method: "POST", body: "{}" });
+  assert.equal(replay.status, 401);
+});
+
+test("budget exhausted (fail_jobs): no browser is opened and every new job fails with an explicit diagnostic", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "a" });
+  queue.enqueue({ idempotencyKey: "b", contextType: "price_radar" });
+  const provider = browser.provider(OK_PAGE);
+  const store = memoryStore(today({ browserMs: 470_000 }));
+
+  const summary = await runBatch(deps(config(), provider, store));
+
+  assert.equal(summary.outcome, "paused");
+  assert.equal(summary.rejected, 2);
+  assert.equal(provider.stats.launches, 0);
+  for (const job of queue.jobs) {
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorCode, "OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED");
+    assert.match(job.errorMessage ?? "", /bezpieczny dzienny budżet przeglądarki \(zużyto 470 s z 480 s; limit planu 600 s\)\. Pobieranie OLX wstrzymane do \d{4}-\d{2}-\d{2}T00:00:00\.000Z/);
+  }
+  assert.equal(store.value?.stop?.code, "OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED");
+  assert.equal(store.value?.jobsRejected, 2);
+  assert.equal(store.value?.jobsClaimed, 0, "rejections do not count as processed jobs");
+});
+
+test("budget exhausted (leave_queued): jobs stay queued for a fallback worker; Finder's 90 s watchdog still bounds them", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  const job = queue.enqueue({ idempotencyKey: "a" });
+  const summary = await runBatch(deps(config({ OLX_CLOUD_ON_BUDGET_EXHAUSTED: "leave_queued" }), browser.provider(OK_PAGE), memoryStore(today({ browserMs: 479_000 }))));
+  assert.equal(summary.outcome, "paused");
+  assert.equal(job?.status, "queued");
+  assert.equal(queue.requests.length, 0, "not even a claim");
+  assert.equal(queue.runUnclaimedWatchdog(Date.now() + 91_000), 1);
+  assert.equal(job?.errorCode, "OLX_WORKER_CLAIM_TIMEOUT");
+});
+
+test("the budget runs out in the middle of a batch: the next page is not opened and its job fails cleanly", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ id: "first", idempotencyKey: "a" });
+  queue.enqueue({ id: "second", idempotencyKey: "b" });
+  const provider = browser.provider(OK_PAGE);
+  // Exactly one scrape reserve (35 s) left under the 480 s safe budget.
+  const store = memoryStore(today({ browserMs: 445_000 }));
+
+  const summary = await runBatch(deps(config(), provider, store));
+
+  assert.equal(summary.completed, 1);
+  assert.equal(summary.failed, 1);
+  assert.equal(provider.stats.olxRequests.length, 1);
+  assert.equal(queue.jobs[0].status, "completed");
+  assert.equal(queue.jobs[1].errorCode, "OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED");
+  assert.ok((store.value?.browserMs ?? 0) > 445_000);
+  assert.equal(store.value?.stop?.code, "OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED");
+});
+
+test("Browser Run answers 429 (plan allowance gone): the job fails with that code and the runner pauses until UTC midnight", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "a" });
+  const local = browser.provider(OK_PAGE, { failLaunch: () => new Error("Unable to create new browser: code: 429: message: Too Many Requests") });
+  const provider: BrowserProvider = { ...local, limits: async () => ({ allowedBrowserAcquisitions: 1, timeUntilNextAllowedBrowserAcquisition: 0 }) };
+  const store = memoryStore();
+
+  await runBatch(deps(config(), provider, store));
+
+  assert.equal(queue.jobs[0].errorCode, "OLX_CLOUD_BROWSER_DAILY_LIMIT_429");
+  assert.equal(store.value?.stop?.code, "OLX_CLOUD_BROWSER_DAILY_LIMIT_429");
+  assert.equal(store.value?.browserMs, 600_000);
+
+  queue.enqueue({ idempotencyKey: "b" });
+  const next = await runBatch(deps(config(), provider, store));
+  assert.equal(next.outcome, "paused");
+  assert.equal(queue.jobs[1].errorCode, "OLX_CLOUD_BROWSER_DAILY_LIMIT_429");
+  assert.match(queue.jobs[1].errorMessage ?? "", /HTTP 429/);
+});
+
+test("rate limit of new sessions: the runner waits for Browser Run's next allowed acquisition instead of failing", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "a" });
+  const local = browser.provider(OK_PAGE);
+  let limitCalls = 0;
+  const provider: BrowserProvider = { ...local, limits: async () => ({ allowedBrowserAcquisitions: limitCalls++ === 0 ? 0 : 1, timeUntilNextAllowedBrowserAcquisition: 1_200 }) };
+  const lines: string[] = [];
+  const started = Date.now();
+  const summary = await runBatch(deps(config(), provider, memoryStore(), lines));
+  assert.equal(summary.completed, 1);
+  assert.ok(Date.now() - started >= 1_200);
+  assert.match(lines.join("\n"), /BROWSER_ACQUIRE_WAIT/);
+});
+
+test("OLX refusing access (403 / challenge) ends the job once, without retries or workarounds", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ id: "forbidden", idempotencyKey: "a", requestUrl: "https://www.olx.pl/forbidden/" });
+  queue.enqueue({ id: "challenge", idempotencyKey: "b", requestUrl: "https://www.olx.pl/challenge/" });
+  const provider = browser.provider((url) => url.includes("forbidden") ? { status: 403, body: "<title>Forbidden</title>" } : { status: 200, body: buildChallengePage() });
+
+  await runBatch(deps(config(), provider, memoryStore()));
+
+  assert.equal(queue.jobs.find((job) => job.id === "forbidden")?.errorCode, "OLX_HTTP_403");
+  assert.equal(queue.jobs.find((job) => job.id === "challenge")?.errorCode, "OLX_HUMAN_VERIFICATION");
+  assert.equal(provider.stats.olxRequests.length, 2, "one request per job");
+});
+
+test("a lease revoked while scraping is detected by the final heartbeat: no stale completion is sent", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ id: "job-1", idempotencyKey: "a" });
+  const provider = browser.provider(() => { queue.revokeLease("job-1"); return OK_PAGE(); });
+  const summary = await runBatch(deps(config(), provider, memoryStore()));
+  assert.equal(summary.leaseLost, 1);
+  assert.equal(queue.requests.filter((request) => request.path === "/api/olx-worker/complete").length, 0);
+  assert.equal(queue.requests.filter((request) => request.path === "/api/olx-worker/fail").length, 0);
+});
+
+test("daily job cap for the limited production trial: only the first job is processed", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "a" });
+  queue.enqueue({ idempotencyKey: "b" });
+  const store = memoryStore();
+  const cfg = config({ OLX_CLOUD_MAX_JOBS_PER_DAY: "1", OLX_CLOUD_MAX_HELD_JOBS: "1", OLX_CLOUD_ON_BUDGET_EXHAUSTED: "leave_queued" });
+  const summary = await runBatch(deps(cfg, browser.provider(OK_PAGE), store));
+  assert.equal(summary.completed, 1);
+  assert.deepEqual(queue.jobs.map((job) => job.status), ["completed", "queued"]);
+  assert.equal(store.value?.stop?.code, "OLX_CLOUD_DAILY_JOB_CAP_REACHED");
+  // Raising the cap takes effect immediately, without waiting for midnight.
+  const resumed = await runBatch(deps(config({ OLX_CLOUD_MAX_JOBS_PER_DAY: "2" }), browser.provider(OK_PAGE), store));
+  assert.equal(resumed.completed, 1);
+  assert.deepEqual(queue.jobs.map((job) => job.status), ["completed", "completed"]);
+  assert.match(store.value?.stop?.message ?? "", /dzienny limit zadań \(2\/2\)/);
+});
+
+test("Workers Free CPU: one invocation takes at most OLX_CLOUD_MAX_JOBS_PER_INVOCATION jobs (default 2)", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  for (const key of ["a", "b", "c"]) queue.enqueue({ idempotencyKey: key });
+  const summary = await runBatch(deps(config(), browser.provider(OK_PAGE), memoryStore()));
+  assert.equal(summary.outcome, "max_jobs");
+  assert.equal(summary.completed, 2);
+  assert.deepEqual(queue.jobs.map((job) => job.status), ["completed", "completed", "queued"]);
+});
+
+test("run-once semantics: maxJobs=1 leaves the rest of the queue untouched", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "a" });
+  queue.enqueue({ idempotencyKey: "b" });
+  const summary = await runBatch(deps(config(), browser.provider(OK_PAGE), memoryStore()), { maxJobs: 1 });
+  assert.equal(summary.outcome, "max_jobs");
+  assert.deepEqual(queue.jobs.map((job) => job.status), ["completed", "queued"]);
+});
+
+test("Free-plan subrequest allowance: claiming stops early and the rest is left for the next invocation", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  for (const key of ["a", "b", "c"]) queue.enqueue({ idempotencyKey: key });
+  const summary = await runBatch(deps(config({ OLX_CLOUD_MAX_HELD_JOBS: "3", OLX_CLOUD_MAX_JOBS_PER_INVOCATION: "3" }), browser.provider(OK_PAGE), memoryStore()), { subrequestLimit: 16 });
+  assert.equal(summary.outcome, "subrequest_limit");
+  assert.ok(summary.subrequests <= 16, `used ${summary.subrequests}`);
+  assert.ok(queue.jobs.some((job) => job.status === "queued"));
+  assert.ok(queue.jobs.every((job) => job.status === "queued" || job.status === "completed"));
+});
+
+test("an unreachable queue API is a logged poll error, not a crash, and costs no browser time", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.failNextRequests("/api/olx-worker/claim", 1);
+  queue.enqueue({ idempotencyKey: "a" });
+  const provider = browser.provider(OK_PAGE);
+  const lines: string[] = [];
+  const summary = await runBatch(deps(config(), provider, memoryStore(), lines));
+  assert.equal(summary.outcome, "idle");
+  assert.equal(provider.stats.launches, 0);
+  assert.match(lines.join("\n"), /WORKER_POLL_ERROR/);
+});
+
+test("a wrong shared secret is rejected by the queue and nothing is processed", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "a" });
+  const summary = await runBatch(deps(config({ OLX_WORKER_SECRET: "another-secret-that-is-at-least-32-chars" }), browser.provider(OK_PAGE), memoryStore()));
+  assert.equal(summary.claimed, 0);
+  assert.deepEqual(queue.authFailures, ["INVALID_SIGNATURE"]);
+  assert.equal(queue.jobs[0].status, "queued");
+});
+
+test("a session left open by a crashed runner is charged on recovery, and a new UTC day starts from zero", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  const crashed = memoryStore(today({ browserMs: 100_000, openSession: { startedAt: Date.now() - 10_000, sessionId: "lost" } }));
+  await runBatch(deps(config(), browser.provider(OK_PAGE), crashed));
+  // 10 s open + 20 s keep_alive (worst case before Browser Run reaps it).
+  assert.ok((crashed.value?.browserMs ?? 0) >= 130_000 && (crashed.value?.browserMs ?? 0) < 131_000, String(crashed.value?.browserMs));
+  assert.equal(crashed.value?.openSession, null);
+
+  queue.enqueue({ idempotencyKey: "a" });
+  const yesterday = memoryStore({ ...today({ browserMs: 600_000, stop: { code: "OLX_CLOUD_BROWSER_DAILY_LIMIT_429", message: "x", at: "2000-01-01T00:00:00.000Z", resumesAt: "2000-01-02T00:00:00.000Z" } }), day: "2000-01-01" });
+  const summary = await runBatch(deps(config(), browser.provider(OK_PAGE), yesterday));
+  assert.equal(summary.completed, 1);
+  assert.equal(yesterday.value?.stop, null);
+  assert.equal(yesterday.value?.day, new Date().toISOString().slice(0, 10));
+});
+
+test("disabled or misconfigured worker never claims", () => {
+  assert.deepEqual(loadCloudConfig({ OLX_CLOUD_ENABLED: "0" }).ok, false);
+  const missing = loadCloudConfig({ OLX_CLOUD_ENABLED: "1", OLX_WORKER_API_URL: "https://app.example", OLX_WORKER_SECRET: "short" });
+  assert.equal(missing.ok, false);
+  assert.ok(!missing.ok && missing.code === "OLX_CLOUD_CONFIG_INVALID" && !missing.message.includes("short"), "the message never echoes a secret");
+  const overBudget = loadCloudConfig({ OLX_CLOUD_ENABLED: "1", OLX_WORKER_API_URL: "https://app.example", OLX_WORKER_SECRET: FAKE_SECRET, OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS: "700" });
+  assert.equal(overBudget.ok, false);
+  const plainHttp = loadCloudConfig({ OLX_CLOUD_ENABLED: "1", OLX_WORKER_API_URL: "http://app.example", OLX_WORKER_SECRET: FAKE_SECRET });
+  assert.equal(plainHttp.ok, false);
+  const tooSlow = loadCloudConfig({ OLX_CLOUD_ENABLED: "1", OLX_WORKER_API_URL: "https://app.example", OLX_WORKER_SECRET: FAKE_SECRET, OLX_CLOUD_IDLE_POLL_SECONDS: "60" });
+  assert.equal(tooSlow.ok, false, "an idle poll above 45 s could miss Finder's 90 s claim window");
+});
