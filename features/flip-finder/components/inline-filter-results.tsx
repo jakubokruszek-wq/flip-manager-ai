@@ -122,6 +122,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [historyMessage, setHistoryMessage] = useState<string | null>(null);
+  const [historyDeleteOpen, setHistoryDeleteOpen] = useState(false);
   const [error, setError] = useState<{ message: string; detail: string | null } | null>(null);
   const [loading, setLoading] = useState(false);
   const [underwritingSettings, setUnderwritingSettings] = useState(DEFAULT_UNDERWRITING_SETTINGS);
@@ -183,33 +184,33 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
     if (next && archive === null) void loadArchivePage(0);
   };
 
-  const clearSearchHistory = async () => {
+  const deleteAllListings = async (expectedListings: number, confirmation: string) => {
     if (clearingHistory) return;
-    const confirmed = window.confirm("Usunąć całą historię znalezionych ofert? Znikną oferty, snapshoty i dopasowania. Filtry oraz źródła pozostaną bez zmian.");
-    if (!confirmed) return;
-
     setClearingHistory(true);
     setHistoryMessage(null);
     try {
       const response = await fetch("/api/flip-finder/history", {
         method: "DELETE",
         credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirmation, expectedListings }),
       });
       const payload: unknown = await readJson(response);
       if (!response.ok) {
         const fallback = response.status === 409
           ? "Poczekaj na zakończenie bieżącego skanu i spróbuj ponownie."
-          : "Nie udało się wyczyścić historii wyszukiwania.";
+          : "Nie udało się usunąć ofert.";
         throw new Error(readMessage(payload, fallback));
       }
       const deleted = isDeletedHistoryResponse(payload) ? payload.deletedListings : 0;
+      setHistoryDeleteOpen(false);
       setArchiveOpen(false);
       setArchive(null);
       setQuery("");
-      setHistoryMessage(`Historia wyczyszczona. Usunięto ${deleted} ofert.`);
+      setHistoryMessage(`Trwale usunięto ${deleted} ofert ze wszystkich filtrów i portali.`);
       await load();
     } catch (reason) {
-      setHistoryMessage(reason instanceof Error ? reason.message : "Nie udało się wyczyścić historii wyszukiwania.");
+      setHistoryMessage(reason instanceof Error ? reason.message : "Nie udało się usunąć ofert.");
     } finally {
       setClearingHistory(false);
     }
@@ -336,14 +337,83 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
         {data.diagnostics ? <p className="mt-2 text-[11px] text-muted-foreground/70" data-testid="finder-read-diagnostics">Odczyt: {data.diagnostics.durationMs} ms · zapytań: {data.diagnostics.queryCount} · powiązań: {data.diagnostics.membershipRowsRead}</p> : null}
       </details> : null}
       <details className="rounded-xl border border-border/60 px-3 py-2">
-        <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Historia wyszukiwania i działania</summary>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Czyszczenie usuwa oferty i ich historię. Nie usuwa filtrów ani źródeł.</p><Button disabled={clearingHistory} onClick={() => void clearSearchHistory()} type="button" variant="outline">{clearingHistory ? "Czyszczenie…" : "Wyczyść historię wyszukiwania"}</Button></div>
+        <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Strefa niebezpieczna · usuwanie danych</summary>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/[0.04] p-3"><p className="min-w-0 flex-1 text-xs text-muted-foreground"><strong className="text-destructive">Trwale usuwa wszystkie oferty ze wszystkich filtrów i portali</strong> razem z historią cen, zdjęciami i dopasowaniami. Aby tylko ukryć wyniki tego filtra, użyj „Wyczyść wyniki”.</p><Button className="min-h-[44px]" disabled={clearingHistory} onClick={() => setHistoryDeleteOpen(true)} type="button" variant="destructive">Usuń wszystkie oferty…</Button></div>
       </details>
+      <HistoryDeleteDialog busy={clearingHistory} onConfirm={(expected, phrase) => void deleteAllListings(expected, phrase)} onOpenChange={setHistoryDeleteOpen} open={historyDeleteOpen} />
       {historyMessage ? <p className="rounded-lg border border-border/60 p-3 text-sm" role="status">{historyMessage}</p> : null}
       {data ? <details className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.035] px-3 py-2"><summary className="cursor-pointer text-xs font-semibold text-emerald-700 outline-none focus-visible:ring-2 focus-visible:ring-primary">Okazja dnia{dealOfDay ? ` · ${cleanDisplayText(dealOfDay.title) || "Oferta inwestycyjna"} · ${dealOfDay.underwriting?.flipScore ?? "—"}/100` : " · brak oferty ponad próg"}</summary>{dealOfDay ? <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3"><p className="text-xs text-muted-foreground">{decisionLabelForUi(dealOfDay.underwriting?.decision)} · zysk bazowy {currency(dealOfDay.underwriting?.profitBase ?? null)} · pewność {dealOfDay.underwriting?.confidenceScore}%</p><Link className="text-xs font-semibold text-gold underline-offset-4 hover:underline" href={`/deals/${encodeURIComponent(dealOfDay.id)}`}>Otwórz Deal Room</Link></div> : <p className="mt-3 text-xs text-muted-foreground">Brak okazji spełniającej dzisiejszy próg.</p>}</details> : null}
     </section>
   );
 });
+
+type HistoryDeletePreview = { enabled: boolean; enableVariable: string; confirmation: string; listings: number; priceSnapshots: number; filters: number };
+
+/** Permanent delete of every Finder listing: shows the real scale first and needs the typed phrase. */
+function HistoryDeleteDialog({ open, onOpenChange, busy, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; busy: boolean; onConfirm: (expectedListings: number, phrase: string) => void }) {
+  return (
+    <Dialog onOpenChange={(next) => { if (!busy) onOpenChange(next); }} open={open}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Usunąć trwale wszystkie oferty?</DialogTitle>
+        <DialogDescription>To nie jest „Wyczyść wyniki”. Operacja dotyczy wszystkich filtrów i wszystkich portali i nie można jej cofnąć.</DialogDescription>
+        {/* Mounted per opening: the preview and the typed phrase always start fresh. */}
+        {open ? <HistoryDeleteContent busy={busy} onCancel={() => onOpenChange(false)} onConfirm={onConfirm} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function HistoryDeleteContent({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: (expectedListings: number, phrase: string) => void }) {
+  const [preview, setPreview] = useState<HistoryDeletePreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [phrase, setPhrase] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/flip-finder/history", { cache: "no-store", credentials: "same-origin" });
+        const payload: unknown = await readJson(response);
+        if (!response.ok || !isHistoryDeletePreview(payload)) throw new Error(readMessage(payload, "Nie udało się sprawdzić, co zostałoby usunięte."));
+        if (!cancelled) setPreview(payload);
+      } catch (reason) {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Nie udało się sprawdzić, co zostałoby usunięte.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const matches = Boolean(preview && phrase.trim() === preview.confirmation);
+  return (
+    <>
+      {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+      {!preview && !error ? <p className="text-sm text-muted-foreground">Sprawdzam, co zostałoby usunięte…</p> : null}
+      {preview ? (
+        <div className="space-y-3 text-sm" data-testid="finder-history-delete-preview">
+          <ul className="list-disc space-y-1 pl-5">
+            <li>Oferty do usunięcia: <strong>{preview.listings}</strong> (ze wszystkich {preview.filters} filtrów i wszystkich portali)</li>
+            <li>Wpisy historii cen: <strong>{preview.priceSnapshots}</strong></li>
+            <li>Filtry i źródła pozostaną.</li>
+          </ul>
+          {preview.enabled ? (
+            <label className="block space-y-1">
+              <span className="text-xs text-muted-foreground">Aby potwierdzić, wpisz: <strong className="text-foreground">{preview.confirmation}</strong></span>
+              <Input autoComplete="off" onChange={(event) => setPhrase(event.target.value)} value={phrase} />
+            </label>
+          ) : <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3 text-xs" role="status">Usuwanie jest wyłączone na tym serwerze ({preview.enableVariable}). Aby ukryć wyniki bez usuwania danych, użyj „Wyczyść wyniki”.</p>}
+        </div>
+      ) : null}
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <Button className="min-h-[44px]" disabled={busy} onClick={onCancel} type="button" variant="outline">Anuluj</Button>
+        <Button className="min-h-[44px]" disabled={busy || !preview?.enabled || !matches} onClick={() => preview && onConfirm(preview.listings, phrase.trim())} type="button" variant="destructive">{busy ? "Usuwanie…" : "Usuń trwale"}</Button>
+      </div>
+    </>
+  );
+}
+
+function isHistoryDeletePreview(value: unknown): value is HistoryDeletePreview {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.enabled === "boolean" && typeof record.confirmation === "string" && typeof record.listings === "number" && typeof record.priceSnapshots === "number" && typeof record.filters === "number" && typeof record.enableVariable === "string";
+}
 
 function FinderErrorPanel({ message, detail, loading, onRetry }: { message: string; detail: string | null; loading: boolean; onRetry: () => void }) {
   return <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="finder-load-error" role="alert"><p className="font-semibold">{message}</p>{detail ? <p className="mt-1 text-xs">Szczegóły: {detail}</p> : null}<Button className="mt-3" disabled={loading} onClick={onRetry} size="sm" type="button" variant="outline">{loading ? "Ponawianie…" : "Spróbuj ponownie"}</Button></div>;
