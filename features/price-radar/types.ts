@@ -115,6 +115,29 @@ export type RadarSearchCriteria = {
   districts?: string[];
 };
 
+export type RadarWaitingReason = "next_portion" | "retry_after" | "olx_worker";
+
+/**
+ * Stored in the existing checkpoint JSONB (no schema change). Progress means a
+ * counter increase or a cursor move -- never merely a checkpoint write.
+ */
+export type RadarProgressDiagnostics = {
+  lastCounterIncreaseAt?: string;
+  lastCursorChangeAt?: string;
+  lastRealProgressAt?: string;
+  lastProgressSource?: string;
+  lastPortionAt?: string;
+  /** Consecutive portions that ended without any real progress. */
+  noProgressPortions?: number;
+  /** Consecutive fair attempts per source without progress; reset by progress. */
+  sourceNoProgressAttempts?: Record<string, number>;
+  sourceLastAttemptError?: Record<string, string>;
+  sourceHadProgress?: Record<string, boolean>;
+  waitingReason?: RadarWaitingReason | null;
+  waitingUntil?: string | null;
+  lastContinuationError?: { at: string; hop: number; reason: string } | null;
+};
+
 export type RadarCheckpoint = {
   sourceQueue: RadarSource[];
   currentSourceIndex: number;
@@ -135,10 +158,10 @@ export type RadarCheckpoint = {
   searchCriteria?: RadarSearchCriteria;
   /** At most five sanitized detail examples per source; never stores page HTML or contact data. */
   detailDiagnostics?: Record<string, RadarDetailDiagnostic[]>;
-  /** Timestamp of the last durable collection checkpoint; absent on legacy runs. */
+  /** Timestamp of the last durable checkpoint WRITE (also written without progress); absent on legacy runs. */
   lastProgressAt?: string;
-  /** Consecutive portions in which a source timed out without committing a batch; reset by any committed batch. */
-  sourceTimeoutStreaks?: Record<string, number>;
+  /** Real-progress and continuation diagnostics; see RadarProgressDiagnostics. */
+  progress?: RadarProgressDiagnostics;
   buffer: unknown[];
   bufferOffset: number;
 };

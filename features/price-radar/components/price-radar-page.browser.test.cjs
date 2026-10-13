@@ -582,7 +582,7 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   await resumeStarted;
   const waitingSummary = await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText();
   assert.match(waitingSummary, /Status\s+Oczekiwanie na kontynuację/u, "an expired lease must not be labeled as active scanning");
-  assert.match(waitingSummary, /Ostatni zapis postępu/u);
+  assert.match(waitingSummary, /Ostatni zapis checkpointu/u);
   const expectedProgressLabel = new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(orphanedRun.checkpoint.lastProgressAt));
   assert.ok(waitingSummary.includes(expectedProgressLabel), "the UI shows the durable checkpoint time in the browser's local timezone, not just run start");
   assert.match(waitingSummary, /Aktualne źródło\s+Morizon/u);

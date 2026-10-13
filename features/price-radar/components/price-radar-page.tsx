@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
-import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
+import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarProgressDiagnostics, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
 import { isRadarDailyScanDue, nextRadarDailyScanAt } from "@/features/price-radar/server/radar-scheduler";
 import { radarRunActivity } from "@/features/price-radar/run-presentation";
 import { describeRadarRequestError, RadarHttpError, radarConnectionIssue, radarLeaseExpiredForBrowserResume, radarRunPollDelayMs } from "@/features/price-radar/run-connection";
@@ -19,7 +19,7 @@ type ResultsResponse = {
 };
 type DistrictQueueResponse = { available: boolean; pending: RadarDistrictQueueItem[]; assigned: RadarDistrictQueueItem[]; rejected: RadarDistrictQueueItem[] };
 type VerificationQueueResponse = { available: boolean; pending: RadarVerificationQueueItem[]; confirmed: RadarVerificationQueueItem[]; rejected: RadarVerificationQueueItem[] };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; lastProgressAt?: string | null; olxJobStatus?: "queued" | "running" | "completed" | "failed" | "missing" | "unavailable"; olxJobLeaseUntil?: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number; rejectedCount?: number; verificationQueuedCount?: number; districtQueuedCount?: number; lastProgressAt?: string } };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; lastProgressAt?: string | null; olxJobStatus?: "queued" | "running" | "completed" | "failed" | "missing" | "unavailable"; olxJobLeaseUntil?: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number; rejectedCount?: number; verificationQueuedCount?: number; districtQueuedCount?: number; lastProgressAt?: string; progress?: RadarProgressDiagnostics } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null; automaticScanEnabled: boolean; automaticScanTime: string }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
@@ -693,9 +693,12 @@ export function PriceRadarPage() {
           <AutomationMetric label="Czas trwania" value={run ? formatDuration(run.startedAt, run.finishedAt ?? run.userTerminatedAt, clockNow) : "—"} />
           <AutomationMetric label="Status" value={runActivity.status} />
           <AutomationMetric label="Następny skan" value={radarNextScanLabel(run, automaticScanEnabled, automaticScanTime, new Date(clockNow))} />
-          <AutomationMetric label="Ostatni zapis postępu" value={runActivity.lastProgressAt ? formatDate(runActivity.lastProgressAt) : "Brak zapisanego checkpointu"} />
+          <AutomationMetric label="Ostatni rzeczywisty postęp" value={run?.checkpoint?.progress?.lastRealProgressAt ? `${formatDate(run.checkpoint.progress.lastRealProgressAt)}${run.checkpoint.progress.lastProgressSource ? ` · ${radarSourceLabel(run.checkpoint.progress.lastProgressSource)}` : ""}` : run ? "Brak potwierdzonego postępu" : "—"} />
+          <AutomationMetric label="Ostatni zapis checkpointu" value={runActivity.lastProgressAt ? formatDate(runActivity.lastProgressAt) : "Brak zapisanego checkpointu"} />
           <AutomationMetric label="Aktualne źródło" value={runActivity.currentSource ? radarSourceLabel(runActivity.currentSource) : "—"} />
           <AutomationMetric label="Pozostałe źródła" value={String(runActivity.remainingSources)} />
+          {isRunActuallyActive(run) || run?.status === "running" || run?.status === "pending" ? <AutomationMetric label="Powód oczekiwania" value={radarWaitingLabel(run)} /> : null}
+          {run?.checkpoint?.progress?.lastContinuationError ? <AutomationMetric label="Ostatni błąd przekazania" value={`${formatDate(run.checkpoint.progress.lastContinuationError.at)} · krok ${run.checkpoint.progress.lastContinuationError.hop} · ${run.checkpoint.progress.lastContinuationError.reason}`} /> : null}
           <AutomationMetric label="Ostatnia synchronizacja z serwerem" value={lastSyncedAt ? formatDate(new Date(lastSyncedAt).toISOString()) : "—"} />
         </div>
         <div className="grid gap-3 border-t pt-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -1081,6 +1084,24 @@ function formatDuration(startedAt: string, finishedAt: string | null, now: numbe
 }
 
 function radarSourceActivityLabel(run: RunStatus, source: string, status: string, now: number): string {
+  const attempts = run.checkpoint?.progress?.sourceNoProgressAttempts?.[source] ?? 0;
+  const base = radarSourceBaseActivityLabel(run, source, status, now);
+  return attempts > 0 && status !== "completed" && status !== "failed" && status !== "partial" ? `${base} · próby bez postępu: ${attempts}` : base;
+}
+
+function radarWaitingLabel(run: RunStatus | null): string {
+  const progress = run?.checkpoint?.progress;
+  const noProgress = progress?.noProgressPortions ?? 0;
+  const suffix = noProgress > 0 ? ` · porcje bez postępu: ${noProgress}` : "";
+  switch (progress?.waitingReason) {
+    case "retry_after": return `Portal poprosił o przerwę (Retry-After)${progress.waitingUntil ? ` do ${formatDate(progress.waitingUntil)}` : ""}${suffix}`;
+    case "olx_worker": return `Worker OLX${suffix}`;
+    case "next_portion": return `Następna porcja na serwerze${suffix}`;
+    default: return noProgress > 0 ? `Brak postępu${suffix}` : "—";
+  }
+}
+
+function radarSourceBaseActivityLabel(run: RunStatus, source: string, status: string, now: number): string {
   if (status !== "running") return ({ pending: "oczekuje", completed: "ukończono", partial: "częściowe pokrycie", failed: "błąd terminalny" } as Record<string, string>)[status] ?? "nieznany";
   if (source === "olx") {
     if (run.olxJobStatus === "queued") return "oczekuje na worker";

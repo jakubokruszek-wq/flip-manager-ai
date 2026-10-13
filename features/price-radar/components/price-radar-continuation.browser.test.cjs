@@ -116,9 +116,20 @@ test("the Radar PWA keeps refreshing across app switches, lost network, server e
 
   // 1. A run started on another device appears as soon as the PWA is shown again.
   radarRun = runningRun(433, 24, 60_000);
+  radarRun.checkpoint.progress = {
+    lastRealProgressAt: "2026-10-13T08:35:00.000Z", lastProgressSource: "oferty_net", noProgressPortions: 4,
+    sourceNoProgressAttempts: { domiporta: 2 }, waitingReason: "next_portion",
+    lastContinuationError: { at: "2026-10-13T08:42:41.000Z", hop: 17, reason: "ACK_TIMEOUT" },
+  };
   await returnToApp();
   await page.getByText(/433 sprawdzonych · 24 zakwalifikowanych/u).waitFor({ timeout: 10_000 });
-  assert.match(await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText(), /Aktualne źródło\s+Domiporta/u);
+  const diagnostics = await page.getByRole("region", { name: "Automatyczne skanowanie" }).innerText();
+  assert.match(diagnostics, /Aktualne źródło\s+Domiporta/u);
+  assert.match(diagnostics, /Ostatni rzeczywisty postęp\s+.*Oferty\.net/u, "real progress is shown separately from checkpoint writes");
+  assert.match(diagnostics, /Ostatni zapis checkpointu/u);
+  assert.match(diagnostics, /Powód oczekiwania\s+Następna porcja na serwerze · porcje bez postępu: 4/u);
+  assert.match(diagnostics, /Ostatni błąd przekazania\s+.*krok 17 · ACK_TIMEOUT/u);
+  assert.match(await collectionText(), /Domiporta: pobieranie · próby bez postępu: 2/u);
 
   // 2. Lost network: an understandable message plus the last known progress, never "Failed to fetch".
   networkDown = true;
