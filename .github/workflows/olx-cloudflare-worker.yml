@@ -1,0 +1,61 @@
+name: OLX Cloudflare worker checks
+
+# Tests, typecheck and a Wrangler dry-run bundle of workers/olx-cloudflare.
+# Never deploys and needs no Cloudflare credentials or secrets.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "workers/olx-cloudflare/**"
+      - "workers/olx-browser/src/**"
+      - "features/flip-finder/olx-parser.ts"
+      - "features/flip-finder/olx-worker-protocol.ts"
+      - "features/flip-finder/olx-job-state.ts"
+      - "features/flip-finder/listing-attribute-extraction.ts"
+      - "features/flip-finder/identity-evidence.ts"
+      - "features/flip-finder/server/olx-images.ts"
+      - "features/flip-finder/server/olx-selective-claim.ts"
+      - "features/flip-finder/server/olx-selective-claim.test.ts"
+      - "app/api/olx-worker/**"
+      - "supabase/migrations/20261013150000_add_selective_olx_claim.sql"
+      - "features/flip-finder/otodom-search.ts"
+      - ".github/workflows/olx-cloudflare-worker.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install root dependencies (Playwright stand-in for Browser Run)
+        run: npm ci --no-audit --no-fund
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install worker dependencies
+        working-directory: workers/olx-cloudflare
+        run: npm ci --no-audit --no-fund
+      - name: In-page parser bundle is up to date
+        working-directory: workers/olx-cloudflare
+        run: node scripts/build-in-page-bundle.mjs --check
+      - name: Typecheck
+        working-directory: workers/olx-cloudflare
+        run: npm run typecheck
+      - name: Tests
+        working-directory: workers/olx-cloudflare
+        run: npm test
+      - name: Selective claim payload (app route helper)
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --test features/flip-finder/server/olx-selective-claim.test.ts
+      - name: Wrangler dry-run bundle (no deploy)
+        working-directory: workers/olx-cloudflare
+        run: npx wrangler deploy --dry-run --outdir dist
+      - name: Wrangler dry-run of the separate stage-1 test Worker (no deploy)
+        working-directory: workers/olx-cloudflare
+        run: npx wrangler deploy --dry-run --outdir dist-stage1 --config wrangler.stage1.toml

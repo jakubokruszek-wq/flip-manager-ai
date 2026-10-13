@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "types": ["@cloudflare/workers-types", "node"],
+    "typeRoots": ["./node_modules/@types", "../../node_modules/@types", "./node_modules"],
+    "paths": { "@/*": ["../../*"] }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
