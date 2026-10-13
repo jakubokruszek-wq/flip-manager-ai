@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { resolveNextDeploymentId } from "./features/settings/deployment-id.mjs";
 
 const supabaseImageHost = (() => {
   try { return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").hostname; }
@@ -6,7 +7,7 @@ const supabaseImageHost = (() => {
 })();
 
 const nextConfig: NextConfig = {
-  deploymentId: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
+  deploymentId: resolveNextDeploymentId(process.env),
   env: {
     NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA:
       process.env.VERCEL_GIT_COMMIT_SHA ??

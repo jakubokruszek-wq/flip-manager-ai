@@ -11,6 +11,7 @@ const settings = read("features/settings/components/settings-page.tsx");
 const serviceWorker = read("components/pwa-service-worker.tsx");
 const nextConfig = read("next.config.ts");
 const buildInfo = read("app/api/build-info/route.ts");
+const deploymentId = require("../deployment-id.mjs").resolveNextDeploymentId;
 
 test("settings compares the browser build with uncached Production build-info", () => {
   assert.match(settings, /<VersionUpdatesSettings \/>/);
@@ -21,7 +22,28 @@ test("settings compares the browser build with uncached Production build-info", 
   assert.match(component, /Dostępna aktualizacja/);
   assert.match(component, /Aktualizuj/);
   assert.match(buildInfo, /Cache-Control.*no-store/);
-  assert.match(nextConfig, /deploymentId: process\.env\.VERCEL_GIT_COMMIT_SHA/);
+  assert.match(nextConfig, /deploymentId: resolveNextDeploymentId\(process\.env\)/);
+  assert.match(nextConfig, /NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA/);
+});
+
+test("Next deployment IDs are unique-safe Vercel identifiers no longer than 32 chars", () => {
+  const platformId = "dpl_" + "a".repeat(27);
+  assert.equal(
+    deploymentId({ VERCEL_DEPLOYMENT_ID: platformId, VERCEL_GIT_COMMIT_SHA: "b".repeat(40) }),
+    "a".repeat(27),
+  );
+
+  const fromCommit = deploymentId({ VERCEL_GIT_COMMIT_SHA: "b".repeat(40) });
+  assert.equal(fromCommit, "b".repeat(32));
+  assert.ok(fromCommit.length <= 32);
+  assert.doesNotMatch(fromCommit, /^dpl_/);
+
+  assert.equal(
+    deploymentId({ VERCEL_DEPLOYMENT_ID: "dpl_" + "x".repeat(33), VERCEL_GIT_COMMIT_SHA: "c".repeat(40) }),
+    "c".repeat(32),
+  );
+  assert.equal(deploymentId({ VERCEL: "1", VERCEL_GIT_COMMIT_SHA: "d".repeat(40) }), undefined);
+  assert.equal(deploymentId({}), undefined);
 });
 
 test("PWA update warns before reload and preserves browser storage", () => {
