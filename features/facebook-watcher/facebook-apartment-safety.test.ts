@@ -43,3 +43,17 @@ test("does not infer a block from an address that has no verified evidence", () 
   assert.equal(evidence.status, "UNVERIFIED");
   assert.equal(evidence.buildingType, null);
 });
+
+test("Facebook uses the shared Finder building rule: a neighbouring tenement is not evidence, a vague 'modern building' is not a type", () => {
+  const nextToTenement = evaluateFacebookApartmentSafety({ authoritativeText: "Sprzedam mieszkanie w bloku obok zabytkowej kamienicy, Łódź Śródmieście", property: { city: "Lodz" }, filter });
+  assert.equal(nextToTenement.hardReject, false, nextToTenement.reasons.join(","));
+  assert.equal(nextToTenement.buildingType, "blok");
+  const amongTenements = evaluateFacebookApartmentSafety({ authoritativeText: "Mieszkanie w apartamentowcu wśród kamienic, Łódź", property: { city: "Lodz" }, filter });
+  assert.equal(amongTenements.buildingType, "apartamentowiec");
+  assert.equal(amongTenements.reasons.includes("FACEBOOK_BUILDING_KAMIENICA"), false);
+  const vague = evaluateFacebookApartmentSafety({ authoritativeText: "Mieszkanie w nowoczesnym budynku, nowa inwestycja, Łódź", property: { city: "Lodz" }, filter });
+  assert.equal(vague.buildingType, null, "never guessed from marketing words");
+  assert.ok(vague.reasons.includes("FACEBOOK_BUILDING_TYPE_UNVERIFIED"));
+  const tenement = evaluateFacebookApartmentSafety({ authoritativeText: "Mieszkanie w odnowionej kamienicy przy Piotrkowskiej, Łódź", property: { city: "Lodz" }, filter });
+  assert.equal(tenement.hardReject, true);
+});

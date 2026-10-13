@@ -137,10 +137,22 @@ function splitTopLevelCommas(expression: string): string[] {
 }
 
 function matchesEqClause(row: Row, clause: string): boolean {
+  const contains = clause.match(/^([a-z_]+)\.cs\.(.*)$/i);
+  if (contains) return jsonContains(row[contains[1]], contains[2]);
   const match = clause.match(/^([a-z_]+)\.eq\.(.*)$/i);
   if (!match) return false;
   const [, column, rawValue] = match;
   return String(row[column] ?? "") === rawValue;
+}
+
+/** PostgREST `cs` (jsonb @>) for the JSON-array values this codebase filters on. */
+function jsonContains(value: unknown, rawExpected: unknown): boolean {
+  let expected: unknown = rawExpected;
+  if (typeof rawExpected === "string") {
+    try { expected = JSON.parse(rawExpected); } catch { return false; }
+  }
+  if (!Array.isArray(expected) || !Array.isArray(value)) return false;
+  return expected.every((item) => value.some((candidate) => JSON.stringify(candidate) === JSON.stringify(item)));
 }
 
 class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message: string } | null }> {
@@ -156,14 +168,20 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
   private limitCount: number | null = null;
   private rangeWindow: [number, number] | null = null;
   private wantsSelectBack = false;
+  private countRequested = false;
+  private headOnly = false;
 
   constructor(db: FakeFacebookSupabase, table: string) {
     this.db = db;
     this.table = table;
   }
 
-  select(): this {
+  select(_columns?: string, options?: { count?: "exact" | "planned" | "estimated"; head?: boolean }): this {
     this.wantsSelectBack = true;
+    // Mirrors supabase-js: `count` adds the total matching row count to the
+    // response; `head` returns no rows at all (count only).
+    this.countRequested = Boolean(options?.count);
+    this.headOnly = options?.head === true;
     return this;
   }
   eq(column: string, value: unknown): this {
@@ -196,6 +214,7 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
   }
   not(column: string, operator: string, value: unknown): this {
     if (operator === "is") this.filters.push((row) => row[column] !== value);
+    if (operator === "cs") this.filters.push((row) => !jsonContains(row[column], value));
     return this;
   }
   is(column: string, value: unknown): this {
@@ -302,6 +321,10 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: { message:
     if (failure) return { data: null, error: failure };
 
     if (this.op === "select") {
+      if (this.countRequested || this.headOnly) {
+        const all = this.db._table(this.table).filter((row) => this.filters.every((filter) => filter(row)) && this.matchesOr(row));
+        return { data: this.headOnly ? null : this.matchingRows(), error: null, count: all.length } as { data: unknown; error: QueryFailure | null };
+      }
       return { data: this.matchingRows(), error: null };
     }
 

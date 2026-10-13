@@ -18,11 +18,14 @@ import {
 import type { SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { resolveListingUrl } from "@/features/listing-url";
+import { formatListingAge } from "@/features/flip-finder/publication-date";
 
 type ResultsResponse = {
   filter: SearchFilter;
   results: FilterResult[];
   reviewResults: FilterResult[];
+  buildingVerificationResults?: FilterResult[];
+  excludedResults?: Array<{ id: string; title: string | null; label: string }>;
   total: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
@@ -40,7 +43,8 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
       const payload: unknown = await readJson(response);
 
       if (!response.ok || !isResultsResponse(payload)) {
-        throw new Error(readMessage(payload, "Nie udało się pobrać wyników filtra."));
+        const detail = payload !== null && typeof payload === "object" && "detail" in payload && typeof payload.detail === "string" ? ` Szczegóły: ${payload.detail}` : "";
+        throw new Error(`${readMessage(payload, "Nie udało się pobrać wyników filtra.")} (HTTP ${response.status}).${detail}`);
       }
 
       setData(payload);
@@ -62,6 +66,7 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
 
   const results = useMemo(() => (data ? sortResults(data.results, sort) : []), [data, sort]);
   const reviewResults = useMemo(() => (data ? sortResults(data.reviewResults, sort) : []), [data, sort]);
+  const buildingResults = useMemo(() => (data ? sortResults(data.buildingVerificationResults ?? [], sort) : []), [data, sort]);
 
   if (isLoading) {
     return <ResultsLoadingState />;
@@ -128,7 +133,7 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
         </div>
       ) : null}
 
-      {results.length === 0 && reviewResults.length === 0 ? (
+      {results.length === 0 && reviewResults.length === 0 && buildingResults.length === 0 ? (
         <EmptyResultsState isActive={data.filter.isActive} />
       ) : (
         <section aria-label="Oferty dopasowane do filtra" className="grid gap-4 lg:grid-cols-2">
@@ -137,6 +142,29 @@ export function FilterResultsPage({ id: filterId }: { id: string }) {
           ))}
         </section>
       )}
+
+      {buildingResults.length > 0 ? (
+        <section aria-label="Oferty do weryfikacji budynku" className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">DO WERYFIKACJI BUDYNKU</h2>
+            <p className="text-sm text-muted-foreground">Typ budynku niepotwierdzony — poza głównymi listami: {formatNumber(buildingResults.length)}</p>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {buildingResults.map((result) => (
+              <ListingResultCard key={result.id} result={result} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {data.excludedResults?.length ? (
+        <details className="rounded-xl border p-3 text-sm">
+          <summary className="cursor-pointer font-medium">Zapisane dopasowania niewidoczne w wynikach: {formatNumber(data.excludedResults.length)}</summary>
+          <ul className="mt-2 space-y-1 text-muted-foreground">
+            {data.excludedResults.map((entry) => <li key={entry.id}>{entry.title ?? "Oferta bez tytułu"} — {entry.label}</li>)}
+          </ul>
+        </details>
+      ) : null}
 
       {reviewResults.length > 0 ? (
         <section aria-label="Oferty do oceny" className="space-y-3">
@@ -221,6 +249,10 @@ function ListingResultCard({ result }: { result: FilterResult }) {
             <div className="flex flex-wrap justify-between gap-x-3">
               <dt>Ostatnie sprawdzenie</dt>
               <dd className="min-w-0 whitespace-normal break-words text-right [overflow-wrap:anywhere]">{formatDateTime(result.lastSeenAt)}</dd>
+            </div>
+            <div className="flex flex-wrap justify-between gap-x-3">
+              <dt>Wiek oferty</dt>
+              <dd className="min-w-0 text-right">{formatListingAge(result.publicationAgeDays ?? null).replace("Wiek oferty: ", "")}{result.isOlderListing ? " · starsza oferta" : ""}{result.verificationStale ? " · aktualność niepotwierdzona" : ""}</dd>
             </div>
           </dl>
 

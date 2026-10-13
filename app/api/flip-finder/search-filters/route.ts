@@ -18,16 +18,31 @@ export async function GET() {
     const payload = await listSearchFilters();
     const now = Date.now();
     const filters = await mapWithConcurrency(payload.filters, 3, async (filter) => {
-      if (filter.membershipRows === 0) return { ...filter, totalMatches: 0 };
-      const results = await getFilterResults(filter.id, false, now, operator.id);
-      return {
-        ...filter,
-        totalMatches: results ? results.results.length + results.reviewResults.length : 0,
-      };
+      if (filter.membershipRows === 0) return { ...filter, totalMatches: 0, visibleCounts: { matched: 0, review: 0, buildingVerification: 0, excluded: 0 }, countsError: null };
+      try {
+        // Counts only: the summary read skips snapshots, comps and scoring,
+        // which never change which section a listing lands in.
+        const results = await getFilterResults(filter.id, false, now, operator.id, { summaryOnly: true });
+        const counts = results?.counts;
+        return {
+          ...filter,
+          totalMatches: counts ? counts.active + counts.review + counts.buildingVerification : 0,
+          visibleCounts: counts ? { matched: counts.active, review: counts.review, buildingVerification: counts.buildingVerification, excluded: counts.excluded } : undefined,
+          countsError: null,
+        };
+      } catch (error) {
+        // One filter's failed count must not blank the whole dashboard, and
+        // must never be shown as a genuine zero.
+        console.error("FLIP FINDER FILTER COUNT ERROR:", filter.id, error);
+        return { ...filter, totalMatches: 0, countsError: error instanceof Error ? error.message : "Nie udało się policzyć wyników filtra." };
+      }
     });
     return Response.json({ ...payload, filters });
   }
-  catch { return Response.json({ message: "Nie udało się pobrać filtrów." }, { status: 500 }); }
+  catch (error) {
+    console.error("FLIP FINDER FILTER LIST ROUTE ERROR:", error);
+    return Response.json({ message: "Nie udało się pobrać filtrów.", detail: error instanceof Error ? error.message : null }, { status: 500 });
+  }
 }
 
 async function mapWithConcurrency<T, R>(items: readonly T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {

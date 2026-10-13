@@ -644,7 +644,14 @@ export function FlipFinderPage() {
                         {filter.maxPricePerSqm !== null ? (
                           <span>Maks. cena/m²: {formatCurrency(filter.maxPricePerSqm)}</span>
                         ) : null}
-                        <span>Widoczne oferty: {formatNumber(filter.totalMatches ?? 0)}</span>
+                        {filter.countsError ? (
+                          <span className="text-destructive" role="alert">Nie udało się policzyć ofert: {filter.countsError}</span>
+                        ) : (
+                          <span>Widoczne oferty: {formatNumber(filter.totalMatches ?? 0)}</span>
+                        )}
+                        {filter.visibleCounts && !filter.countsError ? (
+                          <span>Dopasowane: {formatNumber(filter.visibleCounts.matched)} · Do oceny: {formatNumber(filter.visibleCounts.review)} · Weryfikacja budynku: {formatNumber(filter.visibleCounts.buildingVerification)}</span>
+                        ) : null}
                         <span>Nowe w ostatnim skanie: {formatNumber(filter.newMatches ?? 0)}</span>
                       </div>
                       {/* filter.lastScannedAt (search_filters.last_scanned_at) is

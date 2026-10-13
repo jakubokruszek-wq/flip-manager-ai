@@ -27,8 +27,11 @@ const NEGATION_WINDOW = /\b(?:nie|bez|brak)\b\s+(?:\p{L}+\s+){0,2}$/iu;
 type Pattern = { canonical: string; regex: RegExp };
 
 const BUILDING_TYPE_PATTERNS: Pattern[] = [
-  { canonical: "apartamentowiec", regex: /apartamentowiec\p{L}*/giu },
-  { canonical: "kamienica", regex: /kamienic\p{L}*/giu },
+  // The stem changes under declension (apartamentowiec -> apartamentowcu,
+  // apartamentowca, apartamentowcem), so a "apartamentowiec\p{L}*" prefix
+  // missed "Mieszkanie w apartamentowcu" entirely.
+  { canonical: "apartamentowiec", regex: /\bapartamentow(?:iec|ca|cu|cem|ce|ców|cach|cami)(?!\p{L})/giu },
+  { canonical: "kamienica", regex: /\bkamienic\p{L}*/giu },
   { canonical: "dom", regex: /szeregow\p{L}*/giu },
   // A bare "dom" is deliberately excluded: it is one of the most common
   // words in Polish ("blisko domu", "dom seniora", "w drodze do domu") and
@@ -43,7 +46,14 @@ const BUILDING_TYPE_PATTERNS: Pattern[] = [
   // an apartment-building scale, not a house.
   { canonical: "dom", regex: /\bdom(?:ek)?\p{L}*\s+(?:wolnostoj\p{L}*|jednorodzinn\p{L}*|dwurodzinn\p{L}*|bliźniacz\p{L}*|parterow\p{L}*|(?:jedno|dwu|trzy)?piętrow\p{L}*|letniskow\p{L}*)/giu },
   { canonical: "dom", regex: /\b(?:wolnostoj\p{L}*|jednorodzinn\p{L}*|dwurodzinn\p{L}*|bliźniacz\p{L}*)\s+dom(?:ek)?\p{L}*/giu },
-  { canonical: "blok", regex: /\bblok\p{L}*/giu },
+  // Only real inflections of "blok": a bare prefix also matched unrelated
+  // words such as "blokada" or "blokowanie" and fabricated a building type.
+  { canonical: "blok", regex: /\bblok(?:u|iem|owi|i|ów|ach|ami)?(?!\p{L})/giu },
+  // A high-rise block ("wieżowiec") and a large-panel building ("z wielkiej
+  // płyty") are explicit statements about the building itself. Diacritic-free
+  // spellings are common in Facebook posts.
+  { canonical: "blok", regex: /\bwie[żz]ow(?:iec|ca|cu|cem|ce|ców|cow)(?!\p{L})/giu },
+  { canonical: "blok", regex: /\bwielk(?:iej|a|ą)\s+p[łl]yt(?:y|a|ą|cie)(?!\p{L})/giu },
 ];
 
 const OWNERSHIP_PATTERNS: Pattern[] = [
@@ -73,7 +83,10 @@ function extractCanonical(text: string, patterns: Pattern[], ignoreMatch?: (matc
 
 /** Combines title + description into one scan surface, same source fields filter-evaluation.ts's own free-text checks already use. */
 function scanText(title: string | null, description: string | null): string {
-  return `${title ?? ""} ${description ?? ""}`;
+  // A line break keeps the title and the description separate clauses, so a
+  // neighbour phrase at the start of the description ("Kamienica obok.") is
+  // never read as continuing the title's own statement ("Mieszkanie w bloku").
+  return `${title ?? ""}\n${description ?? ""}`;
 }
 
 export function extractBuildingType(title: string | null, description: string | null): string | null {
@@ -159,8 +172,63 @@ function isNonListingBuildingMention(match: RegExpExecArray, text: string): bool
   // distinguishes that from one real negated clause, and widening the
   // reach wrongly discarded a later, unrelated, genuinely affirmative
   // declaration together with the earlier negated one.
-  return /(?:\bobok|\bnaprzeciw(?:ko)?|\bw\s+sąsiedztwie|\bw\s+okolicy|\bpoblisk\p{L}*|\bsąsiedn\p{L}*|\bwidok(?:iem)?\s+na)\b/iu.test(before)
-    || /^(?:\s*\b(?:obok|naprzeciw(?:ko)?|w\s+sąsiedztwie|w\s+okolicy|poblisk\p{L}*|sąsiedn\p{L}*)\b)/iu.test(after);
+  return NEIGHBOUR_CONTEXT_BEFORE.test(before)
+    || NEIGHBOUR_PREPOSITION_ADJACENT.test(before)
+    || STREET_NAME_PREFIX.test(text.slice(Math.max(0, match.index - 12), match.index))
+    // "Kamienica obok" describes a neighbour, but in "mieszkanie w bloku obok
+    // kamienicy" the locative "w bloku" locates this unit; "obok" then refers
+    // to the next word, not to the block.
+    || (NEIGHBOUR_CONTEXT_AFTER.test(after) && !LOCATIVE_BEFORE.test(before))
+    || isPluralTenementMention(match);
+}
+
+const NEIGHBOUR_CONTEXT_BEFORE = /(?:\bobok|\bnaprzeciw(?:ko)?|\bw\s+sąsiedztwie|\bw\s+okolicy|\bpoblisk\p{L}*|\bsąsiedn\p{L}*|\bwidok(?:iem)?\s+na)(?!\p{L})/iu;
+/**
+ * Spatial prepositions that are common in ordinary address text ("przy ul.
+ * Piotrkowskiej", "między Piotrkowską a Kościuszki") only describe a
+ * neighbour when they directly govern the building word (at most two
+ * adjectives in between: "wśród zabytkowych kamienic", "przy starej
+ * kamienicy"), never anywhere earlier in the clause.
+ */
+const NEIGHBOUR_PREPOSITION_ADJACENT = /(?:^|[^\p{L}])(?:wśród|pośród|między|wokół|dookoła|otoczon\p{L}*|otoczeni\p{L}*|w\s+otoczeniu|niedaleko|przy|za\s+rogiem|kilka\s+kroków\s+od|sąsiaduj\p{L}*\s+z)(?:\s+(?!(?:w|we)(?!\p{L}))\p{L}+){0,2}\s*$/iu;
+/** A street/square name ("ul. Kamienica") is an address, never a building type. */
+const STREET_NAME_PREFIX = /(?:^|[^\p{L}])(?:ul\.?|ulic[ayi]|al\.|alej[ai]|aleja|pl\.|plac[u]?|os\.|osiedl[eua])\s*$/iu;
+const NEIGHBOUR_CONTEXT_AFTER = /^(?:\s*\b(?:obok|naprzeciw(?:ko)?|w\s+sąsiedztwie|w\s+okolicy|poblisk\p{L}*|sąsiedn\p{L}*|wokół|dookoła|w\s+pobliżu)(?!\p{L}))/iu;
+const LOCATIVE_BEFORE = /(?:^|[^\p{L}])(?:w|we)(?:\s+\p{L}+){0,2}\s*$/iu;
+const PLURAL_TENEMENT = /^kamienic(?:e|ami|ach)?$/iu;
+
+/**
+ * Plural tenement forms ("kamienice", "pełno kamienic", "między
+ * kamienicami") describe the surrounding area, not the unit on offer. They
+ * are therefore never affirmative evidence. The one plural phrasing that
+ * does locate the unit ("w jednej z kamienic") stays affirmative.
+ */
+function isPluralTenementMention(match: RegExpExecArray): boolean {
+  if (!PLURAL_TENEMENT.test(match[0]) || match[0].toLocaleLowerCase("pl-PL") === "kamienica") return false;
+  const before = match.input.slice(Math.max(0, match.index - 24), match.index);
+  return !/\bjedn(?:ej|ą|a)\s+ze?\s+$/iu.test(before);
+}
+
+/**
+ * A tenement mention that is not affirmative evidence about this unit but is
+ * also not clearly about a neighbour (plural forms describing the area). It
+ * never rejects a listing; Finder uses it only to ask the operator to verify
+ * a structured-only building type.
+ */
+export function hasAmbiguousTenementMention(title: string | null, description: string | null): boolean {
+  const text = scanText(title, description);
+  const regex = /\bkamienic\p{L}*/giu;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, match.index - 40), match.index);
+    if (NEGATION_WINDOW.test(before)) continue;
+    if (isPluralTenementMention(match)) {
+      const clauseStart = Math.max(text.lastIndexOf(".", match.index), text.lastIndexOf(",", match.index), text.lastIndexOf("\n", match.index), text.lastIndexOf(">", match.index)) + 1;
+      const clauseBefore = text.slice(clauseStart, match.index);
+      if (!NEIGHBOUR_CONTEXT_BEFORE.test(clauseBefore.trim()) && !NEIGHBOUR_PREPOSITION_ADJACENT.test(clauseBefore)) return true;
+    }
+  }
+  return false;
 }
 
 export function resolveOwnership(
@@ -188,13 +256,25 @@ function fold(value: string): string {
   return value.trim().toLocaleLowerCase("pl-PL").replace(/ł/gu, "l").normalize("NFD").replace(/\p{M}/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+/** Canonical building type for an operator- or source-supplied label; null when not a recognized category. */
+export function normalizeStructuredBuildingType(value: unknown): string | null {
+  const explicit = structuredText(value);
+  return explicit.present ? normalizeBuildingType(explicit.value) : null;
+}
+
 function normalizeBuildingType(value: string | null): string | null {
   if (!value) return null;
   const normalized = fold(value);
   if (["blok", "blok mieszkalny", "block", "block of flats"].includes(normalized)) return "blok";
   if (["kamienica", "kamieniczny", "tenement", "tenement house"].includes(normalized)) return "kamienica";
-  if (["dom", "house", "detached house", "single family house", "dom jednorodzinny", "wolnostojacy dom", "dom wolnostojacy", "zabudowa szeregowa", "dom szeregowy"].includes(normalized)) return "dom";
-  if (["apartamentowiec", "budynek apartamentowy", "apartment building", "apartment block"].includes(normalized)) return "apartamentowiec";
+  if (["dom", "house", "detached house", "single family house", "dom jednorodzinny", "wolnostojacy dom", "dom wolnostojacy", "zabudowa szeregowa", "dom szeregowy", "wolnostojacy", "szeregowiec", "blizniak", "ribbon", "detached", "semi detached", "terraced"].includes(normalized)) return "dom";
+  // Otodom's structured enum names an apartment building plainly "apartment".
+  if (["apartamentowiec", "budynek apartamentowy", "apartment building", "apartment block", "apartment"].includes(normalized)) return "apartamentowiec";
+  // Known, explicitly named building categories that are neither a block nor
+  // an apartment building. They are confirmed types (so a blok/apartamentowiec
+  // filter rejects them), never guessed from other attributes.
+  if (["loft"].includes(normalized)) return "loft";
+  if (["plomba", "infill"].includes(normalized)) return "plomba";
   return null;
 }
 

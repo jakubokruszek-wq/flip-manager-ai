@@ -11,10 +11,10 @@ test("Finder source totals use MATCHED and REVIEW canonical rows, including acti
     [row("olx"), row("olx")],
   );
 
-  assert.deepEqual(counts.bySource.gratka, { matched: 1, review: 0 });
-  assert.deepEqual(counts.bySource.olx, { matched: 0, review: 2 });
-  assert.deepEqual(counts.bySource.domiporta, { matched: 0, review: 0 });
-  assert.deepEqual(counts.total, { matched: 1, review: 2 });
+  assert.deepEqual(counts.bySource.gratka, { matched: 1, review: 0, buildingVerification: 0 });
+  assert.deepEqual(counts.bySource.olx, { matched: 0, review: 2, buildingVerification: 0 });
+  assert.deepEqual(counts.bySource.domiporta, { matched: 0, review: 0, buildingVerification: 0 });
+  assert.deepEqual(counts.total, { matched: 1, review: 2, buildingVerification: 0 });
   assert.equal(
     counts.total.matched,
     Object.values(counts.bySource).reduce((sum, source) => sum + source.matched, 0),
@@ -30,10 +30,16 @@ test("cross-portal property card counts once in totals and once in each represen
     [{ id: "unit-1", source: "gratka", linkedListings: [{ source: "morizon" }, { source: "nieruchomosci_online" }] }],
     [{ id: "unit-2", source: "olx", linkedListings: [{ source: "otodom" }] }],
   );
-  assert.deepEqual(counts.total, { matched: 1, review: 1 });
-  assert.deepEqual(counts.bySource.gratka, { matched: 1, review: 0 });
-  assert.deepEqual(counts.bySource.morizon, { matched: 1, review: 0 });
-  assert.deepEqual(counts.bySource.nieruchomosci_online, { matched: 1, review: 0 });
-  assert.deepEqual(counts.bySource.olx, { matched: 0, review: 1 });
-  assert.deepEqual(counts.bySource.otodom, { matched: 0, review: 1 });
+  assert.deepEqual(counts.total, { matched: 1, review: 1, buildingVerification: 0 });
+  assert.deepEqual(counts.bySource.gratka, { matched: 1, review: 0, buildingVerification: 0 });
+  assert.deepEqual(counts.bySource.morizon, { matched: 1, review: 0, buildingVerification: 0 });
+  assert.deepEqual(counts.bySource.nieruchomosci_online, { matched: 1, review: 0, buildingVerification: 0 });
+  assert.deepEqual(counts.bySource.olx, { matched: 0, review: 1, buildingVerification: 0 });
+  assert.deepEqual(counts.bySource.otodom, { matched: 0, review: 1, buildingVerification: 0 });
+});
+
+test("the building-verification queue is counted separately, never inside Do oceny", () => {
+  const counts = countFinderResultsBySource([row("olx")], [row("olx")], [row("olx"), row("gratka")]);
+  assert.deepEqual(counts.total, { matched: 1, review: 1, buildingVerification: 2 });
+  assert.deepEqual(counts.bySource.olx, { matched: 1, review: 1, buildingVerification: 1 });
 });

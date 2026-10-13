@@ -2,6 +2,7 @@ import type { SearchFilter } from "@/features/flip-finder";
 import { LODZ_CONTEXT, OUTSIDE_LODZ_TOWN } from "@/features/location-intelligence/lodz-satellite-towns";
 import type { FacebookProperty } from "./types";
 import type { FacebookBuildingEvidence } from "./facebook-building-evidence";
+import { extractBuildingType, hasAffirmativeTenementMention } from "@/features/flip-finder/listing-attribute-extraction";
 
 export type FacebookApartmentSafetyDecision = {
   passes: boolean;
@@ -18,13 +19,17 @@ export function evaluateFacebookApartmentSafety(input: {
   filter: SearchFilter;
   buildingEvidence?: FacebookBuildingEvidence;
 }): FacebookApartmentSafetyDecision {
-  const text = normalize(input.authoritativeText ?? "");
+  const rawText = input.authoritativeText ?? "";
+  const text = normalize(rawText);
   const reasons: string[] = [];
   const hardReasons = new Set<string>();
   const buildingEvidence = input.buildingEvidence ?? unverifiedBuildingEvidence();
-  const buildingType = buildingEvidence.buildingType ?? inferBuildingType(text);
+  // Shared Finder rule (listing-attribute-extraction.ts): only an explicit,
+  // unnegated statement about this unit counts. "Obok kamienicy", "wśród
+  // kamienic" or "nowoczesna inwestycja" are not building evidence.
+  const buildingType = buildingEvidence.buildingType ?? extractBuildingType(null, rawText);
 
-  if (/\bkamienic\w*\b/u.test(text)) { reasons.push("FACEBOOK_BUILDING_KAMIENICA"); hardReasons.add("FACEBOOK_BUILDING_KAMIENICA"); }
+  if (hasAffirmativeTenementMention(null, rawText)) { reasons.push("FACEBOOK_BUILDING_KAMIENICA"); hardReasons.add("FACEBOOK_BUILDING_KAMIENICA"); }
   if (/\b(blizniak\w*|dom(?:u|em|y|ow)?\s+(?:wolnostojac\w*|jednorodzinn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dom\b)\b/u.test(text)) { reasons.push("FACEBOOK_PROPERTY_HOUSE"); hardReasons.add("FACEBOOK_PROPERTY_HOUSE"); }
   if (/\b(dzialk\w*\s+(?:budowlan\w*|rekreacyjn\w*)|(?:sprzedam|na\s+sprzedaz)\s+dzialk\w*)\b/u.test(text)) { reasons.push("FACEBOOK_PROPERTY_PLOT"); hardReasons.add("FACEBOOK_PROPERTY_PLOT"); }
 
@@ -48,12 +53,6 @@ function unverifiedBuildingEvidence(): FacebookBuildingEvidence {
   return { addressMatched: false, normalizedAddress: null, status: "UNVERIFIED", buildingType: null, buildingEvidenceSource: null, buildingEvidenceType: null, buildingEvidenceValue: null, buildingEvidenceConfidence: 0, sourceUrls: [] };
 }
 
-function inferBuildingType(text: string): string | null {
-  if (/\bkamienic\w*\b/u.test(text)) return "kamienica";
-  if (/\b(apartamentow\w*|nowoczesn\w+\s+(?:budyn\w*|inwestycj\w*)|now\w+\s+inwestycj\w*)\b/u.test(text)) return "apartamentowiec";
-  if (/\b(blok\w*|wiezow\w*|wielk\w+\s+plyt\w*)\b/u.test(text)) return "blok";
-  return null;
-}
 
 function normalize(value: string): string {
   return value.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l").replace(/\s+/g, " ").trim();

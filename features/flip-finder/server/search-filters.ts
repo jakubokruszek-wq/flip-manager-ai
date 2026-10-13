@@ -52,66 +52,70 @@ export function searchFilterWriteFailureResponse(error: unknown, fallbackMessage
   return Response.json({ message: fallbackMessage }, { status: 500 });
 }
 
-const SOURCE_SCAN_COLUMNS =
-  "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message,filter_snapshot";
-const MEMBERSHIP_PAGE_SIZE = 1_000;
+// filter_snapshot can be a large JSON document per scan; the list only needs
+// its heartbeat, so only filter_snapshot->_scanProgress is projected.
+const SOURCE_SCAN_COLUMNS: string =
+  "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message,scan_progress:filter_snapshot->_scanProgress";
 
+type CountResult = { count?: number | null; error: unknown };
+
+/**
+ * Dashboard read. It used to download every listing_filter_matches row of
+ * every filter (3854+ for "Flip" alone) and every listing (silently capped at
+ * PostgREST's 1000 rows, so the summary was wrong past that size). It now
+ * asks Postgres for exact counts only (HEAD requests, no rows returned).
+ */
 export async function listSearchFilters(): Promise<SearchFilterListBaseResponse> {
   const supabase = await createClient();
-  const [filtersResult, matchesResult, listingsResult, scansResult, completedScansResult] = await Promise.all([
+  const exactCount = (table: string) => supabase.from(table).select("id", { count: "exact", head: true });
+  const membershipCount = () => supabase.from("listing_filter_matches").select("listing_id", { count: "exact", head: true });
+  const [filtersResult, scansResult, completedScansResult, listingsTotal, activeListingsWithLifecycle, activeLegacyListings, removedListings] = await Promise.all([
     supabase.from("search_filters").select("*").order("updated_at", { ascending: false }),
-    fetchAllFilterMembershipRows(supabase),
-    supabase.from("listings").select("id,status,lifecycle_status"),
     supabase.from("source_scans").select(SOURCE_SCAN_COLUMNS).order("started_at", { ascending: false }).limit(SOURCE_SCAN_PAGE_LIMIT),
     supabase.from("source_scans").select(SOURCE_SCAN_COLUMNS).eq("status", "completed").not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(SOURCE_SCAN_PAGE_LIMIT),
+    exactCount("listings") as PromiseLike<CountResult>,
+    exactCount("listings").eq("status", "active").eq("lifecycle_status", "ACTIVE") as PromiseLike<CountResult>,
+    exactCount("listings").eq("status", "active").is("lifecycle_status", null) as PromiseLike<CountResult>,
+    exactCount("listings").eq("status", "removed") as PromiseLike<CountResult>,
   ]);
 
-  if (filtersResult.error || matchesResult.error || listingsResult.error || scansResult.error || completedScansResult.error) {
-    console.error(
-      "FLIP FINDER LIST ERROR:",
-      filtersResult.error ?? matchesResult.error ?? listingsResult.error ?? scansResult.error ?? completedScansResult.error,
-    );
+  const countErrors = [listingsTotal, activeListingsWithLifecycle, activeLegacyListings, removedListings].map((result) => result.error).filter(Boolean);
+  if (filtersResult.error || scansResult.error || completedScansResult.error || countErrors.length) {
+    console.error("FLIP FINDER LIST ERROR:", filtersResult.error ?? scansResult.error ?? completedScansResult.error ?? countErrors[0]);
     throw new Error("Nie udało się pobrać filtrów.");
   }
 
-  // This diagnostic counts current membership rows only. The GET route replaces
-  // totalMatches with the authoritative visible-card count from getFilterResults
-  // after lifecycle, tombstone, manual-decision, price, publication-window,
-  // identity-grouping, and filter-rule checks.
-  const matchCounts = new Map<string, number>();
-  const membershipCounts = new Map<string, number>();
-  for (const match of asRows(matchesResult.data)) {
-    const filterId = asString(match.search_filter_id);
-
-    if (filterId) {
-      membershipCounts.set(filterId, (membershipCounts.get(filterId) ?? 0) + 1);
-      if (match.is_current_match === true) matchCounts.set(filterId, (matchCounts.get(filterId) ?? 0) + 1);
+  // Diagnostic counts of membership rows, before lifecycle, tombstone,
+  // manual-decision, price, identity-grouping and filter-rule checks. The GET
+  // route replaces totalMatches with the authoritative visible-card count.
+  const filterRows = asRows(filtersResult.data).map(toSearchFilter);
+  const membershipCounts = await Promise.all(filterRows.map(async (filter) => {
+    const [all, current] = await Promise.all([
+      membershipCount().eq("search_filter_id", filter.id) as PromiseLike<CountResult>,
+      membershipCount().eq("search_filter_id", filter.id).eq("is_current_match", true) as PromiseLike<CountResult>,
+    ]);
+    if (all.error || current.error) {
+      console.error("FLIP FINDER LIST MEMBERSHIP COUNT ERROR:", all.error ?? current.error);
+      throw new Error("Nie udało się pobrać filtrów.");
     }
-  }
+    return { all: all.count ?? 0, current: current.count ?? 0 };
+  }));
 
   // The dashboard must never keep showing "running"/"pending" for a scan the
-  // platform has already abandoned (killed the background invocation before
-  // it reached its finally block, with nothing left alive to ever write
-  // "failed"). This read-only, in-memory projection is the backstop for
-  // viewers who never start a new scan or poll this exact run's progress
-  // endpoint -- both of which durably heal the row elsewhere -- so simply
-  // loading or refreshing the dashboard can never show fabricated,
-  // perpetually-"in progress" activity for dead work.
+  // platform has already abandoned; this read-only projection is the backstop.
   const now = Date.now();
   const toScans = (data: unknown) => asRows(data).map((row) => toSearchFilterScan(row, now)).filter((scan): scan is SearchFilterScan => scan !== null);
   const scans = toScans(scansResult.data);
   const latestScans = selectLatestScans(scans);
   const latestCompletedScans = selectLatestCompletedScans(toScans(completedScansResult.data));
 
-  const filters = asRows(filtersResult.data)
-    .map(toSearchFilter)
-    .map((filter) => ({
-      ...filter,
-      currentMembershipRows: matchCounts.get(filter.id) ?? 0,
-      membershipRows: membershipCounts.get(filter.id) ?? 0,
-      newMatches: latestCompletedScans.get(filter.id)?.newCount ?? 0,
-      lastScan: latestScans.get(filter.id) ?? null,
-    }));
+  const filters = filterRows.map((filter, index) => ({
+    ...filter,
+    currentMembershipRows: membershipCounts[index]?.current ?? 0,
+    membershipRows: membershipCounts[index]?.all ?? 0,
+    newMatches: latestCompletedScans.get(filter.id)?.newCount ?? 0,
+    lastScan: latestScans.get(filter.id) ?? null,
+  }));
   const activeFilters = filters.filter((filter) => filter.isActive).length;
   const latestScan = scans.reduce<SearchFilterScan | null>((current, scan) => {
     return !current || scan.startedAt > current.startedAt ? scan : current;
@@ -123,9 +127,9 @@ export async function listSearchFilters(): Promise<SearchFilterListBaseResponse>
     summary: {
       activeFilters,
       pausedFilters: filters.length - activeFilters,
-      listingsCount: asRows(listingsResult.data).length,
-      activeListings: asRows(listingsResult.data).filter((listing) => listing.status === "active" && (!listing.lifecycle_status || listing.lifecycle_status === "ACTIVE")).length,
-      removedListings: asRows(listingsResult.data).filter((listing) => listing.status === "removed").length,
+      listingsCount: listingsTotal.count ?? 0,
+      activeListings: (activeListingsWithLifecycle.count ?? 0) + (activeLegacyListings.count ?? 0),
+      removedListings: removedListings.count ?? 0,
       newMatches: filters.reduce((total, filter) => total + filter.newMatches, 0),
     },
   };
@@ -148,22 +152,6 @@ export async function getSearchFilter(id: string, options: { supabase?: ReturnTy
   return data ? toSearchFilter(asRow(data)) : null;
 }
 
-async function fetchAllFilterMembershipRows(supabase: Awaited<ReturnType<typeof createClient>>): Promise<{ data: unknown[] | null; error: unknown }> {
-  const rows: unknown[] = [];
-  let from = 0;
-  while (true) {
-    const page = await supabase.from("listing_filter_matches")
-      .select("search_filter_id,listing_id,is_current_match")
-      .order("search_filter_id", { ascending: true })
-      .order("listing_id", { ascending: true })
-      .range(from, from + MEMBERSHIP_PAGE_SIZE - 1);
-    if (page.error) return { data: null, error: page.error };
-    const batch = asRows(page.data);
-    rows.push(...batch);
-    if (batch.length < MEMBERSHIP_PAGE_SIZE) return { data: rows, error: null };
-    from += batch.length;
-  }
-}
 
 /**
  * Server scheduler read path. Unlike the operator-facing getSearchFilter,
@@ -507,7 +495,8 @@ export function toSearchFilterScan(row: Row, now: number): SearchFilterScan | nu
   // their own schedules independent of this dashboard read -- reclassifying
   // them here too would risk disagreeing with whichever one of those is
   // currently mid-recovery for the exact same row.
-  const stale = source !== "facebook" && source !== "olx" && isStaleScan({ status: rawStatus, startedAt, heartbeatAt: scanHeartbeatAt(row.filter_snapshot) }, now);
+  const snapshot = row.filter_snapshot ?? (row.scan_progress === undefined ? null : { _scanProgress: row.scan_progress });
+  const stale = source !== "facebook" && source !== "olx" && isStaleScan({ status: rawStatus, startedAt, heartbeatAt: scanHeartbeatAt(snapshot) }, now);
   const status = stale ? "failed" : rawStatus;
   const errorMessage = stale ? STALE_SCAN_MESSAGE : nullableString(row.error_message);
 

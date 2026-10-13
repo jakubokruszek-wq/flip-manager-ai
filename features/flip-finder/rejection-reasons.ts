@@ -65,6 +65,8 @@ export function describeRejectionReason(reason: string, context: RejectionReason
       return "Parter — wykluczony przez filtr";
     case "building_type":
       return `Typ budynku „${context.buildingType ?? "?"}” nie pasuje do filtra (${filter.buildingTypes.join("/")})`;
+    case "building_type_conflict":
+      return "Opis oferty wskazuje kamienicę wbrew typowi budynku podanemu przez źródło";
     case "ownership":
       return `Forma własności „${context.ownership ?? "?"}” nie pasuje do filtra (${filter.ownershipTypes.join("/")})`;
     case "district":

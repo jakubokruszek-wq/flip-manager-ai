@@ -37,18 +37,38 @@ import { LISTING_SOURCES, type SearchFilter } from "@/features/flip-finder";
 import type { SearchFilterScan } from "@/features/flip-finder/search-filter-contract";
 import { shouldShowGenericStatusBadge } from "@/features/flip-finder/listing-card-variant";
 import { resolveListingUrl } from "@/features/listing-url";
+import { formatListingAge, matchesPublicationAgeFilter, parsePublicationAgeFilter, type PublicationAgeFilter } from "@/features/flip-finder/publication-date";
+import { buildingQualificationLabel } from "@/features/flip-finder/building-type-qualification";
+
+type ExcludedResult = {
+  id: string;
+  title: string | null;
+  price: number | null;
+  area: number | null;
+  district: string | null;
+  source: FilterResult["source"] | null;
+  originalUrl: string | null;
+  publishedAt: string | null;
+  lastSeenAt: string | null;
+  code: string;
+  label: string;
+};
 
 type ResultsResponse = {
   filter: SearchFilter;
   results: FilterResult[];
   reviewResults?: FilterResult[];
+  buildingVerificationResults?: FilterResult[];
+  excludedResults?: ExcludedResult[];
   archivedResults?: FilterResult[];
-  counts?: { active: number; review: number; archived: number };
+  archive?: { offset: number; limit: number; total: number; hasMore: boolean } | null;
+  counts?: { active: number; review: number; buildingVerification?: number; excluded?: number; archived: number };
   total: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
   sourceScans: SearchFilterScan[];
-  identityFeatures?: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean };
+  identityFeatures?: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean; buildingConfirmationAvailable?: boolean };
+  diagnostics?: { durationMs: number; queryCount: number; membershipRowsRead: number };
 };
 
 type PriceHistoryResponse = {
@@ -57,16 +77,53 @@ type PriceHistoryResponse = {
   history: Array<{ price: number | null; capturedAt: string }>;
 };
 
+/** A request the server does not answer within this time is reported as an error, never as an empty Finder. */
+const RESULTS_TIMEOUT_MS = 30_000;
+const ARCHIVE_PAGE_SIZE = 30;
+
+class FinderLoadError extends Error {
+  readonly detail: string | null;
+  constructor(message: string, detail: string | null) {
+    super(message);
+    this.detail = detail;
+  }
+}
+
+async function fetchFinderJson(url: string, fallback: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), RESULTS_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+    const payload: unknown = await readJson(response);
+    if (!response.ok) {
+      const detail = payload !== null && typeof payload === "object" && "detail" in payload && typeof payload.detail === "string" ? payload.detail : null;
+      throw new FinderLoadError(`${readMessage(payload, fallback)} (HTTP ${response.status})`, detail);
+    }
+    return payload;
+  } catch (reason) {
+    if (reason instanceof FinderLoadError) throw reason;
+    if (reason instanceof DOMException && reason.name === "AbortError") throw new FinderLoadError(`${fallback} Serwer nie odpowiedział w ciągu ${RESULTS_TIMEOUT_MS / 1000} s.`, null);
+    throw new FinderLoadError(`${fallback} Brak połączenia z serwerem.`, reason instanceof Error ? reason.message : null);
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 export const InlineFilterResults = memo(function InlineFilterResults({ filterId, deepLinkListingId = null }: { filterId: string; deepLinkListingId?: string | null }) {
   const [data, setData] = useState<ResultsResponse | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ResultSort>("opportunity");
   const [source, setSource] = useState<FilterResult["source"] | null>(null);
+  const [ageFilter, setAgeFilter] = useState<PublicationAgeFilter>("all");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archive, setArchive] = useState<{ results: FilterResult[]; total: number; hasMore: boolean; nextOffset: number } | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [historyMessage, setHistoryMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; detail: string | null } | null>(null);
+  const [loading, setLoading] = useState(false);
   const [underwritingSettings, setUnderwritingSettings] = useState(DEFAULT_UNDERWRITING_SETTINGS);
 
   useEffect(() => installGalleryNativeCapture(), []);
@@ -77,24 +134,54 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
     return () => { window.clearTimeout(timeout); window.removeEventListener("flip-underwriting-settings", refresh); };
   }, []);
 
+  // The active view only: current matches, REVIEW and the building queue.
+  // History is fetched separately, page by page, after "Historia ofert" opens.
   const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const response = await fetch(`/api/flip-finder/search-filters/${filterId}/results${archiveOpen ? "?view=archive" : ""}`, { cache: "no-store" });
-      const payload: unknown = await readJson(response);
-      if (!response.ok || !isResultsResponse(payload)) {
-        throw new Error(readMessage(payload, "Nie udało się pobrać ofert."));
-      }
+      const payload = await fetchFinderJson(`/api/flip-finder/search-filters/${filterId}/results`, "Nie udało się pobrać ofert.");
+      if (!isResultsResponse(payload)) throw new FinderLoadError("Serwer zwrócił nieprawidłową odpowiedź Findera.", null);
       setData(payload);
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Nie udało się pobrać ofert.");
+      // Keep the last good data on screen, clearly marked as not refreshed.
+      setError({ message: reason instanceof Error ? reason.message : "Nie udało się pobrać ofert.", detail: reason instanceof FinderLoadError ? reason.detail : null });
+    } finally {
+      setLoading(false);
     }
-  }, [archiveOpen, filterId]);
+  }, [filterId]);
+
+  const loadArchivePage = useCallback(async (offset: number) => {
+    setArchiveLoading(true);
+    try {
+      const payload = await fetchFinderJson(`/api/flip-finder/search-filters/${filterId}/results?view=archive&offset=${offset}&limit=${ARCHIVE_PAGE_SIZE}`, "Nie udało się pobrać archiwum ofert.");
+      if (!isResultsResponse(payload)) throw new FinderLoadError("Serwer zwrócił nieprawidłową odpowiedź archiwum.", null);
+      const page = payload.archivedResults ?? [];
+      const total = payload.archive?.total ?? page.length;
+      setArchive((current) => ({
+        results: offset === 0 ? page : [...(current?.results ?? []), ...page.filter((result) => !current?.results.some((existing) => existing.id === result.id))],
+        total,
+        hasMore: payload.archive?.hasMore ?? false,
+        nextOffset: offset + (payload.archive?.limit ?? ARCHIVE_PAGE_SIZE),
+      }));
+      setArchiveError(null);
+    } catch (reason) {
+      setArchiveError(reason instanceof Error ? reason.message : "Nie udało się pobrać archiwum ofert.");
+    } finally {
+      setArchiveLoading(false);
+    }
+  }, [filterId]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timeoutId);
   }, [load]);
+
+  const toggleArchive = () => {
+    const next = !archiveOpen;
+    setArchiveOpen(next);
+    if (next && archive === null) void loadArchivePage(0);
+  };
 
   const clearSearchHistory = async () => {
     if (clearingHistory) return;
@@ -117,6 +204,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
       }
       const deleted = isDeletedHistoryResponse(payload) ? payload.deletedListings : 0;
       setArchiveOpen(false);
+      setArchive(null);
       setQuery("");
       setHistoryMessage(`Historia wyczyszczona. Usunięto ${deleted} ofert.`);
       await load();
@@ -127,53 +215,57 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
     }
   };
 
+  const matchesSourceAndAge = useCallback((result: FilterResult) =>
+    (!source || result.source === source || Boolean(result.linkedListings?.some((listing) => listing.source === source)))
+    && matchesPublicationAgeFilter(result.publishedAt, ageFilter), [ageFilter, source]);
   const allResults = useMemo(() => (data?.results ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.results, underwritingSettings]);
-  const filteredResults = useMemo(() => {
-    const textFiltered = filterResultsByText(allResults, query);
-    return source ? textFiltered.filter((result) => result.source === source || result.linkedListings?.some((listing) => listing.source === source)) : textFiltered;
-  }, [allResults, query, source]);
+  const filteredResults = useMemo(() => filterResultsByText(allResults, query).filter(matchesSourceAndAge), [allResults, query, matchesSourceAndAge]);
   const renderedResults = useMemo(
     () => sortResults(filteredResults, sort),
     [filteredResults, sort],
   );
   const reviewResults = useMemo(() => (data?.reviewResults ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.reviewResults, underwritingSettings]);
-  const filteredReviewResults = useMemo(
-    () => source ? reviewResults.filter((result) => result.source === source || result.linkedListings?.some((listing) => listing.source === source)) : reviewResults,
-    [reviewResults, source],
-  );
+  const filteredReviewResults = useMemo(() => filterResultsByText(reviewResults, query).filter(matchesSourceAndAge), [reviewResults, query, matchesSourceAndAge]);
   const sortedReviewResults = useMemo(() => sortResults(filteredReviewResults, sort), [filteredReviewResults, sort]);
   const reviewBuckets = useMemo(() => reviewCounts(sortedReviewResults), [sortedReviewResults]);
   const visibleReviewResults = sortedReviewResults;
   const reviewCount = sortedReviewResults.length;
-  const archivedResults = useMemo(() => archiveOpen ? sortResults(data?.archivedResults ?? [], sort) : [], [archiveOpen, data?.archivedResults, sort]);
+  const buildingResults = useMemo(() => (data?.buildingVerificationResults ?? []).map((result) => applySettings(result, underwritingSettings)), [data?.buildingVerificationResults, underwritingSettings]);
+  const visibleBuildingResults = useMemo(() => sortResults(filterResultsByText(buildingResults, query).filter(matchesSourceAndAge), sort), [buildingResults, query, matchesSourceAndAge, sort]);
+  const excludedResults = data?.excludedResults ?? [];
+  const archivedResults = useMemo(() => archiveOpen ? sortResults(archive?.results ?? [], sort) : [], [archiveOpen, archive?.results, sort]);
   const sourceCounts = useMemo(
-    () => countFinderResultsBySource(data?.results ?? [], data?.reviewResults ?? []),
-    [data?.results, data?.reviewResults],
+    () => countFinderResultsBySource(data?.results ?? [], data?.reviewResults ?? [], data?.buildingVerificationResults ?? []),
+    [data?.results, data?.reviewResults, data?.buildingVerificationResults],
   );
   const activeSources = activeFilterSources(data?.filter.sources ?? []);
-  const historicalSources = LISTING_SOURCES.filter((item) => (sourceCounts.bySource[item].matched + sourceCounts.bySource[item].review) > 0 && !activeSources.includes(item));
+  const historicalSources = LISTING_SOURCES.filter((item) => (sourceCounts.bySource[item].matched + sourceCounts.bySource[item].review + sourceCounts.bySource[item].buildingVerification) > 0 && !activeSources.includes(item));
   const dealOfDay = useMemo(() => selectDealOfDay([...allResults, ...reviewResults]), [allResults, reviewResults]);
+  const archivedCount = data?.counts?.archived ?? 0;
+  const sourceLine = (counts: { matched: number; review: number; buildingVerification: number }) => `Dopasowane: ${counts.matched} · Do oceny: ${counts.review} · Weryfikacja budynku: ${counts.buildingVerification}`;
+  const filtersNarrowed = Boolean(query) || source !== null || ageFilter !== "all";
 
-  if (error) {
-    return <p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</p>;
+  if (error && data === null) {
+    return <FinderErrorPanel detail={error.detail} loading={loading} message={error.message} onRetry={() => void load()} />;
   }
 
   return (
     <section aria-label="Oferty dopasowane do aktywnego filtra" className="space-y-4">
+      {error && data ? <FinderErrorPanel detail={error.detail} loading={loading} message={`${error.message} Wyświetlane oferty pochodzą z poprzedniego odczytu.`} onRetry={() => void load()} /> : null}
       {data ? <>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
-          <div><p className="font-semibold">BAZA OFERT</p><p className="mt-1 text-sm text-muted-foreground">Widoczne oferty: <strong className="text-foreground">{sourceCounts.total.matched + sourceCounts.total.review}</strong></p></div>
-          <button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source ? <span className="size-2 rounded-full bg-primary" /> : null}</button>
+          <div><p className="font-semibold">BAZA OFERT</p><p className="mt-1 text-sm text-muted-foreground" data-testid="finder-section-counts">Dopasowane: <strong className="text-foreground">{sourceCounts.total.matched}</strong> · Do oceny: <strong className="text-foreground">{sourceCounts.total.review}</strong> · Do weryfikacji budynku: <strong className="text-foreground">{sourceCounts.total.buildingVerification}</strong> · Archiwalne: <strong className="text-foreground">{archivedCount}</strong>{excludedResults.length ? <> · Wykluczone z powodem: <strong className="text-foreground">{excludedResults.length}</strong></> : null}</p></div>
+          <button aria-expanded={filtersOpen} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary sm:hidden" onClick={() => setFiltersOpen(true)} type="button"><SlidersHorizontal className="size-4" />Filtry{source || ageFilter !== "all" ? <span className="size-2 rounded-full bg-primary" /> : null}</button>
         </div>
         {data.identityFeatures && (!data.identityFeatures.automaticEvidenceAvailable || !data.identityFeatures.manualReviewAvailable) ? <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3 text-xs text-muted-foreground" data-testid="finder-identity-schema-status">Łączenie między portalami jest częściowo niedostępne do czasu zastosowania draftu migracji Finder Identity. Zwykłe wyniki ofert pozostają dostępne.</p> : null}
         <div aria-label="Wyniki według źródła" className="flex w-full min-w-0 flex-wrap gap-2" data-testid="finder-source-counts">
-          <SourceCount label={`Razem · Dopasowane: ${sourceCounts.total.matched} · Do oceny: ${sourceCounts.total.review}`} testId="finder-source-count-all" active={source === null} onClick={() => setSource(null)} />
+          <SourceCount label={`Razem · ${sourceLine(sourceCounts.total)}`} testId="finder-source-count-all" active={source === null} onClick={() => setSource(null)} />
           {activeSources.map((item) => {
             const counts = sourceCounts.bySource[item];
-            return <SourceCount key={item} label={`${sourceLabel(item)} · Dopasowane: ${counts.matched} · Do oceny: ${counts.review}`} testId={`finder-source-count-${item}`} active={source === item} onClick={() => setSource(item)} />;
+            return <SourceCount key={item} label={`${sourceLabel(item)} · ${sourceLine(counts)}`} testId={`finder-source-count-${item}`} active={source === item} onClick={() => setSource(item)} />;
           })}
         </div>
-        {filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><p className="mt-3 text-xs text-muted-foreground">{activeSourcesSummary(activeSources)}</p><div className="mt-5 flex min-w-0 flex-wrap gap-2"><SourceCount label={`Razem · Dopasowane: ${sourceCounts.total.matched} · Do oceny: ${sourceCounts.total.review}`} testId="finder-source-count-all-mobile" active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{activeSources.map((item) => { const counts = sourceCounts.bySource[item]; return <SourceCount key={item} label={`${sourceLabel(item)} · Dopasowane: ${counts.matched} · Do oceny: ${counts.review}`} testId={`finder-source-count-${item}-mobile`} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />; })}</div></div></div> : null}
+        {filtersOpen ? <div className="fixed inset-0 z-[70] sm:hidden"><button aria-label="Zamknij filtry" className="absolute inset-0 bg-black/60" onClick={() => setFiltersOpen(false)} type="button" /><div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl"><div className="flex items-center justify-between"><h2 className="text-lg font-bold">Filtry ofert</h2><button aria-label="Zamknij filtry" className="flex size-11 items-center justify-center rounded-xl border border-border" onClick={() => setFiltersOpen(false)} type="button"><X className="size-5" /></button></div><p className="mt-3 text-xs text-muted-foreground">{activeSourcesSummary(activeSources)}</p><div className="mt-5 flex min-w-0 flex-wrap gap-2"><SourceCount label={`Razem · ${sourceLine(sourceCounts.total)}`} testId="finder-source-count-all-mobile" active={source === null} onClick={() => { setSource(null); setFiltersOpen(false); }} />{activeSources.map((item) => { const counts = sourceCounts.bySource[item]; return <SourceCount key={item} label={`${sourceLabel(item)} · ${sourceLine(counts)}`} testId={`finder-source-count-${item}-mobile`} active={source === item} onClick={() => { setSource(item); setFiltersOpen(false); }} />; })}</div><AgeFilterSelect className="mt-5" onChange={(value) => { setAgeFilter(value); setFiltersOpen(false); }} value={ageFilter} /></div></div> : null}
       </> : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <input
@@ -184,43 +276,64 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
           type="search"
           value={query}
         />
-        <label className="flex w-full items-center gap-2 text-sm sm:w-auto">
-          <span className="text-muted-foreground">Sortowanie</span>
-          <select
-            className="h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 sm:flex-none"
-            onChange={(event) => setSort(parseResultSort(event.target.value))}
-            value={sort}
-          >
-            <option value="opportunity">Najlepsza ocena inwestycji</option>
-            <option value="profit">Największy potencjalny zysk</option>
-            <option value="roi">Najwyższy zwrot z inwestycji (ROI)</option>
-            <option value="discount">Największy rabat względem ceny po remoncie</option>
-            <option value="newest">Najnowsze ogłoszenia</option>
-            <option value="price_asc">Najniższa cena</option>
-            <option value="price_per_sqm_asc">Najniższa cena/m²</option>
-            <option value="biggest_price_drop">Największa obniżka</option>
-          </select>
-        </label>
+        <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
+          <AgeFilterSelect className="hidden sm:flex" onChange={setAgeFilter} value={ageFilter} />
+          <label className="flex w-full items-center gap-2 text-sm sm:w-auto">
+            <span className="text-muted-foreground">Sortowanie</span>
+            <select
+              className="h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 sm:flex-none"
+              onChange={(event) => setSort(parseResultSort(event.target.value))}
+              value={sort}
+            >
+              <option value="opportunity">Najlepsza ocena inwestycji</option>
+              <option value="profit">Największy potencjalny zysk</option>
+              <option value="roi">Najwyższy zwrot z inwestycji (ROI)</option>
+              <option value="discount">Największy rabat względem ceny po remoncie</option>
+              <option value="newest">Najnowsze ogłoszenia</option>
+              <option value="price_asc">Najniższa cena</option>
+              <option value="price_per_sqm_asc">Najniższa cena/m²</option>
+              <option value="biggest_price_drop">Największa obniżka</option>
+            </select>
+          </label>
+        </div>
       </div>
 
-      {data === null ? <p className="text-sm text-muted-foreground">Ładowanie ofert…</p> : null}
+      {data === null ? <p className="text-sm text-muted-foreground" role="status">Ładowanie ofert…</p> : null}
       {data !== null && renderedResults.length === 0 ? (
-        <div className="rounded-xl border border-dashed p-6 text-center">
-          <p className="font-medium">Nie znaleziono jeszcze ofert pasujących do tego filtra.</p>
-          {query ? <p className="mt-1 text-sm text-muted-foreground">Zmień tekst wyszukiwania, aby zobaczyć pozostałe oferty.</p> : null}
+        <div className="rounded-xl border border-dashed p-6 text-center" data-testid="finder-empty-matched">
+          <p className="font-medium">{allResults.length > 0 ? "Żadna dopasowana oferta nie spełnia wybranych filtrów widoku." : "Brak dopasowanych ofert dla tego filtra."}</p>
+          {filtersNarrowed ? <p className="mt-1 text-sm text-muted-foreground">Zmień wyszukiwanie, źródło lub wiek ogłoszenia, aby zobaczyć pozostałe oferty.</p> : null}
+          {reviewResults.length + buildingResults.length > 0 ? <p className="mt-1 text-sm text-muted-foreground">Sprawdź sekcje „Do oceny” ({reviewResults.length}) i „Do weryfikacji budynku” ({buildingResults.length}) poniżej.</p> : null}
         </div>
       ) : null}
       {data && renderedResults.length > 0 ? <p className="text-lg font-semibold">AKTYWNE / DOPASOWANE <span className="text-sm font-normal text-muted-foreground">({renderedResults.length})</span></p> : null}
       <div className="grid gap-4 lg:grid-cols-2" data-finder-offers>
         {renderedResults.map((result) => <ExpandableListingCard autoOpen={result.id === deepLinkListingId} identityManagementAvailable={data?.identityFeatures?.manualReviewAvailable ?? false} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}
       </div>
-      {data && reviewCount > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych: {reviewCount}</p><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div></div><div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard autoOpen={result.id === deepLinkListingId} identityManagementAvailable={data.identityFeatures?.manualReviewAvailable ?? false} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
-      {data ? <div className="flex justify-end border-t border-border/60 pt-4"><Button aria-label="Otwórz historię ofert" onClick={() => setArchiveOpen((current) => !current)} type="button" variant="outline">{archiveOpen ? "Wróć do bieżących ofert" : "Historia ofert"}</Button></div> : null}
-      {data && archivedResults.length > 0 ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4"><h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2><p className="mt-1 text-sm text-muted-foreground">Ukryte z głównego widoku: {archivedResults.length} · stale: {archivedResults.filter((result) => result.lifecycleStatus === "STALE").length} · archiwalne: {archivedResults.filter((result) => result.lifecycleStatus === "ARCHIVED").length} · odrzucone: {archivedResults.filter((result) => result.lifecycleStatus === "REJECTED").length} · nieaktualna data publikacji (wciąż aktywne): {archivedResults.filter((result) => result.canonicalDecisionDebug?.reason === "stale_publication_date").length}</p><div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} filter={data.filter} key={result.id} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
+      {data && reviewCount > 0 ? <section aria-label="Oferty do oceny" className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">DO OCENY</h2><p className="text-sm text-muted-foreground">Potencjalne oferty bez kompletu danych (typ budynku potwierdzony): {reviewCount}</p><p className="text-sm text-muted-foreground">Posortowane według potencjału, nie tylko daty.</p><div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold"><ReviewBucket label="PILNE / TOP" count={reviewBuckets.TOP} /><ReviewBucket label="WYSOKI" count={reviewBuckets.HIGH} /><ReviewBucket label="DO OCENY" count={reviewBuckets.MEDIUM} /><ReviewBucket label="NISKI" count={reviewBuckets.LOW} /></div></div></div><div className="grid gap-3 lg:grid-cols-2">{visibleReviewResults.map((result) => <ReviewListingCard autoOpen={result.id === deepLinkListingId} identityManagementAvailable={data.identityFeatures?.manualReviewAvailable ?? false} averagePricePerSqm={data?.filter.maxPricePerSqm ?? null} filter={data?.filter ?? null} key={result.id} marketType={data?.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div></section> : null}
+      {data && buildingResults.length > 0 ? <details className="rounded-xl border border-amber-500/30 bg-amber-500/[0.04] px-3 py-2" data-testid="finder-building-verification" open={visibleBuildingResults.some((result) => result.id === deepLinkListingId) || undefined}>
+        <summary className="cursor-pointer text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary">DO WERYFIKACJI BUDYNKU ({visibleBuildingResults.length}{visibleBuildingResults.length !== buildingResults.length ? ` z ${buildingResults.length}` : ""})</summary>
+        <p className="mt-2 text-xs text-muted-foreground">Oferty bez potwierdzonego typu budynku. Nie trafiają do „Dopasowane” ani „Do oceny”, dopóki typ nie zostanie potwierdzony w danych źródła lub ręcznie przez operatora. Finder nie zgaduje typu na podstawie ulicy, roku budowy, piętra ani wysokości pomieszczeń.</p>
+        {data.identityFeatures?.buildingConfirmationAvailable === false ? <p className="mt-2 rounded-lg border border-amber-500/25 p-2 text-xs text-muted-foreground" data-testid="finder-building-confirmation-unavailable">Ręczne potwierdzanie typu budynku wymaga zastosowania migracji finder_building_type_confirmations.</p> : null}
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">{visibleBuildingResults.map((result) => <div className="space-y-2" key={result.id}><ExpandableListingCard autoOpen={result.id === deepLinkListingId} identityManagementAvailable={data.identityFeatures?.manualReviewAvailable ?? false} averagePricePerSqm={data.filter.maxPricePerSqm ?? null} filter={data.filter} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} /><BuildingTypeConfirmation available={data.identityFeatures?.buildingConfirmationAvailable !== false} onConfirmed={() => void load()} result={result} /></div>)}</div>
+      </details> : null}
+      {data && excludedResults.length > 0 ? <details className="rounded-xl border border-border/60 px-3 py-2" data-testid="finder-excluded">
+        <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Zapisane dopasowania niewidoczne w wynikach: {excludedResults.length} (z powodem)</summary>
+        <ul className="mt-3 space-y-2 text-sm">{excludedResults.map((entry) => <li className="rounded-lg border border-border/50 p-2" data-testid="finder-excluded-item" key={entry.id}><p className="font-medium">{cleanDisplayText(entry.title) || "Oferta bez tytułu"} · {currency(entry.price)}{entry.area ? ` · ${measure(entry.area, "m²")}` : ""}{entry.source ? ` · ${sourceLabel(entry.source)}` : ""}</p><p className="text-xs text-muted-foreground">Powód: {entry.label}</p>{entry.originalUrl ? <a className="text-xs font-semibold text-gold underline-offset-4 hover:underline" href={entry.originalUrl} rel="noopener noreferrer" target="_blank">Otwórz ogłoszenie</a> : null}</li>)}</ul>
+      </details> : null}
+      {data ? <div className="flex justify-end border-t border-border/60 pt-4"><Button aria-label="Otwórz historię ofert" onClick={toggleArchive} type="button" variant="outline">{archiveOpen ? "Ukryj historię ofert" : `Historia ofert${archivedCount ? ` (${archivedCount})` : ""}`}</Button></div> : null}
+      {data && archiveOpen ? <section aria-label="Odrzucone i archiwalne oferty" className="space-y-3 rounded-xl border border-border/60 p-4" data-testid="finder-archive">
+        <h2 className="font-semibold">ARCHIWUM / ODRZUCONE</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Historyczne dopasowania (dawniej pasujące, odrzucone lub wyczyszczone). Wczytano {archive?.results.length ?? 0} z {archive?.total ?? archivedCount}.</p>
+        {archiveError ? <p className="text-sm text-destructive" role="alert">{archiveError}</p> : null}
+        <div className="grid gap-3 lg:grid-cols-2">{archivedResults.map((result) => <ExpandableListingCard averagePricePerSqm={data.filter.maxPricePerSqm ?? null} filter={data.filter} key={result.id} marketType={data.filter.marketType ?? null} onChanged={() => void load()} result={result} />)}</div>
+        {archiveLoading ? <p className="text-sm text-muted-foreground" role="status">Ładowanie archiwum…</p> : archive?.hasMore ? <Button onClick={() => void loadArchivePage(archive.nextOffset)} type="button" variant="outline">Pokaż kolejne archiwalne oferty</Button> : null}
+      </section> : null}
       {data ? <details className="rounded-xl border border-border/60 bg-muted/10 px-3 py-2">
         <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Źródła i historia skanów · {activeSourcesSummary(activeSources)}</summary>
         <p className="mt-3 text-xs text-muted-foreground">{latestActiveScansText(data.sourceScans, activeSources)}</p>
-        {historicalSources.length ? <p className="mt-2 text-xs text-muted-foreground/80">Historyczne wyniki z wyłączonych źródeł: {historicalSources.map((item) => { const counts = sourceCounts.bySource[item]; return `${sourceLabel(item)} (Dopasowane: ${counts.matched}, Do oceny: ${counts.review})`; }).join(", ")}</p> : null}
+        {historicalSources.length ? <p className="mt-2 text-xs text-muted-foreground/80">Historyczne wyniki z wyłączonych źródeł: {historicalSources.map((item) => { const counts = sourceCounts.bySource[item]; return `${sourceLabel(item)} (${sourceLine(counts)})`; }).join(", ")}</p> : null}
+        {data.diagnostics ? <p className="mt-2 text-[11px] text-muted-foreground/70" data-testid="finder-read-diagnostics">Odczyt: {data.diagnostics.durationMs} ms · zapytań: {data.diagnostics.queryCount} · powiązań: {data.diagnostics.membershipRowsRead}</p> : null}
       </details> : null}
       <details className="rounded-xl border border-border/60 px-3 py-2">
         <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Historia wyszukiwania i działania</summary>
@@ -231,6 +344,42 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
     </section>
   );
 });
+
+function FinderErrorPanel({ message, detail, loading, onRetry }: { message: string; detail: string | null; loading: boolean; onRetry: () => void }) {
+  return <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="finder-load-error" role="alert"><p className="font-semibold">{message}</p>{detail ? <p className="mt-1 text-xs">Szczegóły: {detail}</p> : null}<Button className="mt-3" disabled={loading} onClick={onRetry} size="sm" type="button" variant="outline">{loading ? "Ponawianie…" : "Spróbuj ponownie"}</Button></div>;
+}
+
+function AgeFilterSelect({ value, onChange, className = "" }: { value: PublicationAgeFilter; onChange: (value: PublicationAgeFilter) => void; className?: string }) {
+  return <label className={`flex w-full items-center gap-2 text-sm sm:w-auto ${className}`}><span className="text-muted-foreground">Wiek ogłoszenia</span><select aria-label="Wiek ogłoszenia" className="h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 sm:flex-none" data-testid="finder-age-filter" onChange={(event) => onChange(parsePublicationAgeFilter(event.target.value))} value={value}><option value="all">Dowolny</option><option value="7">Do 7 dni</option><option value="14">Do 14 dni</option><option value="30">Do 30 dni</option><option value="older">Starsze niż 30 dni</option></select></label>;
+}
+
+const BUILDING_CONFIRMATION_CHOICES = [
+  { value: "blok", label: "Blok" },
+  { value: "apartamentowiec", label: "Apartamentowiec" },
+  { value: "kamienica", label: "Kamienica" },
+  { value: "dom", label: "Dom" },
+] as const;
+
+function BuildingTypeConfirmation({ result, available, onConfirmed }: { result: FilterResult; available: boolean; onConfirmed: () => void }) {
+  const [saving, setSaving] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const confirm = async (buildingType: string) => {
+    if (saving) return;
+    setSaving(buildingType);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/flip-finder/listings/${encodeURIComponent(result.id)}/building-type`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ buildingType }) });
+      const payload: unknown = await readJson(response);
+      if (!response.ok) throw new Error(readMessage(payload, "Nie udało się zapisać typu budynku."));
+      onConfirmed();
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Nie udało się zapisać typu budynku.");
+    } finally {
+      setSaving(null);
+    }
+  };
+  return <div className="rounded-xl border border-border/60 bg-card p-3" data-testid="finder-building-confirmation"><p className="text-xs text-muted-foreground">{result.buildingQualification ? buildingQualificationLabel(result.buildingQualification) : "Brak potwierdzonego typu budynku"}. Potwierdź na podstawie ogłoszenia:</p><div className="mt-2 flex flex-wrap gap-2">{BUILDING_CONFIRMATION_CHOICES.map((choice) => <Button disabled={!available || saving !== null} key={choice.value} onClick={() => void confirm(choice.value)} size="sm" type="button" variant="outline">{saving === choice.value ? "Zapisywanie…" : choice.label}</Button>)}</div>{message ? <p className="mt-2 text-xs text-destructive" role="alert">{message}</p> : null}</div>;
+}
 
 type GalleryState = NonNullable<FilterResult["galleryStatus"]>;
 
@@ -886,6 +1035,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
             <p className="flex items-center gap-2"><BedDouble aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span>{measure(result.rooms, "pok.")} <span className="mx-1.5 text-border">•</span> {measure(result.area, "m²")}</span></p>
             <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{publicationLabel(result.publishedAt)}</span></p>
             <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{firstSeenLabel(result.firstSeenAt)}</span></p>
+            <ListingFreshness result={result} />
           </div>
           <p className="mt-auto pt-4 text-xs font-medium text-muted-foreground/80">Kliknij kartę, aby zobaczyć szczegóły</p>
         </div>
@@ -982,6 +1132,23 @@ export function ExpandableListingCard(props: { result: FilterResult; averagePric
   // listing would show two nested gold rectangles instead of one.
   const wrapperBorderClassName = props.variant === "watcher" ? "" : FINDER_CARD_BORDER_CLASSNAME;
   return <div className={wrapperBorderClassName} data-listing-id={props.result.id} data-testid="finder-card" onClickCapture={handleCardClickCapture} onPointerDownCapture={handleCardPointerCapture}><ExpandableListingCardContent {...props} />{props.variant === "watcher" ? null : <div className="px-5 pb-4 sm:px-8"><GalleryRequestButton onChanged={props.onChanged} result={props.result} traceId={traceId} /></div>}</div>;
+}
+
+/**
+ * Publication age is shown as information. Older listings and listings not
+ * recently confirmed by a scan are marked, never hidden for that reason.
+ */
+function ListingFreshness({ result }: { result: FilterResult }) {
+  return <div className="space-y-1.5" data-testid="finder-card-freshness">
+    {result.latestPublishedAt ? <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">Odświeżono w źródle: {dateTime(result.latestPublishedAt)}</span></p> : null}
+    <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">Ostatnia weryfikacja w źródle: {dateTime(result.lastSeenAt)}</span></p>
+    <div className="flex flex-wrap gap-1.5 pt-0.5">
+      {result.publicationAgeDays !== undefined ? <span className="rounded-full border border-border/60 px-2 py-0.5 text-xs font-semibold" data-testid="finder-card-age">{formatListingAge(result.publicationAgeDays ?? null)}</span> : null}
+      {result.isOlderListing ? <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-200" data-testid="finder-card-older">Starsza oferta (ponad 30 dni)</span> : null}
+      {result.verificationStale ? <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-200" data-testid="finder-card-unconfirmed">Aktualność niepotwierdzona{result.lastVerifiedDaysAgo !== null && result.lastVerifiedDaysAgo !== undefined ? ` (${result.lastVerifiedDaysAgo} dni)` : ""}</span> : null}
+      {result.buildingQualification && result.buildingQualification.status !== "not_required" ? <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${result.buildingQualification.status === "confirmed" ? "border-emerald-500/30 text-emerald-700 dark:text-emerald-300" : "border-amber-500/40 text-amber-800 dark:text-amber-200"}`} data-testid="finder-card-building">{buildingQualificationLabel(result.buildingQualification)}</span> : null}
+    </div>
+  </div>;
 }
 
 function OpportunitySummary({ result }: { result: FilterResult }) {
@@ -1084,4 +1251,4 @@ function isUpdatedPropertyImport(value: unknown): boolean { return value !== nul
 function isPropertyImportResponse(value: unknown): value is { status: "created" | "updated"; propertyId: string } { return value !== null && typeof value === "object" && "status" in value && (value.status === "created" || value.status === "updated") && "propertyId" in value && typeof value.propertyId === "string" && value.propertyId.trim().length > 0; }
 function isPriceHistoryResponse(value: unknown): value is PriceHistoryResponse { return value !== null && typeof value === "object" && "listingId" in value && typeof value.listingId === "string" && "currentPrice" in value && (value.currentPrice === null || typeof value.currentPrice === "number") && "history" in value && Array.isArray(value.history) && value.history.every((entry) => entry !== null && typeof entry === "object" && "price" in entry && (entry.price === null || typeof entry.price === "number") && "capturedAt" in entry && typeof entry.capturedAt === "string"); }
 function isMarketIntelligence(value: unknown): value is MarketIntelligence { return value !== null && typeof value === "object" && "listingId" in value && typeof value.listingId === "string" && "comparableCount" in value && typeof value.comparableCount === "number" && "comparables" in value && Array.isArray(value.comparables) && "currentPricePerSqm" in value && (value.currentPricePerSqm === null || typeof value.currentPricePerSqm === "number"); }
-function isResultsResponse(value: unknown): value is ResultsResponse { return value !== null && typeof value === "object" && "filter" in value && "results" in value && Array.isArray(value.results) && "total" in value && typeof value.total === "number" && "newMatches" in value && typeof value.newMatches === "number" && "lastScan" in value && "sourceScans" in value && Array.isArray(value.sourceScans); }
+function isResultsResponse(value: unknown): value is ResultsResponse { return value !== null && typeof value === "object" && "filter" in value && "results" in value && Array.isArray(value.results) && "total" in value && typeof value.total === "number" && "newMatches" in value && typeof value.newMatches === "number" && "lastScan" in value && "sourceScans" in value && Array.isArray(value.sourceScans) && (!("buildingVerificationResults" in value) || Array.isArray(value.buildingVerificationResults)); }

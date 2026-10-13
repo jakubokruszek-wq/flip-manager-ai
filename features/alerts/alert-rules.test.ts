@@ -21,7 +21,23 @@ test("a legacy null lifecycle_status remains actionable (backward compatible)",(
 
 // Task 3 acceptance #1: MATCHED (lifecycle_status=ACTIVE) pushes immediately,
 // as its own dedicated event distinct from score-based opportunity alerts.
-test("ACTIVE lifecycle_status (canonical MATCHED) creates a canonical_match alert",()=>{const alerts=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE"},[],Date.parse("2026-08-09T12:10:00Z"));assert.ok(alerts.some(alert=>alert.type==="canonical_match"));});
+test("ACTIVE lifecycle_status (canonical MATCHED) creates a canonical_match alert",()=>{const alerts=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:"blok"},[],Date.parse("2026-08-09T12:10:00Z"));assert.ok(alerts.some(alert=>alert.type==="canonical_match"));});
 test("REVIEW lifecycle_status does not create a canonical_match alert",()=>{const alerts=createAlertsForListing({...listing,lifecycleStatus:"REVIEW"},[],Date.parse("2026-08-09T12:10:00Z"));assert.equal(alerts.some(alert=>alert.type==="canonical_match"),false);});
-test("canonical_match has a stable per-listing event key, so it fires at most once for the same listing",()=>{const first=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE"},[],Date.parse("2026-08-09T12:10:00Z")).find(a=>a.type==="canonical_match");const second=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE"},[],Date.parse("2026-08-20T09:00:00Z")).find(a=>a.type==="canonical_match");assert.equal(first?.eventKey,second?.eventKey);});
+test("canonical_match has a stable per-listing event key, so it fires at most once for the same listing",()=>{const first=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:"blok"},[],Date.parse("2026-08-09T12:10:00Z")).find(a=>a.type==="canonical_match");const second=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:"blok"},[],Date.parse("2026-08-20T09:00:00Z")).find(a=>a.type==="canonical_match");assert.equal(first?.eventKey,second?.eventKey);});
 test("a weak REVIEW listing (low score, no keyword, not a private renovation, not new) creates no alert at all — no unconditional REVIEW push",()=>{const weak={...listing,lifecycleStatus:"REVIEW" as const,opportunityScore:20,flipScore:20,sellerType:null,condition:null,description:"Mieszkanie na sprzedaż",flags:[],groupPriority:null};const alerts=createAlertsForListing(weak,[],Date.parse("2026-08-12T00:00:00Z"));assert.deepEqual(alerts,[]);});
+
+// Finder building rule applies to alerts and pushes too.
+test("a confirmed tenement (structured or affirmative text) never creates any alert, even when ACTIVE with a high score",()=>{
+  assert.deepEqual(createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:"kamienica"},[],Date.parse("2026-08-09T12:10:00Z")),[]);
+  assert.deepEqual(createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:"blok",description:"Lokal w kamienicy po rewitalizacji"},[],Date.parse("2026-08-09T12:10:00Z")),[]);
+  assert.deepEqual(createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:"dom"},[],Date.parse("2026-08-09T12:10:00Z")),[]);
+});
+test("'obok kamienicy' is not tenement evidence: a confirmed block next to a tenement still alerts",()=>{
+  const alerts=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:"blok",description:"Blok obok zabytkowej kamienicy"},[],Date.parse("2026-08-09T12:10:00Z"));
+  assert.ok(alerts.some(alert=>alert.type==="canonical_match"));
+});
+test("an unverified building type does not create canonical_match, but does not block other opportunity alerts",()=>{
+  const alerts=createAlertsForListing({...listing,lifecycleStatus:"ACTIVE",buildingType:null},[],Date.parse("2026-08-09T12:10:00Z"));
+  assert.equal(alerts.some(alert=>alert.type==="canonical_match"),false);
+  assert.ok(alerts.some(alert=>alert.type==="high_flip_score"));
+});

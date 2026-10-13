@@ -4,6 +4,7 @@ import type { OpportunityPriority, OpportunityConfidence } from "./opportunity-s
 import type { UnderwritingResult } from "./underwriting";
 import type { CanonicalVisibilityDebug, FinderStatus } from "./canonical-visibility";
 import { formatPublicationLabel } from "./publication-date";
+import type { BuildingQualification } from "./building-type-qualification";
 
 export type ResultSort =
   | "newest"
@@ -48,6 +49,18 @@ export type FilterResult = PropertyListingResult & {
   opportunityMissingFields?: string[];
   sourceConflict?: boolean;
   underwriting?: UnderwritingResult | null;
+  /** Most recent source-reported publication (a portal refresh); publishedAt stays the earliest known. */
+  latestPublishedAt?: string | null;
+  publicationAgeDays?: number | null;
+  /** Older than FINDER_OLDER_LISTING_DAYS: shown with a badge, never hidden for that reason alone. */
+  isOlderListing?: boolean;
+  lastVerifiedDaysAgo?: number | null;
+  /** No scan has confirmed the listing on its source recently ("aktualność niepotwierdzona"). */
+  verificationStale?: boolean;
+  buildingQualification?: BuildingQualification;
+  /** Operator-confirmed building type, when present. */
+  buildingTypeConfirmedByOperator?: string | null;
+  finderSection?: "MATCHED" | "REVIEW" | "BUILDING_VERIFICATION" | "EXCLUDED";
 };
 
 /** Returns the canonical host family expected for a persisted source. */

@@ -78,8 +78,11 @@ test("clearing zero MATCHED plus 22 REVIEW rows hides both result sections witho
   const snapshotsBefore = structuredClone(db.rows("listing_snapshots"));
 
   const before = await getFilterResults(filterId);
-  assert.equal(before?.results.length, 0);
-  assert.equal(before?.reviewResults.length, 22);
+  // review-0 carries the operator's manual ACCEPT: it is shown under
+  // Dopasowane instead of being re-evaluated back into Do oceny.
+  assert.equal(before?.results.length, 1);
+  assert.equal(before?.results[0]?.id, "review-0");
+  assert.equal(before?.reviewResults.length, 21);
   const cleared = await clearFilterResults(filterId);
   assert.equal(cleared.archivedCount, 22);
   const after = await getFilterResults(filterId);
@@ -126,10 +129,10 @@ test("route E2E: confirmation POST writes per-filter tombstones and the subseque
     { params: Promise.resolve({ id: filterId }) },
   );
   assert.equal(afterResponse.status, 200);
-  const after = await afterResponse.json() as { results: unknown[]; reviewResults: unknown[]; counts: { active: number; review: number } };
+  const after = await afterResponse.json() as { results: unknown[]; reviewResults: unknown[]; counts: Record<string, number> };
   assert.deepEqual(after.results, []);
   assert.deepEqual(after.reviewResults, []);
-  assert.deepEqual(after.counts, { active: 0, review: 0, archived: 0 });
+  assert.deepEqual(after.counts, { active: 0, review: 0, buildingVerification: 0, excluded: 0, archived: 3 });
 });
 
 test("clearing more than 2000 visible memberships writes deterministic chunks of at most 200 and is idempotent", async () => {

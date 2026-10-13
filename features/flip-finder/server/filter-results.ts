@@ -2,7 +2,6 @@ import "server-only";
 
 import type { SearchFilter } from "@/features/flip-finder";
 import {
-  filterMatchesForFilter,
   isFilterMissing,
   reliablePricePerSqm,
   resultLocation,
@@ -22,35 +21,71 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { calculateOpportunityAssessment } from "@/features/flip-finder/opportunity-score";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
-import { visibleMembership } from "@/features/flip-finder/membership-reconciliation";
+import { reviewMembership, visibleMembership } from "@/features/flip-finder/membership-reconciliation";
 import { parseFacebookPriceReliability, resolveFacebookPriceReliabilityOnMetadataFailure, type FacebookPriceStatus } from "@/features/facebook-watcher/price-quality";
 import { canonicalVisibilityDebug } from "@/features/flip-finder/canonical-visibility";
 import { effectiveGalleryDisplayState } from "@/features/facebook-worker/gallery-state";
 import { resolveListingUrl } from "@/features/listing-url";
-import { canonicalFacebookContentFingerprint, canonicalFacebookParameterFingerprint, dedupeByListingIdentity, normalizeListingIdentityUrl } from "@/features/listing-identity";
-import { earliestPublicationDate, isWithinFinderPublicationWindow, normalizePublicationDate } from "@/features/flip-finder/publication-date";
+import { canonicalFacebookContentFingerprint, canonicalFacebookParameterFingerprint, normalizeListingIdentityUrl } from "@/features/listing-identity";
+import { earliestPublicationDate, latestPublicationDate, listingFreshness, normalizePublicationDate } from "@/features/flip-finder/publication-date";
 import { isValidSalePrice } from "@/features/flip-finder/sale-price";
 import { resolveBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
-import { groupPropertyResults, identityPairKey } from "@/features/flip-finder/property-identity";
+import { identityPairKey } from "@/features/flip-finder/property-identity";
 import { normalizeListingIdentityEvidence } from "@/features/flip-finder/identity-evidence";
+import { partitionFinderRows, sectionForDecision, toExcludedResult, type FinderExcludedResult, type FinderExclusionCode, type FinderRow } from "@/features/flip-finder/finder-sections";
+import { FINDER_REVIEW_MEMBERSHIP_OR_FILTER, ARCHIVE_PAGE_SIZE_DEFAULT, ARCHIVE_PAGE_SIZE_MAX, SOURCE_SCAN_READ_LIMIT, RESALE_COMPS_CACHE_TTL_MS } from "@/features/flip-finder/finder-read-policy";
+import { readBuildingTypeConfirmations } from "@/features/flip-finder/server/building-type-confirmations";
 
 type Row = Record<string, unknown>;
 
-type FilterResultsPayload = {
+export type FinderView = "active" | "archive";
+
+export type FilterResultsOptions = {
+  /** Archive memberships (historical/rejected/cleared) are read only for this view, one server-side page at a time. */
+  view?: FinderView;
+  archiveOffset?: number;
+  archiveLimit?: number;
+  /**
+   * Dashboard counters only: skips price snapshots, resale comps and the
+   * opportunity engine, which never change which section a listing lands in.
+   */
+  summaryOnly?: boolean;
+};
+
+export type FinderReadDiagnostics = {
+  view: FinderView;
+  queryCount: number;
+  membershipRowsRead: number;
+  listingRowsRead: number;
+  snapshotRowsRead: number;
+  sourceScanRowsRead: number;
+  durationMs: number;
+};
+
+export type FilterResultsPayload = {
   filter: SearchFilter;
   results: FilterResult[];
   reviewResults: FilterResult[];
+  /** REVIEW listings whose building type is not confirmed: never mixed into Dopasowane / Do oceny. */
+  buildingVerificationResults: FilterResult[];
+  /** Current memberships that are not shown in any section, each with an explicit reason. */
+  excludedResults: FinderExcludedResult[];
+  /** Only populated for view=archive, one page at a time. */
   archivedResults: FilterResult[];
+  archive: { offset: number; limit: number; total: number; hasMore: boolean } | null;
   counts: {
     active: number;
     review: number;
+    buildingVerification: number;
+    excluded: number;
     archived: number;
   };
   total: number;
   newMatches: number;
   lastScan: SearchFilterScan | null;
   sourceScans: SearchFilterScan[];
-  identityFeatures: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean };
+  identityFeatures: { automaticEvidenceAvailable: boolean; manualReviewAvailable: boolean; buildingConfirmationAvailable: boolean };
+  diagnostics: FinderReadDiagnostics;
 };
 
 type MatchRow = {
@@ -102,6 +137,8 @@ type ListingRow = Pick<
   | "galleryTotal"
   | "galleryPersistedCount"
 > & {
+  /** The persisted structured value, before read-time reconciliation with the listing text. */
+  rawBuildingType?: unknown;
   externalListingId?: string | null;
   contentHash?: string | null;
   crossSourceIdentity?: string | null;
@@ -127,146 +164,161 @@ type SnapshotRow = {
   listingId: string;
   price: number | null;
   capturedAt: string;
-  rawData: Row;
+  publishedCandidates: unknown[];
 };
 
-export async function getFilterResults(filterId: string, includeArchived = false, now = Date.now(), operatorId?: string): Promise<FilterResultsPayload | null> {
-  const filter = await getSearchFilter(filterId);
+type SupabaseSession = Awaited<ReturnType<typeof createClient>>;
+
+// Typed as plain string: PostgREST JSON-path aliases are not useful to the
+// generated select-string type parser and only slow type checking down.
+const SOURCE_SCAN_COLUMNS: string = "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message,scan_progress:filter_snapshot->_scanProgress";
+
+/**
+ * Finder read path. Production (2026-10-13) had 3854 memberships for filter
+ * "Flip" but only 4 current matches and 87 REVIEW rows; the previous version
+ * read every membership, every scan of the filter, full snapshot JSON and
+ * 500 comps on each open (and the dashboard did it once more per filter).
+ * The active view now reads only current MATCHED + explicit REVIEW
+ * memberships; history is paged from the archive view on demand.
+ */
+export async function getFilterResults(
+  filterId: string,
+  includeArchived = false,
+  now = Date.now(),
+  operatorId?: string,
+  options: FilterResultsOptions = {},
+): Promise<FilterResultsPayload | null> {
+  const startedAt = Date.now();
+  const view: FinderView = includeArchived || options.view === "archive" ? "archive" : "active";
+  const summaryOnly = options.summaryOnly === true && view === "active";
+  const stats = { queryCount: 0, membershipRowsRead: 0, listingRowsRead: 0, snapshotRowsRead: 0, sourceScanRowsRead: 0 };
+  const session = await createClient();
+  // Every .from() call is one PostgREST round trip (pagination calls .from()
+  // again per page), so counting here measures the real number of queries.
+  const supabase = { from: (table: string) => { stats.queryCount += 1; return session.from(table); } } as SupabaseSession;
+  let adminClient: ReturnType<typeof createAdminClient> | null = null;
+  const getAdminClient = () => (adminClient ??= createAdminClient());
+
+  stats.queryCount += 1;
+  const archiveLimit = clampInteger(options.archiveLimit, 1, ARCHIVE_PAGE_SIZE_MAX, ARCHIVE_PAGE_SIZE_DEFAULT);
+  const archiveOffset = clampInteger(options.archiveOffset, 0, Number.MAX_SAFE_INTEGER, 0);
+  const [filter, membershipResult, scansResult, archivedCountResult, comps] = await Promise.all([
+    getSearchFilter(filterId),
+    view === "active"
+      ? readVisibleMemberships(supabase, filterId)
+      : supabase
+        .from("listing_filter_matches")
+        .select("listing_id,search_filter_id,first_matched_at,last_matched_at,is_current_match,match_origin,match_reasons", { count: "exact" })
+        .eq("search_filter_id", filterId)
+        .eq("is_current_match", false)
+        .not("match_reasons", "cs", '["review"]')
+        .order("last_matched_at", { ascending: false })
+        .order("listing_id", { ascending: true })
+        .range(archiveOffset, archiveOffset + archiveLimit - 1),
+    supabase
+      .from("source_scans")
+      .select(SOURCE_SCAN_COLUMNS)
+      .eq("search_filter_id", filterId)
+      .order("started_at", { ascending: false })
+      .limit(SOURCE_SCAN_READ_LIMIT),
+    view === "active"
+      ? supabase
+        .from("listing_filter_matches")
+        .select("listing_id", { count: "exact", head: true })
+        .eq("search_filter_id", filterId)
+        .eq("is_current_match", false)
+        .not("match_reasons", "cs", '["review"]')
+      : Promise.resolve(null),
+    summaryOnly ? Promise.resolve([] as ResaleCompRecord[]) : readResaleComps(supabase),
+  ]);
   if (isFilterMissing(filter)) {
     return null;
   }
 
-  const supabase = await createClient();
-  let adminClient: ReturnType<typeof createAdminClient> | null = null;
-  const getAdminClient = () => (adminClient ??= createAdminClient());
-  const [matchesResult, scansResult] = await Promise.all([
-    fetchAllRows(() =>
-      supabase
-        .from("listing_filter_matches")
-        .select("listing_id,search_filter_id,first_matched_at,last_matched_at,is_current_match,match_origin,match_reasons")
-        .eq("search_filter_id", filterId)
-        // search_filter_id is already fixed by the .eq() above, so listing_id
-        // alone is unique within this result set -- a deterministic total
-        // order .range() can safely page across. Without this, PostgREST's
-        // LIMIT/OFFSET has no guaranteed stable row order between separate
-        // page requests, which can silently skip or duplicate rows exactly
-        // like the truncation bug this pagination fix exists to close.
-        .order("listing_id", { ascending: true }),
-    ),
-    supabase
-      .from("source_scans")
-      .select(
-        "id,scan_run_id,search_filter_id,source,status,started_at,finished_at,scanned_count,matched_count,listings_created,new_count,listings_updated,price_drop_count,warnings,error_message,filter_snapshot",
-      )
-      .eq("search_filter_id", filterId),
-  ]);
-
-  if (matchesResult.error || scansResult.error) {
-    console.error("FLIP FINDER RESULTS ERROR:", matchesResult.error ?? scansResult.error);
+  if (membershipResult.error || scansResult.error) {
+    console.error("FLIP FINDER RESULTS ERROR:", membershipResult.error ?? scansResult.error);
     throw new Error("Nie udało się pobrać wyników filtra.");
   }
+  const membershipRows = asRows(membershipResult.data);
+  stats.membershipRowsRead = membershipRows.length;
+  stats.sourceScanRowsRead = asRows(scansResult.data).length;
 
-  const allMatches = filterMatchesForFilter(
-    asRows(matchesResult.data)
-      .map(toMatchRow)
-      .filter((match): match is MatchRow => match !== null),
-    filterId,
-  );
-  // Current MATCHED memberships and explicit REVIEW memberships are visible in
-  // the Finder. Reconciled-out rows remain in the database for audit/history,
-  // but must not reappear as active results.
-  const visibleMatches = includeArchived ? allMatches : allMatches.filter(visibleMembership);
-  // Required invariant: one canonical listing appears at most once in one
-  // Finder response. listing_filter_matches has a real primary key on
-  // (listing_id, search_filter_id), so a genuine duplicate row for the same
-  // listing under this same filter should be structurally impossible — this
-  // is a defensive, no-cost floor against a duplicate ever reaching
-  // allResults.flatMap (which would otherwise mint two FilterResult objects
-  // sharing one id, landing in the same bucket) if a future migration,
-  // client-library quirk, or caching layer ever violated that guarantee.
-  // Deduplication priority here is by canonical listing ID only — the
-  // highest tier — because every row in this array is already keyed on that
-  // exact canonical id by construction, never a raw pre-canonical source
-  // record.
-  const matches = dedupeByListingId(visibleMatches);
-  // Same backstop as the dashboard's listSearchFilters(): never keep showing
-  // "running" for a scan the platform has already abandoned, so viewing or
-  // refreshing this filter's results page can never display fabricated,
-  // perpetually-"in progress" activity for dead work.
-  const resultsNow = Date.now();
+  const allMatches = dedupeByListingId(membershipRows
+    .map(toMatchRow)
+    .filter((match): match is MatchRow => match !== null && match.searchFilterId === filterId));
+  // The OR filter above is the server-side form of visibleMembership(). It is
+  // re-applied here so a legacy row (or a client that ignores the filter) can
+  // never leak a historical membership into the active sections; the archive
+  // view shows only non-visible (historical) rows for the same reason.
+  const matches = view === "active" ? allMatches.filter(visibleMembership) : allMatches.filter((match) => !visibleMembership(match));
+  const archiveTotal = view === "archive" ? countFromResult(membershipResult, archiveOffset + membershipRows.length) : 0;
+  const archivedCount = view === "active" ? countFromResult(archivedCountResult, 0) : archiveTotal;
+
+  // Never keep showing "running" for a scan the platform has already abandoned.
   const scans = asRows(scansResult.data)
-    .map((row) => toSearchFilterScan(row, resultsNow))
+    .map((row) => toSearchFilterScan(row, Date.now()))
     .filter((scan): scan is SearchFilterScan => scan !== null);
-  const lastScan = scans.reduce<SearchFilterScan | null>((current, scan) => {
-    return !current || scan.startedAt > current.startedAt ? scan : current;
-  }, null);
+  const lastScan = scans.reduce<SearchFilterScan | null>((current, scan) => (!current || scan.startedAt > current.startedAt ? scan : current), null);
   const latestCompletedScan = scans.reduce<CompletedScanWindow | null>((current, scan) => {
-    if (scan.status !== "completed" || !scan.finishedAt) {
-      return current;
-    }
-
-    return !current || scan.finishedAt > current.finishedAt
-      ? { startedAt: scan.startedAt, finishedAt: scan.finishedAt }
-      : current;
+    if (scan.status !== "completed" || !scan.finishedAt) return current;
+    return !current || scan.finishedAt > current.finishedAt ? { startedAt: scan.startedAt, finishedAt: scan.finishedAt } : current;
   }, null);
+
+  const finish = (partial: Omit<FilterResultsPayload, "filter" | "lastScan" | "sourceScans" | "diagnostics" | "counts" | "total" | "newMatches" | "archive">): FilterResultsPayload => ({
+    filter,
+    ...partial,
+    archive: view === "archive" ? { offset: archiveOffset, limit: archiveLimit, total: archiveTotal, hasMore: archiveOffset + membershipRows.length < archiveTotal } : null,
+    counts: {
+      active: partial.results.length,
+      review: partial.reviewResults.length,
+      buildingVerification: partial.buildingVerificationResults.length,
+      excluded: partial.excludedResults.length,
+      archived: archivedCount,
+    },
+    total: partial.results.length,
+    newMatches: partial.results.filter((result) => result.isNew).length,
+    lastScan,
+    sourceScans: scans,
+    diagnostics: { view, ...stats, durationMs: Date.now() - startedAt },
+  });
 
   if (matches.length === 0) {
-    return {
-      filter,
+    return finish({
       results: [],
       reviewResults: [],
+      buildingVerificationResults: [],
+      excludedResults: [],
       archivedResults: [],
-      counts: { active: 0, review: 0, archived: 0 },
-      total: 0,
-      newMatches: 0,
-      lastScan,
-      sourceScans: scans,
-      identityFeatures: { automaticEvidenceAvailable: false, manualReviewAvailable: false },
-    };
+      identityFeatures: { automaticEvidenceAvailable: false, manualReviewAvailable: false, buildingConfirmationAvailable: false },
+    });
   }
 
   const listingIds = matches.map((match) => match.listingId);
-  const lifecycleStatuses = includeArchived
-    ? ["ACTIVE", "REVIEW", "STALE", "ARCHIVED", "REJECTED"]
-    : ["ACTIVE", "REVIEW"];
   const baseListingColumns = (includeYearBuilt: boolean) =>
     `id,external_listing_id,content_hash,title,price,area,rooms,floor,building_type${includeYearBuilt ? ",year_built" : ""},ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at,lifecycle_status,review_reason,missing_fields,manual_decision,manual_decision_reason,archived_at,estimated_sale_price,estimated_profit,estimated_roi,flip_score,gallery_status,gallery_job_id,gallery_requested_at,gallery_completed_at,gallery_error,gallery_total,gallery_persisted_count`;
+  // No status/lifecycle filter here: only the ~100 current memberships are
+  // read, and an archived/removed/rejected listing behind a current
+  // membership must be reported with its reason instead of vanishing.
   const buildListingQuery = (idChunk: string[], identityColumns: "both" | "cross" | "none", includeYearBuilt = true) =>
     supabase
       .from("listings")
-      .select(
-        `${baseListingColumns(includeYearBuilt)}${identityColumns === "both" ? ",cross_source_identity,identity_evidence" : identityColumns === "cross" ? ",cross_source_identity" : ""}`,
-      )
+      .select(`${baseListingColumns(includeYearBuilt)}${identityColumns === "both" ? ",cross_source_identity,identity_evidence" : identityColumns === "cross" ? ",cross_source_identity" : ""}`)
       .in("id", idChunk)
-      .eq("status", "active")
-      .in("lifecycle_status", lifecycleStatuses)
-      // id is this table's primary key -- a deterministic total order so
-      // .range() pages across a stable sequence, never PostgREST's otherwise
-      // unspecified LIMIT/OFFSET row order.
       .order("id", { ascending: true });
-  const [initialListingsResult, snapshotsResult] = await Promise.all([
+  const [initialListingsResult, snapshotsResult, confirmations, manualIdentityScope] = await Promise.all([
     fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, "both")),
-    fetchAllRowsForIds(listingIds, (idChunk) =>
-      supabase
-        .from("listing_snapshots")
-        .select("listing_id,price,captured_at,raw_data")
-        .in("listing_id", idChunk)
-        // captured_at alone is not guaranteed unique across listings (a
-        // bulk-inserted batch can share one timestamp) -- listing_id as a
-        // secondary key makes the total order deterministic across pages.
-        .order("captured_at", { ascending: false })
-        .order("listing_id", { ascending: true }),
-    ),
+    summaryOnly ? Promise.resolve({ data: [] as Row[], error: null }) : readPublicationSnapshots(supabase, listingIds),
+    readBuildingTypeConfirmations(supabase as unknown as Parameters<typeof readBuildingTypeConfirmations>[0], listingIds),
+    operatorId
+      ? readManualIdentityScope(supabase, operatorId, filterId)
+      : Promise.resolve({ available: false, groupByListing: new Map<string, string>(), blockedPairs: new Set<string>() }),
   ]);
   let listingsResult = initialListingsResult;
   let identityEvidenceAvailable = true;
   let identityColumns: "both" | "cross" | "none" = "both";
   let yearBuiltAvailable = true;
   // These columns were introduced by independent, optional migrations. Retry
-  // only when PostgREST identifies the specific missing column, retaining all
-  // other available evidence. This lets the deployed read path remain usable
-  // before the year-built draft is applied, while still exposing the value
-  // immediately on schemas that have it.
+  // only when PostgREST identifies the specific missing column.
   for (let attempt = 0; listingsResult.error && attempt < 3; attempt += 1) {
     if (identityColumns === "both" && isMissingSelectedColumn(listingsResult.error, "identity_evidence")) {
       identityColumns = "cross";
@@ -282,24 +334,21 @@ export async function getFilterResults(filterId: string, includeArchived = false
     listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) => buildListingQuery(idChunk, identityColumns, yearBuiltAvailable));
   }
   if (listingsResult.error?.code === "42703" || listingsResult.error?.code === "PGRST204") {
-    // Compatibility for pre-lifecycle schemas remains separate from optional
-    // identity columns. Only an explicit missing-column response reaches it.
+    // Compatibility for pre-lifecycle schemas remains separate from optional identity columns.
     identityEvidenceAvailable = false;
     listingsResult = await fetchAllRowsForIds(listingIds, (idChunk) =>
-      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", idChunk).eq("status", "active").order("id", { ascending: true }),
+      supabase.from("listings").select("id,title,price,area,rooms,floor,building_type,ownership,description,price_per_sqm,address,city,district,images,original_url,source,status,first_seen_at,last_seen_at").in("id", idChunk).order("id", { ascending: true }),
     ) as typeof initialListingsResult;
   }
   if (listingsResult.error || snapshotsResult.error) {
     console.error("FLIP FINDER RESULTS LISTINGS ERROR:", listingsResult.error ?? snapshotsResult.error);
     throw new Error("Nie udało się pobrać ofert dla filtra.");
   }
+  stats.listingRowsRead = asRows(listingsResult.data).length;
+  stats.snapshotRowsRead = asRows(snapshotsResult.data).length;
 
-  // listing_source_metadata contains private source-post material. The
-  // protected results route authorizes the operator before this function is
-  // called; only initialize the service client for this table when Facebook
-  // rows exist. Manual identity decisions use the session client and the
-  // migration's owner-scoped SELECT policies, so ordinary portal results do
-  // not require service-role credentials.
+  // listing_source_metadata contains private source-post material. Only
+  // initialize the service client for this table when Facebook rows exist.
   const facebookListingIds = [...new Set(asRows(listingsResult.data)
     .filter((row) => row.source === "facebook" && typeof row.id === "string")
     .map((row) => String(row.id)))];
@@ -307,13 +356,14 @@ export async function getFilterResults(filterId: string, includeArchived = false
   if (facebookListingIds.length > 0) {
     try {
       const admin = getAdminClient();
-      priceQualityResult = await fetchAllRowsForIds(facebookListingIds, (idChunk) =>
-        admin.from("listing_source_metadata")
+      priceQualityResult = await fetchAllRowsForIds(facebookListingIds, (idChunk) => {
+        stats.queryCount += 1;
+        return admin.from("listing_source_metadata")
           .select("listing_id,source_post_url,collected_at,published_at,metadata")
           .in("listing_id", idChunk)
           .eq("source", "facebook")
-          .order("id", { ascending: true }),
-      );
+          .order("id", { ascending: true });
+      });
     } catch (error) {
       priceQualityResult = { data: [], error: { message: error instanceof Error ? error.message : "service client unavailable" } };
     }
@@ -323,13 +373,9 @@ export async function getFilterResults(filterId: string, includeArchived = false
   const sourcePostIdByListingId = new Map<string, string | null>();
   const listingIntentByListingId = new Map<string, string | null>();
   const sourceMetadataCollectedAtByListingId = new Map<string, string>();
-  const sourcePublishedAtByListingId = new Map<string, string>();
-  // Distinguish "the query ran and this Facebook listing simply has no
-  // priceQuality yet" (backward-compatible: trusted, same as before this
-  // feature existed) from "the query itself failed" (must not silently
-  // restore trusted-by-default scoring for Facebook, since Facebook price
-  // trust has no other source of truth). Only Facebook is affected either
-  // way — OLX/Otodom never depended on this query for their own trust signal.
+  const sourcePublishedAtByListingId = new Map<string, string[]>();
+  // "Query failed" must not silently restore trusted-by-default scoring for
+  // Facebook (no other source of price truth); OLX/Otodom are unaffected.
   const priceQualityMetadataQueryFailed = Boolean(priceQualityResult.error);
   if (priceQualityMetadataQueryFailed) {
     console.error("FLIP FINDER PRICE RELIABILITY METADATA ERROR:", priceQualityResult.error);
@@ -340,31 +386,19 @@ export async function getFilterResults(filterId: string, includeArchived = false
       const collectedAt = nullableString(row.collected_at);
       const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Row : {};
       const publishedAt = normalizePublicationDate(row.published_at, now);
-      if (listingId && publishedAt) {
-        const currentPublishedAt = sourcePublishedAtByListingId.get(listingId);
-        sourcePublishedAtByListingId.set(listingId, currentPublishedAt ? earliestPublicationDate([currentPublishedAt, publishedAt])! : publishedAt);
-      }
+      if (listingId && publishedAt) sourcePublishedAtByListingId.set(listingId, [...(sourcePublishedAtByListingId.get(listingId) ?? []), publishedAt]);
       const previousCollectedAt = listingId ? sourceMetadataCollectedAtByListingId.get(listingId) : null;
       const isNewer = !previousCollectedAt || !collectedAt || collectedAt > previousCollectedAt;
       if (listingId && isNewer) {
         sourcePostUrlByListingId.set(listingId, sourcePostUrl);
         sourcePostIdByListingId.set(listingId, nullableString(metadata.postId));
-        const intent = nullableString(metadata.listingIntent);
-        listingIntentByListingId.set(listingId, intent);
+        listingIntentByListingId.set(listingId, nullableString(metadata.listingIntent));
         if (collectedAt) sourceMetadataCollectedAtByListingId.set(listingId, collectedAt);
       }
       const status = parseFacebookPriceReliability(row.metadata);
       if (listingId && status) priceReliabilityByListingId.set(listingId, status);
     }
   }
-
-  const compsResult = await supabase
-    .from("resale_comps")
-    .select("id,source,external_listing_id,canonical_url,title,description,city,district,street,address,latitude,longitude,price,area_m2,price_per_m2,rooms,floor,floors,building_type,construction_year,ownership,balcony,elevator,parking,renovation_status,renovation_confidence,finish_level,listing_created_at,first_seen_at,last_seen_at,active,seller_type,fingerprint,outlier_reason,evidence")
-    .eq("active", true)
-    .limit(500);
-
-  const resaleComps = compsResult.error ? [] : asRows(compsResult.data).map(toResaleCompRecord).filter((comp): comp is ResaleCompRecord => comp !== null);
 
   const listingsById = new Map(
     asRows(listingsResult.data)
@@ -390,236 +424,364 @@ export async function getFilterResults(filterId: string, includeArchived = false
           sourceMetadataCollectedAt: sourceMetadataCollectedAtByListingId.get(listing.id) ?? null,
           originalUrl: resolveListingUrl({ source: listing.source, sourcePostUrl, originalUrl: listing.originalUrl }),
           priceReliability: resolveFacebookPriceReliabilityOnMetadataFailure(listing.source, priceReliabilityByListingId.get(listing.id), priceQualityMetadataQueryFailed),
-        }];
+        } satisfies ListingRow];
       }),
   );
-  const manualIdentityScope = operatorId
-    ? await readManualIdentityScope(supabase, operatorId, filterId)
-    : { available: false, groupByListing: new Map<string, string>(), blockedPairs: new Set<string>() };
   const snapshotsByListingId = new Map<string, SnapshotRow[]>();
-
-  for (const snapshot of asRows(snapshotsResult.data)
-    .map(toSnapshotRow)
-    .filter((entry): entry is SnapshotRow => entry !== null)) {
+  for (const snapshot of asRows(snapshotsResult.data).map(toSnapshotRow).filter((entry): entry is SnapshotRow => entry !== null)) {
     const snapshots = snapshotsByListingId.get(snapshot.listingId) ?? [];
     snapshots.push(snapshot);
     snapshotsByListingId.set(snapshot.listingId, snapshots);
   }
+  for (const snapshots of snapshotsByListingId.values()) snapshots.sort((left, right) => Date.parse(right.capturedAt) - Date.parse(left.capturedAt));
 
-  const allResults = matches.flatMap((match): FilterResult[] => {
+  const rows: FinderRow[] = [];
+  const missingListingMatches: MatchRow[] = [];
+  for (const match of matches) {
     const listing = listingsById.get(match.listingId);
     if (!listing) {
-      return [];
+      missingListingMatches.push(match);
+      continue;
     }
-
-    const previousPrice = previousDifferentPrice(
-      snapshotsByListingId.get(listing.id) ?? [],
-      listing.price,
-    );
-    const status = resultStatus(
-      {
-        firstMatchedAt: match.firstMatchedAt,
-        previousPrice,
-        currentPrice: listing.price,
-      },
-      latestCompletedScan,
-    );
-    const safeLocation = safeFacebookDisplayLocation(listing);
-    const locationText = resultLocation(safeLocation.address, safeLocation.district, safeLocation.city);
-    const filterDecision = evaluateCanonicalListingDecision(
-      {
-        price: listing.price,
-        area: listing.area,
-        pricePerSqm: reliablePricePerSqm(listing.pricePerSqm, listing.price, listing.area),
-        rooms: listing.rooms,
-        floor: listing.floor,
-        city: safeLocation.city,
-        district: safeLocation.district,
-        title: listing.title,
-        description: listing.description,
-        locationText,
-        buildingType: listing.buildingType,
-        yearBuilt: listing.yearBuilt ?? null,
-        ownership: listing.ownership,
-        listingIntent: listing.listingIntent,
-      },
+    rows.push(buildFinderRow({
+      listing,
+      match,
       filter,
-    );
-    const sourceConflict = listing.originalUrl ? !sourceDomainMatchesSource(listing.source, listing.originalUrl) : false;
-    const hardFilterReject = filterDecision.hardRejectReasons.length > 0;
-    const effectiveGalleryDisplay = effectiveGalleryDisplayState(listing.galleryStatus ?? null, listing.galleryRequestedAt ?? null, listing.galleryError ?? null);
-    const decisionBucket: FilterResult["decisionBucket"] = sourceConflict || hardFilterReject
-      ? "REJECTED"
-      : listing.manualDecision === "REJECTED" || listing.lifecycleStatus === "REJECTED"
-        ? "REJECTED"
-        : filterDecision.bucket;
-    const expectedLifecycle = decisionBucket === "MATCHED" ? "ACTIVE" : decisionBucket === "REVIEW" ? "REVIEW" : "REJECTED";
-    const finderCleared = match.matchReasons.includes("finder_cleared");
-    const persistedReview = match.matchReasons.some((reason) => reason === "review" || reason.startsWith("unknown_"));
-    const consistencyMismatch = !finderCleared && (listing.lifecycleStatus !== expectedLifecycle
-      || match.isCurrentMatch !== (decisionBucket === "MATCHED")
-      || (decisionBucket === "REVIEW" && !persistedReview));
-    const canonicalDebug = canonicalVisibilityDebug({
-      listingId: listing.id,
-      canonicalBucket: decisionBucket,
-      lifecycleStatus: listing.lifecycleStatus ?? null,
-      isCurrentMatch: match.isCurrentMatch,
-      matchReasons: [...filterDecision.reasons, ...(decisionBucket === "REVIEW" ? ["review", ...filterDecision.missingFields.map((field) => `unknown_${field}`)] : [])],
-      visibilityInFinder: !finderCleared && (decisionBucket === "MATCHED" || decisionBucket === "REVIEW") && listing.status === "active" && (listing.lifecycleStatus === "ACTIVE" || listing.lifecycleStatus === "REVIEW"),
-      visibilityInWatcher: listing.source === "facebook",
-      reason: finderCleared ? "cleared_by_operator" : sourceConflict ? "source_conflict" : decisionBucket === "REJECTED" ? filterDecision.hardRejectReasons.join(",") || "rejected_by_policy" : decisionBucket === "REVIEW" ? "review_uncertainty" : "current_filter_match",
-      consistencyMismatch,
-    });
-    const publishedAt = listing.source === "facebook"
-      ? sourcePublishedAtByListingId.get(listing.id) ?? publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? [], now)
-      : publishedAtFromSnapshots(snapshotsByListingId.get(listing.id) ?? [], now);
+      now,
+      latestCompletedScan,
+      snapshots: snapshotsByListingId.get(listing.id) ?? [],
+      facebookPublishedAt: sourcePublishedAtByListingId.get(listing.id) ?? [],
+      operatorBuildingType: confirmations.byListing.get(listing.id) ?? null,
+      comps,
+      summaryOnly,
+    }));
+  }
+  const missingExcluded = missingListingMatches.map((match) => toExcludedResult(missingListingRow(match), "listing_missing", [], filter));
 
-    return [
-      {
-        id: listing.id,
-        title: listing.title,
-        price: listing.price,
-        area: listing.area,
-        rooms: listing.rooms,
-        floor: listing.floor,
-        totalFloors: null,
-        buildingType: listing.buildingType,
-        yearBuilt: listing.yearBuilt ?? null,
-        ownership: listing.ownership,
-        description: listing.description,
-        images: listing.images,
-        pricePerSqm: reliablePricePerSqm(listing.pricePerSqm, listing.price, listing.area),
-        locationText,
-        address: safeLocation.address,
-        city: safeLocation.city,
-        district: safeLocation.district,
-        thumbnailUrl: listing.images[0] ?? null,
-        originalUrl: listing.originalUrl,
-        sourcePostUrl: listing.sourcePostUrl ?? null,
-        source: listing.source,
-        crossSourceIdentity: listing.crossSourceIdentity ?? null,
-        identityEvidence: listing.identityEvidence,
-        sourceConflict,
-        listingStatus: listing.status,
-        isActive: listing.status === "active",
-        publishedAt,
-        firstSeenAt: listing.firstSeenAt,
-        lastSeenAt: listing.lastSeenAt,
-        firstMatchedAt: match.firstMatchedAt,
-        lastMatchedAt: match.lastMatchedAt,
-        previousPrice: status.hasPriceDrop ? previousPrice : null,
-        currentPrice: listing.price,
-        ...status,
-        isNew: match.matchOrigin === "scan" && status.isNew,
-        matchReasons: [...filterDecision.reasons, ...(filterDecision.bucket === "REVIEW" ? ["review"] : [])],
-        unknownFields: filterDecision.missingFields,
-        decisionBucket,
-        finderStatus: canonicalDebug.finderStatus,
-        canonicalDecisionDebug: canonicalDebug,
-        canonicalConsistencyMismatch: consistencyMismatch,
-        // A Finder clear is scoped to this filter's membership. Project it as
-        // archived in this filter's history view without mutating the shared
-        // canonical listing or another filter's membership.
-        lifecycleStatus: finderCleared ? "ARCHIVED" : listing.lifecycleStatus,
-        reviewReason: listing.reviewReason,
-        missingFields: listing.missingFields,
-        manualDecision: listing.manualDecision,
-        manualDecisionReason: listing.manualDecisionReason,
-        archivedAt: listing.archivedAt,
-        // Gallery timeout mission: a PENDING/RUNNING gallery no extension
-        // ever claimed has no proactive reaper anywhere in this codebase
-        // (unlike Finder's own source_scans) — this display-time check is
-        // what stops the UI from showing "Oczekuje na pobranie galerii"
-        // forever. See effectiveGalleryDisplayState's own doc comment.
-        galleryStatus: effectiveGalleryDisplay.status ?? undefined,
-        galleryJobId: listing.galleryJobId,
-        galleryTotal: listing.galleryTotal,
-        galleryPersistedCount: listing.galleryPersistedCount,
-        galleryError: effectiveGalleryDisplay.error ?? undefined,
-        ...opportunityFields(listing, filter, decisionBucket, resaleComps),
-      },
-    ];
-  });
-  const dedupedResults = dedupeByListingIdentity(
-    [...allResults].sort((left, right) => {
+  if (view === "archive") {
+    const archivedResults = sortResults(rows, "newest").map((row) => stripRow(row));
+    return finish({
+      results: [],
+      reviewResults: [],
+      buildingVerificationResults: [],
+      excludedResults: missingExcluded,
+      archivedResults,
+      identityFeatures: { automaticEvidenceAvailable: identityEvidenceAvailable, manualReviewAvailable: manualIdentityScope.available, buildingConfirmationAvailable: confirmations.available },
+    });
+  }
+
+  const partition = partitionFinderRows(rows, {
+    filter,
+    identityOf: (row) => {
+      const listing = listingsById.get(row.id);
+      return {
+        listingId: row.id,
+        source: row.source,
+        externalListingId: listing?.externalListingId ?? null,
+        sourcePostUrl: row.sourcePostUrl,
+        originalUrl: row.originalUrl,
+        facebookPostId: listing?.facebookPostId ?? null,
+        parameterFingerprint: listing?.parameterFingerprint ?? null,
+        contentFingerprint: listing?.contentFingerprint ?? listing?.contentHash ?? null,
+      };
+    },
+    qualityCompare: (left, right) => {
       const leftQuality = ((normalizeListingIdentityUrl(left.source, left.sourcePostUrl) ?? normalizeListingIdentityUrl(left.source, left.originalUrl)) ? 2 : 0) + (left.images.length > 0 ? 1 : 0);
       const rightQuality = ((normalizeListingIdentityUrl(right.source, right.sourcePostUrl) ?? normalizeListingIdentityUrl(right.source, right.originalUrl)) ? 2 : 0) + (right.images.length > 0 ? 1 : 0);
       if (rightQuality !== leftQuality) return rightQuality - leftQuality;
       const leftObserved = sourceMetadataCollectedAtByListingId.get(left.id) ?? left.lastSeenAt ?? left.firstSeenAt;
       const rightObserved = sourceMetadataCollectedAtByListingId.get(right.id) ?? right.lastSeenAt ?? right.firstSeenAt;
       return Date.parse(rightObserved) - Date.parse(leftObserved);
-    }),
-    (result) => ({
-      listingId: result.id,
-      source: result.source,
-      externalListingId: listingsById.get(result.id)?.externalListingId ?? null,
-      sourcePostUrl: result.sourcePostUrl,
-      originalUrl: result.originalUrl,
-      facebookPostId: listingsById.get(result.id)?.facebookPostId ?? null,
-      parameterFingerprint: listingsById.get(result.id)?.parameterFingerprint ?? null,
-      contentFingerprint: listingsById.get(result.id)?.contentFingerprint ?? listingsById.get(result.id)?.contentHash ?? null,
-    }),
-  );
-  const groupedResults = groupPropertyResults(dedupedResults, {
-    blockedPairs: manualIdentityScope.blockedPairs,
-    manualGroupByListing: manualIdentityScope.groupByListing,
+    },
+    grouping: { blockedPairs: manualIdentityScope.blockedPairs, manualGroupByListing: manualIdentityScope.groupByListing },
   });
-  // Duplicate-listing mission: a listing whose stored lifecycle is
-  // STALE/ARCHIVED (set by some other process — aging out, a manual archive
-  // action, restoration bookkeeping) can still independently satisfy the
-  // CURRENT filter's live criteria (decisionBucket "MATCHED" or "REVIEW").
-  // Filtering each bucket only by its own positive condition let the very
-  // same canonical listing qualify for two buckets at once — proven live in
-  // production: 44 real listings for one active filter appeared in both
-  // reviewResults and archivedResults simultaneously. Once something is
-  // archived, it must render only in the archive section, never also in the
-  // active grids — so MATCHED/REVIEW membership explicitly excludes
-  // archived-lifecycle listings, making the three buckets mutually
-  // exclusive by construction: every listing lands in exactly one.
-  const archivedLifecycle = new Set(["STALE", "ARCHIVED", "REJECTED"]);
-  const isArchivedLifecycle = (result: FilterResult) => archivedLifecycle.has(result.lifecycleStatus ?? "");
-  const mainVisible = (result: FilterResult) =>
-    (result.source === "facebook" || isValidSalePrice(result.price)) && isWithinFinderPublicationWindow(result.publishedAt, now);
-  const sortedResults = sortResults(groupedResults.filter((result) => result.decisionBucket === "MATCHED" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
-  const reviewResults = sortResults(groupedResults.filter((result) => result.decisionBucket === "REVIEW" && !isArchivedLifecycle(result) && mainVisible(result)), "newest");
-  // A listing can still be a genuine, live MATCHED/REVIEW candidate --
-  // is_current_match=true, lifecycle_status "ACTIVE", no manual decision --
-  // and yet fail mainVisible() purely because its own reported publication
-  // date is older than FINDER_PUBLICATION_MAX_AGE_DAYS (confirmed live in
-  // Production, 2026-10-11: two real OLX listings, 31 and 135 days old by
-  // their own sourcePublishedAt, both otherwise fully qualifying). Without
-  // this, such a listing's lifecycleStatus stays "ACTIVE" while it lands in
-  // archivedResults -- it inflates the archive's total count without being
-  // counted by any of the UI's own stale/archived/rejected sub-totals,
-  // which otherwise always sum to that total. Tagging it here keeps that
-  // sum honest and gives the operator the ACTUAL reason instead of a
-  // mysterious gap.
-  const isStalePublicationOnly = (result: FilterResult) =>
-    (result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW")
-    && !isArchivedLifecycle(result) && !result.sourceConflict && !mainVisible(result)
-    && (result.source === "facebook" || isValidSalePrice(result.price));
-  const archivedResults: FilterResult[] = includeArchived ? sortResults(groupedResults.filter((result) => isArchivedLifecycle(result) || result.decisionBucket === "REJECTED" || result.sourceConflict === true || ((result.decisionBucket === "MATCHED" || result.decisionBucket === "REVIEW") && !mainVisible(result))), "newest")
-    .map((result): FilterResult => isStalePublicationOnly(result) && result.canonicalDecisionDebug
-      ? { ...result, canonicalDecisionDebug: { ...result.canonicalDecisionDebug, reason: "stale_publication_date" } }
-      : result)
-    : [];
+
+  return finish({
+    results: sortResults(partition.matched, "newest").map(stripRow),
+    reviewResults: sortResults(partition.review, "newest").map(stripRow),
+    buildingVerificationResults: sortResults(partition.buildingVerification, "newest").map(stripRow),
+    excludedResults: [...partition.excluded, ...missingExcluded],
+    archivedResults: [],
+    identityFeatures: { automaticEvidenceAvailable: identityEvidenceAvailable, manualReviewAvailable: manualIdentityScope.available, buildingConfirmationAvailable: confirmations.available },
+  });
+}
+
+function buildFinderRow(input: {
+  listing: ListingRow;
+  match: MatchRow;
+  filter: SearchFilter;
+  now: number;
+  latestCompletedScan: CompletedScanWindow | null;
+  snapshots: SnapshotRow[];
+  facebookPublishedAt: string[];
+  operatorBuildingType: string | null;
+  comps: ResaleCompRecord[];
+  summaryOnly: boolean;
+}): FinderRow {
+  const { listing, match, filter, now } = input;
+  const previousPrice = previousDifferentPrice(input.snapshots, listing.price);
+  const status = resultStatus({ firstMatchedAt: match.firstMatchedAt, previousPrice, currentPrice: listing.price }, input.latestCompletedScan);
+  const safeLocation = safeFacebookDisplayLocation(listing);
+  const locationText = resultLocation(safeLocation.address, safeLocation.district, safeLocation.city);
+  const pricePerSqm = reliablePricePerSqm(listing.pricePerSqm, listing.price, listing.area);
+  const filterDecision = evaluateCanonicalListingDecision(
+    {
+      price: listing.price,
+      area: listing.area,
+      pricePerSqm,
+      rooms: listing.rooms,
+      floor: listing.floor,
+      city: safeLocation.city,
+      district: safeLocation.district,
+      title: listing.title,
+      description: listing.description,
+      locationText,
+      // The persisted structured value (not the read-time reconciled one), so
+      // the shared qualification sees source data and text separately.
+      buildingType: (listing.rawBuildingType ?? listing.buildingType) as string | null,
+      yearBuilt: listing.yearBuilt ?? null,
+      ownership: listing.ownership,
+      listingIntent: listing.listingIntent,
+      buildingTypeConfirmedByOperator: input.operatorBuildingType,
+    },
+    filter,
+  );
+  // A manual ACCEPT (apply_listing_review_decision: is_current_match=true,
+  // reasons "manual_accept") is the operator vouching for the missing data.
+  // It used to be re-evaluated as REVIEW on every read, so an accepted offer
+  // never showed under Dopasowane. Hard rejections still win, and an unknown
+  // building type still needs its own explicit confirmation.
+  const manuallyAccepted = listing.manualDecision === "ACCEPTED" && filterDecision.bucket === "REVIEW"
+    && !filterDecision.missingFields.includes("buildingType");
+  const evaluatedBucket = manuallyAccepted ? "MATCHED" : filterDecision.bucket;
+  const sourceConflict = listing.originalUrl ? !sourceDomainMatchesSource(listing.source, listing.originalUrl) : false;
+  const finderCleared = match.matchReasons.includes("finder_cleared");
+  const exclusion = exclusionFor({ listing, sourceConflict, finderCleared, hardRejectReasons: filterDecision.hardRejectReasons });
+  const decisionBucket: FilterResult["decisionBucket"] = exclusion ? "REJECTED" : evaluatedBucket;
+  const unknownFields = decisionBucket === "MATCHED" ? [] : filterDecision.missingFields;
+  const finderSection = exclusion ? "EXCLUDED" : sectionForDecision(decisionBucket, unknownFields);
+  const expectedLifecycle = decisionBucket === "MATCHED" ? "ACTIVE" : decisionBucket === "REVIEW" ? "REVIEW" : "REJECTED";
+  const persistedReview = reviewMembership(match);
+  const consistencyMismatch = !finderCleared && (listing.lifecycleStatus !== expectedLifecycle
+    || match.isCurrentMatch !== (decisionBucket === "MATCHED")
+    || (decisionBucket === "REVIEW" && !persistedReview));
+  const canonicalDebug = canonicalVisibilityDebug({
+    listingId: listing.id,
+    canonicalBucket: decisionBucket,
+    lifecycleStatus: listing.lifecycleStatus ?? null,
+    isCurrentMatch: match.isCurrentMatch,
+    matchReasons: [...filterDecision.reasons, ...(decisionBucket === "REVIEW" ? ["review", ...filterDecision.missingFields.map((field) => `unknown_${field}`)] : [])],
+    visibilityInFinder: finderSection !== "EXCLUDED",
+    visibilityInWatcher: listing.source === "facebook",
+    reason: finderCleared ? "cleared_by_operator" : exclusion ? `${exclusion.code}${exclusion.reasons.length ? `:${exclusion.reasons.join(",")}` : ""}` : decisionBucket === "REVIEW" ? "review_uncertainty" : manuallyAccepted ? "manual_accept" : "current_filter_match",
+    consistencyMismatch,
+  });
+  const publicationValues = listing.source === "facebook" && input.facebookPublishedAt.length
+    ? input.facebookPublishedAt
+    : input.snapshots.flatMap((snapshot) => snapshot.publishedCandidates);
+  const publishedAt = earliestPublicationDate(publicationValues, now);
+  const latestPublishedAt = latestPublicationDate(publicationValues, now);
+  const freshness = listingFreshness(publishedAt, listing.lastSeenAt, now);
+  const effectiveGalleryDisplay = effectiveGalleryDisplayState(listing.galleryStatus ?? null, listing.galleryRequestedAt ?? null, listing.galleryError ?? null);
 
   return {
-    filter,
-    results: sortedResults,
-    reviewResults,
-    archivedResults,
-    counts: {
-      active: sortedResults.length,
-      review: reviewResults.length,
-      archived: archivedResults.length,
-    },
-    total: sortedResults.length,
-    newMatches: sortedResults.filter((result) => result.isNew).length,
-    lastScan,
-    sourceScans: scans,
-    identityFeatures: { automaticEvidenceAvailable: identityEvidenceAvailable, manualReviewAvailable: manualIdentityScope.available },
+    id: listing.id,
+    title: listing.title,
+    price: listing.price,
+    area: listing.area,
+    rooms: listing.rooms,
+    floor: listing.floor,
+    totalFloors: null,
+    buildingType: filterDecision.buildingQualification?.type ?? listing.buildingType,
+    yearBuilt: listing.yearBuilt ?? null,
+    ownership: listing.ownership,
+    description: listing.description,
+    images: listing.images,
+    pricePerSqm,
+    locationText,
+    address: safeLocation.address,
+    city: safeLocation.city,
+    district: safeLocation.district,
+    thumbnailUrl: listing.images[0] ?? null,
+    originalUrl: listing.originalUrl,
+    sourcePostUrl: listing.sourcePostUrl ?? null,
+    source: listing.source,
+    crossSourceIdentity: listing.crossSourceIdentity ?? null,
+    identityEvidence: listing.identityEvidence,
+    sourceConflict,
+    listingStatus: listing.status,
+    isActive: listing.status === "active",
+    publishedAt,
+    latestPublishedAt: latestPublishedAt !== publishedAt ? latestPublishedAt : null,
+    publicationAgeDays: freshness.ageDays,
+    isOlderListing: freshness.isOlderListing,
+    lastVerifiedDaysAgo: freshness.lastVerifiedDaysAgo,
+    verificationStale: freshness.verificationStale,
+    firstSeenAt: listing.firstSeenAt,
+    lastSeenAt: listing.lastSeenAt,
+    firstMatchedAt: match.firstMatchedAt,
+    lastMatchedAt: match.lastMatchedAt,
+    previousPrice: status.hasPriceDrop ? previousPrice : null,
+    currentPrice: listing.price,
+    ...status,
+    isNew: match.matchOrigin === "scan" && status.isNew,
+    matchReasons: [...filterDecision.reasons, ...(evaluatedBucket === "REVIEW" ? ["review"] : []), ...(manuallyAccepted ? ["manual_accept"] : [])],
+    unknownFields,
+    decisionBucket,
+    finderStatus: canonicalDebug.finderStatus,
+    canonicalDecisionDebug: canonicalDebug,
+    canonicalConsistencyMismatch: consistencyMismatch,
+    // A Finder clear is scoped to this filter's membership: project it as archived here only.
+    lifecycleStatus: finderCleared ? "ARCHIVED" : listing.lifecycleStatus,
+    reviewReason: listing.reviewReason,
+    missingFields: listing.missingFields,
+    manualDecision: listing.manualDecision,
+    manualDecisionReason: listing.manualDecisionReason,
+    archivedAt: listing.archivedAt,
+    // A PENDING/RUNNING gallery no extension ever claimed has no proactive
+    // reaper; this display-time check stops "Oczekuje na pobranie galerii" forever.
+    galleryStatus: effectiveGalleryDisplay.status ?? undefined,
+    galleryJobId: listing.galleryJobId,
+    galleryTotal: listing.galleryTotal,
+    galleryPersistedCount: listing.galleryPersistedCount,
+    galleryError: effectiveGalleryDisplay.error ?? undefined,
+    buildingQualification: filterDecision.buildingQualification ?? undefined,
+    buildingTypeConfirmedByOperator: input.operatorBuildingType,
+    finderSection,
+    exclusion,
+    isCurrentMatch: match.isCurrentMatch,
+    ...(input.summaryOnly ? emptyOpportunityFields() : opportunityFields(listing, filter, decisionBucket, input.comps)),
   };
+}
+
+/**
+ * Why a current membership is not shown in an active section. Order matters:
+ * the most fundamental reason wins so the operator sees one clear cause.
+ */
+function exclusionFor(input: { listing: ListingRow; sourceConflict: boolean; finderCleared: boolean; hardRejectReasons: string[] }): FinderRow["exclusion"] {
+  const { listing } = input;
+  const make = (code: FinderExclusionCode, reasons: string[] = []) => ({ code, reasons });
+  if (listing.status !== "active") return make("listing_inactive", [listing.status]);
+  if (listing.manualDecision === "REJECTED") return make("manual_rejected");
+  if (input.finderCleared || listing.lifecycleStatus === "ARCHIVED") return make("lifecycle_archived");
+  if (listing.lifecycleStatus === "STALE") return make("lifecycle_stale");
+  if (input.hardRejectReasons.length > 0) return make("filter_rejected", input.hardRejectReasons);
+  if (listing.lifecycleStatus === "REJECTED") return make("lifecycle_rejected");
+  if (input.sourceConflict) return make("source_conflict");
+  if (listing.source !== "facebook" && !isValidSalePrice(listing.price)) return make("invalid_price");
+  return null;
+}
+
+/** Removes internal partition bookkeeping before the payload leaves the server. */
+function stripRow(row: FilterResult): FilterResult {
+  const { exclusion: _exclusion, isCurrentMatch: _isCurrentMatch, ...result } = row as FinderRow;
+  void _exclusion;
+  void _isCurrentMatch;
+  return result;
+}
+
+function missingListingRow(match: MatchRow): FinderRow {
+  return {
+    id: match.listingId, title: null, price: null, area: null, rooms: null, floor: null, totalFloors: null, buildingType: null,
+    ownership: null, description: null, images: [], pricePerSqm: null, locationText: null, address: null, city: null, district: null,
+    thumbnailUrl: null, originalUrl: null, source: "otodom", listingStatus: "removed", isActive: false, firstSeenAt: match.firstMatchedAt,
+    lastSeenAt: match.lastMatchedAt, firstMatchedAt: match.firstMatchedAt, lastMatchedAt: match.lastMatchedAt, previousPrice: null,
+    currentPrice: null, isNew: false, hasPriceDrop: false, priceDropAmount: null, matchReasons: match.matchReasons, unknownFields: [],
+    finderSection: "EXCLUDED", isCurrentMatch: match.isCurrentMatch,
+  };
+}
+
+const PUBLICATION_KEYS = ["sourcePublishedAt", "publishedAt", "published_at", "datePosted", "datePostedAt", "datePublished", "date_published", "postedAt", "posted_at"] as const;
+/**
+ * Only the publication fields are projected out of raw_data (PostgREST JSON
+ * path selects) instead of shipping every snapshot's full source payload to
+ * the server on each Finder open.
+ */
+const SNAPSHOT_PUBLICATION_SELECT = [
+  "listing_id",
+  "price",
+  "captured_at",
+  ...PUBLICATION_KEYS.map((key) => `pub_${key}:raw_data->>${key}`),
+  ...PUBLICATION_KEYS.map((key) => `cand_${key}:raw_data->candidate->>${key}`),
+].join(",");
+
+async function readPublicationSnapshots(supabase: SupabaseSession, listingIds: string[]): Promise<{ data: Row[]; error: { message?: string; code?: string } | null }> {
+  const slim = await fetchAllRowsForIds(listingIds, (idChunk) =>
+    supabase
+      .from("listing_snapshots")
+      .select(SNAPSHOT_PUBLICATION_SELECT)
+      .in("listing_id", idChunk)
+      // captured_at alone is not unique across listings; listing_id makes the page order total.
+      .order("captured_at", { ascending: false })
+      .order("listing_id", { ascending: true }),
+  );
+  if (!slim.error) return slim;
+  // A PostgREST that rejects JSON-path selects falls back to the full payload.
+  console.error("FLIP FINDER SNAPSHOT SLIM SELECT ERROR:", slim.error);
+  return fetchAllRowsForIds(listingIds, (idChunk) =>
+    supabase
+      .from("listing_snapshots")
+      .select("listing_id,price,captured_at,raw_data")
+      .in("listing_id", idChunk)
+      .order("captured_at", { ascending: false })
+      .order("listing_id", { ascending: true }),
+  );
+}
+
+async function readVisibleMemberships(supabase: SupabaseSession, filterId: string): Promise<{ data: Row[]; error: { message?: string; code?: string } | null }> {
+  const membershipColumns = "listing_id,search_filter_id,first_matched_at,last_matched_at,is_current_match,match_origin,match_reasons";
+  const visible = await fetchAllRows(() => supabase
+    .from("listing_filter_matches")
+    .select(membershipColumns)
+    .eq("search_filter_id", filterId)
+    .or(FINDER_REVIEW_MEMBERSHIP_OR_FILTER)
+    // listing_id is unique within one filter: a deterministic total order for paging.
+    .order("listing_id", { ascending: true }));
+  if (!visible.error) return visible;
+  // Correctness first: if PostgREST ever rejects the JSON containment filter,
+  // fall back to the complete (heavier) membership read and filter in memory.
+  console.error("FLIP FINDER VISIBLE MEMBERSHIP FILTER ERROR, falling back to full read:", visible.error);
+  return fetchAllRows(() => supabase
+    .from("listing_filter_matches")
+    .select(membershipColumns)
+    .eq("search_filter_id", filterId)
+    .order("listing_id", { ascending: true }));
+}
+
+let resaleCompsCache: { loadedAt: number; comps: ResaleCompRecord[] } | null = null;
+
+/**
+ * Market comparables change at scan cadence, not per Finder open. A short
+ * in-instance cache removes the 500-row comps read from repeated opens
+ * without changing scoring inputs. The comp description is never used by
+ * the ARV model, so it is not read.
+ */
+async function readResaleComps(supabase: SupabaseSession): Promise<ResaleCompRecord[]> {
+  if (resaleCompsCache && Date.now() - resaleCompsCache.loadedAt < RESALE_COMPS_CACHE_TTL_MS) return resaleCompsCache.comps;
+  const result = await supabase
+    .from("resale_comps")
+    .select("id,source,external_listing_id,canonical_url,title,city,district,street,address,latitude,longitude,price,area_m2,price_per_m2,rooms,floor,floors,building_type,construction_year,ownership,balcony,elevator,parking,renovation_status,renovation_confidence,finish_level,listing_created_at,first_seen_at,last_seen_at,active,seller_type,fingerprint,outlier_reason,evidence")
+    .eq("active", true)
+    .limit(500);
+  if (result.error) return [];
+  const comps = asRows(result.data).map(toResaleCompRecord).filter((comp): comp is ResaleCompRecord => comp !== null);
+  resaleCompsCache = { loadedAt: Date.now(), comps };
+  return comps;
+}
+
+/** TEST-ONLY: resets in-instance read caches between isolated fake databases. */
+export function resetFinderReadCachesForTests(): void {
+  resaleCompsCache = null;
+}
+
+function countFromResult(result: unknown, fallback: number): number {
+  const count = result && typeof result === "object" ? (result as { count?: unknown }).count : undefined;
+  return typeof count === "number" && Number.isFinite(count) && count >= 0 ? count : fallback;
+}
+
+function clampInteger(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
 function dedupeByListingId(matches: MatchRow[]): MatchRow[] {
@@ -723,6 +885,7 @@ export function toListingRow(row: Row): ListingRow | null {
     // description explicitly identifies a tenement from resurfacing as a
     // confirmed match after an older import/recalculation.
     buildingType: resolveBuildingType(row.building_type, nullableString(row.title), nullableString(row.description)),
+    rawBuildingType: row.building_type ?? null,
     yearBuilt: nullableNumber(row.year_built),
     ownership: nullableString(row.ownership),
     description: nullableString(row.description),
@@ -803,7 +966,11 @@ function opportunityFields(
     marketDiscountPct: assessment.marketDiscountPct,
     opportunityMissingFields: assessment.missingFields,
     underwriting: assessment.underwriting,
-  } : {
+  } : emptyOpportunityFields();
+}
+
+function emptyOpportunityFields(): ReturnType<typeof opportunityFields> {
+  return {
     opportunityScore: null,
     opportunityPriority: null,
     economicsConfidence: null,
@@ -898,15 +1065,28 @@ function nullableGalleryStatus(value: unknown): NonNullable<PropertyListing["gal
 function toSnapshotRow(row: Row): SnapshotRow | null {
   const listingId = nullableString(row.listing_id);
   const capturedAt = nullableString(row.captured_at);
+  if (!listingId || !capturedAt) return null;
+  const raw = isRow(row.raw_data) ? row.raw_data : null;
+  const candidate = raw && isRow(raw.candidate) ? raw.candidate : null;
+  // Either the slim JSON-path projection (pub_*/cand_*) or, on fallback, the full raw_data.
+  const publishedCandidates = raw
+    ? [...PUBLICATION_KEYS.map((key) => raw[key]), ...(candidate ? PUBLICATION_KEYS.map((key) => candidate[key]) : [])]
+    : [...PUBLICATION_KEYS.map((key) => row[`pub_${key}`]), ...PUBLICATION_KEYS.map((key) => row[`cand_${key}`])];
+  return {
+    listingId,
+    price: nullableNumber(row.price),
+    capturedAt,
+    // The first source-provided key wins per snapshot, exactly as before.
+    publishedCandidates: [firstPublicationValue(publishedCandidates.slice(0, PUBLICATION_KEYS.length)), firstPublicationValue(publishedCandidates.slice(PUBLICATION_KEYS.length))].filter((value) => value !== null),
+  };
+}
 
-  return listingId && capturedAt
-    ? {
-        listingId,
-        price: nullableNumber(row.price),
-        capturedAt,
-        rawData: isRow(row.raw_data) ? row.raw_data : {},
-      }
-    : null;
+function firstPublicationValue(values: unknown[]): string | null {
+  for (const value of values) {
+    // ->> renders a numeric JSON value as text; only real date strings are publication dates.
+    if (typeof value === "string" && !/^\d+$/u.test(value.trim()) && normalizePublicationDate(value) !== null) return value;
+  }
+  return null;
 }
 
 export function toSearchFilterScan(row: Row, now: number): SearchFilterScan | null {
@@ -930,7 +1110,9 @@ export function toSearchFilterScan(row: Row, now: number): SearchFilterScan | nu
   // scheduler and the OLX lease recovery) that already run independently of
   // this read -- reclassifying them here too would risk disagreeing with
   // whichever one of those is currently mid-recovery for the same row.
-  const stale = source !== "facebook" && source !== "olx" && isStaleScan({ status: rawStatus, startedAt, heartbeatAt: scanHeartbeatAt(row.filter_snapshot) }, now);
+  // The Finder results read projects only filter_snapshot->_scanProgress (scan_progress).
+  const snapshot = row.filter_snapshot ?? (row.scan_progress === undefined ? null : { _scanProgress: row.scan_progress });
+  const stale = source !== "facebook" && source !== "olx" && isStaleScan({ status: rawStatus, startedAt, heartbeatAt: scanHeartbeatAt(snapshot) }, now);
   const status = stale ? "failed" : rawStatus;
   const errorMessage = stale ? STALE_SCAN_MESSAGE : nullableString(row.error_message);
 
@@ -965,20 +1147,6 @@ function previousDifferentPrice(snapshots: SnapshotRow[], currentPrice: number |
     }
   }
 
-  return null;
-}
-
-function publishedAtFromSnapshots(snapshots: SnapshotRow[], now = Date.now()): string | null {
-  return earliestPublicationDate(snapshots.map((snapshot) => rawPublishedAt(snapshot.rawData, now)), now);
-}
-
-function rawPublishedAt(raw: Row, now = Date.now()): string | null {
-  for (const key of ["sourcePublishedAt", "publishedAt", "published_at", "datePosted", "datePostedAt", "datePublished", "date_published", "postedAt", "posted_at"]) {
-    const parsed = normalizePublicationDate(raw[key], now);
-    if (parsed) return parsed;
-  }
-  const candidate = isRow(raw.candidate) ? raw.candidate : null;
-  if (candidate) return rawPublishedAt(candidate, now);
   return null;
 }
 
