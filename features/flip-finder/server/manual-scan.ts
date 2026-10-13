@@ -16,9 +16,10 @@ import { decideScanResumption, isStaleScan, RECOVERABLE_SCAN_STATUSES, scanHeart
 import { CONTINUATION_LEASE_MS, CONTINUATION_MAX_WAIT_MS, classifySourceFailure, continuationCycleAt, isContinuationExpired, isContinuationPending, nextContinuationAt } from "./scan-continuation";
 import { assertCheckpointSize, emptySourceCheckpoint, readSourceCheckpoint, SourceSliceYield, type SourceCheckpoint } from "./source-checkpoint";
 import type { SourceBatch } from "../source-batches";
+import type { ListingScanStats } from "../olx-batch";
 export { scanStatus } from "./scan-start-errors";
 
-export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary };
+export type SourceScanResult = { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings?: string[]; matchDiagnostics: MatchDiagnosticSummary; /** OLX worker path: counts with one meaning each (see olx-batch.ts). */ stats?: ListingScanStats };
 export type ScanSummary = { runId: string; status: "running" | "completed" | "partial"; sourcesRun: number; sourcesCompleted: number; sourcesFailed: number; fetched: number; normalized: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; actualErrors: number; sourceResults: SourceScanResult[]; matchDiagnostics: MatchDiagnosticSummary; scannedCount: number; matchedCount: number; newCount: number; updatedCount: number; priceDropCount: number; warnings: string[] };
 type SupabaseClient = DatabaseClient;
 type LoadedFilter = NonNullable<Awaited<ReturnType<typeof getSearchFilter>>>;

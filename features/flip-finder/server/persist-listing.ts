@@ -15,6 +15,7 @@ import { isValidSalePrice } from "@/features/flip-finder/sale-price";
 import { normalizePublicationDate } from "@/features/flip-finder/publication-date";
 import { normalizeConfirmedPropertyIdentity } from "@/features/flip-finder/property-identity";
 import { hasListingIdentityEvidence, mergeListingIdentityEvidence } from "@/features/flip-finder/identity-evidence";
+import { olxUrlIdToken } from "@/features/flip-finder/olx-batch";
 
 type ExistingListing = Pick<PropertyListing, "id" | "price" | "contentHash" | "images"> & {
   manualDecision?: "ACCEPTED" | "REJECTED" | null;
@@ -60,6 +61,13 @@ export async function persistListing(supabase: SupabaseClient, filterId: string,
         break;
       }
     }
+  }
+  // OLX's legacy external id and its normalized URL both embed the title slug,
+  // so a seller's title edit changes both. The "-ID<token>.html" suffix does
+  // not change: reuse that ad's newest record instead of storing a copy.
+  const olxToken = item.source === "olx" ? olxUrlIdToken(item.normalizedUrl) : null;
+  if (!existingResult.error && !existingResult.data && olxToken) {
+    existingResult = await supabase.from("listings").select("id,external_listing_id,price,content_hash,images,manual_decision,lifecycle_status,archived_at,building_type,ownership").eq("source", "olx").like("normalized_url", `%-ID${olxToken}.html`).order("last_seen_at", { ascending: false }).limit(1).abortSignal(signal).maybeSingle();
   }
   const existingError = existingResult.error;
   const existing = existingResult.data;
