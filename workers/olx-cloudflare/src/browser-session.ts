@@ -1,7 +1,8 @@
 import { assertAllowedOlxUrl } from "../../../features/flip-finder/olx-parser.ts";
 import { ControlledOlxFailure } from "../../olx-browser/src/retry.ts";
 import { inPageExpression } from "./in-page-expression.ts";
-import { decodeInPageResult, parseExtractedPage } from "./olx-page.ts";
+import { decodeInPageResult, isParserError, type InPageOptions, type OlxVerification } from "./olx-page.ts";
+import type { ListingFixReport } from "./listing-fixes.ts";
 import { rawListings } from "./raw-listings.ts";
 
 /**
@@ -45,6 +46,10 @@ export type SessionHooks = {
   onSessionClosed(chargedMs: number, sessionId: string | null): Promise<void>;
   /** Browser Run refused the session (HTTP 429) although acquisitions were allowed: the daily allowance is gone. */
   onDailyLimitRejected(): Promise<void>;
+  /** OLX refused access (HTTP 403/405/429 or a verification page): feeds the automatic pause. */
+  onOlxRefused(code: string): Promise<void>;
+  /** OLX served a normal page: resets the refusal streak. */
+  onOlxAccepted(): Promise<void>;
 };
 
 export type ScrapeResult = {
@@ -54,7 +59,8 @@ export type ScrapeResult = {
   listings: unknown[];
   warnings: string[];
   durationMs: number;
-  verification: ReturnType<typeof parseExtractedPage>["verification"] | null;
+  verification: OlxVerification | null;
+  fixReport: ListingFixReport | null;
 };
 
 const GOTO_TIMEOUT_MS = 30_000;
@@ -111,22 +117,22 @@ export class CloudBrowserSession {
     };
   }
 
-  scrapeFor(release: () => void): (requestUrl: string, signal: AbortSignal) => Promise<ScrapeResult> {
+  /** Scrape function for one job (signature expected by the shared `runOlxJob` runner). */
+  scrapeFor(release: () => void, options: InPageOptions): (requestUrl: string, signal: AbortSignal) => Promise<ScrapeResult> {
     return (requestUrl, signal) => {
       release();
-      return this.scrape(requestUrl, signal);
+      return this.scrape(requestUrl, signal, options);
     };
   }
 
-  /** Signature expected by the shared `runOlxJob` runner. */
-  scrape = (requestUrl: string, signal: AbortSignal): Promise<ScrapeResult> => {
+  scrape = (requestUrl: string, signal: AbortSignal, options: InPageOptions = { idMode: "legacy" }): Promise<ScrapeResult> => {
     const url = assertAllowedOlxUrl(requestUrl).toString();
     this.waiting += 1;
     // `queue` never rejects (see below), so pages are opened strictly one after another.
     const run = this.queue.then(async () => {
       this.waiting -= 1;
       signal.throwIfAborted();
-      return this.scrapeExclusive(url, signal);
+      return this.scrapeExclusive(url, signal, options);
     });
     this.queue = run.then(() => undefined, () => undefined);
     return run;
@@ -161,11 +167,11 @@ export class CloudBrowserSession {
     await this.hooks.onSessionClosed(chargedMs, sessionId);
   }
 
-  private async scrapeExclusive(url: string, signal: AbortSignal): Promise<ScrapeResult> {
+  private async scrapeExclusive(url: string, signal: AbortSignal, options: InPageOptions): Promise<ScrapeResult> {
     const startedAt = this.hooks.now();
     this.active = true;
     try {
-      return await this.scrapeOnce(url, signal, startedAt);
+      return await this.scrapeOnce(url, signal, startedAt, options);
     } finally {
       this.active = false;
       const age = this.startedAt === null ? 0 : this.hooks.now() - this.startedAt;
@@ -176,7 +182,7 @@ export class CloudBrowserSession {
     }
   }
 
-  private async scrapeOnce(url: string, signal: AbortSignal, startedAt: number): Promise<ScrapeResult> {
+  private async scrapeOnce(url: string, signal: AbortSignal, startedAt: number, options: InPageOptions): Promise<ScrapeResult> {
     this.hooks.assertBudget(this.startedAt);
     const browser = await this.ensureBrowser(signal);
     const closeOnAbort = () => { void this.close("job_aborted"); };
@@ -189,36 +195,34 @@ export class CloudBrowserSession {
       const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: GOTO_TIMEOUT_MS });
       signal.throwIfAborted();
       const status = response?.status() ?? null;
-      const { header, second } = decodeInPageResult(await page.evaluate(inPageExpression()));
+      const { header, second } = decodeInPageResult(await page.evaluate(inPageExpression(options)));
       signal.throwIfAborted();
       await context.close().catch(() => undefined);
       context = null;
       const extracted = header.page;
       // Same classification as the local worker: OLX refusing access is final, never retried or worked around.
-      if (status === 403 || status === 405 || status === 429) throw new ControlledOlxFailure(`OLX_HTTP_${status}`, `OLX refused normal browser access (OLX_HTTP_${status}).`);
-      if (extracted.challenge) throw new ControlledOlxFailure("OLX_HUMAN_VERIFICATION", "OLX refused normal browser access (OLX_HUMAN_VERIFICATION).");
-      if (!response?.ok()) throw new Error(`OLX_HTTP_${status ?? "UNKNOWN"}`);
-
-      let listings: unknown[];
-      let rawItems = header.rawItems;
-      let normalizedItems = header.normalizedItems;
-      let warnings = header.warnings;
-      let verification = header.verification;
-      if (header.error && !header.fallback) throw new Error(header.error);
-      if (header.error) {
-        // Unexpected in-page failure: parse the raw ads here (costs Worker CPU, but the job still succeeds).
-        this.hooks.log("OLX_IN_PAGE_PARSE_FALLBACK", { error: header.error });
-        const fallback = parseExtractedPage({ ...extracted, adsJson: second });
-        ({ rawItems, normalizedItems, warnings } = fallback.parsed);
-        listings = fallback.parsed.listings;
-        verification = fallback.verification;
-      } else {
-        listings = rawListings(second);
+      const refusal = status === 403 || status === 405 || status === 429 ? `OLX_HTTP_${status}` : extracted.challenge ? "OLX_HUMAN_VERIFICATION" : null;
+      if (refusal) {
+        await this.hooks.onOlxRefused(refusal);
+        throw new ControlledOlxFailure(refusal, `OLX refused normal browser access (${refusal}).`);
       }
+      if (!response?.ok()) throw new Error(`OLX_HTTP_${status ?? "UNKNOWN"}`);
+      // A redirect away from olx.pl (login wall, consent host, …) is never followed further or parsed.
+      if (!isOlxUrl(extracted.finalUrl)) throw new ControlledOlxFailure("OLX_CLOUD_UNEXPECTED_REDIRECT", "OLX przekierował poza olx.pl — strona nie została przetworzona.");
+      await this.hooks.onOlxAccepted();
+      if (header.error) {
+        // Parser errors keep the Finder parser's own messages (same as the local worker). Any other in-page
+        // failure ends the job explicitly: re-parsing ~1 MB here would exceed the Workers Free CPU limit
+        // and an invocation killed for CPU would lose every job it holds.
+        if (isParserError(header.error)) throw new Error(header.error);
+        throw new ControlledOlxFailure("OLX_CLOUD_IN_PAGE_PARSER_FAILED", `Parser OLX w przeglądarce Cloudflare zawiódł (${header.error.slice(0, 200)}); zadanie zakończone bez parsowania w Workerze (limit CPU).`);
+      }
+      const listings = rawListings(second);
+      const { rawItems, normalizedItems, warnings, verification } = header;
       this.hooks.log("OLX_PAGE_VERIFIED", {
         rawItems, normalizedItems, uniqueIds: verification?.uniqueIds ?? null, domCards: extracted.domCards,
         meta: extracted.meta, coverage: verification?.coverage ?? null, warnings, stateSource: extracted.stateSource, htmlLength: extracted.htmlLength,
-        listingsBytes: second.length, javaScript: this.options.pageJavaScript,
+        listingsBytes: second.length, javaScript: this.options.pageJavaScript, idMode: options.idMode, fixes: header.fixReport,
       });
       const durationMs = this.hooks.now() - startedAt;
       return {
@@ -226,6 +230,7 @@ export class CloudBrowserSession {
         diagnostics: { status, finalUrl: extracted.finalUrl, title: extracted.title, bodyLength: extracted.htmlLength, marker: extracted.marker, challenge: false, stateSource: extracted.stateSource, browserMs: durationMs },
         durationMs,
         verification,
+        fixReport: header.fixReport,
       };
     } finally {
       signal.removeEventListener("abort", closeOnAbort);
@@ -284,5 +289,14 @@ export class CloudBrowserSession {
       // Optional optimisation only; the page is read the same way without it.
       this.hooks.log("BROWSER_RESOURCE_BLOCKING_UNAVAILABLE", {});
     }
+  }
+}
+
+function isOlxUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && (url.hostname === "olx.pl" || url.hostname === "www.olx.pl");
+  } catch {
+    return false;
   }
 }

@@ -1,7 +1,8 @@
 import type { WorkerHeartbeat, WorkerJob } from "../../olx-browser/src/api-client.ts";
 import { runOlxJob } from "../../olx-browser/src/job-runner.ts";
 import { ControlledOlxFailure } from "../../olx-browser/src/retry.ts";
-import { budgetStop, canScrape, currentLedger, jobCapReached, type BudgetLimits, type BudgetStop, type Ledger } from "./budget.ts";
+import { accessPauseStop, budgetStop, canScrape, currentLedger, hardStop, jobCapReached, type BudgetLimits, type BudgetStop, type Ledger } from "./budget.ts";
+import type { ListingIdMode } from "./listing-fixes.ts";
 import { CloudBrowserSession, type BrowserProvider } from "./browser-session.ts";
 import type { CloudConfig } from "./config.ts";
 import { createRawCompleter, type RawCompletion } from "./raw-complete.ts";
@@ -41,9 +42,15 @@ export type BatchOptions = {
   claimWindowMs?: number;
   /** Workers Free allows 50 subrequests per invocation; we keep a margin. */
   subrequestLimit?: number;
+  /**
+   * Limited-trial guard (manual mode): only a Finder job of this filter may be
+   * scraped. Any other claimed job is ended at once with OLX_CLOUD_TEST_FOREIGN_JOB
+   * (no browser, no listings written) and claiming stops.
+   */
+  expectFilterId?: string;
 };
 
-export type BatchOutcome = "idle" | "worked" | "paused" | "subrequest_limit" | "claim_window" | "max_jobs";
+export type BatchOutcome = "idle" | "worked" | "paused" | "subrequest_limit" | "claim_window" | "max_jobs" | "foreign_job";
 
 export type BatchSummary = {
   outcome: BatchOutcome;
@@ -103,9 +110,9 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
   const countSubrequest = () => { subrequests += 1; };
   const summary = { claimed: 0, completed: 0, failed: 0, leaseLost: 0, rejected: 0 };
 
-  const stopWith = (code: BudgetStop["code"]): BudgetStop => {
+  const stopWith = (code: BudgetStop["code"], prebuilt?: BudgetStop): BudgetStop => {
     if (ledger.stop?.code !== code) {
-      ledger = { ...ledger, stop: budgetStop(code, ledger, now(), limits) };
+      ledger = { ...ledger, stop: prebuilt ?? budgetStop(code, ledger, now(), limits) };
       log("OLX_CLOUD_PAUSED", { code, message: ledger.stop?.message, browserMs: ledger.browserMs, safeBudgetMs: limits.safeBrowserBudgetMs, dailyLimitMs: limits.dailyBrowserLimitMs, jobsClaimed: ledger.jobsClaimed });
       void persist();
     }
@@ -119,7 +126,7 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
     countSubrequest,
     assertBudget(openSessionStartedAt) {
       if (canScrape(ledger, now(), openSessionStartedAt, limits)) return;
-      const stop = ledger.stop?.code === "OLX_CLOUD_BROWSER_DAILY_LIMIT_429" ? ledger.stop : stopWith("OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED");
+      const stop = hardStop(ledger, now()) ?? stopWith("OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED");
       throw new ControlledOlxFailure(stop.code, stop.message);
     },
     async onSessionOpened(startedAt, sessionId) {
@@ -133,6 +140,16 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
     async onDailyLimitRejected() {
       ledger = { ...ledger, browserMs: Math.max(ledger.browserMs, limits.dailyBrowserLimitMs) };
       stopWith("OLX_CLOUD_BROWSER_DAILY_LIMIT_429");
+      await persist();
+    },
+    async onOlxRefused(code) {
+      ledger = { ...ledger, refusalStreak: ledger.refusalStreak + 1 };
+      if (ledger.refusalStreak >= config.refusalPauseThreshold) stopWith("OLX_CLOUD_OLX_ACCESS_PAUSED", accessPauseStop(ledger, now(), config.refusalPauseMs, code));
+      await persist();
+    },
+    async onOlxAccepted() {
+      if (ledger.refusalStreak === 0) return;
+      ledger = { ...ledger, refusalStreak: 0 };
       await persist();
     },
   }, { sessionMaxMs: config.sessionMaxMs, keepAliveMs: config.keepAliveMs, blockHeavyResources: config.blockHeavyResources, restrictToOlxDomains: config.restrictToOlxDomains, pageJavaScript: config.pageJavaScript });
@@ -153,7 +170,8 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
   // Re-evaluated on every claim, so raising the budget or the job cap takes
   // effect without waiting for midnight. Cloudflare's own 429 is final for the day.
   const pausedCode = (): BudgetStop["code"] | null => {
-    if (ledger.stop?.code === "OLX_CLOUD_BROWSER_DAILY_LIMIT_429") return ledger.stop.code;
+    const hard = hardStop(ledger, now());
+    if (hard) return hard.code;
     if (jobCapReached(ledger, limits)) return "OLX_CLOUD_DAILY_JOB_CAP_REACHED";
     if (!canScrape(ledger, now(), session.openSessionStartedAt(), limits)) return "OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED";
     if (ledger.stop) {
@@ -168,8 +186,9 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
   // 90-second watchdog fail it with a generic "worker did not claim" message.
   const initialPause = pausedCode();
   if (initialPause) {
-    const stop = stopWith(initialPause);
-    if (config.onBudgetExhausted === "fail_jobs") {
+    const stop = hardStop(ledger, now()) ?? stopWith(initialPause);
+    // A manual trial never claims while paused: it must not touch other filters' or Radar's jobs.
+    if (config.onBudgetExhausted === "fail_jobs" && !options.expectFilterId) {
       // Rejecting costs almost no CPU (no browser, tiny bodies): bounded only by the subrequest allowance.
       const maxRejections = options.maxJobs ?? Number.POSITIVE_INFINITY;
       while (subrequests + 2 <= subrequestLimit && summary.rejected < maxRejections) {
@@ -199,12 +218,28 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
     void persist();
   }
 
+  async function rejectForeignJob(job: WorkerJob) {
+    const message = `Test Cloudflare (filtr ${options.expectFilterId}) odebrał zadanie spoza testu (${job.contextType === "price_radar" ? "Radar" : `filtr ${job.filterId ?? "?"}`}); zakończono je bez pobierania OLX i bez zapisu ofert. Uruchom ten skan ponownie.`;
+    log("JOB_REJECTED_FOREIGN", { jobId: job.id, contextType: job.contextType ?? "finder", filterId: job.filterId });
+    try {
+      await countedApi.fail(job, "OLX_CLOUD_TEST_FOREIGN_JOB", message);
+      summary.rejected += 1;
+      ledger = { ...ledger, jobsRejected: ledger.jobsRejected + 1 };
+    } catch {
+      log("JOB_FAIL_REPORT_ERROR", { jobId: job.id, code: "OLX_FAIL_REPORT_FAILED" });
+    }
+    void persist();
+  }
+
+  const idModeFor = (job: WorkerJob): ListingIdMode =>
+    config.listingIdPolicy === "stable_all" || (config.listingIdPolicy === "stable_finder" && job.contextType !== "price_radar") ? "stable" : "legacy";
+
   const startJob = (job: WorkerJob) => {
     const release = session.hold();
     ledger = { ...ledger, jobsClaimed: ledger.jobsClaimed + 1 };
     void persist();
     const task = runOlxJob({
-      job, api: countedApi, scrape: session.scrapeFor(release), shutdownSignal: shutdown.signal, log,
+      job, api: countedApi, scrape: session.scrapeFor(release, { idMode: idModeFor(job) }), shutdownSignal: shutdown.signal, log,
       ...deps.jobTimings,
     }).then((result) => {
       if (result === "completed") { summary.completed += 1; ledger = { ...ledger, jobsCompleted: ledger.jobsCompleted + 1 }; }
@@ -229,7 +264,7 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
       const reserve = SUBREQUESTS_PER_JOB * (running.size + 1) + (session.openSessionStartedAt() === null ? SUBREQUESTS_PER_SESSION : 0);
       if (subrequests + reserve > subrequestLimit) { outcome = "subrequest_limit"; return; }
       const paused = pausedCode();
-      if (paused) { stopWith(paused); outcome = "paused"; return; }
+      if (paused) { if (!hardStop(ledger, now())) stopWith(paused); outcome = "paused"; return; }
       let job: WorkerJob | null;
       try {
         job = (await countedApi.claim()).job;
@@ -242,6 +277,11 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
         // The queue hands out a job only with a fresh lease; seeing one we already run means a server bug. Never run it twice.
         log("JOB_DUPLICATE_CLAIM_IGNORED", { jobId: job.id });
         continue;
+      }
+      if (options.expectFilterId && (job.contextType === "price_radar" || job.filterId !== options.expectFilterId)) {
+        await rejectForeignJob(job);
+        outcome = "foreign_job";
+        return;
       }
       summary.claimed += 1;
       outcome = "worked";
@@ -284,21 +324,22 @@ export function budgetLimits(config: CloudConfig): BudgetLimits {
  * the default 20 s that leaves >60 s of slack. After work we look again almost
  * immediately, because more jobs of the same scan usually follow.
  */
-export function nextAlarmDelayMs(summary: Pick<BatchSummary, "outcome" | "stop">, config: Pick<CloudConfig, "idlePollMs" | "onBudgetExhausted">, now: number): number {
+export function nextAlarmDelayMs(summary: Pick<BatchSummary, "outcome" | "stop">, config: Pick<CloudConfig, "idlePollMs" | "onBudgetExhausted">, now: number, idleDelayMs: number = config.idlePollMs): number {
   switch (summary.outcome) {
     case "worked":
     case "subrequest_limit":
     case "claim_window":
     case "max_jobs":
+    case "foreign_job":
       return 1_000;
     case "paused": {
       // fail_jobs keeps polling so each new job gets the explicit diagnostic well within 90 s.
-      if (config.onBudgetExhausted === "fail_jobs") return config.idlePollMs;
+      if (config.onBudgetExhausted === "fail_jobs") return idleDelayMs;
       const untilResume = summary.stop ? Date.parse(summary.stop.resumesAt) - now : config.idlePollMs;
       return Math.max(config.idlePollMs, Math.min(untilResume, 15 * 60_000));
     }
     default:
-      return config.idlePollMs;
+      return idleDelayMs;
   }
 }
 

@@ -50,7 +50,7 @@ function deps(cfg: CloudConfig, provider: BrowserProvider, store: LedgerStore, l
 }
 
 function today(partial: Partial<Ledger>): Ledger {
-  return { day: new Date().toISOString().slice(0, 10), browserMs: 0, sessions: 0, jobsClaimed: 0, jobsCompleted: 0, jobsFailed: 0, jobsRejected: 0, openSession: null, stop: null, ...partial };
+  return { day: new Date().toISOString().slice(0, 10), browserMs: 0, sessions: 0, jobsClaimed: 0, jobsCompleted: 0, jobsFailed: 0, jobsRejected: 0, refusalStreak: 0, openSession: null, stop: null, ...partial };
 }
 
 function requireChromium(t: { skip(message: string): void }): LocalChromium | null {
@@ -322,4 +322,159 @@ test("disabled or misconfigured worker never claims", () => {
   assert.equal(plainHttp.ok, false);
   const tooSlow = loadCloudConfig({ OLX_CLOUD_ENABLED: "1", OLX_WORKER_API_URL: "https://app.example", OLX_WORKER_SECRET: FAKE_SECRET, OLX_CLOUD_IDLE_POLL_SECONDS: "60" });
   assert.equal(tooSlow.ok, false, "an idle poll above 45 s could miss Finder's 90 s claim window");
+});
+
+/** Browser stand-in whose page returns a crafted in-page result (for failures a real page cannot easily produce). */
+function craftedProvider(header: Record<string, unknown>, options: { status?: number } = {}): BrowserProvider & { launches: number } {
+  const page = { title: "t", finalUrl: "https://www.olx.pl/nieruchomosci/", htmlLength: 1, marker: true, challenge: false, domCards: null, stateSource: "inline-script", adsShape: "array", stateError: null, meta: { totalElements: null, visibleTotalCount: null, totalPages: null, pageNumber: null } };
+  const provider = {
+    launches: 0,
+    async launch() {
+      provider.launches += 1;
+      return {
+        sessionId: null,
+        browser: {
+          async newContext() {
+            return {
+              async newPage() {
+                return {
+                  async goto() { return { status: () => options.status ?? 200, ok: () => (options.status ?? 200) < 400 }; },
+                  async evaluate(expression: string) { if (expression === "1 + 1") return 2; return `${JSON.stringify({ rawItems: 0, normalizedItems: 0, warnings: [], verification: null, fixReport: null, error: null, ...header, page: { ...page, ...(header.page as object | undefined) } })}\nnull`; },
+                };
+              },
+              async close() {},
+            };
+          },
+          async close() {},
+        },
+      };
+    },
+  };
+  return provider as BrowserProvider & { launches: number };
+}
+
+test("an unexpected in-page parser failure ends the job explicitly and is never re-parsed in the Worker (CPU limit)", async () => {
+  queue.enqueue({ idempotencyKey: "a" });
+  const lines: string[] = [];
+  const summary = await runBatch(deps(config(), craftedProvider({ error: "TypeError: Cannot read properties of undefined" }), memoryStore(), lines));
+  assert.equal(summary.failed, 1);
+  assert.equal(queue.jobs[0].errorCode, "OLX_CLOUD_IN_PAGE_PARSER_FAILED");
+  assert.match(queue.jobs[0].errorMessage ?? "", /bez parsowania w Workerze/);
+  assert.equal(queue.requests.filter((request) => request.path === "/api/olx-worker/complete").length, 0);
+  assert.doesNotMatch(lines.join("\n"), /FALLBACK/);
+});
+
+test("a Finder parser error keeps its own message (same as the local worker)", async () => {
+  queue.enqueue({ idempotencyKey: "a" });
+  await runBatch(deps(config(), craftedProvider({ error: "OLX_PARSER_SHAPE_CHANGED" }), memoryStore()));
+  assert.equal(queue.jobs[0].errorCode, "OLX_WORKER_ERROR");
+  assert.equal(queue.jobs[0].errorMessage, "OLX_PARSER_SHAPE_CHANGED");
+});
+
+test("a redirect away from olx.pl is not parsed", async () => {
+  queue.enqueue({ idempotencyKey: "a" });
+  await runBatch(deps(config(), craftedProvider({ page: { finalUrl: "https://login.example.com/" } }), memoryStore()));
+  assert.equal(queue.jobs[0].errorCode, "OLX_CLOUD_UNEXPECTED_REDIRECT");
+});
+
+test("automatic pause: repeated OLX refusals stop all fetching for hours, across UTC midnight, with an explicit message", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  for (const key of ["a", "b"]) queue.enqueue({ idempotencyKey: key });
+  const provider = browser.provider(() => ({ status: 403, body: "<title>Forbidden</title>" }));
+  const store = memoryStore();
+  await runBatch(deps(config(), provider, store));
+  assert.deepEqual(queue.jobs.map((job) => job.errorCode), ["OLX_HTTP_403", "OLX_HTTP_403"]);
+  assert.equal(store.value?.stop?.code, "OLX_CLOUD_OLX_ACCESS_PAUSED");
+  assert.match(store.value?.stop?.message ?? "", /OLX odmówił dostępu 2 razy z rzędu \(ostatnio OLX_HTTP_403\)\. .*wstrzymane do/);
+
+  queue.enqueue({ idempotencyKey: "c" });
+  const paused = await runBatch(deps(config(), provider, store));
+  assert.equal(paused.outcome, "paused");
+  assert.equal(provider.stats.olxRequests.length, 2, "no further request to OLX while paused");
+  assert.equal(queue.jobs[2].errorCode, "OLX_CLOUD_OLX_ACCESS_PAUSED");
+
+  // A new UTC day resets the browser budget but not the OLX pause.
+  const yesterday = { ...(store.value as Ledger), day: "2000-01-01" };
+  const { currentLedger } = await import("../src/budget.ts");
+  const carried = currentLedger(yesterday, Date.now(), { dailyBrowserLimitMs: 600_000, safeBrowserBudgetMs: 480_000, scrapeReserveMs: 35_000, sessionMaxMs: 45_000, keepAliveMs: 20_000, maxJobsPerDay: 0 });
+  assert.equal(carried.browserMs, 0);
+  assert.equal(carried.stop?.code, "OLX_CLOUD_OLX_ACCESS_PAUSED");
+});
+
+test("a normal page resets the refusal streak (one isolated refusal does not pause)", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "a", requestUrl: "https://www.olx.pl/forbidden/" });
+  queue.enqueue({ idempotencyKey: "b" });
+  const store = memoryStore();
+  await runBatch(deps(config(), browser.provider((url) => url.includes("forbidden") ? { status: 403, body: "x" } : OK_PAGE()), store));
+  assert.equal(store.value?.refusalStreak, 0);
+  assert.equal(store.value?.stop, null);
+});
+
+test("limited trial guard: an older Radar job or another filter's job is never scraped and the test job is left queued", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  const testFilter = "22222222-2222-4222-8222-222222222222";
+  queue.enqueue({ id: "radar-older", idempotencyKey: "r", contextType: "price_radar" });
+  queue.enqueue({ id: "test-job", idempotencyKey: "t", filterId: testFilter });
+  const provider = browser.provider(OK_PAGE);
+
+  const first = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, expectFilterId: testFilter });
+  assert.equal(first.outcome, "foreign_job");
+  assert.equal(provider.stats.launches, 0, "no browser for a foreign job");
+  assert.equal(queue.jobs[0].errorCode, "OLX_CLOUD_TEST_FOREIGN_JOB");
+  assert.match(queue.jobs[0].errorMessage ?? "", /bez pobierania OLX i bez zapisu ofert/);
+  assert.equal(queue.jobs[1].status, "queued", "claiming stops at the first foreign job");
+
+  const second = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, expectFilterId: testFilter });
+  assert.equal(second.completed, 1);
+  assert.equal(queue.jobs[1].status, "completed");
+});
+
+test("limited trial guard: while paused, a manual run claims nothing at all", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "other" });
+  const summary = await runBatch(deps(config(), browser.provider(OK_PAGE), memoryStore(today({ browserMs: 479_000 }))), { maxJobs: 1, expectFilterId: "22222222-2222-4222-8222-222222222222" });
+  assert.equal(summary.outcome, "paused");
+  assert.equal(queue.requests.length, 0);
+  assert.equal(queue.jobs[0].status, "queued");
+});
+
+test("listing id policy: Finder jobs get OLX's stable id, Radar jobs keep the legacy id (until Radar is migrated)", async (t) => {
+  const browser = requireChromium(t); if (!browser) return;
+  queue.enqueue({ idempotencyKey: "f" });
+  queue.enqueue({ idempotencyKey: "r", contextType: "price_radar" });
+  await runBatch(deps(config(), browser.provider(OK_PAGE), memoryStore()));
+  const id = (index: number) => (queue.jobs[index].completion as { listings: Array<{ externalListingId: string; images: string[] }> }).listings[0];
+  assert.equal(id(0).externalListingId, "913400000");
+  assert.equal(id(1).externalListingId, "mieszkanie-one-pokoje-baluty-CID3-IDLFLS.html");
+  assert.doesNotMatch(id(0).images[0], /%7B/);
+
+  queue.enqueue({ idempotencyKey: "f2" });
+  await runBatch(deps(config({ OLX_CLOUD_LISTING_ID_MODE: "legacy" }), browser.provider(OK_PAGE), memoryStore()));
+  assert.equal(id(2).externalListingId, "mieszkanie-one-pokoje-baluty-CID3-IDLFLS.html");
+});
+
+test("self-test verifies URL, secret and HMAC against the queue API without claiming or changing any job", async () => {
+  queue.enqueue({ idempotencyKey: "untouched" });
+  const env = { OLX_CLOUD_ENABLED: "0", OLX_WORKER_API_URL: queue.url, OLX_WORKER_SECRET: FAKE_SECRET, OLX_CLOUD_ADMIN_TOKEN: "a".repeat(40) };
+  const { runSelfTest } = await import("../src/self-test.ts");
+  const noBrowser = craftedProvider({});
+  const ok = await runSelfTest(env, { withBrowser: false, browser: noBrowser, ledger: memoryStore() });
+  assert.equal((ok.queueApi as { ok: boolean }).ok, true);
+  assert.deepEqual(queue.requests.map((request) => `${request.path}:${request.status}`), ["/api/olx-worker/heartbeat:409"]);
+  assert.equal(queue.jobs[0].status, "queued");
+  assert.equal(queue.jobs[0].attempts, 0);
+  assert.equal(noBrowser.launches, 0);
+  const config = ok.config as Record<string, unknown>;
+  assert.deepEqual({ killSwitch: config.killSwitch, valid: config.valid, workerSecret: config.workerSecret, adminToken: config.adminToken }, { killSwitch: "disabled", valid: true, workerSecret: "set", adminToken: "set" });
+  assert.ok(!JSON.stringify(ok).includes(FAKE_SECRET), "no secret in the self-test output");
+
+  const wrong = await runSelfTest({ ...env, OLX_WORKER_SECRET: "another-secret-that-is-at-least-32-chars" }, { withBrowser: false, browser: noBrowser, ledger: memoryStore() });
+  assert.deepEqual({ ok: (wrong.queueApi as { ok: boolean }).ok, status: (wrong.queueApi as { status: number }).status }, { ok: false, status: 401 });
+
+  const store = memoryStore();
+  const withBrowser = await runSelfTest(env, { withBrowser: true, browser: noBrowser, ledger: store });
+  assert.equal(noBrowser.launches, 1);
+  assert.equal((store.value?.sessions ?? 0), 1, "the blank browser is charged to the daily ledger");
+  assert.ok("browserRun" in withBrowser);
 });

@@ -24,6 +24,7 @@ export type FakeJob = OlxJobState & {
   errorMessage: string | null;
   completion: Record<string, unknown> | null;
   workerId: string | null;
+  filterId: string;
 };
 
 export type FakeQueue = {
@@ -31,7 +32,7 @@ export type FakeQueue = {
   jobs: FakeJob[];
   requests: Array<{ path: string; status: number; body: string }>;
   authFailures: string[];
-  enqueue(input: { id?: string; idempotencyKey: string; requestUrl?: string; contextType?: "finder" | "price_radar"; createdAt?: number }): FakeJob | null;
+  enqueue(input: { id?: string; idempotencyKey: string; requestUrl?: string; contextType?: "finder" | "price_radar"; createdAt?: number; filterId?: string }): FakeJob | null;
   /** Finder's watchdog: a job never claimed within 90 s is failed with OLX_WORKER_CLAIM_TIMEOUT. */
   runUnclaimedWatchdog(now?: number): number;
   /** Simulates the lease being revoked server-side (e.g. Radar run cancelled). */
@@ -73,7 +74,8 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
       const owns = job && job.status === "running" && job.leaseToken === payload.leaseToken && job.workerId === payload.workerId
         && (job.contextType !== "price_radar" || payload.radarLeaseToken === job.radarLeaseToken);
       if (path === "/api/olx-worker/heartbeat") {
-        if (!job || !owns || !heartbeat(job, String(payload.leaseToken), Date.now())) { reply(400, { error: "OLX_JOB_LEASE_NOT_ACTIVE" }); return; }
+        // Production (heartbeatOlxJob → route): 409 OLX_JOB_LEASE_LOST, no row changed.
+        if (!job || !owns || !heartbeat(job, String(payload.leaseToken), Date.now())) { reply(409, { error: "OLX_JOB_LEASE_LOST" }); return; }
         const until = new Date(job.leasedUntil ?? 0).toISOString();
         reply(200, { ok: true, jobLeasedUntil: until, radarLeaseUntil: job.contextType === "price_radar" ? until : null });
         return;
@@ -107,7 +109,7 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
     job.workerId = workerId;
     if (job.contextType === "price_radar") job.radarLeaseToken = randomUUID();
     return {
-      id: job.id, runId: `run-${job.id}`, sourceScanId: job.contextType === "finder" ? `scan-${job.id}` : null, filterId: job.contextType === "finder" ? "filter-1" : null,
+      id: job.id, runId: `run-${job.id}`, sourceScanId: job.contextType === "finder" ? `scan-${job.id}` : null, filterId: job.contextType === "finder" ? job.filterId : null,
       contextType: job.contextType, radarOwnerId: job.contextType === "price_radar" ? "owner-1" : null,
       radarRunLeaseToken: job.radarLeaseToken, radarLeaseUntil: job.contextType === "price_radar" ? new Date(now + LEASE_MS).toISOString() : null,
       requestUrl: job.requestUrl, leaseToken: job.leaseToken, leasedUntil: new Date(job.leasedUntil ?? now).toISOString(), attempts: job.attempts,
@@ -128,7 +130,7 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
       const job: FakeJob = {
         id: input.id ?? randomUUID(), idempotencyKey: input.idempotencyKey, status: "queued", attempts: 0, maxAttempts: 3, leaseToken: null, leasedUntil: null, heartbeatAt: null,
         requestUrl: input.requestUrl ?? DEFAULT_URL, createdAt: input.createdAt ?? Date.now(), contextType: input.contextType ?? "finder", radarLeaseToken: null,
-        errorCode: null, errorMessage: null, completion: null, workerId: null,
+        errorCode: null, errorMessage: null, completion: null, workerId: null, filterId: input.filterId ?? "11111111-1111-4111-8111-111111111111",
       };
       const next = enqueueUnique(enqueued, job);
       if (next.length === enqueued.length) return null;

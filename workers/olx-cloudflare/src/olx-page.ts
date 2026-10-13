@@ -1,5 +1,6 @@
 import { isOlxChallengeHtml, parseOlxHtml, type OlxParseResult } from "../../../features/flip-finder/olx-parser.ts";
 import type { PropertySourceListing } from "../../../features/properties/types/property.ts";
+import { applyListingFixes, type ListingFixOptions, type ListingFixReport } from "./listing-fixes.ts";
 
 /**
  * OLX page → Finder listings, with as little Worker CPU as possible.
@@ -19,7 +20,7 @@ import type { PropertySourceListing } from "../../../features/properties/types/p
  *   3. the page returns one string: a small JSON header, a newline, and the
  *      listings JSON, which the Worker forwards to /complete without parsing it.
  *
- * The same functions run in Node for tests and as the Worker-side fallback.
+ * The same functions run in Node for tests (the Worker never parses listings).
  */
 
 export type ExtractedOlxPage = {
@@ -178,15 +179,21 @@ export function verifyOlxResult(page: ExtractedOlxPage, parsed: OlxParseResult):
   return { rawItems: parsed.rawItems, normalizedItems: n, uniqueIds, domCards: page.domCards, meta: page.meta, coverage, warnings };
 }
 
-/** Parser input for an extracted page. Throws the same codes as the Finder parser for a missing or changed state. */
-export function parseExtractedPage(page: ExtractedOlxPage): { parsed: OlxParseResult; verification: OlxVerification } {
+/**
+ * Parser input for an extracted page. Throws the same codes as the Finder
+ * parser for a missing or changed state. Cloud fixes (stable id, image sizes)
+ * are applied before verification, so duplicate checks see the final ids.
+ */
+export function parseExtractedPage(page: ExtractedOlxPage, fixes: ListingFixOptions = { idMode: "legacy" }): { parsed: OlxParseResult; verification: OlxVerification; fixReport: ListingFixReport } {
   if (page.stateError === "OLX_STATE_JSON_INVALID") throw new Error("OLX: niepoprawny JSON PRERENDERED_STATE.");
   if (!page.marker && page.adsJson === null) throw new Error("OLX: brak PRERENDERED_STATE.");
   if (page.adsJson === null) throw new Error("OLX_PARSER_SHAPE_CHANGED");
   const parsed = withQuietParserLog(() => parseOlxHtml(buildStateEnvelope(page.adsJson as string)));
+  const fixReport = applyListingFixes(parsed.listings as PropertySourceListing[], fixes);
   const verification = verifyOlxResult(page, parsed);
+  if (fixReport.imagesUnresolved > 0) verification.warnings.push(`OLX_CLOUD_IMAGE_TEMPLATE_UNRESOLVED: ${fixReport.imagesUnresolved} adresów zdjęć z nierozwiązanym szablonem rozmiaru.`);
   // Finder keeps at most 20 warnings per scan; parser warnings go first.
-  return { parsed: { ...parsed, warnings: [...parsed.warnings, ...verification.warnings].slice(0, 20) }, verification };
+  return { parsed: { ...parsed, warnings: [...parsed.warnings, ...verification.warnings].slice(0, 20) }, verification, fixReport };
 }
 
 /**
@@ -217,31 +224,37 @@ export type InPageHeader = {
   normalizedItems: number;
   warnings: string[];
   verification: OlxVerification | null;
-  /** Parser error (same messages as the Finder parser), or an unexpected in-page failure. */
+  fixReport: ListingFixReport | null;
+  /** Parser error (same messages as the Finder parser) or an unexpected in-page failure; the listings part is then "null". */
   error: string | null;
-  /** True when the in-page parser failed unexpectedly: the second part then carries the raw ads for a Worker-side parse. */
-  fallback: boolean;
 };
 
-const PARSER_ERRORS = /^(OLX:|OLX_PARSER_SHAPE_CHANGED)/;
+export type InPageOptions = ListingFixOptions;
 
 /**
- * Runs inside the page. Returns `header JSON + "\n" + listings JSON` (or, on
- * an unexpected failure, the raw ads JSON for the Worker-side fallback).
+ * Runs inside the page. Returns `header JSON + "\n" + listings JSON`.
  * JSON.stringify never emits a raw newline, so the first one is the separator.
+ * There is deliberately no Worker-side fallback: parsing a page in the Worker
+ * costs ~8–12 ms CPU, above the Workers Free per-invocation limit, and an
+ * invocation killed for CPU would take its held jobs down with it.
  */
-export function processExtractedPage(page: ExtractedOlxPage): string {
-  const { adsJson, ...meta } = page;
+export function processExtractedPage(page: ExtractedOlxPage, options: InPageOptions = { idMode: "legacy" }): string {
+  const { adsJson: _adsJson, ...meta } = page;
+  void _adsJson;
   try {
-    const { parsed, verification } = parseExtractedPage(page);
-    const header: InPageHeader = { page: meta, rawItems: parsed.rawItems, normalizedItems: parsed.normalizedItems, warnings: parsed.warnings, verification, error: null, fallback: false };
+    const { parsed, verification, fixReport } = parseExtractedPage(page, options);
+    const header: InPageHeader = { page: meta, rawItems: parsed.rawItems, normalizedItems: parsed.normalizedItems, warnings: parsed.warnings, verification, fixReport, error: null };
     return `${JSON.stringify(header)}\n${JSON.stringify(parsed.listings)}`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const known = PARSER_ERRORS.test(message);
-    const header: InPageHeader = { page: meta, rawItems: 0, normalizedItems: 0, warnings: [], verification: null, error: message.slice(0, 300), fallback: !known && adsJson !== null };
-    return `${JSON.stringify(header)}\n${header.fallback ? adsJson : "null"}`;
+    const header: InPageHeader = { page: meta, rawItems: 0, normalizedItems: 0, warnings: [], verification: null, fixReport: null, error: message.slice(0, 300) };
+    return `${JSON.stringify(header)}\nnull`;
   }
+}
+
+/** Finder parser messages (the page itself is not what we expect) vs. anything else (a defect of the in-page pipeline). */
+export function isParserError(message: string): boolean {
+  return /^(OLX:|OLX_PARSER_SHAPE_CHANGED)/.test(message);
 }
 
 export function decodeInPageResult(text: unknown): { header: InPageHeader; second: string } {

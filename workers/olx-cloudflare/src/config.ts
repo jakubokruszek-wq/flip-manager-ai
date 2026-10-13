@@ -7,14 +7,33 @@
  */
 
 export type BudgetExhaustedPolicy = "fail_jobs" | "leave_queued";
+/**
+ * manual: nothing is claimed by the alarm or the Cron Trigger; only an operator
+ * call to /run-once?filterId=… claims exactly one job (the limited trial).
+ * auto: the alarm polls the queue (normal operation).
+ */
+export type ClaimMode = "manual" | "auto";
+/**
+ * stable_finder: Finder jobs get OLX's stable numeric id; Radar jobs keep the
+ * parser's legacy id until Radar's stored ids are migrated (see docs).
+ * stable_all: both. legacy: exactly what the local worker sends.
+ */
+export type ListingIdPolicy = "stable_finder" | "stable_all" | "legacy";
 
 export type CloudConfig = {
   enabled: boolean;
   apiUrl: URL;
   secret: string;
   workerId: string;
-  /** Idle claim interval driven by the Durable Object alarm. */
+  claimMode: ClaimMode;
+  listingIdPolicy: ListingIdPolicy;
+  /** First idle claim interval driven by the Durable Object alarm (after work or a fresh start). */
   idlePollMs: number;
+  /** Idle interval after repeated empty claims (doubling from idlePollMs). */
+  idlePollMaxMs: number;
+  /** Consecutive OLX refusals (403/405/429/verification) that pause the worker. */
+  refusalPauseThreshold: number;
+  refusalPauseMs: number;
   /** Cloudflare's own daily Browser Run allowance on the current plan. */
   dailyBrowserLimitMs: number;
   /** Our self-imposed ceiling, kept below the plan allowance. */
@@ -60,6 +79,36 @@ export function loadCloudConfig(environment: Environment): ConfigResult {
   if (stringValue(environment.OLX_CLOUD_ENABLED) !== "1") {
     return { ok: false, code: "OLX_CLOUD_DISABLED", message: "OLX_CLOUD_ENABLED nie jest ustawione na \"1\" — worker nie odbiera zadań." };
   }
+  return parseCloudConfig(environment);
+}
+
+/**
+ * Read-only configuration check for /status, independent of the kill switch,
+ * so a disabled deployment can be verified before anything is enabled.
+ * Reports presence and validity only — never values of secrets.
+ */
+export function checkCloudConfig(environment: Environment): Record<string, unknown> {
+  const parsed = parseCloudConfig(environment);
+  const secret = stringValue(environment.OLX_WORKER_SECRET);
+  const admin = stringValue(environment.OLX_CLOUD_ADMIN_TOKEN);
+  let apiHost: string | null = null;
+  try { apiHost = new URL(stringValue(environment.OLX_WORKER_API_URL)).host; } catch { apiHost = null; }
+  const warnings: string[] = [];
+  if (parsed.ok && parsed.config.dailyBrowserLimitMs > FREE_PLAN_DAILY_BROWSER_MS) warnings.push("OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS > 600: wymaga planu Workers Paid.");
+  if (parsed.ok && parsed.config.claimMode === "auto") warnings.push("Tryb auto: alarm odbiera wszystkie zadania OLX (Finder i Radar).");
+  return {
+    killSwitch: stringValue(environment.OLX_CLOUD_ENABLED) === "1" ? "enabled" : "disabled",
+    valid: parsed.ok,
+    problem: parsed.ok ? null : parsed.message,
+    apiHost,
+    workerSecret: secret ? (secret.length >= 32 ? "set" : "too_short") : "missing",
+    adminToken: admin ? (admin.length >= 32 ? "set" : "too_short") : "missing",
+    warnings,
+  };
+}
+
+/** Validates every setting except the kill switch (used by /status and /selftest). */
+export function parseCloudConfig(environment: Environment): ConfigResult {
   try {
     const apiUrl = new URL(required(environment, "OLX_WORKER_API_URL"));
     if (apiUrl.protocol !== "https:" && apiUrl.hostname !== "localhost" && apiUrl.hostname !== "127.0.0.1") throw new Error("OLX_WORKER_API_URL must use HTTPS.");
@@ -77,6 +126,14 @@ export function loadCloudConfig(environment: Environment): ConfigResult {
     // 90 s is Finder's unclaimed-job watchdog. The idle interval must leave room
     // for the claim round trip and a delayed alarm, hence the 45 s ceiling.
     const idlePollMs = seconds(environment, "OLX_CLOUD_IDLE_POLL_SECONDS", 20, 10, 45);
+    const idlePollMaxMs = seconds(environment, "OLX_CLOUD_IDLE_POLL_MAX_SECONDS", 40, 10, 45);
+    if (idlePollMaxMs < idlePollMs) throw new Error("OLX_CLOUD_IDLE_POLL_MAX_SECONDS cannot be lower than OLX_CLOUD_IDLE_POLL_SECONDS.");
+    const refusalPauseThreshold = integer(environment, "OLX_CLOUD_REFUSAL_PAUSE_THRESHOLD", 2, 1, 10);
+    const refusalPauseMs = integer(environment, "OLX_CLOUD_REFUSAL_PAUSE_HOURS", 6, 1, 72) * 3_600_000;
+    const claimMode = stringValue(environment.OLX_CLOUD_CLAIM_MODE) || "manual";
+    if (claimMode !== "manual" && claimMode !== "auto") throw new Error("OLX_CLOUD_CLAIM_MODE must be manual or auto.");
+    const listingIdPolicy = stringValue(environment.OLX_CLOUD_LISTING_ID_MODE) || "stable_finder";
+    if (listingIdPolicy !== "stable_finder" && listingIdPolicy !== "stable_all" && listingIdPolicy !== "legacy") throw new Error("OLX_CLOUD_LISTING_ID_MODE must be stable_finder, stable_all or legacy.");
     const keepAliveMs = seconds(environment, "OLX_CLOUD_KEEP_ALIVE_SECONDS", 20, 10, 60);
     const maxJobsPerDay = integer(environment, "OLX_CLOUD_MAX_JOBS_PER_DAY", 0, 0, 10_000);
     const maxHeldJobs = integer(environment, "OLX_CLOUD_MAX_HELD_JOBS", 2, 1, 5);
@@ -86,7 +143,7 @@ export function loadCloudConfig(environment: Environment): ConfigResult {
     return {
       ok: true,
       config: {
-        enabled: true, apiUrl, secret, workerId, idlePollMs, dailyBrowserLimitMs, safeBrowserBudgetMs, sessionMaxMs, scrapeReserveMs, keepAliveMs,
+        enabled: stringValue(environment.OLX_CLOUD_ENABLED) === "1", apiUrl, secret, workerId, claimMode, listingIdPolicy, idlePollMs, idlePollMaxMs, refusalPauseThreshold, refusalPauseMs, dailyBrowserLimitMs, safeBrowserBudgetMs, sessionMaxMs, scrapeReserveMs, keepAliveMs,
         maxJobsPerDay, maxHeldJobs, maxJobsPerInvocation, onBudgetExhausted: policy,
         blockHeavyResources: stringValue(environment.OLX_CLOUD_BLOCK_HEAVY_RESOURCES) !== "0",
         pageJavaScript: stringValue(environment.OLX_CLOUD_PAGE_JAVASCRIPT) === "1",

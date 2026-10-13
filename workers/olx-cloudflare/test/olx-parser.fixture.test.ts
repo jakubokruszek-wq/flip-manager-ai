@@ -10,14 +10,22 @@ import vm from "node:vm";
 
 import { isOlxChallengeHtml, parseOlxHtml } from "../../../features/flip-finder/olx-parser.ts";
 import { inPageExpression } from "../src/in-page-expression.ts";
-import { buildStateEnvelope, decodeExtractedPage, decodeInPageResult, extractionExpression, parseExtractedPage, processExtractedPage, verifyOlxResult, type ExtractedOlxPage } from "../src/olx-page.ts";
+import { buildStateEnvelope, decodeExtractedPage, decodeInPageResult, extractionExpression, isParserError, parseExtractedPage, processExtractedPage, verifyOlxResult, type ExtractedOlxPage } from "../src/olx-page.ts";
 import { rawListings, rawListingsJson } from "../src/raw-listings.ts";
+import { applyListingFixes, DEFAULT_IMAGE_SIZE, stableOlxId } from "../src/listing-fixes.ts";
 import { buildChallengePage, buildOlxListingPage, fixtureAds } from "./fixtures/generate-olx-fixture.ts";
 import { localChromium, type LocalChromium } from "./helpers/local-chromium.ts";
 
 const FIXTURE = readFileSync(new URL("./fixtures/olx-lodz-sprzedaz.sample.html", import.meta.url), "utf8");
 const OLX_URL = "https://www.olx.pl/nieruchomosci/mieszkania/sprzedaz/lodz/";
 console.info = () => undefined; // the Finder parser's shape probe
+
+/** The full-page Finder parse plus the cloud corrections: what the in-page pipeline must reproduce. */
+function fixedListings(idMode: "stable" | "legacy") {
+  const listings = parseOlxHtml(FIXTURE).listings;
+  applyListingFixes(listings, { idMode });
+  return listings;
+}
 
 let chromium: LocalChromium | null = null;
 before(async () => { chromium = await localChromium(); });
@@ -119,7 +127,7 @@ test("in a real browser: extraction returns only the ads, matching the full-page
   assert.ok((extracted.adsJson?.length ?? 0) < extracted.htmlLength / 2, `ads ${extracted.adsJson?.length} vs html ${extracted.htmlLength}`);
 
   const { parsed, verification } = parseExtractedPage(extracted);
-  assert.deepEqual(parsed.listings, parseOlxHtml(FIXTURE).listings);
+  assert.deepEqual(parsed.listings, fixedListings("legacy"));
   assert.deepEqual(verification.warnings, []);
 });
 
@@ -151,9 +159,9 @@ test("decodeExtractedPage rejects anything but the extraction's JSON string", ()
 
 test("in a real browser: the full in-page pipeline (bundled Finder parser) returns the same listings, with and without page JavaScript", async (t) => {
   if (!chromium) return t.skip("local Chromium unavailable");
-  const expected = parseOlxHtml(FIXTURE).listings;
+  const expected = fixedListings("stable");
   for (const javaScriptEnabled of [false, true]) {
-    const text = await chromium.evaluate(OLX_URL, FIXTURE, inPageExpression(), { javaScriptEnabled });
+    const text = await chromium.evaluate(OLX_URL, FIXTURE, inPageExpression({ idMode: "stable" }), { javaScriptEnabled });
     const { header, second } = decodeInPageResult(text);
     assert.equal(header.error, null);
     assert.equal(header.rawItems, 40);
@@ -172,11 +180,11 @@ test("in a real browser: the page is left without globals from the pipeline", as
   assert.equal(leaked, "undefined,undefined");
 });
 
-test("in-page parser errors keep the Finder parser's messages; only unexpected failures ask for a Worker fallback", () => {
+test("in-page parser errors keep the Finder parser's messages and never ship raw ads to the Worker", () => {
   const meta = { title: "", finalUrl: OLX_URL, htmlLength: 1, marker: true, challenge: false, domCards: null, stateSource: "inline-script" as const, adsShape: "object", stateError: null, meta: { totalElements: null, visibleTotalCount: null, totalPages: null, pageNumber: null } };
   const reshaped = decodeInPageResult(processExtractedPage({ ...meta, adsJson: null }));
   assert.equal(reshaped.header.error, "OLX_PARSER_SHAPE_CHANGED");
-  assert.equal(reshaped.header.fallback, false);
+  assert.equal(isParserError(String(reshaped.header.error)), true);
   assert.equal(reshaped.second, "null");
   const ok = decodeInPageResult(processExtractedPage({ ...meta, adsShape: "array", adsJson: JSON.stringify(fixtureAds()) }));
   assert.equal(ok.header.normalizedItems, 40);
@@ -195,4 +203,59 @@ test("raw listings are never silently serialised as an empty array", () => {
   assert.throws(() => JSON.stringify({ listings: holder }), /OLX_CLOUD_RAW_LISTINGS_REQUIRE_RAW_COMPLETE/);
   assert.throws(() => rawListings("null"), /OLX_CLOUD_LISTINGS_JSON_INVALID/);
   assert.equal(rawListingsJson([]), null);
+});
+
+test("stable id: a title edit (new slug URL) keeps the same id; the legacy parser id changes", () => {
+  const before = fixtureAds();
+  const after = fixtureAds().map((ad, index) => index === 2 ? { ...ad, title: "Nowy tytuł po edycji", url: "https://www.olx.pl/d/oferta/nowy-tytul-po-edycji-CID3-IDLFLU.html" } : ad);
+  const parse = (ads: unknown[], idMode: "stable" | "legacy") => {
+    const { listings } = parseOlxHtml(buildStateEnvelope(JSON.stringify(ads)));
+    applyListingFixes(listings, { idMode });
+    return listings[2];
+  };
+  const legacyBefore = parse(before, "legacy");
+  const legacyAfter = parse(after, "legacy");
+  assert.notEqual(legacyBefore.externalListingId, legacyAfter.externalListingId, "legacy id is the URL slug and changes with the title");
+
+  const stableBefore = parse(before, "stable");
+  const stableAfter = parse(after, "stable");
+  assert.equal(stableBefore.externalListingId, "913400002");
+  assert.equal(stableAfter.externalListingId, "913400002");
+  assert.equal(stableAfter.title, "Nowy tytuł po edycji");
+  // Only the id changes: URL, content hash and raw payload stay what the Finder parser produced.
+  assert.equal(stableAfter.originalUrl, legacyAfter.originalUrl);
+  assert.equal(stableAfter.contentHash, legacyAfter.contentHash);
+  assert.deepEqual(stableAfter.rawPayload, legacyAfter.rawPayload);
+});
+
+test("stable id sources: numeric id, numeric string, string id kept as the parser does, then the URL ID token", () => {
+  assert.equal(stableOlxId({ id: 913400002 }), "913400002");
+  assert.equal(stableOlxId({ id: " 913400002 " }), "913400002");
+  assert.equal(stableOlxId({ id: "13Ab07" }), "13Ab07");
+  assert.equal(stableOlxId({ url: "https://www.olx.pl/d/oferta/inny-slug-CID3-ID13AbCd.html?reason=x" }), "ID13AbCd");
+  assert.equal(stableOlxId({ id: -1, url: "https://www.olx.pl/d/oferta/bez-tokenu.html" }), null);
+  const ids = fixedListings("stable").map((item) => item.externalListingId);
+  assert.equal(new Set(ids).size, 40);
+  assert.ok(ids.every((id) => /^(\d+|13Ab07)$/.test(id)), ids.join(","));
+});
+
+test("images: the {width}x{height} template is replaced by the photo's own size, never left URL-encoded", () => {
+  const listings = fixedListings("legacy");
+  const raw = parseOlxHtml(FIXTURE).listings;
+  assert.match(raw[0].images?.[0] ?? "", /%7Bwidth%7Dx%7Bheight%7D/, "the Finder parser alone keeps the encoded template");
+  for (const listing of listings) {
+    for (const image of [...(listing.images ?? []), listing.thumbnailUrl ?? ""]) {
+      assert.doesNotMatch(image, /%7B|%7D|\{|\}/);
+      assert.equal(new URL(image).protocol, "https:");
+    }
+    assert.equal(listing.thumbnailUrl, listing.images?.[0]);
+  }
+  assert.equal(listings[0].images?.[0], "https://ireland.apollo.olxcdn.com/v1/files/fixture-913400000-a/image;s=1200x900");
+  assert.equal(listings[0].images?.length, 2);
+
+  const noSize = fixtureAds().slice(0, 1).map((ad) => ({ ...ad, photos: [{ link: "https://ireland.apollo.olxcdn.com:443/v1/files/abc/image;s={width}x{height}" }] }));
+  const { listings: [single] } = parseOlxHtml(buildStateEnvelope(JSON.stringify(noSize)));
+  const report = applyListingFixes([single], { idMode: "legacy" });
+  assert.equal(single.images?.[0], `https://ireland.apollo.olxcdn.com/v1/files/abc/image;s=${DEFAULT_IMAGE_SIZE}`);
+  assert.deepEqual(report, { stableIds: 0, legacyIdsKept: 0, imagesResolved: 1, imagesUnresolved: 0 });
 });
