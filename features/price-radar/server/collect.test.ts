@@ -1481,3 +1481,103 @@ test("with parallel lanes a stalled portal is still closed after the no-progress
   assert.equal(result!.sourceStatuses.allegro_lokalnie, "failed");
   assert.match(result!.sourceErrors.allegro_lokalnie ?? "", /^RADAR_SOURCE_NO_PROGRESS_LIMIT:/u);
 });
+
+test("STOP during parallel lanes leaves a resumable partial run; resuming finishes it without duplicates", async () => {
+  const db = fakeDb();
+  let stopNow = false;
+  const pagesRead: Record<string, number[]> = {};
+  fakeSourceImpl = async (id, cursor, batches) => {
+    for (let page = cursor ?? 1; page <= 3; page += 1) {
+      (pagesRead[id] ??= []).push(page);
+      if (stopNow && !db.tables.price_radar_runs[0]!.stop_requested_at) db.tables.price_radar_runs[0]!.stop_requested_at = new Date().toISOString();
+      await batches!.onBatch({ listings: [qualifyingListing(`${id}-p${page}`, id)], warnings: [], fetched: 1 }, page < 3 ? page + 1 : null);
+      if (id === "domiporta" && page === 1) stopNow = true;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon", "allegro_lokalnie", "adresowo"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  const timing = { ...RADAR_PORTION_TIMING, parallelSources: 3 };
+  const stopped = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never, timing);
+  const row = db.tables.price_radar_runs[0]!;
+  assert.equal(stopped.status, "partial");
+  assert.equal(row.error_message, "RADAR_STOPPED_BY_OPERATOR");
+  assert.ok(Object.values(row.source_statuses as Record<string, string>).every((status) => status !== "running"), "no source is left marked as running after STOP");
+  // A batch already written when STOP landed is not counted yet: its cursor
+  // stays on the previous batch and the idempotent replay counts it once.
+  assert.ok(Number(row.qualified_count) <= db.tables.price_radar_listings.length);
+
+  const resumed = await resumeExistingRadarRun(ownerId, claimed.run.id, db as never);
+  assert.equal(resumed.kind, "claimed", "the operator can resume the same stopped run");
+  if (resumed.kind !== "claimed") return;
+  stopNow = false;
+  let result;
+  for (let portion = 0; portion < 3; portion += 1) {
+    result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: resumed.run.leaseToken! }, db as never, timing);
+    if (result.status !== "running") break;
+  }
+  assert.equal(result!.status, "completed");
+  assert.equal(result!.scannedCount, 12, "4 portals x 3 pages, no offer counted twice across STOP and resume");
+  assert.equal(result!.qualifiedCount, db.tables.price_radar_listings.length, "every qualified offer is saved exactly once, no duplicates");
+  assert.deepEqual(db.tables.price_radar_listings.map((listing) => listing.external_listing_id).sort(), ["domiporta-p1", "domiporta-p2", "domiporta-p3", "morizon-p1", "morizon-p2", "morizon-p3"]);
+  assert.equal(db.tables.price_radar_runs.length, 1);
+});
+
+test("a crash between coalesced checkpoints replays only uncheckpointed work: no double counting and no duplicate offers", async () => {
+  const db = fakeDb();
+  // Like Supabase, store a serialized copy of each checkpoint, not the live object.
+  const rpc = db.rpc.bind(db);
+  db.rpc = async (name: string, args: Row) => rpc(name, name === "checkpoint_price_radar_run" ? { ...args, p_checkpoint: structuredClone(args.p_checkpoint) } : args);
+  let snapshot: Row | null = null;
+  fakeSourceImpl = async (id, cursor, batches) => {
+    for (let page = cursor ?? 1; page <= 4; page += 1) {
+      // The process "dies" here on page 3 of Morizon: everything written to
+      // the run row after this instant is lost, committed offers stay.
+      if (id === "morizon" && page === 3 && !snapshot) snapshot = structuredClone(db.tables.price_radar_runs[0]!);
+      await batches!.onBatch({ listings: [qualifyingListing(`${id}-p${page}`, id)], warnings: [], fetched: 1 }, page < 4 ? page + 1 : null);
+    }
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["morizon", "domiporta"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  const timing = { ...RADAR_PORTION_TIMING, parallelSources: 2, checkpointIntervalMs: 60_000 };
+  await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never, timing);
+  assert.ok(snapshot, "the crash point was reached");
+  const listingsBeforeReplay = db.tables.price_radar_listings.length;
+  // Restore the run row as it was at the crash, with an expired lease.
+  db.tables.price_radar_runs[0] = { ...(snapshot as unknown as Row), lease_until: new Date(Date.now() - 1_000).toISOString() };
+  const resumed = await resumeExistingRadarRun(ownerId, claimed.run.id, db as never);
+  assert.equal(resumed.kind, "claimed");
+  if (resumed.kind !== "claimed") return;
+  let result;
+  for (let portion = 0; portion < 3; portion += 1) {
+    result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: resumed.run.leaseToken! }, db as never, timing);
+    if (result.status !== "running") break;
+  }
+  assert.equal(result!.status, "completed");
+  assert.equal(db.tables.price_radar_listings.length, 8, "replayed offers are upserted, never duplicated");
+  assert.equal(listingsBeforeReplay, 8, "offers committed before the crash were kept");
+  assert.equal(result!.scannedCount, 8, "counters restart from the checkpoint together with the cursor, so nothing is counted twice");
+  assert.equal(result!.qualifiedCount, 8);
+});
+
+test("every unfinished portal gets processing time even when all of them have much more work than one portion", async () => {
+  const db = fakeDb();
+  const calls: Record<string, number> = {};
+  fakeSourceImpl = async (id, cursor, batches) => {
+    calls[id] = (calls[id] ?? 0) + 1;
+    const page = cursor ?? 1;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await batches!.onBatch({ listings: [qualifyingListing(`${id}-p${page}`, id)], warnings: [], fetched: 1 }, page + 1);
+    throw new SourceBatchYield("detail_batch_limit");
+  };
+  const sources = ["domiporta", "morizon", "oferty_net", "adresowo", "allegro_lokalnie"];
+  const claimed = await claimOrCreateRadarRun(ownerId, sources as never, db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  const timing = { ...RADAR_PORTION_TIMING, parallelSources: 3, portionBudgetMs: 400, yieldMarginMs: 80, minSliceMs: 60, detailReserveMs: 20 };
+  await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never, timing);
+  for (const source of sources) assert.ok((calls[source] ?? 0) >= 1, `${source} got a turn in the very first portion`);
+  const progress = (db.tables.price_radar_runs[0]!.checkpoint as { progress: { metrics: { sources: Record<string, { fetched: number }> } } }).progress;
+  for (const source of sources) assert.ok(progress.metrics.sources[source]!.fetched >= 1, `${source} made progress`);
+});

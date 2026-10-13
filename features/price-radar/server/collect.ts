@@ -411,8 +411,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       if (candidate === "olx" || attemptedSourceIds.has(candidate) || sourceFinished(checkpoint, candidate)) continue;
       return candidate;
     }
-    const resumable = resumableThisPortion.shift();
-    if (resumable) return resumable;
+    while (resumableThisPortion.length) {
+      const resumable = resumableThisPortion.shift()!;
+      if (!sourceFinished(checkpoint, resumable) && !activeHttpLanes.has(resumable)) return resumable;
+    }
     const httpLeft = checkpoint.sourceQueue.some((candidate) => candidate !== "olx" && !sourceFinished(checkpoint, candidate));
     if (!httpLeft && activeHttpLanes.size === 0 && checkpoint.sourceQueue.includes("olx") && !attemptedSourceIds.has("olx") && !sourceFinished(checkpoint, "olx")) return "olx";
     return null;
@@ -422,7 +424,9 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       if (Date.now() >= portionYieldAt || userTerminationDetected || operatorStopDetected) return;
       // Bounded run: past the active HTTP limit every unfinished portal ends
       // as honestly reported partial coverage; OLX (its own worker) follows.
-      if (closeHttpSourcesPastTimeLimit(checkpoint, metrics, Date.now() - started, timing.httpRunLimitMs)) await save("running");
+      // A portal another lane is reading right now is closed by that lane's
+      // next check, never under its feet (it still owns status and cursor).
+      if (closeHttpSourcesPastTimeLimit(checkpoint, metrics, Date.now() - started, timing.httpRunLimitMs, activeHttpLanes)) await save("running");
       const sourceId = pickNextSource();
       if (!sourceId) return;
       // Claimed synchronously, before any await, so no other lane takes it.
@@ -502,10 +506,10 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
           const batchStartedAt = Date.now();
           await ensureRunStillOwned();
-          if (Date.now() >= portionYieldAt) {
-            controller.abort();
-            throw new Error("RADAR_PORTION_BUDGET_YIELD");
-          }
+          // Past this portion's end only this lane gives its turn back; the
+          // shared abort would also cut other lanes' in-flight requests. The
+          // uncommitted batch is read again from the same cursor next time.
+          if (Date.now() >= portionYieldAt) throw new SourceBatchYield("portion_budget");
           emittedBatches = true;
           const batchRejectionReasons = [...(batch.rejectionReasons ?? [])];
           let batchQualified = 0;
@@ -1047,9 +1051,9 @@ function finishPortionMetrics(checkpoint: RadarCheckpoint, metrics: RadarRunMetr
 }
 
 /** Ends every unfinished HTTP portal once the run's active HTTP time is used up. */
-function closeHttpSourcesPastTimeLimit(checkpoint: RadarCheckpoint, metrics: RadarRunMetrics, elapsedThisPortionMs: number, limitMs: number): boolean {
+function closeHttpSourcesPastTimeLimit(checkpoint: RadarCheckpoint, metrics: RadarRunMetrics, elapsedThisPortionMs: number, limitMs: number, inUse: ReadonlySet<RadarSource> = new Set()): boolean {
   if (metrics.httpActiveMs + elapsedThisPortionMs < limitMs) return false;
-  const open = checkpoint.sourceQueue.filter((source) => source !== "olx" && !sourceFinished(checkpoint, source));
+  const open = checkpoint.sourceQueue.filter((source) => source !== "olx" && !inUse.has(source) && !sourceFinished(checkpoint, source));
   if (!open.length) return false;
   const minutes = Math.round(limitMs / 60_000);
   for (const source of open) {
@@ -1058,7 +1062,7 @@ function closeHttpSourcesPastTimeLimit(checkpoint: RadarCheckpoint, metrics: Rad
     checkpoint.sourceErrors[source] = `${RADAR_HTTP_TIME_LIMIT_ERROR}: przekroczono limit ${minutes} min aktywnej pracy portali HTTP w tym przebiegu; zapisane wyniki zachowano.`;
     checkpoint.perSourceCursor[source] = SOURCE_DONE_CURSOR;
   }
-  metrics.httpFinishedAt ??= new Date().toISOString();
+  if (!inUse.size) metrics.httpFinishedAt ??= new Date().toISOString();
   return true;
 }
 

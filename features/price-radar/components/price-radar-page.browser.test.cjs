@@ -442,6 +442,9 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   await page.getByRole("button", { name: "Zatrzymaj" }).first().click();
   const stoppingButtons = page.getByRole("button", { name: "Zatrzymywanie…" });
   await stoppingButtons.first().waitFor();
+  // The stop button switches at once; the start button follows when the
+  // server's stop-requested state arrives a moment later.
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].filter((button) => button.textContent === "Zatrzymywanie…").length === 2);
   assert.equal(await stoppingButtons.count(), 2, "the run controls reflect the same pending stop request");
   assert.deepEqual(await stoppingButtons.evaluateAll((buttons) => buttons.map((button) => (button).disabled)), [true, true], "a pending stop cannot be submitted twice");
   assert.equal(runPosts().length, 3);
@@ -456,7 +459,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Wznów zatrzymany przebieg" }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Zakończ przebieg" }).count(), 1, "a paused-but-resumable run also offers permanent end separately from STOP");
-  assert.ok(await page.getByText(/Zatrzymany/).count(), "the acknowledged backend state is rendered as stopped");
+  assert.ok(await page.getByText(/Zatrzymano/).count(), "the acknowledged backend state is rendered as stopped");
   const postsBeforeStoppedRefresh = runPosts().length;
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Wznów zatrzymany przebieg" }).waitFor();
