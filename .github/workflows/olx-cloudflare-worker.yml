@@ -14,6 +14,10 @@ on:
       - "features/flip-finder/listing-attribute-extraction.ts"
       - "features/flip-finder/identity-evidence.ts"
       - "features/flip-finder/server/olx-images.ts"
+      - "features/flip-finder/server/olx-selective-claim.ts"
+      - "features/flip-finder/server/olx-selective-claim.test.ts"
+      - "app/api/olx-worker/**"
+      - "supabase/migrations/20261013150000_add_selective_olx_claim.sql"
       - "features/flip-finder/otodom-search.ts"
       - ".github/workflows/olx-cloudflare-worker.yml"
 
@@ -47,6 +51,11 @@ jobs:
       - name: Tests
         working-directory: workers/olx-cloudflare
         run: npm test
+      - name: Selective claim payload (app route helper)
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --test features/flip-finder/server/olx-selective-claim.test.ts
       - name: Wrangler dry-run bundle (no deploy)
         working-directory: workers/olx-cloudflare
         run: npx wrangler deploy --dry-run --outdir dist
+      - name: Wrangler dry-run of the separate stage-1 test Worker (no deploy)
+        working-directory: workers/olx-cloudflare
+        run: npx wrangler deploy --dry-run --outdir dist-stage1 --config wrangler.stage1.toml

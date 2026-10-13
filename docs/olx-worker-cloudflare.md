@@ -5,7 +5,8 @@ Lokalny worker Windows (`workers/olx-browser`) i wariant Railway (PR #3) pozosta
 warianty awaryjne. Railway nie jest wdrażany.
 
 > Status: **nie wdrożono**. Wdrożenie przebiega etapami, każdy wymaga zatwierdzenia:
-> 1. **Etap 1 — wyłącznie testowy.** `OLX_CLOUD_ENABLED=0`, zero pobierania zadań. Instrukcja:
+> 1. **Etap 1 — wyłącznie testowy, osobny Worker `flip-manager-olx-cloud-stage1`** (istniejący
+>    `flip-manager-olx-cloud` nietknięty). Zero pobierania zadań. Instrukcja:
 >    [`olx-worker-cloudflare-etap1.md`](olx-worker-cloudflare-etap1.md).
 > 2. **Etap 2 — ograniczony test produkcyjny.** Tryb `manual`, jedno zadanie jednego filtra (§6).
 > 3. **Etap 3 — praca ciągła.** Tryb `auto`.
@@ -32,7 +33,8 @@ enqueue → olx_scan_jobs (Supabase)            Cron Trigger (co 1 min): tylko p
   współdzielony `runOlxJob` z `workers/olx-browser`, importowany bez modyfikacji. Worker nie zapisuje
   ogłoszeń: w Durable Object trzyma tylko licznik budżetu i diagnostykę.
 - **Tryby odbioru** (`OLX_CLOUD_CLAIM_MODE`):
-  - `manual` (domyślnie): alarm i Cron niczego nie pobierają;
+  - `manual` (domyślnie): alarm i Cron niczego nie pobierają; `/run-once?jobId=…|filterId=…` używa
+    wyłącznie atomowego claimu selektywnego (§6);
   - `auto`: alarm co 20 s, po kolejnych pustych odpowiedziach co 40 s, ~1 s po pracy.
     Cron (co 1 min) tylko przywraca utracony alarm.
 - **Parsowanie w przeglądarce.** `window.__PRERENDERED_STATE__` jest czytany z oryginalnego skryptu
@@ -156,6 +158,7 @@ To tylko propozycja.
 - **Adresy:** zadania tylko na `https://(www.)olx.pl`. Przekierowanie poza olx.pl →
   `OLX_CLOUD_UNEXPECTED_REDIRECT` i strona nie jest parsowana. API tylko przez HTTPS.
 - **Wyłączanie, od najmocniejszego:**
+  - `OLX_CLOUD_STAGE1_LOCK=1` (Worker etapu 1): pobieranie zablokowane w kodzie niezależnie od innych zmiennych;
   - `OLX_CLOUD_ENABLED=0`: Cron usuwa alarm, `/run-once` jest odrzucany;
   - brak `OLX_WORKER_SECRET`: konfiguracja nieważna, nic nie jest pobierane;
   - `OLX_CLOUD_CLAIM_MODE=manual`: żadnego pobierania automatycznego;
@@ -168,53 +171,77 @@ To tylko propozycja.
   Zmiana zmiennych wymaga `wrangler deploy`. Trwająca partia (≤ 2 zadania) kończy się normalnie,
   następny alarm już się nie uruchomi.
 
-## 6. Etap 2 — ograniczony test produkcyjny (punkt 6, do zatwierdzenia)
+## 6. Etap 2 — ograniczony test produkcyjny (do zatwierdzenia)
 
-**Ryzyko (dotyczyło pierwszej wersji):** RPC `claim_olx_scan_job` zawsze zwraca **najstarsze** zadanie
-w kolejce, a kontrakt nie pozwala wybrać filtra. Harmonogramy Findera i Radaru (GitHub Actions co 5 min)
-mogą dodać zadania w każdej chwili. Pierwsza wersja testu mogła więc przejąć zadanie innego filtra albo
-Radaru.
+### Problem w poprzedniej wersji (commit 85e0367)
 
-**Zabezpieczenia:**
-1. **Tryb `manual`:** żadnego pobierania przez alarm ani Cron. Pobiera tylko
-   `POST /run-once?filterId=<uuid>`, dokładnie jedno zadanie.
-2. **Strażnik filtra:** jeśli pobrane zadanie to Radar albo inny filtr, worker nie otwiera przeglądarki
-   i niczego nie zapisuje. Kończy zadanie jednoznacznym `OLX_CLOUD_TEST_FOREIGN_JOB` („…zakończono je
-   bez pobierania OLX i bez zapisu ofert. Uruchom ten skan ponownie”) i przestaje pobierać. Kontrakt
-   nie pozwala oddać zadania do kolejki; jawne zakończenie jest bezpieczniejsze niż porzucenie
-   (lease wygasa, a watchdog Findera i tak oznacza je jako błąd).
-3. **Przy pauzie** (budżet / OLX) `run-once` w trybie manual nie pobiera nic.
-4. **Kontrola kolejki tuż przed testem** (Supabase → SQL Editor, tylko odczyt):
+Test ręczny wywoływał zwykły claim, czyli `claim_olx_scan_job`. Ten zawsze bierze **najstarsze**
+zadanie i przy okazji odzyskuje cudze wygasłe lease (UPDATE innych wierszy). Dopiero potem worker
+sprawdzał filtr i cudze zadanie kończył jako FAILED (`OLX_CLOUD_TEST_FOREIGN_JOB`). Test zmieniał więc
+stan cudzych zadań. Ten mechanizm został **usunięty**.
 
+### Rozwiązanie: atomowy, selektywny claim
+
+| Element | Plik | Status |
+|---|---|---|
+| Funkcja SQL `claim_olx_scan_job_selective(worker_id, job_id, search_filter_id, lease_seconds)` | `supabase/migrations/20261013150000_add_selective_olx_claim.sql` | **przygotowana, NIE wykonana** |
+| Endpoint `POST /api/olx-worker/claim-selective` (ten sam HMAC co `/claim`) | `app/api/olx-worker/claim-selective/route.ts`, `features/flip-finder/server/olx-selective-claim.ts` | nowe pliki; aktywne po wdrożeniu aplikacji |
+| Worker: tryb `manual` używa wyłącznie tego endpointu | `workers/olx-cloudflare/src/selective-claim-client.ts`, `runner.ts` | w PR |
+
+Gwarancje funkcji (test na wbudowanym PostgreSQL, `test/selective-claim.rpc.test.ts`):
+- blokuje (`FOR UPDATE SKIP LOCKED`) wyłącznie zadanie `queued` z `context_type = 'finder'` o podanym
+  `job_id` albo `search_filter_id`; dokładnie jeden selektor jest wymagany;
+- **nie zmienia żadnego innego wiersza**: nie odzyskuje ani nie wyczerpuje cudzych lease. Test porównuje
+  pełną treść wierszy starszego zadania Radaru, starszego zadania innego filtra i zadania z wygasłym
+  lease przed i po;
+- zadania Radaru nie da się pobrać nawet po jawnym `job_id`;
+- nie konkuruje ze zwykłymi workerami: dzięki `SKIP LOCKED` zadanie pobiera dokładnie jeden z nich;
+- ustawia lease identycznie jak `claim_olx_scan_job`, więc heartbeat, `complete` i `fail` działają
+  bez zmian;
+- wykonać ją może tylko `service_role`;
+- istniejąca funkcja `claim_olx_scan_job`, endpoint `/claim`, worker lokalny i Railway są bez zmian.
+
+Zachowanie workera w trybie `manual`:
+- `POST /run-once?jobId=<uuid>` lub `?filterId=<uuid>` (dokładnie jedno) → jeden claim selektywny;
+- zwykły `/claim` nie jest wywoływany nigdy (sprawdzone w testach i w `workerd`);
+- brak migracji → endpoint odpowiada `503 OLX_SELECTIVE_CLAIM_UNAVAILABLE`, nic nie jest pobierane
+  (`summary.claimError`);
+- przy aktywnej pauzie (budżet albo OLX) nie ma żadnego żądania do kolejki;
+- jeśli serwer zwróciłby niepasujące zadanie (co według testów jest niemożliwe), worker go nie
+  przetwarza i nie oznacza jako błędne; lease wygasa i zadanie wraca do kolejki zwykłą drogą.
+
+### Przebieg etapu 2 (po zatwierdzeniach z §6a)
+
+1. W głównym `wrangler.toml` ustaw `OLX_CLOUD_ENABLED="1"` (tryb pozostaje `manual`),
+   `OLX_CLOUD_MAX_JOBS_PER_DAY="2"`, `OLX_CLOUD_MAX_JOBS_PER_INVOCATION="1"` i
+   `OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS="120"`. Ustaw sekret `OLX_WORKER_SECRET`. Wdróż na Worker
+   wskazany w zatwierdzeniu.
+2. W Finderze uruchom ręcznie skan jednego filtra OLX (Łódź).
+3. Odczytaj ID zadania (Supabase, tylko odczyt):
    ```sql
-   select id, context_type, search_filter_id, status, created_at
-     from public.olx_scan_jobs
-    where status in ('queued', 'running')
-    order by created_at;
+   select id, status, created_at from public.olx_scan_jobs
+    where search_filter_id = '<UUID filtra>' and status = 'queued'
+    order by created_at desc limit 1;
    ```
-
-   Test uruchamiaj tylko przy **0 wierszach**. Strażnik obsługuje rzadki wyścig, gdy harmonogram doda
-   zadanie w ciągu tych kilku sekund.
-5. Jeśli działa worker lokalny Windows, może sam przejąć zadanie testowe; `run-once` zwróci wtedy
-   `idle`. Na czas testu najlepiej go zatrzymać.
-
-**Przebieg:**
-1. Ustaw `OLX_CLOUD_ENABLED="1"`, `OLX_CLOUD_CLAIM_MODE="manual"`, `OLX_CLOUD_MAX_JOBS_PER_DAY="2"`,
-   `OLX_CLOUD_MAX_JOBS_PER_INVOCATION="1"`, `OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS="120"`.
-   Ustaw sekret `OLX_WORKER_SECRET`. `npx wrangler deploy`.
-2. Wykonaj zapytanie z p. 4: 0 wierszy.
-3. W Finderze uruchom ręcznie skan jednego filtra OLX (Łódź). Skopiuj jego UUID z adresu filtra.
 4. W ciągu 60 s:
-   ```bash
-   curl -X POST -H "authorization: Bearer $OLX_CLOUD_ADMIN_TOKEN" \
-     "https://flip-manager-olx-cloud.<subdomena>.workers.dev/run-once?filterId=<UUID>"
-   ```
-5. Sprawdź:
-   - w Finderze: oferty, ceny, metraże, dzielnice, daty i zdjęcia;
-   - w `/status`: `browserSecondsUsedToday`;
-   - w Workers Logs: **CPU time** wywołania (< 10 ms) i brak `exceededCpu`;
-   - w `npx wrangler tail`: `OLX_PAGE_VERIFIED` z `fixes.stableIds` i `imagesResolved`.
-6. Wycofanie: `OLX_CLOUD_ENABLED="0"` + `npx wrangler deploy`.
+   `curl -X POST -H "authorization: Bearer $T" "$W/run-once?jobId=<id zadania>"`.
+5. Sprawdź w Finderze oferty, ceny, metraże, dzielnice, daty i zdjęcia. W Workers Logs sprawdź CPU time
+   (< 10 ms) i brak `exceededCpu`; w `/status` zużycie przeglądarki.
+6. Wycofanie: `OLX_CLOUD_ENABLED="0"` + deploy.
+
+Kontrola kolejki przed testem nie jest już warunkiem bezpieczeństwa (claim selektywny nie dotyka cudzych
+zadań), ale pomaga zinterpretować wynik.
+
+### 6a. Zatwierdzenia wymagane przed etapem 2
+
+1. **Migracja Supabase** `20261013150000_add_selective_olx_claim.sql`: jedna nowa funkcja, bez zmian
+   danych. Zgoda właściciela bazy i Findera, wykonanie w SQL Editor albo `supabase db push`.
+2. **Wdrożenie aplikacji** z endpointem `/api/olx-worker/claim-selective`. Nowe pliki w module
+   kolejki OLX. Zgoda właściciela Findera, merge PR #5 albo osobny deploy.
+3. **Docelowy Worker** dla etapu 2: istniejący `flip-manager-olx-cloud` (nadpisuje jego kod, zmienne
+   i dodaje migrację DO bez możliwości rollbacku) albo nowy, osobny Worker.
+4. **Okno testu i filtr testowy:** który filtr Łodzi, kiedy, czy worker lokalny ma być zatrzymany.
+5. **Zgoda na pobranie jednego zadania** (`ENABLED=1`, `manual`, `MAX_JOBS_PER_DAY=2`).
 
 ## 7. Diagnostyka
 
@@ -234,7 +261,6 @@ stronie, kilka sekund z budżetu dnia).
 | `OLX_CLOUD_BROWSER_DAILY_LIMIT_429` | Cloudflare odrzucił sesję (limit planu); pauza do północy UTC. |
 | `OLX_CLOUD_OLX_ACCESS_PAUSED` | OLX odmówił dostępu kilka razy z rzędu; pauza na kilka godzin. |
 | `OLX_CLOUD_DAILY_JOB_CAP_REACHED` | Osiągnięty `OLX_CLOUD_MAX_JOBS_PER_DAY`. |
-| `OLX_CLOUD_TEST_FOREIGN_JOB` | Test manual pobrał zadanie spoza testu; zakończone bez zmian, do ponowienia. |
 | `OLX_CLOUD_IN_PAGE_PARSER_FAILED` | Błąd parsera w przeglądarce (nie kształtu strony); bez parsowania w Workerze. |
 | `OLX_CLOUD_UNEXPECTED_REDIRECT` | OLX przekierował poza olx.pl. |
 | `OLX_CLOUD_BROWSER_RATE_LIMITED` | Limit nowych sesji (1/20 s) mimo odczekania. |
@@ -245,6 +271,7 @@ stronie, kilka sekund z budżetu dnia).
 | Zmienna | Domyślnie | Znaczenie |
 |---|---|---|
 | `OLX_CLOUD_ENABLED` | `0` | Wyłącznik główny. |
+| `OLX_CLOUD_STAGE1_LOCK` | brak (`1` w `wrangler.stage1.toml`) | Trwała blokada pobierania dla Workera etapu 1. |
 | `OLX_CLOUD_CLAIM_MODE` | `manual` | `manual` / `auto` (§1, §6). |
 | `OLX_CLOUD_LISTING_ID_MODE` | `stable_finder` | §2. |
 | `OLX_WORKER_API_URL` | `https://flip-manager-ai.vercel.app` | Adres aplikacji. |
@@ -272,13 +299,18 @@ cd workers/olx-cloudflare && npm ci && npm test && npm run typecheck && npm run 
 
 - `test/olx-parser.fixture.test.ts` (18 testów): reprezentatywna strona wyników, ekstrakcja i parser
   w prawdziwym Chromium (z JS i bez), zgodność bundla, stabilne ID przy edycji tytułu, zdjęcia.
-- `test/runner.integration.test.ts` (26 testów): fikcyjna kolejka HTTP z produkcyjną weryfikacją HMAC
+- `test/runner.integration.test.ts` (29 testów): fikcyjna kolejka HTTP z produkcyjną weryfikacją HMAC
   i nonce, model stanów Findera i watchdog 90 s. Obejmuje:
   - Finder + Radar, idempotencję;
   - budżet i 429, pauzę po odmowach OLX;
-  - strażnika testu (Radar / obcy filtr / pauza);
+  - test ręczny: przy kolejce ze starszym zadaniem Radaru i starszym zadaniem innego filtra
+    przetwarzane jest wyłącznie wskazane zadanie (po `jobId` i po `filterId`), bez migracji nic nie
+    jest pobierane, przy pauzie nie ma żadnego żądania;
   - brak parsowania zapasowego w Workerze, przekierowanie;
   - politykę ID, self-test.
+- `test/selective-claim.rpc.test.ts` (5 testów): funkcja SQL claimu selektywnego na wbudowanym
+  PostgreSQL, z prawdziwą migracją kolejki.
+- `test/stage1-config.test.ts` (3 testy): osobna nazwa Workera etapu 1, blokada i zgodność konfiguracji.
 - `test/scheduling.test.ts` (7 testów): symulacja 24 h z pollingiem adaptacyjnym, opóźnionymi i
   utraconymi alarmami oraz liczbą claimów na dobę.
 

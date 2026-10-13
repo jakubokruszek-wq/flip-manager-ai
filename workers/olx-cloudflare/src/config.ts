@@ -68,7 +68,7 @@ export type CloudConfig = {
   restrictToOlxDomains: boolean;
 };
 
-export type ConfigResult = { ok: true; config: CloudConfig } | { ok: false; code: "OLX_CLOUD_CONFIG_INVALID" | "OLX_CLOUD_DISABLED"; message: string };
+export type ConfigResult = { ok: true; config: CloudConfig } | { ok: false; code: "OLX_CLOUD_CONFIG_INVALID" | "OLX_CLOUD_DISABLED" | "OLX_CLOUD_STAGE1_LOCKED"; message: string };
 
 type Environment = Record<string, unknown>;
 
@@ -76,6 +76,11 @@ type Environment = Record<string, unknown>;
 export const FREE_PLAN_DAILY_BROWSER_MS = 600_000;
 
 export function loadCloudConfig(environment: Environment): ConfigResult {
+  // The separate stage-1 test Worker (wrangler.stage1.toml) can never claim,
+  // even if OLX_CLOUD_ENABLED is flipped in the dashboard.
+  if (stringValue(environment.OLX_CLOUD_STAGE1_LOCK) === "1") {
+    return { ok: false, code: "OLX_CLOUD_STAGE1_LOCKED", message: "Worker testowy etapu 1: pobieranie zadań jest zablokowane na stałe (OLX_CLOUD_STAGE1_LOCK=1)." };
+  }
   if (stringValue(environment.OLX_CLOUD_ENABLED) !== "1") {
     return { ok: false, code: "OLX_CLOUD_DISABLED", message: "OLX_CLOUD_ENABLED nie jest ustawione na \"1\" — worker nie odbiera zadań." };
   }
@@ -98,6 +103,7 @@ export function checkCloudConfig(environment: Environment): Record<string, unkno
   if (parsed.ok && parsed.config.claimMode === "auto") warnings.push("Tryb auto: alarm odbiera wszystkie zadania OLX (Finder i Radar).");
   return {
     killSwitch: stringValue(environment.OLX_CLOUD_ENABLED) === "1" ? "enabled" : "disabled",
+    stage1Lock: stringValue(environment.OLX_CLOUD_STAGE1_LOCK) === "1",
     valid: parsed.ok,
     problem: parsed.ok ? null : parsed.message,
     apiHost,

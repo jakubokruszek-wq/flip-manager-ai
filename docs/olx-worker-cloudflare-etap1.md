@@ -1,18 +1,39 @@
-# Etap 1 — testowe wdrożenie na istniejący Worker `flip-manager-olx-cloud`
+# Etap 1 — testowe wdrożenie jako osobny Worker `flip-manager-olx-cloud-stage1`
 
-Cel: wdrożyć kod z PR #5 na istniejące konto Cloudflare i istniejący Worker `flip-manager-olx-cloud`
-**bez pobierania jakichkolwiek zadań**. Sprawdzamy `/health`, `/status` i konfigurację.
+Cel: sprawdzić kod z PR #5 na Twoim koncie Cloudflare **bez pobierania jakichkolwiek zadań** i **bez
+zmian w istniejącym Workerze `flip-manager-olx-cloud`**. Weryfikujemy `/health`, `/status` i konfigurację.
 
-Gwarancje etapu 1 (sprawdzone w lokalnym runtime `workerd`):
+Etap 1 to osobny Worker z własnym plikiem `workers/olx-cloudflare/wrangler.stage1.toml`. Ma własny kod,
+zmienne, sekrety, przestrzeń Durable Object i migracje. Istniejący `flip-manager-olx-cloud` (kod,
+zmienne, sekrety, triggery, migracje DO) pozostaje nietknięty.
+
+Gwarancje (sprawdzone testami i w lokalnym runtime `workerd`):
 
 | Mechanizm | Efekt |
 |---|---|
-| `OLX_CLOUD_ENABLED = "0"` | Cron co minutę tylko loguje `CRON_TICK_INACTIVE` i usuwa alarm. `/run-once` zwraca `OLX_CLOUD_DISABLED`. Nie ma żadnego wywołania `claim`. |
-| `OLX_CLOUD_CLAIM_MODE = "manual"` | Nawet po włączeniu nic nie jest pobierane automatycznie. |
-| Krok 1a: bez sekretu `OLX_WORKER_SECRET` | Konfiguracja jest nieważna, więc nie ma podpisanych żądań do aplikacji, nawet przy błędzie w zmiennych. |
-| Brak zmian w Vercel, Supabase, Finderze i Radarze | Kolejka, harmonogramy i worker lokalny działają jak dotąd. |
+| `OLX_CLOUD_STAGE1_LOCK = "1"` | Trwała blokada w kodzie. Cron, alarm i `/run-once` nie pobierają zadań **nawet po ustawieniu `OLX_CLOUD_ENABLED=1` w panelu** (`/status`: `OLX_CLOUD_STAGE1_LOCKED`). |
+| `OLX_CLOUD_ENABLED = "0"`, `OLX_CLOUD_CLAIM_MODE = "manual"` | Druga i trzecia warstwa wyłączenia, jak w docelowej konfiguracji. |
+| Etap 1a bez `OLX_WORKER_SECRET` | Worker nie wysyła ani jednego podpisanego żądania do aplikacji. |
+| Brak zmian w Vercel, Supabase, Finderze i Radarze | Kolejka, harmonogramy i worker lokalny działają jak dotąd. Migracja `20261013150000` **nie jest potrzebna** w etapie 1. |
 
-Nie uruchamiaj `/run-once` w etapie 1. Etap 2 (§6 w `olx-worker-cloudflare.md`) wymaga osobnej zgody.
+Nie uruchamiaj `/run-once`. W tym Workerze i tak zwraca `OLX_CLOUD_STAGE1_LOCKED`.
+
+## Zatwierdzenia wymagane przed rozpoczęciem etapu 1
+
+1. **Utworzenie nowego Workera** `flip-manager-olx-cloud-stage1` na Twoim koncie (Workers Free:
+   limit 100 Workerów).
+2. **Jeden Cron Trigger `* * * * *`** dla tego Workera (Workers Free: 5 na konto). Jeśli limit jest już
+   wykorzystany, usuń sekcję `[triggers]` z `wrangler.stage1.toml` przed wdrożeniem. Etap 1 traci wtedy
+   tylko sprawdzenie, że Cron jest bezczynny.
+3. **Utworzenie sekretu `OLX_CLOUD_ADMIN_TOKEN`** w nowym Workerze.
+4. **(Opcjonalny etap 1b)** wpisanie sekretu `OLX_WORKER_SECRET` (tego samego co w Vercel) do nowego
+   Workera i jedno wywołanie `/selftest`. To jedno podpisane żądanie heartbeat do produkcyjnej aplikacji,
+   bez pobrania i zmiany zadań; jedyny zapis to jednorazowy nonce HMAC.
+5. **(Opcjonalny)** `/selftest?browser=1`: jedna pusta przeglądarka, kilka sekund z dziennych 600 s
+   Browser Run, bez wizyty na OLX.
+
+Nic poza powyższym. Nie są potrzebne: migracja Supabase, wdrożenie aplikacji ani zmiany w
+`flip-manager-olx-cloud`.
 
 ## 0. Przygotowanie (lokalnie)
 
@@ -21,7 +42,7 @@ git fetch origin claude/olx-cloudflare-workers-gkzda7
 git checkout claude/olx-cloudflare-workers-gkzda7
 cd workers/olx-cloudflare
 npm ci
-npm test                  # oczekiwane: wszystkie testy „pass” (testy przeglądarkowe wymagają Chromium)
+npm test                  # oczekiwane: wszystkie testy „pass”
 npm run typecheck
 ```
 
@@ -31,114 +52,84 @@ Na Windows w PowerShell te same polecenia działają bez zmian. Wymagany jest No
 
 ```bash
 npx wrangler login
-npx wrangler whoami        # sprawdź nazwę konta i Account ID
+npx wrangler whoami
 ```
 
-Jeśli masz kilka kont, ustaw `CLOUDFLARE_ACCOUNT_ID` (zmienna środowiskowa w terminalu, nie w repozytorium).
+Sprawdź nazwę konta i Account ID. Przy kilku kontach ustaw `CLOUDFLARE_ACCOUNT_ID` tylko w terminalu.
 
-## 2. Zabezpieczenie obecnego Workera testowego (ważne)
+## 2. Podgląd bez wysyłania
 
-Wdrożenie dodaje Durable Object (migracja `v1`, klasa `OlxCloudRunner`). **Cloudflare nie pozwala potem
-wrócić rollbackiem do wersji sprzed tej migracji.** Zanim wdrożysz:
-
-1. Panel Cloudflare → **Workers & Pages** → `flip-manager-olx-cloud`:
-   - **Edit code**: skopiuj obecny kod testowego Workera do pliku lokalnego, jeśli chcesz go zachować;
-   - **Settings → Variables and Secrets**: zanotuj zmienne. `wrangler deploy` zastąpi zmienne panelu
-     wartościami z `wrangler.toml`. Sekrety pozostają bez zmian;
-   - **Settings → Bindings**: Browser Run powinien być dostępny. Wdrożenie doda `BROWSER` i `OLX_RUNNER`;
-   - **Settings → Triggers**: istniejące Cron Triggers zostaną zastąpione jednym `* * * * *`
-     (limit Free: 5 na konto);
-   - **Settings → Domains & Routes**: zanotuj ewentualne trasy. Ten Worker potrzebuje tylko `workers.dev`.
-2. Lista wersji i sekretów (sekrety tylko z nazwy):
-   ```bash
-   npx wrangler deployments list
-   npx wrangler secret list
-   ```
-   Jeśli istnieje sekret `OLX_WORKER_SECRET` z wcześniejszych testów, na etap 1a usuń go
-   (`npx wrangler secret delete OLX_WORKER_SECRET`). Zostanie ustawiony świadomie w kroku 6.
-3. Jeśli istniejący Worker ma już Durable Objects z migracją o tagu `v1`, deploy zakończy się błędem
-   i niczego nie zmieni. Wtedy przerwij i zgłoś to do korekty konfiguracji.
-
-## 3. Kontrola konfiguracji przed wdrożeniem
-
-W `workers/olx-cloudflare/wrangler.toml` (bez zmian względem PR) muszą być:
-
-```toml
-name = "flip-manager-olx-cloud"
-OLX_CLOUD_ENABLED = "0"
-OLX_CLOUD_CLAIM_MODE = "manual"
-OLX_WORKER_API_URL = "https://flip-manager-ai.vercel.app"
-```
-
-Podgląd bez wysyłania (wymagany: `env.OLX_CLOUD_ENABLED ("0")` i `env.OLX_CLOUD_CLAIM_MODE ("manual")`):
+**Wszystkie polecenia etapu 1 zawierają `--config wrangler.stage1.toml`.** Bez tego parametru Wrangler
+użyłby `wrangler.toml`, czyli istniejącego Workera `flip-manager-olx-cloud`.
 
 ```bash
-npx wrangler deploy --dry-run --outdir dist
+npx wrangler deploy --dry-run --outdir dist-stage1 --config wrangler.stage1.toml
 ```
 
-## 4. Wdrożenie (po Twoim zatwierdzeniu)
+W wyniku muszą być: `env.OLX_CLOUD_STAGE1_LOCK ("1")`, `env.OLX_CLOUD_ENABLED ("0")` i
+`env.OLX_CLOUD_CLAIM_MODE ("manual")`.
+
+## 3. Wdrożenie (po zatwierdzeniu 1–2)
 
 ```bash
-npx wrangler deploy
+npx wrangler deploy --config wrangler.stage1.toml
 ```
 
-Zanotuj adres `https://flip-manager-olx-cloud.<subdomena>.workers.dev` i ID wersji.
+Zanotuj adres `https://flip-manager-olx-cloud-stage1.<subdomena>.workers.dev`.
 
-## 5. Token administracyjny i weryfikacja (etap 1a — bez sekretu aplikacji)
+Upewnij się w panelu (Workers & Pages), że `flip-manager-olx-cloud` ma nadal tę samą datę ostatniego
+wdrożenia co wcześniej.
+
+## 4. Etap 1a — token administracyjny i weryfikacja (bez sekretu aplikacji)
 
 ```bash
-openssl rand -hex 32                          # zapisz w menedżerze haseł
-npx wrangler secret put OLX_CLOUD_ADMIN_TOKEN # wklej token
+openssl rand -hex 32        # zapisz w menedżerze haseł
+npx wrangler secret put OLX_CLOUD_ADMIN_TOKEN --config wrangler.stage1.toml
 ```
 
 W PowerShell bez `openssl`:
 `-join ((48..57)+(97..102) | Get-Random -Count 64 | % {[char]$_})`.
 
-Weryfikacja (`W` = adres workers.dev, `T` = token):
+Weryfikacja (`W` = adres workers.dev Workera etapu 1, `T` = token):
 
 ```bash
 curl -s "$W/health"
 # {"ok":true,"service":"flip-manager-olx-cloud"}
 
 curl -s -o /dev/null -w "%{http_code}\n" "$W/status"
-# 404  (bez tokenu endpoint „nie istnieje”)
+# 404 bez tokenu
 
 curl -s -H "authorization: Bearer $T" "$W/status"
 ```
 
 Oczekiwane w `/status`:
-- `"ok": false`, `"code": "OLX_CLOUD_DISABLED"`;
-- `configCheck.killSwitch = "disabled"`, `configCheck.adminToken = "set"`;
-- `configCheck.workerSecret = "missing"` i `configCheck.valid = false`. W etapie 1a to poprawne:
-  bez sekretu nic nie może się podpisać;
+- `"code": "OLX_CLOUD_STAGE1_LOCKED"`;
+- `configCheck.stage1Lock: true`, `configCheck.killSwitch: "disabled"`, `configCheck.adminToken: "set"`;
+- `configCheck.workerSecret: "missing"` i `configCheck.valid: false`. W 1a to poprawne;
 - `nextAlarm: null`, `running: false`, `ledger: null`;
-- `lastCron` aktualizowany co ~1 min (Cron działa). Gdy DO jeszcze się nie obudził, pole może być
-  puste; poczekaj 2 minuty.
+- `lastCron` aktualizowany co ok. minutę (jeśli Cron jest włączony).
 
 Logi na żywo (Ctrl+C kończy):
 
 ```bash
-npx wrangler tail --format pretty
+npx wrangler tail --config wrangler.stage1.toml --format pretty
 ```
 
-Co minutę powinno pojawić się `CRON_TICK_INACTIVE` z kodem `OLX_CLOUD_DISABLED`. Nie może być
-`JOB_START`, `OLX_BROWSER_START`, `WORKER_POLL_ERROR` ani żadnego zdarzenia `claim`.
+Co minutę: `CRON_TICK_INACTIVE` z kodem `OLX_CLOUD_STAGE1_LOCKED`. Nie może być `JOB_START`,
+`OLX_BROWSER_START`, `WORKER_POLL_ERROR` ani `claim`.
 
-## 6. Etap 1b (opcjonalny) — sprawdzenie sekretu i HMAC bez pobierania zadań
-
-Wymaga ustawienia sekretu aplikacji, ale nadal **nie pobiera zadań** (`OLX_CLOUD_ENABLED="0"`):
+## 5. Etap 1b (opcjonalny) — sekret i HMAC bez pobierania zadań
 
 ```bash
-npx wrangler secret put OLX_WORKER_SECRET     # ten sam co OLX_WORKER_SECRET w Vercel
-curl -s -H "authorization: Bearer $T" "$W/status"   # configCheck.valid = true, workerSecret = "set"
+npx wrangler secret put OLX_WORKER_SECRET --config wrangler.stage1.toml   # ten sam co w Vercel
+curl -s -H "authorization: Bearer $T" "$W/status"
+# configCheck.valid: true, workerSecret: "set"; config.workerId: "cloudflare-olx-stage1", config.claimMode: "manual"
 curl -s -X POST -H "authorization: Bearer $T" "$W/selftest"
 ```
 
-Oczekiwane: `"queueApi": {"ok": true, "status": 409, ...}`.
-
-`/selftest` wysyła jeden podpisany heartbeat dla losowego, nieistniejącego zadania. Aplikacja
-sprawdza podpis, nie znajduje zadania i odpowiada 409 `OLX_JOB_LEASE_LOST` bez zmiany żadnego wiersza.
-Jedyny zapis to jednorazowy nonce HMAC, usuwany automatycznie po 5 minutach.
+Oczekiwane: `"queueApi": {"ok": true, "status": 409, ...}`. To jeden podpisany heartbeat dla losowego,
+nieistniejącego zadania. Aplikacja sprawdza podpis i odpowiada 409 `OLX_JOB_LEASE_LOST` bez zmiany
+żadnego wiersza.
 
 | Wynik `queueApi` | Znaczenie |
 |---|---|
@@ -147,36 +138,38 @@ Jedyny zapis to jednorazowy nonce HMAC, usuwany automatycznie po 5 minutach.
 | 401 `EXPIRED_REQUEST` | Problem z zegarem. |
 | 503 `OLX_WORKER_NOT_CONFIGURED` | Vercel nie ma `OLX_WORKER_SECRET`. |
 
-Opcjonalnie: test samej przeglądarki (pusta strona, bez wizyty na OLX, kilka sekund z dziennych 600 s):
+Opcjonalnie: `curl -s -X POST -H "authorization: Bearer $T" "$W/selftest?browser=1"`. Oczekiwane:
+`browserRun.ok: true` i kilka sekund w `ledger.browserMs`.
 
-```bash
-curl -s -X POST -H "authorization: Bearer $T" "$W/selftest?browser=1"
-```
-
-Oczekiwane: `"browserRun": {"ok": true, "browserMs": …}`. W `/status` pojawi się `ledger` z
-`sessions: 1` i małym `browserMs`.
-
-## 7. Kryteria zaliczenia etapu 1
+## 6. Kryteria zaliczenia etapu 1
 
 - [ ] `/health` → 200, `/status` bez tokenu → 404.
-- [ ] `/status`: `OLX_CLOUD_DISABLED`, `killSwitch: disabled`, `nextAlarm: null`; po etapie 1b także
-      `config.claimMode: "manual"` (sekcja `config` pojawia się, gdy konfiguracja jest kompletna).
-- [ ] `wrangler tail`: tylko `CRON_TICK_INACTIVE`, żadnych zdarzeń zadań.
-- [ ] Supabase (tylko odczyt): brak zadań z `worker_id` zaczynającym się od `cloudflare`:
+- [ ] `/status`: `OLX_CLOUD_STAGE1_LOCKED`, `stage1Lock: true`, `killSwitch: disabled`, `nextAlarm: null`.
+- [ ] `wrangler tail`: tylko `CRON_TICK_INACTIVE`.
+- [ ] Supabase (tylko odczyt):
       `select count(*) from public.olx_scan_jobs where worker_id like 'cloudflare%';` → `0`.
+- [ ] `flip-manager-olx-cloud` bez nowego wdrożenia (panel → Deployments).
 - [ ] (1b) `/selftest` → `queueApi.ok = true`.
 - [ ] (opcjonalnie) `/selftest?browser=1` → `browserRun.ok = true`.
 
-Prześlij mi wynik `/status`, `/selftest` i fragment `wrangler tail`. Na tej podstawie przygotuję
-etap 2 do Twojej decyzji.
+Prześlij wynik `/status`, `/selftest` i fragment `wrangler tail`.
 
-## 8. Wyłączenie / wycofanie
+## 7. Usunięcie Workera etapu 1
 
-- Worker w etapie 1 niczego nie pobiera, więc pozostawienie go jest bezpieczne.
-- Całkowite zatrzymanie Crona: panel → `flip-manager-olx-cloud` → **Settings → Triggers** → usuń
-  `* * * * *`. Wróci przy następnym `wrangler deploy`.
-- Usunięcie sekretów: `npx wrangler secret delete OLX_WORKER_SECRET` (i `OLX_CLOUD_ADMIN_TOKEN`).
-- Usunięcie Workera: `npx wrangler delete`. Usuwa też Durable Object z licznikiem budżetu; danych
-  ofert to nie dotyczy, bo są w Supabase.
-- Rollback do testowego Workera sprzed migracji Durable Objects nie jest możliwy. Wrócić można,
-  wklejając zachowany kod (krok 2) jako nową wersję w panelu.
+Worker etapu 1 nie może niczego pobrać, więc może zostać. Usunięcie (bez wpływu na
+`flip-manager-olx-cloud`, Supabase i Vercel):
+
+```bash
+npx wrangler delete --config wrangler.stage1.toml
+```
+
+## 8. Dalej (każdy krok osobno do zatwierdzenia — szczegóły w `olx-worker-cloudflare.md` §6a)
+
+Etap 2 wymaga:
+- migracji Supabase `20261013150000_add_selective_olx_claim.sql` (jedna nowa funkcja SQL, bez zmian danych);
+- wdrożenia aplikacji z endpointem `/api/olx-worker/claim-selective`;
+- wyboru docelowego Workera;
+- okna testu i filtra;
+- zgody na pobranie jednego zadania.
+
+Bez migracji endpoint odpowiada 503 i nic nie jest pobierane.

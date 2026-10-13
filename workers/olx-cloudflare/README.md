@@ -3,7 +3,8 @@
 Odbiera zadania z kolejki `olx_scan_jobs` (przez `/api/olx-worker/*`, HMAC) bez komputera i bez płatnego
 hostingu. Pełna instrukcja konfiguracji, wdrożenia (Wrangler), limitów Free i testu produkcyjnego:
 [`docs/olx-worker-cloudflare.md`](../../docs/olx-worker-cloudflare.md). Etap 1 (wyłącznie testowy, bez
-pobierania zadań) na istniejący Worker: [`docs/olx-worker-cloudflare-etap1.md`](../../docs/olx-worker-cloudflare-etap1.md).
+pobierania zadań) jako osobny Worker `flip-manager-olx-cloud-stage1` (`wrangler.stage1.toml`):
+[`docs/olx-worker-cloudflare-etap1.md`](../../docs/olx-worker-cloudflare-etap1.md).
 
 ```bash
 npm ci
@@ -19,5 +20,6 @@ Pliki:
 - `src/browser-session.ts` — sesja Browser Run, limity nowych sesji, rozliczanie czasu.
 - `src/olx-page.ts`, `src/in-page-expression.ts` — ekstrakcja `PRERENDERED_STATE`, parser Findera w stronie, weryfikacja.
 - `src/listing-fixes.ts` — stabilne ID ofert OLX i rozmiary zdjęć (w przeglądarce, po parserze Findera).
+- `src/selective-claim-client.ts` — test ręczny: atomowy claim tylko wskazanego zadania (`/api/olx-worker/claim-selective`).
 - `src/self-test.ts` — `/selftest`: HMAC/URL/sekret bez pobierania zadań, opcjonalnie pusta przeglądarka.
 - `src/generated/in-page-bundle.ts` — bundel parsera (generowany: `node scripts/build-in-page-bundle.mjs`).

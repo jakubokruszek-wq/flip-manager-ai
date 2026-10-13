@@ -8,6 +8,7 @@ import type { BrowserLike, BrowserProvider } from "./browser-session.ts";
 import { checkCloudConfig, loadCloudConfig, parseCloudConfig, type CloudConfig } from "./config.ts";
 import { createIdlePollBackoff, type IdlePollBackoff } from "../../shared/idle-poll-backoff.ts";
 import { runSelfTest } from "./self-test.ts";
+import type { ClaimSelector } from "./selective-claim-client.ts";
 import { createLogger, type DiagnosticEvent } from "./logger.ts";
 import { budgetLimits, nextAlarmDelayMs, runBatch, type BatchSummary } from "./runner.ts";
 import { isAuthorizedAdmin } from "./admin-auth.ts";
@@ -90,17 +91,18 @@ export class OlxCloudRunner extends DurableObject<Env> {
   }
 
   /**
-   * On-demand claim. Manual mode (the limited trial): exactly one job, and it
-   * must be a Finder job of `filterId`, otherwise it is ended untouched with
-   * OLX_CLOUD_TEST_FOREIGN_JOB. Auto mode: up to `maxJobs` (1–3) of any kind.
+   * On-demand claim. Manual mode (the limited trial): exactly one Finder job,
+   * selected atomically on the server by `jobId` or `filterId`
+   * (/api/olx-worker/claim-selective); no other job is touched. Auto mode:
+   * up to `maxJobs` (1–3) through the regular claim.
    */
-  async runOnce(maxJobs: number, filterId: string | null): Promise<{ ok: boolean; code?: string; message?: string; summary?: Omit<BatchSummary, "ledger"> & { ledger: Ledger } }> {
+  async runOnce(maxJobs: number, selector: ClaimSelector | null): Promise<{ ok: boolean; code?: string; message?: string; summary?: Omit<BatchSummary, "ledger"> & { ledger: Ledger } }> {
     const loaded = loadCloudConfig(this.env);
     if (!loaded.ok) return { ok: false, code: loaded.code, message: loaded.message };
     if (this.active) return { ok: false, code: "OLX_CLOUD_RUNNER_BUSY", message: "Runner właśnie przetwarza zadania; spróbuj ponownie za chwilę." };
     const manual = loaded.config.claimMode === "manual";
-    if (manual && !filterId) return { ok: false, code: "OLX_CLOUD_FILTER_ID_REQUIRED", message: "Tryb manual: podaj ?filterId=<uuid filtra testowego>." };
-    const options = manual ? { maxJobs: 1, expectFilterId: filterId as string } : { maxJobs: Math.max(1, Math.min(3, Math.trunc(maxJobs) || 1)), ...(filterId ? { expectFilterId: filterId } : {}) };
+    if (manual && !selector) return { ok: false, code: "OLX_CLOUD_SELECTOR_REQUIRED", message: "Tryb manual: podaj ?jobId=<uuid zadania> albo ?filterId=<uuid filtra>." };
+    const options = selector ? { maxJobs: 1, selector } : { maxJobs: Math.max(1, Math.min(3, Math.trunc(maxJobs) || 1)) };
     const summary = await this.execute(loaded.config, "run_once", options);
     return summary ? { ok: true, summary } : { ok: false, code: "OLX_CLOUD_RUN_FAILED", message: "Zobacz /status → lastError." };
   }
@@ -143,7 +145,7 @@ export class OlxCloudRunner extends DurableObject<Env> {
     };
   }
 
-  private async execute(config: CloudConfig, trigger: string, options: { maxJobs?: number; expectFilterId?: string }): Promise<BatchSummary | null> {
+  private async execute(config: CloudConfig, trigger: string, options: { maxJobs?: number; selector?: ClaimSelector }): Promise<BatchSummary | null> {
     const logger = createLogger();
     const run = (async () => {
       try {
@@ -200,9 +202,13 @@ export default {
     if (!(await isAuthorizedAdmin(request, env.OLX_CLOUD_ADMIN_TOKEN))) return new Response("Not found", { status: 404 });
     if (request.method === "GET" && url.pathname === "/status") return Response.json(await runner(env).status());
     if (request.method === "POST" && url.pathname === "/run-once") {
+      const jobId = url.searchParams.get("jobId");
       const filterId = url.searchParams.get("filterId");
-      if (filterId !== null && !UUID.test(filterId)) return Response.json({ ok: false, code: "OLX_CLOUD_FILTER_ID_INVALID" }, { status: 400 });
-      const result = await runner(env).runOnce(Number(url.searchParams.get("maxJobs") ?? "1"), filterId);
+      if ((jobId !== null && !UUID.test(jobId)) || (filterId !== null && !UUID.test(filterId)) || (jobId !== null && filterId !== null)) {
+        return Response.json({ ok: false, code: "OLX_CLOUD_SELECTOR_INVALID", message: "Podaj jedno: jobId albo filterId (UUID)." }, { status: 400 });
+      }
+      const selector = jobId ? { jobId } : filterId ? { filterId } : null;
+      const result = await runner(env).runOnce(Number(url.searchParams.get("maxJobs") ?? "1"), selector);
       return Response.json(result, { status: result.ok ? 200 : 409 });
     }
     if (request.method === "POST" && url.pathname === "/selftest") {

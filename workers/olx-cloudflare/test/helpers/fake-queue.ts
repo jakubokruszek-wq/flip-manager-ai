@@ -38,6 +38,8 @@ export type FakeQueue = {
   /** Simulates the lease being revoked server-side (e.g. Radar run cancelled). */
   revokeLease(jobId: string): void;
   failNextRequests(path: string, count: number): void;
+  /** false = the selective-claim migration is not applied (endpoint answers 503). */
+  setSelectiveAvailable(value: boolean): void;
   close(): Promise<void>;
 };
 
@@ -51,6 +53,7 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
   const requests: FakeQueue["requests"] = [];
   const authFailures: string[] = [];
   const injectedFailures = new Map<string, number>();
+  const state = { selectiveAvailable: true };
 
   const server: Server = createServer(async (request, response) => {
     const body = await readBody(request);
@@ -70,6 +73,22 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
     try {
       const payload = JSON.parse(body) as Record<string, unknown>;
       if (path === "/api/olx-worker/claim") { reply(200, { job: claim(String(payload.workerId)) }); return; }
+      if (path === "/api/olx-worker/claim-selective") {
+        // Mirrors claim_olx_scan_job_selective (migration 20261013150000): only a queued
+        // Finder job matching the selector; no lease recovery, no other row touched.
+        if (!state.selectiveAvailable) { reply(503, { error: "OLX_SELECTIVE_CLAIM_UNAVAILABLE" }); return; }
+        const jobId = typeof payload.jobId === "string" ? payload.jobId : null;
+        const filterId = typeof payload.filterId === "string" ? payload.filterId : null;
+        if ((jobId === null) === (filterId === null)) { reply(400, { error: "INVALID_SELECTOR" }); return; }
+        const candidate = jobs
+          .filter((item) => item.status === "queued" && item.contextType === "finder" && (jobId ? item.id === jobId : item.filterId === filterId))
+          .sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (!candidate) { reply(200, { job: null }); return; }
+        const now = Date.now();
+        Object.assign(candidate, { status: "running", attempts: candidate.attempts + 1, leaseToken: randomUUID(), leasedUntil: now + LEASE_MS, heartbeatAt: now, workerId: String(payload.workerId) });
+        reply(200, { job: describe(candidate, now) });
+        return;
+      }
       const job = jobs.find((item) => item.id === payload.jobId);
       const owns = job && job.status === "running" && job.leaseToken === payload.leaseToken && job.workerId === payload.workerId
         && (job.contextType !== "price_radar" || payload.radarLeaseToken === job.radarLeaseToken);
@@ -108,6 +127,10 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
     if (!job) return null;
     job.workerId = workerId;
     if (job.contextType === "price_radar") job.radarLeaseToken = randomUUID();
+    return describe(job, now);
+  }
+
+  function describe(job: FakeJob, now: number) {
     return {
       id: job.id, runId: `run-${job.id}`, sourceScanId: job.contextType === "finder" ? `scan-${job.id}` : null, filterId: job.contextType === "finder" ? job.filterId : null,
       contextType: job.contextType, radarOwnerId: job.contextType === "price_radar" ? "owner-1" : null,
@@ -153,6 +176,7 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
       if (job) job.leaseToken = randomUUID();
     },
     failNextRequests(path, count) { injectedFailures.set(path, count); },
+    setSelectiveAvailable(value) { state.selectiveAvailable = value; },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

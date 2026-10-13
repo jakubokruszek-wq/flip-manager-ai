@@ -411,29 +411,67 @@ test("a normal page resets the refusal streak (one isolated refusal does not pau
   assert.equal(store.value?.stop, null);
 });
 
-test("limited trial guard: an older Radar job or another filter's job is never scraped and the test job is left queued", async (t) => {
-  const browser = requireChromium(t); if (!browser) return;
-  const testFilter = "22222222-2222-4222-8222-222222222222";
-  queue.enqueue({ id: "radar-older", idempotencyKey: "r", contextType: "price_radar" });
-  queue.enqueue({ id: "test-job", idempotencyKey: "t", filterId: testFilter });
-  const provider = browser.provider(OK_PAGE);
+/** Full state of the jobs that are not part of the trial, to prove they stay byte-for-byte unchanged. */
+function untouched(ids: string[]) {
+  return JSON.stringify(queue.jobs.filter((job) => ids.includes(job.id)));
+}
 
-  const first = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, expectFilterId: testFilter });
-  assert.equal(first.outcome, "foreign_job");
-  assert.equal(provider.stats.launches, 0, "no browser for a foreign job");
-  assert.equal(queue.jobs[0].errorCode, "OLX_CLOUD_TEST_FOREIGN_JOB");
-  assert.match(queue.jobs[0].errorMessage ?? "", /bez pobierania OLX i bez zapisu ofert/);
-  assert.equal(queue.jobs[1].status, "queued", "claiming stops at the first foreign job");
+for (const by of ["filterId", "jobId"] as const) {
+  test(`limited trial (selective claim by ${by}): with an older Radar job and an older job of another filter queued, ONLY the test job is processed`, async (t) => {
+    const browser = requireChromium(t); if (!browser) return;
+    const testFilter = "22222222-2222-4222-8222-222222222222";
+    queue.enqueue({ id: "radar-older", idempotencyKey: "r", contextType: "price_radar", createdAt: Date.now() - 180_000 });
+    queue.enqueue({ id: "other-filter-older", idempotencyKey: "o", filterId: "33333333-3333-4333-8333-333333333333", createdAt: Date.now() - 120_000 });
+    queue.enqueue({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", idempotencyKey: "t", filterId: testFilter });
+    const others = ["radar-older", "other-filter-older"];
+    const before = untouched(others);
+    const provider = browser.provider(OK_PAGE);
 
-  const second = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, expectFilterId: testFilter });
-  assert.equal(second.completed, 1);
-  assert.equal(queue.jobs[1].status, "completed");
+    const selector = by === "jobId" ? { jobId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } : { filterId: testFilter };
+    const summary = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, selector });
+
+    assert.equal(summary.completed, 1);
+    assert.equal(summary.claimed, 1);
+    assert.equal(queue.jobs[2].status, "completed");
+    assert.equal(untouched(others), before, "older Radar and other-filter jobs: same status, attempts, lease, everything");
+    assert.deepEqual(queue.jobs.slice(0, 2).map((job) => [job.status, job.attempts, job.errorCode]), [["queued", 0, null], ["queued", 0, null]]);
+    assert.equal(provider.stats.olxRequests.length, 1);
+    assert.ok(!queue.requests.some((request) => request.path === "/api/olx-worker/claim"), "the regular claim (oldest job) is never called");
+    assert.deepEqual(queue.authFailures, []);
+
+    // Nothing left for the selector: the next trial run claims nothing and still touches nothing.
+    const again = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, selector });
+    assert.equal(again.claimed, 0);
+    assert.equal(untouched(others), before);
+  });
+}
+
+test("limited trial: a selector naming a Radar job claims nothing (selective claim is Finder-only)", async () => {
+  queue.enqueue({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", idempotencyKey: "r", contextType: "price_radar" });
+  const before = untouched(["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]);
+  const summary = await runBatch(deps(config(), craftedProvider({}), memoryStore()), { maxJobs: 1, selector: { jobId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" } });
+  assert.equal(summary.claimed, 0);
+  assert.equal(untouched(["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]), before);
 });
 
-test("limited trial guard: while paused, a manual run claims nothing at all", async (t) => {
+test("limited trial before the migration is applied: the selective endpoint fails closed and nothing is claimed", async () => {
+  queue.setSelectiveAvailable(false);
+  queue.enqueue({ id: "radar-older", idempotencyKey: "r", contextType: "price_radar" });
+  queue.enqueue({ idempotencyKey: "t", filterId: "22222222-2222-4222-8222-222222222222" });
+  const before = JSON.stringify(queue.jobs);
+  const provider = craftedProvider({});
+  const summary = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, selector: { filterId: "22222222-2222-4222-8222-222222222222" } });
+  assert.equal(summary.claimed, 0);
+  assert.equal(summary.claimError, "OLX_SELECTIVE_CLAIM_UNAVAILABLE");
+  assert.equal(provider.launches, 0);
+  assert.equal(JSON.stringify(queue.jobs), before);
+  assert.ok(!queue.requests.some((request) => request.path === "/api/olx-worker/claim"));
+});
+
+test("limited trial: while paused, a manual run claims nothing at all", async (t) => {
   const browser = requireChromium(t); if (!browser) return;
   queue.enqueue({ idempotencyKey: "other" });
-  const summary = await runBatch(deps(config(), browser.provider(OK_PAGE), memoryStore(today({ browserMs: 479_000 }))), { maxJobs: 1, expectFilterId: "22222222-2222-4222-8222-222222222222" });
+  const summary = await runBatch(deps(config(), browser.provider(OK_PAGE), memoryStore(today({ browserMs: 479_000 }))), { maxJobs: 1, selector: { filterId: "22222222-2222-4222-8222-222222222222" } });
   assert.equal(summary.outcome, "paused");
   assert.equal(queue.requests.length, 0);
   assert.equal(queue.jobs[0].status, "queued");
