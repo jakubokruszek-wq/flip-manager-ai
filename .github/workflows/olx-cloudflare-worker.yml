@@ -17,6 +17,7 @@ on:
       - "app/api/olx-worker/**"
       - "features/flip-finder/otodom-search.ts"
       - ".github/workflows/olx-cloudflare-worker.yml"
+      - ".github/workflows/olx-cloudflare-stage2.yml"
 
 permissions:
   contents: read

@@ -12,16 +12,20 @@ import type { ClaimSelector } from "./selective-claim-client.ts";
 import { createLogger, type DiagnosticEvent } from "./logger.ts";
 import { budgetLimits, nextAlarmDelayMs, runBatch, type BatchSummary } from "./runner.ts";
 import { isAuthorizedAdmin } from "./admin-auth.ts";
+import { runnerVersionStale, versionReport } from "./version-sync.ts";
 
 export type Env = {
   BROWSER: Fetcher;
   OLX_RUNNER: DurableObjectNamespace<OlxCloudRunner>;
   OLX_WORKER_SECRET?: string;
   OLX_CLOUD_ADMIN_TOKEN?: string;
+  CF_VERSION_METADATA?: WorkerVersionMetadata;
   [name: string]: unknown;
 };
 
 const RUNNER_NAME = "olx-runner";
+/** The runner refuses work while it runs another deploy than the Worker that called it. */
+const VERSION_MISMATCH = { ok: false, code: "OLX_CLOUD_RUNNER_VERSION_MISMATCH", message: "Durable Object działa na innej wersji niż Worker; nic nie pobrano. Ponów po chwili." } as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LEDGER_KEY = "ledger";
 const DIAGNOSTICS_KEY = "diagnostics";
@@ -96,7 +100,8 @@ export class OlxCloudRunner extends DurableObject<Env> {
    * (/api/olx-worker/claim-selective); no other job is touched. Auto mode:
    * up to `maxJobs` (1–3) through the regular claim.
    */
-  async runOnce(maxJobs: number, selector: ClaimSelector | null): Promise<{ ok: boolean; code?: string; message?: string; summary?: Omit<BatchSummary, "ledger"> & { ledger: Ledger } }> {
+  async runOnce(maxJobs: number, selector: ClaimSelector | null, workerVersion: string | null = null): Promise<{ ok: boolean; code?: string; message?: string; summary?: Omit<BatchSummary, "ledger"> & { ledger: Ledger } }> {
+    if (runnerVersionStale({ worker: workerVersion, runner: this.versionId() })) return VERSION_MISMATCH;
     const loaded = loadCloudConfig(this.env);
     if (!loaded.ok) return { ok: false, code: loaded.code, message: loaded.message };
     if (this.active) return { ok: false, code: "OLX_CLOUD_RUNNER_BUSY", message: "Runner właśnie przetwarza zadania; spróbuj ponownie za chwilę." };
@@ -108,12 +113,33 @@ export class OlxCloudRunner extends DurableObject<Env> {
   }
 
   /** Connectivity/HMAC check without claiming (see self-test.ts). */
-  async selfTest(withBrowser: boolean, selectiveProbe: boolean): Promise<Record<string, unknown>> {
+  async selfTest(withBrowser: boolean, selectiveProbe: boolean, workerVersion: string | null = null): Promise<Record<string, unknown>> {
+    if (runnerVersionStale({ worker: workerVersion, runner: this.versionId() })) return VERSION_MISMATCH;
     if (this.active) return { ok: false, code: "OLX_CLOUD_RUNNER_BUSY" };
     return runSelfTest(this.env, { withBrowser, selectiveProbe, browser: browserRunProvider(this.env), ledger: {
       load: () => this.ctx.storage.get<Ledger>(LEDGER_KEY),
       save: (ledger) => this.ctx.storage.put(LEDGER_KEY, ledger),
     } });
+  }
+
+  /** Version id of the code and environment this instance runs. */
+  private versionId(): string | null {
+    return this.env.CF_VERSION_METADATA?.id ?? null;
+  }
+
+  /**
+   * Called by the Worker before every admin request with its own (deployed)
+   * version. An idle instance still on another version resets itself; the
+   * Worker's next call then reaches a fresh instance. A running batch is
+   * never interrupted.
+   */
+  async syncVersion(workerVersion: string | null): Promise<{ runner: string | null }> {
+    const runner = this.versionId();
+    if (runnerVersionStale({ worker: workerVersion, runner }) && !this.active) {
+      console.log(JSON.stringify({ timestamp: new Date().toISOString(), event: "OLX_CLOUD_RUNNER_VERSION_RESET", runner, worker: workerVersion }));
+      this.ctx.abort("OLX_CLOUD_RUNNER_VERSION_STALE");
+    }
+    return { runner };
   }
 
   async status(): Promise<Record<string, unknown>> {
@@ -128,6 +154,7 @@ export class OlxCloudRunner extends DurableObject<Env> {
     const ledger = parsed.ok && !this.active ? (storedLedger ? currentLedger(storedLedger, Date.now(), budgetLimits(parsed.config)) : null) : storedLedger ?? null;
     return {
       ok: loaded.ok,
+      runnerVersion: this.versionId(),
       code: loaded.ok ? null : loaded.code,
       message: loaded.ok ? null : loaded.message,
       config,
@@ -200,7 +227,13 @@ export default {
     if (url.pathname !== "/status" && url.pathname !== "/run-once" && url.pathname !== "/selftest") return new Response("Not found", { status: 404 });
     // Admin endpoints exist only when a token is configured, and never reveal whether it is.
     if (!(await isAuthorizedAdmin(request, env.OLX_CLOUD_ADMIN_TOKEN))) return new Response("Not found", { status: 404 });
-    if (request.method === "GET" && url.pathname === "/status") return Response.json(await runner(env).status());
+    const workerVersion = env.CF_VERSION_METADATA?.id ?? null;
+    const runnerReset = await syncRunnerVersion(env, workerVersion);
+    if (request.method === "GET" && url.pathname === "/status") {
+      const { runnerVersion, ...status } = (await runner(env).status()) as Record<string, unknown>;
+      const version = versionReport({ worker: workerVersion, runner: typeof runnerVersion === "string" ? runnerVersion : null }, runnerReset);
+      return Response.json({ ...status, version });
+    }
     if (request.method === "POST" && url.pathname === "/run-once") {
       const jobId = url.searchParams.get("jobId");
       // Only a job id selects; any other selector (e.g. filterId) is refused, never ignored.
@@ -209,15 +242,26 @@ export default {
         return Response.json({ ok: false, code: "OLX_CLOUD_SELECTOR_INVALID", message: "Dozwolony jest wyłącznie parametr jobId (UUID)." }, { status: 400 });
       }
       const selector = jobId ? { jobId } : null;
-      const result = await runner(env).runOnce(Number(url.searchParams.get("maxJobs") ?? "1"), selector);
+      const result = await runner(env).runOnce(Number(url.searchParams.get("maxJobs") ?? "1"), selector, workerVersion);
       return Response.json(result, { status: result.ok ? 200 : 409 });
     }
     if (request.method === "POST" && url.pathname === "/selftest") {
-      return Response.json(await runner(env).selfTest(url.searchParams.get("browser") === "1", url.searchParams.get("selective") === "1"));
+      return Response.json(await runner(env).selfTest(url.searchParams.get("browser") === "1", url.searchParams.get("selective") === "1", workerVersion));
     }
     return new Response("Method not allowed", { status: 405 });
   },
 } satisfies ExportedHandler<Env>;
+
+/** True when the runner instance was on another version and reset itself (see version-sync.ts). */
+async function syncRunnerVersion(env: Env, workerVersion: string | null): Promise<boolean> {
+  try {
+    await runner(env).syncVersion(workerVersion);
+    return false;
+  } catch {
+    // abort() fails the call that triggered it; a new stub reaches the fresh instance.
+    return true;
+  }
+}
 
 function runner(env: Env): DurableObjectStub<OlxCloudRunner> {
   return env.OLX_RUNNER.get(env.OLX_RUNNER.idFromName(RUNNER_NAME));
