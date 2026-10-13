@@ -1,0 +1,43 @@
+name: OLX selective claim checks
+
+# Offline checks for the selective-claim backend (migration, helper, route):
+# embedded PostgreSQL (PGlite) and mocked Supabase. No Supabase, Vercel or
+# Cloudflare request; nothing is deployed or migrated.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/migrations/20261013180000_add_selective_olx_claim.sql"
+      - "supabase/migrations/20260810190000_create_olx_local_worker_queue.sql"
+      - "supabase/migrations/20261008000000_create_price_radar.sql"
+      - "features/flip-finder/server/olx-selective-claim*.ts"
+      - "app/api/olx-worker/**"
+      - ".github/workflows/olx-selective-claim-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - name: Selective claim tests (SQL on PGlite + helper)
+        run: |
+          node --import ./scripts/register-test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test \
+            features/flip-finder/server/olx-selective-claim.test.ts \
+            features/flip-finder/server/olx-selective-claim.rpc.test.ts
+      - name: Existing OLX queue tests
+        run: node --test --experimental-strip-types --experimental-test-module-mocks workers/olx-browser/src/*.test.ts features/flip-finder/olx-worker-protocol.test.ts features/flip-finder/olx-job-state.test.ts
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+      - name: Lint changed files
+        run: npx eslint app/api/olx-worker features/flip-finder/server/olx-selective-claim.ts features/flip-finder/server/olx-selective-claim.test.ts features/flip-finder/server/olx-selective-claim.rpc.test.ts
