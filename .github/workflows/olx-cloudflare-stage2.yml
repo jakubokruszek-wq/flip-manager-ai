@@ -1,0 +1,347 @@
+name: OLX Cloudflare — etap 2 (jedno zadanie Findera, ręcznie)
+
+# Manual only (workflow_dispatch). Operates exclusively the separate test
+# Worker "flip-manager-olx-cloud-stage2" (wrangler.stage2.toml). Never touches
+# "flip-manager-olx-cloud" or "flip-manager-olx-cloud-stage1", Vercel or Supabase.
+#
+# Actions:
+#   deploy-disabled  deploy the Worker DISABLED (OLX_CLOUD_ENABLED=0, manual, no Cron) and set its secrets
+#   check            /status + one /selftest?selective=1 (HMAC heartbeat + claim-selective probe with a random id)
+#   run-one-job      after explicit confirmation: enable for this run only, ONE /run-once?jobId=…,
+#                    then ALWAYS redeploy disabled (also on failure or cancellation)
+#   disable          redeploy disabled (emergency stop)
+#
+# The test claims only the named Finder job through /api/olx-worker/claim-selective.
+# The regular /claim and any filter selector are never used.
+#
+# Repository secrets:
+#   CLOUDFLARE_API_TOKEN_STAGE2   restricted Cloudflare API token (Workers Scripts edit, this account)
+#   CLOUDFLARE_ACCOUNT_ID         Cloudflare account id
+#   OLX_CLOUD_ADMIN_TOKEN_STAGE2  admin bearer token of the stage-2 Worker (>= 32 chars)
+#   OLX_WORKER_SECRET_STAGE2      the app's OLX_WORKER_SECRET (same value as in Vercel)
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Akcja"
+        type: choice
+        options: [check, deploy-disabled, run-one-job, disable]
+        default: check
+      job_id:
+        description: "run-one-job: UUID zadania Findera (olx_scan_jobs.id)"
+        required: false
+        default: ""
+      confirm:
+        description: "run-one-job: wpisz URUCHOM-1-ZADANIE"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: olx-cloudflare-stage2
+  cancel-in-progress: false
+
+env:
+  STAGE2_CONFIG: wrangler.stage2.toml
+  STAGE2_NAME: flip-manager-olx-cloud-stage2
+  STAGE2_URL: https://flip-manager-olx-cloud-stage2.jakub-okruszek.workers.dev
+  # /status of the deployed, DISABLED Worker.
+  DISABLED_FILTER: >-
+    .code == "OLX_CLOUD_DISABLED"
+    and .configCheck.killSwitch == "disabled"
+    and .configCheck.stage1Lock == false
+    and .configCheck.valid == true
+    and .configCheck.workerSecret == "set"
+    and .configCheck.adminToken == "set"
+    and .config.claimMode == "manual"
+    and .config.workerId == "cloudflare-olx-stage2"
+    and .config.maxJobsPerDay == 1
+    and .config.maxJobsPerInvocation == 1
+    and .config.maxHeldJobs == 1
+    and .config.safeBrowserBudgetSeconds == 120
+    and .running == false
+    and .nextAlarm == null
+  # /status while enabled for the single test run: still manual, no alarm.
+  ENABLED_FILTER: >-
+    .ok == true
+    and .configCheck.killSwitch == "enabled"
+    and .config.claimMode == "manual"
+    and .config.workerId == "cloudflare-olx-stage2"
+    and .config.maxJobsPerDay == 1
+    and .config.maxJobsPerInvocation == 1
+    and .running == false
+    and .nextAlarm == null
+
+jobs:
+  stage2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: olx-cloudflare-stage2
+    defaults:
+      run:
+        shell: bash
+        working-directory: workers/olx-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Kontrola wejścia
+        working-directory: .
+        env:
+          ACTION: ${{ inputs.action }}
+          JOB_ID: ${{ inputs.job_id }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          echo "Akcja: $ACTION, commit: $GITHUB_SHA"
+          if [ "$ACTION" = "run-one-job" ]; then
+            [[ "$JOB_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo "::error::job_id musi być UUID zadania (olx_scan_jobs.id)"; exit 1; }
+            [ "$CONFIRM" = "URUCHOM-1-ZADANIE" ] || { echo "::error::Brak potwierdzenia: wpisz URUCHOM-1-ZADANIE"; exit 1; }
+          elif [ -n "$JOB_ID" ] || [ -n "$CONFIRM" ]; then
+            echo "::error::job_id i confirm są dozwolone tylko dla run-one-job"; exit 1
+          fi
+
+      - name: Kontrola sekretów (bez wypisywania wartości)
+        env:
+          ACTION: ${{ inputs.action }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE2 }}
+          WORKER_SECRET: ${{ secrets.OLX_WORKER_SECRET_STAGE2 }}
+        run: |
+          set -euo pipefail
+          [ "${#ADMIN_TOKEN}" -ge 32 ] || { echo "::error::Brak lub zbyt krótki OLX_CLOUD_ADMIN_TOKEN_STAGE2"; exit 1; }
+          if [ "$ACTION" != "check" ]; then
+            [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "::error::Brak CLOUDFLARE_API_TOKEN_STAGE2"; exit 1; }
+            [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]] || { echo "::error::CLOUDFLARE_ACCOUNT_ID musi mieć 32 znaki hex"; exit 1; }
+          fi
+          if [ "$ACTION" = "deploy-disabled" ]; then
+            [ "${#WORKER_SECRET}" -ge 32 ] || { echo "::error::Brak lub zbyt krótki OLX_WORKER_SECRET_STAGE2"; exit 1; }
+          fi
+          echo "Sekrety obecne."
+
+      - name: Kontrola konfiguracji wrangler.stage2.toml
+        if: ${{ inputs.action != 'check' }}
+        run: |
+          set -euo pipefail
+          f="$STAGE2_CONFIG"
+          toplevel="$(awk '/^[[:space:]]*\[/{exit} {print}' "$f")"
+          [ "$(printf '%s\n' "$toplevel" | grep -Ec '^name[[:space:]]*=')" = "1" ] || { echo "::error::Wymagana dokładnie jedna nazwa Workera"; exit 1; }
+          printf '%s\n' "$toplevel" | grep -Eq "^name = \"$STAGE2_NAME\"$" || { echo "::error::Nazwa Workera inna niż $STAGE2_NAME"; exit 1; }
+          if grep -Eq '^name[[:space:]]*=[[:space:]]*"flip-manager-olx-cloud(-stage1)?"' "$f"; then echo "::error::Konfiguracja wskazuje inny Worker"; exit 1; fi
+          if grep -Eq '^\[triggers\]|^crons[[:space:]]*=' "$f"; then echo "::error::Worker etapu 2 nie może mieć Cron Trigger"; exit 1; fi
+          if grep -Eq '^[[:space:]]*(route|routes)[[:space:]]*=|^\[\[routes\]\]|^\[env\.' "$f"; then echo "::error::Niedozwolone trasy lub środowiska"; exit 1; fi
+          if grep -Eq '^(OLX_WORKER_SECRET|OLX_CLOUD_ADMIN_TOKEN)' "$f"; then echo "::error::Sekret w pliku konfiguracji"; exit 1; fi
+          expect() {
+            [ "$(grep -Ec "^$1[[:space:]]*=" "$f")" = "1" ] || { echo "::error::$1 musi wystąpić dokładnie raz"; exit 1; }
+            grep -Eq "^$1 = \"$2\"$" "$f" || { echo "::error::$1 musi mieć wartość \"$2\""; exit 1; }
+            echo "OK  $1 = \"$2\""
+          }
+          expect OLX_CLOUD_ENABLED 0
+          expect OLX_CLOUD_CLAIM_MODE manual
+          expect OLX_CLOUD_MAX_JOBS_PER_DAY 1
+          expect OLX_CLOUD_MAX_JOBS_PER_INVOCATION 1
+          expect OLX_CLOUD_MAX_HELD_JOBS 1
+          expect OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS 120
+          expect OLX_CLOUD_WORKER_ID cloudflare-olx-stage2
+
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.action != 'check' }}
+        with:
+          node-version: 22
+
+      - name: Instalacja zależności Workera
+        if: ${{ inputs.action != 'check' }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Dry-run (bez wysyłania)
+        if: ${{ inputs.action != 'check' }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run --outdir dist-stage2 --config "$STAGE2_CONFIG" | tee dry-run.log
+          for expected in 'env.OLX_CLOUD_ENABLED ("0")' 'env.OLX_CLOUD_CLAIM_MODE ("manual")' 'env.OLX_CLOUD_MAX_JOBS_PER_DAY ("1")' 'env.OLX_CLOUD_MAX_JOBS_PER_INVOCATION ("1")' 'env.OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS ("120")'; do
+            grep -Fq "$expected" dry-run.log || { echo "::error::Dry-run nie pokazuje: $expected"; exit 1; }
+          done
+          if grep -Eiq 'schedule|cron' dry-run.log; then echo "::error::Dry-run pokazuje harmonogram"; exit 1; fi
+
+      # ---------- deploy-disabled / disable ----------
+      - name: Wdrożenie WYŁĄCZONEGO Workera etapu 2
+        if: ${{ inputs.action == 'deploy-disabled' || inputs.action == 'disable' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config "$STAGE2_CONFIG" | tee deploy.log
+          grep -Fq "Uploaded $STAGE2_NAME" deploy.log || { echo "::error::Wynik wdrożenia nie wskazuje $STAGE2_NAME"; exit 1; }
+          if grep -Eiq 'schedule:' deploy.log; then echo "::error::Wdrożono harmonogram"; exit 1; fi
+          grep -Fq "$STAGE2_URL" deploy.log || { echo "::error::Adres Workera inny niż $STAGE2_URL"; exit 1; }
+
+      - name: Sekrety Workera etapu 2 (tylko w nim)
+        if: ${{ inputs.action == 'deploy-disabled' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE2 }}
+          WORKER_SECRET: ${{ secrets.OLX_WORKER_SECRET_STAGE2 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put OLX_CLOUD_ADMIN_TOKEN --config "$STAGE2_CONFIG"
+          printf '%s' "$WORKER_SECRET" | npx wrangler secret put OLX_WORKER_SECRET --config "$STAGE2_CONFIG"
+
+      - name: Weryfikacja stanu wyłączonego
+        if: ${{ inputs.action == 'deploy-disabled' || inputs.action == 'disable' }}
+        working-directory: .
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE2 }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl -fsS --max-time 20 "$STAGE2_URL/health" -o health.json; then break; fi
+            echo "Czekam na workers.dev ($attempt/12)..."; sleep 10
+          done
+          grep -Fq '"ok":true' health.json || { echo "::error::/health nie odpowiada"; exit 1; }
+          [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$STAGE2_URL/status")" = "404" ] || { echo "::error::/status bez tokenu nie zwraca 404"; exit 1; }
+          ok=""
+          for attempt in $(seq 1 12); do
+            curl -sS --max-time 20 -o status.json -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE2_URL/status" || true
+            if jq -e "$DISABLED_FILTER" status.json >/dev/null 2>&1; then ok=1; break; fi
+            echo "Czekam na nową wersję i sekrety ($attempt/12)..."; sleep 10
+          done
+          jq '{code, configCheck, config: {claimMode: .config.claimMode, workerId: .config.workerId, maxJobsPerDay: .config.maxJobsPerDay, maxJobsPerInvocation: .config.maxJobsPerInvocation, safeBrowserBudgetSeconds: .config.safeBrowserBudgetSeconds}, running, nextAlarm, ledger}' status.json || true
+          [ -n "$ok" ] || { echo "::error::Worker nie potwierdza stanu wyłączonego"; exit 1; }
+          {
+            echo "## OLX Cloudflare etap 2 — Worker WYŁĄCZONY"
+            echo "- Worker: \`$STAGE2_NAME\` ($STAGE2_URL), commit \`$GITHUB_SHA\`"
+            echo '```json'; jq '{code, configCheck, ledger, nextAlarm, running}' status.json; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- check ----------
+      - name: Sprawdzenie konfiguracji i połączenia
+        if: ${{ inputs.action == 'check' || inputs.action == 'run-one-job' }}
+        working-directory: .
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE2 }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o status-before.json -w '%{http_code}' --max-time 20 -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE2_URL/status")"
+          [ "$code" = "200" ] || { echo "::error::/status zwrócił HTTP $code (Worker nie wdrożony albo inny token)"; exit 1; }
+          jq '{code, configCheck, claimMode: .config.claimMode, maxJobsPerDay: .config.maxJobsPerDay, running, nextAlarm, ledger, paused}' status-before.json
+          jq -e "$DISABLED_FILTER" status-before.json >/dev/null || { echo "::error::Worker nie jest w bezpiecznym stanie wyłączonym — przerwano (uruchom akcję disable)"; exit 1; }
+          if [ "$ACTION" = "run-one-job" ]; then
+            # /status already rolls the ledger over at UTC midnight, so today's counters are shown.
+            jq -e '.ledger == null or ((.ledger.jobsClaimed // 0) == 0 and .ledger.openSession == null)' status-before.json >/dev/null \
+              || { echo "::error::Dzienny limit 1 zadania na dziś został już wykorzystany (wznowienie po północy UTC). Nic nie uruchomiono."; exit 1; }
+            jq -e '.paused == null' status-before.json >/dev/null \
+              || { echo "::error::Worker jest wstrzymany: $(jq -r '.paused.code' status-before.json). Nic nie uruchomiono."; exit 1; }
+          fi
+          # Exactly one self-test: signed heartbeat for a random job id (409 expected) and a
+          # claim-selective probe with a random job id ({ job: null } expected). No retry.
+          code="$(curl -sS -X POST -o selftest.json -w '%{http_code}' --max-time 60 -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE2_URL/selftest?selective=1")"
+          [ "$code" = "200" ] || { echo "::error::/selftest zwrócił HTTP $code"; exit 1; }
+          jq '{queueApi, selectiveClaim, browserRun}' selftest.json
+          jq -e '.browserRun == null' selftest.json >/dev/null || { echo "::error::Nieoczekiwany test przeglądarki"; exit 1; }
+          jq -e '.queueApi.ok == true and .queueApi.status == 409' selftest.json >/dev/null || { echo "::error::HMAC / połączenie z aplikacją nie działa (oczekiwano 409 OLX_JOB_LEASE_LOST)"; exit 1; }
+          jq -e '.selectiveClaim.ok == true' selftest.json >/dev/null \
+            || { echo "::error::claim-selective niedostępny: $(jq -r '.selectiveClaim.meaning' selftest.json). Wymagane: migracja 20261013180000 + wdrożenie aplikacji z /api/olx-worker/claim-selective."; exit 1; }
+          {
+            echo "## OLX Cloudflare etap 2 — kontrola"
+            echo "- Worker wyłączony, tryb manual, limit 1 zadanie/dzień, budżet 120 s"
+            echo "- HMAC: \`queueApi.ok=true\` (409), claim-selective: dostępny"
+            echo "- Dziś: przeglądarka $(jq -r '(.browserSecondsUsedToday // 0)' status-before.json) s, zadania $(jq -r '(.ledger.jobsClaimed // 0)' status-before.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- run-one-job ----------
+      - name: Włączenie tylko na czas jednego zadania
+        id: enable
+        if: ${{ inputs.action == 'run-one-job' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE2 }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config "$STAGE2_CONFIG" --var OLX_CLOUD_ENABLED:1 | tee enable.log
+          grep -Fq "Uploaded $STAGE2_NAME" enable.log || { echo "::error::Wynik wdrożenia nie wskazuje $STAGE2_NAME"; exit 1; }
+          if grep -Eiq 'schedule:' enable.log; then echo "::error::Wdrożono harmonogram"; exit 1; fi
+          ok=""
+          for attempt in $(seq 1 12); do
+            curl -sS --max-time 20 -o status-enabled.json -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE2_URL/status" || true
+            if jq -e "$ENABLED_FILTER" status-enabled.json >/dev/null 2>&1; then ok=1; break; fi
+            echo "Czekam na włączoną wersję ($attempt/12)..."; sleep 5
+          done
+          [ -n "$ok" ] || { echo "::error::Włączona wersja nie potwierdza trybu manual"; exit 1; }
+
+      - name: Dokładnie jedno /run-once dla wskazanego jobId
+        id: run
+        if: ${{ inputs.action == 'run-one-job' && steps.enable.outcome == 'success' }}
+        working-directory: .
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE2 }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          set -euo pipefail
+          # One request, no retry. The Worker claims only this Finder job (claim-selective).
+          code="$(curl -sS -X POST -o run.json -w '%{http_code}' --max-time 300 -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE2_URL/run-once?jobId=${JOB_ID}")" || { echo "::error::Żądanie /run-once nie powiodło się (bez ponowienia)"; exit 1; }
+          echo "HTTP $code"
+          jq '{ok, code, message, summary: (.summary // {} | {outcome, claimed, completed, failed, leaseLost, rejected, browserLaunches, subrequests, claimError, stop: (.stop // null | if . then {code, message} else null end)})}' run.json || true
+
+      - name: ZAWSZE wyłącz Workera po teście
+        if: ${{ always() && inputs.action == 'run-one-job' && steps.enable.outcome != 'skipped' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npx wrangler deploy --config "$STAGE2_CONFIG" | tee disable.log && grep -Fq "Uploaded $STAGE2_NAME" disable.log; then exit 0; fi
+            echo "Ponawiam wyłączenie ($attempt/3)..."; sleep 10
+          done
+          echo "::error::NIE UDAŁO SIĘ WYŁĄCZYĆ Workera — uruchom akcję disable"; exit 1
+
+      - name: Wynik, czas przeglądarki i stan po teście
+        if: ${{ always() && inputs.action == 'run-one-job' && steps.enable.outcome != 'skipped' }}
+        working-directory: .
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE2 }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          set -euo pipefail
+          disabled=""
+          for attempt in $(seq 1 12); do
+            curl -sS --max-time 20 -o status-after.json -H "authorization: Bearer ${ADMIN_TOKEN}" "$STAGE2_URL/status" || true
+            if jq -e '.code == "OLX_CLOUD_DISABLED" and .running == false and .nextAlarm == null' status-after.json >/dev/null 2>&1; then disabled=1; break; fi
+            echo "Czekam na wyłączoną wersję ($attempt/12)..."; sleep 5
+          done
+          [ -f run.json ] || echo '{}' > run.json
+          {
+            echo "## OLX Cloudflare etap 2 — wynik testu jednego zadania"
+            echo "- Zadanie: \`$JOB_ID\`"
+            echo "- Worker po teście: $([ -n "$disabled" ] && echo 'WYŁĄCZONY ✅' || echo 'NIEPOTWIERDZONY — uruchom akcję disable ⚠️')"
+            echo ""
+            echo "### /run-once"
+            echo '```json'
+            jq '{ok, code, message, summary: (.summary // {} | {outcome, claimed, completed, failed, leaseLost, browserLaunches, claimError, stop: (.stop // null | if . then {code, message} else null end)})}' run.json || true
+            echo '```'
+            echo "### Czas przeglądarki i licznik dnia"
+            echo '```json'
+            jq '{browserSecondsUsedToday, ledger: (.ledger // {} | {day, browserMs, sessions, jobsClaimed, jobsCompleted, jobsFailed, jobsRejected, stop: (.stop // null | if . then .code else null end)})}' status-after.json || true
+            echo '```'
+            echo "### Zdarzenia (bez tokenów)"
+            echo '```json'
+            jq '[.recent[]? | select(.event | test("^(JOB_|OLX_PAGE_VERIFIED|BROWSER_SESSION|OLX_CLOUD_)")) | {event, jobId, code, rawItems, normalizedItems, domCards, warnings, chargedMs}]' status-after.json || true
+            echo '```'
+            echo "### Stan kolejki — sprawdź w Supabase (SQL Editor, tylko odczyt)"
+            echo '```sql'
+            echo "select id, context_type, status, attempts, worker_id, error_code, finished_at from public.olx_scan_jobs where id = '$JOB_ID';"
+            echo "select context_type, status, count(*) from public.olx_scan_jobs where worker_id like 'cloudflare%' group by 1, 2;"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ -n "$disabled" ] || { echo "::error::Nie potwierdzono wyłączenia Workera"; exit 1; }
+          jq -e '.ok == true and .summary.claimed == 1 and .summary.completed == 1' run.json >/dev/null \
+            || { echo "::error::Zadanie nie zostało ukończone — szczegóły w podsumowaniu (Worker jest wyłączony)"; exit 1; }
+          echo "Zadanie $JOB_ID ukończone, Worker wyłączony."
