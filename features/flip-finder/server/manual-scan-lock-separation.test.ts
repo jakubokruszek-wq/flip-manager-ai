@@ -228,10 +228,12 @@ mock.module("@/lib/supabase/admin", { namedExports: { createAdminClient: () => c
 const olxResumableRuns = new Map<string, string>();
 const olxResults = new Map<string, { source: string; status: "pending" | "completed" | "failed"; fetched: number; normalized: number; matched: number; listingsCreated: number; newMatches: number; updated: number; priceDrops: number; rejected: number; durationMs: number; errorCode: string | null; errorMessage: string | null; warnings: string[]; matchDiagnostics: Record<string, number> }>();
 const olxEnqueueCalls: string[] = [];
+/** Simulated OLX queue failure: OLX_MULTIPLE_RUN_IDS (ambiguous) or a read error. */
+let olxQueueFailure: Error | null = null;
 mock.module("@/features/flip-finder/server/olx-jobs", {
   namedExports: {
-    resumableOlxRunId: async (filterId: string) => olxResumableRuns.get(filterId) ?? null,
-    existingOlxScanResult: async (runId: string) => olxResults.get(runId) ?? null,
+    resumableOlxRunId: async (filterId: string) => { if (olxQueueFailure) throw olxQueueFailure; return olxResumableRuns.get(filterId) ?? null; },
+    existingOlxScanResult: async (runId: string) => { if (olxQueueFailure && olxQueueFailure.message !== "OLX_MULTIPLE_RUN_IDS") throw olxQueueFailure; return olxResults.get(runId) ?? null; },
     enqueueOlxJob: async (filter: { id: string }, runId: string) => {
       olxEnqueueCalls.push(`${filter.id}:${runId}`);
       olxResumableRuns.set(filter.id, runId);
@@ -740,4 +742,106 @@ test("a Watcher-owned facebook source_scan that already failed with COLLECTOR_UP
   const facebookResult = summary.sourceResults.find((result) => result.source === "facebook");
   assert.equal(facebookResult?.status, "completed", "Finder's own facebook step must complete normally, never inheriting the Watcher's COLLECTOR_UPLOAD_422 failure");
   assert.equal(facebookResult?.errorCode, null, "Finder's own result must carry no error at all from the unrelated Watcher failure");
+});
+
+// 13.10.2026 isolation of the OLX queue from the other portals: an OLX job
+// from an earlier run, still waiting in its own queue, must neither pull a new
+// portal cycle into that old run nor be queued a second time.
+const otodomOlxFilter = { ...facebookOnlyFilter, id: "filter-otodom-olx", name: "Flip (Otodom + OLX)", sources: ["otodom", "olx"] };
+
+function seedQueuedOlx(runId: string) {
+  olxResumableRuns.clear();
+  olxResults.clear();
+  olxEnqueueCalls.length = 0;
+  olxResumableRuns.set(otodomOlxFilter.id, runId);
+  olxResults.set(runId, { source: "olx", status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode: null, errorMessage: "OLX: oczekuje na lokalny worker", warnings: [], matchDiagnostics: { rejectedByPrice: 0, rejectedByPricePerSqm: 0, rejectedByRooms: 0, rejectedByDistrict: 0, rejectedByArea: 0, rejectedByBuildingType: 0, matched: 0 } });
+}
+
+test("an OLX job queued since an earlier run: the next portal cycle gets a fresh run and no second OLX job is queued", async () => {
+  seedQueuedOlx("run-olx-0730");
+  const oldOlxRow = { id: "olx-0730", search_filter_id: otodomOlxFilter.id, source: "olx", status: "pending", started_at: "2026-10-13T07:30:00.000Z", scan_run_id: "run-olx-0730" };
+  const oldOtodomRow = { id: "otodom-0730", search_filter_id: otodomOlxFilter.id, source: "otodom", status: "completed", started_at: "2026-10-13T07:30:00.000Z", scan_run_id: "run-olx-0730" };
+  current = fakeAdmin([oldOlxRow, oldOtodomRow]);
+  const start = await startFinderScanForFilter(otodomOlxFilter as never, "run-1230", current.client as never, "scheduler");
+  assert.equal(start.runId, "run-1230", "the portals are not attached to the 07:30 run");
+  assert.deepEqual(olxEnqueueCalls, [], "no duplicate OLX job while the 07:30 one is queued");
+  const reserved = current.sourceScans.filter((row) => row.scan_run_id === "run-1230");
+  assert.deepEqual(reserved.map((row) => [row.source, row.status]), [["otodom", "pending"]]);
+  assert.deepEqual(current.sourceScans.find((row) => row.id === "olx-0730"), oldOlxRow, "the queued OLX row and its run history are untouched");
+  assert.deepEqual(current.sourceScans.find((row) => row.id === "otodom-0730"), oldOtodomRow);
+
+  const summary = await runManualOtodomScan(otodomOlxFilter.id, { filter: otodomOlxFilter as never, runId: start.runId, supabase: current.client as never, skipLock: true, usePreparedRows: true });
+  assert.deepEqual(olxEnqueueCalls, [], "running the new cycle does not queue OLX either");
+  assert.equal(summary.status, "completed", "the new run completes on its own portals; OLX belongs to the 07:30 run");
+  assert.ok(summary.warnings.some((warning) => warning.includes("OLX_PREVIOUS_JOB_IN_QUEUE") && warning.includes("run-olx-0730")));
+  assert.ok(!summary.sourceResults.some((result) => result.source === "olx"), "OLX is not reported as part of the new run");
+});
+
+test("after the old OLX job finished, the next cycle queues exactly one OLX job for its own run", async () => {
+  seedQueuedOlx("run-olx-0730");
+  olxResumableRuns.clear(); // the 07:30 job completed (20:06)
+  current = fakeAdmin([]);
+  const start = await startFinderScanForFilter(otodomOlxFilter as never, "run-2230", current.client as never, "scheduler");
+  assert.equal(start.runId, "run-2230");
+  assert.deepEqual(olxEnqueueCalls, ["filter-otodom-olx:run-2230"]);
+  await runManualOtodomScan(otodomOlxFilter.id, { filter: otodomOlxFilter as never, runId: start.runId, supabase: current.client as never, skipLock: true, usePreparedRows: true });
+  assert.deepEqual(olxEnqueueCalls, ["filter-otodom-olx:run-2230"], "the run itself finds its own job and does not queue another");
+});
+
+test("portals still pending in the same run as the queued OLX job keep resuming that run", async () => {
+  seedQueuedOlx("run-same");
+  current = fakeAdmin([{ id: "otodom-same", search_filter_id: otodomOlxFilter.id, source: "otodom", status: "pending", started_at: new Date().toISOString(), scan_run_id: "run-same" }]);
+  const start = await startFinderScanForFilter(otodomOlxFilter as never, "run-unused", current.client as never, "scheduler");
+  assert.equal(start.runId, "run-same");
+  assert.deepEqual(olxEnqueueCalls, []);
+});
+
+test("an OLX-only filter keeps following its queued job instead of creating a new run", async () => {
+  seedQueuedOlx("run-olx-only");
+  olxResumableRuns.set(olxOnlyFilter.id, "run-olx-only");
+  current = fakeAdmin([]);
+  const start = await startFinderScanForFilter(olxOnlyFilter as never, "run-unused", current.client as never, "scheduler");
+  assert.equal(start.runId, "run-olx-only");
+  assert.deepEqual(olxEnqueueCalls, []);
+});
+
+// OLX queue failure isolation: with other portals, an ambiguous (OLX_MULTIPLE_RUN_IDS)
+// or unreadable OLX queue is an OLX-only problem: no OLX job, a warning, the portals run.
+for (const [code, failure] of [["OLX_MULTIPLE_RUN_IDS", new Error("OLX_MULTIPLE_RUN_IDS")], ["OLX_QUEUE_READ_FAILED", new Error("Nie udało się sprawdzić stanu kolejki OLX: connection reset")]] as const) {
+  test(`${code} in the OLX queue does not stop the other portals of a mixed filter and queues no OLX job`, async () => {
+    seedQueuedOlx("run-unused");
+    olxResumableRuns.clear();
+    olxQueueFailure = failure;
+    const warn = mock.method(console, "warn", () => undefined);
+    try {
+      current = fakeAdmin([]);
+      const start = await startFinderScanForFilter(otodomOlxFilter as never, `run-${code}`, current.client as never, "scheduler");
+      assert.equal(start.runId, `run-${code}`);
+      assert.deepEqual(current.sourceScans.map((row) => [row.source, row.status]), [["otodom", "pending"]], "the other portals are reserved");
+      const summary = await runManualOtodomScan(otodomOlxFilter.id, { filter: otodomOlxFilter as never, runId: start.runId, supabase: current.client as never, skipLock: true, usePreparedRows: true });
+      assert.deepEqual(olxEnqueueCalls, [], "no OLX job while the queue state is unknown");
+      assert.equal(summary.status, "completed", "the portals' run completes");
+      assert.equal(summary.sourcesFailed, 0, "the OLX queue problem is a warning, not a failed portal");
+      assert.ok(summary.warnings.some((warning) => warning.startsWith(`olx: ${code}:`)), summary.warnings.join(" | "));
+      assert.ok(warn.mock.calls.some((call) => call.arguments[0] === "FINDER_OLX_QUEUE_DEGRADED" && (call.arguments[1] as { code: string }).code === code));
+    } finally {
+      warn.mock.restore();
+      olxQueueFailure = null;
+    }
+  });
+}
+
+test("an OLX-only filter keeps the previous protection: OLX_MULTIPLE_RUN_IDS is 429, a queue read error is 500, nothing is queued", async () => {
+  olxEnqueueCalls.length = 0;
+  current = fakeAdmin([]);
+  try {
+    olxQueueFailure = new Error("OLX_MULTIPLE_RUN_IDS");
+    await assert.rejects(startFinderScanForFilter(olxOnlyFilter as never, "run-x", current.client as never, "scheduler"), (error: Error & { status?: number }) => error.status === 429 && /niespójne/.test(error.message));
+    olxQueueFailure = new Error("Nie udało się sprawdzić stanu kolejki OLX: connection reset");
+    await assert.rejects(startFinderScanForFilter(olxOnlyFilter as never, "run-x", current.client as never, "scheduler"), (error: Error & { status?: number }) => error.status === 500);
+    assert.deepEqual(olxEnqueueCalls, []);
+    assert.equal(current.sourceScans.length, 0);
+  } finally {
+    olxQueueFailure = null;
+  }
 });

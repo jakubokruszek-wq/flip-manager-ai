@@ -20,6 +20,15 @@ export { FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, finderScanIntervalMinutes, i
 // the routes' current 60-second limit; the five-minute trigger picks up the
 // next due filter on its next invocation.
 export const FINDER_SCHEDULER_MAX_FILTERS_PER_RUN = 1;
+/**
+ * Sources with their own queue and lifecycle (olx_scan_jobs, served by a
+ * separate worker). Their pending source_scans row only means "a job is in
+ * that queue": it may wait for hours (13.10.2026: OLX pending 07:30-20:06
+ * blocked every other portal of filter "Flip"). Duplicate OLX jobs are
+ * prevented by the OLX queue itself (see startFinderScanForFilter), so these
+ * sources never hold the Finder cadence of the other portals.
+ */
+export const FINDER_SCHEDULER_INDEPENDENT_SOURCES: ReadonlySet<string> = new Set(["olx"]);
 const FINDER_SCHEDULER_DB_TIMEOUT_MS = 8_000;
 
 export type FinderSchedulerSummary = {
@@ -72,6 +81,7 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
   const dependencies = defaultDependencies(overrides);
   const filters = await dependencies.listFilters();
   const due = dueFinderFilters(filters, now);
+  console.info("FINDER_SCHEDULER_CYCLE_START", { at: now.toISOString(), checked: filters.length, due: due.map((filter) => filter.id) });
   const summary: FinderSchedulerSummary = {
     status: "completed",
     checked: filters.length,
@@ -90,10 +100,12 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
     try {
       if (await dependencies.hasRunningScan(filter)) {
         summary.skippedRunning += 1;
+        console.info("FINDER_SCHEDULER_SKIPPED", { filterId: filter.id, reason: "SOURCE_SCAN_IN_PROGRESS" });
         continue;
       }
       if (!await dependencies.claimFilter(filter, now)) {
         summary.skippedRunning += 1;
+        console.info("FINDER_SCHEDULER_SKIPPED", { filterId: filter.id, reason: "CLAIM_LOST" });
         continue;
       }
       let start: ManualScanStart;
@@ -102,6 +114,7 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
       } catch (startError) {
         if (isRunningScanError(startError)) {
           summary.skippedRunning += 1;
+          console.info("FINDER_SCHEDULER_SKIPPED", { filterId: filter.id, reason: "RESERVATION_LOCKED" });
           continue;
         }
         // The claim already advanced last_scanned_at, but no scan actually
@@ -121,13 +134,26 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
       summary.runs.push({ filterId: filter.id, runId: result.runId, status: result.status });
       if (result.status === "completed") summary.completed += 1;
       else summary.partial += 1;
+      // The portion that ran in this invocation; pending sources continue via finder-scan-continuation.
+      console.info("FINDER_SCHEDULER_RUN_RESULT", {
+        filterId: filter.id,
+        runId: result.runId,
+        status: result.status,
+        sourcesRun: result.sourcesRun,
+        sourcesCompleted: result.sourcesCompleted,
+        sourcesFailed: result.sourcesFailed,
+        pendingSources: (result.sourceResults ?? []).filter((source) => source.status === "pending").map((source) => source.source),
+      });
     } catch (error) {
       if (isRunningScanError(error)) {
         summary.skippedRunning += 1;
+        console.info("FINDER_SCHEDULER_SKIPPED", { filterId: filter.id, reason: "RESERVATION_LOCKED" });
         continue;
       }
       summary.status = "partial";
-      summary.errors.push(`${filter.id}: ${error instanceof Error ? error.message : "Nie udało się uruchomić skanu."}`);
+      const cause = error instanceof Error ? error.message : "Nie udało się uruchomić skanu.";
+      summary.errors.push(`${filter.id}: ${cause}`);
+      console.error("FINDER_SCHEDULER_FILTER_FAILED", { filterId: filter.id, cause });
     }
   }
 
@@ -193,8 +219,14 @@ export async function revertFinderFilterClaim(supabase: DatabaseClient, filter: 
   if (error) throw new Error(`FINDER_SCHEDULER_CLAIM_REVERT_FAILED: ${error.message}`);
 }
 
-async function hasRunningFinderScan(supabase: DatabaseClient, filter: SearchFilter): Promise<boolean> {
-  const sourceIds = activeSources(filter).map((source) => source.id);
+/** Sources whose pending/running rows block a new automatic run (see FINDER_SCHEDULER_INDEPENDENT_SOURCES). */
+export function finderSchedulerLockSources(filter: SearchFilter): string[] {
+  return activeSources(filter).map((source) => source.id).filter((source) => !FINDER_SCHEDULER_INDEPENDENT_SOURCES.has(source));
+}
+
+/** Exported for tests: the real query, driven against a recorded fake client. */
+export async function hasRunningFinderScan(supabase: DatabaseClient, filter: SearchFilter): Promise<boolean> {
+  const sourceIds = finderSchedulerLockSources(filter);
   if (!sourceIds.length) return false;
   const { data, error } = await supabase
     .from("source_scans")

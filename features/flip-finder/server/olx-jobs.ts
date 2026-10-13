@@ -256,7 +256,11 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
   const completed = await supabase.from("olx_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: result, error_code: null, error_message: null })
     .eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("status", "running");
   if (completed.error) throw new Error(`OLX_JOB_FINALIZE_FAILED: ${completed.error.message}`);
-  await supabase.from("search_filters").update({ last_scanned_at: now }).eq("id", filter.id);
+  // search_filters.last_scanned_at is the Finder cadence clock of ALL the
+  // filter's portals, set when a run starts (finder-scheduler claim) or ends
+  // (runManualOtodomScan). A late OLX completion (13.10.2026: 20:06 for a run
+  // started 07:30) must not move it, or every other portal waits a full
+  // interval from the OLX finish instead of from its own run.
   return result;
 }
 

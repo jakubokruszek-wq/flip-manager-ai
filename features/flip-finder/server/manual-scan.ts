@@ -108,22 +108,38 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
   // Finder source_scans row for it; enqueueOlxJob creates the one async row.
   const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
   let olxRunId: string | null = null;
+  // Set when the OLX queue cannot be read unambiguously. With other portals,
+  // that is an OLX-only problem: no OLX job is queued, the others still run.
+  let olxQueueProblem: string | null = null;
   if (sources.some((source) => source.id === "olx")) {
     try {
       olxRunId = await resumableOlxRunId(filter.id, supabase);
     } catch (error) {
-      if (error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS") throw statusError(429, "Kolejka OLX ma niespójne, równoległe przebiegi.");
-      throw statusError(500, error instanceof Error ? error.message : "Nie udało się sprawdzić kolejki OLX.");
+      const multiple = error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS";
+      if (!lockableSourceIds.length) {
+        if (multiple) throw statusError(429, "Kolejka OLX ma niespójne, równoległe przebiegi.");
+        throw statusError(500, error instanceof Error ? error.message : "Nie udało się sprawdzić kolejki OLX.");
+      }
+      olxQueueProblem = olxQueueProblemCode(error);
+      console.warn("FINDER_OLX_QUEUE_DEGRADED", { filterId: filter.id, code: olxQueueProblem, detail: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
     }
   }
-  let actualRunId = olxRunId ?? runId;
+  // OLX is isolated from the other portals: an OLX job still waiting in its
+  // own queue (possibly for hours) never pulls the other portals into its old
+  // run, and never blocks them. The other portals resume their own unfinished
+  // run or reserve a fresh one; an OLX-only filter keeps following its job.
+  let actualRunId = lockableSourceIds.length ? runId : olxRunId ?? runId;
   if (lockableSourceIds.length) {
     await failStaleScans(supabase, filter.id, lockableSourceIds);
     actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter, origin);
-    if (olxRunId && actualRunId !== olxRunId) throw statusError(429, "Filtr ma niezgodne, równoległe przebiegi skanu.");
   }
-  if (sources.some((source) => source.id === "olx") && !(await existingOlxScanResult(actualRunId, supabase))) {
-    await enqueueOlxJob(filter, actualRunId, supabase);
+  if (sources.some((source) => source.id === "olx") && !olxQueueProblem) {
+    if (olxRunId && olxRunId !== actualRunId) {
+      // At most one OLX job per filter in flight: no second job for the new run.
+      console.info("FINDER_OLX_JOB_STILL_QUEUED", { filterId: filter.id, olxRunId, runId: actualRunId });
+    } else if (!(await existingOlxScanResult(actualRunId, supabase))) {
+      await enqueueOlxJob(filter, actualRunId, supabase);
+    }
   }
   console.info("FINDER_SCAN_START_REQUEST", { filterId: filter.id, runId: actualRunId, requestedBy: origin, resumed: actualRunId !== runId });
   return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
@@ -244,6 +260,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   const scanStarted = Date.now();
   const ownedScans = new Map<string, ScanClock>();
   const sourceResults: SourceScanResult[] = [];
+  let olxQueueWarning: string | null = null;
   const filter = options.filter ?? await getSearchFilter(filterId);
   if (!filter) throw statusError(404, "Nie znaleziono filtra.");
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
@@ -323,9 +340,29 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
     }
     if (sources.some((source) => source.id === "olx")) {
       try {
-        const existing = await existingOlxScanResult(runId, supabase);
-        if (existing) {
+        let existing: SourceScanResult | null = null;
+        let olxRunId: string | null = null;
+        let queueReadable = true;
+        try {
+          existing = await existingOlxScanResult(runId, supabase);
+          olxRunId = existing ? null : await resumableOlxRunId(filterId, supabase);
+        } catch (queueError) {
+          // OLX-only filter: unchanged, the failure is the run's result below.
+          if (!sources.some((source) => source.id !== "olx")) throw queueError;
+          // Mixed filter: the OLX queue is unreadable or ambiguous. Queue nothing, keep the other portals' result.
+          const code = olxQueueProblemCode(queueError);
+          olxQueueWarning = `olx: ${code}: kolejka OLX nie została jednoznacznie odczytana; nie dodano zadania OLX, pozostałe portale działają.`;
+          console.warn("FINDER_OLX_QUEUE_DEGRADED", { filterId, runId, code, detail: queueError instanceof Error ? queueError.message.slice(0, 200) : "unknown" });
+          queueReadable = false;
+        }
+        if (!queueReadable) {
+          // Nothing is queued while the OLX queue state is unknown; the warning above is the OLX result.
+        } else if (existing) {
           sourceResults.push(existing);
+        } else if (olxRunId && olxRunId !== runId) {
+          // The filter's OLX job from an earlier run is still in the OLX queue:
+          // it is not part of this run, and no second job is queued for it.
+          olxQueueWarning = `olx: OLX_PREVIOUS_JOB_IN_QUEUE: zadanie OLX z przebiegu ${olxRunId} wciąż czeka w kolejce; nie dodano drugiego.`;
         } else {
           await enqueueOlxJob(filter, runId, supabase);
           sourceResults.push((await existingOlxScanResult(runId, supabase)) ?? pendingResult("olx"));
@@ -348,10 +385,10 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
       throw statusError(500, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
     }
     const sum = (key: keyof Pick<SourceScanResult, "fetched" | "normalized" | "matched" | "listingsCreated" | "newMatches" | "updated" | "priceDrops" | "rejected">) => sourceResults.reduce((total, result) => total + result[key], 0);
-    const warnings = sourceResults.flatMap((result) => [
+    const warnings = [...sourceResults.flatMap((result) => [
       ...(result.warnings ?? []).map((warning) => `${result.source}: ${warning}`),
       ...(result.errorMessage ? [`${result.source}: ${result.errorMessage}`] : []),
-    ]);
+    ]), ...(olxQueueWarning ? [olxQueueWarning] : [])];
     const matchDiagnostics = mergeMatchDiagnosticSummaries(sourceResults.map((result) => result.matchDiagnostics));
     console.info("MATCH DIAGNOSTICS SUMMARY", JSON.stringify(matchDiagnostics));
     const { error: updateError } = await supabase.from("search_filters").update({ last_scanned_at: new Date().toISOString() }).eq("id", filterId).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
@@ -763,6 +800,11 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * skips every "failed" prepared row -- defeating the entire point of
  * resuming instead of refusing.
  */
+/** Diagnostic code for an OLX queue that cannot be read unambiguously. */
+function olxQueueProblemCode(error: unknown): "OLX_MULTIPLE_RUN_IDS" | "OLX_QUEUE_READ_FAILED" {
+  return error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS" ? "OLX_MULTIPLE_RUN_IDS" : "OLX_QUEUE_READ_FAILED";
+}
+
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
   const now = Date.now();
   const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at,continuation_lease_until,continuation_lease_token").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(now)).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
