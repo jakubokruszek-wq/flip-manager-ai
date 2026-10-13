@@ -1,4 +1,6 @@
-import { claimOrCreateRadarRun, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
+import { claimOrCreateRadarRun, releaseRadarRunLease, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
+import { parseRadarContinuationHop, RADAR_CONTINUATION_HOP_HEADER, requestRadarContinuation, scheduleRadarContinuation } from "@/features/price-radar/server/radar-continuation";
+import { runAfterResponse } from "@/features/facebook-watcher/run-after-response";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
@@ -10,9 +12,13 @@ import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
  * Authorized by its own PRICE_RADAR_CRON_SECRET, deliberately separate from the
  * shared CRON_SECRET used by Finder/Facebook Watch -- a leak or rotation of
  * one never affects the other, and this endpoint accepts no other credential.
+ *
+ * A request carrying the continuation hop header is the server's own
+ * self-continuation of one exact run (see radar-continuation.ts): it is
+ * acknowledged with 202 at once and its portion runs after the response.
  */
 export const runtime = "nodejs";
-export const maxDuration = 55;
+export const maxDuration = 60;
 
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const ACTIVE = new Set(["pending", "running"]);
@@ -34,6 +40,20 @@ export async function POST(request: Request) {
   const requestedRunId = isRecord(body) && body.runId !== undefined ? body.runId : null;
   if (requestedRunId !== null && (typeof requestedRunId !== "string" || !RUN_ID.test(requestedRunId))) {
     return Response.json({ error: "Invalid Radar run ID." }, { status: 400 });
+  }
+
+  const rawHop = request.headers.get(RADAR_CONTINUATION_HOP_HEADER);
+  if (rawHop !== null) {
+    const hop = parseRadarContinuationHop(rawHop);
+    if (hop === null || typeof requestedRunId !== "string") return Response.json({ error: "Invalid Radar continuation." }, { status: 400 });
+    runAfterResponse(async () => {
+      try {
+        await continueExactRun(requestedRunId, createAdminClient(), { hop, awaitNext: true });
+      } catch (error) {
+        console.error("RADAR_CONTINUATION_PORTION_FAILED", { runId: requestedRunId, hop, message: error instanceof Error ? error.message : "unknown" });
+      }
+    });
+    return Response.json({ runId: requestedRunId, status: "accepted" }, { status: 202 });
   }
 
   const admin = createAdminClient();
@@ -109,7 +129,9 @@ export async function POST(request: Request) {
   return Response.json({ status: "idle", message: "Brak właściciela Radaru gotowego do pobrania porcji." });
 }
 
-async function continueExactRun(runId: string, admin: ReturnType<typeof createAdminClient>) {
+type ContinuationMode = { hop: number; awaitNext: boolean };
+
+async function continueExactRun(runId: string, admin: ReturnType<typeof createAdminClient>, chain?: ContinuationMode) {
   const { data: row, error } = await admin.from("price_radar_runs").select("*").eq("id", runId).maybeSingle();
   if (error) return Response.json({ error: "RADAR_RUN_READ_FAILED" }, { status: 500 });
   if (!row || typeof row.owner_id !== "string") return Response.json({ error: "RADAR_RUN_NOT_FOUND" }, { status: 404 });
@@ -126,8 +148,13 @@ async function continueExactRun(runId: string, admin: ReturnType<typeof createAd
     });
   }
   if (!ACTIVE.has(String(row.status))) return Response.json({ runId, status: "run_not_active", terminal: true });
-  const settings = await readRadarSettings(row.owner_id, admin);
-  if (!settings.automaticScanEnabled) return Response.json({ runId, status: "automation_disabled" });
+  // A server hop only ever follows a portion that already ran for this exact
+  // run (manual or scheduled), so finishing it does not depend on the daily
+  // automation switch; STOP/termination above remain the operator's controls.
+  if (!chain) {
+    const settings = await readRadarSettings(row.owner_id, admin);
+    if (!settings.automaticScanEnabled) return Response.json({ runId, status: "automation_disabled" });
+  }
   const leaseUntil = typeof row.lease_until === "string" ? Date.parse(row.lease_until) : 0;
   if (Number.isFinite(leaseUntil) && leaseUntil > Date.now()) {
     return Response.json({ runId, status: "waiting", retryAfterSeconds: Math.max(5, Math.ceil((leaseUntil - Date.now()) / 1000) + 2) });
@@ -144,13 +171,20 @@ async function continueExactRun(runId: string, admin: ReturnType<typeof createAd
     if (current?.user_terminated_at || (current && TERMINAL.has(String(current.status)))) return Response.json({ runId, status: current.user_terminated_at ? "user_terminated" : current.status, terminal: true });
     return Response.json({ runId, status: "run_changed" }, { status: 409 });
   }
-  return executePortion(row.owner_id, runId, resumed.run.leaseToken!, admin);
+  return executePortion(row.owner_id, runId, resumed.run.leaseToken!, admin, chain);
 }
 
-async function executePortion(ownerId: string, runId: string, leaseToken: string, admin: ReturnType<typeof createAdminClient>) {
+async function executePortion(ownerId: string, runId: string, leaseToken: string, admin: ReturnType<typeof createAdminClient>, chain?: ContinuationMode) {
   const portion = await runRadarCollectionPortion({ runId, ownerId, leaseToken }, admin);
   await admin.from("price_radar_settings").update({ updated_at: new Date().toISOString() }).eq("owner_id", ownerId);
   const waitingForOlx = portion.status === "running" && portion.sourceStatuses.olx === "running";
+  // OLX is owned by its separate worker queue; every other unfinished portal
+  // continues on the server without waiting for this lease to expire.
+  if (portion.status === "running" && !waitingForOlx && await releaseRadarRunLease({ runId, ownerId, leaseToken }, admin)) {
+    const next = { runId, hop: (chain?.hop ?? 0) + 1 };
+    if (chain?.awaitNext) await requestRadarContinuation(next);
+    else scheduleRadarContinuation(next);
+  }
   return Response.json({
     runId,
     ...portion,

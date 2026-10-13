@@ -8,6 +8,7 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
 import { isRadarDailyScanDue, nextRadarDailyScanAt } from "@/features/price-radar/server/radar-scheduler";
 import { radarRunActivity } from "@/features/price-radar/run-presentation";
+import { describeRadarRequestError, RadarHttpError, radarConnectionIssue, radarLeaseExpiredForBrowserResume, radarRunPollDelayMs } from "@/features/price-radar/run-connection";
 
 type ResultsResponse = {
   listings: RadarListing[];
@@ -64,6 +65,8 @@ export function PriceRadarPage() {
   const [runStopping, setRunStopping] = useState(false);
   const [runTerminating, setRunTerminating] = useState(false);
   const [autoResumeMessage, setAutoResumeMessage] = useState<string | null>(null);
+  const [connectionNotice, setConnectionNotice] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const autoResumeInFlight = useRef(false);
   const stopFinalizeInFlight = useRef(false);
   const lastAutoResumeAttempt = useRef<{ key: string; at: number } | null>(null);
@@ -95,7 +98,7 @@ export function PriceRadarPage() {
       setDisabledSourceNote(payload.disabledSourceNote);
       setSettingsLoaded(true);
     }).catch((reason) => {
-      if (!cancelled) { setError(reason instanceof Error ? reason.message : "Nie udało się odczytać filtrów Radaru."); setSettingsLoaded(true); }
+      if (!cancelled) { setError(describeRadarRequestError(reason, "Nie udało się odczytać filtrów Radaru.")); setSettingsLoaded(true); }
     });
     return () => { cancelled = true; };
   }, []);
@@ -112,7 +115,7 @@ export function PriceRadarPage() {
       setSettingsDirty(false);
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Nie udało się zapisać filtrów Radaru.");
+      setError(describeRadarRequestError(reason, "Nie udało się zapisać filtrów Radaru."));
     } finally { setSettingsSaving(false); }
   }, [districts, market, areaMin, areaMax, rooms, sources, minPricePerSqm, automaticScanEnabled, automaticScanTime]);
 
@@ -148,7 +151,7 @@ export function PriceRadarPage() {
       setData(payload);
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Nie udało się pobrać wyników Radaru.");
+      setError(describeRadarRequestError(reason, "Nie udało się pobrać wyników Radaru."));
     } finally {
       setIsLoading(false);
     }
@@ -177,7 +180,7 @@ export function PriceRadarPage() {
       const suggested = Object.fromEntries(payload.pending.filter((item) => item.suggestedDistrict).map((item) => [item.id, item.suggestedDistrict as string]));
       setDistrictChoices((current) => ({ ...suggested, ...current }));
     } catch (reason) {
-      setDistrictQueueError(reason instanceof Error ? reason.message : "Nie udało się pobrać kolejki przypisania dzielnicy.");
+      setDistrictQueueError(describeRadarRequestError(reason, "Nie udało się pobrać kolejki przypisania dzielnicy."));
     }
   }, []);
 
@@ -203,7 +206,7 @@ export function PriceRadarPage() {
       // both the queue and the A/B sample/stats must reflect this right away.
       await Promise.all([loadDistrictQueue(), load()]);
     } catch (reason) {
-      setDistrictQueueError(reason instanceof Error ? reason.message : "Nie udało się dodać oferty do porównań.");
+      setDistrictQueueError(describeRadarRequestError(reason, "Nie udało się dodać oferty do porównań."));
     } finally {
       setDistrictQueuePending(null);
     }
@@ -220,7 +223,7 @@ export function PriceRadarPage() {
       setDistrictQueueError(null);
       await loadDistrictQueue();
     } catch (reason) {
-      setDistrictQueueError(reason instanceof Error ? reason.message : "Nie udało się zaktualizować decyzji.");
+      setDistrictQueueError(describeRadarRequestError(reason, "Nie udało się zaktualizować decyzji."));
     } finally {
       setDistrictQueuePending(null);
     }
@@ -234,7 +237,7 @@ export function PriceRadarPage() {
       setVerificationQueue(payload);
       setVerificationQueueError(null);
     } catch (reason) {
-      setVerificationQueueError(reason instanceof Error ? reason.message : "Nie udało się pobrać kolejki weryfikacji.");
+      setVerificationQueueError(describeRadarRequestError(reason, "Nie udało się pobrać kolejki weryfikacji."));
     }
   }, []);
 
@@ -254,7 +257,7 @@ export function PriceRadarPage() {
       setVerificationQueueError(null);
       await Promise.all([loadVerificationQueue(), load()]);
     } catch (reason) {
-      setVerificationQueueError(reason instanceof Error ? reason.message : "Nie udało się zatwierdzić oferty.");
+      setVerificationQueueError(describeRadarRequestError(reason, "Nie udało się zatwierdzić oferty."));
     } finally { setVerificationPending(null); }
   };
 
@@ -269,7 +272,7 @@ export function PriceRadarPage() {
       setVerificationQueueError(null);
       await loadVerificationQueue();
     } catch (reason) {
-      setVerificationQueueError(reason instanceof Error ? reason.message : "Nie udało się zapisać decyzji.");
+      setVerificationQueueError(describeRadarRequestError(reason, "Nie udało się zapisać decyzji."));
     } finally { setVerificationPending(null); }
   };
 
@@ -277,19 +280,33 @@ export function PriceRadarPage() {
     if (!settingsLoaded) return;
     let cancelled = false;
     let timer: number | undefined;
+    let consecutiveFailures = 0;
+    let refreshing = false;
+    const readRun = async (): Promise<RunStatus | null> => {
+      const response = await apiFetch("/api/price-radar/run", { cache: "no-store" });
+      const payload = await response.json().catch(() => null) as { run?: RunStatus | null } | null;
+      if (!response.ok || !payload) throw new RadarHttpError(response.status, "Nie udało się odczytać stanu zbierania Radaru.");
+      return payload.run ?? null;
+    };
+    const applyRun = (latest: RunStatus | null) => {
+      if (cancelled) return;
+      setRun(latest);
+      setLastSyncedAt(Date.now());
+      setConnectionNotice(null);
+    };
     const refresh = async () => {
-      let nextDelay = 60_000;
-      let shouldPoll = false;
+      // Visibility/online events can fire while a refresh is still awaiting
+      // the network; one refresh at a time keeps a single poll timer alive.
+      if (refreshing) return;
+      refreshing = true;
+      let nonterminal = false;
       try {
-        const response = await apiFetch("/api/price-radar/run");
-        const payload = await response.json() as { run?: RunStatus | null };
-        if (!response.ok) throw new Error("Nie udało się odczytać stanu zbierania Radaru.");
-        const latest = payload.run ?? null;
-        if (!cancelled) setRun(latest);
-        const nonterminal = latest?.status === "running" || latest?.status === "pending";
-        nextDelay = nonterminal ? 5_000 : 60_000;
-        shouldPoll = nonterminal;
-        const leaseExpired = nonterminal && (!latest.leaseUntil || !Number.isFinite(Date.parse(latest.leaseUntil)) || Date.parse(latest.leaseUntil) <= Date.now());
+        const latest = await readRun();
+        applyRun(latest);
+        consecutiveFailures = 0;
+        const latestNonterminal = latest?.status === "running" || latest?.status === "pending";
+        nonterminal = latestNonterminal;
+        const leaseExpired = latestNonterminal && (!latest.leaseUntil || !Number.isFinite(Date.parse(latest.leaseUntil)) || Date.parse(latest.leaseUntil) <= Date.now());
         const currentSource = radarRunActivity(latest).currentSource;
         const olxQueueOwnsSource = currentSource === "olx" && latest?.sourceStatuses.olx === "running"
           && (latest.olxJobStatus === "queued" || latest.olxJobStatus === "running" || latest.olxJobStatus === "missing" || latest.olxJobStatus === "unavailable");
@@ -307,33 +324,34 @@ export function PriceRadarPage() {
         else if (latest?.stopRequestedAt && !cancelled) setAutoResumeMessage(leaseExpired
           ? "Zatrzymywanie oczekuje na zakończenie lease'u. Ponów żądanie zatrzymania, jeśli stan nie zmieni się po jego wygaśnięciu."
           : "Zatrzymywanie; bieżąca porcja kończy się bez rozpoczynania kolejnej pracy.");
+        else if (leaseExpired && !cancelled) setAutoResumeMessage("Serwer kontynuuje przebieg od zapisanego checkpointu; oczekiwanie na kolejną porcję.");
         else if (!cancelled) setAutoResumeMessage(null);
         const attemptKey = latest ? `${latest.id}:${latest.leaseUntil ?? "none"}` : "";
         const priorAttempt = lastAutoResumeAttempt.current;
         const retryDelayElapsed = !priorAttempt || priorAttempt.key !== attemptKey || Date.now() - priorAttempt.at >= 30_000;
-        if (!cancelled && leaseExpired && latest && !latest.stopRequestedAt && !olxQueueOwnsSource && !autoResumeInFlight.current && retryDelayElapsed) {
+        // The server continues the run itself right after each portion. The
+        // open PWA is only a fallback once the lease has stayed expired.
+        const browserMayResume = leaseExpired && radarLeaseExpiredForBrowserResume(latest?.leaseUntil);
+        if (!cancelled && browserMayResume && latest && !latest.stopRequestedAt && !olxQueueOwnsSource && !autoResumeInFlight.current && retryDelayElapsed && document.visibilityState !== "hidden") {
           autoResumeInFlight.current = true;
           lastAutoResumeAttempt.current = { key: attemptKey, at: Date.now() };
-          if (!cancelled) { setRunStarting(true); setAutoResumeMessage(null); }
+          if (!cancelled) setRunStarting(true);
           try {
             const resumed = await apiFetch("/api/price-radar/run", {
               method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRunId: latest.id }),
             });
             const resumePayload = await resumed.json().catch(() => null) as { code?: string; message?: string } | null;
             if (resumed.status === 409) {
-              if (!cancelled) setAutoResumeMessage("Inny worker zmienił stan przebiegu; odświeżam zapisany checkpoint.");
+              if (!cancelled) setAutoResumeMessage("Przebieg kontynuuje inny proces (serwer lub inne urządzenie); pobrano najnowszy stan z serwera.");
             } else if (!resumed.ok) {
-              throw new Error(resumePayload?.message || "Unable to automatically resume the Radar run.");
+              throw new RadarHttpError(resumed.status, resumePayload?.message || "Nie udało się automatycznie wznowić przebiegu Radaru.");
             } else if (!cancelled) {
               setAutoResumeMessage(null);
               await load();
             }
-            const currentResponse = await apiFetch("/api/price-radar/run");
-            const currentPayload = await currentResponse.json() as { run?: RunStatus | null };
-            if (!currentResponse.ok) throw new Error("Unable to refresh the Radar run after continuation.");
-            if (!cancelled) setRun(currentPayload.run ?? null);
-            nextDelay = currentPayload.run?.status === "running" || currentPayload.run?.status === "pending" ? 5_000 : 60_000;
-            shouldPoll = currentPayload.run?.status === "running" || currentPayload.run?.status === "pending";
+            const current = await readRun();
+            applyRun(current);
+            nonterminal = current?.status === "running" || current?.status === "pending";
           } finally {
             autoResumeInFlight.current = false;
             setRunStarting(false);
@@ -349,32 +367,59 @@ export function PriceRadarPage() {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "stop", runId: latest.id }),
             });
-            if (!finalized.ok && finalized.status !== 409) throw new Error("Nie udało się dokończyć zatrzymywania Radaru.");
-            const refreshed = await apiFetch("/api/price-radar/run");
-            const refreshedPayload = await refreshed.json() as { run?: RunStatus | null };
-            if (!refreshed.ok) throw new Error("Nie udało się odświeżyć stanu zatrzymywania Radaru.");
-            if (!cancelled) setRun(refreshedPayload.run ?? null);
-            nextDelay = refreshedPayload.run?.status === "running" || refreshedPayload.run?.status === "pending" ? 5_000 : 60_000;
-            shouldPoll = refreshedPayload.run?.status === "running" || refreshedPayload.run?.status === "pending";
+            if (!finalized.ok && finalized.status !== 409) throw new RadarHttpError(finalized.status, "Nie udało się dokończyć zatrzymywania Radaru.");
+            const refreshed = await readRun();
+            applyRun(refreshed);
+            nonterminal = refreshed?.status === "running" || refreshed?.status === "pending";
           } finally {
             stopFinalizeInFlight.current = false;
           }
         }
       } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Nie udało się odczytać stanu zbierania Radaru.");
+        consecutiveFailures += 1;
+        if (!cancelled) {
+          const issue = radarConnectionIssue(reason, navigator.onLine !== false);
+          if (issue) setConnectionNotice(describeRadarRequestError(reason, "Nie udało się odczytać stanu zbierania Radaru."));
+          else setError(describeRadarRequestError(reason, "Nie udało się odczytać stanu zbierania Radaru."));
+        }
       } finally {
-        if (!cancelled && shouldPoll) timer = window.setTimeout(() => { void refresh(); }, nextDelay);
+        refreshing = false;
+        // Never stop polling: a single failed request (phone asleep, PWA in
+        // background, flaky network) previously ended every later refresh.
+        if (!cancelled) {
+          if (timer !== undefined) window.clearTimeout(timer);
+          timer = window.setTimeout(() => { void refresh(); }, radarRunPollDelayMs({ nonterminal, consecutiveFailures }));
+        }
       }
     };
     const refreshNow = () => {
       if (timer !== undefined) window.clearTimeout(timer);
       void refresh();
     };
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshNow();
+      void load();
+    };
+    const onOnline = () => {
+      setConnectionNotice(null);
+      refreshNow();
+      void load();
+    };
+    const onOffline = () => setConnectionNotice(describeRadarRequestError(new TypeError("Failed to fetch"), "", false));
     refreshRunNow.current = refreshNow;
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
     void refresh();
     return () => {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
       if (refreshRunNow.current === refreshNow) refreshRunNow.current = null;
     };
   }, [settingsLoaded, load]);
@@ -406,16 +451,23 @@ export function PriceRadarPage() {
           body: JSON.stringify(stoppedRun ? { expectedRunId: stoppedRun.id } : { action: "start_new" }),
         } : {}),
       });
-      const payload = await response.json() as { runId?: string; status?: RadarRunStatus; message?: string };
-      if (!response.ok) throw new Error(payload.message || "Nie udało się rozpocząć zbierania Radaru.");
-      const status = await apiFetch("/api/price-radar/run");
-      const statusPayload = await status.json() as { run?: RunStatus | null };
-      setRun(statusPayload.run ?? null);
+      const payload = await response.json().catch(() => null) as { runId?: string; status?: RadarRunStatus; message?: string } | null;
+      if (response.status === 409) {
+        // Another device or the server's own continuation already owns the
+        // run: show its real state instead of an error.
+        await loadRunStatusNow();
+        setAutoResumeMessage("Przebieg jest już prowadzony przez serwer lub inne urządzenie; pokazano najnowszy stan.");
+        refreshRunNow.current?.();
+        setError(null);
+        return;
+      }
+      if (!response.ok) throw new RadarHttpError(response.status, payload?.message || "Nie udało się rozpocząć zbierania Radaru.");
+      await loadRunStatusNow();
       await load();
       refreshRunNow.current?.();
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Nie udało się rozpocząć zbierania Radaru.");
+      setError(describeRadarRequestError(reason, "Nie udało się rozpocząć zbierania Radaru."));
     } finally {
       autoResumeInFlight.current = false;
       setRunStarting(false);
@@ -447,7 +499,7 @@ export function PriceRadarPage() {
       refreshRunNow.current?.();
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Nie udało się zatrzymać przebiegu Radaru.");
+      setError(describeRadarRequestError(reason, "Nie udało się zatrzymać przebiegu Radaru."));
     } finally { setRunStopping(false); }
   };
 
@@ -471,15 +523,17 @@ export function PriceRadarPage() {
       refreshRunNow.current?.();
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Nie udało się trwale zakończyć przebiegu Radaru.");
+      setError(describeRadarRequestError(reason, "Nie udało się trwale zakończyć przebiegu Radaru."));
     } finally { setRunTerminating(false); }
   };
 
   const loadRunStatusNow = async () => {
-    const response = await apiFetch("/api/price-radar/run");
-    const payload = await response.json() as { run?: RunStatus | null };
-    if (!response.ok) throw new Error("Nie udało się odczytać stanu Radaru.");
+    const response = await apiFetch("/api/price-radar/run", { cache: "no-store" });
+    const payload = await response.json().catch(() => null) as { run?: RunStatus | null } | null;
+    if (!response.ok || !payload) throw new RadarHttpError(response.status, "Nie udało się odczytać stanu Radaru.");
     setRun(payload.run ?? null);
+    setLastSyncedAt(Date.now());
+    setConnectionNotice(null);
   };
 
   const setExclusion = async (listingId: string, excluded: boolean) => {
@@ -493,7 +547,7 @@ export function PriceRadarPage() {
       if (!response.ok) throw new Error("Nie udało się zaktualizować wykluczenia.");
       await load();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Nie udało się zaktualizować wykluczenia.");
+      setError(describeRadarRequestError(reason, "Nie udało się zaktualizować wykluczenia."));
     } finally {
       setPendingExclusion(null);
     }
@@ -642,6 +696,7 @@ export function PriceRadarPage() {
           <AutomationMetric label="Ostatni zapis postępu" value={runActivity.lastProgressAt ? formatDate(runActivity.lastProgressAt) : "Brak zapisanego checkpointu"} />
           <AutomationMetric label="Aktualne źródło" value={runActivity.currentSource ? radarSourceLabel(runActivity.currentSource) : "—"} />
           <AutomationMetric label="Pozostałe źródła" value={String(runActivity.remainingSources)} />
+          <AutomationMetric label="Ostatnia synchronizacja z serwerem" value={lastSyncedAt ? formatDate(new Date(lastSyncedAt).toISOString()) : "—"} />
         </div>
         <div className="grid gap-3 border-t pt-4 sm:grid-cols-2 xl:grid-cols-4">
           <AutomationMetric label="Sprawdzono" value={run ? String(run.scannedCount) : "—"} />
@@ -650,7 +705,7 @@ export function PriceRadarPage() {
           <AutomationMetric label="Skierowano do weryfikacji" value={run && typeof run.checkpoint?.verificationQueuedCount === "number" && typeof run.checkpoint?.districtQueuedCount === "number" ? String(run.checkpoint.verificationQueuedCount + run.checkpoint.districtQueuedCount) : "—"} />
         </div>
         <p aria-live="polite" className="text-xs text-muted-foreground">
-          {settingsSaving ? "Zapisywanie ustawień…" : settingsDirty ? "Zmiany oczekują na zapis." : "Godzina jest zapisana w ustawieniach Radaru. Kontroler sprawdza harmonogram co 5 minut; kontynuacja używa tego samego checkpointu."}
+          {settingsSaving ? "Zapisywanie ustawień…" : settingsDirty ? "Zmiany oczekują na zapis." : "Godzina jest zapisana w ustawieniach Radaru. Po każdej porcji serwer sam kontynuuje ten sam checkpoint, więc zamknięcie aplikacji nie przerywa skanu portali HTTP (OLX obsługuje osobny worker)."}
         </p>
       </section>
 
@@ -663,6 +718,7 @@ export function PriceRadarPage() {
           {run?.sourceWarnings && Object.values(run.sourceWarnings).some((warnings) => warnings.length > 0) ? <details aria-label="Uwagi i pokrycie źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Uwagi źródeł i zakres wyszukiwania</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceWarnings).map(([source, warnings]) => warnings.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {warnings.map(sourceWarningLabel).join("; ")}</li> : null)}</ul></details> : null}
           {run?.qualificationRejections && Object.values(run.qualificationRejections).some((counts) => Object.keys(counts).length > 0) ? <details aria-label="Powody odrzucenia ofert" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Powody odrzucenia w kwalifikacji</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.qualificationRejections).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${qualificationRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
           {autoResumeMessage ? <p className="mt-2 text-xs text-muted-foreground">{autoResumeMessage}</p> : null}
+          {connectionNotice ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-400" role="status">{connectionNotice}{run ? ` Ostatni znany stan: ${run.scannedCount} sprawdzonych, ${run.qualifiedCount} zakwalifikowanych${runActivity.lastProgressAt ? `, zapis postępu ${formatDate(runActivity.lastProgressAt)}` : ""}.` : ""}</p> : null}
           {settingsSaving ? <p className="mt-1 text-xs text-muted-foreground">Zapisywanie ustawień…</p> : settingsDirty ? <p className="mt-1 text-xs text-destructive">Ustawienia nie zostały zapisane. Zmiana zostanie ponowiona po kolejnej edycji.</p> : null}
         </div>
         <Button disabled={runStarting || runStopping || runTerminating || Boolean(run?.stopRequestedAt && (run.status === "running" || run.status === "pending")) || (isRunActuallyActive(run) && !(run?.status === "partial" && run.errorMessage === "RADAR_STOPPED_BY_OPERATOR")) || !settingsLoaded} onClick={() => void startCollection()}>

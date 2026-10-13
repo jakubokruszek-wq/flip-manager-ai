@@ -1,5 +1,6 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
-import { claimOrCreateRadarRun, requestRadarRunStop, requestRadarRunTermination, resumeExistingRadarRun, runRadarCollectionPortion } from "@/features/price-radar/server/collect";
+import { claimOrCreateRadarRun, releaseRadarRunLease, requestRadarRunStop, requestRadarRunTermination, resumeExistingRadarRun, runRadarCollectionPortion, type RadarPortionResult } from "@/features/price-radar/server/collect";
+import { scheduleRadarContinuation } from "@/features/price-radar/server/radar-continuation";
 import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
@@ -82,6 +83,7 @@ export async function POST(request: Request) {
       }
       if (!resumed.run.leaseToken) throw new Error("RADAR_LEASE_LOST");
       const portion = await runRadarCollectionPortion({ runId: resumed.run.id, ownerId: operator.id, leaseToken: resumed.run.leaseToken });
+      await handOffToServer({ runId: resumed.run.id, ownerId: operator.id, leaseToken: resumed.run.leaseToken }, portion);
       return Response.json({ runId: resumed.run.id, ...portion });
     }
     const settings = await readRadarSettings(operator.id);
@@ -101,6 +103,7 @@ export async function POST(request: Request) {
     }
     if (!claim.run.leaseToken) throw new Error("RADAR_LEASE_LOST");
     const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId: operator.id, leaseToken: claim.run.leaseToken });
+    await handOffToServer({ runId: claim.run.id, ownerId: operator.id, leaseToken: claim.run.leaseToken }, portion);
     return Response.json({ runId: claim.run.id, ...portion });
   } catch (error) {
     console.error("PRICE RADAR RUN ROUTE ERROR:", error);
@@ -111,5 +114,20 @@ export async function POST(request: Request) {
       return Response.json({ code: "RADAR_RUN_TERMINATION_FAILED", message: "Nie udało się trwale zapisać zakończenia przebiegu Radaru." }, { status: 500 });
     }
     return Response.json({ message: "Nie udało się uruchomić zbierania Radaru." }, { status: 500 });
+  }
+}
+
+/**
+ * A portion started from the PWA must not depend on the phone staying awake:
+ * release this request's own lease and let the server continue the same run.
+ * If the hand-off cannot be sent, the open PWA or the scheduler still resumes
+ * the same checkpoint once the (now released) lease is observed as expired.
+ */
+async function handOffToServer(input: { runId: string; ownerId: string; leaseToken: string }, portion: RadarPortionResult): Promise<void> {
+  if (portion.status !== "running" || portion.sourceStatuses.olx === "running") return;
+  try {
+    if (await releaseRadarRunLease(input)) scheduleRadarContinuation({ runId: input.runId, hop: 1 });
+  } catch {
+    // The lease simply expires on its own; never fail the operator's request here.
   }
 }

@@ -137,6 +137,8 @@ export type RadarCheckpoint = {
   detailDiagnostics?: Record<string, RadarDetailDiagnostic[]>;
   /** Timestamp of the last durable collection checkpoint; absent on legacy runs. */
   lastProgressAt?: string;
+  /** Consecutive portions in which a source timed out without committing a batch; reset by any committed batch. */
+  sourceTimeoutStreaks?: Record<string, number>;
   buffer: unknown[];
   bufferOffset: number;
 };
