@@ -120,6 +120,10 @@ test("the Radar PWA keeps refreshing across app switches, lost network, server e
     lastRealProgressAt: "2026-10-13T08:35:00.000Z", lastProgressSource: "oferty_net", noProgressPortions: 4,
     sourceNoProgressAttempts: { domiporta: 2 }, waitingReason: "next_portion",
     lastContinuationError: { at: "2026-10-13T08:42:41.000Z", hop: 17, reason: "ACK_TIMEOUT" },
+    metrics: {
+      portions: 9, httpActiveMs: 240_000, handOffs: 8, handOffGapMs: 24_000, httpStartedAt: "2026-10-13T08:30:00.000Z",
+      sources: { oferty_net: { attempts: 6, activeMs: 180_000, batchMs: 20_000, listRequests: 9, listMs: 13_500, detailRequests: 142, detailMs: 142_000, contextRequests: 1, contextMs: 600, dbMs: 9_000, qualifyMs: 400, checkpointMs: 1_200, fetched: 142, qualified: 12 } },
+    },
   };
   await returnToApp();
   await page.getByText(/433 sprawdzonych · 24 zakwalifikowanych/u).waitFor({ timeout: 10_000 });
@@ -130,6 +134,12 @@ test("the Radar PWA keeps refreshing across app switches, lost network, server e
   assert.match(diagnostics, /Powód oczekiwania\s+Następna porcja na serwerze · porcje bez postępu: 4/u);
   assert.match(diagnostics, /Ostatni błąd przekazania\s+.*krok 17 · ACK_TIMEOUT/u);
   assert.match(await collectionText(), /Domiporta: pobieranie · próby bez postępu: 2/u);
+  await page.getByLabel("Wydajność przebiegu").locator("summary").click();
+  const performance = await page.getByLabel("Wydajność przebiegu").innerText();
+  assert.match(performance, /aktywna praca 4 min 0 s/u);
+  assert.match(performance, /Przekazania między porcjami: 8 · łącznie 24 s \(średnio 3 s\)/u);
+  assert.match(performance, /Oferty\.net:.*lista 9, szczegóły 142, kontekst 1 · oferty 142 · 47\/min/u);
+  assert.match(performance, /Worker OLX: jeszcze nie przekazano/u, "OLX waiting is reported separately from the HTTP portals");
 
   // 2. Lost network: an understandable message plus the last known progress, never "Failed to fetch".
   networkDown = true;

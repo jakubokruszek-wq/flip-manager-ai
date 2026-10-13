@@ -172,7 +172,7 @@ mock.module("@/features/flip-finder/server/search-source-registry", {
   },
 });
 
-const { claimOrCreateRadarRun, releaseRadarRunLease, resumeExistingRadarRun, runRadarCollectionPortion, RADAR_SOURCES, RADAR_SOURCE_NO_PROGRESS_LIMIT, recordRadarContinuationFailure } = await import("./collect.ts");
+const { claimOrCreateRadarRun, releaseRadarRunLease, resumeExistingRadarRun, runRadarCollectionPortion, RADAR_PORTION_TIMING, RADAR_SOURCES, RADAR_SOURCE_NO_PROGRESS_LIMIT, recordRadarContinuationFailure } = await import("./collect.ts");
 const { getRadarResults } = await import("./radar-results.ts");
 
 function qualifyingListing(id: string, source: string) {
@@ -304,7 +304,8 @@ test("a user termination during a batch aborts remaining candidate work and retu
   const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon"], db as never);
   if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
 
-  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never);
+  // Sequential lane: the exact call-level guarantees of a single worker.
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never, { ...RADAR_PORTION_TIMING, parallelSources: 1 });
   assert.equal(sourceFetches, 1, "the source is never fetched a second time after the DB marker is observed");
   assert.equal(db.rpcCalls.filter(({ name }) => name === "persist_price_radar_listing").length, 1, "the in-flight batch stops before persisting its next listing");
   assert.equal(db.rpcCalls.filter(({ name }) => name === "checkpoint_price_radar_run").at(-1)?.args.p_status, "running", "the stale worker does not issue a terminal or running checkpoint after losing the lease");
@@ -655,8 +656,11 @@ test("a detail-batch yield checkpoints its cursor and lets later sources progres
   const db = fakeDb();
   let domiportaCalls = 0;
   let morizonCalls = 0;
+  const order: string[] = [];
   let resumedCursor: FakeBatchContext["radarDetailCursor"] = undefined;
+  let cursorStoredBeforeRetry: unknown = null;
   fakeSourceImpl = async (id, _cursor, batches) => {
+    order.push(id);
     if (id === "domiporta") {
       domiportaCalls += 1;
       if (domiportaCalls === 1) {
@@ -664,6 +668,7 @@ test("a detail-batch yield checkpoints its cursor and lets later sources progres
         throw new SourceBatchYield("detail_batch_limit");
       }
       resumedCursor = batches?.radarDetailCursor;
+      cursorStoredBeforeRetry = ((db.tables.price_radar_runs[0] as Row).checkpoint as { perSourceCursor: Record<string, unknown> }).perSourceCursor.domiporta;
       return { listings: [qualifyingListing("domiporta-resumed", id)], warnings: [], fetched: 1 };
     }
     morizonCalls += 1;
@@ -672,20 +677,16 @@ test("a detail-batch yield checkpoints its cursor and lets later sources progres
   const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon"], db as never);
   if (claimed.kind !== "claimed") throw new Error("expected claimed");
 
-  const first = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
-  assert.equal(first.status, "running");
-  assert.equal(first.sourceStatuses.domiporta, "pending");
-  assert.equal(first.sourceStatuses.morizon, "completed", "a source that yielded a normal detail batch cannot hold later sources behind it");
-  const firstStoredRun = db.tables.price_radar_runs[0] as Row;
-  const firstCheckpoint = firstStoredRun.checkpoint as { perSourceCursor: Record<string, unknown>; sourceQueue: string[] };
-  assert.deepEqual(firstCheckpoint.perSourceCursor.domiporta, { kind: "radar_detail_v1", page: 2, candidateIndex: 12 });
-  assert.deepEqual(firstCheckpoint.sourceQueue, ["morizon", "domiporta"]);
-
-  const resumed = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
+  // One lane: a portal that gave its slice back after real progress is taken
+  // up again in the same portion, but only after the other portal had its turn.
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never, { ...RADAR_PORTION_TIMING, parallelSources: 1 });
+  assert.deepEqual(order, ["domiporta", "morizon", "domiporta"], "a source that yielded a normal detail batch cannot hold later sources behind it");
+  assert.deepEqual(cursorStoredBeforeRetry, { kind: "radar_detail_v1", page: 2, candidateIndex: 12 }, "the detail cursor was checkpointed before the retry");
   assert.deepEqual(resumedCursor, { kind: "radar_detail_v1", page: 2, candidateIndex: 12 }, "the original detail cursor is preserved across the source rotation");
   assert.equal(morizonCalls, 1, "the completed later source is not fetched again");
-  assert.equal(resumed.status, "completed");
-  assert.equal(resumed.sourceStatuses.domiporta, "completed");
+  assert.equal(result.status, "completed");
+  assert.equal(result.sourceStatuses.domiporta, "completed");
+  assert.equal(result.scannedCount, 3, "nothing is counted twice");
   assert.equal(db.tables.price_radar_runs[0]?.id, claimed.run.id);
 });
 
@@ -1405,4 +1406,78 @@ test("a continuation hand-off failure is stored in the run's diagnostics only wh
   row.lease_token = "a-newer-worker";
   await recordRadarContinuationFailure(lease, { hop: 5, reason: "HTTP_503" }, db as never);
   assert.equal((row.checkpoint as { progress?: { lastContinuationError?: { hop: number } } }).progress?.lastContinuationError?.hop, 4, "a newer worker's checkpoint is never overwritten");
+});
+
+test("with parallel portals, a user termination stops every lane: no fetch starts and no write is accepted after it", async () => {
+  let terminated = false;
+  let fetchesAfterTermination = 0;
+  const db = fakeDb({ onListingPersisted: (run) => {
+    if (terminated) return;
+    terminated = true;
+    Object.assign(run, { user_terminated_at: new Date().toISOString(), status: "partial", finished_at: new Date().toISOString(), lease_token: null, lease_until: null });
+  } });
+  fakeSourceImpl = async (id, _cursor, batches) => {
+    if (terminated) fetchesAfterTermination += 1;
+    await batches?.onBatch({ listings: [qualifyingListing(`${id}-1`, id), qualifyingListing(`${id}-2`, id)], warnings: [], fetched: 2 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon", "oferty_net", "adresowo", "allegro_lokalnie"], db as never);
+  if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never, { ...RADAR_PORTION_TIMING, parallelSources: 3 });
+  assert.equal(result.status, "partial", "the owner's termination stays authoritative");
+  assert.equal(fetchesAfterTermination, 0, "no lane starts a new portal after termination is observed");
+  assert.equal(db.tables.price_radar_listings.length, 1, "the fenced write RPC accepts nothing after termination");
+});
+
+test("parallel lanes read different portals at the same time, never the same portal twice, and keep one consistent checkpoint", async () => {
+  const db = fakeDb();
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const reads: string[] = [];
+  fakeSourceImpl = async (id, _cursor, batches) => {
+    reads.push(id);
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    inFlight -= 1;
+    await batches?.onBatch({ listings: [qualifyingListing(`${id}-1`, id)], warnings: [], fetched: 1 }, null);
+    return { listings: [], warnings: [], fetched: 0 };
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta", "morizon", "oferty_net", "adresowo", "allegro_lokalnie"], db as never);
+  if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never, { ...RADAR_PORTION_TIMING, parallelSources: 3 });
+  assert.equal(maxInFlight, 3, "at most three portals are read at once");
+  assert.deepEqual([...reads].sort(), ["adresowo", "allegro_lokalnie", "domiporta", "morizon", "oferty_net"], "each portal is read exactly once");
+  assert.equal(result.status, "completed");
+  assert.equal(result.scannedCount, 5, "counters from all lanes are kept, none lost or doubled");
+  const stored = db.tables.price_radar_runs[0]!;
+  assert.equal(stored.scanned_count, 5, "the last checkpoint write holds the newest shared state");
+  assert.equal(db.tables.price_radar_runs.length, 1);
+});
+
+test("with parallel lanes a stalled portal is still closed after the no-progress limit while other portals keep progressing", async () => {
+  const db = fakeDb();
+  let stalledCalls = 0;
+  let morizonPage = 0;
+  fakeSourceImpl = async (id, cursor, batches) => {
+    if (id === "allegro_lokalnie") {
+      stalledCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const error = new Error("The operation was aborted due to timeout"); error.name = "TimeoutError"; throw error;
+    }
+    // Morizon keeps committing pages while the stalled portal is retried.
+    morizonPage = (cursor ?? 1);
+    await batches!.onBatch({ listings: [qualifyingListing(`morizon-${morizonPage}`, id)], warnings: [], fetched: 1 }, morizonPage < 20 ? morizonPage + 1 : null);
+    throw new SourceBatchYield("detail_batch_limit");
+  };
+  const claimed = await claimOrCreateRadarRun(ownerId, ["allegro_lokalnie", "morizon"], db as never);
+  if (claimed.kind !== "claimed") throw new Error("expected claimed");
+  let result;
+  for (let portion = 0; portion < 6; portion += 1) {
+    result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never, { ...RADAR_PORTION_TIMING, parallelSources: 2 });
+    if (result.sourceStatuses.allegro_lokalnie === "failed") break;
+  }
+  assert.equal(stalledCalls, RADAR_SOURCE_NO_PROGRESS_LIMIT, "progress of another portal never resets the stalled portal's attempts");
+  assert.equal(result!.sourceStatuses.allegro_lokalnie, "failed");
+  assert.match(result!.sourceErrors.allegro_lokalnie ?? "", /^RADAR_SOURCE_NO_PROGRESS_LIMIT:/u);
 });

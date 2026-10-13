@@ -80,7 +80,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
   if (isRetryAfterPending(cursor)) throw new SourceBatchYield("detail_rate_limit");
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
   const city = criteria.city ?? "";
-  const ofertyLocation = config.id === "oferty_net" && !batches.ofertyNetLegacySearch ? await resolveOfertyNetLocation(config, city, signal) : null;
+  const ofertyLocation = config.id === "oferty_net" && !batches.ofertyNetLegacySearch ? await resolveOfertyNetLocation(config, city, signal, batches) : null;
   const listings: PropertySourceListing[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();
@@ -91,9 +91,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
   for (let page = cursor.page; page <= MAX_PAGES; page += 1) {
     if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
     const pageUrlValue = pageUrl(config, criteria, page, ofertyLocation, batches.ofertyNetLegacySearch);
-    const pageResponse = await fetchExternalPage(pageUrlValue, signal);
-    if (!pageResponse.ok) throw new Error(`${config.label}: HTTP ${pageResponse.status}.`);
-    const pageHtml = await pageResponse.text();
+    const pageHtml = (await radarCachedPage(batches, "list", pageUrlValue, signal, config.label)).html;
     assertNotAccessChallenge(config.label, pageHtml);
     const parsed = parser(pageHtml, city);
     const candidates = parsed.detailCandidates ?? parsed.listings;
@@ -111,9 +109,10 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
 
     for (let candidateIndex = firstIndex; candidateIndex < candidates.length; candidateIndex += 1) {
       if (signal?.aborted) throw new Error(`${config.label}: request aborted.`);
-      if (batches.deadlineAt && Date.now() + RADAR_DETAIL_REQUEST_TIMEOUT_MS >= batches.deadlineAt) {
+      if (batches.deadlineAt && Date.now() + (batches.detailReserveMs ?? RADAR_DETAIL_REQUEST_TIMEOUT_MS) >= batches.deadlineAt) {
         throw new SourceBatchYield("portion_budget");
       }
+      if (radarSliceExhausted(batches, detailPagesThisPortion)) throw new SourceBatchYield("detail_batch_limit");
       const sourceCandidate = candidates[candidateIndex]!;
       const baseListing = { ...sourceCandidate, rawPayload: { ...sourceCandidate.rawPayload, radarSearchScope: "apartment-sale" } };
       const next = candidateIndex + 1 < candidates.length
@@ -130,7 +129,7 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
       }
       await batches.onBatch(result.batch, result.nextCursor);
       if (result.detailFetched) detailPagesThisPortion += 1;
-      if (detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) {
+      if (batches.sliceDeadlineAt === undefined && detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) {
         throw new SourceBatchYield("detail_batch_limit");
       }
     }
@@ -156,7 +155,8 @@ export async function fetchRadarOtodomDetails(candidates: readonly PropertySourc
   let detailPagesThisPortion = 0;
   for (let candidateIndex = cursor.candidateIndex; candidateIndex < candidates.length; candidateIndex += 1) {
     if (signal?.aborted) throw new Error("Otodom: request aborted.");
-    if (batches.deadlineAt && Date.now() + RADAR_DETAIL_REQUEST_TIMEOUT_MS >= batches.deadlineAt) throw new SourceBatchYield("portion_budget");
+    if (batches.deadlineAt && Date.now() + (batches.detailReserveMs ?? RADAR_DETAIL_REQUEST_TIMEOUT_MS) >= batches.deadlineAt) throw new SourceBatchYield("portion_budget");
+    if (radarSliceExhausted(batches, detailPagesThisPortion)) throw new SourceBatchYield("detail_batch_limit");
     const next = candidateIndex + 1 < candidates.length ? radarDetailCursor(1, candidateIndex + 1) : null;
     const result = await processRadarDetailCandidate("otodom", "Otodom", candidates[candidateIndex]!, 1, candidateIndex, next, signal, batches);
     fetched += result.batch.fetched;
@@ -167,7 +167,7 @@ export async function fetchRadarOtodomDetails(candidates: readonly PropertySourc
     }
     await batches.onBatch(result.batch, result.nextCursor);
     if (result.detailFetched) detailPagesThisPortion += 1;
-    if (detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) throw new SourceBatchYield("detail_batch_limit");
+    if (batches.sliceDeadlineAt === undefined && detailPagesThisPortion >= RADAR_DETAIL_PAGE_LIMIT_PER_PORTION && next !== null) throw new SourceBatchYield("detail_batch_limit");
   }
   return { listings, warnings: [...new Set(warnings)], fetched };
 }
@@ -184,6 +184,12 @@ async function processRadarDetailCandidate(source: RadarDetailSource, label: str
   const rejection = preflightRadarCandidateRejection({ title: base.title, description: base.description, buildingType: base.buildingType, propertyType, rawPayload: base.rawPayload });
   if (rejection) return { batch: { listings: [], warnings, fetched: 1, rejectionReasons: [rejection] }, nextCursor, listing: null, detailFetched: false };
 
+  // The same offer can reappear on a later result page while a run is in
+  // progress (new offers shift the pages). Its detail was already checked and
+  // counted in this run, so it is neither fetched nor counted again.
+  const checkedKey = `${source}:${base.externalListingId}`;
+  if (batches.isDetailChecked?.(checkedKey)) return { batch: { listings: [], warnings, fetched: 0 }, nextCursor, listing: null, detailFetched: false };
+
   const detailUrl = radarDetailUrl(source, base.originalUrl);
   if (!detailUrl) {
     return {
@@ -193,9 +199,12 @@ async function processRadarDetailCandidate(source: RadarDetailSource, label: str
   }
 
   let response: Response;
+  const detailStartedAt = Date.now();
   try {
     response = await fetchExternalPage(detailUrl, signal, RADAR_DETAIL_REQUEST_TIMEOUT_MS, false);
+    batches.onRequest?.("detail", Date.now() - detailStartedAt);
   } catch (error) {
+    batches.onRequest?.("detail", Date.now() - detailStartedAt);
     const diagnostic: RadarDetailDiagnostic = { kind: "detail_fetch_failed", listingUrl: detailUrl, finalUrl: null, httpStatus: null, identity: "not_checked", unconfirmedFields: [], contradictoryFields: [], errorCode: isTimeoutError(error) ? "TIMEOUT" : "NETWORK_ERROR" };
     await batches.onBatch({ listings: [], warnings: [], fetched: 0, diagnostics: [diagnostic] }, currentCursor);
     throw error;
@@ -265,6 +274,31 @@ function radarDetailUrl(source: RadarDetailSource, value: string | null): string
 
 function radarDetailCursor(page: number, candidateIndex: number): RadarDetailCursor {
   return { kind: "radar_detail_v1", page, candidateIndex };
+}
+
+/** Soft time slice: always at least one detail per attempt, then stop at the slice end. */
+function radarSliceExhausted(batches: SourceBatchContext, detailsThisAttempt: number): boolean {
+  return batches.sliceDeadlineAt !== undefined && detailsThisAttempt >= 1 && Date.now() >= batches.sliceDeadlineAt;
+}
+
+/**
+ * Radar result/context page read, measured, and reused only within the same
+ * portion (the cache lives for one portion, < 60 s). An HTTP error is never
+ * cached; the caller's access-challenge checks still run on every use.
+ */
+async function radarCachedPage(batches: SourceBatchContext, kind: "list" | "context", url: string, signal: AbortSignal | undefined, label: string, errorSuffix = ""): Promise<{ html: string; finalUrl: string }> {
+  const cached = batches.pageCache?.get(url);
+  if (cached) return cached;
+  const startedAt = Date.now();
+  try {
+    const response = await fetchExternalPage(url, signal);
+    if (!response.ok) throw new Error(`${label}: HTTP ${response.status}${errorSuffix}.`);
+    const page = { html: await response.text(), finalUrl: response.url || url };
+    batches.pageCache?.set(url, page);
+    return page;
+  } finally {
+    batches.onRequest?.(kind, Date.now() - startedAt);
+  }
 }
 
 function isRetryAfterPending(cursor: RadarDetailCursor): boolean {
@@ -795,13 +829,22 @@ function assertNotAccessChallenge(source: string, html: string): void {
 
 type OfertyNetLocationIds = { country: string; region: string; city: string };
 
-async function resolveOfertyNetLocation(config: ExternalSourceConfig, city: string, signal?: AbortSignal): Promise<OfertyNetLocationIds> {
+async function resolveOfertyNetLocation(config: ExternalSourceConfig, city: string, signal?: AbortSignal, radarBatches?: SourceBatchContext): Promise<OfertyNetLocationIds> {
   const contextUrl = new URL(config.searchPath(city), `https://${config.hostnames[0]}`).toString();
-  const response = await fetchExternalPage(contextUrl, signal);
-  if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status} (city search context).`);
-  const html = await response.text();
+  const contextKey = `oferty_net:location:${contextUrl}`;
+  const remembered = radarBatches?.contextValues?.get(contextKey)?.match(/^(\d+),(\d+),(\d+)$/u);
+  if (remembered && remembered[1] !== "0" && remembered[2] !== "0" && remembered[3] !== "0") return { country: remembered[1]!, region: remembered[2]!, city: remembered[3]! };
+  let html: string;
+  let finalUrl: string;
+  if (radarBatches) {
+    ({ html, finalUrl } = await radarCachedPage(radarBatches, "context", contextUrl, signal, config.label, " (city search context)"));
+  } else {
+    const response = await fetchExternalPage(contextUrl, signal);
+    if (!response.ok) throw new Error(`${config.label}: HTTP ${response.status} (city search context).`);
+    html = await response.text();
+    finalUrl = response.url || contextUrl;
+  }
   assertNotAccessChallenge(config.label, html);
-  const finalUrl = response.url || contextUrl;
   if (!absoluteUrl(finalUrl, config.id)) throw new Error(`${config.label}: CITY_SEARCH_CONTEXT_HOST_MISMATCH.`);
   const expectedPath = new URL(contextUrl).pathname.replace(/\/$/u, "");
   const finalPath = new URL(finalUrl).pathname.replace(/\/$/u, "");
@@ -809,6 +852,7 @@ async function resolveOfertyNetLocation(config: ExternalSourceConfig, city: stri
   const match = html.match(/myOfertyLocationSelector\s*\(\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]\s*\)/iu);
   if (!match) throw new Error(`${config.label}: LOCATION_SELECTOR_NOT_CONFIRMED.`);
   if (match[1] === "0" || match[2] === "0" || match[3] === "0") throw new Error(`${config.label}: CITY_LOCATION_NOT_SELECTED.`);
+  radarBatches?.contextValues?.set(contextKey, `${match[1]},${match[2]},${match[3]}`);
   return { country: match[1]!, region: match[2]!, city: match[3]! };
 }
 

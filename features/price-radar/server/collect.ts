@@ -13,16 +13,48 @@ import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, is
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
-import type { RadarCheckpoint, RadarRun, RadarRunStatus, RadarSearchCriteria, RadarSource, RadarWaitingReason } from "@/features/price-radar/types";
+import type { RadarCheckpoint, RadarRun, RadarRunMetrics, RadarRunStatus, RadarSearchCriteria, RadarSource, RadarSourceMetrics, RadarWaitingReason } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
 import { classifyRadarSourceWarning, radarSourceStatusFromWarnings, sourceRejectionCountsFromWarnings } from "@/features/price-radar/source-diagnostics";
 
 type Row = Record<string, unknown>;
-const PORTION_BUDGET_MS = 42_000;
+/**
+ * Time budget of one portion. Production uses the defaults; the performance
+ * test passes a scaled copy so a whole run can be simulated in seconds.
+ */
+export type RadarPortionTiming = {
+  /** Hard abort of one portion (inside Vercel Hobby's 60 s function limit). */
+  portionBudgetMs: number;
+  /** No new source attempt starts within this margin before the hard abort. */
+  yieldMarginMs: number;
+  /** Shortest per-source time slice; an attempt with less time left is not held against the portal. */
+  minSliceMs: number;
+  /** Time reserved for one detail request before the portion deadline. */
+  detailReserveMs: number;
+  /** Checkpoints are coalesced to at most one per interval while a source is being read. */
+  checkpointIntervalMs: number;
+  /** Active HTTP work per run; afterwards unfinished portals end as partial coverage. */
+  httpRunLimitMs: number;
+  /** Independent portals read at the same time (each by exactly one lane). */
+  parallelSources: number;
+};
+export const RADAR_PORTION_TIMING: RadarPortionTiming = {
+  portionBudgetMs: 42_000,
+  yieldMarginMs: 8_000,
+  minSliceMs: 10_000,
+  detailReserveMs: 8_000,
+  checkpointIntervalMs: 3_000,
+  httpRunLimitMs: 30 * 60_000,
+  parallelSources: 3,
+};
+export const RADAR_HTTP_TIME_LIMIT_ERROR = "RADAR_HTTP_TIME_LIMIT";
+/** Stable portal context (e.g. city location IDs) is re-verified at least this often. */
+const CONTEXT_VALUE_TTL_MS = 60 * 60_000;
+/** Offers already committed in this run (`source:externalListingId`), bounded. */
+const CHECKED_LISTING_KEYS_LIMIT = 4_000;
 // The portion hard-aborts at 42s; 75s leaves 33s for checkpointing and avoids
 // making the browser wait a full two minutes before its next CAS continuation.
 const LEASE_SECONDS = 75;
-const YIELD_MARGIN_MS = 8_000;
 const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
 // Confirmed on Production (runs 0938a6b6 and b525b4aa, 2026-10-13): portals
 // that timed out or yielded on every portion were retried forever at the same
@@ -34,9 +66,6 @@ const SOURCE_DONE_CURSOR = "__RADAR_SOURCE_DONE__";
 // stay); other portals continue and the run can finish as partial.
 export const RADAR_SOURCE_NO_PROGRESS_LIMIT = 3;
 export const RADAR_SOURCE_NO_PROGRESS_ERROR = "RADAR_SOURCE_NO_PROGRESS_LIMIT";
-// An attempt that started with less than this much of the portion left is cut
-// short by the portion itself, not by the portal, and is not held against it.
-const FAIR_ATTEMPT_MS = 20_000;
 const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
 export const RADAR_STOPPED_BY_OPERATOR = "RADAR_STOPPED_BY_OPERATOR";
 const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "rooms", "floor", "location", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
@@ -288,8 +317,9 @@ export type RadarPortionResult ={ status: "running" | "completed" | "failed" | "
  * it behind other unfinished sources, so a repeatedly slow portal cannot starve
  * the rest of this run. A permanent source error is terminal for this run.
  */
-export async function runRadarCollectionPortion(input: { runId: string; ownerId: string; leaseToken: string }, supabase: SupabaseClient = createAdminClient()): Promise<RadarPortionResult> {
+export async function runRadarCollectionPortion(input: { runId: string; ownerId: string; leaseToken: string }, supabase: SupabaseClient = createAdminClient(), timing: RadarPortionTiming = RADAR_PORTION_TIMING): Promise<RadarPortionResult> {
   const started = Date.now();
+  const portionYieldAt = started + timing.portionBudgetMs - timing.yieldMarginMs;
   const { data: runRow, error } = await supabase.from("price_radar_runs").select("*").eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
   if (error || !runRow) throw new Error("RADAR_RUN_NOT_FOUND");
   const run = toRadarRun(runRow);
@@ -301,7 +331,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   let scanned = run.scannedCount;
   let qualified = run.qualifiedCount;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), PORTION_BUDGET_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timing.portionBudgetMs);
   let stopCheckInFlight = false;
   let operatorStopDetected = false;
   let userTerminationDetected = false;
@@ -326,85 +356,116 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   }, 1_000);
   const attemptedSourceIds = new Set<RadarSource>();
   const progressMarkerAtStart = checkpoint.progress?.lastRealProgressAt ?? null;
-  // One shared cap on AI district-suggestion calls for this whole portion
+  const metrics = startPortionMetrics(checkpoint, started);
+  const checkedListingKeys = new Set(Array.isArray(checkpoint.checkedListingKeys) ? checkpoint.checkedListingKeys.filter((key): key is string => typeof key === "string") : []);
+  let lastCheckpointAt = 0;
+  let httpAttemptedThisPortion = false;
+  // Every checkpoint write goes through here so its cost is measured and the
+  // checked-offer set travels with the cursor it belongs to.
+  // Lanes save one after another; each write snapshots the newest shared
+  // state when it actually runs, so an older snapshot can never land last.
+  let saveChain: Promise<unknown> = Promise.resolve();
+  const save = (status: RadarRunStatus, errorMessage: string | null = null, sourceId?: string): Promise<"saved" | "stopped"> => {
+    const run = async () => {
+      const saveStartedAt = Date.now();
+      checkpoint.checkedListingKeys = [...checkedListingKeys].slice(-CHECKED_LISTING_KEYS_LIMIT);
+      try {
+        return await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, status, errorMessage);
+      } finally {
+        lastCheckpointAt = Date.now();
+        if (sourceId) sourceMetrics(metrics, sourceId).checkpointMs += lastCheckpointAt - saveStartedAt;
+      }
+    };
+    const next = saveChain.then(run, run);
+    saveChain = next.catch(() => undefined);
+    return next;
+  };
+  // One query answers both "terminated?" and "stop requested?"; the 1 s
+  // background check above sets the same flags between batches.
+  const ensureRunStillOwned = async () => {
+    if (userTerminationDetected) throw new Error(RADAR_TERMINATED_BY_USER);
+    if (operatorStopDetected) throw new Error(RADAR_STOPPED_BY_OPERATOR);
+    const control = await radarRunControl(supabase, input);
+    if (control.terminated) { userTerminationDetected = true; throw new Error(RADAR_TERMINATED_BY_USER); }
+    if (control.stopRequested) { operatorStopDetected = true; throw new Error(RADAR_STOPPED_BY_OPERATOR); }
+  };  // One shared cap on AI district-suggestion calls for this whole portion
   // (not per candidate) -- bounds cost/latency the same way the portion's
   // own time budget already bounds a single invocation's work.
   const districtAiBudget = createRadarDistrictAiBudget();
-  try {
-    while (checkpoint.sourceQueue.length > 0) {
-      if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) break;
-      if (userTerminationDetected) break;
-      if (operatorStopDetected) break;
-      const currentSourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
-      if (!currentSourceId || attemptedSourceIds.has(currentSourceId)) {
-        const nextIndex = nextUnfinishedSourceIndex(checkpoint, currentSourceId ? checkpoint.currentSourceIndex + 1 : 0, attemptedSourceIds);
-        if (nextIndex === null) {
-          checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
-          break;
-        }
-        checkpoint.currentSourceIndex = nextIndex;
-      }
-      const sourceId = checkpoint.sourceQueue[checkpoint.currentSourceIndex]!;
-      if (await radarRunUserTerminated(supabase, input)) {
-        userTerminationDetected = true;
-        break;
-      }
-      if (await radarStopRequested(supabase, input)) {
-        operatorStopDetected = true;
-        if (checkpoint.sourceStatuses[sourceId] === "running") checkpoint.sourceStatuses[sourceId] = "pending";
-        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
-        break;
-      }
-      if (checkpoint.perSourceCursor[sourceId] === SOURCE_DONE_CURSOR) {
-        if (!["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[sourceId] ?? "")) {
-          const savedError = checkpoint.sourceErrors[sourceId];
-          checkpoint.sourceStatuses[sourceId] = savedError
-            ? radarSourceStatusFromWarnings([savedError])
-            : "completed";
-        }
-        checkpoint.currentSourceIndex += 1;
-        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-        continue;
-      }
-      if (checkpoint.sourceStatuses[sourceId] === "completed" || checkpoint.sourceStatuses[sourceId] === "failed" || checkpoint.sourceStatuses[sourceId] === "partial") {
-        checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
-        checkpoint.currentSourceIndex += 1;
-        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-        continue;
-      }
-      // OLX is owned by its separate durable worker queue. Defer a pending
-      // OLX reservation until every other unfinished portal has had a turn;
-      // otherwise a queued-but-unclaimed OLX job would stop this run before
-      // later portals could be collected. Legacy checkpoints are rotated in
-      // place, preserving their IDs, cursors and all completed source rows.
-      if (sourceId === "olx" && checkpoint.sourceStatuses.olx !== "running"
-        && checkpoint.sourceQueue.some((candidate) => candidate !== "olx"
-          && !["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[candidate] ?? ""))) {
-        const currentIndex = checkpoint.currentSourceIndex;
-        const [deferredSource] = checkpoint.sourceQueue.splice(currentIndex, 1);
-        if (deferredSource) checkpoint.sourceQueue.push(deferredSource);
-        // When every other unfinished portal was already tried in this portion
-        // (e.g. it timed out), OLX was picked again at once and rotated in a
-        // loop of checkpoint writes until the portion budget ran out, with no
-        // progress. Then OLX waits for the next portion instead.
-        if (!checkpoint.sourceQueue.some((candidate) => candidate !== "olx" && !attemptedSourceIds.has(candidate)
-          && !["completed", "failed", "partial"].includes(checkpoint.sourceStatuses[candidate] ?? "")
-          && checkpoint.perSourceCursor[candidate] !== SOURCE_DONE_CURSOR)) attemptedSourceIds.add("olx");
-        const nextIndex = nextUnfinishedSourceIndex(checkpoint, currentIndex, attemptedSourceIds);
-        if (nextIndex === null) {
-          checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
-          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-          break;
-        }
-        checkpoint.currentSourceIndex = nextIndex;
-        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-        continue;
-      }
+  // Independent portals (different hosts) run in a small pool of lanes; one
+  // portal is never read by two lanes and its own requests stay sequential,
+  // so no portal sees more traffic than before. All lanes share this run's
+  // single lease and checkpoint; checkpoint writes are serialized.
+  const activeHttpLanes = new Set<RadarSource>();
+  // Portals that gave their lane back after real progress at the end of their
+  // time slice; a free lane takes them up again within the same portion.
+  const resumableThisPortion: RadarSource[] = [];
+  const pageCaches = new Map<RadarSource, Map<string, { html: string; finalUrl: string }>>();
+  const pickNextSource = (): RadarSource | null => {
+    // A legacy checkpoint whose OLX stage is owned by the worker runs nothing
+    // else: the worker's finalize replaces the whole checkpoint.
+    if (checkpoint.sourceStatuses.olx === "running" && checkpoint.sourceQueue.includes("olx")) {
+      return !attemptedSourceIds.has("olx") && activeHttpLanes.size === 0 ? "olx" : null;
+    }
+    for (const candidate of checkpoint.sourceQueue) {
+      if (candidate === "olx" || attemptedSourceIds.has(candidate) || sourceFinished(checkpoint, candidate)) continue;
+      return candidate;
+    }
+    const resumable = resumableThisPortion.shift();
+    if (resumable) return resumable;
+    const httpLeft = checkpoint.sourceQueue.some((candidate) => candidate !== "olx" && !sourceFinished(checkpoint, candidate));
+    if (!httpLeft && activeHttpLanes.size === 0 && checkpoint.sourceQueue.includes("olx") && !attemptedSourceIds.has("olx") && !sourceFinished(checkpoint, "olx")) return "olx";
+    return null;
+  };
+  const lane = async (): Promise<void> => {
+    while (true) {
+      if (Date.now() >= portionYieldAt || userTerminationDetected || operatorStopDetected) return;
+      // Bounded run: past the active HTTP limit every unfinished portal ends
+      // as honestly reported partial coverage; OLX (its own worker) follows.
+      if (closeHttpSourcesPastTimeLimit(checkpoint, metrics, Date.now() - started, timing.httpRunLimitMs)) await save("running");
+      const sourceId = pickNextSource();
+      if (!sourceId) return;
+      // Claimed synchronously, before any await, so no other lane takes it.
       attemptedSourceIds.add(sourceId);
+      // The OLX worker finalizes by moving the cursor one step past OLX, so a
+      // newly handed-over OLX stage must be the last entry of the queue.
+      if (sourceId === "olx" && checkpoint.sourceStatuses.olx !== "running") {
+        checkpoint.sourceQueue = [...checkpoint.sourceQueue.filter((candidate) => candidate !== "olx"), "olx"];
+      }
+      if (sourceId !== "olx") activeHttpLanes.add(sourceId);
+      checkpoint.currentSourceIndex = checkpoint.sourceQueue.indexOf(sourceId);
+      try {
+        const control = await radarRunControl(supabase, input);
+        if (control.terminated) { userTerminationDetected = true; controller.abort(new DOMException("Radar run terminated by its owner", "AbortError")); return; }
+        if (control.stopRequested) {
+          operatorStopDetected = true;
+          if (checkpoint.sourceStatuses[sourceId] === "running") checkpoint.sourceStatuses[sourceId] = "pending";
+          await save("partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
+          controller.abort(new DOMException("Radar stop requested", "AbortError"));
+          return;
+        }
+        if (await attemptSource(sourceId) === "stop") return;
+      } finally {
+        activeHttpLanes.delete(sourceId);
+      }
+    }
+  };
+  const attemptSource = async (sourceId: RadarSource): Promise<"next" | "stop"> => {
       const attemptStartedAt = Date.now();
-      const attemptBefore = { scanned, cursor: cursorProgressKey(checkpoint.perSourceCursor[sourceId]) };
-      const attemptProgressed = () => scanned > attemptBefore.scanned || cursorProgressKey(checkpoint.perSourceCursor[sourceId]) !== attemptBefore.cursor;
-      const hadFairShare = attemptStartedAt - started <= PORTION_BUDGET_MS - YIELD_MARGIN_MS - FAIR_ATTEMPT_MS;
+      // Per portal: with parallel lanes the run-wide counters also grow from
+      // other portals, which must never make a stalled portal look alive.
+      const attemptBefore = { fetched: sourceMetrics(metrics, sourceId).fetched, cursor: cursorProgressKey(checkpoint.perSourceCursor[sourceId]) };
+      const attemptProgressed = () => sourceMetrics(metrics, sourceId).fetched > attemptBefore.fetched || cursorProgressKey(checkpoint.perSourceCursor[sourceId]) !== attemptBefore.cursor;
+      // Each unfinished portal gets a fair share of what is left of this
+      // portion (at least minSliceMs); a portal that started with less than
+      // that was cut short by the portion, not by its own failure.
+      const portionLeftMs = portionYieldAt - attemptStartedAt;
+      const hadFairShare = portionLeftMs >= timing.minSliceMs;
+      const turnsLeft = Math.ceil((unattemptedHttpSources(checkpoint, attemptedSourceIds) + 1) / Math.max(1, timing.parallelSources));
+      const sliceDeadlineAt = attemptStartedAt + Math.max(timing.minSliceMs, portionLeftMs / Math.max(1, turnsLeft));
+      if (sourceId !== "olx") httpAttemptedThisPortion = true;
+      const attemptMetrics = sourceMetrics(metrics, sourceId);
+      attemptMetrics.attempts += 1;
       const source = activeSources(syntheticCriteria(sourceId, checkpoint.searchCriteria)).find((candidate) => candidate.id === sourceId);
       if (!source) {
         // A run claimed before a source was turned off can still carry it in
@@ -414,45 +475,34 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         // with an honest, specific reason distinct from "never registered".
         checkpoint.sourceStatuses[sourceId] = "failed";
         checkpoint.sourceErrors[sourceId] = isDisabledSource(sourceId) ? "Źródło wyłączone." : "SOURCE_NOT_ACTIVE_OR_REGISTERED";
-        checkpoint.currentSourceIndex += 1;
-        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-        continue;
+        await save("running");
+        return "next";
       }
 
       checkpoint.sourceStatuses[sourceId] = "running";
       if (!isRadarDetailCursor(checkpoint.perSourceCursor[sourceId]) || checkpoint.sourceErrors[sourceId]?.startsWith("RADAR_PORTION_TIME_BUDGET_EXCEEDED:")) delete checkpoint.sourceErrors[sourceId];
-      await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+      await save("running");
       try {
-        if (await radarStopRequested(supabase, input)) {
-          operatorStopDetected = true;
-          checkpoint.sourceStatuses[sourceId] = "pending";
-          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR);
-          break;
-        }
+      try {
         if (sourceId === "olx") {
+          checkpoint.currentSourceIndex = checkpoint.sourceQueue.indexOf("olx");
           const job = await enqueueRadarOlxJob({ ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, city: "Łódź" }, supabase);
+          metrics.olxEnqueuedAt ??= new Date().toISOString();
           if (job.status === "completed") {
             checkpoint.sourceStatuses.olx = "completed";
             checkpoint.perSourceCursor.olx = SOURCE_DONE_CURSOR;
-            checkpoint.currentSourceIndex += 1;
-            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-            continue;
+            await save("running");
+            return "next";
           }
           checkpoint.sourceStatuses.olx = "running";
-          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-          break;
+          await save("running");
+          return "stop";
         }
         let emittedBatches = false;
       const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
-          if (userTerminationDetected || await radarRunUserTerminated(supabase, input)) {
-            userTerminationDetected = true;
-            throw new Error(RADAR_TERMINATED_BY_USER);
-          }
-          if (operatorStopDetected || await radarStopRequested(supabase, input)) {
-            operatorStopDetected = true;
-            throw new Error(RADAR_STOPPED_BY_OPERATOR);
-          }
-          if (Date.now() - started >= PORTION_BUDGET_MS - YIELD_MARGIN_MS) {
+          const batchStartedAt = Date.now();
+          await ensureRunStillOwned();
+          if (Date.now() >= portionYieldAt) {
             controller.abort();
             throw new Error("RADAR_PORTION_BUDGET_YIELD");
           }
@@ -462,20 +512,31 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           let batchVerificationQueued = 0;
           let batchDistrictQueued = 0;
           const batchExternalIds = batch.listings.map((listing) => listing.externalListingId);
+          let writesInBatch = 0;
+          // The batch start was just checked; before every further write in
+          // the same batch the run is re-checked, so nothing is saved after a
+          // STOP or termination. Rejected candidates need no extra query.
+          const beforeWrite = async () => {
+            if (writesInBatch > 0) await ensureRunStillOwned();
+            writesInBatch += 1;
+          };
+          const lookupsStartedAt = Date.now();
           const [verificationDecisions, rejectedVerificationIds, rejectedDistrictIds, activeAnalysisIds] = await Promise.all([
             confirmedRadarVerificationDecisions(supabase, input.ownerId, sourceId, batchExternalIds),
             rejectedRadarVerificationExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
             rejectedRadarDistrictQueueExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
             activeRadarListingExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
           ]);
+          attemptMetrics.dbMs += Date.now() - lookupsStartedAt;
+          let writeMs = 0;
+          let qualifyMs = 0;
           for (const sourceListing of batch.listings) {
             const manualDecision = verificationDecisions.get(sourceListing.externalListingId);
             const listing = manualDecision ? applyRadarVerificationDecision(sourceListing, manualDecision) : sourceListing;
             controller.signal.throwIfAborted();
-            if (await radarRunUserTerminated(supabase, input)) {
-              userTerminationDetected = true;
-              throw new Error(RADAR_TERMINATED_BY_USER);
-            }
+            if (userTerminationDetected) throw new Error(RADAR_TERMINATED_BY_USER);
+            if (operatorStopDetected) throw new Error(RADAR_STOPPED_BY_OPERATOR);
+            const qualifyStartedAt = Date.now();
             const qualificationCandidate = {
               source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
               title: listing.title, description: listing.description, price: listing.price, area: listing.area, pricePerSqm: listing.pricePerSqm,
@@ -485,6 +546,9 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
             };
             const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, manualDecision, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
+            qualifyMs += Date.now() - qualifyStartedAt;
+            const writeStartedAt = Date.now();
+            try {
             if (!outcome.qualified) {
               if (outcome.reason === "detail_conflict" && (listing.source === "oferty_net" || listing.source === "domiporta")) {
                 const evidence = isRecord(listing.rawPayload.detailEvidence) ? listing.rawPayload.detailEvidence : {};
@@ -499,6 +563,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                   title: listing.title,
                   description: listing.description,
                 })])];
+                await beforeWrite();
                 await markExistingRadarListingForReview(supabase, {
                   ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString(),
                 }, { source: listing.source, externalListingId: listing.externalListingId, issueFields: conflicts }, controller.signal);
@@ -530,6 +595,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               if (outcome.reason === "district_not_confirmed") {
                 const districtAssessment = assessRadarDistrictOnlyCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
                 if (districtAssessment.eligible) {
+                  await beforeWrite();
                   const queueResult = await upsertPendingDistrictCandidate(supabase, input.ownerId, {
                     source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
                     title: listing.title, description: listing.description, price: listing.price!, area: listing.area!, rooms: listing.rooms,
@@ -544,6 +610,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                 }
               }
               if (isReviewable) {
+                await beforeWrite();
                 const queueResult = await upsertPendingRadarVerificationCandidate(supabase, input.ownerId, verificationInput, districtAiBudget);
                 if (!queueResult.ok) recordRadarSourceWarnings(checkpoint, sourceId, [queueResult.reason === "schema_unavailable"
                   ? "RADAR_VERIFICATION_QUEUE_UNAVAILABLE: kolejka wymaga lokalnego draftu 20261012130000_add_price_radar_verification_queue.sql"
@@ -562,6 +629,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
             }
             const raw = listing.rawPayload;
             const crossSourceIdentity = listing.crossSourceIdentity ?? null;
+            await beforeWrite();
             const persisted = await persistRadarListing(supabase, {
               ...outcome, source: listing.source, externalListingId: listing.externalListingId,
               originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl, title: listing.title,
@@ -575,7 +643,12 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               continue;
             }
             batchQualified += 1;
+            } finally {
+              writeMs += Date.now() - writeStartedAt;
+            }
           }
+          attemptMetrics.dbMs += writeMs;
+          attemptMetrics.qualifyMs += qualifyMs;
           // Only checkpoint counters when every row in the page batch has
           // been processed. If STOP lands mid-batch, its cursor remains at
           // the previous committed page and an idempotent replay must not
@@ -595,13 +668,20 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           const previousCursorKey = cursorProgressKey(checkpoint.perSourceCursor[sourceId]);
           checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
           recordBatchProgress(checkpoint, sourceId, batch.fetched, cursorProgressKey(checkpoint.perSourceCursor[sourceId]) !== previousCursorKey);
-          if (await radarStopRequested(supabase, input)) {
-            operatorStopDetected = true;
-            checkpoint.sourceStatuses[sourceId] = "pending";
-            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR);
-            throw new Error(RADAR_STOPPED_BY_OPERATOR);
+          for (const listing of batch.listings) checkedListingKeys.add(`${sourceId}:${listing.externalListingId}`);
+          attemptMetrics.fetched += batch.fetched;
+          attemptMetrics.qualified += batchQualified;
+          attemptMetrics.batchMs += Date.now() - batchStartedAt;
+          // Coalesced: counters, cursor and checked offers always travel in
+          // the same checkpoint, so a crash replays at most a few seconds of
+          // idempotent work and never double counts. Every attempt outcome
+          // below still saves, and the fenced RPC renews the lease.
+          if (nextCursor === null || Date.now() - lastCheckpointAt >= timing.checkpointIntervalMs) {
+            if (await save("running", null, sourceId) === "stopped") {
+              operatorStopDetected = true;
+              throw new Error(RADAR_STOPPED_BY_OPERATOR);
+            }
           }
-          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
         };
         // The underlying adapter must honor the passed AbortSignal. We also
         // refuse to persist any result after this portion's budget expires.
@@ -611,7 +691,19 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           ...(isRadarDetailCursor(cursorValue) ? { radarDetailCursor: cursorValue } : {}),
           purpose: "price_radar",
           ...(sourceId === "oferty_net" && !checkpoint.searchCriteria ? { ofertyNetLegacySearch: true } : {}),
-          deadlineAt: started + PORTION_BUDGET_MS - YIELD_MARGIN_MS,
+          deadlineAt: portionYieldAt,
+          sliceDeadlineAt,
+          detailReserveMs: timing.detailReserveMs,
+          onRequest: (kind, durationMs) => recordRequest(attemptMetrics, kind, durationMs),
+          isDetailChecked: (key) => checkedListingKeys.has(key),
+          pageCache: pageCaches.get(sourceId) ?? pageCaches.set(sourceId, new Map()).get(sourceId)!,
+          contextValues: {
+            get: (key) => {
+              const entry = checkpoint.contextValues?.[key];
+              return entry && Date.now() - Date.parse(entry.at) < CONTEXT_VALUE_TTL_MS ? entry.value : undefined;
+            },
+            set: (key, value) => { (checkpoint.contextValues ??= {})[key] = { value: value.slice(0, 200), at: new Date().toISOString() }; },
+          },
           onBatch: processBatch,
         };
         const sourcePromise = source.fetch(syntheticCriteria(sourceId, checkpoint.searchCriteria), controller.signal, batches);
@@ -625,12 +717,11 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         checkpoint.sourceStatuses[sourceId] = radarSourceStatusFromWarnings(completionWarnings);
         if (checkpoint.progress?.sourceNoProgressAttempts) delete checkpoint.progress.sourceNoProgressAttempts[sourceId];
         checkpoint.perSourceCursor[sourceId] = SOURCE_DONE_CURSOR;
-        checkpoint.currentSourceIndex += 1;
-        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+        await save("running");
       } catch (reason) {
         if (userTerminationDetected || isRadarTerminationError(reason) || await radarRunUserTerminated(supabase, input)) {
           userTerminationDetected = true;
-          break;
+          return "stop";
         }
         if (operatorStopDetected || isRadarStopError(reason) || await radarStopRequested(supabase, input)) {
           operatorStopDetected = true;
@@ -639,8 +730,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           // expired/queued run. For a live worker, the fenced checkpoint RPC
           // accepts this terminal partial state only while stop_requested_at
           // is present. The source cursor remains the last committed cursor.
-          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
-          break;
+          await save("partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
+          return "stop";
         }
         if (reason instanceof SourceBatchYield || isRetryableTimeout(reason, controller.signal)) {
           const isYield = reason instanceof SourceBatchYield;
@@ -662,9 +753,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           }
           if ((attempts[sourceId] ?? 0) >= RADAR_SOURCE_NO_PROGRESS_LIMIT) {
             closeStalledSource(checkpoint, sourceId, attempts[sourceId]!, attemptLabel);
-            checkpoint.currentSourceIndex += 1;
-            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-            continue;
+            await save("running");
+            return "next";
           }
           checkpoint.sourceStatuses[sourceId] = "pending";
           if (!isYield) {
@@ -672,29 +762,31 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
             // continuation, scheduler or PWA) picks the same cursor back up.
             checkpoint.sourceErrors[sourceId] = "RADAR_PORTION_TIME_BUDGET_EXCEEDED: zostanie wznowione przy najbliższym uruchomieniu zbierania (ręcznym lub zaplanowanym), nie wymaga czekania do następnego dnia.";
           }
-          const currentIndex = checkpoint.currentSourceIndex;
-          if (currentIndex < checkpoint.sourceQueue.length - 1) {
-            const [deferredSource] = checkpoint.sourceQueue.splice(currentIndex, 1);
-            if (deferredSource) checkpoint.sourceQueue.push(deferredSource);
-          }
-          const nextIndex = nextUnfinishedSourceIndex(checkpoint, checkpoint.currentSourceIndex, attemptedSourceIds);
-          if (nextIndex === null) {
-            checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
-            await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-            break;
-          }
-          checkpoint.currentSourceIndex = nextIndex;
-          await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
-          continue;
+          // Behind the other unfinished portals for the next portion; a slice
+          // that ended after real progress may be taken up again right away.
+          deferSource(checkpoint, sourceId);
+          if (isYield && reason.reason === "detail_batch_limit" && progressed && portionYieldAt - Date.now() >= timing.minSliceMs / 2) resumableThisPortion.push(sourceId);
+          await save("running");
+          return "next";
         }
         checkpoint.sourceStatuses[sourceId] = "failed";
         checkpoint.sourceErrors[sourceId] = sourceError(reason);
         if (checkpoint.progress?.sourceNoProgressAttempts) delete checkpoint.progress.sourceNoProgressAttempts[sourceId];
-        checkpoint.currentSourceIndex += 1;
         if (isTerminalAccessError(reason)) checkpoint.sourceErrors[sourceId] = `TERMINAL_ACCESS_ERROR: ${checkpoint.sourceErrors[sourceId]}`;
-        await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "running");
+        await save("running");
       }
-    }
+      } finally {
+        attemptMetrics.activeMs += Date.now() - attemptStartedAt;
+      }
+    return "next";
+  };
+  try {
+    normalizeFinishedSources(checkpoint);
+    await Promise.all(Array.from({ length: Math.max(1, timing.parallelSources) }, () => lane()));
+    const unfinished = checkpoint.sourceStatuses.olx === "running" && checkpoint.sourceQueue.includes("olx")
+      ? checkpoint.sourceQueue.indexOf("olx")
+      : checkpoint.sourceQueue.findIndex((candidate) => !sourceFinished(checkpoint, candidate));
+    checkpoint.currentSourceIndex = unfinished >= 0 ? unfinished : checkpoint.sourceQueue.length;
   } catch (reason) {
     if (isRadarTerminationError(reason) || await radarRunUserTerminated(supabase, input)) userTerminationDetected = true;
     else throw reason;
@@ -711,9 +803,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   }
 
   if (operatorStopDetected) {
-    const currentSource = checkpoint.sourceQueue[checkpoint.currentSourceIndex];
-    if (currentSource && checkpoint.sourceStatuses[currentSource] === "running") checkpoint.sourceStatuses[currentSource] = "pending";
-    await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, "partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
+    for (const source of checkpoint.sourceQueue) if (source !== "olx" && checkpoint.sourceStatuses[source] === "running") checkpoint.sourceStatuses[source] = "pending";
+    await save("partial", RADAR_STOPPED_BY_OPERATOR).catch(() => undefined);
     const latest = await supabase.from("price_radar_runs").select("scanned_count,qualified_count,checkpoint,source_statuses")
       .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
     const savedCheckpoint = latest.data && isRecord(latest.data.checkpoint) ? latest.data.checkpoint as unknown as RadarCheckpoint : checkpoint;
@@ -731,6 +822,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   }
 
   const waiting = recordPortionDiagnostics(checkpoint, (checkpoint.progress?.lastRealProgressAt ?? null) !== progressMarkerAtStart);
+  finishPortionMetrics(checkpoint, metrics, started, httpAttemptedThisPortion);
   const done = checkpoint.sourceQueue.every((source) => checkpoint.sourceStatuses[source] === "completed" || checkpoint.sourceStatuses[source] === "failed" || checkpoint.sourceStatuses[source] === "partial");
   if (done) checkpoint.currentSourceIndex = checkpoint.sourceQueue.length;
   const failedSources = Object.values(checkpoint.sourceStatuses).filter((status) => status === "failed").length;
@@ -741,7 +833,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
         : "completed"
     : "running";
   const errorMessage = Object.entries(checkpoint.sourceErrors).map(([sourceId, message]) => `${sourceId}: ${message}`).join("\n").slice(0, 2000) || null;
-  const finalSave = await saveCheckpoint(supabase, input, checkpoint, scanned, qualified, finalStatus, errorMessage);
+  const finalSave = await save(finalStatus, errorMessage);
   if (finalSave === "stopped") {
     const latest = await supabase.from("price_radar_runs").select("scanned_count,qualified_count,checkpoint,source_statuses")
       .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
@@ -883,6 +975,91 @@ function safeDiagnosticUrl(value: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+async function radarRunControl(supabase: SupabaseClient, input: { runId: string; ownerId: string }): Promise<{ terminated: boolean; stopRequested: boolean }> {
+  const { data, error } = await supabase.from("price_radar_runs").select("user_terminated_at,stop_requested_at,error_message,status")
+    .eq("id", input.runId).eq("owner_id", input.ownerId).maybeSingle();
+  if (error || !data) return { terminated: false, stopRequested: false };
+  const terminated = Boolean(data.user_terminated_at || data.error_message === RADAR_TERMINATED_BY_USER);
+  return { terminated, stopRequested: !terminated && Boolean(data.stop_requested_at || data.error_message === RADAR_STOPPED_BY_OPERATOR) };
+}
+
+const TERMINAL_SOURCE_STATUSES = new Set(["completed", "failed", "partial"]);
+function sourceFinished(checkpoint: RadarCheckpoint, source: string): boolean {
+  return TERMINAL_SOURCE_STATUSES.has(checkpoint.sourceStatuses[source] ?? "") || checkpoint.perSourceCursor[source] === SOURCE_DONE_CURSOR;
+}
+
+/** A finished cursor and a terminal status always agree before lanes start. */
+function normalizeFinishedSources(checkpoint: RadarCheckpoint): void {
+  for (const source of checkpoint.sourceQueue) {
+    if (checkpoint.perSourceCursor[source] === SOURCE_DONE_CURSOR && !TERMINAL_SOURCE_STATUSES.has(checkpoint.sourceStatuses[source] ?? "")) {
+      const savedError = checkpoint.sourceErrors[source];
+      checkpoint.sourceStatuses[source] = savedError ? radarSourceStatusFromWarnings([savedError]) : "completed";
+    } else if (TERMINAL_SOURCE_STATUSES.has(checkpoint.sourceStatuses[source] ?? "")) {
+      checkpoint.perSourceCursor[source] = SOURCE_DONE_CURSOR;
+    }
+  }
+}
+
+/** Moves a yielded portal behind the other unfinished ones; OLX stays last. */
+function deferSource(checkpoint: RadarCheckpoint, sourceId: RadarSource): void {
+  const rest = checkpoint.sourceQueue.filter((candidate) => candidate !== sourceId);
+  const olxIndex = rest.indexOf("olx");
+  const olxLast = olxIndex >= 0 && olxIndex === rest.length - 1 && !sourceFinished(checkpoint, "olx");
+  checkpoint.sourceQueue = olxLast ? [...rest.slice(0, olxIndex), sourceId, "olx"] : [...rest, sourceId];
+}
+
+function unattemptedHttpSources(checkpoint: RadarCheckpoint, attempted: ReadonlySet<RadarSource>): number {
+  return checkpoint.sourceQueue.filter((source) => source !== "olx" && !attempted.has(source) && !sourceFinished(checkpoint, source)).length;
+}
+
+function startPortionMetrics(checkpoint: RadarCheckpoint, startedAt: number): RadarRunMetrics {
+  const progress = checkpoint.progress ??= {};
+  const metrics = progress.metrics ??= { portions: 0, httpActiveMs: 0, handOffs: 0, handOffGapMs: 0, sources: {} };
+  metrics.sources ??= {};
+  // Idle time between two portions (release, hand-off, cold start, claim).
+  const previousEnd = progress.lastPortionAt ? Date.parse(progress.lastPortionAt) : Number.NaN;
+  if (Number.isFinite(previousEnd) && startedAt >= previousEnd) {
+    metrics.handOffs += 1;
+    metrics.handOffGapMs += startedAt - previousEnd;
+  }
+  metrics.httpStartedAt ??= new Date(startedAt).toISOString();
+  return metrics;
+}
+
+function sourceMetrics(metrics: RadarRunMetrics, sourceId: string): RadarSourceMetrics {
+  return metrics.sources[sourceId] ??= { attempts: 0, activeMs: 0, batchMs: 0, listRequests: 0, listMs: 0, detailRequests: 0, detailMs: 0, contextRequests: 0, contextMs: 0, dbMs: 0, qualifyMs: 0, checkpointMs: 0, fetched: 0, qualified: 0 };
+}
+
+function recordRequest(metrics: RadarSourceMetrics, kind: "list" | "detail" | "context", durationMs: number): void {
+  const ms = Math.max(0, durationMs);
+  if (kind === "detail") { metrics.detailRequests += 1; metrics.detailMs += ms; }
+  else if (kind === "context") { metrics.contextRequests += 1; metrics.contextMs += ms; }
+  else { metrics.listRequests += 1; metrics.listMs += ms; }
+}
+
+function finishPortionMetrics(checkpoint: RadarCheckpoint, metrics: RadarRunMetrics, startedAt: number, httpAttempted: boolean): void {
+  metrics.portions += 1;
+  if (httpAttempted) metrics.httpActiveMs += Date.now() - startedAt;
+  const httpLeft = checkpoint.sourceQueue.some((source) => source !== "olx" && !sourceFinished(checkpoint, source));
+  if (!httpLeft) metrics.httpFinishedAt ??= new Date().toISOString();
+}
+
+/** Ends every unfinished HTTP portal once the run's active HTTP time is used up. */
+function closeHttpSourcesPastTimeLimit(checkpoint: RadarCheckpoint, metrics: RadarRunMetrics, elapsedThisPortionMs: number, limitMs: number): boolean {
+  if (metrics.httpActiveMs + elapsedThisPortionMs < limitMs) return false;
+  const open = checkpoint.sourceQueue.filter((source) => source !== "olx" && !sourceFinished(checkpoint, source));
+  if (!open.length) return false;
+  const minutes = Math.round(limitMs / 60_000);
+  for (const source of open) {
+    const hadProgress = Boolean(checkpoint.progress?.sourceHadProgress?.[source]) || !isInitialCursor(checkpoint.perSourceCursor[source]);
+    checkpoint.sourceStatuses[source] = hadProgress ? "partial" : "failed";
+    checkpoint.sourceErrors[source] = `${RADAR_HTTP_TIME_LIMIT_ERROR}: przekroczono limit ${minutes} min aktywnej pracy portali HTTP w tym przebiegu; zapisane wyniki zachowano.`;
+    checkpoint.perSourceCursor[source] = SOURCE_DONE_CURSOR;
+  }
+  metrics.httpFinishedAt ??= new Date().toISOString();
+  return true;
 }
 
 /** Retry metadata is not progress: a 429 retry keeps the same page and candidate. */

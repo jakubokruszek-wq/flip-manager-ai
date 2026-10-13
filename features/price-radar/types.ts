@@ -136,6 +136,40 @@ export type RadarProgressDiagnostics = {
   waitingReason?: RadarWaitingReason | null;
   waitingUntil?: string | null;
   lastContinuationError?: { at: string; hop: number; reason: string } | null;
+  metrics?: RadarRunMetrics;
+};
+
+/** Per-portal profile of one run; all durations in milliseconds. */
+export type RadarSourceMetrics = {
+  attempts: number;
+  /** Wall time of all attempts on this portal. */
+  activeMs: number;
+  /** Time spent processing committed batches (DB lookups, qualification, writes). */
+  batchMs: number;
+  listRequests: number;
+  listMs: number;
+  detailRequests: number;
+  detailMs: number;
+  contextRequests: number;
+  contextMs: number;
+  dbMs: number;
+  qualifyMs: number;
+  checkpointMs: number;
+  fetched: number;
+  qualified: number;
+};
+
+export type RadarRunMetrics = {
+  portions: number;
+  /** Sum of portion durations in which an HTTP portal was worked on. */
+  httpActiveMs: number;
+  handOffs: number;
+  /** Idle time between portions (lease release, hand-off, cold start, claim). */
+  handOffGapMs: number;
+  httpStartedAt?: string;
+  httpFinishedAt?: string;
+  olxEnqueuedAt?: string;
+  sources: Record<string, RadarSourceMetrics>;
 };
 
 export type RadarCheckpoint = {
@@ -162,6 +196,10 @@ export type RadarCheckpoint = {
   lastProgressAt?: string;
   /** Real-progress and continuation diagnostics; see RadarProgressDiagnostics. */
   progress?: RadarProgressDiagnostics;
+  /** Offers committed in this run (`source:externalListingId`), so a re-listed offer is not fetched twice. */
+  checkedListingKeys?: string[];
+  /** Small values derived from stable portal context, with the time they were read. */
+  contextValues?: Record<string, { value: string; at: string }>;
   buffer: unknown[];
   bufferOffset: number;
 };

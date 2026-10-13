@@ -718,6 +718,7 @@ export function PriceRadarPage() {
           <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runActivity.status} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)} · czas ${formatDuration(run.startedAt, run.finishedAt ?? run.userTerminatedAt, clockNow)}` : "Brak uruchomionego przebiegu."}</p>
           {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
           {run?.sourceRejectionCounts && Object.keys(run.sourceRejectionCounts).length > 0 ? <details aria-label="Odrzucone kandydatury źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Odrzucone kandydatury według źródła</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceRejectionCounts).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${sourceRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
+          {run?.checkpoint?.progress?.metrics ? <RadarPerformanceDetails run={run} now={clockNow} /> : null}
           {run?.sourceWarnings && Object.values(run.sourceWarnings).some((warnings) => warnings.length > 0) ? <details aria-label="Uwagi i pokrycie źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Uwagi źródeł i zakres wyszukiwania</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceWarnings).map(([source, warnings]) => warnings.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {warnings.map(sourceWarningLabel).join("; ")}</li> : null)}</ul></details> : null}
           {run?.qualificationRejections && Object.values(run.qualificationRejections).some((counts) => Object.keys(counts).length > 0) ? <details aria-label="Powody odrzucenia ofert" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Powody odrzucenia w kwalifikacji</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.qualificationRejections).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${qualificationRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
           {autoResumeMessage ? <p className="mt-2 text-xs text-muted-foreground">{autoResumeMessage}</p> : null}
@@ -1069,6 +1070,37 @@ function verificationIssueLabel(issue: string): string {
 
 function AutomationMetric({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 break-words font-medium">{value}</p></div>;
+}
+
+function formatSeconds(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 90 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+function RadarPerformanceDetails({ run, now }: { run: RunStatus; now: number }) {
+  const metrics = run.checkpoint?.progress?.metrics;
+  if (!metrics) return null;
+  const activeMinutes = metrics.httpActiveMs / 60_000;
+  const throughput = activeMinutes > 0 ? Math.round(run.scannedCount / activeMinutes) : null;
+  const olxWaitingSince = run.sourceStatuses.olx === "running" && metrics.olxEnqueuedAt ? metrics.olxEnqueuedAt : null;
+  const httpWall = metrics.httpStartedAt ? formatDuration(metrics.httpStartedAt, metrics.httpFinishedAt ?? null, now) : "—";
+  const sources = Object.entries(metrics.sources).filter(([, item]) => item.attempts > 0);
+  return (
+    <details aria-label="Wydajność przebiegu" className="mt-2 text-xs">
+      <summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Wydajność przebiegu</summary>
+      <ul className="mt-2 space-y-1 text-muted-foreground">
+        <li>Portale HTTP: aktywna praca {formatSeconds(metrics.httpActiveMs)} · od startu do końca {httpWall}{metrics.httpFinishedAt ? "" : " (w toku)"} · porcje {metrics.portions}</li>
+        <li>Przekazania między porcjami: {metrics.handOffs} · łącznie {formatSeconds(metrics.handOffGapMs)}{metrics.handOffs > 0 ? ` (średnio ${formatSeconds(metrics.handOffGapMs / metrics.handOffs)})` : ""}</li>
+        <li>Przepustowość: {throughput === null ? "—" : `${throughput} ofert/min aktywnej pracy`}</li>
+        <li>Worker OLX: {olxWaitingSince ? `oczekiwanie od ${formatDate(olxWaitingSince)} (${formatDuration(olxWaitingSince, null, now)}), liczone osobno od portali HTTP` : metrics.olxEnqueuedAt ? `przekazano ${formatDate(metrics.olxEnqueuedAt)}` : "jeszcze nie przekazano"}</li>
+        {sources.map(([source, item]) => (
+          <li className="break-words" key={source}>
+            <span className="font-semibold">{radarSourceLabel(source)}:</span> {formatSeconds(item.activeMs)} · żądania: lista {item.listRequests}, szczegóły {item.detailRequests}{item.contextRequests ? `, kontekst ${item.contextRequests}` : ""} · oferty {item.fetched}{item.activeMs > 0 ? ` · ${Math.round(item.fetched / (item.activeMs / 60_000))}/min` : ""} · baza {formatSeconds(item.dbMs + item.checkpointMs)}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function formatDuration(startedAt: string, finishedAt: string | null, now: number): string {
