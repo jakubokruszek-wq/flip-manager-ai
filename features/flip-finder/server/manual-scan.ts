@@ -107,12 +107,20 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
   // Finder source_scans row for it; enqueueOlxJob creates the one async row.
   const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
   let olxRunId: string | null = null;
+  // Set when the OLX queue cannot be read unambiguously. With other portals,
+  // that is an OLX-only problem: no OLX job is queued, the others still run.
+  let olxQueueProblem: string | null = null;
   if (sources.some((source) => source.id === "olx")) {
     try {
       olxRunId = await resumableOlxRunId(filter.id, supabase);
     } catch (error) {
-      if (error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS") throw statusError(429, "Kolejka OLX ma niespójne, równoległe przebiegi.");
-      throw statusError(500, error instanceof Error ? error.message : "Nie udało się sprawdzić kolejki OLX.");
+      const multiple = error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS";
+      if (!lockableSourceIds.length) {
+        if (multiple) throw statusError(429, "Kolejka OLX ma niespójne, równoległe przebiegi.");
+        throw statusError(500, error instanceof Error ? error.message : "Nie udało się sprawdzić kolejki OLX.");
+      }
+      olxQueueProblem = olxQueueProblemCode(error);
+      console.warn("FINDER_OLX_QUEUE_DEGRADED", { filterId: filter.id, code: olxQueueProblem, detail: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
     }
   }
   // OLX is isolated from the other portals: an OLX job still waiting in its
@@ -124,7 +132,7 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
     await failStaleScans(supabase, filter.id, lockableSourceIds);
     actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter, origin);
   }
-  if (sources.some((source) => source.id === "olx")) {
+  if (sources.some((source) => source.id === "olx") && !olxQueueProblem) {
     if (olxRunId && olxRunId !== actualRunId) {
       // At most one OLX job per filter in flight: no second job for the new run.
       console.info("FINDER_OLX_JOB_STILL_QUEUED", { filterId: filter.id, olxRunId, runId: actualRunId });
@@ -331,9 +339,24 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
     }
     if (sources.some((source) => source.id === "olx")) {
       try {
-        const existing = await existingOlxScanResult(runId, supabase);
-        const olxRunId = existing ? null : await resumableOlxRunId(filterId, supabase);
-        if (existing) {
+        let existing: SourceScanResult | null = null;
+        let olxRunId: string | null = null;
+        let queueReadable = true;
+        try {
+          existing = await existingOlxScanResult(runId, supabase);
+          olxRunId = existing ? null : await resumableOlxRunId(filterId, supabase);
+        } catch (queueError) {
+          // OLX-only filter: unchanged, the failure is the run's result below.
+          if (!sources.some((source) => source.id !== "olx")) throw queueError;
+          // Mixed filter: the OLX queue is unreadable or ambiguous. Queue nothing, keep the other portals' result.
+          const code = olxQueueProblemCode(queueError);
+          olxQueueWarning = `olx: ${code}: kolejka OLX nie została jednoznacznie odczytana; nie dodano zadania OLX, pozostałe portale działają.`;
+          console.warn("FINDER_OLX_QUEUE_DEGRADED", { filterId, runId, code, detail: queueError instanceof Error ? queueError.message.slice(0, 200) : "unknown" });
+          queueReadable = false;
+        }
+        if (!queueReadable) {
+          // Nothing is queued while the OLX queue state is unknown; the warning above is the OLX result.
+        } else if (existing) {
           sourceResults.push(existing);
         } else if (olxRunId && olxRunId !== runId) {
           // The filter's OLX job from an earlier run is still in the OLX queue:
@@ -776,6 +799,11 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * skips every "failed" prepared row -- defeating the entire point of
  * resuming instead of refusing.
  */
+/** Diagnostic code for an OLX queue that cannot be read unambiguously. */
+function olxQueueProblemCode(error: unknown): "OLX_MULTIPLE_RUN_IDS" | "OLX_QUEUE_READ_FAILED" {
+  return error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS" ? "OLX_MULTIPLE_RUN_IDS" : "OLX_QUEUE_READ_FAILED";
+}
+
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
   const now = Date.now();
   const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at,continuation_lease_until,continuation_lease_token").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(now)).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));

@@ -39,6 +39,14 @@ Na dzisiejszy problem złożyły się trzy mechanizmy w kodzie, a czwarty doło�
 | `olx-jobs.ts → completeOlxJob` | Nie zmienia `search_filters.last_scanned_at`. Zakończenie zadania, wiersz `source_scans` OLX i `result_summary` działają jak dotąd. |
 | logi schedulera | `FINDER_SCHEDULER_CYCLE_START`, `FINDER_SCHEDULER_SKIPPED` (`SOURCE_SCAN_IN_PROGRESS` / `CLAIM_LOST` / `RESERVATION_LOCKED`), `FINDER_SCHEDULER_RUN_RESULT` (status, liczba ukończonych źródeł, źródła w toku), `FINDER_SCHEDULER_FILTER_FAILED` (przyczyna). Bez sekretów. |
 
+**Awaria kolejki OLX:** dla filtra z OLX i innymi portalami `OLX_MULTIPLE_RUN_IDS` albo błąd odczytu
+kolejki OLX (`OLX_QUEUE_READ_FAILED`) nie zatrzymuje pozostałych portali.
+- Nie powstaje żadne zadanie OLX.
+- Wynik przebiegu dostaje ostrzeżenie `olx: OLX_MULTIPLE_RUN_IDS: …` albo `olx: OLX_QUEUE_READ_FAILED: …`,
+  a w logu pojawia się `FINDER_OLX_QUEUE_DEGRADED`.
+- OLX nie jest liczony jako nieudane źródło.
+- Filtr **wyłącznie z OLX** zachowuje dotychczasowe zabezpieczenie: 429 przy niespójnych przebiegach, 500 przy błędzie odczytu.
+
 **Czego poprawka nie robi:**
 - nie przejmuje zadania OLX i nie zmienia lease ani kolejki OLX;
 - nie zmienia historii istniejących przebiegów i nie dodaje migracji;
