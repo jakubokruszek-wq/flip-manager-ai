@@ -13,11 +13,17 @@ const ROOT = path.resolve(import.meta.dirname, "../../..");
 const MIGRATION = path.join(ROOT, "supabase/migrations/20261013120000_add_finder_building_type_confirmations.sql");
 const LISTING = "20000000-0000-4000-8000-000000000002";
 
-test("the confirmations migration only adds its own table: read-only for authenticated, no anon access, writes only via service role", async () => {
+test("the confirmations migration only adds its own table: operator-only reads (RLS), no anon access, writes only via service role", async () => {
   const db = new PGlite();
   try {
     await db.exec(`
       create role anon; create role authenticated; create role service_role bypassrls;
+      -- Supabase's auth.jwt(): the request's JWT claims as set by PostgREST.
+      create schema auth;
+      create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
+      grant usage on schema auth to anon, authenticated, service_role;
+      grant execute on function auth.jwt() to anon, authenticated, service_role;
+      grant usage on schema public to anon, authenticated, service_role;
       create table public.listings(id uuid primary key, price numeric, building_type text);
       create table public.listing_snapshots(id uuid primary key default gen_random_uuid(), listing_id uuid references public.listings(id), price numeric);
       insert into public.listings values ('${LISTING}', 269000, 'blok');
@@ -39,6 +45,24 @@ test("the confirmations migration only adds its own table: read-only for authent
     assert.deepEqual(privileges, { anon_select: false, anon_insert: false, auth_select: true, auth_insert: false, auth_update: false, auth_delete: false, service_insert: true, rls: true });
     await assert.rejects(db.query(`insert into public.finder_building_type_confirmations(listing_id, building_type, confirmed_by) values ('${LISTING}', 'pałac', gen_random_uuid())`), /check/u, "only known building categories are accepted");
     await db.exec(`insert into public.finder_building_type_confirmations(listing_id, building_type, confirmed_by) values ('${LISTING}', 'blok', gen_random_uuid())`);
+
+    // RLS: only the operator role reads confirmations; other accounts see nothing, anon is denied, nobody but the service role writes.
+    const readAs = async (role: string, claims: Record<string, unknown> | null) => {
+      await db.exec(`reset role; select set_config('request.jwt.claims', '${JSON.stringify(claims ?? {})}', false); set role ${role}`);
+      try { return (await db.query<{ building_type: string }>("select building_type from public.finder_building_type_confirmations")).rows; }
+      finally { await db.exec("reset role"); }
+    };
+    assert.deepEqual(await readAs("authenticated", { sub: "op", role: "authenticated", app_metadata: { role: "operator" } }), [{ building_type: "blok" }]);
+    assert.deepEqual(await readAs("authenticated", { sub: "other", role: "authenticated", app_metadata: {} }), [], "a signed-in non-operator sees no rows");
+    assert.deepEqual(await readAs("authenticated", { sub: "spoof", role: "authenticated", user_metadata: { role: "operator" } }), [], "user-editable user_metadata never grants access");
+    await assert.rejects(readAs("anon", null), /permission denied/u);
+    await db.exec(`select set_config('request.jwt.claims', '{"app_metadata":{"role":"operator"}}', false); set role authenticated`);
+    await assert.rejects(db.query(`insert into public.finder_building_type_confirmations(listing_id, building_type, confirmed_by) values ('${LISTING}', 'kamienica', gen_random_uuid())`), /permission denied/u, "even the operator session cannot write directly; only the authorized route (service role) does");
+    await assert.rejects(db.query(`delete from public.finder_building_type_confirmations`), /permission denied/u);
+    await db.exec("reset role");
+    await db.exec("set role service_role");
+    assert.equal((await db.query("select * from public.finder_building_type_confirmations")).rows.length, 1, "the service role (server route) still reads and writes");
+    await db.exec("reset role");
     assert.deepEqual((await db.query("select price from public.listing_snapshots order by price")).rows, [{ price: "269000" }, { price: "279000" }], "price history untouched");
     assert.deepEqual((await db.query("select building_type from public.listings")).rows, [{ building_type: "blok" }], "listing data untouched");
   } finally { await db.close(); }

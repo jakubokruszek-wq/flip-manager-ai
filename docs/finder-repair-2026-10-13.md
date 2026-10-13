@@ -122,7 +122,7 @@ Przyczyna narastania nonce: `service_role` ma na `facebook_worker_nonces` tylko 
 ## 9. Migracje i kolejność wdrożenia
 
 **Niezbędna przed wdrożeniem Findera jest tylko jedna migracja:** `supabase/migrations/20261013120000_add_finder_building_type_confirmations.sql`.
-* Tworzy jedną nową tabelę: RLS włączone, `authenticated` ma tylko SELECT, zapis wyłącznie przez service role.
+* Tworzy jedną nową tabelę z RLS: odczyt tylko dla roli operatora (`app_metadata.role = 'operator'`, ustawiane wyłącznie przez serwer); inni zalogowani użytkownicy nie widzą żadnych wierszy, `anon` nie ma dostępu; zapis wyłącznie przez service role po autoryzacji operatora w API.
 * Nie zmienia istniejących danych.
 * Bez niej Finder działa poprawnie, tylko przyciski potwierdzania typu budynku są wyłączone z komunikatem.
 

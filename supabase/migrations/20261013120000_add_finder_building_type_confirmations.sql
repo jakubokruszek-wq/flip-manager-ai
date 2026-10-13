@@ -19,15 +19,21 @@ comment on table public.finder_building_type_confirmations is
 
 alter table public.finder_building_type_confirmations enable row level security;
 revoke all on table public.finder_building_type_confirmations from public, anon, authenticated;
--- The Finder read path uses the operator's session client (same as listings).
+-- The Finder read path uses the operator's session client. Reads are limited
+-- to the operator role (features/auth/operator.ts: app_metadata.role =
+-- 'operator'); app_metadata is server-controlled and cannot be set by the
+-- user. Any other signed-in account sees no rows; anon has no privilege.
 grant select on table public.finder_building_type_confirmations to authenticated;
--- Writes only through the operator-authorized server route (service role).
+-- Writes only through the operator-authorized server route (service role,
+-- which bypasses RLS). authenticated gets no INSERT/UPDATE/DELETE privilege
+-- and there is deliberately no write policy.
 grant select, insert, update, delete on table public.finder_building_type_confirmations to service_role;
 
 drop policy if exists finder_building_type_confirmations_read on public.finder_building_type_confirmations;
-create policy finder_building_type_confirmations_read
+drop policy if exists finder_building_type_confirmations_operator_read on public.finder_building_type_confirmations;
+create policy finder_building_type_confirmations_operator_read
   on public.finder_building_type_confirmations
   for select to authenticated
-  using (true);
+  using (coalesce((select auth.jwt()) -> 'app_metadata' ->> 'role', '') = 'operator');
 
 commit;
