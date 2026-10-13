@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
-import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
+import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarProgressDiagnostics, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
 import { isRadarDailyScanDue, nextRadarDailyScanAt } from "@/features/price-radar/server/radar-scheduler";
 import { radarRunActivity } from "@/features/price-radar/run-presentation";
 import { describeRadarRequestError, RadarHttpError, radarConnectionIssue, radarLeaseExpiredForBrowserResume, radarRunPollDelayMs } from "@/features/price-radar/run-connection";
@@ -19,7 +19,7 @@ type ResultsResponse = {
 };
 type DistrictQueueResponse = { available: boolean; pending: RadarDistrictQueueItem[]; assigned: RadarDistrictQueueItem[]; rejected: RadarDistrictQueueItem[] };
 type VerificationQueueResponse = { available: boolean; pending: RadarVerificationQueueItem[]; confirmed: RadarVerificationQueueItem[]; rejected: RadarVerificationQueueItem[] };
-type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; lastProgressAt?: string | null; olxJobStatus?: "queued" | "running" | "completed" | "failed" | "missing" | "unavailable"; olxJobLeaseUntil?: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number; rejectedCount?: number; verificationQueuedCount?: number; districtQueuedCount?: number; lastProgressAt?: string } };
+type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; lastProgressAt?: string | null; olxJobStatus?: "queued" | "running" | "completed" | "failed" | "missing" | "unavailable"; olxJobLeaseUntil?: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number; rejectedCount?: number; verificationQueuedCount?: number; districtQueuedCount?: number; lastProgressAt?: string; progress?: RadarProgressDiagnostics } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null; automaticScanEnabled: boolean; automaticScanTime: string }; activeSources: RadarSource[]; disabledSourceNote: string };
 
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
@@ -693,9 +693,12 @@ export function PriceRadarPage() {
           <AutomationMetric label="Czas trwania" value={run ? formatDuration(run.startedAt, run.finishedAt ?? run.userTerminatedAt, clockNow) : "—"} />
           <AutomationMetric label="Status" value={runActivity.status} />
           <AutomationMetric label="Następny skan" value={radarNextScanLabel(run, automaticScanEnabled, automaticScanTime, new Date(clockNow))} />
-          <AutomationMetric label="Ostatni zapis postępu" value={runActivity.lastProgressAt ? formatDate(runActivity.lastProgressAt) : "Brak zapisanego checkpointu"} />
+          <AutomationMetric label="Ostatni rzeczywisty postęp" value={run?.checkpoint?.progress?.lastRealProgressAt ? `${formatDate(run.checkpoint.progress.lastRealProgressAt)}${run.checkpoint.progress.lastProgressSource ? ` · ${radarSourceLabel(run.checkpoint.progress.lastProgressSource)}` : ""}` : run ? "Brak potwierdzonego postępu" : "—"} />
+          <AutomationMetric label="Ostatni zapis checkpointu" value={runActivity.lastProgressAt ? formatDate(runActivity.lastProgressAt) : "Brak zapisanego checkpointu"} />
           <AutomationMetric label="Aktualne źródło" value={runActivity.currentSource ? radarSourceLabel(runActivity.currentSource) : "—"} />
           <AutomationMetric label="Pozostałe źródła" value={String(runActivity.remainingSources)} />
+          {isRunActuallyActive(run) || run?.status === "running" || run?.status === "pending" ? <AutomationMetric label="Powód oczekiwania" value={radarWaitingLabel(run)} /> : null}
+          {run?.checkpoint?.progress?.lastContinuationError ? <AutomationMetric label="Ostatni błąd przekazania" value={`${formatDate(run.checkpoint.progress.lastContinuationError.at)} · krok ${run.checkpoint.progress.lastContinuationError.hop} · ${run.checkpoint.progress.lastContinuationError.reason}`} /> : null}
           <AutomationMetric label="Ostatnia synchronizacja z serwerem" value={lastSyncedAt ? formatDate(new Date(lastSyncedAt).toISOString()) : "—"} />
         </div>
         <div className="grid gap-3 border-t pt-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -715,6 +718,7 @@ export function PriceRadarPage() {
           <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runActivity.status} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)} · czas ${formatDuration(run.startedAt, run.finishedAt ?? run.userTerminatedAt, clockNow)}` : "Brak uruchomionego przebiegu."}</p>
           {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
           {run?.sourceRejectionCounts && Object.keys(run.sourceRejectionCounts).length > 0 ? <details aria-label="Odrzucone kandydatury źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Odrzucone kandydatury według źródła</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceRejectionCounts).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${sourceRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
+          {run?.checkpoint?.progress?.metrics ? <RadarPerformanceDetails run={run} now={clockNow} /> : null}
           {run?.sourceWarnings && Object.values(run.sourceWarnings).some((warnings) => warnings.length > 0) ? <details aria-label="Uwagi i pokrycie źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Uwagi źródeł i zakres wyszukiwania</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceWarnings).map(([source, warnings]) => warnings.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {warnings.map(sourceWarningLabel).join("; ")}</li> : null)}</ul></details> : null}
           {run?.qualificationRejections && Object.values(run.qualificationRejections).some((counts) => Object.keys(counts).length > 0) ? <details aria-label="Powody odrzucenia ofert" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Powody odrzucenia w kwalifikacji</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.qualificationRejections).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${qualificationRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
           {autoResumeMessage ? <p className="mt-2 text-xs text-muted-foreground">{autoResumeMessage}</p> : null}
@@ -1068,6 +1072,37 @@ function AutomationMetric({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 break-words font-medium">{value}</p></div>;
 }
 
+function formatSeconds(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 90 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+function RadarPerformanceDetails({ run, now }: { run: RunStatus; now: number }) {
+  const metrics = run.checkpoint?.progress?.metrics;
+  if (!metrics) return null;
+  const activeMinutes = metrics.httpActiveMs / 60_000;
+  const throughput = activeMinutes > 0 ? Math.round(run.scannedCount / activeMinutes) : null;
+  const olxWaitingSince = run.sourceStatuses.olx === "running" && metrics.olxEnqueuedAt ? metrics.olxEnqueuedAt : null;
+  const httpWall = metrics.httpStartedAt ? formatDuration(metrics.httpStartedAt, metrics.httpFinishedAt ?? null, now) : "—";
+  const sources = Object.entries(metrics.sources).filter(([, item]) => item.attempts > 0);
+  return (
+    <details aria-label="Wydajność przebiegu" className="mt-2 text-xs">
+      <summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Wydajność przebiegu</summary>
+      <ul className="mt-2 space-y-1 text-muted-foreground">
+        <li>Portale HTTP: aktywna praca {formatSeconds(metrics.httpActiveMs)} · od startu do końca {httpWall}{metrics.httpFinishedAt ? "" : " (w toku)"} · porcje {metrics.portions}</li>
+        <li>Przekazania między porcjami: {metrics.handOffs} · łącznie {formatSeconds(metrics.handOffGapMs)}{metrics.handOffs > 0 ? ` (średnio ${formatSeconds(metrics.handOffGapMs / metrics.handOffs)})` : ""}</li>
+        <li>Przepustowość: {throughput === null ? "—" : `${throughput} ofert/min aktywnej pracy`}</li>
+        <li>Worker OLX: {olxWaitingSince ? `oczekiwanie od ${formatDate(olxWaitingSince)} (${formatDuration(olxWaitingSince, null, now)}), liczone osobno od portali HTTP` : metrics.olxEnqueuedAt ? `przekazano ${formatDate(metrics.olxEnqueuedAt)}` : "jeszcze nie przekazano"}</li>
+        {sources.map(([source, item]) => (
+          <li className="break-words" key={source}>
+            <span className="font-semibold">{radarSourceLabel(source)}:</span> {formatSeconds(item.activeMs)} · żądania: lista {item.listRequests}, szczegóły {item.detailRequests}{item.contextRequests ? `, kontekst ${item.contextRequests}` : ""} · oferty {item.fetched}{item.activeMs > 0 ? ` · ${Math.round(item.fetched / (item.activeMs / 60_000))}/min` : ""} · baza {formatSeconds(item.dbMs + item.checkpointMs)}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function formatDuration(startedAt: string, finishedAt: string | null, now: number): string {
   const started = Date.parse(startedAt);
   const ended = finishedAt ? Date.parse(finishedAt) : now;
@@ -1081,6 +1116,24 @@ function formatDuration(startedAt: string, finishedAt: string | null, now: numbe
 }
 
 function radarSourceActivityLabel(run: RunStatus, source: string, status: string, now: number): string {
+  const attempts = run.checkpoint?.progress?.sourceNoProgressAttempts?.[source] ?? 0;
+  const base = radarSourceBaseActivityLabel(run, source, status, now);
+  return attempts > 0 && status !== "completed" && status !== "failed" && status !== "partial" ? `${base} · próby bez postępu: ${attempts}` : base;
+}
+
+function radarWaitingLabel(run: RunStatus | null): string {
+  const progress = run?.checkpoint?.progress;
+  const noProgress = progress?.noProgressPortions ?? 0;
+  const suffix = noProgress > 0 ? ` · porcje bez postępu: ${noProgress}` : "";
+  switch (progress?.waitingReason) {
+    case "retry_after": return `Portal poprosił o przerwę (Retry-After)${progress.waitingUntil ? ` do ${formatDate(progress.waitingUntil)}` : ""}${suffix}`;
+    case "olx_worker": return `Worker OLX${suffix}`;
+    case "next_portion": return `Następna porcja na serwerze${suffix}`;
+    default: return noProgress > 0 ? `Brak postępu${suffix}` : "—";
+  }
+}
+
+function radarSourceBaseActivityLabel(run: RunStatus, source: string, status: string, now: number): string {
   if (status !== "running") return ({ pending: "oczekuje", completed: "ukończono", partial: "częściowe pokrycie", failed: "błąd terminalny" } as Record<string, string>)[status] ?? "nieznany";
   if (source === "olx") {
     if (run.olxJobStatus === "queued") return "oczekuje na worker";

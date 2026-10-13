@@ -24,6 +24,10 @@ let releaseSucceeds = true;
 let scheduledContinuations: Array<{ runId: string; hop: number }> = [];
 let awaitedContinuations: Array<{ runId: string; hop: number }> = [];
 let afterTasks: Array<() => Promise<unknown>> = [];
+let recordedFailures: Array<{ hop: number; reason: string }> = [];
+let hopInputs: Array<{ runId: string; hop: number; deadlineAt: number; waitingUntil?: string | null }> = [];
+let nextHopFailure: string | null = null;
+let portionError: Error | null = null;
 let resumeSequence: Array<{ kind: "claimed"; run: { id: string; leaseToken: string } } | { kind: "blocked"; reason: string }> = [];
 
 function fakeAdmin() {
@@ -70,14 +74,23 @@ mock.module("@/features/price-radar/server/radar-run-status", { namedExports: {
 mock.module("@/features/price-radar/server/collect", { namedExports: {
   claimOrCreateRadarRun: async (ownerId: string, sources: unknown, _client: unknown, criteria: unknown) => { claimCalls.push(ownerId); claimCriteria.push({ ownerId, sources, criteria }); return claimResults[ownerId] ?? { kind: "blocked" }; },
   resumeExistingRadarRun: async (ownerId: string, runId: string) => { resumeCalls.push({ ownerId, runId }); return resumeSequence.shift() ?? resumeResults[runId] ?? { kind: "claimed", run: { id: runId, leaseToken: "resumed-lease" } }; },
-  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return portionResult; },
+  runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); if (portionError) throw portionError; return portionResult; },
   releaseRadarRunLease: async (input: { runId: string; ownerId: string; leaseToken: string }) => { releaseCalls.push(input); return releaseSucceeds; },
+  recordRadarContinuationFailure: async (_input: unknown, failure: { hop: number; reason: string }) => { recordedFailures.push(failure); },
 } });
+type HopInput = { runId: string; hop: number; deadlineAt: number; waitingUntil?: string | null };
+type HopDeps = { onFailure?: (reason: string) => Promise<void> };
 mock.module("@/features/price-radar/server/radar-continuation", { namedExports: {
   RADAR_CONTINUATION_HOP_HEADER: "x-radar-continuation-hop",
+  RADAR_WATCHDOG_HEADER: "x-radar-watchdog",
   parseRadarContinuationHop: (value: string | null) => value !== null && /^[0-9]+$/u.test(value) && Number(value) >= 1 && Number(value) <= 300 ? Number(value) : null,
-  scheduleRadarContinuation: (input: { runId: string; hop: number }) => { scheduledContinuations.push(input); },
-  requestRadarContinuation: async (input: { runId: string; hop: number }) => { awaitedContinuations.push(input); return true; },
+  scheduleRadarContinuation: (input: HopInput) => { scheduledContinuations.push({ runId: input.runId, hop: input.hop }); hopInputs.push(input); },
+  continueRadarAfterPortion: async (input: HopInput, deps: HopDeps) => {
+    awaitedContinuations.push({ runId: input.runId, hop: input.hop });
+    hopInputs.push(input);
+    if (nextHopFailure) { await deps.onFailure?.(nextHopFailure); return { requested: false, reason: nextHopFailure }; }
+    return { requested: true };
+  },
 } });
 mock.module("@/features/facebook-watcher/run-after-response", { namedExports: {
   runAfterResponse: (task: () => Promise<unknown>) => { afterTasks.push(task); },
@@ -107,6 +120,10 @@ function reset() {
   awaitedContinuations = [];
   afterTasks = [];
   resumeSequence = [];
+  recordedFailures = [];
+  hopInputs = [];
+  nextHopFailure = null;
+  portionError = null;
 }
 
 function withRadarCronSecret<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
@@ -532,4 +549,76 @@ test("a finished portion, an OLX-owned wait or a lost lease release never chains
     assert.equal(portionCalls.length, 1);
     assert.deepEqual(awaitedContinuations, [], JSON.stringify(result.sourceStatuses));
   }
+});
+
+test("without any browser: a Supabase pg_cron watchdog tick is acknowledged at once and resumes an expired run in the background", async () => {
+  reset();
+  ownerRows = [{ owner_id: "owner-a" }];
+  latestRuns["owner-a"] = { id: STALLED_RUN_ID, status: "running", startedAt: "2026-10-13T08:35:00.000Z", stopRequestedAt: null, userTerminatedAt: null, leaseUntil: "2026-10-13T08:43:55.000Z", errorMessage: null };
+  resumeResults[STALLED_RUN_ID] = { kind: "claimed", run: { id: STALLED_RUN_ID, leaseToken: "watchdog-lease" } };
+  portionResult = { status: "running", scannedCount: 440, qualifiedCount: 24, sourceStatuses: { otodom: "pending" }, sourceErrors: {}, qualificationRejections: {} };
+  await withRadarCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret", "x-radar-watchdog": "1" } }));
+    assert.equal(response.status, 202, "pg_net's short timeout can never cut the portion");
+    assert.deepEqual(portionCalls, [], "no work before the acknowledgement");
+    await Promise.all(afterTasks.map((task) => task()));
+  });
+  assert.deepEqual(claimCalls, [], "an expired lease is resumed in place, never replaced by a new run");
+  assert.deepEqual(portionCalls, [{ runId: STALLED_RUN_ID, ownerId: "owner-a", leaseToken: "watchdog-lease" }]);
+  assert.deepEqual(releaseCalls, [{ runId: STALLED_RUN_ID, ownerId: "owner-a", leaseToken: "watchdog-lease" }]);
+  assert.deepEqual(scheduledContinuations, [{ runId: STALLED_RUN_ID, hop: 1 }], "the watchdog restarts the server's own continuation chain");
+});
+
+test("a failed hand-off is recorded in the run diagnostics instead of disappearing", async () => {
+  reset();
+  runRows = [stalledRunRow()];
+  portionResult = { status: "running", scannedCount: 452, qualifiedCount: 28, sourceStatuses: { domy: "pending" }, sourceErrors: {}, qualificationRejections: {} };
+  nextHopFailure = "HTTP_503";
+  await withRadarCronSecret("test-secret", async () => {
+    await route.POST(hopRequest("9"));
+    await Promise.all(afterTasks.map((task) => task()));
+  });
+  assert.deepEqual(awaitedContinuations, [{ runId: STALLED_RUN_ID, hop: 10 }]);
+  assert.deepEqual(recordedFailures, [{ hop: 10, reason: "HTTP_503" }]);
+});
+
+test("a portion that throws releases its lease and records why, so the next trigger can resume at once", async () => {
+  reset();
+  runRows = [stalledRunRow()];
+  portionError = new Error("RADAR_RUN_NOT_FOUND");
+  const errors = mock.method(console, "error", () => undefined);
+  try {
+    await withRadarCronSecret("test-secret", async () => {
+      await route.POST(hopRequest("2"));
+      await Promise.all(afterTasks.map((task) => task()));
+    });
+  } finally { errors.mock.restore(); }
+  assert.deepEqual(releaseCalls, [{ runId: STALLED_RUN_ID, ownerId: "owner-a", leaseToken: "resumed-lease" }]);
+  assert.deepEqual(recordedFailures, [{ hop: 2, reason: "PORTION_FAILED: RADAR_RUN_NOT_FOUND" }]);
+  assert.deepEqual(awaitedContinuations, [], "a failing portion does not spin the chain; the watchdog retries");
+});
+
+test("a hop that finds the lease still briefly active waits for it instead of ending the chain", async () => {
+  reset();
+  runRows = [{ ...stalledRunRow(), lease_until: new Date(Date.now() + 400).toISOString() }];
+  portionResult = { status: "running", scannedCount: 452, qualifiedCount: 28, sourceStatuses: { domy: "pending" }, sourceErrors: {}, qualificationRejections: {} };
+  await withRadarCronSecret("test-secret", async () => {
+    await route.POST(hopRequest("3"));
+    await Promise.all(afterTasks.map((task) => task()));
+  });
+  assert.equal(portionCalls.length, 1, "the same hop resumed the run after the lease expired");
+  assert.deepEqual(awaitedContinuations, [{ runId: STALLED_RUN_ID, hop: 4 }]);
+});
+
+test("a Retry-After wait is passed to the next hop so the portal is not asked again early", async () => {
+  reset();
+  runRows = [stalledRunRow()];
+  const waitingUntil = new Date(Date.now() + 30_000).toISOString();
+  portionResult = { status: "running", scannedCount: 452, qualifiedCount: 28, sourceStatuses: { domiporta: "pending" }, sourceErrors: {}, qualificationRejections: {}, waitingReason: "retry_after", waitingUntil };
+  await withRadarCronSecret("test-secret", async () => {
+    await route.POST(hopRequest("5"));
+    await Promise.all(afterTasks.map((task) => task()));
+  });
+  assert.equal(hopInputs[0]?.waitingUntil, waitingUntil);
+  assert.ok(Number(hopInputs[0]?.deadlineAt) > Date.now(), "the hand-off knows how much of this function's time is left");
 });

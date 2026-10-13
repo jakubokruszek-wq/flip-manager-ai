@@ -138,15 +138,17 @@ test("a Radar detail checkpoint resumes the same run and persists only candidate
   try {
     const claim = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
     if (claim.kind !== "claimed") throw new Error("expected a claimed run");
-    const first = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
-    const saved = db.tables.price_radar_runs[0]!;
-    assert.equal(first.status, "running");
-    assert.equal(first.sourceStatuses.domiporta, "pending");
-    assert.equal(saved.id, claim.run.id, "the incomplete detail queue keeps the original run ID");
-    assert.deepEqual((saved.checkpoint as { perSourceCursor: Record<string, unknown> }).perSourceCursor.domiporta, { kind: "radar_detail_v1", page: 1, candidateIndex: 1 });
-    assert.deepEqual(db.persisted, ["detail-1"]);
-
+    // The yielded slice is taken up again in the same portion from the
+    // checkpointed cursor; before that the cursor is durable in the run row.
+    let storedCursorAtRetry: unknown = null;
+    const originalFixture = fetchRadarDetailFixture!;
+    fetchRadarDetailFixture = async (batches) => {
+      if (batches?.radarDetailCursor) storedCursorAtRetry = (db.tables.price_radar_runs[0]!.checkpoint as { perSourceCursor: Record<string, unknown> }).perSourceCursor.domiporta;
+      return originalFixture(batches);
+    };
     const second = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+    assert.equal(db.tables.price_radar_runs[0]!.id, claim.run.id, "the detail queue keeps the original run ID");
+    assert.deepEqual(storedCursorAtRetry, { kind: "radar_detail_v1", page: 1, candidateIndex: 1 });
     assert.equal(second.status, "completed");
     assert.equal(adapterCalls, 2);
     assert.deepEqual(db.persisted, ["detail-1", "detail-2"], "only the uncompleted candidate is persisted by the resumed portion");

@@ -1,5 +1,5 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
-import { claimOrCreateRadarRun, releaseRadarRunLease, requestRadarRunStop, requestRadarRunTermination, resumeExistingRadarRun, runRadarCollectionPortion, type RadarPortionResult } from "@/features/price-radar/server/collect";
+import { claimOrCreateRadarRun, recordRadarContinuationFailure, releaseRadarRunLease, requestRadarRunStop, requestRadarRunTermination, resumeExistingRadarRun, runRadarCollectionPortion, type RadarPortionResult } from "@/features/price-radar/server/collect";
 import { scheduleRadarContinuation } from "@/features/price-radar/server/radar-continuation";
 import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
@@ -31,6 +31,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const deadlineAt = Date.now() + 56_000;
   let operator;
   try {
     operator = await requireOperator();
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
       }
       if (!resumed.run.leaseToken) throw new Error("RADAR_LEASE_LOST");
       const portion = await runRadarCollectionPortion({ runId: resumed.run.id, ownerId: operator.id, leaseToken: resumed.run.leaseToken });
-      await handOffToServer({ runId: resumed.run.id, ownerId: operator.id, leaseToken: resumed.run.leaseToken }, portion);
+      await handOffToServer({ runId: resumed.run.id, ownerId: operator.id, leaseToken: resumed.run.leaseToken }, portion, deadlineAt);
       return Response.json({ runId: resumed.run.id, ...portion });
     }
     const settings = await readRadarSettings(operator.id);
@@ -103,7 +104,7 @@ export async function POST(request: Request) {
     }
     if (!claim.run.leaseToken) throw new Error("RADAR_LEASE_LOST");
     const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId: operator.id, leaseToken: claim.run.leaseToken });
-    await handOffToServer({ runId: claim.run.id, ownerId: operator.id, leaseToken: claim.run.leaseToken }, portion);
+    await handOffToServer({ runId: claim.run.id, ownerId: operator.id, leaseToken: claim.run.leaseToken }, portion, deadlineAt);
     return Response.json({ runId: claim.run.id, ...portion });
   } catch (error) {
     console.error("PRICE RADAR RUN ROUTE ERROR:", error);
@@ -123,10 +124,15 @@ export async function POST(request: Request) {
  * If the hand-off cannot be sent, the open PWA or the scheduler still resumes
  * the same checkpoint once the (now released) lease is observed as expired.
  */
-async function handOffToServer(input: { runId: string; ownerId: string; leaseToken: string }, portion: RadarPortionResult): Promise<void> {
+async function handOffToServer(input: { runId: string; ownerId: string; leaseToken: string }, portion: RadarPortionResult, deadlineAt: number): Promise<void> {
   if (portion.status !== "running" || portion.sourceStatuses.olx === "running") return;
   try {
-    if (await releaseRadarRunLease(input)) scheduleRadarContinuation({ runId: input.runId, hop: 1 });
+    if (await releaseRadarRunLease(input)) {
+      scheduleRadarContinuation(
+        { runId: input.runId, hop: 1, deadlineAt, waitingUntil: portion.waitingReason === "retry_after" ? portion.waitingUntil ?? null : null },
+        { onFailure: (reason) => recordRadarContinuationFailure(input, { hop: 1, reason }) },
+      );
+    }
   } catch {
     // The lease simply expires on its own; never fail the operator's request here.
   }
