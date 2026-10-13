@@ -121,7 +121,10 @@ test("route E2E: confirmation POST writes per-filter tombstones and the subseque
     { params: Promise.resolve({ id: filterId }) },
   );
   assert.equal(clearResponse.status, 200);
-  assert.deepEqual(await clearResponse.json(), { ok: true, archivedCount: 3 });
+  const clearBody = await clearResponse.json() as { ok: boolean; archivedCount: number; linkedCopiesFromOtherSources: number };
+  assert.equal(clearBody.ok, true);
+  assert.equal(clearBody.archivedCount, 3);
+  assert.equal(clearBody.linkedCopiesFromOtherSources, 0, "an unscoped clear never reports copies from outside its scope");
   assert.equal(db.rows("listing_filter_matches").filter((row) => row.search_filter_id === filterId && (row.match_reasons as string[]).includes("finder_cleared")).length, 3);
 
   const afterResponse = await getResultsRoute(
@@ -171,7 +174,7 @@ test("clearing more than 2000 visible memberships writes deterministic chunks of
   const after = await getFilterResults(filterId);
   assert.equal(after?.total, 0, "the next read must keep the MATCHED section empty, including IDs after the first read page");
   assert.equal(after?.reviewResults.length, 0, "the next read must keep the REVIEW section empty, including IDs after the first read page");
-  assert.deepEqual(await clearFilterResults(filterId), { archivedCount: 0 }, "repeating a successful clear is a no-op");
+  assert.equal((await clearFilterResults(filterId)).archivedCount, 0, "repeating a successful clear is a no-op");
   assert.equal(db.rows("listing_filter_matches").filter((row) => (row.match_reasons as string[]).includes("finder_cleared")).length, 2_105);
 });
 

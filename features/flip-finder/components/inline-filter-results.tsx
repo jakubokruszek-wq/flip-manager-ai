@@ -185,7 +185,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
 
   const clearSearchHistory = async () => {
     if (clearingHistory) return;
-    const confirmed = window.confirm("Usunąć całą historię znalezionych ofert? Znikną oferty, snapshoty i dopasowania. Filtry oraz źródła pozostaną bez zmian.");
+    const confirmed = window.confirm("UWAGA: trwałe usunięcie. Zostaną usunięte WSZYSTKIE znalezione oferty ze WSZYSTKICH filtrów i WSZYSTKICH portali (nie tylko tego filtra), razem z historią cen, zdjęciami i dopasowaniami. Tej operacji nie można cofnąć. Filtry oraz źródła pozostaną bez zmian. Kontynuować?");
     if (!confirmed) return;
 
     setClearingHistory(true);
@@ -337,7 +337,7 @@ export const InlineFilterResults = memo(function InlineFilterResults({ filterId,
       </details> : null}
       <details className="rounded-xl border border-border/60 px-3 py-2">
         <summary className="cursor-pointer text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Historia wyszukiwania i działania</summary>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Czyszczenie usuwa oferty i ich historię. Nie usuwa filtrów ani źródeł.</p><Button disabled={clearingHistory} onClick={() => void clearSearchHistory()} type="button" variant="outline">{clearingHistory ? "Czyszczenie…" : "Wyczyść historię wyszukiwania"}</Button></div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Trwale usuwa wszystkie oferty ze wszystkich filtrów i portali razem z ich historią. Nie usuwa filtrów ani źródeł.</p><Button disabled={clearingHistory} onClick={() => void clearSearchHistory()} type="button" variant="outline">{clearingHistory ? "Czyszczenie…" : "Wyczyść historię wyszukiwania"}</Button></div>
       </details>
       {historyMessage ? <p className="rounded-lg border border-border/60 p-3 text-sm" role="status">{historyMessage}</p> : null}
       {data ? <details className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.035] px-3 py-2"><summary className="cursor-pointer text-xs font-semibold text-emerald-700 outline-none focus-visible:ring-2 focus-visible:ring-primary">Okazja dnia{dealOfDay ? ` · ${cleanDisplayText(dealOfDay.title) || "Oferta inwestycyjna"} · ${dealOfDay.underwriting?.flipScore ?? "—"}/100` : " · brak oferty ponad próg"}</summary>{dealOfDay ? <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3"><p className="text-xs text-muted-foreground">{decisionLabelForUi(dealOfDay.underwriting?.decision)} · zysk bazowy {currency(dealOfDay.underwriting?.profitBase ?? null)} · pewność {dealOfDay.underwriting?.confidenceScore}%</p><Link className="text-xs font-semibold text-gold underline-offset-4 hover:underline" href={`/deals/${encodeURIComponent(dealOfDay.id)}`}>Otwórz Deal Room</Link></div> : <p className="mt-3 text-xs text-muted-foreground">Brak okazji spełniającej dzisiejszy próg.</p>}</details> : null}

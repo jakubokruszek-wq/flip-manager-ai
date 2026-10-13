@@ -25,6 +25,12 @@ export type ClearResultsScope = {
   source?: ListingSource;
   /** Only listings not seen in this many days or more. Omit to clear regardless of age. */
   olderThanDays?: number;
+  /**
+   * With `source`, a card that also links copies from other portals hides
+   * those copies too. The caller must confirm that explicitly; otherwise the
+   * clear is refused with a readable list of the affected portals.
+   */
+  includeLinkedCopies?: boolean;
 };
 
 export type ClearableListing = {

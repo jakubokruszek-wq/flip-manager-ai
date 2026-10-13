@@ -26,6 +26,21 @@ export type ConfirmedPropertyGroupResult<T extends ConfirmedPropertyMember> = T 
 export type PropertyIdentityGroupOptions = {
   blockedPairs?: ReadonlySet<string>;
   manualGroupByListing?: ReadonlyMap<string, string>;
+  /** false = explicit identity only (the grouping before cross-portal evidence); used by read-only diagnostics. */
+  crossPortalEvidence?: boolean;
+  /** Read-only observer of every assessed pair (diagnostics); never changes the result. */
+  onPairAssessed?: (pair: IdentityPairDiagnostic) => void;
+};
+
+export type IdentityPairDiagnostic = {
+  leftId: string;
+  rightId: string;
+  kind: "confirmed" | "candidate" | "separate";
+  reason: string;
+  score: number;
+  evidence: CrossPortalEvidence[];
+  conflicts: string[];
+  blocked: boolean;
 };
 
 export function identityPairKey(leftId: string, rightId: string): string {
@@ -37,7 +52,7 @@ export function identityPairKey(leftId: string, rightId: string): string {
  * single-linkage (A≈B and B≈C must not collapse contradictory A/C).
  * Weak attributes never confirm a pair; shared photos produce candidates.
  */
-type PairAssessment = { kind: "confirmed" | "candidate" | "separate"; reason: string; evidence: CrossPortalEvidence[] };
+type PairAssessment = { kind: "confirmed" | "candidate" | "separate"; reason: string; evidence: CrossPortalEvidence[]; score: number; conflicts: string[] };
 
 export type IdentityCandidate = ConfirmedPropertyMember & { reason: string; evidence?: string[] };
 
@@ -96,7 +111,9 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
       else crossPortalBuckets.set(key, [index]);
     }
   });
-  for (const members of crossPortalBuckets.values()) if (members.length <= CROSS_PORTAL_BUCKET_LIMIT) buckets.set(`cross:${buckets.size}`, members);
+  if (options.crossPortalEvidence !== false) {
+    for (const members of crossPortalBuckets.values()) if (members.length <= CROSS_PORTAL_BUCKET_LIMIT) buckets.set(`cross:${buckets.size}`, members);
+  }
   for (const members of buckets.values()) {
     for (let i = 0; i < members.length; i += 1) for (let j = i + 1; j < members.length; j += 1) comparablePairs.add(`${members[i]}:${members[j]}`);
   }
@@ -113,8 +130,12 @@ export function groupPropertyResults<T extends ConfirmedPropertyMember & {
         sameExplicitIdentity: Boolean(leftIdentity && leftIdentity === rightIdentity),
         blocked: blocked.has(key),
       });
-      const assessment = combineAssessments(explicit, blocked.has(key) ? null : assessCrossPortalPair(left, right));
+      const crossPortal = blocked.has(key) || options.crossPortalEvidence === false ? null : assessCrossPortalPair(left, right);
+      const assessment = options.crossPortalEvidence === false && !blocked.has(key)
+        ? { kind: explicit.kind, reason: explicit.reason, evidence: [], score: 0, conflicts: [] } satisfies PairAssessment
+        : combineAssessments(explicit, crossPortal);
       assessments.set(key, assessment);
+      options.onPairAssessed?.({ leftId: left.id, rightId: right.id, kind: assessment.kind, reason: assessment.reason, score: assessment.score, evidence: assessment.evidence, conflicts: assessment.conflicts, blocked: blocked.has(key) });
       if (assessment.kind === "confirmed") {
         confirmedNeighbours.set(left.id, (confirmedNeighbours.get(left.id) ?? new Set()).add(right.id));
         confirmedNeighbours.set(right.id, (confirmedNeighbours.get(right.id) ?? new Set()).add(left.id));
@@ -263,13 +284,14 @@ function combineAssessments(
   explicit: ReturnType<typeof assessListingIdentityPair>,
   crossPortal: ReturnType<typeof assessCrossPortalPair> | null,
 ): PairAssessment {
-  if (explicit.kind === "confirmed") return { kind: "confirmed", reason: explicit.reason, evidence: [] };
-  if (explicit.reason === "explicit_conflict" || crossPortal === null) return { kind: "separate", reason: explicit.reason, evidence: [] };
-  if (crossPortal.kind === "confirmed") return { kind: "confirmed", reason: crossPortal.reason, evidence: crossPortal.evidence };
-  if (crossPortal.kind === "separate" && crossPortal.conflicts.length > 0) return { kind: "separate", reason: crossPortal.reason, evidence: crossPortal.evidence };
-  if (explicit.kind === "candidate") return { kind: "candidate", reason: explicit.reason, evidence: crossPortal.evidence };
-  if (crossPortal.kind === "candidate") return { kind: "candidate", reason: crossPortal.reason, evidence: crossPortal.evidence };
-  return { kind: "separate", reason: crossPortal.reason, evidence: crossPortal.evidence };
+  const scored = { evidence: crossPortal?.evidence ?? [], score: crossPortal?.score ?? 0, conflicts: crossPortal?.conflicts ?? [] };
+  if (explicit.kind === "confirmed") return { ...scored, kind: "confirmed", reason: explicit.reason };
+  if (explicit.reason === "explicit_conflict" || crossPortal === null) return { ...scored, kind: "separate", reason: explicit.reason };
+  if (crossPortal.kind === "confirmed") return { ...scored, kind: "confirmed", reason: crossPortal.reason };
+  if (crossPortal.kind === "separate" && crossPortal.conflicts.length > 0) return { ...scored, kind: "separate", reason: crossPortal.reason };
+  if (explicit.kind === "candidate") return { ...scored, kind: "candidate", reason: explicit.reason };
+  if (crossPortal.kind === "candidate") return { ...scored, kind: "candidate", reason: crossPortal.reason };
+  return { ...scored, kind: "separate", reason: crossPortal.reason };
 }
 
 function emptyEvidence(): ListingIdentityEvidence {

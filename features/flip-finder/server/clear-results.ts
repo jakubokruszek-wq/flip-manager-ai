@@ -5,10 +5,30 @@ import { getFilterResults } from "./filter-results";
 import type { ClearResultsScope } from "@/features/flip-finder/clear-results-targeting";
 
 export type { ClearResultsScope };
-export type ClearResultsSummary = { archivedCount: number };
+export type ClearResultsSummary = {
+  archivedCount: number;
+  /** Archived memberships per portal, so the operator sees every portal a clear touched. */
+  bySource: Record<string, number>;
+  /** Copies archived only because they are linked to a card of the selected source. */
+  linkedCopiesFromOtherSources: number;
+};
 
 const WRITE_CHUNK_SIZE = 200;
 export const FINDER_CLEARED_MATCH_REASON = "finder_cleared";
+
+export class ClearResultsLinkedCopiesError extends Error {
+  readonly status = 409;
+  readonly code = "CLEAR_RESULTS_LINKED_COPIES";
+  readonly linkedCards: number;
+  readonly otherSources: Record<string, number>;
+  constructor(linkedCards: number, otherSources: Record<string, number>) {
+    super(`Zakres obejmuje ${linkedCards} ${linkedCards === 1 ? "kartę połączoną" : "karty połączone"} z ofertami z innych portali (${Object.entries(otherSources).map(([source, count]) => `${source}: ${count}`).join(", ")}). `
+      + "Wyczyszczenie ukryje te kopie razem z kartą — inaczej wróciłyby jako osobne karty. Potwierdź, aby kontynuować.");
+    this.name = "ClearResultsLinkedCopiesError";
+    this.linkedCards = linkedCards;
+    this.otherSources = otherSources;
+  }
+}
 
 export class ClearResultsConflictError extends Error {
   readonly status = 409;
@@ -32,18 +52,35 @@ export async function clearFilterResults(filterId: string, scope: ClearResultsSc
   const cutoff = typeof scope.olderThanDays === "number" && scope.olderThanDays > 0
     ? Date.now() - scope.olderThanDays * 86_400_000
     : null;
-  const targets = [...new Set([...payload.results, ...payload.reviewResults, ...payload.buildingVerificationResults]
+  const cards = [...payload.results, ...payload.reviewResults, ...payload.buildingVerificationResults]
     // Same rule as the Finder's source filter: a card belongs to every portal it links.
     .filter((result) => !scope.source || result.source === scope.source || Boolean(result.linkedListings?.some((listing) => listing.source === scope.source)))
     .filter((result) => {
       if (cutoff === null) return true;
       const lastSeen = Date.parse(result.lastSeenAt);
       return Number.isFinite(lastSeen) && lastSeen < cutoff;
-    })
-    // A grouped card stands for every linked portal copy; clearing only its
-    // representative would bring the other copies back as a separate card.
-    .flatMap((result) => [result.id, ...(result.linkedListings ?? []).map((listing) => listing.id)]))];
-  if (!targets.length) return { archivedCount: 0 };
+    });
+  // A grouped card stands for every linked portal copy; clearing only its
+  // representative would bring the other copies back as a separate card.
+  const sourceById = new Map<string, string>();
+  for (const card of cards) {
+    sourceById.set(card.id, card.source);
+    for (const listing of card.linkedListings ?? []) sourceById.set(listing.id, listing.source);
+  }
+  const targets = [...sourceById.keys()];
+  if (!targets.length) return { archivedCount: 0, bySource: {}, linkedCopiesFromOtherSources: 0 };
+  const otherSources: Record<string, number> = {};
+  let linkedCards = 0;
+  if (scope.source) {
+    for (const card of cards) {
+      const members = card.linkedListings?.length ? card.linkedListings : [{ id: card.id, source: card.source }];
+      const others = members.filter((listing) => listing.source !== scope.source);
+      if (!others.length) continue;
+      linkedCards += 1;
+      for (const listing of others) otherSources[listing.source] = (otherSources[listing.source] ?? 0) + 1;
+    }
+    if (linkedCards > 0 && scope.includeLinkedCopies !== true) throw new ClearResultsLinkedCopiesError(linkedCards, otherSources);
+  }
 
   // Recheck after the read/target computation. The SQL canonical RPC also
   // recognizes the per-membership tombstone below and rejects any older scan
@@ -51,6 +88,7 @@ export async function clearFilterResults(filterId: string, scope: ClearResultsSc
   await assertNoActiveFinderWork(supabase, filterId);
   const clearedAt = new Date().toISOString();
   let affected = 0;
+  const bySource: Record<string, number> = {};
   for (let offset = 0; offset < targets.length; offset += WRITE_CHUNK_SIZE) {
     const chunk = targets.slice(offset, offset + WRITE_CHUNK_SIZE);
     const update = await supabase.from("listing_filter_matches")
@@ -59,9 +97,15 @@ export async function clearFilterResults(filterId: string, scope: ClearResultsSc
       .in("listing_id", chunk)
       .select("listing_id");
     if (update.error) throw new Error("Nie udało się wyczyścić wyników filtra.");
-    affected += Array.isArray(update.data) ? update.data.length : chunk.length;
+    const archivedIds = Array.isArray(update.data) ? (update.data as Array<{ listing_id: string }>).map((row) => row.listing_id) : chunk;
+    affected += archivedIds.length;
+    for (const id of archivedIds) {
+      const source = sourceById.get(id) ?? "unknown";
+      bySource[source] = (bySource[source] ?? 0) + 1;
+    }
   }
-  return { archivedCount: affected };
+  const linkedCopiesFromOtherSources = Object.values(otherSources).reduce((sum, count) => sum + count, 0);
+  return { archivedCount: affected, bySource, linkedCopiesFromOtherSources };
 }
 
 async function assertNoActiveFinderWork(supabase: ReturnType<typeof createAdminClient>, filterId: string): Promise<void> {

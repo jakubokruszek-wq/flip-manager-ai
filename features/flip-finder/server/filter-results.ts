@@ -30,7 +30,7 @@ import { canonicalFacebookContentFingerprint, canonicalFacebookParameterFingerpr
 import { earliestPublicationDate, latestPublicationDate, listingFreshness, normalizePublicationDate } from "@/features/flip-finder/publication-date";
 import { isValidSalePrice } from "@/features/flip-finder/sale-price";
 import { resolveBuildingType } from "@/features/flip-finder/listing-attribute-extraction";
-import { identityPairKey } from "@/features/flip-finder/property-identity";
+import { identityPairKey, type PropertyIdentityGroupOptions } from "@/features/flip-finder/property-identity";
 import { normalizeListingIdentityEvidence } from "@/features/flip-finder/identity-evidence";
 import { partitionFinderRows, sectionForDecision, toExcludedResult, type FinderExcludedResult, type FinderExclusionCode, type FinderRow } from "@/features/flip-finder/finder-sections";
 import { FINDER_REVIEW_MEMBERSHIP_OR_FILTER, ARCHIVE_PAGE_SIZE_DEFAULT, ARCHIVE_PAGE_SIZE_MAX, SOURCE_SCAN_READ_LIMIT, RESALE_COMPS_CACHE_TTL_MS } from "@/features/flip-finder/finder-read-policy";
@@ -50,6 +50,8 @@ export type FilterResultsOptions = {
    * opportunity engine, which never change which section a listing lands in.
    */
   summaryOnly?: boolean;
+  /** Read-only diagnostics: observe pair assessments or compare with explicit-identity-only grouping. */
+  identity?: Pick<PropertyIdentityGroupOptions, "crossPortalEvidence" | "onPairAssessed">;
 };
 
 export type FinderReadDiagnostics = {
@@ -493,7 +495,7 @@ export async function getFilterResults(
       const rightObserved = sourceMetadataCollectedAtByListingId.get(right.id) ?? right.lastSeenAt ?? right.firstSeenAt;
       return Date.parse(rightObserved) - Date.parse(leftObserved);
     },
-    grouping: { blockedPairs: manualIdentityScope.blockedPairs, manualGroupByListing: manualIdentityScope.groupByListing },
+    grouping: { blockedPairs: manualIdentityScope.blockedPairs, manualGroupByListing: manualIdentityScope.groupByListing, ...options.identity },
   });
 
   return finish({

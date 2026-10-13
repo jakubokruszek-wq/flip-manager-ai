@@ -37,3 +37,42 @@ brak migracji i zmian w Supabase.
   (inne piętro/ulica/budynek/lokal/dzielnica/pokoje/metraż/cena, ten sam portal, brak łańcuchowania).
 - `features/flip-finder/server/filter-results-cross-portal.test.ts` — pełna ścieżka odczytu Findera, decyzja „Nie łącz”,
   czyszczenie wyników.
+
+## Weryfikacja na danych z Production (poprawki po przeglądzie)
+
+Fakty z Production (13.10): Otodom (238 000 zł) ma pusty opis, Domy.pl (298 000 zł) 56 znaków, Oferty.net 91 znaków.
+Dowód „podobny opis” wymaga ≥ 12 trójek słów po obu stronach, więc tych kopii opis nie potwierdza. Progi automatycznego
+łączenia nie zostały obniżone: bez wspólnych zdjęć, numeru oferty lub ulicy takie kopie są pokazywane jako
+„Możliwy duplikat” do ręcznej decyzji (Połącz / Nie łącz).
+
+Zmiany:
+- Para z identycznym metrażem (co do 0,01 m²) i tą samą lub bliską ceną, bez konfliktów, zawsze trafia co najmniej
+  do „Możliwy duplikat” — także przy nieznanej liczbie pokoi.
+- Parser pięter rozpoznaje `floor_3`, `FLOOR_4`, `ground_floor`, `FOURTH`, `GROUND`, rzymskie `IV` / „IV piętro” /
+  „na IV piętrze” / „piętro: IV” oraz liczebniki („na czwartym piętrze”). „4-piętrowy blok”, „i piętro wyżej” nie są piętrem.
+- Czyszczenie wyników z zakresem portalu (`source`) odmawia ukrycia kopii z innych portali bez potwierdzenia
+  `includeLinkedCopies` i podaje listę portali. Odpowiedź zawiera `bySource` i `linkedCopiesFromOtherSources`.
+- Ostrzeżenie „Wyczyść historię wyszukiwania” mówi wprost, że trwale usuwa wszystkie oferty ze wszystkich filtrów
+  i portali (działanie tego przycisku nie zostało zmienione — było tak już na main).
+
+## Diagnostyka READ-ONLY
+
+`scripts/finder-dedup-diagnostics.mts` uruchamia dokładnie ścieżkę odczytu Findera (`getFilterResults`) dwa razy:
+tylko z jawną tożsamością (karty „przed”) i z deduplikacją międzyportalową („po”). Raport zawiera liczbę kart, połączone
+oferty, oferty osobno z powodem, punktację, dowody i konflikty każdej pary oraz ryzyko błędnego połączenia.
+Klient Supabase jest opakowany przez `readOnlySupabase()` — insert/update/upsert/delete/rpc/storage rzucają błąd
+przed wysłaniem zapytania.
+
+```bash
+# live, tylko SELECT (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY w środowisku)
+node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks \
+  scripts/finder-dedup-diagnostics.mts --filter <search_filter_id> --operator <user_id> \
+  --case 238000:37.07 --case 298000:46.55 \
+  --out finder-dedup-report.md \
+  --export features/flip-finder/server/__fixtures__/finder-dedup-production.json
+```
+
+`--export` zapisuje dokładnie te wiersze, które Finder odczytał dla ofert z obu przypadków (i innych ofert o tej samej
+cenie i metrażu). Test `filter-results-production-replay.test.ts` odtwarza je przez tę samą ścieżkę odczytu; do czasu
+dodania eksportu jest pomijany z komunikatem. Po ręcznym sprawdzeniu ofert można wpisać w pliku `expected.groups`
+oczekiwane grupy — test zacznie je egzekwować.

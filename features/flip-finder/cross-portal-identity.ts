@@ -129,8 +129,8 @@ export function assessCrossPortalPair(left: CrossPortalListing, right: CrossPort
     else if (gap > 0.25) conflicts.push("price_gap");
   }
 
-  const leftFloor = normalizeFloor(left.floor) ?? floorFromText(leftText);
-  const rightFloor = normalizeFloor(right.floor) ?? floorFromText(rightText);
+  const leftFloor = parseFloorValue(left.floor) ?? floorFromText(leftText);
+  const rightFloor = parseFloorValue(right.floor) ?? floorFromText(rightText);
   if (leftFloor !== null && rightFloor !== null) {
     if (leftFloor !== rightFloor) conflicts.push("floor");
     else evidence.push("floor");
@@ -182,7 +182,11 @@ export function assessCrossPortalPair(left: CrossPortalListing, right: CrossPort
   if (!sameSource && coreMatch && strong && score >= CROSS_PORTAL_CONFIRM_SCORE && corroboration >= CROSS_PORTAL_CONFIRM_CORROBORATION) {
     return { kind: "confirmed", score, evidence, conflicts, reason: "cross_portal_multi_evidence" };
   }
-  if (score >= CROSS_PORTAL_CANDIDATE_SCORE && (evidence.includes("exact_area") || corroboration > 0)) {
+  // Identical fractional area and price on two portals without any
+  // contradiction is never silently ignored: it goes to manual verification
+  // even when the room count is unknown on one side.
+  const samePriceAndExactArea = !sameSource && evidence.includes("exact_area") && (evidence.includes("price_equal") || evidence.includes("price_close"));
+  if ((score >= CROSS_PORTAL_CANDIDATE_SCORE && (evidence.includes("exact_area") || corroboration > 0)) || samePriceAndExactArea) {
     return { kind: "candidate", score, evidence, conflicts, reason: sameSource ? "same_portal_similar_listing" : "cross_portal_partial_evidence" };
   }
   return separate(evidence, conflicts, "insufficient_evidence", score);
@@ -230,20 +234,54 @@ function sameCity(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right} `) || right.startsWith(`${left} `);
 }
 
-function normalizeFloor(value: string | null | undefined): number | null {
+const ENGLISH_FLOORS: Record<string, number> = { ground: 0, first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
+const ROMAN_FLOORS: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10, XI: 11, XII: 12 };
+const ROMAN_PATTERN = "XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I";
+/** Polish ordinal stems: "czwarte piętro", "na czwartym piętrze". */
+const POLISH_ORDINAL_FLOORS: Array<[RegExp, number]> = [
+  [/pierwsz/u, 1], [/drug/u, 2], [/trzeci/u, 3], [/czwart/u, 4], [/piat/u, 5], [/szost/u, 6], [/siodm/u, 7], [/osm/u, 8], [/dziewiat/u, 9], [/dziesiat/u, 10],
+];
+
+/**
+ * Structured floor values as portals publish them: "4", "4/10", "parter",
+ * Otodom "floor_4" / "FLOOR_4" / "ground_floor", English enums ("FOURTH",
+ * "GROUND") and Roman numerals ("IV", "IV piętro"). Values that do not name
+ * one floor ("floor_higher_10", "poddasze", "suterena") return null: an
+ * unknown floor is never evidence and never a conflict.
+ */
+export function parseFloorValue(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
-  const key = normalizeKey(String(value));
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 && value <= 60 ? value : null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const roman = new RegExp(`^(${ROMAN_PATTERN})(?:\\s*(?:p\\.|pi[eę]t(?:ro|rze)))?\\.?$`, "iu").exec(raw);
+  if (roman && (roman[1] === roman[1].toUpperCase() || roman[1].length > 1 || raw.length > roman[1].length)) return ROMAN_FLOORS[roman[1].toUpperCase()] ?? null;
+  const key = normalizeKey(raw.replace(/_/gu, " "));
   if (!key) return null;
-  if (/^(parter|0|ground floor|ground)$/u.test(key)) return 0;
-  const match = /^(\d{1,2})(?:\s.*)?$/u.exec(key);
-  return match ? Number(match[1]) : null;
+  if (/^(?:parter|0|ground|ground floor|floor ground|floor 0|parterowe)$/u.test(key)) return 0;
+  const english = /^(?:floor\s+)?(ground|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)(?:\s+floor)?$/u.exec(key);
+  if (english) return ENGLISH_FLOORS[english[1]];
+  const numbered = /^(?:floor\s+|pietro\s+)?(\d{1,2})(?:\s.*)?$/u.exec(key);
+  if (numbered) return Number(numbered[1]);
+  return floorFromText(raw);
 }
 
-/** Only "N piętro", "na N piętrze", "piętro N" and "parter" describe the flat's floor; "4-piętrowy blok" does not. */
-function floorFromText(text: string): number | null {
+/** Only "N piętro", "na N piętrze", "piętro N", Roman/ordinal forms and "parter" describe the flat's floor; "4-piętrowy blok" does not. */
+export function floorFromText(text: string): number | null {
+  // Roman numerals are matched case-sensitively on the original text, so the
+  // Polish conjunction "i" ("pokój i piętro wyżej") is never read as floor 1.
+  const romanBefore = new RegExp(`(?:^|[^\\p{L}])(${ROMAN_PATTERN})\\s*(?:-?te|-?gie|-?cie|\\.)?\\s*pi[eę]t(?:ro|rze)(?![\\p{L}])`, "u").exec(text);
+  if (romanBefore) return ROMAN_FLOORS[romanBefore[1]];
+  const romanAfter = new RegExp(`pi[eę]tro\\s*(?:nr\\.?\\s*)?[:\\-]?\\s*(${ROMAN_PATTERN})(?![\\p{L}\\d])`, "iu").exec(text);
+  if (romanAfter && romanAfter[1] === romanAfter[1].toUpperCase()) return ROMAN_FLOORS[romanAfter[1]];
   const key = normalizeKey(text) ?? "";
   const numbered = /\b(\d{1,2})\s*(?:te|gie|cie|me|ste)?\s*(?:pietro|pietrze)\b|\bpietro\s*(?:nr\s*)?(\d{1,2})\b/u.exec(key);
   if (numbered) return Number(numbered[1] ?? numbered[2]);
+  const ordinal = /\b(\p{L}+)\s+(?:pietro|pietrze)\b/u.exec(key);
+  if (ordinal) {
+    const found = POLISH_ORDINAL_FLOORS.find(([pattern]) => pattern.test(ordinal[1]) && /(?:e|ym|im)$/u.test(ordinal[1]));
+    if (found) return found[1];
+  }
   return /\b(?:na parterze|parter mieszkania|mieszkanie na parterze)\b/u.test(key) ? 0 : null;
 }
 

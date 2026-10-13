@@ -178,7 +178,9 @@ test("filter-list counts use the same grouped visible MATCHED + REVIEW read path
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
   }), { params: Promise.resolve({ id: FILTER_ID }) });
   assert.equal(clearResponse.status, 200);
-  assert.deepEqual(await clearResponse.json(), { ok: true, archivedCount: 2 });
+  const clearBody = await clearResponse.json() as { ok: boolean; archivedCount: number };
+  assert.equal(clearBody.ok, true);
+  assert.equal(clearBody.archivedCount, 2);
 
   const listAfterResponse = await getFilterListRoute();
   assert.equal(listAfterResponse.status, 200);

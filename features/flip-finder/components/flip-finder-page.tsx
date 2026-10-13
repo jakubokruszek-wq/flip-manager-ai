@@ -371,7 +371,8 @@ export function FlipFinderPage() {
       const payload: unknown = await readJson(response);
       if (!response.ok) throw new Error(readMessage(payload, "Nie udało się wyczyścić wyników."));
       const archivedCount = isRecordWithArchivedCount(payload) ? payload.archivedCount : 0;
-      setNotice(archivedCount > 0 ? "Wyniki ukryto. Historia i CRM pozostają zachowane." : "Brak ofert do wyczyszczenia.");
+      const bySource = isRecordWithArchivedCount(payload) && payload.bySource ? Object.entries(payload.bySource).map(([source, count]) => `${source}: ${count}`).join(", ") : "";
+      setNotice(archivedCount > 0 ? `Wyniki ukryto. Ukryte oferty: ${archivedCount}${bySource ? ` (${bySource})` : ""}. Historia i CRM pozostają zachowane.` : "Brak ofert do wyczyszczenia.");
       setClearResultsOpen(false);
       setResultsRevision((current) => current + 1);
       // Deliberately NOT reset here (unlike the catch branch below): resetting
@@ -520,7 +521,7 @@ export function FlipFinderPage() {
               <DialogHeader>
                 <DialogTitle>Wyczyścić aktualne wyniki?</DialogTitle>
                 <DialogDescription>
-                  Oferty zostaną ukryte w aktywnych wynikach tego filtra. Nie zostaną trwale usunięte; historia cen, zdjęcia i dane CRM pozostaną zachowane.
+                  Oferty zostaną ukryte w aktywnych wynikach tego filtra ze wszystkich portali. Karta łącząca kopie z kilku portali (np. OLX i Otodom) zostanie ukryta razem ze wszystkimi kopiami. Nic nie zostanie trwale usunięte; historia cen, zdjęcia i dane CRM pozostaną zachowane.
                 </DialogDescription>
               </DialogHeader>
               {clearResultsError ? <p className="text-sm text-destructive">{clearResultsError}</p> : null}
@@ -1404,7 +1405,7 @@ function isSearchFilterListResponse(value: unknown): value is SearchFilterListRe
   );
 }
 
-function isRecordWithArchivedCount(value: unknown): value is { archivedCount: number } {
+function isRecordWithArchivedCount(value: unknown): value is { archivedCount: number; bySource?: Record<string, number> } {
   return value !== null && typeof value === "object" && "archivedCount" in value && typeof value.archivedCount === "number";
 }
 
