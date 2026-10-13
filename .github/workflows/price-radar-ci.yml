@@ -1,0 +1,75 @@
+name: Price Radar CI
+
+# Offline checks only: no Supabase, no portal, no Production request. Every
+# Radar test fakes its database and network.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "features/price-radar/**"
+      - "app/api/price-radar/**"
+      - "app/api/jobs/price-radar-collect/**"
+      - "features/flip-finder/external-source-adapters.ts"
+      - "features/flip-finder/source-batches.ts"
+      - "features/flip-finder/server/search-source-registry.ts"
+      - "features/flip-finder/listing-attribute-extraction.ts"
+      - "features/flip-finder/property-identity.ts"
+      - "scripts/price-radar-scheduler.mjs"
+      - "features/auth/route-classification.ts"
+      - ".github/workflows/price-radar-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: price-radar-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: TypeScript
+        run: npx tsc --noEmit -p .
+      - name: ESLint
+        run: npx eslint .
+      - name: Radar, shared source adapter and scheduler tests
+        run: |
+          shopt -s nullglob
+          files=(features/price-radar/*.test.ts features/price-radar/server/*.test.ts)
+          for file in features/flip-finder/*.test.ts features/flip-finder/server/*.test.ts; do
+            case "$file" in *adapter*|*source*|*registry*|*otodom*|*batch*) files+=("$file");; esac
+          done
+          node --import ./scripts/register-test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks \
+            --test --test-concurrency=2 "${files[@]}" scripts/price-radar-scheduler.test.mjs
+      - name: Production build
+        run: npm run build
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Radar PWA, continuation, connection recovery and quality views (Playwright)
+        run: |
+          node --test --test-concurrency=1 \
+            features/price-radar/components/price-radar-continuation.browser.test.cjs \
+            features/price-radar/components/price-radar-page.browser.test.cjs \
+            features/price-radar/price-radar-quality.browser.test.cjs

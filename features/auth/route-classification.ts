@@ -57,6 +57,8 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
     ["POST", "/api/jobs/finder-scan-continuation", /^\/api\/jobs\/finder-scan-continuation$/],
     ["POST", "/api/jobs/finder-scan-scheduler", /^\/api\/jobs\/finder-scan-scheduler$/],
     ["POST", "/api/jobs/listing-lifecycle", /^\/api\/jobs\/listing-lifecycle$/],
+    // Radar-only secret (PRICE_RADAR_CRON_SECRET), never the shared CRON_SECRET.
+    ["POST", "/api/jobs/price-radar-collect", /^\/api\/jobs\/price-radar-collect$/],
   ]),
   ...routes("OPERATOR_SECRET", [
     ["POST", "/api/facebook-watcher/orphans", /^\/api\/facebook-watcher\/orphans$/],
@@ -104,6 +106,13 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
     ["POST", "/api/push/test", /^\/api\/push\/test$/],
     ["POST", "/api/renovation-visualizer/generate", /^\/api\/renovation-visualizer\/generate$/],
     ["POST", "/api/renovation-visualizer", /^\/api\/renovation-visualizer$/],
+    ["POST", "/api/price-radar/run", /^\/api\/price-radar\/run$/],
+    ["PUT", "/api/price-radar/settings", /^\/api\/price-radar\/settings$/],
+    ["POST", "/api/price-radar/exclude", /^\/api\/price-radar\/exclude$/],
+    ["POST", "/api/price-radar/district-queue/assign", /^\/api\/price-radar\/district-queue\/assign$/],
+    ["POST", "/api/price-radar/district-queue/reject", /^\/api\/price-radar\/district-queue\/reject$/],
+    ["POST", "/api/price-radar/verification-queue/resolve", /^\/api\/price-radar\/verification-queue\/resolve$/],
+    ["POST", "/api/price-radar/verification-queue/reject", /^\/api\/price-radar\/verification-queue\/reject$/],
   ]),
 ];
 

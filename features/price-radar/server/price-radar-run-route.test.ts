@@ -31,9 +31,10 @@ mock.module("@/features/price-radar/server/collect", { namedExports: {
   requestRadarRunTermination: async (ownerId: string, runId: string) => { terminationCalls.push({ ownerId, runId }); if (terminationError) throw terminationError; return terminationResult; },
   runRadarCollectionPortion: async (input: { runId: string; ownerId: string; leaseToken: string }) => { portionCalls.push(input); return { status: portionStatus, scannedCount: 12, qualifiedCount: 2, sourceStatuses: portionSourceStatuses, sourceErrors: {}, qualificationRejections: {} }; },
   releaseRadarRunLease: async (input: { runId: string; ownerId: string; leaseToken: string }) => { releaseCalls.push(input); return true; },
+  recordRadarContinuationFailure: async () => undefined,
 } });
 mock.module("@/features/price-radar/server/radar-continuation", { namedExports: {
-  scheduleRadarContinuation: (input: { runId: string; hop: number }) => { continuationCalls.push(input); },
+  scheduleRadarContinuation: (input: { runId: string; hop: number }) => { continuationCalls.push({ runId: input.runId, hop: input.hop }); },
 } });
 let sourcesFilteredToEmpty = false;
 mock.module("@/features/price-radar/server/radar-settings", { namedExports: {

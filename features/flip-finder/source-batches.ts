@@ -52,5 +52,32 @@ export type SourceBatchContext = {
   ofertyNetLegacySearch?: boolean;
   /** Hard yield boundary supplied by the owning Radar portion. */
   deadlineAt?: number;
+  /**
+   * Radar only: soft per-source time slice. After at least one detail page in
+   * this attempt, no new detail request starts past this instant (replaces the
+   * fixed three-details-per-portion cap when present).
+   */
+  sliceDeadlineAt?: number;
+  /** Radar only: time reserved for one detail request before `deadlineAt` (defaults to its timeout). */
+  detailReserveMs?: number;
+  /** Radar only: profiling hook, called once per HTTP request with its duration. */
+  onRequest?(kind: "list" | "detail" | "context", durationMs: number): void;
+  /**
+   * Radar only: true when this offer (`source:externalListingId`) was already
+   * committed in the same run. The owner records it only when the batch
+   * containing it is committed, never before.
+   */
+  isDetailChecked?(key: string): boolean;
+  /**
+   * Radar only: result/context pages already read in the SAME portion (at most
+   * one portion, < 60 s old), so taking a portal up again after its time slice
+   * does not re-read the same result page.
+   */
+  pageCache?: Map<string, { html: string; finalUrl: string }>;
+  /**
+   * Radar only: small values derived from stable portal context (for example
+   * Oferty.net's city location IDs), kept by the run for a limited time.
+   */
+  contextValues?: { get(key: string): string | undefined; set(key: string, value: string): void };
   onBatch(batch: SourceBatch, nextCursor: SourceBatchCursor): Promise<void>;
 };

@@ -229,7 +229,8 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   // removed or approved.
   await verificationCard.getByLabel("Cena całkowita, zł").fill("240000");
   await verificationCard.getByLabel("Powierzchnia, m²").fill("40");
-  await verificationCard.getByText("6 000 zł/m²", { exact: false }).waitFor();
+  // pl-PL does not group four-digit amounts: 6000 zł, but 10 000 zł.
+  await verificationCard.getByText(/6\s?000\s*zł\/m²/u).waitFor();
   await verificationCard.getByLabel("Pokoje").fill("2");
   await verificationCard.getByLabel("Miasto — potwierdź z ogłoszenia").fill("Łódź");
   await verificationCard.getByLabel("Dzielnica").selectOption("Bałuty");
