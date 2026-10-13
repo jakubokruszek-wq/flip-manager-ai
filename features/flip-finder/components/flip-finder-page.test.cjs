@@ -76,7 +76,7 @@ test("Finder keeps offer results primary and hides filter configuration until re
   assert.match(page, /Ustawienia filtra/);
   assert.match(page, /<details className="relative">[\s\S]*FilterActions filter=\{activeFilter\}/);
   assert.match(inlineResults, /Źródła i historia skanów/);
-  assert.match(inlineResults, /Historia wyszukiwania i działania/);
+  assert.match(inlineResults, /Strefa niebezpieczna · usuwanie danych/);
   assert.match(inlineResults, /function QuickInvestmentPreview/);
   assert.doesNotMatch(inlineResults, /import \{ InvestmentDesk \}/);
 });
@@ -93,10 +93,15 @@ test("Finder exposes a keyboard-accessible one-click Deal Room route outside the
   assert.doesNotMatch(inlineResults, /role="button"\s+tabIndex=\{0\}/);
 });
 
-test("search history can be cleared explicitly without deleting filters or sources", () => {
-  assert.match(inlineResults, /Wyczyść historię wyszukiwania/);
-  assert.match(inlineResults, /window\.confirm\(/);
+test("deleting every listing is a guarded, explicit action that never deletes filters or sources", () => {
+  assert.match(inlineResults, /Usuń wszystkie oferty…/);
+  assert.match(inlineResults, /Trwale usuwa wszystkie oferty ze wszystkich filtrów i portali/);
+  assert.doesNotMatch(inlineResults, /Wyczyść historię wyszukiwania/, "the old one-click label that looked like a per-filter clean-up is gone");
+  assert.doesNotMatch(inlineResults, /window\.confirm\("Usunąć całą historię/);
+  assert.match(inlineResults, /body: JSON\.stringify\(\{ confirmation, expectedListings \}\)/);
   assert.match(inlineResults, /fetch\("\/api\/flip-finder\/history"/);
+  assert.match(historyRoute, /historyDeleteEnabled\(\)/);
+  assert.match(historyRoute, /validateHistoryDeleteRequest/);
   assert.match(inlineResults, /method: "DELETE"/);
   assert.doesNotMatch(inlineResults, /x-flip-finder-action/);
   assert.match(historyRoute, /await requireOperator\(\)/);
