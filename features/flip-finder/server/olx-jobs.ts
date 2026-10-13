@@ -8,6 +8,7 @@ import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/s
 import type { SourceScanResult } from "@/features/flip-finder/server/manual-scan";
 import { createOlxWorkerAdminClient } from "@/features/flip-finder/server/olx-worker-admin";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
+import { dedupeListingsByExternalId, emptyListingScanStats, formatListingScanStats, recordListingOutcome } from "@/features/flip-finder/olx-batch";
 import { reuseExistingListingAttributes } from "@/features/flip-finder/server/listing-attribute-reuse";
 import { invalidSalePriceWarning, validSaleListings } from "@/features/flip-finder/sale-price";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
@@ -215,15 +216,22 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
   const diagnostics = emptyMatchDiagnosticSummary();
   const validInput = validSaleListings(input.listings);
   const priceWarning = invalidSalePriceWarning(validInput.skipped);
-  const warnings = [...new Set([...input.warnings, ...(priceWarning ? [priceWarning] : [])])];
+  // A results page can repeat an ad (promoted copy + regular copy): process each offer once.
+  const batch = dedupeListingsByExternalId(validInput.listings);
+  const stats = { ...emptyListingScanStats(), read: input.fetched, skippedInvalid: input.listings.length - validInput.listings.length, duplicates: batch.duplicates };
+  const duplicateWarning = batch.duplicates
+    ? `OLX_DUPLICATE_LISTINGS_MERGED: ${batch.duplicates} powtórzeń tej samej oferty przetworzono raz${batch.conflictingDuplicates ? ` (${batch.conflictingDuplicates} z inną ceną lub treścią; zachowano pierwszą kopię ze strony)` : ""}.`
+    : null;
+  const warnings = [...new Set([...input.warnings, ...(priceWarning ? [priceWarning] : []), ...(duplicateWarning ? [duplicateWarning] : [])])];
   try {
-    const effectiveListings = await reuseExistingListingAttributes(supabase, validInput.listings);
+    const effectiveListings = await reuseExistingListingAttributes(supabase, batch.listings);
     for (const listing of effectiveListings) {
       controller.signal.throwIfAborted();
       const decision = evaluateListingAgainstFilter(listing, filter);
       const saved = await persistListing(supabase, filter.id, listing, decision.matches, decision.unknownFields, sourceScanId, matchedAt, controller.signal, { bucket: decision.bucket, reasons: decision.reasons, unknownFields: decision.unknownFields });
       addMatchDiagnostic(diagnostics, createMatchDiagnostic(saved.listingId, listing, filter, decision));
       if (decision.matches) matched += 1;
+      recordListingOutcome(stats, { bucket: decision.matches ? "MATCHED" : decision.bucket === "REVIEW" ? "REVIEW" : "REJECTED", created: saved.listingCreated, updated: saved.updated > 0 });
       counters = addScanItemCounts(counters, { listingCreated: saved.listingCreated, matchCreated: saved.matchCreated });
       updated += saved.updated;
       priceDrops += saved.priceDrop;
@@ -231,17 +239,18 @@ export async function completeOlxJob(input: { jobId: string; leaseToken: string;
   } finally {
     clearTimeout(timeout);
   }
+  const finalWarnings = [...warnings, `OLX_SCAN_STATS: ${formatListingScanStats(stats)}`];
   const result: SourceScanResult = {
     source: "olx", status: "completed", fetched: input.fetched, normalized: validInput.listings.length, matched,
     listingsCreated: counters.listingsCreatedCount, newMatches: counters.newMatchesCount, updated, priceDrops,
     rejected: Math.max(0, input.fetched - validInput.listings.length), durationMs: input.durationMs,
-    errorCode: null, errorMessage: null, warnings, matchDiagnostics: diagnostics,
+    errorCode: null, errorMessage: null, warnings: finalWarnings, matchDiagnostics: diagnostics, stats,
   };
   const now = new Date().toISOString();
   const scanUpdate = await supabase.from("source_scans").update({
     status: "completed", finished_at: now, scanned_count: input.fetched, listings_found: input.fetched,
     matched_count: matched, listings_created: counters.listingsCreatedCount, new_count: counters.newMatchesCount,
-    listings_updated: updated, price_drop_count: priceDrops, warnings, error_message: null,
+    listings_updated: updated, price_drop_count: priceDrops, warnings: finalWarnings, error_message: null,
   }).eq("id", sourceScanId);
   if (scanUpdate.error) throw new Error(`OLX_SOURCE_SCAN_FINALIZE_FAILED: ${scanUpdate.error.message}`);
   const completed = await supabase.from("olx_scan_jobs").update({ status: "completed", finished_at: now, leased_until: null, heartbeat_at: now, result_summary: result, error_code: null, error_message: null })

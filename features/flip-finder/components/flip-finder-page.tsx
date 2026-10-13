@@ -33,6 +33,7 @@ import { fetchScanProgress, waitUntilScanTerminal } from "@/features/flip-finder
 import { observeFinderRuns } from "@/features/flip-finder/finder-run-observer";
 import { facebookAccountingUiTotals, type FacebookScanAccounting } from "@/features/facebook-worker/scan-accounting";
 import { activeFilterSources } from "@/features/flip-finder/source-availability";
+import type { ListingScanStats } from "@/features/flip-finder/olx-batch";
 
 type ScanResponse = {
   runId?: string;
@@ -65,6 +66,8 @@ type ScanResponse = {
     warnings?: string[];
     errorMessage: string | null;
     matchDiagnostics?: MatchDiagnostics;
+    /** OLX worker path: source data and filter outcome counted separately. */
+    stats?: ListingScanStats;
   }>;
 };
 
@@ -979,10 +982,19 @@ function DiagnosticBar({ analyzed, count, label }: { analyzed: number; count: nu
   return <div><div className="mb-1.5 flex items-center justify-between gap-4 text-sm"><span className="text-muted-foreground">{label}</span><span className="tabular-nums"><strong className="text-foreground">{formatNumber(count)}</strong><span className="ml-3 text-muted-foreground">{formatPercent(count, analyzed)}</span></span></div><div className="h-2 overflow-hidden rounded-full bg-surface-muted"><div className="h-full rounded-full bg-gold transition-[width] duration-500" style={{ width: `${value}%` }} /></div></div>;
 }
 
+/** Source records (stored whatever the filter says) apart from the filter outcome (Finder sections). */
+function SourceScanStatsList({ stats }: { stats: ListingScanStats }) {
+  const groups: Array<{ title: string; items: Array<[string, number]> }> = [
+    { title: "Dane źródłowe", items: [["Odczytane", stats.read], ["Unikalne", stats.unique], ["Powtórzenia", stats.duplicates], ["Nowe rekordy", stats.created], ["Zaktualizowane", stats.updated], ["Bez zmian", stats.unchanged]] },
+    { title: "Ocena filtra", items: [["Dopasowane", stats.matched], ["Do weryfikacji", stats.review], ["Odrzucone przez filtr", stats.rejectedByFilter]] },
+  ];
+  return <div className="mt-3 space-y-2">{groups.map((group) => <div key={group.title}><p className="text-xs font-semibold text-muted-foreground">{group.title}</p><dl className="mt-1 grid grid-cols-3 gap-2 text-xs">{group.items.map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="tabular-nums font-semibold">{formatNumber(value)}</dd></div>)}</dl></div>)}</div>;
+}
+
 function SourceDiagnosticCard({ source }: { source: NonNullable<ScanResponse["sourceResults"]>[number] }) {
   const reason = mainDiagnosticReason(source.matchDiagnostics);
   if (source.status === "pending") return <div className="rounded-xl border border-gold/20 bg-gold/[0.05] p-4"><p className="font-semibold">{sourceDisplayLabel(source.source)}</p><p className="mt-3 text-sm text-muted-foreground">{sourceDisplayLabel(source.source)}: oczekuje na lokalny worker</p></div>;
-  return <div className="rounded-xl border border-border/60 bg-surface-elevated/60 p-4"><div className="flex items-center justify-between gap-3"><p className="font-semibold">{sourceDisplayLabel(source.source)}</p><span className={`ui-badge ${source.status === "failed" ? "border-danger/20 bg-danger/10 text-danger" : "border-success/20 bg-success/10 text-success"}`}>{source.status === "failed" ? "Błąd" : "Zakończony"}</span></div>{source.status === "failed" ? <p className="mt-3 text-sm text-danger">{source.errorMessage ?? "Źródło nie zakończyło skanu."}</p> : <><dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-muted-foreground">Sprawdzone</dt><dd className="mt-0.5 tabular-nums font-semibold">{formatNumber(source.fetched ?? 0)}</dd></div><div><dt className="text-xs text-muted-foreground">Znormalizowane</dt><dd className="mt-0.5 tabular-nums font-semibold">{formatNumber(source.normalized ?? 0)}</dd></div><div><dt className="text-xs text-muted-foreground">Dopasowane</dt><dd className="mt-0.5 tabular-nums font-semibold text-gold">{formatNumber(source.matched ?? source.matchDiagnostics?.matched ?? 0)}</dd></div><div><dt className="text-xs text-muted-foreground">Odrzucone</dt><dd className="mt-0.5 tabular-nums font-semibold">{formatNumber(source.rejected ?? Math.max(0, (source.fetched ?? 0) - (source.normalized ?? 0)))}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Główny powód odrzucenia</dt><dd className="mt-0.5 font-medium">{reason}</dd></div></dl>{source.warnings?.length ? <div className="mt-3 rounded-lg border border-warning/20 bg-warning/[0.06] p-3"><p className="text-xs font-semibold text-warning">Diagnostyka normalizacji</p><ul className="mt-1 space-y-1 text-xs text-muted-foreground">{source.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}</>}</div>;
+  return <div className="rounded-xl border border-border/60 bg-surface-elevated/60 p-4"><div className="flex items-center justify-between gap-3"><p className="font-semibold">{sourceDisplayLabel(source.source)}</p><span className={`ui-badge ${source.status === "failed" ? "border-danger/20 bg-danger/10 text-danger" : "border-success/20 bg-success/10 text-success"}`}>{source.status === "failed" ? "Błąd" : "Zakończony"}</span></div>{source.status === "failed" ? <p className="mt-3 text-sm text-danger">{source.errorMessage ?? "Źródło nie zakończyło skanu."}</p> : <><dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-muted-foreground">Sprawdzone</dt><dd className="mt-0.5 tabular-nums font-semibold">{formatNumber(source.fetched ?? 0)}</dd></div><div><dt className="text-xs text-muted-foreground">Znormalizowane</dt><dd className="mt-0.5 tabular-nums font-semibold">{formatNumber(source.normalized ?? 0)}</dd></div><div><dt className="text-xs text-muted-foreground">Dopasowane</dt><dd className="mt-0.5 tabular-nums font-semibold text-gold">{formatNumber(source.matched ?? source.matchDiagnostics?.matched ?? 0)}</dd></div><div><dt className="text-xs text-muted-foreground">Odrzucone</dt><dd className="mt-0.5 tabular-nums font-semibold">{formatNumber(source.rejected ?? Math.max(0, (source.fetched ?? 0) - (source.normalized ?? 0)))}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Główny powód odrzucenia</dt><dd className="mt-0.5 font-medium">{reason}</dd></div></dl>{source.stats ? <SourceScanStatsList stats={source.stats} /> : null}{source.warnings?.length ? <div className="mt-3 rounded-lg border border-warning/20 bg-warning/[0.06] p-3"><p className="text-xs font-semibold text-warning">Diagnostyka normalizacji</p><ul className="mt-1 space-y-1 text-xs text-muted-foreground">{source.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}</>}</div>;
 }
 
 function mainDiagnosticReason(diagnostics: MatchDiagnostics | undefined): string {
