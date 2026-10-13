@@ -1,0 +1,175 @@
+name: OLX Cloudflare — etap 1 (ręczne wdrożenie Workera testowego)
+
+# Manual only. Deploys exactly ONE thing: the locked stage-1 test Worker
+# "flip-manager-olx-cloud-stage1" from wrangler.stage1.toml at the pinned
+# PR #5 commit. It never touches the existing "flip-manager-olx-cloud" Worker,
+# Supabase or Vercel, never sets OLX_WORKER_SECRET, and the deployed Worker
+# cannot claim jobs (OLX_CLOUD_STAGE1_LOCK=1, OLX_CLOUD_ENABLED=0, manual).
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN_STAGE1   restricted Cloudflare API token (Workers Scripts edit, one account)
+#   CLOUDFLARE_ACCOUNT_ID         Cloudflare account id
+#   OLX_CLOUD_ADMIN_TOKEN_STAGE1  admin bearer token for /status and /selftest (>= 32 chars)
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run_only:
+        description: "Tylko kontrola i dry-run, bez wdrożenia"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: olx-cloudflare-stage1-deploy
+  cancel-in-progress: false
+
+env:
+  # PR #5 (claude/olx-cloudflare-workers-gkzda7), reviewed commit. Change only together with a new review.
+  SOURCE_SHA: 3990a1abfcac9230e05699e263c0489936f866fc
+  STAGE1_CONFIG: wrangler.stage1.toml
+  STAGE1_NAME: flip-manager-olx-cloud-stage1
+  PRODUCTION_NAME: flip-manager-olx-cloud
+
+jobs:
+  stage1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: olx-cloudflare-stage1
+    defaults:
+      run:
+        shell: bash
+        working-directory: workers/olx-cloudflare
+    steps:
+      - name: Pobierz kod z PR #5 (przypięty commit)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Sprawdź commit
+        working-directory: .
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$SOURCE_SHA" ]; then
+            echo "::error::Pobrano $actual zamiast $SOURCE_SHA"; exit 1
+          fi
+          echo "Commit: $actual"
+
+      - name: Kontrola konfiguracji Workera testowego
+        run: |
+          set -euo pipefail
+          test -f "$STAGE1_CONFIG" || { echo "::error::Brak $STAGE1_CONFIG"; exit 1; }
+          require() {
+            if ! grep -Eq "^$1$" "$STAGE1_CONFIG"; then echo "::error::$STAGE1_CONFIG: brak linii: $2"; exit 1; fi
+            echo "OK  $2"
+          }
+          require 'name = "flip-manager-olx-cloud-stage1"' 'name = "flip-manager-olx-cloud-stage1"'
+          require 'OLX_CLOUD_STAGE1_LOCK = "1"' 'OLX_CLOUD_STAGE1_LOCK = "1"'
+          require 'OLX_CLOUD_ENABLED = "0"' 'OLX_CLOUD_ENABLED = "0"'
+          require 'OLX_CLOUD_CLAIM_MODE = "manual"' 'OLX_CLOUD_CLAIM_MODE = "manual"'
+          # Top-level keys (before the first [section]): exactly one Worker name, never the production Worker.
+          toplevel="$(awk '/^[[:space:]]*\[/{exit} {print}' "$STAGE1_CONFIG")"
+          [ "$(printf '%s\n' "$toplevel" | grep -Ec '^name[[:space:]]*=')" = "1" ] || { echo "::error::Wymagana dokładnie jedna nazwa Workera"; exit 1; }
+          printf '%s\n' "$toplevel" | grep -Eq "^name = \"$STAGE1_NAME\"$" || { echo "::error::Nazwa Workera inna niż $STAGE1_NAME"; exit 1; }
+          if grep -Eq "^name[[:space:]]*=[[:space:]]*\"$PRODUCTION_NAME\"[[:space:]]*$" "$STAGE1_CONFIG"; then echo "::error::Konfiguracja wskazuje produkcyjny Worker"; exit 1; fi
+          if grep -Eq '^[[:space:]]*(route|routes)[[:space:]]*=|^\[\[routes\]\]|^\[env\.' "$STAGE1_CONFIG"; then echo "::error::Niedozwolone trasy lub środowiska w $STAGE1_CONFIG"; exit 1; fi
+          for key in OLX_CLOUD_STAGE1_LOCK OLX_CLOUD_ENABLED OLX_CLOUD_CLAIM_MODE; do
+            [ "$(grep -Ec "^$key[[:space:]]*=" "$STAGE1_CONFIG")" = "1" ] || { echo "::error::$key występuje więcej niż raz"; exit 1; }
+          done
+          if grep -Eq '^OLX_WORKER_SECRET' "$STAGE1_CONFIG"; then echo "::error::Sekret w pliku konfiguracji"; exit 1; fi
+
+      - name: Kontrola sekretów GitHub (bez wypisywania wartości)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE1 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE1 }}
+        run: |
+          set -euo pipefail
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "::error::Brak sekretu CLOUDFLARE_API_TOKEN_STAGE1"; exit 1; }
+          [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]] || { echo "::error::CLOUDFLARE_ACCOUNT_ID musi mieć 32 znaki hex"; exit 1; }
+          [ "${#ADMIN_TOKEN}" -ge 32 ] || { echo "::error::OLX_CLOUD_ADMIN_TOKEN_STAGE1 musi mieć co najmniej 32 znaki"; exit 1; }
+          echo "Sekrety obecne."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalacja zależności Workera
+        run: npm ci --no-audit --no-fund
+
+      - name: Dry-run (bez wysyłania)
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run --outdir dist-stage1 --config "$STAGE1_CONFIG" | tee dry-run.log
+          for expected in 'env.OLX_CLOUD_STAGE1_LOCK ("1")' 'env.OLX_CLOUD_ENABLED ("0")' 'env.OLX_CLOUD_CLAIM_MODE ("manual")'; do
+            grep -Fq "$expected" dry-run.log || { echo "::error::Dry-run nie pokazuje: $expected"; exit 1; }
+          done
+          if grep -Fq 'OLX_WORKER_SECRET' dry-run.log; then echo "::error::Dry-run zawiera OLX_WORKER_SECRET"; exit 1; fi
+
+      - name: Wdrożenie wyłącznie Workera testowego
+        if: ${{ !inputs.dry_run_only }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE1 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config "$STAGE1_CONFIG" | tee deploy.log
+          grep -Fq "$STAGE1_NAME" deploy.log || { echo "::error::Wynik wdrożenia nie wskazuje $STAGE1_NAME"; exit 1; }
+          url="$(grep -Eo "https://$STAGE1_NAME\.[a-z0-9-]+\.workers\.dev" deploy.log | head -1 || true)"
+          [ -n "$url" ] || { echo "::error::Brak adresu workers.dev w wyniku wdrożenia"; exit 1; }
+          echo "STAGE1_URL=$url" >> "$GITHUB_ENV"
+
+      - name: Ustawienie tokenu administracyjnego (tylko w Workerze testowym)
+        if: ${{ !inputs.dry_run_only }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_STAGE1 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE1 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put OLX_CLOUD_ADMIN_TOKEN --config "$STAGE1_CONFIG"
+
+      - name: Weryfikacja /health i /status
+        if: ${{ !inputs.dry_run_only }}
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_STAGE1 }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl -fsS "$STAGE1_URL/health" -o health.json; then break; fi
+            echo "Czekam na workers.dev ($attempt/12)..."; sleep 10
+          done
+          grep -Fq '"ok":true' health.json || { echo "::error::/health nie odpowiada poprawnie"; exit 1; }
+          noauth="$(curl -s -o /dev/null -w '%{http_code}' "$STAGE1_URL/status")"
+          [ "$noauth" = "404" ] || { echo "::error::/status bez tokenu zwrócił $noauth zamiast 404"; exit 1; }
+          status=""
+          for attempt in $(seq 1 12); do
+            status="$(curl -fsS -H "authorization: Bearer $ADMIN_TOKEN" "$STAGE1_URL/status" || true)"
+            if printf '%s' "$status" | jq -e '.code == "OLX_CLOUD_STAGE1_LOCKED"' >/dev/null 2>&1; then break; fi
+            echo "Czekam na token administracyjny ($attempt/12)..."; sleep 10
+          done
+          printf '%s' "$status" | jq -e '.code == "OLX_CLOUD_STAGE1_LOCKED" and .configCheck.stage1Lock == true and .configCheck.killSwitch == "disabled" and .nextAlarm == null and .running == false' >/dev/null \
+            || { echo "::error::/status nie potwierdza zablokowanego Workera"; printf '%s' "$status" | jq '{code, configCheck, nextAlarm, running}' || true; exit 1; }
+          {
+            echo "## OLX Cloudflare — etap 1 wdrożony"
+            echo ""
+            echo "- Worker: \`$STAGE1_NAME\` (commit \`$SOURCE_SHA\`)"
+            echo "- Adres: $STAGE1_URL"
+            echo "- /health: OK, /status bez tokenu: 404"
+            echo ""
+            echo '```json'
+            printf '%s' "$status" | jq '{code, message, configCheck, nextAlarm, running, ledger, lastCron}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Podsumowanie dry-run
+        if: ${{ inputs.dry_run_only }}
+        run: |
+          {
+            echo "## OLX Cloudflare — etap 1: tylko dry-run"
+            echo ""
+            echo "Kontrola konfiguracji i dry-run zakończone. Nic nie zostało wdrożone."
+          } >> "$GITHUB_STEP_SUMMARY"
