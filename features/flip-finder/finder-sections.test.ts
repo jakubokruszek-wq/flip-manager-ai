@@ -65,14 +65,29 @@ test("a confirmed cross-portal group is MATCHED when any member matches and is r
   assert.equal(partition.review.length, 0);
 });
 
-test("a confirmed tenement on one portal excludes its linked duplicate on another portal, with a visible reason", () => {
-  const identity = "portal_shared_unit_id:unit-tenement";
-  const tenement = row("oto-tenement", "EXCLUDED", { crossSourceIdentity: identity, exclusion: { code: "filter_rejected", reasons: ["building_type"] }, buildingType: "kamienica" });
-  const labelledBlock = row("olx-block", "MATCHED", { source: "olx", originalUrl: "https://www.olx.pl/d/oferta/x", crossSourceIdentity: identity });
-  const partition = partitionFinderRows([tenement, labelledBlock], { filter, identityOf });
-  assert.equal(partition.matched.length, 0, "a tenement never reaches Dopasowane through a mislabelled duplicate");
-  assert.deepEqual(new Map(partition.excluded.map((entry) => [entry.id, entry.code])), new Map([["oto-tenement", "filter_rejected"], ["olx-block", "linked_property_rejected"]]));
-  assert.match(partition.excluded.find((entry) => entry.id === "oto-tenement")?.label ?? "", /Typ budynku/u);
+test("a tenement label on another portal never hides a correctly described block: the property waits for building verification", () => {
+  const identity = "portal_shared_unit_id:unit-conflict";
+  const mislabelled = row("oto-tenement", "EXCLUDED", { crossSourceIdentity: identity, exclusion: { code: "filter_rejected", reasons: ["building_type"] }, buildingType: "kamienica", buildingQualification: { status: "rejected", type: "kamienica", reason: "building_type", source: "structured" } });
+  const block = row("olx-block", "MATCHED", { source: "olx", originalUrl: "https://www.olx.pl/d/oferta/x", crossSourceIdentity: identity });
+  const partition = partitionFinderRows([mislabelled, block], { filter, identityOf });
+  assert.equal(partition.matched.length, 0, "an unresolved tenement claim never reaches Dopasowane");
+  assert.deepEqual(partition.buildingVerification.map((card) => card.id), ["olx-block"], "the block stays visible, waiting for the operator");
+  assert.equal(partition.buildingVerification[0].buildingQualification?.reason, "building_type_cross_portal_conflict");
+  assert.deepEqual(partition.excluded.map((entry) => [entry.id, entry.code]), [["oto-tenement", "filter_rejected"]]);
+});
+
+test("an operator-confirmed block settles a cross-portal conflict; an operator rejection excludes every copy", () => {
+  const identity = "portal_shared_unit_id:unit-operator";
+  const mislabelled = row("oto-tenement", "EXCLUDED", { crossSourceIdentity: identity, exclusion: { code: "filter_rejected", reasons: ["building_type"] }, buildingQualification: { status: "rejected", type: "kamienica", reason: "building_type", source: "structured" } });
+  const confirmedBlock = row("olx-block", "MATCHED", { source: "olx", originalUrl: "https://www.olx.pl/d/oferta/y", crossSourceIdentity: identity, buildingQualification: { status: "confirmed", type: "blok", reason: "building_type_confirmed_operator", source: "operator" } });
+  const confirmed = partitionFinderRows([mislabelled, confirmedBlock], { filter, identityOf });
+  assert.deepEqual(confirmed.matched.map((card) => card.id), ["olx-block"]);
+
+  const manualReject = row("oto-manual", "EXCLUDED", { crossSourceIdentity: identity, exclusion: { code: "manual_rejected", reasons: [] } });
+  const block = row("olx-block-2", "MATCHED", { source: "olx", originalUrl: "https://www.olx.pl/d/oferta/z", crossSourceIdentity: identity });
+  const rejected = partitionFinderRows([manualReject, block], { filter, identityOf });
+  assert.equal(rejected.matched.length + rejected.buildingVerification.length, 0);
+  assert.deepEqual(new Map(rejected.excluded.map((entry) => [entry.id, entry.code])), new Map([["oto-manual", "manual_rejected"], ["olx-block-2", "linked_property_rejected"]]));
 });
 
 test("property invariant: every input row lands exactly once, in one section or in excluded with a reason", () => {

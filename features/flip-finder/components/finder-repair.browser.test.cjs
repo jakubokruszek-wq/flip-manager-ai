@@ -160,6 +160,16 @@ test("Finder browser: real errors, visible older matches, separate building queu
   assert.match(counts, /Dopasowane: 2 · Do oceny: 1 · Do weryfikacji budynku: 1 · Archiwalne: 3763/);
   assert.match(counts, /Wykluczone z powodem: 1/);
   assert.equal(await page.getByTestId("finder-card-older").count(), 1, "the 136-day-old match is shown with an 'older' badge");
+  // Production 13.10: the 269 000 zł match was returned by the API but its
+  // card rendered below every Do oceny card. Matched cards must come first.
+  const order = await page.evaluate(() => {
+    const matchedCard = document.querySelector('[data-listing-id="srodmiescie-269"]');
+    const reviewHeading = [...document.querySelectorAll("h2")].find((heading) => heading.textContent?.trim() === "DO OCENY");
+    const buildingQueue = document.querySelector('[data-testid="finder-building-verification"]');
+    const follows = (a, b) => Boolean(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+    return { beforeReview: follows(matchedCard, reviewHeading), beforeBuildingQueue: follows(matchedCard, buildingQueue) };
+  });
+  assert.deepEqual(order, { beforeReview: true, beforeBuildingQueue: true }, "matched cards render above Do oceny and the building queue");
   assert.equal(await page.getByTestId("finder-card-unconfirmed").count(), 1);
   assert.equal(requests.filter((request) => request.view === "archive").length, 0, "the archive is never fetched before it is opened");
 

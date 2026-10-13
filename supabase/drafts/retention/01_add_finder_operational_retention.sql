@@ -1,10 +1,12 @@
--- DRAFT — requires operator approval before it is applied to Production.
+-- SEPARATE RETENTION STAGE — not part of the Finder repair deployment.
+-- Kept outside supabase/migrations so `supabase db push` or a Git integration
+-- can never apply it by merging the Finder PR. Requires operator approval.
 -- Applying this migration deletes NOTHING by itself. It only creates:
 --   * aggregate tables that keep daily statistics of expired operational rows,
 --   * public.finder_retention_report()   -- read-only dry-run report,
 --   * public.finder_retention_run(...)   -- bounded batches, dry-run by default,
 --   * public.finder_retention_runs       -- log of every run (counts + sizes).
--- A schedule is configured separately (scripts/configure-finder-retention-cron.sql).
+-- A schedule is configured separately (03_configure_finder_retention_cron.sql).
 --
 -- Policy (operational data only):
 --   gallery_request_traces       delete after 14 days (diagnostics)

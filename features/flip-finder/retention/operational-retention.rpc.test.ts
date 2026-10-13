@@ -6,13 +6,13 @@ import { PGlite } from "@electric-sql/pglite";
 
 /**
  * Real PostgreSQL (PGlite) proof of the operational retention draft
- * (supabase/migrations/20261013122000_add_finder_operational_retention.sql).
+ * (supabase/drafts/retention/01_add_finder_operational_retention.sql).
  * Production is never contacted. The schema below mirrors only the columns
  * of the production tables the retention functions read or write.
  */
 const ROOT = path.resolve(import.meta.dirname, "../../..");
-const RETENTION = path.join(ROOT, "supabase/migrations/20261013122000_add_finder_operational_retention.sql");
-const NONCE_GRANT = path.join(ROOT, "supabase/migrations/20261013121000_fix_facebook_worker_nonce_cleanup_grant.sql");
+const RETENTION = path.join(ROOT, "supabase/drafts/retention/01_add_finder_operational_retention.sql");
+const NONCE_GRANT = path.join(ROOT, "supabase/drafts/retention/02_fix_facebook_worker_nonce_cleanup_grant.sql");
 const FILTER = "10000000-0000-4000-8000-000000000001";
 const LISTING = "20000000-0000-4000-8000-000000000002";
 const DEVICE = "30000000-0000-4000-8000-000000000003";

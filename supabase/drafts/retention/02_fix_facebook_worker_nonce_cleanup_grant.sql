@@ -1,4 +1,7 @@
--- DRAFT — requires operator approval before it is applied to Production.
+-- SEPARATE RETENTION STAGE — not part of the Finder repair deployment.
+-- Applying this grant lets the application's existing per-request cleanup
+-- start DELETING expired nonces in Production, so it belongs to the
+-- approved retention stage, not to the Finder deployment.
 --
 -- features/facebook-worker/auth.ts deletes expired nonces on every signed
 -- worker request: DELETE ... WHERE expires_at < now(). PostgreSQL requires

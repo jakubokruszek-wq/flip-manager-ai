@@ -15,7 +15,15 @@ Odczyt (`getFilterResults`) ponownie ocenia każde powiązanie i dopiero wtedy d
 | D | Reguła konfliktu typu budynku | Opis z dzielnicy Śródmieście w rodzaju „okolica pełna kamienic”, „w otoczeniu kamienic” był traktowany jak twierdzenie, że lokal jest w kamienicy. Przy `building_type=blok` dawało to `building_type_conflict` → odrzucenie przy odczycie, bez żadnego śladu w UI (powiązanie nadal `is_current_match=true`). |
 | E | Ręczna akceptacja operatora (`manual_accept`) | Była ponownie oceniana jako REVIEW, więc zaakceptowana oferta nigdy nie trafiała do „Dopasowane”. |
 
-**Oferta 269 000 zł (Śródmieście, 47,19 m², opublikowana 01.10.2026)** — jest młodsza niż 30 dni, więc mechanizm A jej nie dotyczy. Bez dostępu do Production nie da się wskazać jednego z mechanizmów B–E z pewnością; najbardziej prawdopodobne są B (odświeżone ogłoszenie OLX) oraz D (opis ze Śródmieścia wspominający kamienice). Każdy z nich jest odtworzony testem (`filter-results-finder-repair.test.ts`, test „why the 269 000 zł offer was invisible”) i naprawiony. Jednoznaczne potwierdzenie daje zapytanie 2 i 3 w `supabase/verification/finder-visibility-diagnostics.sql` (tylko odczyt): pokazuje najwcześniejszą i najnowszą datę publikacji, kontekst słowa „kamienic” w opisie oraz ewentualne duplikaty.
+**Oferta 269 000 zł (Śródmieście, 47,19 m², opublikowana 01.10.2026) — przyczyna potwierdzona w kontroli końcowej.** Odczyt Production z 11.10.2026 22:11, zapisany w repozytorium jako fixture testu i w opisie commitu `29af8c5`, pokazuje, że API zwracało tę ofertę w `results` jako MATCHED. Okno 30 dni jej nie dotyczyło, a typ budynku był potwierdzony. Mechanizmy A–D nie mogły jej więc ukryć.
+
+Ukrywał ją interfejs: do commitu `f453b99` (12.10.2026 18:27) siatka kart „AKTYWNE / DOPASOWANE” była renderowana **za całą sekcją „Do oceny”** (83–87 kart). Operator widział nagłówek z licznikiem 1, a sama karta lądowała na samym dole strony. Jeśli Production działa na wersji sprzed `f453b99` albo PWA trzyma starą wersję, problem nadal występuje.
+
+Ta gałąź zachowuje poprawną kolejność, co sprawdza test Playwright. Dodatkowo:
+* „Do oceny” zawiera teraz tylko oferty z potwierdzonym typem budynku (10 zamiast 87);
+* 77 ofert bez potwierdzonego typu jest w zwiniętej sekcji „Do weryfikacji budynku”.
+
+Mechanizmy B–E zostały naprawione profilaktycznie, bo mogą ukryć inne oferty. Zapytania 2 i 3 w `supabase/verification/finder-visibility-diagnostics.sql` pozwalają to potwierdzić na danych (tylko odczyt).
 
 Niezależnie od przyczyny obowiązuje teraz warunek akceptacji: każde bieżące powiązanie (aktualne dopasowanie lub jawne REVIEW) trafia **dokładnie raz** do jednej sekcji albo na listę „Zapisane dopasowania niewidoczne w wynikach” z czytelnym powodem.
 
@@ -37,7 +45,16 @@ Niezależnie od przyczyny obowiązuje teraz warunek akceptacji: każde bieżące
 **Kamienice i typ budynku**
 * `building-type-qualification.ts` (nowy) — jedna reguła dla wszystkich źródeł i odczytu: potwierdzony dozwolony / odrzucony / do weryfikacji. Potwierdzenie operatora ma pierwszeństwo.
 * `listing-attribute-extraction.ts` — odmiany „apartamentowiec/wieżowiec”, „z wielkiej płyty”; poprawne słowo „blok”; sąsiedztwo („obok”, „wśród”, „przy starej kamienicy”, „ul. Kamienica”) i liczba mnoga („okolica pełna kamienic”) nie są dowodem; „w bloku obok kamienicy” opisuje blok.
-* Nowa sekcja „Do weryfikacji budynku” + przyciski Blok / Apartamentowiec / Kamienica / Dom (`POST /api/flip-finder/listings/[id]/building-type`, tabela `finder_building_type_confirmations`). Historyczne oferty są ponownie kwalifikowane przy odczycie, bez usuwania danych.
+* Nowa sekcja „Do weryfikacji budynku” z przyciskami Blok / Apartamentowiec / Kamienica / Dom (`POST /api/flip-finder/listings/[id]/building-type`, tabela `finder_building_type_confirmations`):
+  * dostęp tylko dla operatora; klient serwisowy powstaje dopiero po autoryzacji;
+  * walidacja UUID oraz listy dozwolonych typów;
+  * operator jest zapisywany z sesji, nie z treści żądania.
+
+  Historyczne oferty są ponownie kwalifikowane przy odczycie, bez usuwania danych.
+* Sprzeczność między portalami (ta sama nieruchomość, inny portal podaje „kamienica”):
+  * oferta trafia do „Do weryfikacji budynku”, zamiast znikać;
+  * potwierdzenie bloku przez operatora przywraca ją do „Dopasowane”;
+  * ręczne odrzucenie albo potwierdzona przez operatora kamienica wyklucza wszystkie kopie.
 * Facebook Watcher (`facebook-apartment-safety.ts`) używa wspólnych reguł.
 * Alerty/push: brak alertów dla potwierdzonej kamienicy/domu; `canonical_match` wymaga potwierdzonego bloku/apartamentowca.
 
@@ -60,6 +77,7 @@ Niezależnie od przyczyny obowiązuje teraz warunek akceptacji: każde bieżące
 | Testy jednostkowe/integracyjne całego repo | 2553 testy; 43 niepowodzenia **identyczne jak na `main`** (worker Facebooka, rozszerzenie, klasyfikacja tras Radaru Cen) — zero nowych |
 | Testy Findera/Watchera/alertów/kolektora | wszystkie przechodzą |
 | Retencja na prawdziwym PostgreSQL (PGlite) | 5/5 |
+| Bezpieczeństwo migracji i API potwierdzania typu | 5/5 |
 | `next build` (produkcyjny, webpack) | OK |
 | Playwright (Finder/Watcher) | nowy test naprawy OK; istniejące OK poza krokiem otwarcia popupu `facebook.com` w teście ramki karty — Chromium w sandboksie nie ma dostępu do internetu (`chrome-error://`), test kart i archiwum przechodzi |
 
@@ -92,7 +110,7 @@ Realistycznie zwykłe otwarcie Findera (dashboard + wyniki równolegle) powinno 
 
 Razem ok. 65–80 MB z ~176 MB. `DELETE`/`UPDATE` zwalnia miejsce do ponownego użycia po (auto)vacuum; zmniejszenie plików na dysku wymaga `VACUUM FULL` (blokada wyłączna) — nie jest uruchamiane automatycznie.
 
-Przyczyna narastania nonce: `service_role` ma na `facebook_worker_nonces` tylko `INSERT, DELETE`, a `DELETE … WHERE expires_at < now()` wymaga też `SELECT` na `expires_at`. Czyszczenie wykonywane przy każdym żądaniu workera kończyło się „permission denied”, a błąd był ignorowany. Potwierdzone na PostgreSQL w teście; migracja `20261013121000` nadaje uprawnienie kolumnowe, a kod loguje błąd czyszczenia.
+Przyczyna narastania nonce: `service_role` ma na `facebook_worker_nonces` tylko `INSERT, DELETE`, a `DELETE … WHERE expires_at < now()` wymaga też `SELECT` na `expires_at`. Czyszczenie wykonywane przy każdym żądaniu workera kończyło się „permission denied”, a błąd był ignorowany. Potwierdzone na PostgreSQL w teście; plik `supabase/drafts/retention/02_fix_facebook_worker_nonce_cleanup_grant.sql` (etap retencji) nadaje uprawnienie kolumnowe, a kod loguje błąd czyszczenia.
 
 ## 8. Jaką historię zachowujemy
 
@@ -101,14 +119,40 @@ Przyczyna narastania nonce: `service_role` ma na `facebook_worker_nonces` tylko 
 * **Paczki kolektora**: pełny `payload` 14 dni, metadane 90 dni, potem statystyki dzienne (`finder_collector_batch_daily_stats`).
 * **Ślady galerii**: 14 dni. **Nonce**: do godziny po wygaśnięciu.
 
-## 9. Operacje wymagające zgody operatora
+## 9. Migracje i kolejność wdrożenia
 
-1. Zastosowanie migracji (w tej kolejności, wszystkie są szkicami):
-   * `20261013120000_add_finder_building_type_confirmations.sql` — nowa tabela (bez zmian danych). Bez niej Finder działa, a przyciski potwierdzania typu budynku są wyłączone z komunikatem.
-   * `20261013121000_fix_facebook_worker_nonce_cleanup_grant.sql` — `GRANT SELECT (nonce, expires_at)`; po zastosowaniu aplikacja sama zacznie usuwać wygasłe nonce (DELETE na Production).
-   * `20261013122000_add_finder_operational_retention.sql` — funkcje i tabele statystyk; samo zastosowanie niczego nie usuwa.
-2. Uruchomienie raportu `select * from public.finder_retention_report();` i przebiegu próbnego `select * from public.finder_retention_run(true);`.
-3. Pierwszy rzeczywisty przebieg `finder_retention_run(false, 500, 10)` (DELETE/UPDATE w małych paczkach).
-4. Harmonogram `scripts/configure-finder-retention-cron.sql` (etap 1: dzienny dry-run; etap 2: co 15 minut).
-5. Ewentualny `VACUUM FULL` wybranych tabel w oknie serwisowym.
-6. Wdrożenie gałęzi na Production po zatwierdzeniu PR.
+**Niezbędna przed wdrożeniem Findera jest tylko jedna migracja:** `supabase/migrations/20261013120000_add_finder_building_type_confirmations.sql`.
+* Tworzy jedną nową tabelę: RLS włączone, `authenticated` ma tylko SELECT, zapis wyłącznie przez service role.
+* Nie zmienia istniejących danych.
+* Bez niej Finder działa poprawnie, tylko przyciski potwierdzania typu budynku są wyłączone z komunikatem.
+
+**Retencja to osobny etap:** `supabase/drafts/retention/` (poza `supabase/migrations`, więc `supabase db push` ani integracja Git jej nie zastosują), z instrukcją w `README.md`. Grant dla nonce także należy do tego etapu, bo po jego nadaniu aplikacja zacznie usuwać wygasłe nonce na Production.
+
+**Nienaruszone:** historia cen (`listing_snapshots`), decyzje operatora (`manual_decision`, decyzje tożsamości), analizy inwestycyjne, Radar Cen i CRM. Wdrożenie nie zawiera żadnego DELETE, UPDATE danych, VACUUM ani harmonogramu.
+
+Kolejność bezpiecznego wdrożenia:
+1. Akceptacja PR #4.
+2. Zastosowanie w Supabase (SQL editor) wyłącznie `20261013120000_add_finder_building_type_confirmations.sql`.
+   * Kontrola: `select has_table_privilege('anon','public.finder_building_type_confirmations','SELECT');` → `false`.
+3. Merge PR #4 do `main` i wdrożenie na Vercel.
+4. Wymuszenie odświeżenia PWA na telefonie (kontrolka wersji), bo stara wersja trzymała kartę pod „Do oceny”.
+5. Kontrola po wdrożeniu:
+   * filtr „Flip” pokazuje 4 karty w „Dopasowane” (lub wpis z powodem na liście wykluczonych);
+   * „Do oceny” ok. 10, „Do weryfikacji budynku” ok. 77;
+   * nagłówek `Server-Timing` i panel „Źródła i historia skanów” pokazują czas odczytu i liczbę zapytań.
+6. Uruchomienie zapytań z `finder-visibility-diagnostics.sql` (tylko odczyt) dla oferty 269 000 zł.
+7. Osobno, po zgodzie: etap retencji z `supabase/drafts/retention/README.md`.
+
+## 10. Konflikty z PR #2 (Radar Cen) i PR #3 (OLX Cloud Worker)
+
+* **Konflikty tekstowe:** brak. Żaden plik nie jest wspólny, a `git merge-tree` scala PR #4+#2+#3 bez konfliktów.
+* **Migracje:** PR #2 i #3 nie dodają migracji, więc nie ma kolizji numeracji.
+* **Testy po scaleniu:** na połączonym drzewie PR #4+#2+#3 jest 2579 testów i 43 niepowodzenia — te same co na `main` i w samym PR #2.
+* **TypeScript po scaleniu:** 4 błędy w `workers/olx-browser/src/worker.test.ts` występują już w samym PR #3. Nie wynikają ze scalenia i nie są zmieniane w tym PR.
+* **Wpływ pośredni na Radar:** Radar (PR #2, `external-source-adapters.ts`) korzysta ze wspólnej funkcji `resolveBuildingType`. Po tym PR Radar:
+  * rozpoznaje „apartamentowcu/apartment/wieżowiec”;
+  * traktuje loft i plombę jako niedozwolone typy;
+  * nie uznaje „wśród kamienic” za kamienicę.
+
+  To zmiana zachowania na korzyść poprawności, bez zmian w kodzie Radaru. Testy Radaru przechodzą.
+* **Worker OLX (PR #3):** używa istniejącego API `/api/olx-worker/*` i kolejki `olx_scan_jobs`, których ten PR nie zmienia. Przyszła retencja chroni zadania `queued/running` i ich skany.

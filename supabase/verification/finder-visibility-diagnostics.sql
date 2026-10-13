@@ -52,7 +52,7 @@ join public.search_filters f on f.id = m.search_filter_id and f.name = 'Flip'
 join public.listings l on l.id = m.listing_id
 where not m.is_current_match and m.match_reasons ? 'unknown_buildingType';
 
--- 5. Why expired Facebook worker nonces accumulate (expected: false before migration 20261013121000).
+-- 5. Why expired Facebook worker nonces accumulate (expected: false until supabase/drafts/retention/02 is applied).
 select has_column_privilege('service_role', 'public.facebook_worker_nonces', 'expires_at', 'SELECT') as cleanup_can_filter_by_expiry,
        count(*) filter (where expires_at < now()) as expired_nonces,
        count(*) as total_nonces

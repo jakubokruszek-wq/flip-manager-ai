@@ -68,7 +68,7 @@ export function exclusionLabel(code: FinderExclusionCode, reasons: readonly stri
     case "source_conflict": return "Adres ogłoszenia nie należy do deklarowanego źródła";
     case "invalid_price": return "Brak poprawnej całkowitej ceny sprzedaży";
     case "duplicate": return "Duplikat innej widocznej oferty (ten sam identyfikator lub adres ogłoszenia)";
-    case "linked_property_rejected": return "Ta sama nieruchomość na innym portalu jest wykluczona (np. potwierdzona kamienica)";
+    case "linked_property_rejected": return "Ta sama nieruchomość została odrzucona przez operatora (ręcznie lub jako niedozwolony typ budynku)";
     case "filter_rejected": {
       const context = {
         price: row?.price ?? null, area: row?.area ?? null, pricePerSqm: row?.pricePerSqm ?? null, rooms: row?.rooms ?? null,
@@ -114,9 +114,10 @@ export type FinderPartition = {
  *   linked member of a grouped card) or in `excluded` with a reason;
  * - deduplication prefers the row from the best section, so a MATCHED copy
  *   is never hidden behind a REVIEW/duplicate copy of the same ad;
- * - a confirmed cross-portal group is MATCHED when any member matches, and
- *   is excluded entirely when any member is a property-level rejection
- *   (manual reject, confirmed tenement/house).
+ * - a confirmed cross-portal group is MATCHED when any member matches; an
+ *   operator rejection of any copy excludes the whole property, while a
+ *   disallowed building label on another portal sends the visible copies to
+ *   building verification instead of hiding a correctly described block.
  */
 export function partitionFinderRows(
   rows: readonly FinderRow[],
@@ -162,16 +163,41 @@ export function partitionFinderRows(
   for (const group of groups) {
     const memberIds = (group.linkedListings ?? []).map((member) => member.id);
     const members = memberIds.map((id) => byId.get(id)).filter((row): row is FinderRow => Boolean(row));
-    if (members.some((member) => member.finderSection === "EXCLUDED")) {
-      // Property-level rejections are already listed; their visible duplicates follow them out.
-      for (const member of members) if (member.finderSection !== "EXCLUDED") exclude(member, "linked_property_rejected", []);
+    const place = (card: FinderRow, section: Exclude<FinderSection, "EXCLUDED">) => {
+      const placed = { ...card, finderSection: section } as FinderRow;
+      if (section === "MATCHED") matched.push(placed);
+      else if (section === "REVIEW") review.push(placed);
+      else buildingVerification.push(placed);
+    };
+    const rejectedMembers = members.filter((member) => member.finderSection === "EXCLUDED");
+    const visibleMembers = members.filter((member) => member.finderSection !== "EXCLUDED");
+    if (rejectedMembers.length === 0) {
+      place(group as FinderRow, groupSection(members));
       continue;
     }
-    const section = groupSection(members);
-    const card = { ...group, finderSection: section } as FinderRow;
-    if (section === "MATCHED") matched.push(card);
-    else if (section === "REVIEW") review.push(card);
-    else buildingVerification.push(card);
+    if (visibleMembers.length === 0) continue; // already listed with their own reasons
+    // An operator decision about the property (manual reject, or the operator
+    // confirming a disallowed building type) applies to every portal copy.
+    const operatorRejected = rejectedMembers.some((member) => member.exclusion?.code === "manual_rejected" || member.buildingQualification?.source === "operator");
+    if (operatorRejected) {
+      for (const member of visibleMembers) exclude(member, "linked_property_rejected", []);
+      continue;
+    }
+    // Otherwise another portal's (possibly wrong) building label must not
+    // hide a correctly described block: the operator confirms, and an
+    // operator-confirmed allowed type settles it for the visible copies.
+    const [visibleCard] = groupPropertyResults(visibleMembers, options.grouping) as FinderRow[];
+    if (!visibleCard) continue;
+    if (visibleMembers.some((member) => member.buildingQualification?.reason === "building_type_confirmed_operator")) {
+      place(visibleCard, groupSection(visibleMembers));
+      continue;
+    }
+    place({
+      ...visibleCard,
+      decisionBucket: "REVIEW",
+      unknownFields: [...new Set([...(visibleCard.unknownFields ?? []), "buildingType"])],
+      buildingQualification: { status: "needs_verification", type: null, reason: "building_type_cross_portal_conflict", source: null },
+    }, "BUILDING_VERIFICATION");
   }
   return { matched, review, buildingVerification, excluded };
 }

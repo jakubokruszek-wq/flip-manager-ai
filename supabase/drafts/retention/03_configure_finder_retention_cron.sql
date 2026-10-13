@@ -1,5 +1,5 @@
 -- Reviewed configuration draft. Do not run as part of a build/deployment.
--- Requires operator approval AND migration 20261013122000 applied first.
+-- Requires operator approval AND 01_add_finder_operational_retention.sql applied first.
 --
 -- Stage 1 (safe, recommended first): a daily DRY-RUN only. It writes one row
 -- to public.finder_retention_runs with what WOULD be removed; nothing is
@@ -16,7 +16,7 @@ BEGIN
     RAISE EXCEPTION 'pg_cron is not available; stop without configuring jobs';
   END IF;
   IF to_regprocedure('public.finder_retention_run(boolean,integer,integer)') IS NULL THEN
-    RAISE EXCEPTION 'finder_retention_run is missing; apply migration 20261013122000 first';
+    RAISE EXCEPTION 'finder_retention_run is missing; apply 01_add_finder_operational_retention.sql first';
   END IF;
 END;
 $preflight$;

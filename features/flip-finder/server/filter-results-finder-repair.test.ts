@@ -311,3 +311,25 @@ test("concurrent scans reconciling the same listings while the Finder reads neve
   assert.deepEqual(new Set(final.results.map((result) => result.id)), new Set(expectMatched));
   assert.deepEqual(new Set(final.buildingVerificationResults.map((result) => result.id)), new Set(expectVerification));
 });
+
+test("a mislabelled tenement copy on another portal never hides the correct block: verification queue, then Dopasowane after the operator confirms", async () => {
+  const db = freshDb();
+  const identity = "portal_shared_unit_id:unit-269k";
+  db.seed("listings", [
+    listing("olx-block", { cross_source_identity: identity }),
+    listing("otodom-mislabelled", { source: "otodom", original_url: "https://www.otodom.pl/pl/oferta/x", building_type: "kamienica", cross_source_identity: identity }),
+  ]);
+  db.seed("listing_filter_matches", [membership("olx-block"), membership("otodom-mislabelled")]);
+  db.seed("finder_building_type_confirmations", []);
+  currentDb = db;
+  const before = await getFilterResults(FILTER_ID, false, NOW);
+  assert.equal(before?.results.length, 0, "an unresolved tenement claim never reaches Dopasowane");
+  assert.deepEqual(before?.buildingVerificationResults.map((result) => result.id), ["olx-block"]);
+  assert.equal(before?.buildingVerificationResults[0].buildingQualification?.reason, "building_type_cross_portal_conflict");
+  assert.deepEqual(before?.excludedResults.map((entry) => [entry.id, entry.code]), [["otodom-mislabelled", "filter_rejected"]]);
+
+  db.seed("finder_building_type_confirmations", [{ listing_id: "olx-block", building_type: "blok", confirmed_by: "operator-test", confirmed_at: "2026-10-13T09:00:00Z" }]);
+  const after = await getFilterResults(FILTER_ID, false, NOW);
+  assert.deepEqual(after?.results.map((result) => result.id), ["olx-block"]);
+  assert.equal(after?.buildingVerificationResults.length, 0);
+});

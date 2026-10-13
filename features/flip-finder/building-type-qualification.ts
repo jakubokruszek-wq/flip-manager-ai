@@ -31,7 +31,8 @@ export type BuildingQualificationReason =
   | "building_type_conflict"
   | "building_type_unknown"
   | "building_type_conflict_unresolved"
-  | "building_type_ambiguous_tenement_mention";
+  | "building_type_ambiguous_tenement_mention"
+  | "building_type_cross_portal_conflict";
 
 export type BuildingQualification = {
   status: BuildingQualificationStatus;
@@ -114,5 +115,6 @@ export function buildingQualificationLabel(qualification: Pick<BuildingQualifica
     case "building_type_unknown": return "Brak potwierdzonego typu budynku";
     case "building_type_conflict_unresolved": return "Sprzeczne informacje o typie budynku";
     case "building_type_ambiguous_tenement_mention": return "Typ tylko z danych źródła, a opis wspomina kamienice w okolicy";
+    case "building_type_cross_portal_conflict": return "Ta sama oferta na innym portalu ma niedozwolony typ budynku — potwierdź";
   }
 }
