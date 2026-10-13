@@ -94,3 +94,17 @@ test("OLX completion skips invalid total sale prices before persistence and coun
   assert.equal(completionDb.rows("olx_scan_jobs")[0]?.status, "completed");
   completionDb = null;
 });
+
+test("a late OLX completion (20:06 for a 07:30 run) does not move the filter's Finder cadence clock", async () => {
+  completionDb = new FakeFacebookSupabase()
+    .seed("olx_scan_jobs", [{ id: "job-late", status: "running", lease_token: "lease-late", worker_id: "cloudflare-olx-stage2", source_scan_id: "scan-late", search_filter_id: "filter-1", result_summary: null }])
+    .seed("source_scans", [{ id: "scan-late", search_filter_id: "filter-1", source: "olx", status: "running", started_at: "2026-10-13T07:30:00.000Z" }])
+    .seed("search_filters", [{ id: "filter-1", last_scanned_at: "2026-10-13T07:30:00.000Z" }]);
+  persistedPrices.length = 0;
+  const result = await completeOlxJob({ jobId: "job-late", leaseToken: "lease-late", workerId: "cloudflare-olx-stage2", fetched: 1, warnings: [], durationMs: 20, listings: [{ source: "olx", externalListingId: "valid", price: 238_000 }] as never });
+  assert.equal(result.status, "completed");
+  assert.equal(completionDb.rows("source_scans")[0]?.status, "completed", "the OLX source of its own run is still finalized");
+  assert.equal(completionDb.rows("olx_scan_jobs")[0]?.status, "completed");
+  assert.equal(completionDb.rows("search_filters")[0]?.last_scanned_at, "2026-10-13T07:30:00.000Z");
+  completionDb = null;
+});

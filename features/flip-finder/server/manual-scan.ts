@@ -115,14 +115,22 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
       throw statusError(500, error instanceof Error ? error.message : "Nie udało się sprawdzić kolejki OLX.");
     }
   }
-  let actualRunId = olxRunId ?? runId;
+  // OLX is isolated from the other portals: an OLX job still waiting in its
+  // own queue (possibly for hours) never pulls the other portals into its old
+  // run, and never blocks them. The other portals resume their own unfinished
+  // run or reserve a fresh one; an OLX-only filter keeps following its job.
+  let actualRunId = lockableSourceIds.length ? runId : olxRunId ?? runId;
   if (lockableSourceIds.length) {
     await failStaleScans(supabase, filter.id, lockableSourceIds);
     actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter, origin);
-    if (olxRunId && actualRunId !== olxRunId) throw statusError(429, "Filtr ma niezgodne, równoległe przebiegi skanu.");
   }
-  if (sources.some((source) => source.id === "olx") && !(await existingOlxScanResult(actualRunId, supabase))) {
-    await enqueueOlxJob(filter, actualRunId, supabase);
+  if (sources.some((source) => source.id === "olx")) {
+    if (olxRunId && olxRunId !== actualRunId) {
+      // At most one OLX job per filter in flight: no second job for the new run.
+      console.info("FINDER_OLX_JOB_STILL_QUEUED", { filterId: filter.id, olxRunId, runId: actualRunId });
+    } else if (!(await existingOlxScanResult(actualRunId, supabase))) {
+      await enqueueOlxJob(filter, actualRunId, supabase);
+    }
   }
   console.info("FINDER_SCAN_START_REQUEST", { filterId: filter.id, runId: actualRunId, requestedBy: origin, resumed: actualRunId !== runId });
   return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
@@ -243,6 +251,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   const scanStarted = Date.now();
   const ownedScans = new Map<string, ScanClock>();
   const sourceResults: SourceScanResult[] = [];
+  let olxQueueWarning: string | null = null;
   const filter = options.filter ?? await getSearchFilter(filterId);
   if (!filter) throw statusError(404, "Nie znaleziono filtra.");
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
@@ -323,8 +332,13 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
     if (sources.some((source) => source.id === "olx")) {
       try {
         const existing = await existingOlxScanResult(runId, supabase);
+        const olxRunId = existing ? null : await resumableOlxRunId(filterId, supabase);
         if (existing) {
           sourceResults.push(existing);
+        } else if (olxRunId && olxRunId !== runId) {
+          // The filter's OLX job from an earlier run is still in the OLX queue:
+          // it is not part of this run, and no second job is queued for it.
+          olxQueueWarning = `olx: OLX_PREVIOUS_JOB_IN_QUEUE: zadanie OLX z przebiegu ${olxRunId} wciąż czeka w kolejce; nie dodano drugiego.`;
         } else {
           await enqueueOlxJob(filter, runId, supabase);
           sourceResults.push((await existingOlxScanResult(runId, supabase)) ?? pendingResult("olx"));
@@ -347,10 +361,10 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
       throw statusError(500, sourceResults.map((result) => result.errorMessage).filter(Boolean).join(" ") || "Wszystkie źródła skanu zakończyły się błędem.");
     }
     const sum = (key: keyof Pick<SourceScanResult, "fetched" | "normalized" | "matched" | "listingsCreated" | "newMatches" | "updated" | "priceDrops" | "rejected">) => sourceResults.reduce((total, result) => total + result[key], 0);
-    const warnings = sourceResults.flatMap((result) => [
+    const warnings = [...sourceResults.flatMap((result) => [
       ...(result.warnings ?? []).map((warning) => `${result.source}: ${warning}`),
       ...(result.errorMessage ? [`${result.source}: ${result.errorMessage}`] : []),
-    ]);
+    ]), ...(olxQueueWarning ? [olxQueueWarning] : [])];
     const matchDiagnostics = mergeMatchDiagnosticSummaries(sourceResults.map((result) => result.matchDiagnostics));
     console.info("MATCH DIAGNOSTICS SUMMARY", JSON.stringify(matchDiagnostics));
     const { error: updateError } = await supabase.from("search_filters").update({ last_scanned_at: new Date().toISOString() }).eq("id", filterId).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
