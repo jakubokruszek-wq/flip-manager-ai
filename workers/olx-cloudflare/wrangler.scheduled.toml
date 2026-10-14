@@ -72,8 +72,10 @@ OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS = "120"
 OLX_CLOUD_SCRAPE_RESERVE_SECONDS = "35"
 OLX_CLOUD_SESSION_MAX_SECONDS = "45"
 OLX_CLOUD_KEEP_ALIVE_SECONDS = "20"
-# Required by scheduled mode (parseCloudConfig refuses anything else).
-OLX_CLOUD_MAX_JOBS_PER_DAY = "1"
+# Scheduled mode allows 1 or 2 (12 h schedule). The database limit
+# (olx_automation_control.max_claims_24h, default 1) decides; every job must
+# also fit the measured browser budget (last job cost + today's account usage).
+OLX_CLOUD_MAX_JOBS_PER_DAY = "2"
 OLX_CLOUD_MAX_HELD_JOBS = "1"
 OLX_CLOUD_MAX_JOBS_PER_INVOCATION = "1"
 OLX_CLOUD_ON_BUDGET_EXHAUSTED = "leave_queued"

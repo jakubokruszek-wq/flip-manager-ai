@@ -24,7 +24,8 @@ test("the GitHub schedule checks saved Warsaw settings every five minutes and st
   assert.match(endpoint, /runRadarCollectionPortion/u);
   assert.doesNotMatch(endpoint, /facebook_scan_jobs|source_scans|crm/u);
   assert.doesNotMatch(collector, /facebook_scan_jobs|source_scans|crm/u);
-  assert.match(collector, /enqueueRadarOlxJob/u, "OLX remains delegated to its separate existing queue");
+  assert.doesNotMatch(collector, /enqueueRadarOlxJob/u, "OLX left Radar: the collector never queues an OLX job");
+  assert.match(collector, /RADAR_REMOVED_SOURCES: ReadonlySet<string> = new Set\(\["olx"\]\)/u);
   assert.match(workflow, /MAX_REQUESTS:\s*["']24["']/u);
   assert.match(workflow, /MAX_ELAPSED_MS:\s*["']3300000["']/u);
   assert.match(runner, /AbortSignal\.timeout\(REQUEST_TIMEOUT_MS\)/u);

@@ -6,13 +6,14 @@ let authorized = true;
 let claimResult: unknown = { job: null, reason: "AUTOMATION_DISABLED" };
 let claimError: Error | null = null;
 const claims: string[] = [];
+const usages: unknown[] = [];
 mock.module("server-only", { defaultExport: {} });
 mock.module("@/features/flip-finder/server/olx-worker-auth", { namedExports: {
   authenticateOlxWorkerRequest: async (request: Request) => authorized ? { ok: true, body: await request.text() } : { ok: false, response: Response.json({ error: "OLX_WORKER_UNAUTHORIZED" }, { status: 401 }) },
 } });
 mock.module("@/features/flip-finder/server/olx-scheduled-claim", { namedExports: {
-  claimScheduledOlxJob: async (workerId: string) => { claims.push(workerId); if (claimError) throw claimError; return claimResult; },
-  parseScheduledClaimBody: (value: Record<string, unknown>) => { if (Object.keys(value).some((key) => key !== "workerId")) throw new Error("INVALID_SELECTOR"); return { workerId: String(value.workerId) }; },
+  claimScheduledOlxJob: async (workerId: string, usage: unknown) => { claims.push(workerId); usages.push(usage); if (claimError) throw claimError; return claimResult; },
+  parseScheduledClaimBody: (value: Record<string, unknown>) => { if (Object.keys(value).some((key) => key !== "workerId" && key !== "usage")) throw new Error("INVALID_SELECTOR"); return { workerId: String(value.workerId), usage: value.usage ?? null }; },
 } });
 const { POST } = await import("./route.ts");
 const request = (body: unknown) => new Request("http://localhost/api/olx-worker/claim-scheduled", { method: "POST", body: JSON.stringify(body) });
@@ -26,7 +27,9 @@ test("unsigned requests are rejected before any claim", async () => {
 
 test("returns the claim result with its reason; a selector is refused", async () => {
   claimResult = { job: null, reason: "NO_DUE_JOB" };
-  assert.deepEqual(await (await POST(request({ workerId: "cloudflare-olx-scheduled" }))).json(), { job: null, reason: "NO_DUE_JOB" });
+  const usage = { accountBrowserMs: 1, workerBrowserMs: 2, safeBudgetMs: 120_000, jobEstimateMs: 45_000 };
+  assert.deepEqual(await (await POST(request({ workerId: "cloudflare-olx-scheduled", usage }))).json(), { job: null, reason: "NO_DUE_JOB" });
+  assert.deepEqual(usages.at(-1), usage, "the usage report reaches the claim");
   const refused = await POST(request({ workerId: "cloudflare-olx-scheduled", jobId: "x" }));
   assert.equal(refused.status, 400);
 });

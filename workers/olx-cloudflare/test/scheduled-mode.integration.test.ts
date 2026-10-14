@@ -73,19 +73,65 @@ test("claims only the automatic Finder job through claim-scheduled and completes
   assert.equal(store.value?.jobsClaimed, 1);
 });
 
-test("second tick the same UTC day: the Worker's own 1-job cap stops before any request", async (t) => {
+test("12 h: with the database limit 2 the second job of the day runs, a third never; with limit 1 the second is refused", async (t) => {
   if (!chromium) { t.skip("local Chromium unavailable"); return; }
-  queue.enqueue({ id: "auto-1", idempotencyKey: "a:olx", requestedBy: "scheduler" });
+  queue.setMaxClaims(2);
   const store = memoryStore();
   const provider = chromium.provider(OK_PAGE);
-  await runBatch(deps(config(), provider, store), { maxJobs: 1, scheduled: true });
-  queue.enqueue({ id: "auto-2", idempotencyKey: "b:olx", requestedBy: "scheduler" });
-  const before = queue.requests.length;
+  for (const id of ["auto-1", "auto-2", "auto-3"]) queue.enqueue({ id, idempotencyKey: `${id}:olx`, requestedBy: "scheduler" });
+  const first = await runBatch(deps(config(), provider, store), { maxJobs: 1, scheduled: true });
   const second = await runBatch(deps(config(), provider, store), { maxJobs: 1, scheduled: true });
-  assert.equal(second.outcome, "paused");
-  assert.equal(second.stop?.code, "OLX_CLOUD_DAILY_JOB_CAP_REACHED");
+  assert.deepEqual([first.completed, second.completed], [1, 1], "08:00 and 20:00");
+  const before = queue.requests.length;
+  const third = await runBatch(deps(config(), provider, store), { maxJobs: 1, scheduled: true });
+  assert.equal(third.outcome, "paused");
+  assert.equal(third.stop?.code, "OLX_CLOUD_DAILY_JOB_CAP_REACHED", "the Worker's own cap of 2 per UTC day");
   assert.equal(queue.requests.length, before, "no claim, no rejection");
-  assert.equal(queue.jobs[1].status, "queued");
+  assert.equal(queue.jobs[2].status, "queued");
+
+  queue.setMaxClaims(1);
+  queue.enqueue({ id: "auto-4", idempotencyKey: "auto-4:olx", requestedBy: "scheduler" });
+  const refused = await runBatch(deps(config(), provider, memoryStore()), { maxJobs: 1, scheduled: true });
+  assert.equal(refused.claimReason, "DAILY_CLAIM_USED", "the database limit (default 1) decides first");
+});
+
+test("the measured cost of the last job becomes the estimate, is reported with every claim and gates the next one", async (t) => {
+  if (!chromium) { t.skip("local Chromium unavailable"); return; }
+  queue.setMaxClaims(2);
+  queue.enqueue({ id: "auto-1", idempotencyKey: "a:olx", requestedBy: "scheduler" });
+  const store = memoryStore();
+  await runBatch(deps(config(), chromium.provider(OK_PAGE), store), { maxJobs: 1, scheduled: true });
+  const measured = store.value?.lastJobBrowserMs ?? 0;
+  assert.ok(measured > 0, "the job's charged browser time is stored");
+  assert.deepEqual(Object.keys(queue.usageReports[0] ?? {}).sort(), ["accountBrowserMs", "jobEstimateMs", "safeBudgetMs", "workerBrowserMs"]);
+  assert.equal(queue.usageReports[0]?.safeBudgetMs, 120_000);
+  assert.equal(queue.usageReports[0]?.jobEstimateMs, 35_000, "before any job: the page reserve");
+
+  // A real job measured at 80 s: with 50 s already used on the account it no longer fits 120 s.
+  queue.enqueue({ id: "auto-2", idempotencyKey: "b:olx", requestedBy: "scheduler" });
+  store.value = { ...store.value!, lastJobBrowserMs: 80_000 };
+  const before = queue.requests.length;
+  const blocked = await runBatch(deps(config(), { launch: async () => { throw new Error("no"); } }, store, async () => 50_000), { maxJobs: 1, scheduled: true });
+  assert.equal(blocked.stop?.code, "OLX_CLOUD_ACCOUNT_BUDGET_EXHAUSTED");
+  assert.equal(queue.requests.length, before, "refused before any claim");
+  // The measured cost survives the UTC day reset.
+  store.value = { ...store.value!, day: "2000-01-01" };
+  const nextDay = await runBatch(deps(config(), { launch: async () => { throw new Error("no"); } }, store, async () => 100_000), { maxJobs: 1, scheduled: true });
+  assert.equal(nextDay.stop?.code, "OLX_CLOUD_ACCOUNT_BUDGET_EXHAUSTED");
+  assert.equal(store.value?.lastJobBrowserMs, 80_000);
+});
+
+test("the database refuses on budget or missing usage: nothing scraped, reason reported", async () => {
+  queue.enqueue({ id: "auto-1", idempotencyKey: "a:olx", requestedBy: "scheduler" });
+  const provider = { launch: async () => { throw new Error("must not launch"); } };
+  for (const reason of ["BROWSER_BUDGET_INSUFFICIENT", "BROWSER_USAGE_UNKNOWN"] as const) {
+    const d = deps(config(), provider, memoryStore());
+    d.claimScheduled = async () => ({ job: null, reason });
+    const summary = await runBatch(d, { maxJobs: 1, scheduled: true });
+    assert.equal(summary.outcome, "idle");
+    assert.equal(summary.claimReason, reason);
+  }
+  assert.equal(queue.jobs[0].status, "queued");
 });
 
 test("STOP in the database: AUTOMATION_DISABLED, nothing claimed, no browser", async () => {
@@ -168,7 +214,7 @@ test("a job that is not an automatic Finder job is never scraped (defence in dep
 test("scheduled mode is refused unless the reviewed limits are set", () => {
   const base = { ...tomlVars, OLX_WORKER_SECRET: FAKE_SECRET };
   assert.ok(parseCloudConfig(base).ok, "the committed wrangler.scheduled.toml is valid");
-  for (const [key, value] of [["OLX_CLOUD_MAX_JOBS_PER_DAY", "0"], ["OLX_CLOUD_MAX_JOBS_PER_DAY", "2"], ["OLX_CLOUD_MAX_HELD_JOBS", "2"], ["OLX_CLOUD_MAX_JOBS_PER_INVOCATION", "2"], ["OLX_CLOUD_ON_BUDGET_EXHAUSTED", "fail_jobs"], ["OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS", "900"], ["OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS", "400"]]) {
+  for (const [key, value] of [["OLX_CLOUD_MAX_JOBS_PER_DAY", "0"], ["OLX_CLOUD_MAX_JOBS_PER_DAY", "3"], ["OLX_CLOUD_MAX_HELD_JOBS", "2"], ["OLX_CLOUD_MAX_JOBS_PER_INVOCATION", "2"], ["OLX_CLOUD_ON_BUDGET_EXHAUSTED", "fail_jobs"], ["OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS", "900"], ["OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS", "400"]]) {
     const result = parseCloudConfig({ ...base, [key]: value });
     assert.equal(result.ok, false, `${key}=${value} must be refused`);
   }
@@ -202,7 +248,7 @@ test("account usage from history(): only today's UTC part, open sessions until n
   assert.equal(accountBrowserMsToday([], now), 0);
 });
 
-test("resource model: 96 Cron ticks/day; at most 1 job and 120 s of 600 s browser time per day", () => {
+test("resource model: 96 Cron ticks/day; at most 2 jobs and 120 s of 600 s browser time per day", () => {
   assert.match(SCHEDULED_TOML, /^crons = \["\*\/15 \* \* \* \*"\]$/m);
   const ticks = 24 * 60 / 15;
   assert.equal(ticks, 96);

@@ -174,21 +174,15 @@ test("completed and terminal 403 source checkpoints advance without retrying the
   assert.equal(fetchCalls, 0);
 });
 
-test("OLX is queued once in its Radar context and creates no Finder source scan or membership", async () => {
+test("OLX left Radar: a selection with OLX never queues it, creates no Finder rows and keeps the other portals", async () => {
   const db = fakeDb();
-  fetchFixture = async () => { throw new Error("OLX must use its existing async worker queue"); };
-  const claim = await claimOrCreateRadarRun(ownerId, ["olx"], db as never);
-  if (claim.kind !== "claimed") throw new Error("expected a claimed run");
-  const first = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
-  assert.equal(first.status, "running");
-  assert.equal(first.sourceStatuses.olx, "running");
-  assert.equal(db.tables.olx_scan_jobs.length, 1);
-  assert.equal(db.tables.olx_scan_jobs[0].context_type, "price_radar");
-  assert.equal(db.tables.olx_scan_jobs[0].source_scan_id, null);
-  assert.equal(db.tables.olx_scan_jobs[0].search_filter_id, null);
-  assert.equal(db.tables.olx_scan_jobs[0].radar_run_id, claim.run.id);
-  await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
-  assert.equal(db.tables.olx_scan_jobs.length, 1, "repeated scheduler portions reuse the idempotent row");
+  fetchFixture = async () => { throw new Error("no fetch expected in this portion"); };
+  const onlyOlx = await claimOrCreateRadarRun(ownerId, ["olx"], db as never);
+  if (onlyOlx.kind !== "claimed") throw new Error("expected a claimed run");
+  assert.ok(!onlyOlx.run.checkpoint.sourceQueue.includes("olx"), "a legacy OLX-only selection means all current Radar sources");
+  assert.ok(onlyOlx.run.checkpoint.sourceQueue.length > 0);
+  assert.equal((db.tables.olx_scan_jobs ?? []).length, 0);
+  assert.ok(!db.accessedTables.has("olx_scan_jobs"));
   assert.ok(!db.accessedTables.has("source_scans"));
   assert.ok(!db.accessedTables.has("listing_filter_matches"));
 });

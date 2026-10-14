@@ -139,7 +139,7 @@ test("the Radar PWA keeps refreshing across app switches, lost network, server e
   assert.match(performance, /aktywna praca 4 min 0 s/u);
   assert.match(performance, /Przekazania między porcjami: 8 · łącznie 24 s \(średnio 3 s\)/u);
   assert.match(performance, /Oferty\.net:.*lista 9, szczegóły 142, kontekst 1 · oferty 142 · 47\/min/u);
-  assert.match(performance, /Worker OLX: jeszcze nie przekazano/u, "OLX waiting is reported separately from the HTTP portals");
+  assert.doesNotMatch(performance, /Worker OLX/u, "OLX left Radar: a run that never handed OLX over shows no OLX worker line");
 
   // 2. Lost network: an understandable message plus the last known progress, never "Failed to fetch".
   networkDown = true;

@@ -115,7 +115,7 @@ jobs:
           }
           expect OLX_CLOUD_ENABLED 0
           expect OLX_CLOUD_CLAIM_MODE scheduled
-          expect OLX_CLOUD_MAX_JOBS_PER_DAY 1
+          expect OLX_CLOUD_MAX_JOBS_PER_DAY 2
           expect OLX_CLOUD_MAX_JOBS_PER_INVOCATION 1
           expect OLX_CLOUD_MAX_HELD_JOBS 1
           expect OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS 120
@@ -138,7 +138,7 @@ jobs:
           set -euo pipefail
           npm test
           npx wrangler deploy --dry-run --outdir dist-scheduled --config "$SCHEDULED_CONFIG" | tee dry-run.log
-          for expected in 'env.OLX_CLOUD_ENABLED ("0")' 'env.OLX_CLOUD_CLAIM_MODE ("scheduled")' 'env.OLX_CLOUD_MAX_JOBS_PER_DAY ("1")' 'env.OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS ("120")'; do
+          for expected in 'env.OLX_CLOUD_ENABLED ("0")' 'env.OLX_CLOUD_CLAIM_MODE ("scheduled")' 'env.OLX_CLOUD_MAX_JOBS_PER_DAY ("2")' 'env.OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS ("120")'; do
             grep -Fq "$expected" dry-run.log || { echo "::error::Dry-run nie pokazuje: $expected"; exit 1; }
           done
 
@@ -242,7 +242,7 @@ jobs:
             || { echo "::error::Włączona wersja $version nie została potwierdzona"; exit 1; }
           {
             echo "## OLX automat — WŁĄCZONY"
-            echo "- Wersja \`$version\`. Co 15 min Cron może odebrać najwyżej 1 automatyczne zadanie OLX Findera (1 na dobę),"
+            echo "- Wersja \`$version\`. Co 15 min Cron może odebrać najwyżej 1 automatyczne zadanie OLX Findera (≤ 2 na dobę, w budżecie przeglądarki),"
             echo "  wyłącznie gdy \`olx_automation_control.scheduled_claim_enabled = true\` (domyślnie false)."
             echo "- STOP: akcja \`disable\` albo \`scripts/olx-cloud-scheduled.stop.sql\`."
           } >> "$GITHUB_STEP_SUMMARY"

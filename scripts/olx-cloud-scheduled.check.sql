@@ -35,3 +35,30 @@ select error_code, count(*), max(finished_at) as last
   from public.olx_scan_jobs
  where requested_by = 'scheduler' and status = 'failed'
  group by 1 order by 3 desc;
+
+-- ---- Slot schedule (migration 20261016120000) ----
+
+-- 6. Schedule per filter: start time, interval, durable anchor, current/next slot (Warsaw).
+select f.name, to_char(f.finder_olx_start_time, 'HH24:MI') as start_time, f.finder_olx_scan_interval_minutes / 60 as interval_h,
+       f.finder_olx_schedule_anchor as anchor_local, w.current_slot, w.next_slot
+  from public.search_filters f
+  cross join lateral public.finder_olx_slot_window(f.finder_olx_schedule_anchor, f.finder_olx_scan_interval_minutes, now()) w
+ where f.is_active and f.sources ? 'olx'
+ order by f.name;
+
+-- 7. Last slots: planned vs actual start (delay), job result; missed slots with their cause.
+select f.name, s.slot_at as planned, s.status as slot, s.reason, j.started_at as actual_start,
+       j.started_at - s.slot_at as delay, j.status as job, j.error_code, j.worker_id
+  from public.finder_olx_slots s
+  join public.search_filters f on f.id = s.search_filter_id
+  left join public.olx_scan_jobs j on j.id = s.job_id
+ order by s.slot_at desc
+ limit 20;
+
+-- 8. Browser Run budget reported by the scheduled Worker (today, UTC).
+select * from public.olx_cloud_budget_today(now());
+
+-- 9. Radar: no OLX job may be queued or running (expected: 0 rows); retired ones are audited.
+select id, status, error_code, result_summary->'radarOlxRemoved' as audit
+  from public.olx_scan_jobs where context_type = 'price_radar' and status in ('queued', 'running');
+select status, error_code, count(*) from public.olx_scan_jobs where context_type = 'price_radar' group by 1, 2 order by 1, 2;

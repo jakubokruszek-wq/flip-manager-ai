@@ -105,7 +105,7 @@ export function checkCloudConfig(environment: Environment): Record<string, unkno
   const warnings: string[] = [];
   if (parsed.ok && parsed.config.dailyBrowserLimitMs > FREE_PLAN_DAILY_BROWSER_MS) warnings.push("OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS > 600: wymaga planu Workers Paid.");
   if (parsed.ok && parsed.config.claimMode === "auto") warnings.push("Tryb auto: alarm odbiera wszystkie zadania OLX (Finder i Radar).");
-  if (parsed.ok && parsed.config.claimMode === "scheduled") warnings.push("Tryb scheduled: Cron odbiera najwyżej 1 automatyczne zadanie OLX Findera na dobę (claim-scheduled).");
+  if (parsed.ok && parsed.config.claimMode === "scheduled") warnings.push(`Tryb scheduled: Cron odbiera najwyżej ${parsed.config.maxJobsPerDay} automatyczne zadanie OLX Findera na dobę (claim-scheduled), każde tylko gdy mieści się w budżecie przeglądarki.`);
   return {
     killSwitch: stringValue(environment.OLX_CLOUD_ENABLED) === "1" ? "enabled" : "disabled",
     stage1Lock: stringValue(environment.OLX_CLOUD_STAGE1_LOCK) === "1",
@@ -153,7 +153,8 @@ export function parseCloudConfig(environment: Environment): ConfigResult {
     if (policy !== "fail_jobs" && policy !== "leave_queued") throw new Error("OLX_CLOUD_ON_BUDGET_EXHAUSTED must be fail_jobs or leave_queued.");
     if (claimMode === "scheduled") {
       // Unattended mode only with the reviewed safety limits; anything looser is refused, not clamped.
-      if (maxJobsPerDay !== 1) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_MAX_JOBS_PER_DAY=1.");
+      // 2 = the 12 h schedule; every job is still gated by the measured browser budget.
+      if (maxJobsPerDay !== 1 && maxJobsPerDay !== 2) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_MAX_JOBS_PER_DAY of 1 or 2.");
       if (maxHeldJobs !== 1 || maxJobsPerInvocation !== 1) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_MAX_HELD_JOBS=1 and OLX_CLOUD_MAX_JOBS_PER_INVOCATION=1.");
       if (policy !== "leave_queued") throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_ON_BUDGET_EXHAUSTED=leave_queued.");
       if (dailyBrowserLimitMs > FREE_PLAN_DAILY_BROWSER_MS) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS <= 600 (Workers Free).");

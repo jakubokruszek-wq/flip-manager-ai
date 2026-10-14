@@ -7,17 +7,20 @@ import {
 import type { WorkerJob } from "../../olx-browser/src/api-client.ts";
 
 /** Why the server handed out no job (claim_scheduled_finder_olx_job). */
-export type ScheduledClaimReason = "AUTOMATION_DISABLED" | "OLX_JOB_RUNNING" | "DAILY_CLAIM_USED" | "NO_DUE_JOB";
+export type ScheduledClaimReason = "AUTOMATION_DISABLED" | "OLX_JOB_RUNNING" | "DAILY_CLAIM_USED" | "NO_DUE_JOB" | "BROWSER_USAGE_UNKNOWN" | "BROWSER_BUDGET_INSUFFICIENT";
+/** Reported with every claim; the database keeps it (olx_cloud_budget) and gates enqueue and claim on it. */
+export type ScheduledClaimUsage = { accountBrowserMs: number; workerBrowserMs: number; safeBudgetMs: number; jobEstimateMs: number };
 export type ScheduledClaim = { job: WorkerJob | null; reason: ScheduledClaimReason | null };
 
 /**
- * POST /api/olx-worker/claim-scheduled with body exactly `{ workerId }` (same
+ * POST /api/olx-worker/claim-scheduled with body `{ workerId, usage }` (same
  * HMAC as /claim). The server decides which automatic Finder job, if any, is
- * due; the Worker has no selector and cannot ask for anything else.
+ * due; the Worker has no selector and cannot ask for anything else. `usage` is
+ * this Worker's measured Browser Run usage of today.
  */
 export function createScheduledClaimer(config: { apiUrl: URL; secret: string; workerId: string }) {
-  return async (signal?: AbortSignal): Promise<ScheduledClaim> => {
-    const body = JSON.stringify({ workerId: config.workerId });
+  return async (usage: ScheduledClaimUsage, signal?: AbortSignal): Promise<ScheduledClaim> => {
+    const body = JSON.stringify({ workerId: config.workerId, usage });
     const url = new URL("/api/olx-worker/claim-scheduled", config.apiUrl);
     const auth = createWorkerAuthHeaders({ secret: config.secret, method: "POST", pathname: url.pathname, body });
     const response = await fetch(url, {

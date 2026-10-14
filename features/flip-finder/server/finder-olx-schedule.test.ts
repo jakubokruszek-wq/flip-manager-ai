@@ -221,7 +221,7 @@ test("an OLX failure never stops the portals: RPC error, missing function, timeo
   }
 });
 
-test("a global budget reason ends the tick; at most one OLX job per tick across filters", async () => {
+test("a budget reason does not end the tick (every open slot is evaluated); a missing function does; at most one job per tick", async () => {
   const asked: string[] = [];
   const decide = (reason: string | null, decision = "skipped") => async (candidate: { id: string }) => {
     asked.push(candidate.id);
@@ -231,6 +231,9 @@ test("a global budget reason ends the tick; at most one OLX job per tick across 
   try {
     const filters = [filter(FLIP), filter(OTHER)];
     await runFinderOlxSchedulerPhase(filters, decide("AUTOMATIC_DAILY_BUDGET_USED") as never);
+    assert.deepEqual(asked, [FLIP, OTHER]);
+    asked.length = 0;
+    await runFinderOlxSchedulerPhase(filters, decide("OLX_SCHEDULE_UNAVAILABLE") as never);
     assert.deepEqual(asked, [FLIP]);
     asked.length = 0;
     await runFinderOlxSchedulerPhase(filters, decide(null, "enqueued") as never);
@@ -269,7 +272,11 @@ test("an OLX-only filter gets OLX from its own schedule and never starts an empt
 test("Finder reports the OLX decision in readable Polish", () => {
   assert.match(olxScheduleNote(undefined), /^olx: OLX_SEPARATE_SCHEDULE:/);
   const skipped = parseDecision(FLIP, { decision: "skipped", reason: "SHARED_DAILY_BUDGET_USED", next_allowed_at: "2026-10-14T07:30:00+00:00", shared_limit: 1, total_jobs_in_window: 1 }, 1);
-  assert.equal(olxScheduleNote(skipped), "olx: OLX_SKIPPED_SHARED_DAILY_BUDGET_USED: wykorzystany wspólny budżet OLX na 24 h (ręczne skany, Radar cen); następny dopuszczalny termin: 2026-10-14T07:30:00+00:00.");
+  assert.equal(olxScheduleNote(skipped), "olx: OLX_SKIPPED_SHARED_DAILY_BUDGET_USED: wykorzystany wspólny budżet OLX na 24 h (razem z ręcznymi skanami Findera); następny dopuszczalny termin: 2026-10-14T07:30:00+00:00.");
+  const budget = parseDecision(FLIP, { decision: "skipped", reason: "BROWSER_BUDGET_INSUFFICIENT", start_time: "08:00", slot_at: "2026-10-14T06:00:00+00:00", browser_budget: { remaining_ms: 30_000, fits_one_job: false } }, 1);
+  assert.match(olxScheduleNote(budget), /^olx: OLX_SKIPPED_BROWSER_BUDGET_INSUFFICIENT: brak dziennego budżetu przeglądarki Cloudflare/);
+  assert.equal(budget.browserBudget?.remainingMs, 30_000);
+  assert.equal(budget.schedule?.startTime, "08:00");
   assert.equal(skipped.budget?.totalJobs, 1);
   assert.equal(parseDecision(FLIP, { decision: "skipped", reason: "SOMETHING_NEW" }, 1).reason, "OLX_SCHEDULE_CHECK_FAILED", "an unknown reason is not trusted");
 });

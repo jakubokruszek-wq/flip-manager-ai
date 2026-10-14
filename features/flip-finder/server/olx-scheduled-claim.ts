@@ -14,15 +14,21 @@ import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
  * selective claim and Price Radar are unchanged.
  */
 
-export type ScheduledClaimReason = "AUTOMATION_DISABLED" | "OLX_JOB_RUNNING" | "DAILY_CLAIM_USED" | "NO_DUE_JOB";
+export type ScheduledClaimReason = "AUTOMATION_DISABLED" | "OLX_JOB_RUNNING" | "DAILY_CLAIM_USED" | "NO_DUE_JOB" | "BROWSER_USAGE_UNKNOWN" | "BROWSER_BUDGET_INSUFFICIENT";
+/** Browser Run usage the scheduled Worker reports with every claim (migration 20261016120000). */
+export type ScheduledClaimUsage = { accountBrowserMs: number; workerBrowserMs: number; safeBudgetMs: number; jobEstimateMs: number };
 export type ScheduledClaimResult = { job: ClaimedOlxJob | null; reason: ScheduledClaimReason | null };
 
-const REASONS = new Set<string>(["AUTOMATION_DISABLED", "OLX_JOB_RUNNING", "DAILY_CLAIM_USED", "NO_DUE_JOB"]);
+const REASONS = new Set<string>(["AUTOMATION_DISABLED", "OLX_JOB_RUNNING", "DAILY_CLAIM_USED", "NO_DUE_JOB", "BROWSER_USAGE_UNKNOWN", "BROWSER_BUDGET_INSUFFICIENT"]);
 
-export async function claimScheduledOlxJob(workerId: string, client?: DatabaseClient): Promise<ScheduledClaimResult> {
+/**
+ * The usage report travels to the database as is; the SQL function validates
+ * it and refuses the claim (BROWSER_USAGE_UNKNOWN) when it is missing or bad.
+ */
+export async function claimScheduledOlxJob(workerId: string, usage: ScheduledClaimUsage | null = null, client?: DatabaseClient): Promise<ScheduledClaimResult> {
   if (workerId.trim().length < 3 || workerId.length > 100) throw new Error("INVALID_WORKER_ID");
   const supabase = client ?? createOlxWorkerAdminClient();
-  const result = await supabase.rpc("claim_scheduled_finder_olx_job", { p_worker_id: workerId, p_lease_seconds: 120 });
+  const result = await supabase.rpc("claim_scheduled_finder_olx_job", { p_worker_id: workerId, p_lease_seconds: 120, p_usage: usage });
   // A missing function (migration not applied) fails closed: nothing is claimed.
   if (result.error) throw new Error(result.error.code === "PGRST202" || result.error.code === "42883" ? "OLX_SCHEDULED_CLAIM_UNAVAILABLE" : `OLX_JOB_CLAIM_FAILED: ${result.error.message}`);
   return parseScheduledClaim(result.data);
@@ -57,12 +63,20 @@ export function parseScheduledClaim(value: unknown): ScheduledClaimResult {
   };
 }
 
-/** Request body: exactly `{ workerId }`. No job id, filter or "oldest" selector. */
-export function parseScheduledClaimBody(value: unknown): { workerId: string } {
+/**
+ * Request body: `{ workerId, usage? }`. No job id, filter or "oldest" selector.
+ * `usage` must be exactly the four numeric fields; a missing usage is passed on
+ * as null and the database refuses the claim.
+ */
+export function parseScheduledClaimBody(value: unknown): { workerId: string; usage: ScheduledClaimUsage | null } {
   const row = asRow(value);
   if (!row || typeof row.workerId !== "string" || !row.workerId) throw new Error("INVALID_PAYLOAD");
-  if (Object.keys(row).some((key) => key !== "workerId")) throw new Error("INVALID_SELECTOR");
-  return { workerId: row.workerId };
+  if (Object.keys(row).some((key) => key !== "workerId" && key !== "usage")) throw new Error("INVALID_SELECTOR");
+  if (row.usage === undefined || row.usage === null) return { workerId: row.workerId, usage: null };
+  const usage = asRow(row.usage);
+  const keys = ["accountBrowserMs", "workerBrowserMs", "safeBudgetMs", "jobEstimateMs"] as const;
+  if (!usage || Object.keys(usage).some((key) => !(keys as readonly string[]).includes(key)) || keys.some((key) => typeof usage[key] !== "number" || !Number.isFinite(usage[key]))) throw new Error("INVALID_USAGE");
+  return { workerId: row.workerId, usage: Object.fromEntries(keys.map((key) => [key, usage[key]])) as ScheduledClaimUsage };
 }
 
 export type ExpiredScheduledJobs = { unclaimedExpired: number; leaseExpired: number };

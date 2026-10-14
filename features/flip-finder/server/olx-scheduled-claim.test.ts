@@ -18,8 +18,13 @@ const job = {
   request_url: "https://www.olx.pl/nieruchomosci/mieszkania/sprzedaz/lodz/", lease_token: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", leased_until: "2026-10-15T07:47:00Z", attempts: 1,
 };
 
-test("payload is exactly { workerId }: no job id, filter or other selector", () => {
-  assert.deepEqual(parseScheduledClaimBody({ workerId: "cloudflare-olx-scheduled" }), { workerId: "cloudflare-olx-scheduled" });
+test("payload is { workerId, usage? }: no job id, filter or other selector; usage has exactly four numbers", () => {
+  assert.deepEqual(parseScheduledClaimBody({ workerId: "cloudflare-olx-scheduled" }), { workerId: "cloudflare-olx-scheduled", usage: null });
+  const usage = { accountBrowserMs: 1, workerBrowserMs: 2, safeBudgetMs: 120_000, jobEstimateMs: 45_000 };
+  assert.deepEqual(parseScheduledClaimBody({ workerId: "cloudflare-olx-scheduled", usage }), { workerId: "cloudflare-olx-scheduled", usage });
+  assert.throws(() => parseScheduledClaimBody({ workerId: "w-1", usage: { ...usage, extra: 1 } }), /INVALID_USAGE/);
+  assert.throws(() => parseScheduledClaimBody({ workerId: "w-1", usage: { ...usage, safeBudgetMs: "120000" } }), /INVALID_USAGE/);
+  assert.throws(() => parseScheduledClaimBody({ workerId: "w-1", usage: [] }), /INVALID_USAGE/);
   assert.throws(() => parseScheduledClaimBody({ workerId: "cloudflare-olx-scheduled", jobId: job.id }), /INVALID_SELECTOR/);
   assert.throws(() => parseScheduledClaimBody({ workerId: "cloudflare-olx-scheduled", filterId: "x" }), /INVALID_SELECTOR/);
   assert.throws(() => parseScheduledClaimBody({}), /INVALID_PAYLOAD/);
@@ -29,12 +34,13 @@ test("payload is exactly { workerId }: no job id, filter or other selector", () 
 test("calls only claim_scheduled_finder_olx_job and maps the job; reasons pass through", async () => {
   calls.length = 0;
   rpcResult = { data: { job, reason: null }, error: null };
-  const claimed = await claimScheduledOlxJob("cloudflare-olx-scheduled");
-  assert.deepEqual(calls, [{ fn: "claim_scheduled_finder_olx_job", args: { p_worker_id: "cloudflare-olx-scheduled", p_lease_seconds: 120 } }]);
+  const usage = { accountBrowserMs: 10_000, workerBrowserMs: 5_000, safeBudgetMs: 120_000, jobEstimateMs: 45_000 };
+  const claimed = await claimScheduledOlxJob("cloudflare-olx-scheduled", usage);
+  assert.deepEqual(calls, [{ fn: "claim_scheduled_finder_olx_job", args: { p_worker_id: "cloudflare-olx-scheduled", p_lease_seconds: 120, p_usage: usage } }]);
   assert.equal(claimed.job?.id, job.id);
   assert.equal(claimed.job?.contextType, "finder");
   assert.equal(claimed.job?.radarRunLeaseToken, null);
-  for (const reason of ["AUTOMATION_DISABLED", "OLX_JOB_RUNNING", "DAILY_CLAIM_USED", "NO_DUE_JOB"]) {
+  for (const reason of ["AUTOMATION_DISABLED", "OLX_JOB_RUNNING", "DAILY_CLAIM_USED", "NO_DUE_JOB", "BROWSER_USAGE_UNKNOWN", "BROWSER_BUDGET_INSUFFICIENT"]) {
     rpcResult = { data: { job: null, reason }, error: null };
     assert.deepEqual(await claimScheduledOlxJob("cloudflare-olx-scheduled"), { job: null, reason });
   }

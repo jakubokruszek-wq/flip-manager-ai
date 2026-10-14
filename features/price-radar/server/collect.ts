@@ -11,7 +11,6 @@ import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, rejectedRadarVerificationExternalIds, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
-import { enqueueRadarOlxJob } from "@/features/price-radar/server/radar-olx-queue";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
 import type { RadarCheckpoint, RadarRun, RadarRunMetrics, RadarRunStatus, RadarSearchCriteria, RadarSource, RadarSourceMetrics, RadarWaitingReason } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
@@ -70,11 +69,35 @@ const DETAIL_DIAGNOSTIC_SAMPLE_LIMIT = 5;
 export const RADAR_STOPPED_BY_OPERATOR = "RADAR_STOPPED_BY_OPERATOR";
 const DETAIL_DIAGNOSTIC_FIELDS = new Set(["total_price", "area", "rooms", "floor", "location", "city_lodz", "district", "building_type", "market_type", "apartment_sale", "finish_evidence", "renovation_completion", "renovation_recency", "move_in_readiness", "turnkey_finish", "active_listing", "identity"]);
 
+/**
+ * Sources removed from Radar for good. OLX stays a Flip Finder-only source:
+ * Radar never selects, queues, resumes or samples it (docs/radar-olx-removal.md).
+ */
+export const RADAR_REMOVED_SOURCES: ReadonlySet<string> = new Set(["olx"]);
+export const RADAR_OLX_REMOVED = "RADAR_OLX_REMOVED";
+
 /** Radar may only use sources that are both in the shared schema gate and have a registered adapter. */
 export const RADAR_SOURCES: RadarSource[] = SCHEMA_READY_SOURCE_IDS.filter((id) => {
+  if (RADAR_REMOVED_SOURCES.has(id)) return false;
   const filter = syntheticCriteria(id as RadarSource);
   return activeSources(filter).some((source) => source.id === id);
 });
+
+/**
+ * A run created before OLX left Radar may still list it. Its OLX stage is
+ * closed explicitly and auditably (failed + RADAR_OLX_REMOVED), never queued
+ * or resumed; rows already saved stay. Returns true when it changed anything.
+ */
+export function retireRadarOlxSource(checkpoint: RadarCheckpoint): boolean {
+  if (!checkpoint.sourceQueue.includes("olx")) return false;
+  const status = checkpoint.sourceStatuses.olx;
+  if (status === "failed" && checkpoint.sourceErrors.olx?.startsWith(RADAR_OLX_REMOVED)) return false;
+  if (status === "completed" || status === "partial" || status === "failed") return false;
+  checkpoint.sourceStatuses.olx = "failed";
+  checkpoint.perSourceCursor.olx = SOURCE_DONE_CURSOR;
+  checkpoint.sourceErrors.olx = `${RADAR_OLX_REMOVED}: OLX usunięty z Radaru cen (tylko Flip Finder); etap pominięty, zadania OLX nie zlecono ani nie wznowiono (poprzedni status: ${status ?? "brak"}).`;
+  return true;
+}
 
 function syntheticCriteria(sourceId: RadarSource, searchCriteria?: RadarSearchCriteria): SearchFilter {
   return {
@@ -210,7 +233,10 @@ export async function requestRadarRunTermination(ownerId: string, expectedRunId:
 /** The DB RPC serializes claims by owner and returns a fenced lease token. */
 export async function claimOrCreateRadarRun(ownerId: string, selectedSources: readonly RadarSource[] = RADAR_SOURCES, supabase: SupabaseClient = createAdminClient(), searchCriteria?: RadarSearchCriteria): Promise<RadarClaimResult> {
   const allowed = new Set(RADAR_SOURCES);
-  const sourceQueue = selectedSources.length ? selectedSources.filter((source) => allowed.has(source)) : [...RADAR_SOURCES];
+  // Removed sources (OLX) are dropped before the "no selection = all" rule, so
+  // a legacy selection of only OLX means every current Radar source, never OLX.
+  const selected = selectedSources.filter((source) => allowed.has(source));
+  const sourceQueue = selected.length ? selected : [...RADAR_SOURCES];
   const initialCheckpoint = defaultCheckpoint(sourceQueue, searchCriteria);
   const { data, error } = await supabase.rpc("claim_price_radar_run", {
     p_owner_id: ownerId,
@@ -249,17 +275,10 @@ export async function resumeExistingRadarRun(ownerId: string, expectedRunId: str
   if (!Number.isInteger(checkpoint.currentSourceIndex) || checkpoint.currentSourceIndex < 0 || checkpoint.currentSourceIndex > checkpoint.sourceQueue.length
     || checkpoint.sourceQueue.some((source) => !Object.hasOwn(checkpoint.sourceStatuses, source))) return { kind: "blocked", reason: "inconsistent_run" };
   if (nextUnfinishedSourceIndex(checkpoint, checkpoint.currentSourceIndex) === null) return { kind: "blocked", reason: "inconsistent_run" };
-  if (checkpoint.sourceQueue.some((source) => source === "olx" && checkpoint.sourceStatuses.olx === "running")) {
-    const job = await supabase.from("olx_scan_jobs").select("status")
-      .eq("context_type", "price_radar").eq("radar_owner_id", ownerId).eq("radar_run_id", expectedRunId)
-      .maybeSingle();
-    // The separate worker keeps ownership while a queued/running reservation
-    // exists. A terminal job, however, must release the Radar checkpoint so
-    // collect() can record its actual outcome and continue later portals.
-    if (job.error || (job.data?.status !== "failed" && job.data?.status !== "completed")) {
-      return { kind: "blocked", reason: "olx_queue_owns_source" };
-    }
-  }
+  // OLX left Radar: a legacy OLX stage no longer owns the run. Resuming never
+  // waits for, requeues or resumes an OLX job; the next portion closes the
+  // stage with RADAR_OLX_REMOVED (retireRadarOlxSource). A still-live legacy
+  // job loses its Radar lease here and can no longer write this run.
 
   const leaseToken = randomUUID();
   let update = supabase.from("price_radar_runs").update({
@@ -402,21 +421,15 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   const resumableThisPortion: RadarSource[] = [];
   const pageCaches = new Map<RadarSource, Map<string, { html: string; finalUrl: string }>>();
   const pickNextSource = (): RadarSource | null => {
-    // A legacy checkpoint whose OLX stage is owned by the worker runs nothing
-    // else: the worker's finalize replaces the whole checkpoint.
-    if (checkpoint.sourceStatuses.olx === "running" && checkpoint.sourceQueue.includes("olx")) {
-      return !attemptedSourceIds.has("olx") && activeHttpLanes.size === 0 ? "olx" : null;
-    }
+    // OLX is never picked: it left Radar (retireRadarOlxSource closed any legacy stage).
     for (const candidate of checkpoint.sourceQueue) {
-      if (candidate === "olx" || attemptedSourceIds.has(candidate) || sourceFinished(checkpoint, candidate)) continue;
+      if (RADAR_REMOVED_SOURCES.has(candidate) || attemptedSourceIds.has(candidate) || sourceFinished(checkpoint, candidate)) continue;
       return candidate;
     }
     while (resumableThisPortion.length) {
       const resumable = resumableThisPortion.shift()!;
       if (!sourceFinished(checkpoint, resumable) && !activeHttpLanes.has(resumable)) return resumable;
     }
-    const httpLeft = checkpoint.sourceQueue.some((candidate) => candidate !== "olx" && !sourceFinished(checkpoint, candidate));
-    if (!httpLeft && activeHttpLanes.size === 0 && checkpoint.sourceQueue.includes("olx") && !attemptedSourceIds.has("olx") && !sourceFinished(checkpoint, "olx")) return "olx";
     return null;
   };
   const lane = async (): Promise<void> => {
@@ -488,19 +501,11 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
       await save("running");
       try {
       try {
-        if (sourceId === "olx") {
-          checkpoint.currentSourceIndex = checkpoint.sourceQueue.indexOf("olx");
-          const job = await enqueueRadarOlxJob({ ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, city: "Łódź" }, supabase);
-          metrics.olxEnqueuedAt ??= new Date().toISOString();
-          if (job.status === "completed") {
-            checkpoint.sourceStatuses.olx = "completed";
-            checkpoint.perSourceCursor.olx = SOURCE_DONE_CURSOR;
-            await save("running");
-            return "next";
-          }
-          checkpoint.sourceStatuses.olx = "running";
+        if (RADAR_REMOVED_SOURCES.has(sourceId)) {
+          // Defence in depth: never reached (pickNextSource skips it). Never queues OLX.
+          retireRadarOlxSource(checkpoint);
           await save("running");
-          return "stop";
+          return "next";
         }
         let emittedBatches = false;
       const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
@@ -785,6 +790,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
     return "next";
   };
   try {
+    if (retireRadarOlxSource(checkpoint)) await save("running");
     normalizeFinishedSources(checkpoint);
     await Promise.all(Array.from({ length: Math.max(1, timing.parallelSources) }, () => lane()));
     const unfinished = checkpoint.sourceStatuses.olx === "running" && checkpoint.sourceQueue.includes("olx")

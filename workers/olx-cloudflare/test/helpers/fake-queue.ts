@@ -40,6 +40,10 @@ export type FakeQueue = {
   setAutomationEnabled(value: boolean): void;
   /** false = the scheduled-claim migration is not applied (endpoint answers 503). */
   setScheduledAvailable(value: boolean): void;
+  /** olx_automation_control.max_claims_24h (0..2, default 1). */
+  setMaxClaims(value: number): void;
+  /** Usage reports received with claim-scheduled (olx_cloud_budget). */
+  usageReports: Array<Record<string, unknown> | null>;
   /** Finder's watchdog: a job never claimed within 90 s is failed with OLX_WORKER_CLAIM_TIMEOUT. */
   runUnclaimedWatchdog(now?: number): number;
   /** Simulates the lease being revoked server-side (e.g. Radar run cancelled). */
@@ -60,7 +64,8 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
   const requests: FakeQueue["requests"] = [];
   const authFailures: string[] = [];
   const injectedFailures = new Map<string, number>();
-  const state = { selectiveAvailable: true, scheduledAvailable: true, automationEnabled: true };
+  const state = { selectiveAvailable: true, scheduledAvailable: true, automationEnabled: true, maxClaims: 1 };
+  const usageReports: Array<Record<string, unknown> | null> = [];
 
   const server: Server = createServer(async (request, response) => {
     const body = await readBody(request);
@@ -100,11 +105,17 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
         // lease; 1 scheduled claim per 24 h; only queued automatic Finder jobs, attempts 0,
         // younger than 6 h; no other row touched.
         if (!state.scheduledAvailable) { reply(503, { error: "OLX_SCHEDULED_CLAIM_UNAVAILABLE" }); return; }
-        if (Object.keys(payload).some((key) => key !== "workerId")) { reply(400, { error: "INVALID_SELECTOR" }); return; }
+        if (Object.keys(payload).some((key) => key !== "workerId" && key !== "usage")) { reply(400, { error: "INVALID_SELECTOR" }); return; }
         const now = Date.now();
         if (!state.automationEnabled) { reply(200, { job: null, reason: "AUTOMATION_DISABLED" }); return; }
+        // Migration 20261016120000: the usage report is required and gates the claim.
+        const usage = payload.usage && typeof payload.usage === "object" ? payload.usage as Record<string, unknown> : null;
+        usageReports.push(usage);
+        const numbers = usage ? ["accountBrowserMs", "workerBrowserMs", "safeBudgetMs", "jobEstimateMs"].map((key) => usage[key]) : [];
+        if (!usage || numbers.some((value) => typeof value !== "number" || value < 0) || Number(usage.jobEstimateMs) <= 0) { reply(200, { job: null, reason: "BROWSER_USAGE_UNKNOWN" }); return; }
+        if (Math.max(Number(usage.accountBrowserMs), Number(usage.workerBrowserMs)) + Number(usage.jobEstimateMs) > Math.min(Number(usage.safeBudgetMs), 300_000)) { reply(200, { job: null, reason: "BROWSER_BUDGET_INSUFFICIENT" }); return; }
         if (jobs.some((item) => item.status === "running" && (item.leasedUntil ?? 0) > now)) { reply(200, { job: null, reason: "OLX_JOB_RUNNING" }); return; }
-        if (jobs.some((item) => item.requestedBy === "scheduler" && item.startedAt !== null && item.startedAt > now - 86_400_000)) { reply(200, { job: null, reason: "DAILY_CLAIM_USED" }); return; }
+        if (jobs.filter((item) => item.requestedBy === "scheduler" && item.startedAt !== null && item.startedAt > now - 86_400_000).length >= state.maxClaims) { reply(200, { job: null, reason: "DAILY_CLAIM_USED" }); return; }
         const candidate = jobs.filter((item) => item.status === "queued" && item.contextType === "finder" && item.requestedBy === "scheduler" && item.attempts === 0 && item.createdAt > now - 6 * 3_600_000)
           .sort((a, b) => a.createdAt - b.createdAt)[0];
         if (!candidate) { reply(200, { job: null, reason: "NO_DUE_JOB" }); return; }
@@ -203,6 +214,8 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
     setSelectiveAvailable(value) { state.selectiveAvailable = value; },
     setAutomationEnabled(value) { state.automationEnabled = value; },
     setScheduledAvailable(value) { state.scheduledAvailable = value; },
+    setMaxClaims(value) { state.maxClaims = value; },
+    usageReports,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

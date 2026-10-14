@@ -40,6 +40,12 @@ export type Ledger = {
   jobsRejected: number;
   /** Consecutive OLX refusals (403/405/429/verification); reset by any normal page. */
   refusalStreak: number;
+  /**
+   * Scheduled mode: measured browser ms of the last job (one job per session),
+   * carried across UTC days; the estimate for the next job and the value the
+   * Worker reports with every claim. Absent before the first job.
+   */
+  lastJobBrowserMs?: number | null;
   /** A session that was open when this runner last persisted; charged on recovery. */
   openSession: { startedAt: number; sessionId: string | null } | null;
   stop: BudgetStop | null;
@@ -82,7 +88,7 @@ export function currentLedger(stored: Ledger | null | undefined, now: number, li
   if (ledger.day !== utcDay(now)) {
     // A new UTC day resets Cloudflare's allowance, not an OLX access pause.
     const carried = ledger.stop?.code === "OLX_CLOUD_OLX_ACCESS_PAUSED" && Date.parse(ledger.stop.resumesAt) > now ? ledger.stop : null;
-    ledger = { ...emptyLedger(now), stop: carried, refusalStreak: carried ? ledger.refusalStreak : 0 };
+    ledger = { ...emptyLedger(now), stop: carried, refusalStreak: carried ? ledger.refusalStreak : 0, lastJobBrowserMs: ledger.lastJobBrowserMs ?? null };
   }
   return ledger;
 }
@@ -148,4 +154,10 @@ function isLedger(value: unknown): value is Ledger {
   if (!value || typeof value !== "object") return false;
   const row = value as Record<string, unknown>;
   return typeof row.day === "string" && typeof row.browserMs === "number" && Number.isFinite(row.browserMs);
+}
+
+/** Browser time the next job is expected to cost: the last measured job, never less than the page reserve. */
+export function jobEstimateMs(ledger: Ledger, limits: Pick<BudgetLimits, "scrapeReserveMs">): number {
+  const measured = typeof ledger.lastJobBrowserMs === "number" && Number.isFinite(ledger.lastJobBrowserMs) ? ledger.lastJobBrowserMs : 0;
+  return Math.max(measured, limits.scrapeReserveMs);
 }

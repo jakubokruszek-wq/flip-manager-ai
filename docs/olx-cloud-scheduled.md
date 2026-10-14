@@ -1,5 +1,10 @@
 # OLX bez obsługi: Worker `scheduled` na Cloudflare
 
+> **Aktualizacja (migracja `20261016120000`):** harmonogram w stałych terminach (godzina startu, 12/24/48/72 h,
+> Europe/Warsaw), do 2 zadań na 24 h (`max_claims_24h`, domyślnie 1) bramkowanych zmierzonym czasem
+> przeglądarki oraz OLX usunięty z Radaru. Zob. [`olx-slot-schedule.md`](olx-slot-schedule.md). Worker ma
+> `OLX_CLOUD_MAX_JOBS_PER_DAY = "2"`; budżet bezpieczny bez zmian: 120 s.
+
 Stan: **kod gotowy, nic nie wdrożono i nic nie włączono.**
 - Migracja jest szkicem.
 - Worker `flip-manager-olx-cloud-scheduled` nie istnieje jeszcze na Cloudflare.

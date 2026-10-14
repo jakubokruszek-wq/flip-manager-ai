@@ -11,7 +11,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { isActiveFilterSource } from "@/features/flip-finder/source-availability";
-import { FINDER_OLX_DEFAULT_INTERVAL_MINUTES, isFinderOlxIntervalMinutes } from "@/features/flip-finder/finder-schedule";
+import { FINDER_OLX_DEFAULT_INTERVAL_MINUTES, FINDER_OLX_DEFAULT_START_TIME, isFinderOlxIntervalMinutes, isFinderOlxStartTime, normalizeFinderOlxStartTime } from "@/features/flip-finder/finder-schedule";
 import { isStaleScan, scanHeartbeatAt, selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT, STALE_SCAN_MESSAGE } from "./scan-lifecycle";
 
 type Row = Record<string, unknown>;
@@ -304,6 +304,7 @@ export function parseSearchFilterInput(value: unknown): SearchFilterInput {
     scanIntervalMinutes: positiveInteger(value.scanIntervalMinutes, "Częstotliwość skanowania"),
     finderScanIntervalMinutes: positiveInteger(value.finderScanIntervalMinutes ?? 60, "Interwał automatycznego skanu Findera"),
     finderOlxScanIntervalMinutes: finderOlxIntervalInput(value.finderOlxScanIntervalMinutes),
+    finderOlxStartTime: finderOlxStartTimeInput(value.finderOlxStartTime),
     isActive: booleanValue(value.isActive, "Status"),
   };
 
@@ -380,7 +381,7 @@ async function writeSearchFilter(
   return data ? toSearchFilter(asRow(data)) : null;
 }
 
-const DRAFT_COLUMNS = ["year_built_min", "finder_scan_interval_minutes", "finder_olx_scan_interval_minutes"] as const;
+const DRAFT_COLUMNS = ["year_built_min", "finder_scan_interval_minutes", "finder_olx_scan_interval_minutes", "finder_olx_start_time"] as const;
 
 /** Draft columns a PostgREST/Postgres "unknown column" error names (42703 / PGRST204 only). */
 function missingDraftColumns(error: { code?: unknown; message?: unknown } | null): string[] {
@@ -393,7 +394,13 @@ function missingDraftColumns(error: { code?: unknown; message?: unknown } | null
 
 function finderOlxIntervalInput(value: unknown): number {
   if (value === undefined || value === null) return FINDER_OLX_DEFAULT_INTERVAL_MINUTES;
-  if (!isFinderOlxIntervalMinutes(value)) throw new Error("Interwał OLX: dozwolone wartości to 24 h, 48 h albo 72 h (krótszy wymaga osobnej konfiguracji budżetu Cloudflare).");
+  if (!isFinderOlxIntervalMinutes(value)) throw new Error("Interwał OLX: dozwolone wartości to 12 h, 24 h, 48 h albo 72 h.");
+  return value;
+}
+
+function finderOlxStartTimeInput(value: unknown): string {
+  if (value === undefined || value === null) return FINDER_OLX_DEFAULT_START_TIME;
+  if (!isFinderOlxStartTime(value)) throw new Error("Godzina startu OLX: format HH:mm, co 5 minut (00:00–23:55).");
   return value;
 }
 
@@ -426,6 +433,7 @@ function toDatabasePayload(input: SearchFilterInput) {
     scan_interval_minutes: input.scanIntervalMinutes,
     finder_scan_interval_minutes: input.finderScanIntervalMinutes ?? 60,
     finder_olx_scan_interval_minutes: input.finderOlxScanIntervalMinutes ?? FINDER_OLX_DEFAULT_INTERVAL_MINUTES,
+    finder_olx_start_time: input.finderOlxStartTime ?? FINDER_OLX_DEFAULT_START_TIME,
     is_active: input.isActive,
   };
 }
@@ -469,6 +477,7 @@ function toSearchFilter(row: Row): SearchFilter {
     // Absent column (migration not applied) or an unexpected value reads as
     // null, never as the default: the OLX scheduler then queues nothing.
     finderOlxScanIntervalMinutes: isFinderOlxIntervalMinutes(row.finder_olx_scan_interval_minutes) ? row.finder_olx_scan_interval_minutes : null,
+    finderOlxStartTime: normalizeFinderOlxStartTime(row.finder_olx_start_time),
     isActive: booleanValue(row.is_active, "is_active"),
     lastScannedAt: nullableString(row.last_scanned_at),
     createdAt: requiredString(row.created_at, "created_at"),

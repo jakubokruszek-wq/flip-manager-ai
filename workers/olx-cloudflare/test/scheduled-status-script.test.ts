@@ -14,7 +14,7 @@ const V = "948f253b-70fc-470c-9d2b-3342307cc327";
 function status(enabled: boolean, config: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) {
   return {
     ok: enabled, code: enabled ? null : "OLX_CLOUD_DISABLED", message: null,
-    config: { claimMode: "scheduled", workerId: "cloudflare-olx-scheduled", maxJobsPerDay: 1, maxJobsPerInvocation: 1, maxHeldJobs: 1, safeBrowserBudgetSeconds: 120, onBudgetExhausted: "leave_queued", ...config },
+    config: { claimMode: "scheduled", workerId: "cloudflare-olx-scheduled", maxJobsPerDay: 2, maxJobsPerInvocation: 1, maxHeldJobs: 1, safeBrowserBudgetSeconds: 120, onBudgetExhausted: "leave_queued", ...config },
     configCheck: { killSwitch: enabled ? "enabled" : "disabled", stage1Lock: false, valid: true, problem: null, workerSecret: "set", adminToken: "set", warnings: [] },
     running: false, nextAlarm: null, paused: null, ledger: null,
     version: { worker: V, runner: V, matches: true, runnerReset: false },
@@ -46,7 +46,7 @@ test("confirms disabled and enabled scheduled states; a pending claim alarm is a
 });
 
 test("refuses any looser configuration, another mode or Worker, and a running batch when disabling", async () => {
-  for (const config of [{ claimMode: "auto" }, { claimMode: "manual" }, { workerId: "cloudflare-olx-stage2" }, { maxJobsPerDay: 0 }, { maxJobsPerDay: 2 }, { maxHeldJobs: 2 }, { safeBrowserBudgetSeconds: 480 }, { onBudgetExhausted: "fail_jobs" }]) {
+  for (const config of [{ claimMode: "auto" }, { claimMode: "manual" }, { workerId: "cloudflare-olx-stage2" }, { maxJobsPerDay: 0 }, { maxJobsPerDay: 1 }, { maxJobsPerDay: 3 }, { maxHeldJobs: 2 }, { safeBrowserBudgetSeconds: 480 }, { onBudgetExhausted: "fail_jobs" }]) {
     assert.equal((await wait("enabled", status(true, config))).code, 1, JSON.stringify(config));
   }
   assert.equal((await wait("disabled", status(false, {}, { running: true }))).code, 1);

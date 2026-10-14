@@ -104,13 +104,11 @@ test("two resume requests for one expired run have one compare-and-set winner", 
   assert.equal(db.rows.length, 1, "resume must never insert a second full Radar run");
 });
 
-test("a live lease, terminal run, mismatched run ID, or active OLX queue source cannot be reclaimed", async (t) => {
+test("a live lease, terminal run or mismatched run ID cannot be reclaimed", async (t) => {
   const cases: Array<[string, Row, string]> = [
     ["live lease", run({ lease_until: new Date(Date.now() + 60_000).toISOString() }), "lease_active"],
     ["terminal run", run({ status: "partial" }), "run_changed"],
     ["user-terminated run", run({ status: "partial", user_terminated_at: new Date().toISOString() }), "run_changed"],
-    ["OLX queue source", run({ checkpoint: { sourceQueue: ["olx"], currentSourceIndex: 0, sourceStatuses: { olx: "running" }, sourceErrors: {}, perSourceCursor: {} }, olx_scan_jobs: [{ context_type: "price_radar", radar_owner_id: "owner-1", radar_run_id: "radar-run-current", status: "queued" }] }), "olx_queue_owns_source"],
-    ["OLX queue source behind rotated pointer", run({ checkpoint: { sourceQueue: ["morizon", "olx"], currentSourceIndex: 2, sourceStatuses: { morizon: "completed", olx: "running" }, sourceErrors: {}, perSourceCursor: {} }, olx_scan_jobs: [{ context_type: "price_radar", radar_owner_id: "owner-1", radar_run_id: "radar-run-current", status: "running" }] }), "olx_queue_owns_source"],
   ];
   for (const [label, row, reason] of cases) await t.test(label, async () => {
     const db = fakeDb(row);
@@ -121,6 +119,19 @@ test("a live lease, terminal run, mismatched run ID, or active OLX queue source 
   const mismatched = fakeDb(run());
   assert.deepEqual(await resumeExistingRadarRun("owner-1", "another-run", mismatched as never), { kind: "blocked", reason: "run_changed" });
   assert.equal(mismatched.updates, 0);
+});
+
+test("OLX left Radar: a legacy OLX stage with a queued or running job no longer blocks resume and nothing is requeued", async () => {
+  for (const status of ["queued", "running"]) {
+    const row = run({
+      checkpoint: { sourceQueue: ["morizon", "olx"], currentSourceIndex: 1, sourceStatuses: { morizon: "completed", olx: "running" }, sourceErrors: {}, perSourceCursor: {} },
+      olx_scan_jobs: [{ context_type: "price_radar", radar_owner_id: "owner-1", radar_run_id: "radar-run-current", status }],
+    });
+    const db = fakeDb(row);
+    const resumed = await resumeExistingRadarRun("owner-1", "radar-run-current", db as never);
+    assert.equal(resumed.kind, "claimed", `${status}: the legacy OLX stage is closed by the next portion, not waited for`);
+    assert.equal((((row as Row).olx_scan_jobs as Row[])[0]).status, status, "the old job row is not touched by resume");
+  }
 });
 
 test("a terminal failed OLX job releases the same expired Radar checkpoint for the normal error path", async () => {

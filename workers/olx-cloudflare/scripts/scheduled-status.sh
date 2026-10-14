@@ -23,7 +23,7 @@ COMMON='.configCheck.valid == true
   and .configCheck.adminToken == "set"
   and .config.claimMode == "scheduled"
   and .config.workerId == "cloudflare-olx-scheduled"
-  and .config.maxJobsPerDay == 1
+  and .config.maxJobsPerDay == 2
   and .config.maxJobsPerInvocation == 1
   and .config.maxHeldJobs == 1
   and .config.safeBrowserBudgetSeconds == 120

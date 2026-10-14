@@ -22,11 +22,11 @@ test("own Worker name; stage 2 stays the manual, cron-less, disabled test Worker
   assert.doesNotMatch(stage2, /^\[triggers\]/m);
 });
 
-test("committed vars: OFF, scheduled, 1 job/day, 1 held, 1 per invocation, 120 s budget, leave_queued, no secrets", () => {
+test("committed vars: OFF, scheduled, 2 jobs/day (budget-gated), 1 held, 1 per invocation, 120 s budget, leave_queued, no secrets", () => {
   const v = vars(scheduled);
   assert.equal(v.OLX_CLOUD_ENABLED, "0");
   assert.equal(v.OLX_CLOUD_CLAIM_MODE, "scheduled");
-  assert.equal(v.OLX_CLOUD_MAX_JOBS_PER_DAY, "1");
+  assert.equal(v.OLX_CLOUD_MAX_JOBS_PER_DAY, "2");
   assert.equal(v.OLX_CLOUD_MAX_HELD_JOBS, "1");
   assert.equal(v.OLX_CLOUD_MAX_JOBS_PER_INVOCATION, "1");
   assert.equal(v.OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS, "120");

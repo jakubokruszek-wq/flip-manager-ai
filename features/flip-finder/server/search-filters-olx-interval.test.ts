@@ -57,19 +57,23 @@ function input(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("only 24 h, 48 h and 72 h are accepted; a missing value defaults to 24 h", () => {
-  for (const minutes of [1440, 2880, 4320]) assert.equal(parseSearchFilterInput(input({ finderOlxScanIntervalMinutes: minutes })).finderOlxScanIntervalMinutes, minutes);
+test("only 12 h, 24 h, 48 h and 72 h are accepted; a missing value defaults to 24 h; start time HH:mm every 5 min, default 08:00", () => {
+  for (const minutes of [720, 1440, 2880, 4320]) assert.equal(parseSearchFilterInput(input({ finderOlxScanIntervalMinutes: minutes })).finderOlxScanIntervalMinutes, minutes);
   assert.equal(parseSearchFilterInput(input()).finderOlxScanIntervalMinutes, 1440);
-  for (const minutes of [300, 60, 720, 1439, 1441, 10_080, "1440", -1440]) {
+  for (const minutes of [300, 60, 600, 1439, 1441, 10_080, "1440", -1440]) {
     assert.throws(() => parseSearchFilterInput(input({ finderOlxScanIntervalMinutes: minutes })), /Interwał OLX/);
   }
   assert.equal(parseSearchFilterInput(input()).finderScanIntervalMinutes, 300, "the other portals keep their own interval");
+  assert.equal(parseSearchFilterInput(input()).finderOlxStartTime, "08:00");
+  for (const time of ["00:00", "07:55", "20:00", "23:55"]) assert.equal(parseSearchFilterInput(input({ finderOlxStartTime: time })).finderOlxStartTime, time);
+  for (const time of ["08:03", "24:00", "8:00", "08:00:00", "", 800]) assert.throws(() => parseSearchFilterInput(input({ finderOlxStartTime: time })), /Godzina startu OLX/);
 });
 
 test("the interval is persisted in its own column and read back by the backend", async () => {
   calls = []; missingColumns = [];
   const saved = await createSearchFilter(parseSearchFilterInput(input({ finderOlxScanIntervalMinutes: 2880 })));
   assert.equal(calls[0].payload.finder_olx_scan_interval_minutes, 2880);
+  assert.equal(calls[0].payload.finder_olx_start_time, "08:00");
   assert.equal(calls[0].payload.finder_scan_interval_minutes, 300);
   assert.equal(saved.finderOlxScanIntervalMinutes, 2880);
   // A later read (e.g. after an application restart) gets the stored value.
@@ -101,4 +105,13 @@ test("an unexpected stored value reads as null, never as a shorter interval", as
   storedRow = { ...storedRow, finder_olx_scan_interval_minutes: 60 };
   const filter = await getSearchFilter("filter-1");
   assert.equal(filter?.finderOlxScanIntervalMinutes, null);
+});
+
+test("the start time stored by Postgres (HH:mm:ss) reads back as HH:mm; unreadable reads as null", async () => {
+  calls = []; missingColumns = [];
+  await createSearchFilter(parseSearchFilterInput(input({ finderOlxStartTime: "20:05" })));
+  storedRow = { ...storedRow, finder_olx_start_time: "20:05:00" };
+  assert.equal((await getSearchFilter("filter-1"))?.finderOlxStartTime, "20:05");
+  storedRow = { ...storedRow, finder_olx_start_time: undefined };
+  assert.equal((await getSearchFilter("filter-1"))?.finderOlxStartTime, null);
 });
