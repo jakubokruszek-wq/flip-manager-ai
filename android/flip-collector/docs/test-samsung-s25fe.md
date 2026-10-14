@@ -1,6 +1,6 @@
 # Pierwsze testy na Samsungu Galaxy S25 FE (Android 16)
 
-Wersja: Flip Collector 0.3.1, build debug (`pl.jakubokruszek.flipcollector.debug`, „Flip Collector (test)”).
+Wersja: Flip Collector 0.4.0, build debug (`pl.jakubokruszek.flipcollector.debug`, „Flip Collector (test)”).
 Tryb: **DEMO** — Facebook nie jest otwierany, nic nie jest wysyłane do Flip Managera.
 
 Wynik każdego kroku wpisz jako OK / BŁĄD / NIE WYKONANO. Nie wpisuj OK, jeśli krok nie był wykonany.
@@ -24,7 +24,7 @@ Wynik każdego kroku wpisz jako OK / BŁĄD / NIE WYKONANO. Nie wpisuj OK, jeśl
 | # | Krok | Oczekiwany wynik |
 | --- | --- | --- |
 | 2.1 | „Skanuj teraz” (stan Wi-Fi, ładowarki i parowania bez znaczenia) | Pasek „Grupy 0/1”, pasek postów rośnie do 12/12, licznik ofert do 6, na końcu „Gotowy”. |
-| 2.2 | Historia | Wpis „Ręczny · DEMO · Zakończony”, 12 postów, 6 ofert, „Wysłane do Flip Managera: 0”. |
+| 2.2 | Historia → „Testy demo” | Wpis „Ręczny · DEMO · Zakończony”, 12 postów, 6 ofert, „Wysłane do Flip Managera: 0”. Zakładka „Na żywo” pusta. Pulpit: „Wyniki Facebook Watchera (na żywo)” — brak; „Testy demo” — 1 test. |
 | 2.3 | „Skanuj teraz”, po ok. 2 s „Zatrzymaj” | Wpis „Zatrzymany”, powód „Zatrzymane przez użytkownika”. |
 | 2.4 | Harmonogram → „Symuluj błąd w skanie demo” → Pulpit → „Skanuj teraz” | Wpis „Błąd”: „Symulowany błąd po 7 postach (tryb demo)”. Wyłącz przełącznik po teście. |
 | 2.5 | Telefon niesparowany, tryb samolotowy, bez ładowarki → „Skanuj teraz” | Skan demo rusza i kończy się normalnie (działa w pełni lokalnie). |
@@ -51,6 +51,35 @@ Wynik każdego kroku wpisz jako OK / BŁĄD / NIE WYKONANO. Nie wpisuj OK, jeśl
 | 3.5 | Noc z domyślnym oknem 02:00–05:00, telefon na ładowarce, ekran wygaszony | Rano: wpis automatu z nocy albo w diagnostyce powód braku (np. `STOP_REASON_QUOTA`). Zapisz wynik bez interpretacji. |
 | 3.6 | Samsung: Ustawienia → Aplikacje → Flip Collector (test) → Bateria: „Zoptymalizowana” vs „Bez ograniczeń” | Powtórz 3.2 w obu ustawieniach, porównaj opóźnienia. |
 
+## 3a. Przerwanie i odzyskanie skanu
+
+| # | Krok | Oczekiwany wynik |
+| --- | --- | --- |
+| 3a.1 | „Skanuj teraz”, po 1–2 s: Ustawienia telefonu → Aplikacje → Flip Collector (test) → „Wymuś zatrzymanie”, potem otwórz aplikację i Watcher | Komunikat „Poprzedni skan (demo) został przerwany…”; w Historii → Testy demo wpis „Przerwany (proces zakończony)” z liczbą postów z chwili przerwania. |
+| 3a.2 | Ten sam test z kartą „Ostatnie aplikacje” → przesunięcie aplikacji | Jak 3a.1 albo skan kończy się normalnie, jeśli system nie zabił procesu — zapisz, co się stało. |
+| 3a.3 | Automat w oknie (jak 3.2), w trakcie skanu „Wymuś zatrzymanie” | Przy następnym ticku: wpis „Przerwany”, w panelu „WorkManager i okna” okno „przerwane · próby 1/2”, potem ponowna próba (2/2) i okno „wykorzystane”. |
+| 3a.4 | Diagnostyka | `SCAN_RECOVERED_INTERRUPTED`, potem `AUTO_SCAN_START … próba 2/2`. |
+
+## 3b. Test WorkManagera bez komputera (Android 16)
+
+| # | Krok | Oczekiwany wynik |
+| --- | --- | --- |
+| 3b.1 | Historia → „WorkManager i okna” → „Test za 1 min”, ekran włączony, ładowarka, Wi-Fi | Po ok. 1–2 min stan „wykonane”, w diagnostyce `PROBE_RAN` z opóźnieniem w sekundach. |
+| 3b.2 | „Test za 15 min”, zablokuj telefon, ładowarka, Wi-Fi | Zapisz opóźnienie z `PROBE_RAN` (ekran włączony=false, doze=…). |
+| 3b.3 | „Test za 15 min” bez ładowarki (harmonogram wymaga ładowania) | Stan „czeka” do podłączenia ładowarki; po podłączeniu uruchomienie. |
+| 3b.4 | Bateria aplikacji „Zoptymalizowana” vs „Bez ograniczeń” | Powtórz 3b.2 w obu ustawieniach i porównaj opóźnienia. |
+| 3b.5 | Automat włączony, panel | „Automat (co 15 min): czeka, najwcześniej …”; po zatrzymaniu przez system widoczny kod `stop`. |
+
+Opcjonalnie, tylko z komputerem albo Termuxem z debugowaniem bezprzewodowym (nie jest wymagane):
+`adb shell am set-standby-bucket pl.jakubokruszek.flipcollector.debug rare`, `adb shell dumpsys deviceidle force-idle`, `adb shell am compat enable OVERRIDE_QUOTA_ENFORCEMENT_TO_TOP_STARTED_JOBS pl.jakubokruszek.flipcollector.debug` — do porównania z zachowaniem bez wymuszeń.
+
+## 3c. Grupy i synchronizacja
+
+| # | Krok | Oczekiwany wynik |
+| --- | --- | --- |
+| 3c.1 | Grupy → „Synchronizuj grupy” | „Ostatnio: … — oczekuje na kontrakt backendu (brak połączenia)”; żadnego ruchu sieciowego. |
+| 3c.2 | Dodaj grupę ręcznie, „Wyłącz”, „Włącz”, „Usuń” | Plakietka „lokalna”; licznik „x z y” zmienia się zgodnie z przełącznikiem. |
+
 ## 4. Powiadomienia
 
 | # | Krok | Oczekiwany wynik |
@@ -62,6 +91,10 @@ Wynik każdego kroku wpisz jako OK / BŁĄD / NIE WYKONANO. Nie wpisuj OK, jeśl
 ## 5. Diagnostyka do raportu
 
 Historia → „Kopiuj diagnostykę” → wklej do raportu. Zawiera wersję aplikacji, model telefonu, Androida, stan Wi-Fi i baterii oraz dziennik zdarzeń. Nie zawiera tokenów ani treści postów.
+
+## 6. WebView przy wygaszonym ekranie (dopiero po włączeniu LIVE)
+
+Nie do wykonania w tej wersji (bramka zamknięta). Plan na później: skan jednej grupy z włączonym ekranem → ten sam skan po zablokowaniu telefonu (oczekiwana blokada `SCREEN_OFF`) → po decyzji o modelu z `webview-bezpieczenstwo.md` pomiar, czy renderer i JavaScript działają przy wygaszonym ekranie.
 
 ## Czego ten test NIE sprawdza
 

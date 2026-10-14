@@ -32,7 +32,9 @@ Ekran „Otwórz Facebook Watcher” ma cztery zakładki: Pulpit, Harmonogram, G
 
 **Tryb demo** (jedyny w tej wersji) skanuje grupę testową z 12 fikcyjnymi postami oznaczonymi „DEMO”. Ręczny skan demo działa w pełni lokalnie: bez parowania, Wi-Fi, ładowarki i bez wywołań API. Automat w trybie demo stosuje okno, Wi-Fi i ładowanie z harmonogramu, żeby dało się przetestować harmonogram. Skanowanie na żywo wymaga dodatkowo `BuildConfig.LIVE_COLLECTION_ENABLED` (false), osobnej zgody na sesję Facebooka, parowania z Flip Managerem i aktywnej grupy (`ScanPreconditions`).
 
-Praca w tle i Android 16: [`docs/android-16-praca-w-tle.md`](docs/android-16-praca-w-tle.md). Plan testów na S25 FE: [`docs/test-samsung-s25fe.md`](docs/test-samsung-s25fe.md).
+**Odzyskiwanie:** dziennik aktywnego skanu (`ScanJournal`) i księga okien (`WindowLedger`) odróżniają okno wykorzystane, skan ukończony i skan przerwany (jedna ponowna próba w otwartym oknie). **Historia i statystyki** trybu demo i skanów na żywo są przechowywane i pokazywane osobno. **Grupy** mają model synchronizacji z Flip Managerem (`integration/GroupSync.kt`); źródło danych czeka na kontrakt backendu.
+
+Praca w tle i Android 16: [`docs/android-16-praca-w-tle.md`](docs/android-16-praca-w-tle.md). WebView: [`docs/webview-bezpieczenstwo.md`](docs/webview-bezpieczenstwo.md). Plan testów na S25 FE: [`docs/test-samsung-s25fe.md`](docs/test-samsung-s25fe.md). Testy instrumentacyjne WorkManagera (emulator API 36): `.github/workflows/android-collector-instrumented.yml`.
 
 Kontrast kolorów obu motywów sprawdza test `FlipPaletteContrastTest` (WCAG: 4,5:1 dla tekstu, 3:1 dla obramowań).
 
