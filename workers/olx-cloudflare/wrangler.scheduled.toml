@@ -40,6 +40,16 @@ binding = "CF_VERSION_METADATA"
 name = "OLX_RUNNER"
 class_name = "OlxCloudRunner"
 
+# A deploy must take effect at once: wrangler 4.143 deploys with a DEFERRED
+# Durable Object code update (up to 300 s) by default, during which the
+# previous version kept serving workers.dev (runs 38606455224 and 38607086215:
+# /status stayed on the version made by `wrangler secret put` while every
+# `wrangler deploy` reported a new "Current Version ID"). A STOP must not wait
+# 5 minutes either. A batch cut short by the restart loses its lease and is
+# closed as OLX_SCHEDULED_JOB_LEASE_EXPIRED, never retried.
+[durable_objects.code_update_strategy]
+mode = "immediate"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["OlxCloudRunner"]

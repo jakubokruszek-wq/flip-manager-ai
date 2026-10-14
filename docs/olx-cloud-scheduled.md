@@ -138,6 +138,7 @@ Dla porównania odrzucony tryb `auto`: ~2 200 claimów na dobę (~66 tys./mies.)
    - Wykorzystywane są wyłącznie **wartości** sekretów Stage2. Workflow wdraża, konfiguruje i wywołuje tylko `flip-manager-olx-cloud-scheduled` (`wrangler.scheduled.toml`), nigdy Workera Stage2. Pilnuje tego test `workers/olx-cloudflare/test/scheduled-config.test.ts`.
    - **Widoczność:** GitHub udostępnia jobowi tylko sekrety repozytorium i sekrety jego środowiska (`olx-cloudflare-scheduled`). Jeśli sekrety `_STAGE2` są zapisane tylko w środowisku `olx-cloudflare-stage2`, fallback ich nie zobaczy, a krok „Kontrola sekretów” zakończy się jasnym błędem. Wtedy trzeba je dodać na poziomie repozytorium albo w środowisku `olx-cloudflare-scheduled`.
 4. **Workflow `deploy-disabled`**, potem `check`. Oczekiwane: tryb `scheduled`, OFF, Worker i DO na jednej wersji, HMAC 409.
+   - Każde wdrożenie jest potwierdzane dla jednej konkretnej wersji: deployment w Cloudflare (100 %), wartość `OLX_CLOUD_ENABLED` w tej wersji i `/status` (Worker i DO). Błąd ma osobny kod diagnostyczny. Przyczyna i kody: [`olx-cloud-scheduled-activation.md`](olx-cloud-scheduled-activation.md).
 5. **Weryfikacja budżetu przed włączeniem:**
    - z podsumowania stage2 z 14.10 (`browserSecondsUsedToday`, `chargedMs`) potwierdź, że 1 zadanie mieści się w 120 s;
    - `check.sql` (krok 3): ile zadań Radaru OLX dziennie. Przy codziennym Radarze z OLX wspólny budżet 1 będzie blokował Findera (`SHARED_DAILY_BUDGET_USED`); to decyzja o budżecie, ten PR jej nie zmienia.

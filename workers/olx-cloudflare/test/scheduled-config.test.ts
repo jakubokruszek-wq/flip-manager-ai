@@ -3,6 +3,7 @@
  * committed, scheduled mode with the reviewed limits, a 15-minute Cron.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -39,9 +40,10 @@ test("committed vars: OFF, scheduled, 2 jobs/day (budget-gated), 1 held, 1 per i
   assert.match(scheduled, /^\[triggers\]\ncrons = \["\*\/15 \* \* \* \*"\]$/m);
 });
 
-test("bindings, migrations and build match the main Worker (only vars and triggers differ)", () => {
+test("bindings, migrations and build match the main Worker (only vars, triggers and the immediate DO update differ)", () => {
   const body = (toml: string) => toml.slice(toml.indexOf("main ="), toml.indexOf("[vars]"))
     .replace(/^\[triggers\][\s\S]*?(?=^\[)/m, "")
+    .replace(/^\[durable_objects\.code_update_strategy\]\nmode = "immediate"\n/m, "")
     .split("\n").filter((line) => line.trim() && !line.trim().startsWith("#")).join("\n");
   assert.equal(body(scheduled), body(read("wrangler.toml")));
 });
@@ -111,5 +113,45 @@ test("workflow tests: root deps (playwright) and Chromium installed before npm t
   assert.match(workflow, /grep -Eq '\^# fail 0\$' test\.log/);
   assert.match(workflow, /grep -Eq '\^# skipped 0\$' test\.log/, "Chromium tests skip themselves without a browser; that must fail the run");
   assert.ok(tests < at(/npx wrangler deploy --dry-run/), "tests before the dry-run and any deploy");
+});
+
+test("activation (runs 38606455224, 38607086215): immediate Durable Object update; every deploy proven by deployment, var and served version; no \"any\"", () => {
+  const workflow = readFileSync(new URL("../../../.github/workflows/olx-cloudflare-scheduled.yml", import.meta.url), "utf8");
+  const commands = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  // The wrangler default is a DEFERRED Durable Object code update (up to 300 s): the old version kept serving.
+  assert.match(scheduled, /^\[durable_objects\.code_update_strategy\]\nmode = "immediate"$/m);
+  assert.match(commands, /durable_objects\\\.code_update_strategy/, "the workflow's config check requires it too");
+  assert.doesNotMatch(commands, /"\$STATUS" wait \w+ any\b/, "a wait is always for one exact version");
+  assert.doesNotMatch(commands, /version=any/);
+  for (const call of commands.match(/"\$STATUS" wait (?:enabled|disabled) [^ ]+ \d+ \d+/g) ?? []) {
+    const [, , , , attempts, pause] = call.split(" ");
+    if (Number(attempts) > 1) assert.ok(Number(attempts) * Number(pause) >= 300, `${call}: must outlast a 300 s deferral`);
+  }
+  const step = (name: string) => { const start = commands.indexOf(`- name: ${name}`); assert.ok(start >= 0, name); const end = commands.indexOf("\n      - ", start + 1); return commands.slice(start, end < 0 ? undefined : end); };
+  const order = (text: string, ...parts: string[]) => { let at = -1; for (const part of parts) { const next = text.indexOf(part, at + 1); assert.ok(next > at, `${part} after the previous proof`); at = next; } };
+
+  order(step("Włączenie automatu"), "wrangler deploy --config \"$SCHEDULED_CONFIG\" --var OLX_CLOUD_ENABLED:1", "deploy-version enable.log",
+    "wrangler deployments status --json", "\"$STATUS\" deployment \"$version\"", "wrangler versions view \"$version\" --json",
+    "\"$STATUS\" var version.json OLX_CLOUD_ENABLED 1", "\"$STATUS\" wait enabled \"$version\"");
+  order(step("Sekrety Workera (tylko w nim)"), "wrangler secret put OLX_WORKER_SECRET", "wrangler deployments status --json", "active-version deployment.json");
+  order(step("Weryfikacja stanu wyłączonego"), "\"$STATUS\" deployment \"$VERSION\"", "\"$STATUS\" var version.json OLX_CLOUD_ENABLED 0", "\"$STATUS\" wait disabled \"$VERSION\"");
+  order(step("Sprawdzenie stanu, budżetu i połączenia"), "active-version deployment-before.json", "\"$STATUS\" wait disabled \"$active\"");
+  // The automatic rollback is confirmed like any other deploy, and never silently.
+  order(step("Wyłącz, jeśli włączenie nie zostało potwierdzone"), "wrangler deploy --config \"$SCHEDULED_CONFIG\" | tee rollback.log",
+    "\"$STATUS\" deployment \"$version\"", "\"$STATUS\" wait disabled \"$version\"");
+  assert.doesNotMatch(step("Wyłącz, jeśli włączenie nie zostało potwierdzone"), /--var/);
+});
+
+test("confirm: surrounding spaces are ignored (run 38612095982 sent \" WLACZ-AUTOMAT-OLX\"), anything else is still refused", () => {
+  const workflow = readFileSync(new URL("../../../.github/workflows/olx-cloudflare-scheduled.yml", import.meta.url), "utf8");
+  const block = workflow.slice(workflow.indexOf("- name: Kontrola wejścia"));
+  const script = block.slice(block.indexOf("run: |") + 7, block.indexOf("\n\n")).split("\n").map((line) => line.replace(/^ {10}/, "")).join("\n");
+  const run = (action: string, confirm: string) => spawnSync("bash", ["-c", script], { env: { ...process.env, ACTION: action, CONFIRM: confirm, GITHUB_REF: "refs/heads/main", GITHUB_SHA: "x" }, encoding: "utf8" }).status;
+  assert.equal(run("enable", " WLACZ-AUTOMAT-OLX"), 0);
+  assert.equal(run("enable", "WLACZ-AUTOMAT-OLX \n"), 0);
+  for (const wrong of ["", "WLACZ-AUTOMAT", "wlacz-automat-olx", "WLACZ AUTOMAT OLX", "WLACZ-AUTOMAT-OLX!"]) assert.equal(run("enable", wrong), 1, JSON.stringify(wrong));
+  assert.equal(run("check", ""), 0);
+  assert.equal(run("check", "  "), 0, "only spaces = no confirmation");
+  assert.equal(run("disable", "WLACZ-AUTOMAT-OLX"), 1, "confirm only for enable");
 });
 
