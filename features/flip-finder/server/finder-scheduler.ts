@@ -1,15 +1,15 @@
 import "server-only";
 
 import type { SearchFilter } from "@/features/flip-finder";
-import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { listActiveSearchFiltersForScheduler } from "@/features/flip-finder/server/search-filters";
+import { FINDER_SEPARATE_SOURCES, finderPortalSources } from "@/features/flip-finder/server/finder-portal-sources";
 import {
   runManualOtodomScan,
   startFinderScanForFilter,
   type ManualScanStart,
   type ScanSummary,
 } from "@/features/flip-finder/server/manual-scan";
-import { olxScheduleNote, runFinderOlxSchedulerPhase, scheduleFinderOlxJob, type FinderOlxScheduleDecision } from "@/features/flip-finder/server/finder-olx-schedule";
+import { runFinderOlxSchedulerPhase, scheduleFinderOlxJob, type FinderOlxScheduleDecision } from "@/features/flip-finder/server/finder-olx-schedule";
 import { expireStaleScheduledOlxJobs, type ExpiredScheduledJobs } from "@/features/flip-finder/server/olx-scheduled-claim";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
@@ -23,14 +23,13 @@ export { FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, finderScanIntervalMinutes, i
 // next due filter on its next invocation.
 export const FINDER_SCHEDULER_MAX_FILTERS_PER_RUN = 1;
 /**
- * Sources with their own queue and lifecycle (olx_scan_jobs, served by a
- * separate worker). Their pending source_scans row only means "a job is in
- * that queue": it may wait for hours (13.10.2026: OLX pending 07:30-20:06
- * blocked every other portal of filter "Flip"). Duplicate OLX jobs are
- * prevented by the OLX queue itself (see startFinderScanForFilter), so these
- * sources never hold the Finder cadence of the other portals.
+ * Sources that are not stages of a Finder run (OLX: its own schedule, queue and
+ * Cloudflare Worker -- see finderPortalSources). A pending OLX source_scans row
+ * only means "an OLX job is in its queue" and may wait for hours (13.10.2026:
+ * OLX pending 07:30-20:06 blocked every other portal of filter "Flip"), so it
+ * never holds the Finder cadence of the other portals.
  */
-export const FINDER_SCHEDULER_INDEPENDENT_SOURCES: ReadonlySet<string> = new Set(["olx"]);
+export const FINDER_SCHEDULER_INDEPENDENT_SOURCES: ReadonlySet<string> = FINDER_SEPARATE_SOURCES;
 const FINDER_SCHEDULER_DB_TIMEOUT_MS = 8_000;
 
 export type FinderSchedulerSummary = {
@@ -64,8 +63,8 @@ export type FinderSchedulerDependencies = {
    */
   revertClaim: (filter: SearchFilter, claimedAt: Date) => Promise<void>;
   startScan: (filter: SearchFilter) => Promise<ManualScanStart>;
-  /** olxNote: how the separate OLX schedule decided this tick, reported in the portals' run. */
-  runScan: (filter: SearchFilter, start: ManualScanStart, context?: { olxNote: string | null }) => Promise<ScanSummary>;
+  /** The portals' run only; the OLX schedule's decision is reported in summary.olx, never in this run. */
+  runScan: (filter: SearchFilter, start: ManualScanStart) => Promise<ScanSummary>;
   /** Asks enqueue_scheduled_finder_olx_job for one filter; never part of the portals' cycle. */
   scheduleOlx: (filter: SearchFilter) => Promise<FinderOlxScheduleDecision>;
   /** Diagnoses orphaned automatic OLX jobs (failed with a code, never deleted); null before the migration. */
@@ -78,7 +77,7 @@ export type FinderSchedulerDependencies = {
  * OLX-only filter never starts a portals' run either.
  */
 export function finderFilterCanRun(filter: SearchFilter): boolean {
-  return activeSources(filter).some((source) => !FINDER_SCHEDULER_INDEPENDENT_SOURCES.has(source.id)) || filter.sources.includes("facebook");
+  return finderPortalSources(filter).length > 0 || filter.sources.includes("facebook");
 }
 
 export function dueFinderFilters(filters: readonly SearchFilter[], now: Date | number): SearchFilter[] {
@@ -107,7 +106,6 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
   });
   if (expired && (expired.stopped || expired.unclaimedExpired || expired.leaseExpired)) console.warn("FINDER_OLX_SCHEDULED_JOBS_EXPIRED", expired);
   const olxPhase = await runFinderOlxSchedulerPhase(filters, dependencies.scheduleOlx);
-  const olxDecisions = new Map(olxPhase.decisions.map((decision) => [decision.filterId, decision]));
   const summary: FinderSchedulerSummary = {
     status: "completed",
     checked: filters.length,
@@ -161,8 +159,7 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
         throw startError;
       }
       summary.started += 1;
-      const hasOlx = activeSources(filter).some((source) => source.id === "olx");
-      const result = await dependencies.runScan(filter, start, { olxNote: hasOlx ? olxScheduleNote(olxDecisions.get(filter.id)) : null });
+      const result = await dependencies.runScan(filter, start);
       summary.runs.push({ filterId: filter.id, runId: result.runId, status: result.status });
       if (result.status === "completed") summary.completed += 1;
       else summary.partial += 1;
@@ -201,14 +198,12 @@ function defaultDependencies(overrides: Partial<FinderSchedulerDependencies>): F
     claimFilter: (filter, now) => claimFinderFilter(supabase, filter, now),
     revertClaim: (filter, claimedAt) => revertFinderFilterClaim(supabase, filter, claimedAt),
     startScan: (filter) => startFinderScanForFilter(filter, undefined, supabase, "scheduler"),
-    runScan: (filter, start, context) => runManualOtodomScan(filter.id, {
+    runScan: (filter, start) => runManualOtodomScan(filter.id, {
       filter,
       runId: start.runId,
       supabase,
       skipLock: true,
       usePreparedRows: true,
-      olxMode: "separate-schedule",
-      olxNote: context?.olxNote ?? null,
     }),
     scheduleOlx: (filter) => scheduleFinderOlxJob(supabase, filter),
     expireOlx: () => expireStaleScheduledOlxJobs(supabase),
@@ -257,7 +252,7 @@ export async function revertFinderFilterClaim(supabase: DatabaseClient, filter: 
 
 /** Sources whose pending/running rows block a new automatic run (see FINDER_SCHEDULER_INDEPENDENT_SOURCES). */
 export function finderSchedulerLockSources(filter: SearchFilter): string[] {
-  return activeSources(filter).map((source) => source.id).filter((source) => !FINDER_SCHEDULER_INDEPENDENT_SOURCES.has(source));
+  return finderPortalSources(filter).map((source) => source.id);
 }
 
 /** Exported for tests: the real query, driven against a recorded fake client. */
