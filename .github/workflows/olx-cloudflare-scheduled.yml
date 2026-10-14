@@ -57,7 +57,7 @@ env:
 jobs:
   scheduled:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment: olx-cloudflare-scheduled
     defaults:
       run:
@@ -77,8 +77,10 @@ jobs:
           set -euo pipefail
           echo "Akcja: $ACTION, commit: $GITHUB_SHA, gałąź: $GITHUB_REF"
           [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::Workflow działa wyłącznie z main"; exit 1; }
+          # Surrounding spaces are ignored (run 38612095982 failed on " WLACZ-AUTOMAT-OLX"); the phrase itself stays exact.
+          CONFIRM="${CONFIRM#"${CONFIRM%%[![:space:]]*}"}"; CONFIRM="${CONFIRM%"${CONFIRM##*[![:space:]]}"}"
           if [ "$ACTION" = "enable" ]; then
-            [ "$CONFIRM" = "WLACZ-AUTOMAT-OLX" ] || { echo "::error::Brak potwierdzenia: wpisz WLACZ-AUTOMAT-OLX"; exit 1; }
+            [ "$CONFIRM" = "WLACZ-AUTOMAT-OLX" ] || { echo "::error::Brak potwierdzenia: wpisz dokładnie WLACZ-AUTOMAT-OLX"; exit 1; }
           elif [ -n "$CONFIRM" ]; then
             echo "::error::confirm jest dozwolone tylko dla enable"; exit 1
           fi
@@ -130,6 +132,10 @@ jobs:
           expect OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS 600
           expect OLX_CLOUD_ON_BUDGET_EXHAUSTED leave_queued
           expect OLX_CLOUD_WORKER_ID cloudflare-olx-scheduled
+          # A deferred Durable Object code update (wrangler default) kept the previous version live after deploys.
+          awk '/^\[durable_objects\.code_update_strategy\]$/{t=1; next} /^\[/{t=0} t && /^mode = "immediate"$/{ok=1} END{exit !ok}' "$f" \
+            || { echo "::error::Wymagane [durable_objects.code_update_strategy] mode = \"immediate\""; exit 1; }
+          echo "OK  durable_objects.code_update_strategy.mode = \"immediate\""
 
       - uses: actions/setup-node@v4
         if: ${{ inputs.action != 'check' }}
@@ -197,22 +203,31 @@ jobs:
           set -euo pipefail
           printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put OLX_CLOUD_ADMIN_TOKEN --config "$SCHEDULED_CONFIG"
           printf '%s' "$WORKER_SECRET" | npx wrangler secret put OLX_WORKER_SECRET --config "$SCHEDULED_CONFIG"
-          echo "version=any" >> "$GITHUB_OUTPUT"
+          # Every `secret put` creates and deploys a NEW version (1d7f95d1 in run 38604780597); expect exactly that one.
+          npx wrangler deployments status --json --config "$SCHEDULED_CONFIG" > deployment.json
+          echo "version=$("$STATUS" active-version deployment.json)" >> "$GITHUB_OUTPUT"
 
       - name: Weryfikacja stanu wyłączonego
         if: ${{ inputs.action == 'deploy-disabled' || inputs.action == 'disable' }}
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED || secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
           VERSION: ${{ steps.secrets.outputs.version || steps.deploy.outputs.version }}
         run: |
           set -euo pipefail
+          # 1) Cloudflare: the active deployment sends 100 % to VERSION; 2) that version has the var; 3) workers.dev serves it.
+          npx wrangler deployments status --json --config "$SCHEDULED_CONFIG" > deployment.json
+          "$STATUS" deployment "$VERSION" deployment.json
+          npx wrangler versions view "$VERSION" --json --config "$SCHEDULED_CONFIG" > version.json
+          "$STATUS" var version.json OLX_CLOUD_ENABLED 0
           for attempt in $(seq 1 12); do
             if curl -fsS --max-time 20 "$SCHEDULED_URL/health" -o health.json; then break; fi
             echo "Czekam na workers.dev ($attempt/12)..."; sleep 10
           done
           grep -Fq '"ok":true' health.json || { echo "::error::/health nie odpowiada"; exit 1; }
           [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$SCHEDULED_URL/status")" = "404" ] || { echo "::error::/status bez tokenu nie zwraca 404"; exit 1; }
-          "$STATUS" wait disabled "$VERSION" 24 5 status.json
+          "$STATUS" wait disabled "$VERSION" 72 5 status.json
           {
             echo "## OLX automat — Worker WYŁĄCZONY"
             echo "- Worker: \`$SCHEDULED_NAME\`, commit \`$GITHUB_SHA\`, wersja \`$VERSION\`"
@@ -223,12 +238,17 @@ jobs:
       - name: Sprawdzenie stanu, budżetu i połączenia
         if: ${{ inputs.action == 'check' || inputs.action == 'enable' }}
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED || secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
           ACTION: ${{ inputs.action }}
         run: |
           set -euo pipefail
           if [ "$ACTION" = "enable" ]; then
-            "$STATUS" wait disabled any 1 0 status-before.json \
+            # The disabled Worker must be the version Cloudflare reports as active, on Worker and Durable Object.
+            npx wrangler deployments status --json --config "$SCHEDULED_CONFIG" > deployment-before.json
+            active="$("$STATUS" active-version deployment-before.json)"
+            "$STATUS" wait disabled "$active" 1 0 status-before.json \
               || { echo "::error::Włączyć można tylko poprawnie wdrożony, WYŁĄCZONY Worker (uruchom deploy-disabled)."; exit 1; }
             jq -e '.paused == null' status-before.json >/dev/null || { echo "::error::Worker wstrzymany: $(jq -r '.paused.code' status-before.json)"; exit 1; }
           else
@@ -261,7 +281,13 @@ jobs:
           grep -Fq "Uploaded $SCHEDULED_NAME" enable.log || { echo "::error::Wynik wdrożenia nie wskazuje $SCHEDULED_NAME"; exit 1; }
           version="$("$STATUS" deploy-version enable.log)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          "$STATUS" wait enabled "$version" 24 5 status-enabled.json \
+          # Separate proofs, each with its own diagnosis (see scripts/scheduled-status.sh):
+          npx wrangler deployments status --json --config "$SCHEDULED_CONFIG" > deployment.json
+          "$STATUS" deployment "$version" deployment.json            # DEPLOYMENT_NOT_APPLIED
+          npx wrangler versions view "$version" --json --config "$SCHEDULED_CONFIG" > version.json
+          "$STATUS" var version.json OLX_CLOUD_ENABLED 1              # VAR_NOT_APPLIED (--var is "(hidden)" in the deploy log)
+          # VERSION_NOT_ACTIVE / DURABLE_OBJECT_VERSION_MISMATCH / STATE_MISMATCH; 6 min > the 300 s deferral seen before.
+          "$STATUS" wait enabled "$version" 72 5 status-enabled.json \
             || { echo "::error::Włączona wersja $version nie została potwierdzona"; exit 1; }
           {
             echo "## OLX automat — WŁĄCZONY"
@@ -275,8 +301,14 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED || secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
         run: |
           set -euo pipefail
+          stop="uruchom akcję disable oraz scripts/olx-cloud-scheduled.stop.sql"
           npx wrangler deploy --config "$SCHEDULED_CONFIG" | tee rollback.log
-          grep -Fq 'env.OLX_CLOUD_ENABLED ("0")' rollback.log || { echo "::error::NIE UDAŁO SIĘ wyłączyć — uruchom disable i stop.sql"; exit 1; }
-          echo "::warning::Włączenie niepotwierdzone — Worker wdrożony ponownie jako wyłączony."
+          grep -Fq 'env.OLX_CLOUD_ENABLED ("0")' rollback.log || { echo "::error::NIE UDAŁO SIĘ wyłączyć — $stop"; exit 1; }
+          version="$("$STATUS" deploy-version rollback.log)"
+          npx wrangler deployments status --json --config "$SCHEDULED_CONFIG" > deployment-rollback.json
+          "$STATUS" deployment "$version" deployment-rollback.json || { echo "::error::Wyłączona wersja nie jest aktywna — $stop"; exit 1; }
+          "$STATUS" wait disabled "$version" 72 5 status-rollback.json || { echo "::error::Wyłączenie niepotwierdzone na workers.dev — $stop"; exit 1; }
+          echo "::warning::Włączenie niepotwierdzone — Worker wdrożony ponownie jako wyłączony (wersja $version potwierdzona)."
