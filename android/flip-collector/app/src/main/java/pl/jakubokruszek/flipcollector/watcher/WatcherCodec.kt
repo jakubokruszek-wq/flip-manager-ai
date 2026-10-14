@@ -70,7 +70,15 @@ object WatcherCodec {
                     .put("postsSent", record.postsSent)
                     .put("errors", record.errors)
                     .put("message", record.message ?: JSONObject.NULL)
-                    .put("windowKey", record.windowKey ?: JSONObject.NULL),
+                    .put("windowKey", record.windowKey ?: JSONObject.NULL)
+                    .put("mode", record.mode.name)
+                    .put("offersFound", record.offersFound)
+                    .put("stopReason", record.stopReason ?: JSONObject.NULL)
+                    .put("groupReports", JSONArray().apply {
+                        record.groupReports.forEach { report ->
+                            put(JSONObject().put("groupName", report.groupName).put("postsSeen", report.postsSeen).put("offersFound", report.offersFound).put("error", report.error ?: JSONObject.NULL))
+                        }
+                    }),
             )
         }
     }.toString()
@@ -92,6 +100,15 @@ object WatcherCodec {
                     errors = json.optInt("errors"),
                     message = if (json.isNull("message")) null else json.optString("message"),
                     windowKey = if (json.isNull("windowKey")) null else json.optString("windowKey"),
+                    mode = runCatching { ScanMode.valueOf(json.optString("mode", ScanMode.DEMO.name)) }.getOrDefault(ScanMode.DEMO),
+                    offersFound = json.optInt("offersFound"),
+                    groupReports = json.optJSONArray("groupReports")?.let { reports ->
+                        (0 until reports.length()).map { i ->
+                            val report = reports.getJSONObject(i)
+                            GroupReport(report.getString("groupName"), report.optInt("postsSeen"), report.optInt("offersFound"), if (report.isNull("error")) null else report.optString("error"))
+                        }
+                    } ?: emptyList(),
+                    stopReason = if (json.isNull("stopReason")) null else json.optString("stopReason").ifBlank { null },
                 )
             }.getOrNull()
         }

@@ -23,7 +23,9 @@ class AutoScanPlannerTest {
         selection: GroupSelection = GroupSelection.AllActive,
         last: String? = null,
         running: Boolean = false,
-    ) = AutoScanPlanner.decide(now, schedule, conditions, groups, selection, last, running)
+        mode: ScanMode = ScanMode.LIVE,
+        liveAllowed: Boolean = true,
+    ) = AutoScanPlanner.decide(now, schedule, conditions, groups, selection, last, running, mode, liveAllowed)
 
     @Test
     fun startsInsideTheWindowWithActiveGroupsOnly() {
@@ -82,6 +84,23 @@ class AutoScanPlannerTest {
     @Test
     fun unpairedPhoneWaits() {
         assertEquals(AutoDecision.Wait(listOf(ScanBlocker.NOT_PAIRED)), decide(conditions = ready.copy(paired = false)))
+    }
+
+    @Test
+    fun demoModeScansTheBundledDemoGroupWithoutPairingOrRealGroups() {
+        val decision = decide(conditions = ready.copy(paired = false), selection = GroupSelection.Single("missing"), mode = ScanMode.DEMO, liveAllowed = false) as AutoDecision.Start
+        assertEquals(listOf(DemoData.GROUP_ID), decision.groups.map { it.id })
+    }
+
+    @Test
+    fun demoModeStillHonoursWindowWifiAndCharging() {
+        assertEquals(AutoDecision.Wait(listOf(ScanBlocker.OUTSIDE_WINDOW)), decide(now = outside, mode = ScanMode.DEMO))
+        assertEquals(AutoDecision.Wait(listOf(ScanBlocker.CHARGING_REQUIRED)), decide(conditions = ready.copy(charging = false), mode = ScanMode.DEMO))
+    }
+
+    @Test
+    fun liveModeIsBlockedWhileLiveCollectionIsNotAllowed() {
+        assertEquals(AutoDecision.Wait(listOf(ScanBlocker.LIVE_DISABLED)), decide(liveAllowed = false))
     }
 
     @Test

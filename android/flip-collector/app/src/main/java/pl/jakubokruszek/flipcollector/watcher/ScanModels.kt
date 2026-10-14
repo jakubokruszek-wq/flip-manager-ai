@@ -21,11 +21,15 @@ sealed interface GroupSelection {
 
 enum class ScanTrigger { MANUAL, AUTOMATIC }
 
+/** What a scan runs on. Only DEMO exists in this release; LIVE waits for consent and backend integration. */
+enum class ScanMode { DEMO, LIVE }
+
 /** Device state the preconditions read; supplied by Android in production, by tests directly. */
 data class DeviceConditions(
     val onWifi: Boolean,
     val charging: Boolean,
     val paired: Boolean,
+    val batteryPercent: Int? = null,
 )
 
 /** Why a scan may not start. Each blocker carries the text the screen shows. */
@@ -37,25 +41,40 @@ enum class ScanBlocker(val message: String) {
     NOT_PAIRED("Urządzenie nie jest sparowane z Flip Managerem."),
     NO_GROUPS("Brak aktywnych grup do skanowania."),
     ALREADY_RUNNING("Skan już trwa."),
+    LIVE_DISABLED("Skanowanie prawdziwych grup jest wyłączone w tej wersji."),
 }
 
 data class ScanProgress(
     val totalGroups: Int,
     val completedGroups: Int = 0,
     val postsSeen: Int = 0,
+    val offersFound: Int = 0,
     val postsSent: Int = 0,
     val errors: Int = 0,
     val currentGroup: String? = null,
+    /** Posts read so far in the current group and its expected total, when known. */
+    val currentGroupPosts: Int = 0,
+    val currentGroupTotal: Int? = null,
 )
 
-enum class ScanOutcome(val label: String) {
-    COMPLETED("Zakończony"),
-    PARTIAL("Zakończony z błędami"),
-    FAILED("Błąd"),
-    STOPPED("Zatrzymany"),
-    BLOCKED("Nie uruchomiono"),
-    DRY_RUN("Próba bez Facebooka"),
+enum class ScanOutcome(val label: String, val successful: Boolean) {
+    COMPLETED("Zakończony", true),
+    PARTIAL("Zakończony z błędami", false),
+    FAILED("Błąd", false),
+    STOPPED("Zatrzymany", false),
+    TIMED_OUT("Przekroczony limit czasu", false),
+    BLOCKED("Nie uruchomiono", false),
+    /** Kept so histories written by 0.2.0 still decode. */
+    DRY_RUN("Próba bez Facebooka", true),
 }
+
+/** One group's line in a scan report. */
+data class GroupReport(
+    val groupName: String,
+    val postsSeen: Int,
+    val offersFound: Int,
+    val error: String? = null,
+)
 
 data class ScanRecord(
     val id: String,
@@ -69,6 +88,10 @@ data class ScanRecord(
     val errors: Int,
     val message: String?,
     val windowKey: String? = null,
+    val mode: ScanMode = ScanMode.DEMO,
+    val offersFound: Int = 0,
+    val groupReports: List<GroupReport> = emptyList(),
+    val stopReason: String? = null,
 )
 
 /** Pure precondition check shared by "Skanuj teraz" and the automatic tick. */
@@ -80,6 +103,8 @@ object ScanPreconditions {
         groups: List<WatchedGroup>,
         selection: GroupSelection,
         insideWindow: Boolean,
+        mode: ScanMode = ScanMode.DEMO,
+        liveAllowed: Boolean = false,
     ): List<ScanBlocker> = buildList {
         if (trigger == ScanTrigger.AUTOMATIC) {
             if (!schedule.enabled) add(ScanBlocker.AUTOMATION_DISABLED)
@@ -89,7 +114,11 @@ object ScanPreconditions {
         // the phone's data plan and battery, whoever presses the button.
         if (schedule.requireWifi && !conditions.onWifi) add(ScanBlocker.WIFI_REQUIRED)
         if (schedule.requireCharging && !conditions.charging) add(ScanBlocker.CHARGING_REQUIRED)
-        if (!conditions.paired) add(ScanBlocker.NOT_PAIRED)
-        if (selection.resolve(groups).isEmpty()) add(ScanBlocker.NO_GROUPS)
+        if (mode == ScanMode.LIVE) {
+            // A demo scan runs on bundled test data, so pairing and real groups only bind a live scan.
+            if (!liveAllowed) add(ScanBlocker.LIVE_DISABLED)
+            if (!conditions.paired) add(ScanBlocker.NOT_PAIRED)
+            if (selection.resolve(groups).isEmpty()) add(ScanBlocker.NO_GROUPS)
+        }
     }
 }

@@ -4,7 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,21 +39,24 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pl.jakubokruszek.flipcollector.watcher.android.WatcherRuntime
-import pl.jakubokruszek.flipcollector.watcher.android.WatcherSettingsScreen
+import pl.jakubokruszek.flipcollector.ui.FlipColors
+import pl.jakubokruszek.flipcollector.ui.FlipTheme
+import pl.jakubokruszek.flipcollector.watcher.android.FacebookWatcherScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         // Re-register the periodic tick after an update or a cleared WorkManager state.
         WatcherRuntime.applySchedule(this, WatcherRuntime.settings(this).schedule())
         setContent {
-            MaterialTheme {
+            FlipTheme {
                 var screen by remember { mutableStateOf(Screen.HOME) }
                 when (screen) {
                     Screen.HOME -> CollectorHome(this@MainActivity, onOpenWatcher = { screen = Screen.WATCHER })
                     Screen.WATCHER -> {
                         BackHandler { screen = Screen.HOME }
-                        WatcherSettingsScreen(this@MainActivity, onBack = { screen = Screen.HOME })
+                        FacebookWatcherScreen(this@MainActivity, onBack = { screen = Screen.HOME })
                     }
                 }
             }
@@ -87,7 +95,7 @@ private fun CollectorHome(activity: ComponentActivity, onOpenWatcher: () -> Unit
         }
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().background(FlipColors.Surface).windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Flip Collector", style = MaterialTheme.typography.headlineMedium)
         Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(if (!paired) "Urządzenie nie jest sparowane" else "Urządzenie połączone")
@@ -95,7 +103,7 @@ private fun CollectorHome(activity: ComponentActivity, onOpenWatcher: () -> Unit
             Text("Ostatni import: ${preferences.getString("last_import", null) ?: "brak"}")
             Text("Importy oczekujące: ${queue.all().size}")
         } }
-        OutlinedButton(onClick = onOpenWatcher, modifier = Modifier.fillMaxWidth()) { Text("Facebook Watcher → Ustawienia skanowania") }
+        Button(onClick = onOpenWatcher, modifier = Modifier.fillMaxWidth()) { Text("Otwórz Facebook Watcher") }
         if (!paired) {
             Text("Połącz z Flip Managerem", style = MaterialTheme.typography.titleMedium)
             Button(onClick = { scanner.startScan().addOnSuccessListener { barcode -> parsePairingPayload(barcode.rawValue.orEmpty())?.let(::connect) ?: run { message = "Kod QR parowania jest nieprawidłowy." } }.addOnFailureListener { message = "Nie udało się odczytać kodu QR." } }) { Text("Skanuj kod QR") }

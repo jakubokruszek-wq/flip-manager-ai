@@ -32,6 +32,21 @@ class WatcherCodecTest {
     }
 
     @Test
+    fun recordWithReportsAndStopReasonRoundTrips() {
+        val record = ScanRecord("s1", ScanTrigger.AUTOMATIC, "2026-10-14T00:00:00Z", "2026-10-14T00:05:00Z", ScanOutcome.STOPPED, 2, 7, 0, 1, "Bałuty: błąd", "w1", ScanMode.DEMO, 3, listOf(GroupReport("A", 7, 3), GroupReport("Bałuty", 0, 0, "błąd")), "Zatrzymane przez użytkownika")
+        assertEquals(listOf(record), WatcherCodec.decodeHistory(WatcherCodec.encodeHistory(listOf(record))))
+    }
+
+    @Test
+    fun historyFromVersion020StillDecodes() {
+        val old = "[{\"id\":\"s\",\"trigger\":\"MANUAL\",\"startedAt\":\"a\",\"finishedAt\":\"b\",\"outcome\":\"DRY_RUN\",\"groups\":1,\"postsSeen\":0,\"postsSent\":0,\"errors\":0,\"message\":null,\"windowKey\":null}]"
+        val decoded = WatcherCodec.decodeHistory(old).single()
+        assertEquals(ScanOutcome.DRY_RUN, decoded.outcome)
+        assertEquals(ScanMode.DEMO, decoded.mode)
+        assertEquals(emptyList<GroupReport>(), decoded.groupReports)
+    }
+
+    @Test
     fun historyRoundTripsAndIsCappedNewestFirst() {
         val records = (1..60).fold(emptyList<ScanRecord>()) { history, index ->
             WatcherCodec.prepend(history, ScanRecord("s$index", ScanTrigger.MANUAL, "2026-10-14T00:00:00Z", "2026-10-14T00:01:00Z", ScanOutcome.DRY_RUN, 2, 0, 0, 0, if (index % 2 == 0) null else "note", null))
