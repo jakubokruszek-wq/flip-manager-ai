@@ -12,8 +12,8 @@ android {
         applicationId = "pl.jakubokruszek.flipcollector"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("FLIP_COLLECTOR_VERSION_CODE").orElse("4").get().toInt()
-        versionName = "0.3.1"
+        versionCode = providers.gradleProperty("FLIP_COLLECTOR_VERSION_CODE").orElse("5").get().toInt()
+        versionName = "0.4.0"
 
         buildConfigField(
             "String",
@@ -24,6 +24,7 @@ android {
         // until the user separately approves it; see LiveCollectionGate.
         buildConfigField("boolean", "LIVE_COLLECTION_ENABLED", "false")
         resValue("string", "app_name", "Flip Collector")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -75,4 +76,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     // Android's org.json is a stub on the JVM; tests use the real library.
     testImplementation("org.json:json:20240303")
+
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.work:work-testing:2.10.0")
 }

@@ -48,6 +48,8 @@ sealed interface StartResult {
 class ScanCoordinator(
     private val scope: CoroutineScope,
     private val onFinished: (ScanRecord) -> Unit,
+    /** Durable checkpoint at start, at each group's start and after each group; see [ScanJournal]. */
+    private val onCheckpoint: (ScanJournal) -> Unit = {},
     private val clock: () -> Instant = Instant::now,
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -73,7 +75,10 @@ class ScanCoordinator(
         var progress = ScanProgress(totalGroups = groups.size)
         val reports = mutableListOf<GroupReport>()
         fun publish(value: ScanProgress) { mutableState.value = ScanState.Running(scanId, trigger, mode, value) }
+        val journalBase = ScanJournal(scanId, trigger, mode, startedAt.toString(), windowKey, groups.size, 0, 0, 0, 0, 0, emptyList(), startedAt.toString())
+        fun checkpoint() { runCatching { onCheckpoint(ScanRecovery.journalAt(progress, journalBase, reports.toList(), clock())) } }
         publish(progress)
+        checkpoint()
         // Lazy start: [job] is set before the body can run, so a scan that
         // finishes at once never leaves a stale job behind.
         val launched = scope.launch(start = CoroutineStart.LAZY) {
@@ -85,6 +90,7 @@ class ScanCoordinator(
                         val base = progress.copy(currentGroup = group.name, currentGroupPosts = 0, currentGroupTotal = null)
                         progress = base
                         publish(progress)
+                        checkpoint()
                         try {
                             val result = withTimeoutOrNull(limits.perGroup.toMillis()) {
                                 executor.scanGroup(group) { step ->
@@ -106,6 +112,7 @@ class ScanCoordinator(
                         }
                         progress = progress.copy(currentGroup = null)
                         publish(progress)
+                        checkpoint()
                     }
                     true
                 }

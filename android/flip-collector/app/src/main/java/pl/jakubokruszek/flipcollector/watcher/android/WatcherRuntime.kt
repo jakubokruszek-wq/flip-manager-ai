@@ -16,6 +16,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.workDataOf
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -33,9 +36,12 @@ import pl.jakubokruszek.flipcollector.watcher.DiagnosticLevel
 import pl.jakubokruszek.flipcollector.watcher.ScanCoordinator
 import pl.jakubokruszek.flipcollector.watcher.ScanExecutor
 import pl.jakubokruszek.flipcollector.watcher.ScanMode
+import pl.jakubokruszek.flipcollector.watcher.ScanOutcome
 import pl.jakubokruszek.flipcollector.watcher.ScanRecord
+import pl.jakubokruszek.flipcollector.watcher.ScanRecovery
 import pl.jakubokruszek.flipcollector.watcher.ScanSchedule
 import pl.jakubokruszek.flipcollector.watcher.ScanTrigger
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 /**
@@ -75,17 +81,73 @@ object WatcherRuntime {
             ScanCoordinator(
                 scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
                 onFinished = { record -> onScanFinished(app, record) },
+                onCheckpoint = { journal -> settings(app).saveJournal(journal) },
             ).also { coordinatorInstance = it }
         }
     }
 
     private fun onScanFinished(context: Context, record: ScanRecord) {
         val settings = settings(context)
+        // Order matters for recovery: history first, then the window, then the journal.
+        // A crash between them leaves a journal whose scan id is already in the
+        // history, and recovery then only clears it.
         settings.appendHistory(record)
+        record.windowKey?.let { settings.markWindowFinished(it, record.outcome) }
+        settings.clearJournal()
         val level = if (record.outcome.successful) DiagnosticLevel.INFO else DiagnosticLevel.WARN
         settings.log(level, "SCAN_FINISHED", "${record.mode} ${record.trigger} ${record.outcome}: posty ${record.postsSeen}, oferty ${record.offersFound}, błędy ${record.errors}${record.stopReason?.let { ", powód: $it" } ?: ""}")
         if (settings.notifyAfterScan()) notifyScanFinished(context, record)
     }
+
+    /**
+     * Turns a journal left by a dead process into an INTERRUPTED history record
+     * and marks its window INTERRUPTED (one retry allowed). Safe to call any
+     * time: it does nothing while a scan runs in this process, and nothing
+     * when the journal's scan is already in the history.
+     */
+    @Synchronized
+    fun recoverInterruptedScan(context: Context): ScanRecord? {
+        val app = context.applicationContext
+        if (coordinator(app).isRunning) return null
+        val settings = settings(app)
+        val journal = settings.journal() ?: return null
+        if (settings.allHistory().any { it.id == journal.scanId }) {
+            settings.clearJournal()
+            return null
+        }
+        val record = ScanRecovery.interruptedRecord(journal, Instant.now())
+        settings.appendHistory(record)
+        record.windowKey?.let { settings.markWindowFinished(it, ScanOutcome.INTERRUPTED) }
+        settings.clearJournal()
+        settings.log(DiagnosticLevel.WARN, "SCAN_RECOVERED_INTERRUPTED", "${journal.mode} ${journal.trigger}: grupy ${journal.completedGroups}/${journal.totalGroups}, ostatni zapis ${journal.lastCheckpointAt}")
+        return record
+    }
+
+    /**
+     * Schedules a one-off background probe ([ProbeWorker]) in [delayMinutes]
+     * with the schedule's Wi-Fi and charging constraints. It records when it
+     * really ran, so delays from Doze, App Standby or Android 16 job quotas can
+     * be measured on the phone without adb.
+     */
+    fun scheduleProbe(context: Context, delayMinutes: Long) {
+        val schedule = settings(context).schedule()
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(if (schedule.requireWifi) NetworkType.UNMETERED else NetworkType.NOT_REQUIRED)
+            .setRequiresCharging(schedule.requireCharging)
+            .build()
+        val request = OneTimeWorkRequestBuilder<ProbeWorker>()
+            .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+            .setConstraints(constraints)
+            .setInputData(workDataOf(ProbeWorker.KEY_PLANNED_AT to System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(delayMinutes)))
+            .addTag(PROBE_TAG)
+            .build()
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(PROBE_WORK, ExistingWorkPolicy.REPLACE, request)
+        settings(context).log(DiagnosticLevel.INFO, "PROBE_SCHEDULED", "za $delayMinutes min, wifi=${schedule.requireWifi} ładowanie=${schedule.requireCharging}")
+    }
+
+    const val PROBE_WORK = "flip-collector-workmanager-probe"
+    const val PROBE_TAG = "flip-collector-probe"
+    const val AUTO_WORK_NAME = AUTO_WORK
 
     fun conditions(context: Context): DeviceConditions {
         val app = context.applicationContext

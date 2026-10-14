@@ -42,7 +42,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Compile (Kotlin + Compose)
-        run: ./gradlew --no-daemon --stacktrace compileDebugKotlin -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}
+        run: ./gradlew --no-daemon --stacktrace compileDebugKotlin compileDebugAndroidTestKotlin -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}
 
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}

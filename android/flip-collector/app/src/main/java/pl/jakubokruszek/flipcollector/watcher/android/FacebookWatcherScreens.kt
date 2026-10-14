@@ -64,6 +64,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import pl.jakubokruszek.flipcollector.BuildConfig
 import pl.jakubokruszek.flipcollector.integration.BackendIntegration
+import pl.jakubokruszek.flipcollector.integration.GroupFetchResult
+import pl.jakubokruszek.flipcollector.integration.GroupOrigin
+import pl.jakubokruszek.flipcollector.integration.GroupSync
+import pl.jakubokruszek.flipcollector.integration.PendingContractGroupSource
+import pl.jakubokruszek.flipcollector.integration.SyncedGroup
 import pl.jakubokruszek.flipcollector.theme.ThemeMode
 import pl.jakubokruszek.flipcollector.ui.ThemeController
 import pl.jakubokruszek.flipcollector.ui.DemoBanner
@@ -93,8 +98,15 @@ import pl.jakubokruszek.flipcollector.watcher.ScanTrigger
 import pl.jakubokruszek.flipcollector.watcher.StartResult
 import pl.jakubokruszek.flipcollector.watcher.WARSAW
 import pl.jakubokruszek.flipcollector.watcher.WatchedGroup
+import pl.jakubokruszek.flipcollector.watcher.WindowLedger
+import pl.jakubokruszek.flipcollector.watcher.WindowStatus
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -119,15 +131,22 @@ fun FacebookWatcherScreen(context: Context, onBack: () -> Unit) {
 
     var tab by rememberSaveable { mutableStateOf(WatcherTab.HOME) }
     var schedule by remember { mutableStateOf(store.schedule()) }
-    var groups by remember { mutableStateOf(store.groups()) }
+    var synced by remember { mutableStateOf(store.syncedGroups()) }
+    val groups = synced.map { it.group.copy(active = it.scannable) }
     var selection by remember { mutableStateOf(store.selection()) }
-    var history by remember { mutableStateOf(store.history()) }
+    var liveHistory by remember { mutableStateOf(store.history(ScanMode.LIVE)) }
+    var demoHistory by remember { mutableStateOf(store.history(ScanMode.DEMO)) }
     var diagnostics by remember { mutableStateOf(store.diagnostics()) }
     var conditions by remember { mutableStateOf(WatcherRuntime.conditions(app)) }
     var lastAutoCheck by remember { mutableStateOf(store.lastAutoCheck()) }
     var message by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        WatcherRuntime.recoverInterruptedScan(app)?.let { recovered ->
+            message = "Poprzedni skan (${if (recovered.mode == ScanMode.DEMO) "demo" else "na żywo"}) został przerwany przez zamknięcie aplikacji — zapisano go w historii."
+            liveHistory = store.history(ScanMode.LIVE)
+            demoHistory = store.history(ScanMode.DEMO)
+        }
         while (true) {
             conditions = WatcherRuntime.conditions(app)
             lastAutoCheck = store.lastAutoCheck()
@@ -136,7 +155,8 @@ fun FacebookWatcherScreen(context: Context, onBack: () -> Unit) {
     }
     LaunchedEffect(scanState) {
         if (scanState is ScanState.Idle) {
-            history = store.history()
+            liveHistory = store.history(ScanMode.LIVE)
+            demoHistory = store.history(ScanMode.DEMO)
             diagnostics = store.diagnostics()
         }
     }
@@ -195,18 +215,18 @@ fun FacebookWatcherScreen(context: Context, onBack: () -> Unit) {
         ) {
             if (mode == ScanMode.DEMO) DemoBanner("Dane testowe. Facebook nie jest otwierany, nic nie trafia do Flip Managera.")
             when (tab) {
-                WatcherTab.HOME -> HomeTab(mode, scanState, conditions, schedule, history, groups, selection, message, lastAutoCheck, ::startScan, onStop = { coordinator.stop() })
+                WatcherTab.HOME -> HomeTab(mode, scanState, conditions, schedule, liveHistory, demoHistory, groups, selection, message, lastAutoCheck, ::startScan, onStop = { coordinator.stop() })
                 WatcherTab.SCHEDULE -> ScheduleTab(context, store, schedule, lastAutoCheck, ::updateSchedule)
-                WatcherTab.GROUPS -> GroupsTab(groups, selection, mode, onSelection = { selection = it; store.saveSelection(it) }, onGroups = { next ->
-                    groups = next
-                    store.saveGroups(next)
+                WatcherTab.GROUPS -> GroupsTab(synced, selection, mode, store.lastGroupSync(), onSelection = { selection = it; store.saveSelection(it) }, onSync = { text -> store.saveLastGroupSync(text); store.log(DiagnosticLevel.INFO, "GROUP_SYNC", text) }, onGroups = { next ->
+                    synced = next
+                    store.saveSyncedGroups(next)
                     val current = selection
-                    if (current is GroupSelection.Single && next.none { it.id == current.groupId }) {
+                    if (current is GroupSelection.Single && next.none { it.group.id == current.groupId }) {
                         selection = GroupSelection.AllActive
                         store.saveSelection(GroupSelection.AllActive)
                     }
                 })
-                WatcherTab.HISTORY -> HistoryTab(history, diagnostics, conditions, schedule, onClearHistory = { store.clearHistory(); history = emptyList() }, onClearDiagnostics = { store.clearDiagnostics(); diagnostics = emptyList() })
+                WatcherTab.HISTORY -> HistoryTab(context, store, liveHistory, demoHistory, diagnostics, conditions, schedule, onClearHistory = { m -> store.clearHistory(m); if (m == ScanMode.LIVE) liveHistory = emptyList() else demoHistory = emptyList() }, onClearDiagnostics = { store.clearDiagnostics(); diagnostics = emptyList() }, onRefreshDiagnostics = { diagnostics = store.diagnostics() })
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -228,7 +248,8 @@ private fun HomeTab(
     scanState: ScanState,
     conditions: DeviceConditions,
     schedule: ScanSchedule,
-    history: List<ScanRecord>,
+    liveHistory: List<ScanRecord>,
+    demoHistory: List<ScanRecord>,
     groups: List<WatchedGroup>,
     selection: GroupSelection,
     message: String?,
@@ -237,7 +258,8 @@ private fun HomeTab(
     onStop: () -> Unit,
 ) {
     val running = scanState as? ScanState.Running
-    val summary = ScanSummary.from(history, Instant.now())
+    val live = ScanSummary.from(liveHistory, Instant.now())
+    val demo = ScanSummary.from(demoHistory, Instant.now())
 
     DeviceStatusRow(conditions, schedule)
 
@@ -289,15 +311,32 @@ private fun HomeTab(
         message?.let { Text(it, color = FlipColors.Danger, fontSize = 13.sp) }
     }
 
+    // Real results and demo tests are never added together.
     FlipCard {
-        SectionLabel("Wyniki")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MetricTile("${summary.offersToday}", "oferty dziś", Tone.GOLD)
-            MetricTile("${summary.scansToday}", "skany dziś")
+        SectionLabel("Wyniki Facebook Watchera (na żywo)")
+        if (liveHistory.isEmpty()) {
+            Text("Brak — skanowanie prawdziwych grup jest wyłączone w tej wersji.", fontSize = 13.sp, color = FlipColors.MutedForeground)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MetricTile("${live.offersToday}", "oferty dziś", Tone.GOLD)
+                MetricTile("${live.scansToday}", "skany dziś")
+            }
+            InfoRow("Ostatni udany skan", live.lastSuccessful?.let { "${formatInstant(it.finishedAt)} · ${it.offersFound} ofert" } ?: "brak")
+            live.lastError?.let { InfoRow("Ostatni błąd", it, FlipColors.Danger) }
         }
-        val last = summary.lastSuccessful
-        InfoRow("Ostatni udany skan", last?.let { "${formatInstant(it.finishedAt)} · ${modeLabel(it)} · ${it.offersFound} ofert" } ?: "brak")
-        summary.lastError?.let { InfoRow("Ostatni błąd", it, FlipColors.Danger) }
+    }
+
+    FlipCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel("Testy demo", Modifier.weight(1f))
+            StatusPill("dane testowe", Tone.NEUTRAL)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MetricTile("${demo.scansToday}", "testy dziś")
+            MetricTile("${demoHistory.count { !it.outcome.successful }}", "nieudane (łącznie)", if (demoHistory.any { !it.outcome.successful }) Tone.WARNING else Tone.NEUTRAL)
+        }
+        InfoRow("Ostatni udany test", demo.lastSuccessful?.let { formatInstant(it.finishedAt) } ?: "brak")
+        demo.lastError?.let { InfoRow("Ostatni błąd testu", it, FlipColors.Danger) }
     }
 
     FlipCard {
@@ -450,10 +489,20 @@ private fun TimeButton(label: String, minutes: Int, modifier: Modifier, onClick:
 // ----------------------------------------------------------------- Grupy
 
 @Composable
-private fun GroupsTab(groups: List<WatchedGroup>, selection: GroupSelection, mode: ScanMode, onSelection: (GroupSelection) -> Unit, onGroups: (List<WatchedGroup>) -> Unit) {
+private fun GroupsTab(
+    synced: List<SyncedGroup>,
+    selection: GroupSelection,
+    mode: ScanMode,
+    lastSync: String?,
+    onSelection: (GroupSelection) -> Unit,
+    onSync: (String) -> Unit,
+    onGroups: (List<SyncedGroup>) -> Unit,
+) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
-    val active = groups.filter { it.active }
+    var syncMessage by remember { mutableStateOf(lastSync) }
+    val scope = rememberCoroutineScope()
+    val scannable = synced.count { it.scannable }
 
     if (mode == ScanMode.DEMO) {
         FlipCard(highlighted = true) {
@@ -463,40 +512,75 @@ private fun GroupsTab(groups: List<WatchedGroup>, selection: GroupSelection, mod
     }
 
     FlipCard {
-        SectionLabel("Zakres skanu")
-        SelectionRow("Wszystkie aktywne", "${active.size} z ${groups.size}", selection == GroupSelection.AllActive) { onSelection(GroupSelection.AllActive) }
-        if (groups.isNotEmpty()) HorizontalDivider(color = FlipColors.Border)
-        groups.forEach { group ->
-            Column {
-                SelectionRow(group.name, group.url, selection == GroupSelection.Single(group.id), enabled = group.active) { onSelection(GroupSelection.Single(group.id)) }
-                Row(Modifier.padding(start = 48.dp)) {
-                    TextButton(onClick = { onGroups(groups.map { if (it.id == group.id) it.copy(active = !it.active) else it }) }) { Text(if (group.active) "Wyłącz" else "Włącz") }
-                    TextButton(onClick = { onGroups(groups.filterNot { it.id == group.id }) }) { Text("Usuń", color = FlipColors.Danger) }
+        SectionLabel("Synchronizacja z Flip Managerem")
+        Text("Lista grup obserwowanych w Flip Managerze. Twój przełącznik „Wyłącz/Włącz” w telefonie zostaje po synchronizacji; grupy usunięte w Flip Managerze są oznaczane i nie są skanowane.", fontSize = 13.sp, color = FlipColors.MutedForeground)
+        OutlinedButton(onClick = {
+            scope.launch {
+                val stamp = ZonedDateTime.now(WARSAW).format(TIME_FORMAT)
+                val text = when (val result = PendingContractGroupSource.fetch()) {
+                    GroupFetchResult.PendingContract -> "$stamp — oczekuje na kontrakt backendu (brak połączenia)"
+                    is GroupFetchResult.Failure -> "$stamp — błąd: ${result.code}"
+                    is GroupFetchResult.Success -> {
+                        val (merged, report) = GroupSync.merge(synced, result.groups) { UUID.randomUUID().toString() }
+                        onGroups(merged)
+                        "$stamp — dodane ${report.added}, zmienione ${report.updated}, usunięte w Flip Managerze ${report.removedOnServer}"
+                    }
                 }
+                syncMessage = text
+                onSync(text)
             }
-        }
-        if (groups.isEmpty()) Text("Brak grup. Dodaj je poniżej — lista jest przechowywana tylko w telefonie.", fontSize = 13.sp, color = FlipColors.MutedForeground)
+        }, modifier = Modifier.fillMaxWidth()) { Text("Synchronizuj grupy") }
+        syncMessage?.let { Text("Ostatnio: $it", fontSize = 12.sp, color = FlipColors.Warning) }
     }
 
     FlipCard {
-        SectionLabel("Dodaj grupę")
+        SectionLabel("Zakres skanu")
+        SelectionRow("Wszystkie aktywne", "$scannable z ${synced.size}", selection == GroupSelection.AllActive) { onSelection(GroupSelection.AllActive) }
+        if (synced.isNotEmpty()) HorizontalDivider(color = FlipColors.Border)
+        synced.forEach { item ->
+            val group = item.group
+            Column {
+                SelectionRow(group.name, group.url, selection == GroupSelection.Single(group.id), enabled = item.scannable) { onSelection(GroupSelection.Single(group.id)) }
+                Row(Modifier.padding(start = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    StatusPill(
+                        when (item.origin) {
+                            GroupOrigin.LOCAL -> "lokalna"
+                            GroupOrigin.SERVER -> if (item.serverEnabled) "Flip Manager" else "wyłączona w Flip Managerze"
+                            GroupOrigin.REMOVED_ON_SERVER -> "usunięta w Flip Managerze"
+                        },
+                        when (item.origin) {
+                            GroupOrigin.LOCAL -> Tone.NEUTRAL
+                            GroupOrigin.SERVER -> if (item.serverEnabled) Tone.SUCCESS else Tone.WARNING
+                            GroupOrigin.REMOVED_ON_SERVER -> Tone.DANGER
+                        },
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { onGroups(synced.map { if (it.group.id == group.id) it.copy(group = it.group.copy(active = !it.group.active)) else it }) }) { Text(if (group.active) "Wyłącz" else "Włącz") }
+                    TextButton(onClick = { onGroups(synced.filterNot { it.group.id == group.id }) }) { Text("Usuń", color = FlipColors.Danger) }
+                }
+            }
+        }
+        if (synced.isEmpty()) Text("Brak grup. Dodaj je poniżej — do czasu synchronizacji lista jest przechowywana tylko w telefonie.", fontSize = 13.sp, color = FlipColors.MutedForeground)
+    }
+
+    FlipCard {
+        SectionLabel("Dodaj grupę ręcznie")
         OutlinedTextField(name, { name = it }, label = { Text("Nazwa grupy") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(url, { url = it }, label = { Text("Link: https://www.facebook.com/groups/…") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         val normalizedUrl = url.trim().replace(Regex("^https://(m\\.)?facebook\\.com/", RegexOption.IGNORE_CASE), "https://www.facebook.com/")
-        val duplicate = groups.any { it.url.equals(normalizedUrl, ignoreCase = true) }
+        val duplicate = synced.any { GroupSync.normalizeUrl(it.group.url) == GroupSync.normalizeUrl(normalizedUrl) }
         if (url.isNotBlank() && !FACEBOOK_SOURCE.matches(url.trim())) Text("Link musi zaczynać się od https://www.facebook.com/", fontSize = 12.sp, color = FlipColors.Danger)
         if (duplicate) Text("Ta grupa już jest na liście.", fontSize = 12.sp, color = FlipColors.Danger)
         Button(
             enabled = name.isNotBlank() && FACEBOOK_SOURCE.matches(url.trim()) && !duplicate,
             onClick = {
-                onGroups(groups + WatchedGroup(UUID.randomUUID().toString(), name.trim(), normalizedUrl))
+                onGroups(synced + SyncedGroup(WatchedGroup(UUID.randomUUID().toString(), name.trim(), normalizedUrl), GroupOrigin.LOCAL))
                 name = ""
                 url = ""
             },
             colors = ButtonDefaults.buttonColors(containerColor = FlipColors.Gold, contentColor = FlipColors.OnGold),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Dodaj grupę") }
-        Text("Pobieranie listy grup z Flip Managera: oczekuje na kontrakt backendu.", fontSize = 12.sp, color = FlipColors.Warning)
     }
 }
 
@@ -518,24 +602,46 @@ private fun SelectionRow(title: String, subtitle: String?, selected: Boolean, en
 
 @Composable
 private fun HistoryTab(
-    history: List<ScanRecord>,
+    context: Context,
+    store: WatcherSettingsStore,
+    liveHistory: List<ScanRecord>,
+    demoHistory: List<ScanRecord>,
     diagnostics: List<DiagnosticEvent>,
     conditions: DeviceConditions,
     schedule: ScanSchedule,
-    onClearHistory: () -> Unit,
+    onClearHistory: (ScanMode) -> Unit,
     onClearDiagnostics: () -> Unit,
+    onRefreshDiagnostics: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    var shownMode by rememberSaveable { mutableStateOf(ScanMode.DEMO) }
+    val shown = if (shownMode == ScanMode.LIVE) liveHistory else demoHistory
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SectionLabel("Skany (${history.size})", Modifier.weight(1f))
-        if (history.isNotEmpty()) TextButton(onClick = onClearHistory) { Text("Wyczyść") }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        listOf(ScanMode.LIVE to "Na żywo (${liveHistory.size})", ScanMode.DEMO to "Testy demo (${demoHistory.size})").forEach { (m, label) ->
+            FilterChip(
+                selected = shownMode == m,
+                onClick = { shownMode = m },
+                label = { Text(label) },
+                modifier = Modifier.weight(1f),
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = FlipColors.Gold, selectedLabelColor = FlipColors.OnGold, labelColor = FlipColors.Foreground),
+                border = FilterChipDefaults.filterChipBorder(enabled = true, selected = shownMode == m, borderColor = FlipColors.MutedForeground),
+            )
+        }
     }
-    if (history.isEmpty()) Text("Brak skanów. Uruchom „Skanuj teraz” na Pulpicie.", fontSize = 13.sp, color = FlipColors.MutedForeground)
-    history.forEach { HistoryCard(it) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionLabel(if (shownMode == ScanMode.LIVE) "Skany prawdziwych grup" else "Skany testowe (oddzielnie od wyników)", Modifier.weight(1f))
+        if (shown.isNotEmpty()) TextButton(onClick = { onClearHistory(shownMode) }) { Text("Wyczyść") }
+    }
+    if (shown.isEmpty()) {
+        Text(if (shownMode == ScanMode.LIVE) "Brak — skanowanie na żywo jest wyłączone w tej wersji." else "Brak testów. Uruchom „Skanuj teraz” na Pulpicie.", fontSize = 13.sp, color = FlipColors.MutedForeground)
+    }
+    shown.forEach { HistoryCard(it) }
 
     Spacer(Modifier.height(4.dp))
+    WorkManagerPanel(context, store, onRefreshDiagnostics)
+
     Row(verticalAlignment = Alignment.CenterVertically) {
         SectionLabel("Diagnostyka (${diagnostics.size})", Modifier.weight(1f))
         TextButton(onClick = { showDiagnostics = !showDiagnostics }) { Text(if (showDiagnostics) "Ukryj" else "Pokaż") }
@@ -547,6 +653,8 @@ private fun HistoryTab(
                 "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}",
                 "Wi-Fi=${conditions.onWifi} ładowanie=${conditions.charging} bateria=${conditions.batteryPercent ?: "?"}%",
                 "Harmonogram: automat=${schedule.enabled} ${ScanSchedule.format(schedule.startMinutes)}–${ScanSchedule.format(schedule.endMinutes)} wifi=${schedule.requireWifi} ładowanie=${schedule.requireCharging}",
+                "Okna: " + store.ledger().take(5).joinToString("; ") { "${it.key} ${it.status} próby=${it.attempts}" },
+                "Aktywny dziennik skanu: " + (store.journal()?.let { "${it.scanId} ${it.mode} ${it.completedGroups}/${it.totalGroups}" } ?: "brak"),
             )
             clipboard.setText(AnnotatedString(Diagnostics.export(diagnostics, header)))
         }, modifier = Modifier.weight(1f)) { Text("Kopiuj diagnostykę") }
@@ -567,6 +675,54 @@ private fun HistoryTab(
             }
         }
     }
+}
+
+/** WorkManager state on the phone, without adb: the periodic tick, the probe and the window ledger. */
+@Composable
+private fun WorkManagerPanel(context: Context, store: WatcherSettingsStore, onRefreshDiagnostics: () -> Unit) {
+    val workManager = remember { WorkManager.getInstance(context.applicationContext) }
+    val autoInfos by workManager.getWorkInfosForUniqueWorkFlow(WatcherRuntime.AUTO_WORK_NAME).collectAsState(initial = emptyList())
+    val probeInfos by workManager.getWorkInfosForUniqueWorkFlow(WatcherRuntime.PROBE_WORK).collectAsState(initial = emptyList())
+    LaunchedEffect(probeInfos.firstOrNull()?.state) { onRefreshDiagnostics() }
+
+    FlipCard {
+        SectionLabel("WorkManager i okna")
+        InfoRow("Automat (co 15 min)", autoInfos.firstOrNull()?.let { workText(it) } ?: "nie zaplanowany")
+        InfoRow("Test zadania w tle", probeInfos.firstOrNull()?.let { workText(it) } ?: "nie uruchomiony")
+        store.ledger().take(3).forEach { entry ->
+            InfoRow("Okno ${windowLabel(entry.key)}", "${windowStatusText(entry.status)} · próby ${entry.attempts}/${WindowLedger.MAX_ATTEMPTS}")
+        }
+        Text("Test sprawdza, z jakim opóźnieniem Android uruchomi zadanie w tle z warunkami harmonogramu (Wi-Fi, ładowanie). Wynik trafia do diagnostyki jako PROBE_RAN.", fontSize = 12.sp, color = FlipColors.MutedForeground)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { WatcherRuntime.scheduleProbe(context, 1); onRefreshDiagnostics() }, modifier = Modifier.weight(1f)) { Text("Test za 1 min") }
+            OutlinedButton(onClick = { WatcherRuntime.scheduleProbe(context, 15); onRefreshDiagnostics() }, modifier = Modifier.weight(1f)) { Text("Test za 15 min") }
+        }
+    }
+}
+
+private fun workText(info: WorkInfo): String = buildString {
+    append(when (info.state) {
+        WorkInfo.State.ENQUEUED -> "czeka"
+        WorkInfo.State.RUNNING -> "działa"
+        WorkInfo.State.SUCCEEDED -> "wykonane"
+        WorkInfo.State.FAILED -> "błąd"
+        WorkInfo.State.BLOCKED -> "zablokowane"
+        WorkInfo.State.CANCELLED -> "anulowane"
+    })
+    if (info.state == WorkInfo.State.ENQUEUED && info.nextScheduleTimeMillis != Long.MAX_VALUE) {
+        append(", najwcześniej ").append(Instant.ofEpochMilli(info.nextScheduleTimeMillis).atZone(WARSAW).format(TIME_FORMAT))
+    }
+    if (info.runAttemptCount > 0) append(", próby ").append(info.runAttemptCount)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && info.stopReason != WorkInfo.STOP_REASON_NOT_STOPPED) append(", stop ").append(info.stopReason)
+}
+
+/** Window keys are the window start as an ISO offset date-time, e.g. 2026-10-15T02:00+02:00. */
+private fun windowLabel(key: String): String = runCatching { OffsetDateTime.parse(key).atZoneSameInstant(WARSAW).format(TIME_FORMAT) }.getOrDefault(key)
+
+private fun windowStatusText(status: WindowStatus) = when (status) {
+    WindowStatus.STARTED -> "skan w toku"
+    WindowStatus.FINISHED -> "wykorzystane (skan zakończony)"
+    WindowStatus.INTERRUPTED -> "przerwane"
 }
 
 @Composable
@@ -604,7 +760,7 @@ private fun HistoryCard(record: ScanRecord) {
 
 private fun outcomeTone(outcome: ScanOutcome) = when (outcome) {
     ScanOutcome.COMPLETED, ScanOutcome.DRY_RUN -> Tone.SUCCESS
-    ScanOutcome.PARTIAL, ScanOutcome.STOPPED, ScanOutcome.TIMED_OUT -> Tone.WARNING
+    ScanOutcome.PARTIAL, ScanOutcome.STOPPED, ScanOutcome.TIMED_OUT, ScanOutcome.INTERRUPTED -> Tone.WARNING
     ScanOutcome.FAILED -> Tone.DANGER
     ScanOutcome.BLOCKED -> Tone.NEUTRAL
 }

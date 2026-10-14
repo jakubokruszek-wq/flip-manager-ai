@@ -42,6 +42,8 @@ enum class ScanBlocker(val message: String) {
     NO_GROUPS("Brak aktywnych grup do skanowania."),
     ALREADY_RUNNING("Skan już trwa."),
     LIVE_DISABLED("Skanowanie prawdziwych grup jest wyłączone w tej wersji."),
+    WINDOW_FINISHED("Skan w tym oknie już się zakończył."),
+    WINDOW_RETRIES_EXHAUSTED("Skan w tym oknie był przerywany ${WindowLedger.MAX_ATTEMPTS} razy — czekam na następne okno."),
 }
 
 data class ScanProgress(
@@ -64,6 +66,8 @@ enum class ScanOutcome(val label: String, val successful: Boolean) {
     STOPPED("Zatrzymany", false),
     TIMED_OUT("Przekroczony limit czasu", false),
     BLOCKED("Nie uruchomiono", false),
+    /** The process died mid-scan; recorded from the journal at the next start. */
+    INTERRUPTED("Przerwany (proces zakończony)", false),
     /** Kept so histories written by 0.2.0 still decode. */
     DRY_RUN("Próba bez Facebooka", true),
 }

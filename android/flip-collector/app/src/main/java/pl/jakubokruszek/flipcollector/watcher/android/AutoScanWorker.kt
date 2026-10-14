@@ -15,6 +15,7 @@ import pl.jakubokruszek.flipcollector.watcher.ScanSchedule
 import pl.jakubokruszek.flipcollector.watcher.ScanState
 import pl.jakubokruszek.flipcollector.watcher.ScanTrigger
 import pl.jakubokruszek.flipcollector.watcher.StartResult
+import pl.jakubokruszek.flipcollector.watcher.WindowLedger
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
@@ -31,6 +32,9 @@ import java.time.format.DateTimeFormatter
  */
 class AutoScanWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
+        // A journal left by a killed process becomes an INTERRUPTED record first,
+        // so the planner below sees the window as interrupted, not running.
+        WatcherRuntime.recoverInterruptedScan(applicationContext)
         val settings = WatcherRuntime.settings(applicationContext)
         val schedule = settings.schedule()
         val coordinator = WatcherRuntime.coordinator(applicationContext)
@@ -44,24 +48,25 @@ class AutoScanWorker(appContext: Context, params: WorkerParameters) : CoroutineW
             conditions = conditions,
             groups = settings.groups(),
             selection = settings.selection(),
-            lastStartedWindowKey = settings.lastStartedWindowKey(),
+            ledger = settings.ledger(),
             scanRunning = coordinator.isRunning,
             mode = mode,
             liveAllowed = WatcherRuntime.gate(applicationContext).open,
         )
         when (decision) {
             is AutoDecision.Wait -> {
-                val text = if (decision.blockers.isEmpty()) "okno już obsłużone" else decision.blockers.joinToString(" ") { it.message }
+                val text = decision.blockers.joinToString(" ") { it.message }.ifBlank { "brak powodu" }
                 settings.saveLastAutoCheck("$stamp — $text")
                 settings.log(DiagnosticLevel.INFO, "AUTO_TICK_WAIT", "$text (Wi-Fi: ${conditions.onWifi}, ładowanie: ${conditions.charging}, bateria: ${conditions.batteryPercent ?: "?"}%)")
             }
             is AutoDecision.Start -> {
-                // Store the window first: a crash mid-scan must not start it again.
-                settings.saveLastStartedWindowKey(decision.window.key)
+                // Mark the window first: a crash mid-scan is then seen as an
+                // interruption of this window (one retry), never as a fresh window.
+                settings.markWindowStarted(decision.window.key)
                 when (coordinator.start(ScanTrigger.AUTOMATIC, decision.groups, WatcherRuntime.executor(applicationContext), ScanLimits.AUTOMATIC, decision.window.key)) {
                     is StartResult.Started -> {
                         settings.saveLastAutoCheck("$stamp — uruchomiono skan $mode (okno ${ScanSchedule.format(schedule.startMinutes)}–${ScanSchedule.format(schedule.endMinutes)})")
-                        settings.log(DiagnosticLevel.INFO, "AUTO_SCAN_START", "$mode, grupy: ${decision.groups.size}, okno ${decision.window.key}")
+                        settings.log(DiagnosticLevel.INFO, "AUTO_SCAN_START", "$mode, grupy: ${decision.groups.size}, okno ${decision.window.key}, próba ${decision.attempt}/${WindowLedger.MAX_ATTEMPTS}")
                         try {
                             coordinator.state.first { it is ScanState.Idle }
                         } catch (stopped: CancellationException) {

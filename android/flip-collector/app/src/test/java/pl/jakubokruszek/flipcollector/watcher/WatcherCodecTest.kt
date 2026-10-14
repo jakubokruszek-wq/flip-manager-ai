@@ -56,3 +56,18 @@ class WatcherCodecTest {
         assertEquals(records, WatcherCodec.decodeHistory(WatcherCodec.encodeHistory(records)))
     }
 }
+
+class SyncedGroupCodecTest {
+    @Test
+    fun syncedGroupsRoundTripAndOldFormatReadsAsLocal() {
+        val groups = listOf(
+            pl.jakubokruszek.flipcollector.integration.SyncedGroup(WatchedGroup("1", "A", "https://www.facebook.com/groups/a", false), pl.jakubokruszek.flipcollector.integration.GroupOrigin.SERVER, "r1", serverEnabled = false),
+            pl.jakubokruszek.flipcollector.integration.SyncedGroup(WatchedGroup("2", "B", "https://www.facebook.com/groups/b"), pl.jakubokruszek.flipcollector.integration.GroupOrigin.LOCAL),
+        )
+        assertEquals(groups, WatcherCodec.decodeSyncedGroups(WatcherCodec.encodeSyncedGroups(groups)))
+        val old = WatcherCodec.encodeGroups(listOf(WatchedGroup("3", "C", "https://www.facebook.com/groups/c")))
+        val decoded = WatcherCodec.decodeSyncedGroups(old).single()
+        assertEquals(pl.jakubokruszek.flipcollector.integration.GroupOrigin.LOCAL, decoded.origin)
+        assertEquals(null, decoded.remoteId)
+    }
+}

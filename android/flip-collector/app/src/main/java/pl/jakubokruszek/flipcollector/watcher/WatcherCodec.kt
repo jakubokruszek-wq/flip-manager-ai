@@ -2,6 +2,8 @@ package pl.jakubokruszek.flipcollector.watcher
 
 import org.json.JSONArray
 import org.json.JSONObject
+import pl.jakubokruszek.flipcollector.integration.GroupOrigin
+import pl.jakubokruszek.flipcollector.integration.SyncedGroup
 import java.time.DayOfWeek
 import java.time.ZoneId
 
@@ -45,6 +47,29 @@ object WatcherCodec {
         (0 until array.length()).map { index ->
             val json = array.getJSONObject(index)
             WatchedGroup(json.getString("id"), json.getString("name"), json.getString("url"), json.optBoolean("active", true))
+        }
+    }.getOrDefault(emptyList())
+
+    /** Groups with sync metadata; reads the 0.2–0.3 format (no metadata) as LOCAL groups. */
+    fun encodeSyncedGroups(groups: List<SyncedGroup>): String = JSONArray().apply {
+        groups.forEach {
+            put(
+                JSONObject().put("id", it.group.id).put("name", it.group.name).put("url", it.group.url).put("active", it.group.active)
+                    .put("origin", it.origin.name).put("remoteId", it.remoteId ?: JSONObject.NULL).put("serverEnabled", it.serverEnabled),
+            )
+        }
+    }.toString()
+
+    fun decodeSyncedGroups(text: String?): List<SyncedGroup> = runCatching {
+        val array = JSONArray(text ?: "[]")
+        (0 until array.length()).map { index ->
+            val json = array.getJSONObject(index)
+            SyncedGroup(
+                group = WatchedGroup(json.getString("id"), json.getString("name"), json.getString("url"), json.optBoolean("active", true)),
+                origin = runCatching { GroupOrigin.valueOf(json.optString("origin", GroupOrigin.LOCAL.name)) }.getOrDefault(GroupOrigin.LOCAL),
+                remoteId = if (json.isNull("remoteId")) null else json.optString("remoteId").ifBlank { null },
+                serverEnabled = json.optBoolean("serverEnabled", true),
+            )
         }
     }.getOrDefault(emptyList())
 

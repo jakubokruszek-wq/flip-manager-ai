@@ -25,7 +25,14 @@ class AutoScanPlannerTest {
         running: Boolean = false,
         mode: ScanMode = ScanMode.LIVE,
         liveAllowed: Boolean = true,
-    ) = AutoScanPlanner.decide(now, schedule, conditions, groups, selection, last, running, mode, liveAllowed)
+    ) = AutoScanPlanner.decide(now, schedule, conditions, groups, selection, finishedLedger(last), running, mode, liveAllowed)
+
+    /** A ledger in which window [key] already finished, or an empty one. */
+    private fun finishedLedger(key: String?): List<WindowEntry> {
+        if (key == null) return emptyList()
+        val at = java.time.Instant.parse("2026-10-14T00:00:00Z")
+        return WindowLedger.finished(WindowLedger.started(emptyList(), key, at), key, ScanOutcome.COMPLETED, at)
+    }
 
     @Test
     fun startsInsideTheWindowWithActiveGroupsOnly() {
@@ -71,7 +78,7 @@ class AutoScanPlannerTest {
     @Test
     fun aWindowIsServedOnlyOnce() {
         val start = decide() as AutoDecision.Start
-        assertEquals(AutoDecision.Wait(emptyList()), decide(now = inside.plusMinutes(45), last = start.window.key))
+        assertEquals(AutoDecision.Wait(listOf(ScanBlocker.WINDOW_FINISHED)), decide(now = inside.plusMinutes(45), last = start.window.key))
         // The next night is a new window.
         assertTrue(decide(now = inside.plusDays(1), last = start.window.key) is AutoDecision.Start)
     }
