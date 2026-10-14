@@ -1,13 +1,14 @@
 import type { WorkerHeartbeat, WorkerJob } from "../../olx-browser/src/api-client.ts";
 import { runOlxJob } from "../../olx-browser/src/job-runner.ts";
 import { ControlledOlxFailure } from "../../olx-browser/src/retry.ts";
-import { accessPauseStop, budgetStop, canScrape, currentLedger, hardStop, jobCapReached, type BudgetLimits, type BudgetStop, type Ledger } from "./budget.ts";
+import { accessPauseStop, budgetStop, canScrape, currentLedger, hardStop, jobCapReached, jobEstimateMs, type BudgetLimits, type BudgetStop, type Ledger } from "./budget.ts";
 import type { ListingIdMode } from "./listing-fixes.ts";
 import { CloudBrowserSession, type BrowserProvider } from "./browser-session.ts";
 import type { CloudConfig } from "./config.ts";
 import { createRawCompleter, type RawCompletion } from "./raw-complete.ts";
 import { rawListingsJson } from "./raw-listings.ts";
 import { createSelectiveClaimer, selectorMatches, type ClaimSelector } from "./selective-claim-client.ts";
+import { createScheduledClaimer, isScheduledFinderJob, type ScheduledClaim, type ScheduledClaimUsage } from "./scheduled-claim-client.ts";
 
 /** The queue API of the Flip Manager app (`/api/olx-worker/*`), HMAC-signed by `createApiClient`. */
 export type QueueApi = {
@@ -34,6 +35,10 @@ export type RunnerDeps = {
   completeRaw?(job: WorkerJob, result: RawCompletion, signal?: AbortSignal): Promise<unknown>;
   /** Selective claim for the manual trial; defaults to a signed POST /api/olx-worker/claim-selective. */
   claimSelected?(selector: ClaimSelector, signal?: AbortSignal): Promise<{ job: WorkerJob | null }>;
+  /** Scheduled mode: POST /api/olx-worker/claim-scheduled; defaults to a signed fetch to config.apiUrl. */
+  claimScheduled?(usage: ScheduledClaimUsage, signal?: AbortSignal): Promise<ScheduledClaim>;
+  /** Scheduled mode: browser ms used today by the whole account (Browser Run history()); null = unknown. */
+  accountBrowserMs?(): Promise<number | null>;
   /** Test hook: shorter job timings. */
   jobTimings?: { heartbeatIntervalMs?: number; wallClockLimitMs?: number; finalizationLimitMs?: number };
 };
@@ -51,6 +56,12 @@ export type BatchOptions = {
    * called, so no other job — Radar or another filter — is touched.
    */
   selector?: ClaimSelector;
+  /**
+   * Unattended mode (Cron): one claim through claim-scheduled, only after the
+   * account-level browser usage was read and leaves the safe budget; never a
+   * claim just to reject, never the regular claim.
+   */
+  scheduled?: boolean;
 };
 
 export type BatchOutcome = "idle" | "worked" | "paused" | "subrequest_limit" | "claim_window" | "max_jobs" | "selective_mismatch";
@@ -68,6 +79,10 @@ export type BatchSummary = {
   ledger: Ledger;
   /** Last claim failure of this invocation (e.g. OLX_SELECTIVE_CLAIM_UNAVAILABLE before the migration). */
   claimError: string | null;
+  /** Scheduled mode: why the server handed out no job (AUTOMATION_DISABLED, NO_DUE_JOB, ...). */
+  claimReason: string | null;
+  /** Scheduled mode: account-wide browser ms today (history()) read before claiming; null otherwise. */
+  accountBrowserMs: number | null;
 };
 
 /** Subrequests one held job may need: claim, ~3 heartbeats, complete or fail, plus margin. */
@@ -115,6 +130,8 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
   const countSubrequest = () => { subrequests += 1; };
   const summary = { claimed: 0, completed: 0, failed: 0, leaseLost: 0, rejected: 0 };
   let claimError: string | null = null;
+  let claimReason: string | null = null;
+  let accountBrowserMs: number | null = null;
 
   const stopWith = (code: BudgetStop["code"], prebuilt?: BudgetStop): BudgetStop => {
     if (ledger.stop?.code !== code) {
@@ -161,6 +178,7 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
   }, { sessionMaxMs: config.sessionMaxMs, keepAliveMs: config.keepAliveMs, blockHeavyResources: config.blockHeavyResources, restrictToOlxDomains: config.restrictToOlxDomains, pageJavaScript: config.pageJavaScript });
   const completeRaw = deps.completeRaw ?? createRawCompleter(config);
   const claimSelected = deps.claimSelected ?? createSelectiveClaimer(config);
+  const claimScheduled = deps.claimScheduled ?? createScheduledClaimer(config);
 
   // Every queue call is a subrequest of this invocation, including heartbeats issued by runOlxJob's timer.
   const countedApi: QueueApi = {
@@ -195,7 +213,7 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
   if (initialPause) {
     const stop = hardStop(ledger, now()) ?? stopWith(initialPause);
     // A manual trial never claims while paused: it must not touch other filters' or Radar's jobs.
-    if (config.onBudgetExhausted === "fail_jobs" && !options.selector) {
+    if (config.onBudgetExhausted === "fail_jobs" && !options.selector && !options.scheduled) {
       // Rejecting costs almost no CPU (no browser, tiny bodies): bounded only by the subrequest allowance.
       const maxRejections = options.maxJobs ?? Number.POSITIVE_INFINITY;
       while (subrequests + 2 <= subrequestLimit && summary.rejected < maxRejections) {
@@ -205,7 +223,29 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
       }
     }
     await saving;
-    return { outcome: "paused", ...summary, subrequests, browserLaunches: 0, stop: ledger.stop, ledger, claimError };
+    return { outcome: "paused", ...summary, subrequests, browserLaunches: 0, stop: ledger.stop, ledger, claimError, claimReason, accountBrowserMs };
+  }
+
+  if (options.scheduled) {
+    // Second gate, account-wide: this Worker's ledger cannot see browser time
+    // spent by other Workers of the same account (stage-2 tests, anything
+    // else). Unknown usage means no start.
+    try {
+      countSubrequest();
+      accountBrowserMs = deps.accountBrowserMs ? await deps.accountBrowserMs() : null;
+    } catch (error) {
+      log("OLX_CLOUD_ACCOUNT_USAGE_READ_FAILED", { message: error instanceof Error ? error.message : String(error) });
+      accountBrowserMs = null;
+    }
+    // The next job must fit with its MEASURED cost (last job), not only the page reserve.
+    const accountStop = accountBrowserMs === null || !Number.isFinite(accountBrowserMs)
+      ? "OLX_CLOUD_ACCOUNT_USAGE_UNKNOWN"
+      : Math.max(accountBrowserMs, ledger.browserMs) + jobEstimateMs(ledger, limits) > limits.safeBrowserBudgetMs ? "OLX_CLOUD_ACCOUNT_BUDGET_EXHAUSTED" : null;
+    if (accountStop) {
+      stopWith(accountStop);
+      await saving;
+      return { outcome: "paused", ...summary, subrequests, browserLaunches: 0, stop: ledger.stop, ledger, claimError, claimReason, accountBrowserMs };
+    }
   }
 
   const running = new Map<string, Promise<void>>();
@@ -264,6 +304,16 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
         if (options.selector) {
           countSubrequest();
           job = (await claimSelected(options.selector)).job;
+        } else if (options.scheduled) {
+          countSubrequest();
+          const scheduled = await claimScheduled({
+            accountBrowserMs: Math.round(accountBrowserMs ?? 0),
+            workerBrowserMs: Math.round(ledger.browserMs),
+            safeBudgetMs: limits.safeBrowserBudgetMs,
+            jobEstimateMs: jobEstimateMs(ledger, limits),
+          });
+          job = scheduled.job;
+          claimReason = scheduled.reason;
         } else {
           job = (await countedApi.claim()).job;
         }
@@ -278,6 +328,12 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
         log("JOB_DUPLICATE_CLAIM_IGNORED", { jobId: job.id });
         continue;
       }
+      if (options.scheduled && !isScheduledFinderJob(job)) {
+        // Impossible with a correct server: never scraped, never failed by us; its lease expires.
+        log("OLX_CLOUD_SCHEDULED_CLAIM_MISMATCH", { jobId: job.id, contextType: job.contextType ?? "finder" });
+        outcome = "selective_mismatch";
+        return;
+      }
       if (options.selector && !selectorMatches(options.selector, job)) {
         // Impossible with a correct server; never scraped and never failed by us — its lease simply expires.
         log("OLX_CLOUD_SELECTIVE_CLAIM_MISMATCH", { jobId: job.id, contextType: job.contextType ?? "finder", filterId: job.filterId });
@@ -290,6 +346,7 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
     }
   };
 
+  const browserMsAtStart = ledger.browserMs;
   try {
     await fill();
     while (running.size > 0) {
@@ -300,9 +357,15 @@ export async function runBatch(deps: RunnerDeps, options: BatchOptions = {}): Pr
   } finally {
     await Promise.allSettled(running.values());
     await session.close("batch_end");
+    // Scheduled mode runs one job per session: its charged browser time is the job's cost.
+    if (options.scheduled && summary.claimed === 1 && ledger.browserMs > browserMsAtStart) {
+      ledger = { ...ledger, lastJobBrowserMs: ledger.browserMs - browserMsAtStart };
+      log("OLX_CLOUD_JOB_BROWSER_COST", { browserMs: ledger.lastJobBrowserMs });
+      await persist();
+    }
     await saving;
   }
-  return { outcome, ...summary, subrequests, browserLaunches: session.launches, stop: ledger.stop, ledger, claimError };
+  return { outcome, ...summary, subrequests, browserLaunches: session.launches, stop: ledger.stop, ledger, claimError, claimReason, accountBrowserMs };
 }
 
 export function budgetLimits(config: CloudConfig): BudgetLimits {

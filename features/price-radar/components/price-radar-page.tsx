@@ -25,7 +25,6 @@ type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFil
 const ROOM_OPTIONS = [1, 2, 3, 4, 5];
 const SOURCE_OPTIONS: { value: RadarSource; label: string }[] = [
   { value: "otodom", label: "Otodom" },
-  { value: "olx", label: "OLX" },
   { value: "morizon", label: "Morizon" },
   { value: "domiporta", label: "Domiporta" },
   { value: "sprzedajemy", label: "Sprzedajemy.pl" },
@@ -1092,7 +1091,8 @@ function RadarPerformanceDetails({ run, now }: { run: RunStatus; now: number }) 
         <li>Portale HTTP: aktywna praca {formatSeconds(metrics.httpActiveMs)} · od startu do końca {httpWall}{metrics.httpFinishedAt ? "" : " (w toku)"} · porcje {metrics.portions}</li>
         <li>Przekazania między porcjami: {metrics.handOffs} · łącznie {formatSeconds(metrics.handOffGapMs)}{metrics.handOffs > 0 ? ` (średnio ${formatSeconds(metrics.handOffGapMs / metrics.handOffs)})` : ""}</li>
         <li>Przepustowość: {throughput === null ? "—" : `${throughput} ofert/min aktywnej pracy`}</li>
-        <li>Worker OLX: {olxWaitingSince ? `oczekiwanie od ${formatDate(olxWaitingSince)} (${formatDuration(olxWaitingSince, null, now)}), liczone osobno od portali HTTP` : metrics.olxEnqueuedAt ? `przekazano ${formatDate(metrics.olxEnqueuedAt)}` : "jeszcze nie przekazano"}</li>
+        {/* OLX left Radar: shown only for a legacy run that still carries OLX metrics. */}
+        {olxWaitingSince || metrics.olxEnqueuedAt ? <li>Worker OLX (przebieg sprzed usunięcia OLX z Radaru): {olxWaitingSince ? `oczekiwanie od ${formatDate(olxWaitingSince)} (${formatDuration(olxWaitingSince, null, now)})` : `przekazano ${formatDate(metrics.olxEnqueuedAt!)}`}</li> : null}
         {sources.map(([source, item]) => (
           <li className="break-words" key={source}>
             <span className="font-semibold">{radarSourceLabel(source)}:</span> {formatSeconds(item.activeMs)} · żądania: lista {item.listRequests}, szczegóły {item.detailRequests}{item.contextRequests ? `, kontekst ${item.contextRequests}` : ""} · oferty {item.fetched}{item.activeMs > 0 ? ` · ${Math.round(item.fetched / (item.activeMs / 60_000))}/min` : ""} · baza {formatSeconds(item.dbMs + item.checkpointMs)}
@@ -1178,6 +1178,7 @@ function canTerminateRun(run: RunStatus): boolean {
 }
 
 function radarSourceLabel(source: string): string {
+  if (source === "olx") return "OLX (usunięty z Radaru)";
   return SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? source;
 }
 

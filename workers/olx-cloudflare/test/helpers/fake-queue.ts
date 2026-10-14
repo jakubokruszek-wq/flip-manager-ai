@@ -25,6 +25,9 @@ export type FakeJob = OlxJobState & {
   completion: Record<string, unknown> | null;
   workerId: string | null;
   filterId: string;
+  /** "scheduler" = queued by the Finder OLX schedule (olx_scan_jobs.requested_by). */
+  requestedBy: "scheduler" | null;
+  startedAt: number | null;
 };
 
 export type FakeQueue = {
@@ -32,7 +35,15 @@ export type FakeQueue = {
   jobs: FakeJob[];
   requests: Array<{ path: string; status: number; body: string }>;
   authFailures: string[];
-  enqueue(input: { id?: string; idempotencyKey: string; requestUrl?: string; contextType?: "finder" | "price_radar"; createdAt?: number; filterId?: string }): FakeJob | null;
+  enqueue(input: { id?: string; idempotencyKey: string; requestUrl?: string; contextType?: "finder" | "price_radar"; createdAt?: number; filterId?: string; requestedBy?: "scheduler" | null }): FakeJob | null;
+  /** olx_automation_control.scheduled_claim_enabled; false = STOP. */
+  setAutomationEnabled(value: boolean): void;
+  /** false = the scheduled-claim migration is not applied (endpoint answers 503). */
+  setScheduledAvailable(value: boolean): void;
+  /** olx_automation_control.max_claims_24h (0..2, default 1). */
+  setMaxClaims(value: number): void;
+  /** Usage reports received with claim-scheduled (olx_cloud_budget). */
+  usageReports: Array<Record<string, unknown> | null>;
   /** Finder's watchdog: a job never claimed within 90 s is failed with OLX_WORKER_CLAIM_TIMEOUT. */
   runUnclaimedWatchdog(now?: number): number;
   /** Simulates the lease being revoked server-side (e.g. Radar run cancelled). */
@@ -53,7 +64,8 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
   const requests: FakeQueue["requests"] = [];
   const authFailures: string[] = [];
   const injectedFailures = new Map<string, number>();
-  const state = { selectiveAvailable: true };
+  const state = { selectiveAvailable: true, scheduledAvailable: true, automationEnabled: true, maxClaims: 1 };
+  const usageReports: Array<Record<string, unknown> | null> = [];
 
   const server: Server = createServer(async (request, response) => {
     const body = await readBody(request);
@@ -85,6 +97,30 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
         if (!candidate) { reply(200, { job: null }); return; }
         Object.assign(candidate, { status: "running", attempts: candidate.attempts + 1, leaseToken: randomUUID(), leasedUntil: now + LEASE_MS, heartbeatAt: now, workerId: String(payload.workerId) });
         reply(200, { job: describe(candidate, now) });
+        return;
+      }
+      if (path === "/api/olx-worker/claim-scheduled") {
+        // Mirrors claim_scheduled_finder_olx_job (migration 20261015120000) and its route:
+        // body exactly { workerId }; STOP switch; nothing while any OLX job holds a live
+        // lease; 1 scheduled claim per 24 h; only queued automatic Finder jobs, attempts 0,
+        // younger than 6 h; no other row touched.
+        if (!state.scheduledAvailable) { reply(503, { error: "OLX_SCHEDULED_CLAIM_UNAVAILABLE" }); return; }
+        if (Object.keys(payload).some((key) => key !== "workerId" && key !== "usage")) { reply(400, { error: "INVALID_SELECTOR" }); return; }
+        const now = Date.now();
+        if (!state.automationEnabled) { reply(200, { job: null, reason: "AUTOMATION_DISABLED" }); return; }
+        // Migration 20261016120000: the usage report is required and gates the claim.
+        const usage = payload.usage && typeof payload.usage === "object" ? payload.usage as Record<string, unknown> : null;
+        usageReports.push(usage);
+        const numbers = usage ? ["accountBrowserMs", "workerBrowserMs", "safeBudgetMs", "jobEstimateMs"].map((key) => usage[key]) : [];
+        if (!usage || numbers.some((value) => typeof value !== "number" || value < 0) || Number(usage.jobEstimateMs) <= 0) { reply(200, { job: null, reason: "BROWSER_USAGE_UNKNOWN" }); return; }
+        if (Math.max(Number(usage.accountBrowserMs), Number(usage.workerBrowserMs)) + Number(usage.jobEstimateMs) > Math.min(Number(usage.safeBudgetMs), 300_000)) { reply(200, { job: null, reason: "BROWSER_BUDGET_INSUFFICIENT" }); return; }
+        if (jobs.some((item) => item.status === "running" && (item.leasedUntil ?? 0) > now)) { reply(200, { job: null, reason: "OLX_JOB_RUNNING" }); return; }
+        if (jobs.filter((item) => item.requestedBy === "scheduler" && item.startedAt !== null && item.startedAt > now - 86_400_000).length >= state.maxClaims) { reply(200, { job: null, reason: "DAILY_CLAIM_USED" }); return; }
+        const candidate = jobs.filter((item) => item.status === "queued" && item.contextType === "finder" && item.requestedBy === "scheduler" && item.attempts === 0 && item.createdAt > now - 6 * 3_600_000)
+          .sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (!candidate) { reply(200, { job: null, reason: "NO_DUE_JOB" }); return; }
+        Object.assign(candidate, { status: "running", attempts: candidate.attempts + 1, leaseToken: randomUUID(), leasedUntil: now + LEASE_MS, heartbeatAt: now, workerId: String(payload.workerId), startedAt: now });
+        reply(200, { job: describe(candidate, now), reason: null });
         return;
       }
       const job = jobs.find((item) => item.id === payload.jobId);
@@ -152,6 +188,7 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
         id: input.id ?? randomUUID(), idempotencyKey: input.idempotencyKey, status: "queued", attempts: 0, maxAttempts: 3, leaseToken: null, leasedUntil: null, heartbeatAt: null,
         requestUrl: input.requestUrl ?? DEFAULT_URL, createdAt: input.createdAt ?? Date.now(), contextType: input.contextType ?? "finder", radarLeaseToken: null,
         errorCode: null, errorMessage: null, completion: null, workerId: null, filterId: input.filterId ?? "11111111-1111-4111-8111-111111111111",
+        requestedBy: input.requestedBy ?? null, startedAt: null,
       };
       const next = enqueueUnique(enqueued, job);
       if (next.length === enqueued.length) return null;
@@ -175,6 +212,10 @@ export async function startFakeQueue(options: { secret?: string } = {}): Promise
     },
     failNextRequests(path, count) { injectedFailures.set(path, count); },
     setSelectiveAvailable(value) { state.selectiveAvailable = value; },
+    setAutomationEnabled(value) { state.automationEnabled = value; },
+    setScheduledAvailable(value) { state.scheduledAvailable = value; },
+    setMaxClaims(value) { state.maxClaims = value; },
+    usageReports,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

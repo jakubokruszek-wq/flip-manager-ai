@@ -32,12 +32,28 @@ export function isFinderScanDue(input: {
 }
 
 /**
- * OLX has its own durable cadence (search_filters.finder_olx_scan_interval_minutes),
- * independent of finder_scan_interval_minutes. Only these values are offered;
- * the database refuses anything below 24 h, so a shorter interval needs a
- * separate migration together with a reviewed Cloudflare budget.
+ * OLX has its own durable schedule, independent of finder_scan_interval_minutes:
+ * fixed slots at finder_olx_start_time (Europe/Warsaw) every 12/24/48/72 h
+ * (migration 20261016120000). The database accepts exactly these intervals;
+ * 12 h needs the automatic limit raised to 2 per 24 h after a budget check,
+ * otherwise its second daily slot is skipped as AUTOMATIC_DAILY_BUDGET_USED.
  */
-export const FINDER_OLX_INTERVAL_OPTIONS_MINUTES = [1440, 2880, 4320] as const;
+export const FINDER_OLX_INTERVAL_OPTIONS_MINUTES = [720, 1440, 2880, 4320] as const;
+export const FINDER_OLX_TIME_ZONE = "Europe/Warsaw";
+export const FINDER_OLX_DEFAULT_START_TIME = "08:00";
+/** HH:mm in 5-minute steps (00:00 ... 23:55). */
+export const FINDER_OLX_START_TIME_OPTIONS: readonly string[] = Array.from({ length: 288 }, (_, index) => `${String(Math.floor(index / 12)).padStart(2, "0")}:${String((index % 12) * 5).padStart(2, "0")}`);
+
+export function isFinderOlxStartTime(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5][05]$/.test(value);
+}
+
+/** "08:00:00" (Postgres time) or "08:00" -> "08:00"; anything else -> null. */
+export function normalizeFinderOlxStartTime(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const short = /^(\d{2}:\d{2})(?::00)?$/.exec(value.trim())?.[1] ?? null;
+  return short && isFinderOlxStartTime(short) ? short : null;
+}
 export const FINDER_OLX_DEFAULT_INTERVAL_MINUTES = 1440;
 export type FinderOlxIntervalMinutes = (typeof FINDER_OLX_INTERVAL_OPTIONS_MINUTES)[number];
 

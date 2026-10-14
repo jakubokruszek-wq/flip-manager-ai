@@ -121,6 +121,7 @@ export function createEmptySearchFilter(): SearchFilterInput {
     scanIntervalMinutes: 60,
     finderScanIntervalMinutes: 60,
     finderOlxScanIntervalMinutes: 1440,
+    finderOlxStartTime: "08:00",
     isActive: true,
   };
 }

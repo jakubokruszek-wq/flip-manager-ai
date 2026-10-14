@@ -106,6 +106,8 @@ export type SearchFilter = {
    * yet (migration not applied): no automatic OLX job is queued then.
    */
   finderOlxScanIntervalMinutes?: number | null;
+  /** OLX start time HH:mm (Europe/Warsaw, 5-minute steps); null when not readable yet. */
+  finderOlxStartTime?: string | null;
   isActive: boolean;
   lastScannedAt: string | null;
   createdAt: string;

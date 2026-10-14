@@ -1,0 +1,84 @@
+# UNATTENDED OLX FOR FINDER — separate production Worker (docs/olx-cloud-scheduled.md).
+# Deployed only by .github/workflows/olx-cloudflare-scheduled.yml:
+#   npx wrangler deploy --config wrangler.scheduled.toml
+#
+# A different Worker ("flip-manager-olx-cloud-scheduled") with its own code
+# version, vars, secrets, Durable Object and ledger. The stage-2 test Worker
+# ("flip-manager-olx-cloud-stage2", manual, OFF) and "flip-manager-olx-cloud" /
+# "-stage1" are NOT touched.
+#
+# Safe by default: OLX_CLOUD_ENABLED="0" (the Cron tick removes any alarm and
+# claims nothing). Enabled only by the workflow's "enable" action after the
+# checklist; STOP = workflow "disable" or scripts/olx-cloud-scheduled.stop.sql.
+#
+# scheduled mode: every 15 min the Cron Trigger arms ONE alarm that asks
+# /api/olx-worker/claim-scheduled for at most one automatic Finder OLX job.
+# The server hands out only jobs the Finder OLX schedule admitted (24/48/72 h,
+# 1 per 24 h, shared budget with Price Radar), never in parallel with another
+# OLX job, and only while olx_automation_control.scheduled_claim_enabled.
+# No /run-once, no regular /claim, never Radar, never a retry.
+name = "flip-manager-olx-cloud-scheduled"
+main = "src/index.ts"
+compatibility_date = "2026-09-15"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+
+[build]
+command = "node scripts/build-in-page-bundle.mjs"
+watch_dir = ["src", "../../features/flip-finder"]
+
+[browser]
+binding = "BROWSER"
+
+# Version id of the running code, reported by /status for the Worker and the
+# Durable Object separately (the workflow waits until both run the new deploy).
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+[[durable_objects.bindings]]
+name = "OLX_RUNNER"
+class_name = "OlxCloudRunner"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OlxCloudRunner"]
+
+# 96 ticks per day. Each tick: 1 Worker request, 1 Durable Object alarm and,
+# only while enabled, 1 history() read and 1 claim-scheduled call to Vercel.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[observability]
+enabled = true
+
+[vars]
+OLX_CLOUD_ENABLED = "0"
+OLX_CLOUD_CLAIM_MODE = "scheduled"
+# Identical to stage 2 and the local worker (parser ids); the stable-id switch is a separate decision.
+OLX_CLOUD_LISTING_ID_MODE = "legacy"
+OLX_WORKER_API_URL = "https://flip-manager-ai.vercel.app"
+OLX_CLOUD_WORKER_ID = "cloudflare-olx-scheduled"
+OLX_CLOUD_IDLE_POLL_SECONDS = "20"
+OLX_CLOUD_IDLE_POLL_MAX_SECONDS = "40"
+# One OLX refusal (403/405/429/verification page) pauses the Worker for 24 h.
+OLX_CLOUD_REFUSAL_PAUSE_THRESHOLD = "1"
+OLX_CLOUD_REFUSAL_PAUSE_HOURS = "24"
+# Workers Free: 600 s of Browser Run per UTC day for the WHOLE account.
+OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS = "600"
+# Tested stage-2 budget for one job; checked against this Worker's ledger AND
+# the account's history() before every claim.
+OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS = "120"
+OLX_CLOUD_SCRAPE_RESERVE_SECONDS = "35"
+OLX_CLOUD_SESSION_MAX_SECONDS = "45"
+OLX_CLOUD_KEEP_ALIVE_SECONDS = "20"
+# Scheduled mode allows 1 or 2 (12 h schedule). The database limit
+# (olx_automation_control.max_claims_24h, default 1) decides; every job must
+# also fit the measured browser budget (last job cost + today's account usage).
+OLX_CLOUD_MAX_JOBS_PER_DAY = "2"
+OLX_CLOUD_MAX_HELD_JOBS = "1"
+OLX_CLOUD_MAX_JOBS_PER_INVOCATION = "1"
+OLX_CLOUD_ON_BUDGET_EXHAUSTED = "leave_queued"
+OLX_CLOUD_BLOCK_HEAVY_RESOURCES = "1"
+OLX_CLOUD_PAGE_JAVASCRIPT = "0"
+OLX_CLOUD_RESTRICT_TO_OLX_DOMAINS = "0"

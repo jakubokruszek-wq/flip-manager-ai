@@ -10,6 +10,7 @@ import {
   type ScanSummary,
 } from "@/features/flip-finder/server/manual-scan";
 import { olxScheduleNote, runFinderOlxSchedulerPhase, scheduleFinderOlxJob, type FinderOlxScheduleDecision } from "@/features/flip-finder/server/finder-olx-schedule";
+import { expireStaleScheduledOlxJobs, type ExpiredScheduledJobs } from "@/features/flip-finder/server/olx-scheduled-claim";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, finderScanIntervalMinutes, isFinderScanDue } from "@/features/flip-finder/finder-schedule";
@@ -44,7 +45,7 @@ export type FinderSchedulerSummary = {
   errors: string[];
   runs: Array<{ filterId: string; runId: string; status: ScanSummary["status"] }>;
   /** Separate automatic OLX schedule of this tick (finder-olx-schedule.ts). */
-  olx: { enqueued: number; decisions: Array<Pick<FinderOlxScheduleDecision, "filterId" | "decision" | "reason" | "runId" | "nextAllowedAt">> };
+  olx: { enqueued: number; expired: ExpiredScheduledJobs | null; decisions: Array<Pick<FinderOlxScheduleDecision, "filterId" | "decision" | "reason" | "runId" | "nextAllowedAt">> };
 };
 
 export type FinderSchedulerDependencies = {
@@ -67,6 +68,8 @@ export type FinderSchedulerDependencies = {
   runScan: (filter: SearchFilter, start: ManualScanStart, context?: { olxNote: string | null }) => Promise<ScanSummary>;
   /** Asks enqueue_scheduled_finder_olx_job for one filter; never part of the portals' cycle. */
   scheduleOlx: (filter: SearchFilter) => Promise<FinderOlxScheduleDecision>;
+  /** Diagnoses orphaned automatic OLX jobs (failed with a code, never deleted); null before the migration. */
+  expireOlx: () => Promise<ExpiredScheduledJobs | null>;
 };
 
 /**
@@ -96,6 +99,13 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
   // interval and the shared Cloudflare budget decide, not this 5-minute tick
   // or the portals' 300-minute cadence. Whatever happens here, the portals
   // below run exactly as before.
+  // Orphaned automatic jobs first, so a job nobody claimed for hours is
+  // reported (and stops holding its filter's OLX slot) before the decision.
+  const expired = await dependencies.expireOlx().catch((error: unknown) => {
+    console.warn("FINDER_OLX_EXPIRE_FAILED", { detail: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
+    return null;
+  });
+  if (expired && (expired.stopped || expired.unclaimedExpired || expired.leaseExpired)) console.warn("FINDER_OLX_SCHEDULED_JOBS_EXPIRED", expired);
   const olxPhase = await runFinderOlxSchedulerPhase(filters, dependencies.scheduleOlx);
   const olxDecisions = new Map(olxPhase.decisions.map((decision) => [decision.filterId, decision]));
   const summary: FinderSchedulerSummary = {
@@ -111,6 +121,7 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
     runs: [],
     olx: {
       enqueued: olxPhase.enqueued,
+      expired,
       decisions: olxPhase.decisions.map(({ filterId, decision, reason, runId, nextAllowedAt }) => ({ filterId, decision, reason, runId, nextAllowedAt })),
     },
   };
@@ -200,6 +211,7 @@ function defaultDependencies(overrides: Partial<FinderSchedulerDependencies>): F
       olxNote: context?.olxNote ?? null,
     }),
     scheduleOlx: (filter) => scheduleFinderOlxJob(supabase, filter),
+    expireOlx: () => expireStaleScheduledOlxJobs(supabase),
     ...overrides,
   };
 }

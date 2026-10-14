@@ -10,9 +10,13 @@ export type BudgetExhaustedPolicy = "fail_jobs" | "leave_queued";
 /**
  * manual: nothing is claimed by the alarm or the Cron Trigger; only an operator
  * call to /run-once?jobId=… claims exactly one job (the limited trial).
- * auto: the alarm polls the queue (normal operation).
+ * auto: the alarm polls the queue (normal operation; takes Finder AND Radar jobs).
+ * scheduled: unattended Finder OLX. Only the Cron Trigger asks, once per tick,
+ * /api/olx-worker/claim-scheduled for at most one automatic Finder job that the
+ * Finder OLX schedule admitted. No alarm, no /run-once, never Radar, never a
+ * retry; requires the strict limits checked in parseCloudConfig.
  */
-export type ClaimMode = "manual" | "auto";
+export type ClaimMode = "manual" | "auto" | "scheduled";
 /**
  * stable_finder: Finder jobs get OLX's stable numeric id; Radar jobs keep the
  * parser's legacy id until Radar's stored ids are migrated (see docs).
@@ -101,6 +105,7 @@ export function checkCloudConfig(environment: Environment): Record<string, unkno
   const warnings: string[] = [];
   if (parsed.ok && parsed.config.dailyBrowserLimitMs > FREE_PLAN_DAILY_BROWSER_MS) warnings.push("OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS > 600: wymaga planu Workers Paid.");
   if (parsed.ok && parsed.config.claimMode === "auto") warnings.push("Tryb auto: alarm odbiera wszystkie zadania OLX (Finder i Radar).");
+  if (parsed.ok && parsed.config.claimMode === "scheduled") warnings.push(`Tryb scheduled: Cron odbiera najwyżej ${parsed.config.maxJobsPerDay} automatyczne zadanie OLX Findera na dobę (claim-scheduled), każde tylko gdy mieści się w budżecie przeglądarki.`);
   return {
     killSwitch: stringValue(environment.OLX_CLOUD_ENABLED) === "1" ? "enabled" : "disabled",
     stage1Lock: stringValue(environment.OLX_CLOUD_STAGE1_LOCK) === "1",
@@ -137,7 +142,7 @@ export function parseCloudConfig(environment: Environment): ConfigResult {
     const refusalPauseThreshold = integer(environment, "OLX_CLOUD_REFUSAL_PAUSE_THRESHOLD", 2, 1, 10);
     const refusalPauseMs = integer(environment, "OLX_CLOUD_REFUSAL_PAUSE_HOURS", 6, 1, 72) * 3_600_000;
     const claimMode = stringValue(environment.OLX_CLOUD_CLAIM_MODE) || "manual";
-    if (claimMode !== "manual" && claimMode !== "auto") throw new Error("OLX_CLOUD_CLAIM_MODE must be manual or auto.");
+    if (claimMode !== "manual" && claimMode !== "auto" && claimMode !== "scheduled") throw new Error("OLX_CLOUD_CLAIM_MODE must be manual, auto or scheduled.");
     const listingIdPolicy = stringValue(environment.OLX_CLOUD_LISTING_ID_MODE) || "stable_finder";
     if (listingIdPolicy !== "stable_finder" && listingIdPolicy !== "stable_all" && listingIdPolicy !== "legacy") throw new Error("OLX_CLOUD_LISTING_ID_MODE must be stable_finder, stable_all or legacy.");
     const keepAliveMs = seconds(environment, "OLX_CLOUD_KEEP_ALIVE_SECONDS", 20, 10, 60);
@@ -146,6 +151,15 @@ export function parseCloudConfig(environment: Environment): ConfigResult {
     const maxJobsPerInvocation = integer(environment, "OLX_CLOUD_MAX_JOBS_PER_INVOCATION", 2, 1, 10);
     const policy = stringValue(environment.OLX_CLOUD_ON_BUDGET_EXHAUSTED) || "fail_jobs";
     if (policy !== "fail_jobs" && policy !== "leave_queued") throw new Error("OLX_CLOUD_ON_BUDGET_EXHAUSTED must be fail_jobs or leave_queued.");
+    if (claimMode === "scheduled") {
+      // Unattended mode only with the reviewed safety limits; anything looser is refused, not clamped.
+      // 2 = the 12 h schedule; every job is still gated by the measured browser budget.
+      if (maxJobsPerDay !== 1 && maxJobsPerDay !== 2) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_MAX_JOBS_PER_DAY of 1 or 2.");
+      if (maxHeldJobs !== 1 || maxJobsPerInvocation !== 1) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_MAX_HELD_JOBS=1 and OLX_CLOUD_MAX_JOBS_PER_INVOCATION=1.");
+      if (policy !== "leave_queued") throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_ON_BUDGET_EXHAUSTED=leave_queued.");
+      if (dailyBrowserLimitMs > FREE_PLAN_DAILY_BROWSER_MS) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS <= 600 (Workers Free).");
+      if (safeBrowserBudgetMs > 300_000) throw new Error("OLX_CLOUD_CLAIM_MODE=scheduled requires OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS <= 300 (half of the Free plan).");
+    }
     return {
       ok: true,
       config: {

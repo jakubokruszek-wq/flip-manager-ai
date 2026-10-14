@@ -65,3 +65,10 @@ test("szybko is never accepted into saved Radar settings -- old saved settings a
   const directApiAttempt = normalizeRadarFilters({ districts: ["Bałuty"], sources: ["szybko"] });
   assert.deepEqual(directApiAttempt.sources, [], "a direct API request naming only szybko ends up with an empty, not a widened, source list");
 });
+
+test("OLX is not a Radar source: stored or submitted settings drop it on the server", () => {
+  assert.ok(!RADAR_SOURCES.includes("olx" as never), "OLX stays a Flip Finder-only source");
+  assert.ok(RADAR_SOURCES.includes("otodom" as never), "the other portals stay");
+  assert.deepEqual(normalizeRadarFilters({ sources: ["olx"] }).sources, [], "a legacy OLX-only selection means all current Radar sources");
+  assert.deepEqual(normalizeRadarFilters({ sources: ["olx", "otodom", "gratka"] }).sources, ["otodom", "gratka"]);
+});

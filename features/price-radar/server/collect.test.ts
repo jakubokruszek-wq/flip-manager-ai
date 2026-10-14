@@ -239,27 +239,38 @@ test("terminal CAPTCHA and HTTP 429 failures are recorded once while pending por
   assert.deepEqual(attempts, { adresowo: 1, allegro_lokalnie: 1, domiporta: 1, oferty_net: 1 }, "terminal failures and completed portals are never retried inside the same run");
 });
 
-test("a pending OLX reservation is deferred behind unfinished portals, then uses only its existing worker queue", async () => {
-  let nonOlxPersisted = false;
-  const db = fakeDb({ onListingPersisted: (_run, candidate) => {
-    if (candidate.source !== "olx") {
-      nonOlxPersisted = true;
-      assert.equal(db.tables.olx_scan_jobs.length, 0, "OLX is not queued before another portal has had a collection turn");
-    }
-  } });
-  fakeSourceImpl = async (id) => ({ listings: [qualifyingListing(`${id}-before-olx`, id)], warnings: [], fetched: 1 });
-  const claimed = await claimOrCreateRadarRun(ownerId, ["olx", "domiporta"], db as never);
+test("a legacy run with a pending OLX stage: OLX is closed as RADAR_OLX_REMOVED, never queued, other portals finish", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id) => ({ listings: [qualifyingListing(`${id}-legacy`, id)], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
   if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+  // The run was created before OLX left Radar.
+  const saved = db.tables.price_radar_runs[0]!;
+  const legacy = saved.checkpoint as { sourceQueue: string[]; sourceStatuses: Record<string, string> };
+  legacy.sourceQueue = ["olx", "domiporta"];
+  legacy.sourceStatuses = { olx: "pending", domiporta: "pending" };
 
   const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never);
-  const saved = db.tables.price_radar_runs[0]!;
-  const checkpoint = saved.checkpoint as { sourceQueue: string[]; sourceStatuses: Record<string, string> };
-  assert.equal(nonOlxPersisted, true);
-  assert.deepEqual(checkpoint.sourceQueue, ["domiporta", "olx"], "legacy source order is rotated in-place while keeping the same run");
-  assert.equal(result.sourceStatuses.domiporta, "completed");
-  assert.equal(result.sourceStatuses.olx, "running", "an unavailable worker remains visibly pending/running instead of claiming completion");
-  assert.equal(db.tables.olx_scan_jobs.length, 1, "OLX still gets exactly one idempotent reservation in its existing queue");
-  assert.equal(result.status, "running");
+  assert.equal((db.tables.olx_scan_jobs ?? []).length, 0, "no OLX job is ever created");
+  assert.equal(result.sourceStatuses.olx, "failed");
+  assert.match(result.sourceErrors.olx ?? "", /^RADAR_OLX_REMOVED:/);
+  assert.equal(result.sourceStatuses.domiporta, "completed", "the other portal runs unchanged");
+  assert.equal(result.status, "partial", "the run says honestly that its OLX stage was skipped");
+});
+
+test("a legacy run whose OLX stage was running (worker-owned) is closed the same way and nothing is requeued", async () => {
+  const db = fakeDb();
+  fakeSourceImpl = async (id) => ({ listings: [qualifyingListing(`${id}-legacy-running`, id)], warnings: [], fetched: 1 });
+  const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
+  if (claimed.kind !== "claimed" || !claimed.run.leaseToken) throw new Error("expected claimed run");
+  const legacy = db.tables.price_radar_runs[0]!.checkpoint as { sourceQueue: string[]; sourceStatuses: Record<string, string> };
+  legacy.sourceQueue = ["domiporta", "olx"];
+  legacy.sourceStatuses = { domiporta: "pending", olx: "running" };
+  const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken }, db as never);
+  assert.equal(result.sourceStatuses.olx, "failed");
+  assert.match(result.sourceErrors.olx ?? "", /poprzedni status: running/);
+  assert.equal(result.sourceStatuses.domiporta, "completed", "a worker-owned legacy stage no longer blocks the other portals");
+  assert.equal((db.tables.olx_scan_jobs ?? []).length, 0);
 });
 
 test("a persisted STOP request prevents the next source fetch and releases the same run as resumable partial", async () => {
@@ -876,7 +887,7 @@ test("a materially changed reimport never clears a pre-existing manual exclusion
   assert.equal(db.rpcCalls.filter(({ name }) => name === "persist_price_radar_listing").length, 0, "an excluded snapshot is not rewritten while identity is uncertain");
 });
 
-test("resuming after the OLX worker exhausted its lease (claim_olx_scan_job's own LEASE_EXHAUSTED path, not Radar's finalize RPC) marks olx failed and lets the rest of the queue finish -- a run is never stuck forever behind a dead OLX job", async () => {
+test("a new run after the OLX removal has no OLX stage; a dead pre-removal OLX job is neither touched nor waited for", async () => {
   const db = fakeDb();
   fakeSourceImpl = async (id) => (id === "olx" ? { listings: [], warnings: [], fetched: 0 } : { listings: [qualifyingListing(`${id}-1`, id)], warnings: [], fetched: 1 });
   const claimed = await claimOrCreateRadarRun(ownerId, [], db as never);
@@ -889,13 +900,13 @@ test("resuming after the OLX worker exhausted its lease (claim_olx_scan_job's ow
   // on the next attempt rather than silently re-queuing or hanging.
   db.tables.olx_scan_jobs.push({ id: "job-1", idempotency_key: `price-radar:${ownerId}:olx:${claimed.run.id}`, status: "failed", error_code: "LEASE_EXHAUSTED" });
 
+  assert.ok(!claimed.run.checkpoint.sourceQueue.includes("olx"), "OLX is no longer a Radar source");
   const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
-  assert.equal(result.sourceStatuses.olx, "failed", "a dead OLX job must be recognized as failed, not left at 'running' forever");
-  assert.match(result.sourceErrors.olx ?? "", /RADAR_OLX_JOB_ALREADY_FAILED/);
-  assert.equal(result.sourceStatuses.domiporta, "completed", "sources after olx in the queue must still run");
+  assert.equal(result.sourceStatuses.olx, undefined);
+  assert.equal(result.sourceStatuses.domiporta, "completed");
   assert.equal(result.sourceStatuses.morizon, "completed");
-  assert.equal(result.status, "partial", "one dead source among otherwise-successful ones ends the run partial, not stuck in 'running'");
-  assert.notEqual(db.tables.price_radar_runs[0].status, "running", "the run must reach a terminal status instead of waiting on OLX forever");
+  assert.notEqual(db.tables.price_radar_runs[0].status, "running", "nothing waits on OLX");
+  assert.deepEqual(db.tables.olx_scan_jobs.map((job: Record<string, unknown>) => [job.id, job.status]), [["job-1", "failed"]], "the historical job is kept unchanged");
 });
 
 test("normal expired-run resume releases a terminal OLX job and continues pending portals without repeating completed sources", async () => {
@@ -930,15 +941,15 @@ test("normal expired-run resume releases a terminal OLX job and continues pendin
   const result = await runRadarCollectionPortion({ runId, ownerId, leaseToken: resumed.run.leaseToken! }, db as never);
   assert.equal(result.status, "partial");
   assert.equal(result.sourceStatuses.olx, "failed");
-  assert.match(result.sourceErrors.olx ?? "", /RADAR_OLX_JOB_ALREADY_FAILED/u);
-  assert.equal(result.sourceStatuses.oferty_net, "completed", "a terminal OLX job cannot block the remaining portal");
+  assert.match(result.sourceErrors.olx ?? "", /^RADAR_OLX_REMOVED:/u);
+  assert.equal(result.sourceStatuses.oferty_net, "completed", "a legacy OLX stage cannot block the remaining portal");
   assert.equal(morizonCalls, 0, "the already-completed source is not fetched again");
   assert.equal(ofertyCalls, 1);
   assert.equal(db.tables.olx_scan_jobs.length, 1, "resume never creates a duplicate OLX reservation");
   assert.equal(db.tables.olx_scan_jobs[0]?.status, "failed", "Radar does not rewrite the worker's terminal job status");
 });
 
-test("a completed OLX reservation is checkpointed as completed before later sources continue", async () => {
+test("a legacy OLX stage whose old job completed is closed as RADAR_OLX_REMOVED and later sources continue", async () => {
   const runId = "run-olx-completed-checkpoint";
   const checkpoint = {
     sourceQueue: ["olx", "oferty_net"], currentSourceIndex: 0,
@@ -965,11 +976,12 @@ test("a completed OLX reservation is checkpointed as completed before later sour
   assert.equal(resumed.kind, "claimed");
   if (resumed.kind !== "claimed") return;
   const result = await runRadarCollectionPortion({ runId, ownerId, leaseToken: resumed.run.leaseToken! }, db as never);
-  assert.equal(result.status, "completed");
-  assert.equal(result.sourceStatuses.olx, "completed");
+  assert.equal(result.status, "partial");
+  assert.equal(result.sourceStatuses.olx, "failed");
+  assert.match(result.sourceErrors.olx ?? "", /^RADAR_OLX_REMOVED:/u);
   assert.equal(result.sourceStatuses.oferty_net, "completed");
   assert.equal(ofertyCalls, 1);
-  assert.equal(db.tables.olx_scan_jobs.length, 1, "the completed worker reservation is reused rather than duplicated");
+  assert.deepEqual(db.tables.olx_scan_jobs.map((job: Record<string, unknown>) => job.status), ["completed"], "the historical job is kept, nothing new is queued");
 });
 
 test("resuming a legacy checkpoint that still queues a now-disabled source (szybko) skips it with an honest reason, fetches nothing from it, and still runs the rest of the queue", async () => {
@@ -1212,7 +1224,7 @@ test("a candidate missing its district AND another criterion (e.g. an unconfirme
   assert.deepEqual(result.qualificationRejections, {}, "a saved review candidate is not counted as discarded");
 });
 
-test("a portal that times out on every portion is closed after a bounded number of tries so the run, OLX and other portals are never blocked", async () => {
+test("a portal that times out on every portion is closed after a bounded number of tries so the run and other portals are never blocked (OLX dropped from the selection)", async () => {
   // Production 2026-10-13: run 0938a6b6 returned "running" 443/27 for 24
   // consecutive scheduler portions because Domy.pl timed out each time and a
   // timeout was always retried; OLX (always last) could never start.
@@ -1233,9 +1245,9 @@ test("a portal that times out on every portion is closed after a bounded number 
   for (let portion = 0; portion < RADAR_SOURCE_NO_PROGRESS_LIMIT + 2; portion += 1) {
     const startedAt = Date.now();
     const result = await runRadarCollectionPortion(input, db as never);
-    assert.ok(Date.now() - startedAt < 5_000, "a deferred OLX source must not spin checkpoint writes until the 34 s portion budget is spent");
+    assert.ok(Date.now() - startedAt < 5_000, "no portion spins checkpoint writes until the portion budget is spent");
     portions.push(result);
-    if (result.sourceStatuses.olx === "running") break;
+    if (result.status !== "running") break;
   }
   const last = portions.at(-1)!;
   assert.equal(attempts.oferty_net, RADAR_SOURCE_NO_PROGRESS_LIMIT, "the timing-out portal is tried exactly up to the limit, never forever");
@@ -1246,8 +1258,8 @@ test("a portal that times out on every portion is closed after a bounded number 
   assert.equal(attempts.adresowo, 1);
   assert.equal(last.sourceStatuses.domiporta, "completed");
   assert.equal(attempts.domiporta, 1, "a completed portal is never fetched again by later portions");
-  assert.equal(last.sourceStatuses.olx, "running", "OLX finally reaches its worker queue instead of being deferred forever");
-  assert.equal(db.tables.olx_scan_jobs.length, 1);
+  assert.equal(last.sourceStatuses.olx, undefined, "OLX in a stored selection is dropped: Radar never queues it");
+  assert.equal((db.tables.olx_scan_jobs ?? []).length, 0);
   assert.equal(db.tables.price_radar_runs.length, 1, "all portions continued the one run");
   assert.equal(db.tables.price_radar_runs[0]?.id, claim.run.id);
 });
@@ -1312,7 +1324,7 @@ function stalledDetailSource(cursors: Record<string, { page: number; candidateIn
   };
 }
 
-test("Production b525b4aa: three portals stuck on the same detail cursor are closed after bounded no-progress attempts and OLX gets its worker job", async () => {
+test("Production b525b4aa: three portals stuck on the same detail cursor are closed after bounded no-progress attempts; no OLX job is created", async () => {
   const db = fakeDb();
   const attempts: Record<string, number> = {};
   const stuck = { morizon: { page: 1, candidateIndex: 3 }, domiporta: { page: 1, candidateIndex: 4 }, oferty_net: { page: 1, candidateIndex: 3 } };
@@ -1328,15 +1340,15 @@ test("Production b525b4aa: three portals stuck on the same detail cursor are clo
   let result;
   for (let portion = 0; portion < RADAR_SOURCE_NO_PROGRESS_LIMIT + 2; portion += 1) {
     result = await runRadarCollectionPortion(input, db as never);
-    if (result.sourceStatuses.olx === "running") break;
+    if (result.status !== "running") break;
   }
   for (const source of Object.keys(stuck)) {
     assert.equal(attempts[source], RADAR_SOURCE_NO_PROGRESS_LIMIT, `${source} is retried a bounded number of times, never forever`);
     assert.equal(result!.sourceStatuses[source], "partial", `${source} keeps its earlier rows and is reported as partial coverage`);
     assert.match(result!.sourceErrors[source] ?? "", /^RADAR_SOURCE_NO_PROGRESS_LIMIT:/u);
   }
-  assert.equal(result!.sourceStatuses.olx, "running", "OLX finally reaches its existing worker queue");
-  assert.equal(db.tables.olx_scan_jobs.length, 1);
+  assert.equal(result!.sourceStatuses.olx, undefined, "OLX is not a Radar source any more");
+  assert.equal((db.tables.olx_scan_jobs ?? []).length, 0);
   assert.equal(result!.scannedCount, 436, "already collected results are preserved, nothing is double counted");
   assert.equal(result!.qualifiedCount, 24);
   const progress = ((db.tables.price_radar_runs[0]!.checkpoint as Record<string, unknown>).progress ?? {}) as Record<string, unknown>;

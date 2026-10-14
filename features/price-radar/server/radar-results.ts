@@ -46,7 +46,9 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
     if (page.length < pageSize) break;
   }
 
-  const allListings = rows.map(toRadarListing).filter((listing): listing is RadarListing => listing !== null);
+  // OLX left Radar: archived OLX rows stay in the table (history) but are no
+  // longer current listings, samples or part of any average.
+  const allListings = rows.map(toRadarListing).filter((listing): listing is RadarListing => listing !== null && listing.source !== "olx");
   // Within one portal: the same proven identity resolution Finder/Watcher
   // use (confirmed externalListingId/URL). Its keys are source-prefixed, so
   // this alone never merges across different portals.

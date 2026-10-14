@@ -13,6 +13,8 @@ import { createLogger, type DiagnosticEvent } from "./logger.ts";
 import { budgetLimits, nextAlarmDelayMs, runBatch, type BatchSummary } from "./runner.ts";
 import { isAuthorizedAdmin } from "./admin-auth.ts";
 import { runnerVersionStale, versionReport } from "./version-sync.ts";
+import { cronPlan } from "./cron-plan.ts";
+import { accountBrowserMsToday } from "./scheduled-claim-client.ts";
 
 export type Env = {
   BROWSER: Fetcher;
@@ -57,24 +59,28 @@ export class OlxCloudRunner extends DurableObject<Env> {
     const now = Date.now();
     this.lastCron = { at: new Date(now).toISOString(), scheduledTime: new Date(scheduledTime).toISOString(), lagMs: now - scheduledTime };
     const loaded = loadCloudConfig(this.env);
-    // Disabled, misconfigured or manual mode: no alarm exists, so nothing is ever claimed automatically.
-    if (!loaded.ok || loaded.config.claimMode !== "auto") {
-      if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm();
-      const code = loaded.ok ? "OLX_CLOUD_MANUAL_MODE" : loaded.code;
-      console.log(JSON.stringify({ timestamp: new Date(now).toISOString(), event: "CRON_TICK_INACTIVE", code }));
-      return { armed: false, code };
-    }
     const alarm = await this.ctx.storage.getAlarm();
-    // No alarm (first start, or lost) or an alarm overdue by >2 min (stuck): run now.
-    if (alarm === null || alarm < now - 120_000) {
-      await this.ctx.storage.setAlarm(now + 1_000);
-      console.log(JSON.stringify({ timestamp: new Date(now).toISOString(), event: "CRON_TICK_ARMED_ALARM", previousAlarm: alarm, cronLagMs: this.lastCron.lagMs }));
+    const plan = cronPlan(loaded, alarm, now, this.active !== null);
+    if (plan.action === "disarm") {
+      // Disabled, misconfigured or manual mode: no alarm exists, so nothing is ever claimed automatically.
+      if (alarm !== null) await this.ctx.storage.deleteAlarm();
+      console.log(JSON.stringify({ timestamp: new Date(now).toISOString(), event: "CRON_TICK_INACTIVE", code: plan.code }));
+      return { armed: false, code: plan.code };
+    }
+    if (plan.action === "arm") {
+      await this.ctx.storage.setAlarm(plan.atMs);
+      console.log(JSON.stringify({ timestamp: new Date(now).toISOString(), event: plan.reason === "scheduled_claim" ? "CRON_TICK_SCHEDULED_CLAIM" : "CRON_TICK_ARMED_ALARM", previousAlarm: alarm, cronLagMs: this.lastCron.lagMs }));
     }
     return { armed: true, code: null };
   }
 
   async alarm(): Promise<void> {
     const loaded = loadCloudConfig(this.env);
+    if (loaded.ok && loaded.config.claimMode === "scheduled") {
+      // One claim per Cron tick; never re-armed here (the next Cron tick decides).
+      if (!this.active) await this.execute(loaded.config, "cron", { maxJobs: 1, scheduled: true });
+      return;
+    }
     // Not re-armed: the cron tick arms it again once enabled in auto mode.
     if (!loaded.ok || loaded.config.claimMode !== "auto") return;
     const config = loaded.config;
@@ -105,6 +111,8 @@ export class OlxCloudRunner extends DurableObject<Env> {
     const loaded = loadCloudConfig(this.env);
     if (!loaded.ok) return { ok: false, code: loaded.code, message: loaded.message };
     if (this.active) return { ok: false, code: "OLX_CLOUD_RUNNER_BUSY", message: "Runner właśnie przetwarza zadania; spróbuj ponownie za chwilę." };
+    // Unattended mode has no manual trigger: a blocked or failed job is never re-run by hand.
+    if (loaded.config.claimMode === "scheduled") return { ok: false, code: "OLX_CLOUD_SCHEDULED_MODE", message: "Tryb scheduled: zadania odbiera wyłącznie Cron (claim-scheduled); ręczne uruchomienie jest wyłączone." };
     const manual = loaded.config.claimMode === "manual";
     if (manual && !selector) return { ok: false, code: "OLX_CLOUD_SELECTOR_REQUIRED", message: "Tryb manual: podaj ?jobId=<uuid zadania>." };
     const options = selector ? { maxJobs: 1, selector } : { maxJobs: Math.max(1, Math.min(3, Math.trunc(maxJobs) || 1)) };
@@ -172,7 +180,7 @@ export class OlxCloudRunner extends DurableObject<Env> {
     };
   }
 
-  private async execute(config: CloudConfig, trigger: string, options: { maxJobs?: number; selector?: ClaimSelector }): Promise<BatchSummary | null> {
+  private async execute(config: CloudConfig, trigger: string, options: { maxJobs?: number; selector?: ClaimSelector; scheduled?: boolean }): Promise<BatchSummary | null> {
     const logger = createLogger();
     const run = (async () => {
       try {
@@ -185,6 +193,7 @@ export class OlxCloudRunner extends DurableObject<Env> {
             save: (ledger) => this.ctx.storage.put(LEDGER_KEY, ledger),
           },
           log: logger.log,
+          accountBrowserMs: async () => accountBrowserMsToday(await history(this.env.BROWSER), Date.now()),
         }, options);
         this.lastPollAt = new Date().toISOString();
         if (summary.outcome !== "idle" || trigger !== "alarm") await this.saveDiagnostics({ lastWork: { ...withoutLedger(summary), at: this.lastPollAt, trigger } }, logger.recent());

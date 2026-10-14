@@ -67,7 +67,7 @@ test("within-portal duplicates (same source, same confirmed URL) collapse to one
 test("different listings with identical price, area, district and rooms remain separate without a positive identity proof", async () => {
   currentDb = fakeDb([
     row({ id: "listing-domiporta", source: "domiporta", external_listing_id: "d-1", first_seen_at: "2026-10-01T00:00:00Z" }),
-    row({ id: "listing-olx", source: "olx", external_listing_id: "o-1", first_seen_at: "2026-10-03T00:00:00Z" }),
+    row({ id: "listing-gratka", source: "gratka", external_listing_id: "o-1", first_seen_at: "2026-10-03T00:00:00Z" }),
   ]);
   const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
   assert.equal(payload.listings.length, 2, "the same tuple is not evidence that two portal listings are one dwelling");
@@ -76,7 +76,7 @@ test("different listings with identical price, area, district and rooms remain s
 test("cross-portal listings that merely share a similar title or address but differ in price/area/rooms are NEVER merged", async () => {
   currentDb = fakeDb([
     row({ id: "listing-domiporta", source: "domiporta", external_listing_id: "d-2", title: "Ładne mieszkanie w Bałutach", price: 450_000 }),
-    row({ id: "listing-olx", source: "olx", external_listing_id: "o-2", title: "Ładne mieszkanie w Bałutach", price: 455_000 }),
+    row({ id: "listing-gratka", source: "gratka", external_listing_id: "o-2", title: "Ładne mieszkanie w Bałutach", price: 455_000 }),
   ]);
   const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
   assert.equal(payload.listings.length, 2, "a different confirmed price must keep these as two distinct listings, regardless of the similar title");
@@ -158,12 +158,12 @@ test("an unmapped/invalid row (missing a required confirmed field) is silently e
 test("only an explicit adapter cross-source unit reference can merge portal copies, and the surviving card retains links to both", async () => {
   currentDb = fakeDb([
     row({ id: "listing-a", source: "domiporta", external_listing_id: "a", cross_source_identity: "portal_shared_unit_id:registry-123" }),
-    row({ id: "listing-b", source: "olx", external_listing_id: "b", original_url: "https://olx.pl/b", normalized_url: "https://olx.pl/b", price: 455_000, area: 50.5, price_per_sqm: 9_010, cross_source_identity: "portal_shared_unit_id:registry-123" }),
+    row({ id: "listing-b", source: "gratka", external_listing_id: "b", original_url: "https://gratka.pl/b", normalized_url: "https://gratka.pl/b", price: 455_000, area: 50.5, price_per_sqm: 9_010, cross_source_identity: "portal_shared_unit_id:registry-123" }),
   ]);
   const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
   assert.equal(payload.listings.length, 1);
   assert.equal(payload.listings[0].crossSourceAlternates.length, 1);
-  assert.equal(payload.listings[0].crossSourceAlternates[0].originalUrl, "https://olx.pl/b");
+  assert.equal(payload.listings[0].crossSourceAlternates[0].originalUrl, "https://gratka.pl/b");
   assert.equal(payload.listings[0].crossSourceAlternates[0].price, 455000);
   assert.equal(payload.stats[0].sampleSize, 1, "the identity group contributes one row to the radar sample");
 });
@@ -171,12 +171,12 @@ test("only an explicit adapter cross-source unit reference can merge portal copi
 test("a selected portal retains a confirmed group when its representative is from another portal", async () => {
   currentDb = fakeDb([
     row({ id: "listing-a", source: "domiporta", external_listing_id: "a", cross_source_identity: "canonical_unit_id:unit-portal-filter" }),
-    row({ id: "listing-b", source: "olx", external_listing_id: "b", original_url: "https://olx.pl/b", normalized_url: "https://olx.pl/b", cross_source_identity: "canonical_unit_id:unit-portal-filter" }),
+    row({ id: "listing-b", source: "gratka", external_listing_id: "b", original_url: "https://gratka.pl/b", normalized_url: "https://gratka.pl/b", cross_source_identity: "canonical_unit_id:unit-portal-filter" }),
   ]);
-  const payload = await getRadarResults(OWNER, { ...baseFilters, sources: ["olx"] }, currentDb as never);
+  const payload = await getRadarResults(OWNER, { ...baseFilters, sources: ["gratka"] }, currentDb as never);
   assert.equal(payload.listings.length, 1);
   assert.equal(payload.listings[0].source, "domiporta", "the group keeps one deterministic representative");
-  assert.equal(payload.listings[0].crossSourceAlternates[0]?.source, "olx");
+  assert.equal(payload.listings[0].crossSourceAlternates[0]?.source, "gratka");
   assert.equal(payload.stats[0].sampleSize, 1);
 });
 
@@ -185,4 +185,16 @@ test("read path always scopes its database query to the authenticated owner", as
   currentDb = fakeDb(rows);
   const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
   assert.deepEqual(payload.listings.map((listing) => listing.id), ["owner-1-listing"]);
+});
+
+test("archived OLX rows stay in the table but are no longer listings, samples or averages", async () => {
+  currentDb = fakeDb([
+    row({ id: "listing-otodom", source: "otodom", external_listing_id: "a" }),
+    row({ id: "listing-olx", source: "olx", external_listing_id: "o-archived", price: 999_000, price_per_sqm: 19_000 }),
+  ]);
+  const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
+  assert.deepEqual(payload.listings.map((listing) => listing.id), ["listing-otodom"]);
+  assert.ok(!payload.excludedListings.some((listing) => listing.source === "olx"));
+  assert.equal(payload.stats.reduce((total, group) => total + group.sampleSize, 0), 1, "the OLX row is not part of any sample");
+  assert.ok(payload.stats.every((group) => group.averagePricePerSqm === null || group.averagePricePerSqm < 19_000), "nor of any average");
 });

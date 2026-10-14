@@ -1,0 +1,259 @@
+name: OLX Cloudflare — automat (Worker scheduled)
+
+# Manual only (workflow_dispatch). Operates exclusively the separate unattended
+# Worker "flip-manager-olx-cloud-scheduled" (wrangler.scheduled.toml). Never
+# touches "flip-manager-olx-cloud", "-stage1" or "-stage2", Vercel or Supabase.
+# Full procedure: docs/olx-cloud-scheduled.md.
+#
+# Actions:
+#   check            /status (must be on one version, scheduled mode, fixed limits) + one /selftest
+#                    (signed heartbeat for a random job id: 409 expected). Claims nothing.
+#   deploy-disabled  deploy the Worker DISABLED (OLX_CLOUD_ENABLED=0) and set its secrets.
+#                    Its Cron Trigger then only removes alarms; nothing is claimed.
+#   enable           after the checklist and explicit confirmation: deploy ENABLED. From then on
+#                    every 15 min one Cron tick may claim at most one automatic Finder OLX job
+#                    (claim-scheduled), and only while olx_automation_control is enabled.
+#   disable          STOP: redeploy disabled and confirm (also the emergency stop).
+#
+# There is no "run now": the unattended Worker refuses /run-once. A blocked or
+# failed job is never retried by hand from here.
+#
+# Repository secrets (environment "olx-cloudflare-scheduled"):
+#   CLOUDFLARE_API_TOKEN_SCHEDULED   restricted Cloudflare API token (Workers Scripts edit, this account)
+#   CLOUDFLARE_ACCOUNT_ID            Cloudflare account id
+#   OLX_CLOUD_ADMIN_TOKEN_SCHEDULED  admin bearer token of this Worker (>= 32 chars)
+#   OLX_WORKER_SECRET_SCHEDULED      the app's OLX_WORKER_SECRET (same value as in Vercel)
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Akcja"
+        type: choice
+        options: [check, deploy-disabled, enable, disable]
+        default: check
+      confirm:
+        description: "enable: wpisz WLACZ-AUTOMAT-OLX"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: olx-cloudflare-scheduled
+  cancel-in-progress: false
+
+env:
+  SCHEDULED_CONFIG: wrangler.scheduled.toml
+  SCHEDULED_NAME: flip-manager-olx-cloud-scheduled
+  SCHEDULED_URL: https://flip-manager-olx-cloud-scheduled.jakub-okruszek.workers.dev
+  STATUS: scripts/scheduled-status.sh
+
+jobs:
+  scheduled:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: olx-cloudflare-scheduled
+    defaults:
+      run:
+        shell: bash
+        working-directory: workers/olx-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Kontrola wejścia
+        working-directory: .
+        env:
+          ACTION: ${{ inputs.action }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          echo "Akcja: $ACTION, commit: $GITHUB_SHA, gałąź: $GITHUB_REF"
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::Workflow działa wyłącznie z main"; exit 1; }
+          if [ "$ACTION" = "enable" ]; then
+            [ "$CONFIRM" = "WLACZ-AUTOMAT-OLX" ] || { echo "::error::Brak potwierdzenia: wpisz WLACZ-AUTOMAT-OLX"; exit 1; }
+          elif [ -n "$CONFIRM" ]; then
+            echo "::error::confirm jest dozwolone tylko dla enable"; exit 1
+          fi
+
+      - name: Kontrola sekretów (bez wypisywania wartości)
+        env:
+          ACTION: ${{ inputs.action }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
+          WORKER_SECRET: ${{ secrets.OLX_WORKER_SECRET_SCHEDULED }}
+        run: |
+          set -euo pipefail
+          [ "${#ADMIN_TOKEN}" -ge 32 ] || { echo "::error::Brak lub zbyt krótki OLX_CLOUD_ADMIN_TOKEN_SCHEDULED"; exit 1; }
+          if [ "$ACTION" != "check" ]; then
+            [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "::error::Brak CLOUDFLARE_API_TOKEN_SCHEDULED"; exit 1; }
+            [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]] || { echo "::error::CLOUDFLARE_ACCOUNT_ID musi mieć 32 znaki hex"; exit 1; }
+          fi
+          if [ "$ACTION" = "deploy-disabled" ]; then
+            [ "${#WORKER_SECRET}" -ge 32 ] || { echo "::error::Brak lub zbyt krótki OLX_WORKER_SECRET_SCHEDULED"; exit 1; }
+          fi
+          echo "Sekrety obecne."
+
+      - name: Kontrola konfiguracji wrangler.scheduled.toml
+        if: ${{ inputs.action != 'check' }}
+        run: |
+          set -euo pipefail
+          f="$SCHEDULED_CONFIG"
+          toplevel="$(awk '/^[[:space:]]*\[/{exit} {print}' "$f")"
+          [ "$(printf '%s\n' "$toplevel" | grep -Ec '^name[[:space:]]*=')" = "1" ] || { echo "::error::Wymagana dokładnie jedna nazwa Workera"; exit 1; }
+          printf '%s\n' "$toplevel" | grep -Eq "^name = \"$SCHEDULED_NAME\"$" || { echo "::error::Nazwa Workera inna niż $SCHEDULED_NAME"; exit 1; }
+          grep -Eq '^crons = \["\*/15 \* \* \* \*"\]$' "$f" || { echo "::error::Wymagany dokładnie Cron */15"; exit 1; }
+          if grep -Eq '^[[:space:]]*(route|routes)[[:space:]]*=|^\[\[routes\]\]|^\[env\.' "$f"; then echo "::error::Niedozwolone trasy lub środowiska"; exit 1; fi
+          if grep -Eq '^(OLX_WORKER_SECRET|OLX_CLOUD_ADMIN_TOKEN)' "$f"; then echo "::error::Sekret w pliku konfiguracji"; exit 1; fi
+          expect() {
+            [ "$(grep -Ec "^$1[[:space:]]*=" "$f")" = "1" ] || { echo "::error::$1 musi wystąpić dokładnie raz"; exit 1; }
+            grep -Eq "^$1 = \"$2\"$" "$f" || { echo "::error::$1 musi mieć wartość \"$2\""; exit 1; }
+            echo "OK  $1 = \"$2\""
+          }
+          expect OLX_CLOUD_ENABLED 0
+          expect OLX_CLOUD_CLAIM_MODE scheduled
+          expect OLX_CLOUD_MAX_JOBS_PER_DAY 2
+          expect OLX_CLOUD_MAX_JOBS_PER_INVOCATION 1
+          expect OLX_CLOUD_MAX_HELD_JOBS 1
+          expect OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS 120
+          expect OLX_CLOUD_DAILY_BROWSER_LIMIT_SECONDS 600
+          expect OLX_CLOUD_ON_BUDGET_EXHAUSTED leave_queued
+          expect OLX_CLOUD_WORKER_ID cloudflare-olx-scheduled
+
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.action != 'check' }}
+        with:
+          node-version: 22
+
+      - name: Instalacja zależności Workera
+        if: ${{ inputs.action != 'check' }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Testy Workera i dry-run (bez wysyłania)
+        if: ${{ inputs.action != 'check' }}
+        run: |
+          set -euo pipefail
+          npm test
+          npx wrangler deploy --dry-run --outdir dist-scheduled --config "$SCHEDULED_CONFIG" | tee dry-run.log
+          for expected in 'env.OLX_CLOUD_ENABLED ("0")' 'env.OLX_CLOUD_CLAIM_MODE ("scheduled")' 'env.OLX_CLOUD_MAX_JOBS_PER_DAY ("2")' 'env.OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS ("120")'; do
+            grep -Fq "$expected" dry-run.log || { echo "::error::Dry-run nie pokazuje: $expected"; exit 1; }
+          done
+
+      # ---------- deploy-disabled / disable (STOP) ----------
+      - name: Wdrożenie WYŁĄCZONEGO Workera
+        id: deploy
+        if: ${{ inputs.action == 'deploy-disabled' || inputs.action == 'disable' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npx wrangler deploy --config "$SCHEDULED_CONFIG" | tee deploy.log && grep -Fq "Uploaded $SCHEDULED_NAME" deploy.log \
+               && grep -Fq 'env.OLX_CLOUD_ENABLED ("0")' deploy.log; then
+              grep -Fq "$SCHEDULED_URL" deploy.log || { echo "::error::Adres Workera inny niż $SCHEDULED_URL"; exit 1; }
+              echo "version=$("$STATUS" deploy-version deploy.log)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Ponawiam wdrożenie wyłączonej wersji ($attempt/3)..."; sleep 10
+          done
+          echo "::error::NIE UDAŁO SIĘ wdrożyć wyłączonego Workera — STOP także w bazie: scripts/olx-cloud-scheduled.stop.sql"; exit 1
+
+      - name: Sekrety Workera (tylko w nim)
+        id: secrets
+        if: ${{ inputs.action == 'deploy-disabled' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
+          WORKER_SECRET: ${{ secrets.OLX_WORKER_SECRET_SCHEDULED }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put OLX_CLOUD_ADMIN_TOKEN --config "$SCHEDULED_CONFIG"
+          printf '%s' "$WORKER_SECRET" | npx wrangler secret put OLX_WORKER_SECRET --config "$SCHEDULED_CONFIG"
+          echo "version=any" >> "$GITHUB_OUTPUT"
+
+      - name: Weryfikacja stanu wyłączonego
+        if: ${{ inputs.action == 'deploy-disabled' || inputs.action == 'disable' }}
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
+          VERSION: ${{ steps.secrets.outputs.version || steps.deploy.outputs.version }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl -fsS --max-time 20 "$SCHEDULED_URL/health" -o health.json; then break; fi
+            echo "Czekam na workers.dev ($attempt/12)..."; sleep 10
+          done
+          grep -Fq '"ok":true' health.json || { echo "::error::/health nie odpowiada"; exit 1; }
+          [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$SCHEDULED_URL/status")" = "404" ] || { echo "::error::/status bez tokenu nie zwraca 404"; exit 1; }
+          "$STATUS" wait disabled "$VERSION" 24 5 status.json
+          {
+            echo "## OLX automat — Worker WYŁĄCZONY"
+            echo "- Worker: \`$SCHEDULED_NAME\`, commit \`$GITHUB_SHA\`, wersja \`$VERSION\`"
+            echo '```json'; jq '{code, configCheck, version, ledger, nextAlarm, running, lastWork, lastError}' status.json; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- check (also the precondition of enable) ----------
+      - name: Sprawdzenie stanu, budżetu i połączenia
+        if: ${{ inputs.action == 'check' || inputs.action == 'enable' }}
+        env:
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = "enable" ]; then
+            "$STATUS" wait disabled any 1 0 status-before.json \
+              || { echo "::error::Włączyć można tylko poprawnie wdrożony, WYŁĄCZONY Worker (uruchom deploy-disabled)."; exit 1; }
+            jq -e '.paused == null' status-before.json >/dev/null || { echo "::error::Worker wstrzymany: $(jq -r '.paused.code' status-before.json)"; exit 1; }
+          else
+            curl -fsS --max-time 20 -H "authorization: Bearer ${ADMIN_TOKEN}" "$SCHEDULED_URL/status" -o status-before.json
+          fi
+          # Exactly one self-test: signed heartbeat for a random job id (409 expected). Nothing is claimed.
+          code="$(curl -sS -X POST -o selftest.json -w '%{http_code}' --max-time 60 -H "authorization: Bearer ${ADMIN_TOKEN}" "$SCHEDULED_URL/selftest")"
+          [ "$code" = "200" ] || { echo "::error::/selftest zwrócił HTTP $code"; exit 1; }
+          jq -e '.browserRun == null' selftest.json >/dev/null || { echo "::error::Nieoczekiwany test przeglądarki"; exit 1; }
+          jq -e '.queueApi.ok == true and .queueApi.status == 409' selftest.json >/dev/null || { echo "::error::HMAC / połączenie z aplikacją nie działa"; exit 1; }
+          {
+            echo "## OLX automat — kontrola"
+            echo '```json'
+            jq '{ok, code, killSwitch: .configCheck.killSwitch, claimMode: .config.claimMode, limits: (.config // {} | {maxJobsPerDay, maxHeldJobs, safeBrowserBudgetSeconds, dailyBrowserLimitSeconds}), version, browserSecondsUsedToday, paused: (.paused // null | if . then {code, resumesAt} else null end), nextAlarm, running, lastCron, lastWork: (.lastWork // null | if . then {at, outcome, claimed, completed, failed, claimReason, claimError, accountBrowserMs} else null end), lastError}' status-before.json
+            echo '```'
+            echo "Stan bazy (SQL Editor, tylko odczyt): \`scripts/olx-cloud-scheduled.check.sql\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- enable ----------
+      - name: Włączenie automatu
+        id: enable
+        if: ${{ inputs.action == 'enable' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_TOKEN: ${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config "$SCHEDULED_CONFIG" --var OLX_CLOUD_ENABLED:1 | tee enable.log
+          grep -Fq "Uploaded $SCHEDULED_NAME" enable.log || { echo "::error::Wynik wdrożenia nie wskazuje $SCHEDULED_NAME"; exit 1; }
+          version="$("$STATUS" deploy-version enable.log)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          "$STATUS" wait enabled "$version" 24 5 status-enabled.json \
+            || { echo "::error::Włączona wersja $version nie została potwierdzona"; exit 1; }
+          {
+            echo "## OLX automat — WŁĄCZONY"
+            echo "- Wersja \`$version\`. Co 15 min Cron może odebrać najwyżej 1 automatyczne zadanie OLX Findera (≤ 2 na dobę, w budżecie przeglądarki),"
+            echo "  wyłącznie gdy \`olx_automation_control.scheduled_claim_enabled = true\` (domyślnie false)."
+            echo "- STOP: akcja \`disable\` albo \`scripts/olx-cloud-scheduled.stop.sql\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wyłącz, jeśli włączenie nie zostało potwierdzone
+        if: ${{ failure() && inputs.action == 'enable' && steps.enable.outcome != 'skipped' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config "$SCHEDULED_CONFIG" | tee rollback.log
+          grep -Fq 'env.OLX_CLOUD_ENABLED ("0")' rollback.log || { echo "::error::NIE UDAŁO SIĘ wyłączyć — uruchom disable i stop.sql"; exit 1; }
+          echo "::warning::Włączenie niepotwierdzone — Worker wdrożony ponownie jako wyłączony."

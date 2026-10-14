@@ -22,7 +22,11 @@ export type BudgetStopCode =
   | "OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED"
   | "OLX_CLOUD_BROWSER_DAILY_LIMIT_429"
   | "OLX_CLOUD_DAILY_JOB_CAP_REACHED"
-  | "OLX_CLOUD_OLX_ACCESS_PAUSED";
+  | "OLX_CLOUD_OLX_ACCESS_PAUSED"
+  /** Scheduled mode: the whole account (history()) already used the safe budget today. */
+  | "OLX_CLOUD_ACCOUNT_BUDGET_EXHAUSTED"
+  /** Scheduled mode: the account's usage could not be read; nothing is started (fail closed). */
+  | "OLX_CLOUD_ACCOUNT_USAGE_UNKNOWN";
 
 export type Ledger = {
   /** UTC day, YYYY-MM-DD. */
@@ -36,6 +40,12 @@ export type Ledger = {
   jobsRejected: number;
   /** Consecutive OLX refusals (403/405/429/verification); reset by any normal page. */
   refusalStreak: number;
+  /**
+   * Scheduled mode: measured browser ms of the last job (one job per session),
+   * carried across UTC days; the estimate for the next job and the value the
+   * Worker reports with every claim. Absent before the first job.
+   */
+  lastJobBrowserMs?: number | null;
   /** A session that was open when this runner last persisted; charged on recovery. */
   openSession: { startedAt: number; sessionId: string | null } | null;
   stop: BudgetStop | null;
@@ -78,7 +88,7 @@ export function currentLedger(stored: Ledger | null | undefined, now: number, li
   if (ledger.day !== utcDay(now)) {
     // A new UTC day resets Cloudflare's allowance, not an OLX access pause.
     const carried = ledger.stop?.code === "OLX_CLOUD_OLX_ACCESS_PAUSED" && Date.parse(ledger.stop.resumesAt) > now ? ledger.stop : null;
-    ledger = { ...emptyLedger(now), stop: carried, refusalStreak: carried ? ledger.refusalStreak : 0 };
+    ledger = { ...emptyLedger(now), stop: carried, refusalStreak: carried ? ledger.refusalStreak : 0, lastJobBrowserMs: ledger.lastJobBrowserMs ?? null };
   }
   return ledger;
 }
@@ -127,7 +137,12 @@ export function budgetStop(code: BudgetStopCode, ledger: Ledger, now: number, li
   const safe = Math.round(limits.safeBrowserBudgetMs / 1_000);
   const plan = Math.round(limits.dailyBrowserLimitMs / 1_000);
   const resumesAt = nextUtcMidnight(now);
-  const message = code === "OLX_CLOUD_DAILY_JOB_CAP_REACHED"
+  if (code === "OLX_CLOUD_ACCOUNT_USAGE_UNKNOWN") {
+    return { code, message: "Cloudflare OLX: nie udało się odczytać zużycia przeglądarki konta (history()); nic nie uruchomiono, kolejna próba przy następnym Cron.", at: new Date(now).toISOString(), resumesAt: new Date(now).toISOString() };
+  }
+  const message = code === "OLX_CLOUD_ACCOUNT_BUDGET_EXHAUSTED"
+    ? `Cloudflare OLX: konto zużyło dziś bezpieczny budżet przeglądarki (wg history(); limit ${safe} s, planu ${plan} s), także przez inne Workery lub testy. Wznowienie ${resumesAt}.`
+    : code === "OLX_CLOUD_DAILY_JOB_CAP_REACHED"
     ? `Cloudflare OLX: osiągnięto dzienny limit zadań (${ledger.jobsClaimed}/${limits.maxJobsPerDay}). Wznowienie ${resumesAt}.`
     : code === "OLX_CLOUD_BROWSER_DAILY_LIMIT_429"
       ? `Cloudflare Browser Run odrzucił sesję (HTTP 429 — dzienny limit planu ${plan} s wyczerpany po stronie Cloudflare; licznik workera: ${used} s). Pobieranie OLX wstrzymane do ${resumesAt}.`
@@ -139,4 +154,10 @@ function isLedger(value: unknown): value is Ledger {
   if (!value || typeof value !== "object") return false;
   const row = value as Record<string, unknown>;
   return typeof row.day === "string" && typeof row.browserMs === "number" && Number.isFinite(row.browserMs);
+}
+
+/** Browser time the next job is expected to cost: the last measured job, never less than the page reserve. */
+export function jobEstimateMs(ledger: Ledger, limits: Pick<BudgetLimits, "scrapeReserveMs">): number {
+  const measured = typeof ledger.lastJobBrowserMs === "number" && Number.isFinite(ledger.lastJobBrowserMs) ? ledger.lastJobBrowserMs : 0;
+  return Math.max(measured, limits.scrapeReserveMs);
 }
