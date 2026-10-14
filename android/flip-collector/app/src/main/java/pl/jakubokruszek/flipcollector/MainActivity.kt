@@ -29,7 +29,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import com.google.android.gms.code.scanner.GmsBarcodeScanning
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
