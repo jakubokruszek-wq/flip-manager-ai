@@ -315,7 +315,12 @@ export async function expireUnclaimedOlxJobs(supabase: ReturnType<typeof createF
     finished_at: now,
     error_code: "OLX_WORKER_CLAIM_TIMEOUT",
     error_message: "OLX worker did not claim the queued job within 90 seconds",
-  }).eq("scan_run_id", runId).eq("status", "queued").eq("attempts", 0).lt("created_at", cutoff).select("source_scan_id");
+  }).eq("scan_run_id", runId).eq("status", "queued").eq("attempts", 0).lt("created_at", cutoff)
+    // Automatic jobs (Finder OLX schedule) wait for the scheduled Worker's next
+    // Cron tick (up to 15 min), not for a live operator worker; their own
+    // expiry is expire_stale_scheduled_finder_olx_jobs (6 h, explicit code).
+    .or("requested_by.is.null,requested_by.neq.scheduler")
+    .select("source_scan_id");
   if (neverClaimed.error) throw new Error(`OLX_UNCLAIMED_WATCHDOG_FAILED: ${neverClaimed.error.message}`);
   await finalizeWatchdogSourceScans(supabase, neverClaimed.data, "OLX_WORKER_CLAIM_TIMEOUT: OLX worker did not claim the queued job within 90 seconds");
 

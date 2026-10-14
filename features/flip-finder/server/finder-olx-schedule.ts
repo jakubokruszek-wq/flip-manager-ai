@@ -4,6 +4,7 @@ import type { SearchFilter } from "@/features/flip-finder";
 import { assertAllowedOlxUrl } from "@/features/flip-finder/olx-parser";
 import { finderOlxSharedDailyJobBudget, isFinderOlxIntervalMinutes } from "@/features/flip-finder/finder-schedule";
 import { activeSources, slugifyCity } from "@/features/flip-finder/server/search-source-registry";
+import { getOlxAutomationStatus, type OlxAutomationStatus } from "@/features/flip-finder/server/olx-scheduled-claim";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 
 /**
@@ -214,12 +215,17 @@ export function parseDecision(filterId: string, value: unknown, sharedLimit: num
 
 export type FinderOlxScheduleStatus = FinderOlxScheduleDecision & {
   olxSelected: boolean;
+  /** Unattended OLX (scheduled Cloudflare Worker): database switch and last automatic jobs. */
+  automation: OlxAutomationStatus | null;
   /** Browser seconds are counted only inside the Cloudflare Worker (Durable Object ledger, GET /status). */
   cloudflareBrowserSeconds: null;
 };
 
 /** Read-only diagnostics for the filter settings: a dry run of the same database decision. */
 export async function getFinderOlxScheduleStatus(supabase: DatabaseClient, filter: SearchFilter): Promise<FinderOlxScheduleStatus> {
-  const decision = await scheduleFinderOlxJob(supabase, filter, { dryRun: true });
-  return { ...decision, olxSelected: filterUsesOlx(filter), cloudflareBrowserSeconds: null };
+  const [decision, automation] = await Promise.all([
+    scheduleFinderOlxJob(supabase, filter, { dryRun: true }),
+    getOlxAutomationStatus(supabase).catch(() => null),
+  ]);
+  return { ...decision, olxSelected: filterUsesOlx(filter), automation, cloudflareBrowserSeconds: null };
 }

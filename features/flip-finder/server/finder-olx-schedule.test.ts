@@ -273,3 +273,34 @@ test("Finder reports the OLX decision in readable Polish", () => {
   assert.equal(skipped.budget?.totalJobs, 1);
   assert.equal(parseDecision(FLIP, { decision: "skipped", reason: "SOMETHING_NEW" }, 1).reason, "OLX_SCHEDULE_CHECK_FAILED", "an unknown reason is not trusted");
 });
+
+test("orphaned automatic jobs are expired first on every tick; an expiry failure never stops OLX or the portals", async () => {
+  const order: string[] = [];
+  const store = portalStore([FLIP]);
+  const now = new Date(START);
+  const info = mock.method(console, "info", () => undefined);
+  const warn = mock.method(console, "warn", () => undefined);
+  try {
+    const result = await runFinderScanScheduler(now, {
+      listFilters: async () => [filter(FLIP)],
+      ...store.deps(now),
+      expireOlx: async () => { order.push("expire"); return { unclaimedExpired: 1, leaseExpired: 0 }; },
+      scheduleOlx: async (candidate: SearchFilter) => { order.push("schedule"); return parseDecision(candidate.id, { decision: "skipped", reason: "OLX_INTERVAL_NOT_ELAPSED" }, 1); },
+    } as never);
+    assert.deepEqual(order, ["expire", "schedule"]);
+    assert.deepEqual(result.olx.expired, { unclaimedExpired: 1, leaseExpired: 0 });
+    assert.ok(warn.mock.calls.some((call) => call.arguments[0] === "FINDER_OLX_SCHEDULED_JOBS_EXPIRED"));
+    const failing = await runFinderScanScheduler(now, {
+      listFilters: async () => [filter(FLIP)],
+      ...portalStore([FLIP]).deps(now),
+      expireOlx: async () => { throw new Error("db down"); },
+      scheduleOlx: async (candidate: SearchFilter) => parseDecision(candidate.id, { decision: "skipped", reason: "OLX_INTERVAL_NOT_ELAPSED" }, 1),
+    } as never);
+    assert.equal(failing.started, 1);
+    assert.equal(failing.olx.expired, null);
+    assert.equal(failing.olx.decisions.length, 1);
+  } finally {
+    info.mock.restore();
+    warn.mock.restore();
+  }
+});

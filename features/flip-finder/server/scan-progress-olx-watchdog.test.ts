@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { expireUnclaimedOlxJobs } from "./scan-progress.ts";
 
-type OlxJobRow = { id: string; scan_run_id: string; source_scan_id: string; status: string; attempts: number; created_at: string; leased_until: string | null };
+type OlxJobRow = { id: string; scan_run_id: string; source_scan_id: string; status: string; attempts: number; created_at: string; leased_until: string | null; requested_by?: string | null };
 type SourceScanRow = { id: string; status: string };
 
 /**
@@ -24,6 +24,21 @@ function fakeAdmin(olxJobs: OlxJobRow[], sourceScans: SourceScanRow[]) {
             const builder = {
               eq(column: string, value: unknown) { filters.push((row) => (row as unknown as Record<string, unknown>)[column] === value); return builder; },
               lt(column: string, value: string) { filters.push((row) => String((row as unknown as Record<string, unknown>)[column] ?? "") < value); return builder; },
+              // PostgREST or(): "col.is.null,col.neq.value" (the only shape the watchdog uses).
+              or(expression: string) {
+                const alternatives = expression.split(",").map((part) => {
+                  const [column, operator, ...rest] = part.split(".");
+                  const value = rest.join(".");
+                  return (row: OlxJobRow) => {
+                    const cell = (row as unknown as Record<string, unknown>)[column] ?? null;
+                    if (operator === "is" && value === "null") return cell === null;
+                    if (operator === "neq") return cell !== null && cell !== value;
+                    throw new Error(`unsupported or(): ${part}`);
+                  };
+                });
+                filters.push((row) => alternatives.some((matches) => matches(row)));
+                return builder;
+              },
               async select() {
                 const matched = olxJobs.filter((row) => filters.every((f) => f(row)));
                 for (const row of matched) Object.assign(row, patch);
@@ -129,4 +144,13 @@ test("only the requested scan_run_id's jobs are ever touched", async () => {
   await expireUnclaimedOlxJobs(fakeAdmin(jobs, scans) as never, "run-a");
   assert.equal(jobs[0].status, "failed");
   assert.equal(jobs[1].status, "queued", "a different scan_run_id's job must never be touched");
+});
+
+test("an automatic (scheduled) OLX job waiting for the Cron Worker is not failed by the 90-second watchdog", async () => {
+  const jobs = [olxJob({ requested_by: "scheduler", created_at: new Date(Date.now() - 10 * 60_000).toISOString() }), olxJob({ id: "job-2", source_scan_id: "scan-2", requested_by: null })];
+  const scans = [{ id: "scan-1", status: "pending" }, { id: "scan-2", status: "pending" }];
+  await expireUnclaimedOlxJobs(fakeAdmin(jobs, scans) as never, "run-1");
+  assert.equal(jobs[0].status, "queued", "its own 6 h expiry (expire_stale_scheduled_finder_olx_jobs) applies instead");
+  assert.equal(scans[0].status, "pending");
+  assert.equal(jobs[1].status, "failed", "manual jobs keep the 90-second rule");
 });

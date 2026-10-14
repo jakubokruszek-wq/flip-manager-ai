@@ -18,6 +18,7 @@ on:
       - "features/flip-finder/otodom-search.ts"
       - ".github/workflows/olx-cloudflare-worker.yml"
       - ".github/workflows/olx-cloudflare-stage2.yml"
+      - ".github/workflows/olx-cloudflare-scheduled.yml"
 
 permissions:
   contents: read
@@ -58,3 +59,6 @@ jobs:
       - name: Wrangler dry-run of the separate stage-2 test Worker (no deploy)
         working-directory: workers/olx-cloudflare
         run: npx wrangler deploy --dry-run --outdir dist-stage2 --config wrangler.stage2.toml
+      - name: Wrangler dry-run of the separate unattended (scheduled) Worker (no deploy)
+        working-directory: workers/olx-cloudflare
+        run: npx wrangler deploy --dry-run --outdir dist-scheduled --config wrangler.scheduled.toml

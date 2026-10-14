@@ -12,6 +12,7 @@ type ScheduleStatus = {
   lastJobAutomatic: boolean;
   nextAllowedAt: string | null;
   budget: { automaticJobs: number | null; automaticLimit: number; finderOtherJobs: number | null; radarJobs: number | null; cloudflareJobs: number | null; totalJobs: number | null; sharedLimit: number } | null;
+  automation?: { available: boolean; enabled: boolean | null; recentJobs: Array<{ status: string; createdAt: string | null; workerId: string | null; errorCode: string | null }> } | null;
 };
 
 const REASONS: Record<string, string> = {
@@ -28,6 +29,13 @@ const REASONS: Record<string, string> = {
 };
 
 export const OLX_CLOUDFLARE_LIMIT_TEXT = "OLX jest skanowany osobno od pozostałych portali, przez przeglądarkę Cloudflare (plan Free: 10 minut przeglądarki na dobę dla całego konta). Automatycznie najwyżej 1 skan OLX na 24 h dla wszystkich filtrów; ręczne skany i Radar cen zużywają ten sam budżet. Krótszy interwał wymaga osobnej konfiguracji budżetu.";
+
+function automationText(automation: ScheduleStatus["automation"]): string {
+  if (!automation || !automation.available) return "niedostępne (migracja niezastosowana)";
+  const last = automation.recentJobs[0];
+  const lastText = last ? `; ostatnie zadanie: ${last.status}${last.errorCode ? ` (${last.errorCode})` : ""}, ${formatDate(last.createdAt)}${last.workerId ? `, ${last.workerId}` : ""}` : "; brak zadań automatycznych";
+  return `${automation.enabled ? "WŁĄCZONE" : "WYŁĄCZONE (STOP)"}${lastText}`;
+}
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
@@ -61,6 +69,7 @@ export function OlxScheduleField({ filterId, value, onChange }: { filterId?: str
           <dt className="text-muted-foreground">Powód pominięcia</dt><dd>{status.reason ? REASONS[status.reason] ?? status.reason : "—"}</dd>
           <dt className="text-muted-foreground">Zadania OLX w ostatnich 24 h</dt><dd>{status.budget && status.budget.totalJobs !== null ? `${status.budget.totalJobs} / ${status.budget.sharedLimit} (automatyczne ${status.budget.automaticJobs ?? "?"} / ${status.budget.automaticLimit}, ręczne ${status.budget.finderOtherJobs ?? "?"}, Radar ${status.budget.radarJobs ?? "?"}, pobrane przez Cloudflare ${status.budget.cloudflareJobs ?? "?"})` : "niedostępne"}</dd>
           <dt className="text-muted-foreground">Czas przeglądarki Cloudflare</dt><dd>niedostępny w aplikacji (licznik w workerze Cloudflare, /status)</dd>
+          <dt className="text-muted-foreground">Automatyczne pobieranie (Cloudflare)</dt><dd>{automationText(status.automation)}</dd>
         </dl>
       ) : null}
     </div>

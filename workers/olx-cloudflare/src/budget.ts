@@ -22,7 +22,11 @@ export type BudgetStopCode =
   | "OLX_CLOUD_BROWSER_BUDGET_EXHAUSTED"
   | "OLX_CLOUD_BROWSER_DAILY_LIMIT_429"
   | "OLX_CLOUD_DAILY_JOB_CAP_REACHED"
-  | "OLX_CLOUD_OLX_ACCESS_PAUSED";
+  | "OLX_CLOUD_OLX_ACCESS_PAUSED"
+  /** Scheduled mode: the whole account (history()) already used the safe budget today. */
+  | "OLX_CLOUD_ACCOUNT_BUDGET_EXHAUSTED"
+  /** Scheduled mode: the account's usage could not be read; nothing is started (fail closed). */
+  | "OLX_CLOUD_ACCOUNT_USAGE_UNKNOWN";
 
 export type Ledger = {
   /** UTC day, YYYY-MM-DD. */
@@ -127,7 +131,12 @@ export function budgetStop(code: BudgetStopCode, ledger: Ledger, now: number, li
   const safe = Math.round(limits.safeBrowserBudgetMs / 1_000);
   const plan = Math.round(limits.dailyBrowserLimitMs / 1_000);
   const resumesAt = nextUtcMidnight(now);
-  const message = code === "OLX_CLOUD_DAILY_JOB_CAP_REACHED"
+  if (code === "OLX_CLOUD_ACCOUNT_USAGE_UNKNOWN") {
+    return { code, message: "Cloudflare OLX: nie udało się odczytać zużycia przeglądarki konta (history()); nic nie uruchomiono, kolejna próba przy następnym Cron.", at: new Date(now).toISOString(), resumesAt: new Date(now).toISOString() };
+  }
+  const message = code === "OLX_CLOUD_ACCOUNT_BUDGET_EXHAUSTED"
+    ? `Cloudflare OLX: konto zużyło dziś bezpieczny budżet przeglądarki (wg history(); limit ${safe} s, planu ${plan} s), także przez inne Workery lub testy. Wznowienie ${resumesAt}.`
+    : code === "OLX_CLOUD_DAILY_JOB_CAP_REACHED"
     ? `Cloudflare OLX: osiągnięto dzienny limit zadań (${ledger.jobsClaimed}/${limits.maxJobsPerDay}). Wznowienie ${resumesAt}.`
     : code === "OLX_CLOUD_BROWSER_DAILY_LIMIT_429"
       ? `Cloudflare Browser Run odrzucił sesję (HTTP 429 — dzienny limit planu ${plan} s wyczerpany po stronie Cloudflare; licznik workera: ${used} s). Pobieranie OLX wstrzymane do ${resumesAt}.`
