@@ -100,3 +100,16 @@ test("workflow secrets: stage-2 VALUES may be reused as fallbacks, *_SCHEDULED w
   for (const url of commands.match(/https:\/\/[^\s"']+/g) ?? []) assert.match(url, /^https:\/\/flip-manager-olx-cloud-scheduled\./, url);
 });
 
+test("workflow tests: root deps (playwright) and Chromium installed before npm test; skipped Chromium tests fail the run", () => {
+  const workflow = readFileSync(new URL("../../../.github/workflows/olx-cloudflare-scheduled.yml", import.meta.url), "utf8");
+  const at = (pattern: RegExp) => { const index = workflow.search(pattern); assert.ok(index >= 0, String(pattern)); return index; };
+  const rootInstall = at(/working-directory: \.\n\s+run: npm ci --no-audit --no-fund/);
+  const chromium = at(/working-directory: \.\n\s+run: npx playwright install --with-deps chromium/);
+  const workerInstall = at(/- name: Instalacja zależności Workera\n(?:.*\n)*?\s+run: npm ci --no-audit --no-fund/);
+  const tests = at(/npm test 2>&1 \| tee test\.log/);
+  assert.ok(rootInstall < chromium && chromium < workerInstall && workerInstall < tests, "root npm ci -> Chromium -> worker npm ci -> npm test");
+  assert.match(workflow, /grep -Eq '\^# fail 0\$' test\.log/);
+  assert.match(workflow, /grep -Eq '\^# skipped 0\$' test\.log/, "Chromium tests skip themselves without a browser; that must fail the run");
+  assert.ok(tests < at(/npx wrangler deploy --dry-run/), "tests before the dry-run and any deploy");
+});
+
