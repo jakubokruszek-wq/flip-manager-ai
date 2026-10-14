@@ -136,6 +136,18 @@ jobs:
         with:
           node-version: 22
 
+      # Worker tests drive a local Chromium through the root devDependency
+      # `playwright` (stand-in for Browser Run), as in olx-cloudflare-worker.yml.
+      - name: Instalacja zależności głównych (Playwright do testów)
+        if: ${{ inputs.action != 'check' }}
+        working-directory: .
+        run: npm ci --no-audit --no-fund
+
+      - name: Instalacja Chromium do testów
+        if: ${{ inputs.action != 'check' }}
+        working-directory: .
+        run: npx playwright install --with-deps chromium
+
       - name: Instalacja zależności Workera
         if: ${{ inputs.action != 'check' }}
         run: npm ci --no-audit --no-fund
@@ -144,7 +156,10 @@ jobs:
         if: ${{ inputs.action != 'check' }}
         run: |
           set -euo pipefail
-          npm test
+          npm test 2>&1 | tee test.log
+          # Chromium tests skip themselves when no browser starts: none may be skipped here.
+          grep -Eq '^# fail 0$' test.log || { echo "::error::Testy Workera nie przeszły"; exit 1; }
+          grep -Eq '^# skipped 0$' test.log || { echo "::error::Pominięte testy (Chromium niedostępny?): $(grep -E '^# skipped' test.log)"; exit 1; }
           npx wrangler deploy --dry-run --outdir dist-scheduled --config "$SCHEDULED_CONFIG" | tee dry-run.log
           for expected in 'env.OLX_CLOUD_ENABLED ("0")' 'env.OLX_CLOUD_CLAIM_MODE ("scheduled")' 'env.OLX_CLOUD_MAX_JOBS_PER_DAY ("2")' 'env.OLX_CLOUD_SAFE_BROWSER_BUDGET_SECONDS ("120")'; do
             grep -Fq "$expected" dry-run.log || { echo "::error::Dry-run nie pokazuje: $expected"; exit 1; }
