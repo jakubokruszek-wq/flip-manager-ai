@@ -14,6 +14,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +43,7 @@ class ShareReceiverActivity : ComponentActivity() {
     }
 }
 
+@Composable
 private fun ShareImportForm(activity: ComponentActivity, sharedText: String) {
     val context = activity.applicationContext
     val tokenStore = remember { DeviceTokenStore(context) }
@@ -100,7 +102,7 @@ private fun ShareImportForm(activity: ComponentActivity, sharedText: String) {
                                 UploadRetryWorker.preferences(context)
                                     .edit().putString("last_import", java.time.Instant.now().toString()).apply()
                                 "Oferta została wysłana do Flip Managera."
-                            }.getOrElse { error ->
+                            }.getOrElse {
                                 queue.enqueue(draft)
                                 WorkManager.getInstance(context).enqueueUniqueWork(
                                     "flip-collector-upload",
