@@ -50,25 +50,38 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(text.uppercase(), modifier = modifier, color = FlipColors.MutedForeground, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp)
 }
 
-enum class Tone(val color: Color) {
-    GOLD(FlipColors.Gold),
-    SUCCESS(FlipColors.Success),
-    WARNING(FlipColors.Warning),
-    DANGER(FlipColors.Danger),
-    NEUTRAL(FlipColors.MutedForeground),
+enum class Tone { GOLD, SUCCESS, WARNING, DANGER, NEUTRAL }
+
+/** Dot and outline colour of a [Tone]. */
+@Composable
+fun Tone.accent(): Color = when (this) {
+    Tone.GOLD -> FlipColors.Gold
+    Tone.SUCCESS -> FlipColors.Success
+    Tone.WARNING -> FlipColors.Warning
+    Tone.DANGER -> FlipColors.Danger
+    Tone.NEUTRAL -> FlipColors.MutedForeground
+}
+
+/** Text colour of a [Tone]; gold text uses the darker, readable gold. */
+@Composable
+fun Tone.text(): Color = when (this) {
+    Tone.GOLD -> FlipColors.GoldText
+    Tone.NEUTRAL -> FlipColors.Foreground
+    else -> accent()
 }
 
 /** Small rounded label with a coloured dot, e.g. "Wi-Fi · połączono". */
 @Composable
 fun StatusPill(text: String, tone: Tone, modifier: Modifier = Modifier) {
+    val accent = tone.accent()
     Row(
         modifier
-            .border(1.dp, tone.color.copy(alpha = 0.45f), RoundedCornerShape(50))
-            .background(tone.color.copy(alpha = 0.10f), RoundedCornerShape(50))
+            .border(1.dp, accent.copy(alpha = 0.6f), RoundedCornerShape(50))
+            .background(accent.copy(alpha = 0.10f), RoundedCornerShape(50))
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(7.dp).background(tone.color, CircleShape))
+        Box(Modifier.size(7.dp).background(accent, CircleShape))
         Spacer(Modifier.width(6.dp))
         Text(text, color = FlipColors.Foreground, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -80,8 +93,8 @@ fun DemoBanner(text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .border(1.dp, FlipColors.Gold, MaterialTheme.shapes.small)
-            .background(FlipColors.Gold.copy(alpha = 0.12f), MaterialTheme.shapes.small)
+            .border(1.dp, FlipColors.GoldMuted, MaterialTheme.shapes.small)
+            .background(FlipColors.Gold.copy(alpha = if (FlipColors.isDark) 0.12f else 0.18f), MaterialTheme.shapes.small)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -100,7 +113,7 @@ fun RowScope.MetricTile(value: String, label: String, tone: Tone = Tone.NEUTRAL)
             .background(FlipColors.SurfaceMuted, MaterialTheme.shapes.small)
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
-        Text(value, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = if (tone == Tone.NEUTRAL) FlipColors.Foreground else tone.color)
+        Text(value, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = tone.text())
         Text(label, fontSize = 12.sp, color = FlipColors.MutedForeground)
     }
 }

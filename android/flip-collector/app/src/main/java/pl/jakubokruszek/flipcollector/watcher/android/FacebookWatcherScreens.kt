@@ -64,6 +64,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import pl.jakubokruszek.flipcollector.BuildConfig
 import pl.jakubokruszek.flipcollector.integration.BackendIntegration
+import pl.jakubokruszek.flipcollector.theme.ThemeMode
+import pl.jakubokruszek.flipcollector.ui.ThemeController
 import pl.jakubokruszek.flipcollector.ui.DemoBanner
 import pl.jakubokruszek.flipcollector.ui.FlipCard
 import pl.jakubokruszek.flipcollector.ui.FlipColors
@@ -181,7 +183,7 @@ fun FacebookWatcherScreen(context: Context, onBack: () -> Unit) {
                         onClick = { tab = item },
                         icon = { Icon(item.icon(), contentDescription = null) },
                         label = { Text(item.label) },
-                        colors = NavigationBarItemDefaults.colors(selectedIconColor = FlipColors.OnGold, indicatorColor = FlipColors.Gold, selectedTextColor = FlipColors.Gold),
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = FlipColors.OnGold, indicatorColor = FlipColors.Gold, selectedTextColor = FlipColors.GoldText, unselectedIconColor = FlipColors.MutedForeground, unselectedTextColor = FlipColors.MutedForeground),
                     )
                 }
             }
@@ -193,7 +195,7 @@ fun FacebookWatcherScreen(context: Context, onBack: () -> Unit) {
         ) {
             if (mode == ScanMode.DEMO) DemoBanner("Dane testowe. Facebook nie jest otwierany, nic nie trafia do Flip Managera.")
             when (tab) {
-                WatcherTab.HOME -> HomeTab(scanState, conditions, schedule, history, groups, selection, message, lastAutoCheck, ::startScan, onStop = { coordinator.stop() })
+                WatcherTab.HOME -> HomeTab(mode, scanState, conditions, schedule, history, groups, selection, message, lastAutoCheck, ::startScan, onStop = { coordinator.stop() })
                 WatcherTab.SCHEDULE -> ScheduleTab(context, store, schedule, lastAutoCheck, ::updateSchedule)
                 WatcherTab.GROUPS -> GroupsTab(groups, selection, mode, onSelection = { selection = it; store.saveSelection(it) }, onGroups = { next ->
                     groups = next
@@ -222,6 +224,7 @@ private fun WatcherTab.icon() = when (this) {
 
 @Composable
 private fun HomeTab(
+    mode: ScanMode,
     scanState: ScanState,
     conditions: DeviceConditions,
     schedule: ScanSchedule,
@@ -264,6 +267,8 @@ private fun HomeTab(
                 MetricTile("${p.postsSeen}", "posty")
                 MetricTile("${p.errors}", "błędy", if (p.errors > 0) Tone.DANGER else Tone.NEUTRAL)
             }
+        } else if (mode == ScanMode.DEMO) {
+            Text("Skan demo działa lokalnie: bez parowania, Wi-Fi i ładowarki. Wymagania z harmonogramu dotyczą automatu i skanowania na żywo.", fontSize = 13.sp, color = FlipColors.MutedForeground)
         } else {
             Text(scanTargetText(groups, selection), fontSize = 13.sp, color = FlipColors.MutedForeground)
         }
@@ -323,7 +328,7 @@ private fun DeviceStatusRow(conditions: DeviceConditions, schedule: ScanSchedule
                 if (conditions.onWifi) "Wi-Fi · połączono" else "Wi-Fi · brak",
                 when {
                     conditions.onWifi -> Tone.SUCCESS
-                    schedule.requireWifi -> Tone.DANGER
+                    schedule.requireWifi -> Tone.WARNING
                     else -> Tone.NEUTRAL
                 },
             )
@@ -366,7 +371,8 @@ private fun ScheduleTab(context: Context, store: WatcherSettingsStore, schedule:
                     onClick = { onChange(schedule.copy(days = if (day in schedule.days) schedule.days - day else schedule.days + day)) },
                     label = { Text(label, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f),
-                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = FlipColors.Gold, selectedLabelColor = FlipColors.OnGold),
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = FlipColors.Gold, selectedLabelColor = FlipColors.OnGold, labelColor = FlipColors.Foreground),
+                    border = FilterChipDefaults.filterChipBorder(enabled = true, selected = day in schedule.days, borderColor = FlipColors.MutedForeground),
                 )
             }
         }
@@ -395,6 +401,23 @@ private fun ScheduleTab(context: Context, store: WatcherSettingsStore, schedule:
     FlipCard {
         SectionLabel("Tryb demo")
         ToggleRow("Symuluj błąd w skanie demo", "Skan przerwie się po 7 postach, żeby sprawdzić obsługę błędów.", simulateError) { simulateError = it; store.saveDemoSimulateError(it) }
+    }
+
+    FlipCard {
+        SectionLabel("Wygląd")
+        Text("Domyślnie jasny. „Systemowy” przełącza się razem z trybem ciemnym telefonu.", fontSize = 12.sp, color = FlipColors.MutedForeground)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            ThemeMode.entries.forEach { option ->
+                FilterChip(
+                    selected = ThemeController.mode == option,
+                    onClick = { ThemeController.set(context, option) },
+                    label = { Text(option.label) },
+                    modifier = Modifier.weight(1f),
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = FlipColors.Gold, selectedLabelColor = FlipColors.OnGold, labelColor = FlipColors.Foreground),
+                    border = FilterChipDefaults.filterChipBorder(enabled = true, selected = ThemeController.mode == option, borderColor = FlipColors.MutedForeground),
+                )
+            }
+        }
     }
 }
 

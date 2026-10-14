@@ -104,8 +104,8 @@ class AutoScanPlannerTest {
     }
 
     @Test
-    fun manualScanIgnoresWindowAndAutomationButNotWifiOrCharging() {
-        val blockers = ScanPreconditions.evaluate(ScanTrigger.MANUAL, ScanSchedule.DEFAULT, ready.copy(charging = false), groups, GroupSelection.AllActive, insideWindow = false)
+    fun manualLiveScanIgnoresWindowAndAutomationButNotWifiOrCharging() {
+        val blockers = ScanPreconditions.evaluate(ScanTrigger.MANUAL, ScanSchedule.DEFAULT, ready.copy(charging = false), groups, GroupSelection.AllActive, insideWindow = false, mode = ScanMode.LIVE, liveAllowed = true)
         assertEquals(listOf(ScanBlocker.CHARGING_REQUIRED), blockers)
     }
 }

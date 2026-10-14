@@ -94,7 +94,16 @@ data class ScanRecord(
     val stopReason: String? = null,
 )
 
-/** Pure precondition check shared by "Skanuj teraz" and the automatic tick. */
+/**
+ * Pure precondition check shared by "Skanuj teraz" and the automatic tick.
+ *
+ * - Manual DEMO: nothing is required. It runs on bundled data, opens no
+ *   page and calls no API, so it must work unpaired, offline and unplugged.
+ * - Automatic DEMO: the schedule the user set (automation on, inside the
+ *   window, Wi-Fi and charging if required) — it exists to test that schedule.
+ * - LIVE: everything above plus live collection allowed (build flag and
+ *   consent), pairing with Flip Manager and at least one active group.
+ */
 object ScanPreconditions {
     fun evaluate(
         trigger: ScanTrigger,
@@ -106,16 +115,16 @@ object ScanPreconditions {
         mode: ScanMode = ScanMode.DEMO,
         liveAllowed: Boolean = false,
     ): List<ScanBlocker> = buildList {
+        if (mode == ScanMode.DEMO && trigger == ScanTrigger.MANUAL) return@buildList
         if (trigger == ScanTrigger.AUTOMATIC) {
             if (!schedule.enabled) add(ScanBlocker.AUTOMATION_DISABLED)
             if (!insideWindow) add(ScanBlocker.OUTSIDE_WINDOW)
         }
-        // Wi-Fi and charging requirements bind a manual scan too: they protect
-        // the phone's data plan and battery, whoever presses the button.
+        // Wi-Fi and charging protect the data plan and battery: they bind the
+        // automatic tick and every live scan, whoever presses the button.
         if (schedule.requireWifi && !conditions.onWifi) add(ScanBlocker.WIFI_REQUIRED)
         if (schedule.requireCharging && !conditions.charging) add(ScanBlocker.CHARGING_REQUIRED)
         if (mode == ScanMode.LIVE) {
-            // A demo scan runs on bundled test data, so pairing and real groups only bind a live scan.
             if (!liveAllowed) add(ScanBlocker.LIVE_DISABLED)
             if (!conditions.paired) add(ScanBlocker.NOT_PAIRED)
             if (selection.resolve(groups).isEmpty()) add(ScanBlocker.NO_GROUPS)

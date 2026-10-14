@@ -41,6 +41,7 @@ import kotlinx.coroutines.withContext
 import pl.jakubokruszek.flipcollector.watcher.android.WatcherRuntime
 import pl.jakubokruszek.flipcollector.ui.FlipColors
 import pl.jakubokruszek.flipcollector.ui.FlipTheme
+import pl.jakubokruszek.flipcollector.ui.ThemeController
 import pl.jakubokruszek.flipcollector.watcher.android.FacebookWatcherScreen
 
 class MainActivity : ComponentActivity() {
@@ -49,8 +50,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Re-register the periodic tick after an update or a cleared WorkManager state.
         WatcherRuntime.applySchedule(this, WatcherRuntime.settings(this).schedule())
+        ThemeController.load(this)
         setContent {
-            FlipTheme {
+            FlipTheme(activity = this) {
                 var screen by remember { mutableStateOf(Screen.HOME) }
                 when (screen) {
                     Screen.HOME -> CollectorHome(this@MainActivity, onOpenWatcher = { screen = Screen.WATCHER })
@@ -115,7 +117,7 @@ private fun CollectorHome(activity: ComponentActivity, onOpenWatcher: () -> Unit
             Button(onClick = { WorkManager.getInstance(context).enqueueUniqueWork("flip-collector-upload", ExistingWorkPolicy.KEEP, OneTimeWorkRequestBuilder<UploadRetryWorker>().build()); message = "Uruchomiono synchronizację oczekujących importów." }) { Text("Wyślij oczekujące") }
             Button(onClick = { tokenStore.clearToken(); paired = false; connectedName = null; message = "Token usunięty z telefonu." }) { Text("Odłącz") }
         }
-        Text("Samsung: Ustawienia → Aplikacje → Flip Collector → Bateria → Bez ograniczeń.")
-        message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+        Text("Samsung: Ustawienia → Aplikacje → Flip Collector → Bateria → Bez ograniczeń.", color = FlipColors.MutedForeground)
+        message?.let { Text(it, color = FlipColors.GoldText) }
     }
 }

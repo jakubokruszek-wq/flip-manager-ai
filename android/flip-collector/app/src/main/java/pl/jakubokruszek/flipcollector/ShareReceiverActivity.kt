@@ -41,8 +41,9 @@ class ShareReceiverActivity : ComponentActivity() {
         val sharedText = intent.takeIf { it.action == Intent.ACTION_SEND }
             ?.getStringExtra(Intent.EXTRA_TEXT)
             .orEmpty()
+        pl.jakubokruszek.flipcollector.ui.ThemeController.load(this)
         setContent {
-            pl.jakubokruszek.flipcollector.ui.FlipTheme {
+            pl.jakubokruszek.flipcollector.ui.FlipTheme(activity = this) {
                 ShareImportForm(this@ShareReceiverActivity, sharedText)
             }
         }
