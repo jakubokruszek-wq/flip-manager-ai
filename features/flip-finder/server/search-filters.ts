@@ -11,6 +11,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { isActiveFilterSource } from "@/features/flip-finder/source-availability";
+import { FINDER_OLX_DEFAULT_INTERVAL_MINUTES, isFinderOlxIntervalMinutes } from "@/features/flip-finder/finder-schedule";
 import { isStaleScan, scanHeartbeatAt, selectLatestCompletedScans, selectLatestScans, SOURCE_SCAN_PAGE_LIMIT, STALE_SCAN_MESSAGE } from "./scan-lifecycle";
 
 type Row = Record<string, unknown>;
@@ -302,6 +303,7 @@ export function parseSearchFilterInput(value: unknown): SearchFilterInput {
     ),
     scanIntervalMinutes: positiveInteger(value.scanIntervalMinutes, "Częstotliwość skanowania"),
     finderScanIntervalMinutes: positiveInteger(value.finderScanIntervalMinutes ?? 60, "Interwał automatycznego skanu Findera"),
+    finderOlxScanIntervalMinutes: finderOlxIntervalInput(value.finderOlxScanIntervalMinutes),
     isActive: booleanValue(value.isActive, "Status"),
   };
 
@@ -354,25 +356,20 @@ async function writeSearchFilter(
     ? supabase.from("search_filters").update(payload).eq("id", id).select("*").maybeSingle()
     : supabase.from("search_filters").insert(payload).select("*").single());
 
-  // The year_built_min and Finder cadence migrations are drafts until a human
-  // applies them. Until then, every existing field in the same save must
-  // still go through; only the missing draft columns are omitted on a safe
-  // compatibility retry. Never assume either migration is live.
-  if (isMissingYearBuiltMinColumn(error) || isMissingFinderScanIntervalColumn(error)) {
-    const payloadWithoutDraftColumns = { ...payload } as Record<string, unknown>;
-    if (isMissingYearBuiltMinColumn(error)) delete payloadWithoutDraftColumns.year_built_min;
-    if (isMissingFinderScanIntervalColumn(error)) delete payloadWithoutDraftColumns.finder_scan_interval_minutes;
+  // The year_built_min, Finder cadence and OLX cadence migrations are drafts
+  // until a human applies them. Until then, every existing field in the same
+  // save must still go through; only the missing draft columns are omitted on
+  // a safe compatibility retry. Never assume any of these migrations is live.
+  const omitted = new Set<string>();
+  for (let attempt = 0; attempt < DRAFT_COLUMNS.length; attempt += 1) {
+    const missing = missingDraftColumns(error);
+    if (!missing.length) break;
+    missing.forEach((column) => omitted.add(column));
+    const retryPayload = { ...payload } as Record<string, unknown>;
+    omitted.forEach((column) => delete retryPayload[column]);
     ({ data, error } = await (id
-      ? supabase.from("search_filters").update(payloadWithoutDraftColumns).eq("id", id).select("*").maybeSingle()
-      : supabase.from("search_filters").insert(payloadWithoutDraftColumns).select("*").single()));
-    if (isMissingYearBuiltMinColumn(error) || isMissingFinderScanIntervalColumn(error)) {
-      const payloadWithoutAnyDraftColumns = { ...payloadWithoutDraftColumns };
-      delete payloadWithoutAnyDraftColumns.year_built_min;
-      delete payloadWithoutAnyDraftColumns.finder_scan_interval_minutes;
-      ({ data, error } = await (id
-        ? supabase.from("search_filters").update(payloadWithoutAnyDraftColumns).eq("id", id).select("*").maybeSingle()
-        : supabase.from("search_filters").insert(payloadWithoutAnyDraftColumns).select("*").single()));
-    }
+      ? supabase.from("search_filters").update(retryPayload).eq("id", id).select("*").maybeSingle()
+      : supabase.from("search_filters").insert(retryPayload).select("*").single()));
   }
 
   if (error) {
@@ -383,18 +380,21 @@ async function writeSearchFilter(
   return data ? toSearchFilter(asRow(data)) : null;
 }
 
-function isMissingYearBuiltMinColumn(error: { code?: unknown; message?: unknown } | null): boolean {
-  if (!error) return false;
+const DRAFT_COLUMNS = ["year_built_min", "finder_scan_interval_minutes", "finder_olx_scan_interval_minutes"] as const;
+
+/** Draft columns a PostgREST/Postgres "unknown column" error names (42703 / PGRST204 only). */
+function missingDraftColumns(error: { code?: unknown; message?: unknown } | null): string[] {
+  if (!error) return [];
   const code = typeof error.code === "string" ? error.code : "";
   const message = typeof error.message === "string" ? error.message : "";
-  return (code === "42703" || code === "PGRST204") && /year_built_min/.test(message);
+  if (code !== "42703" && code !== "PGRST204") return [];
+  return DRAFT_COLUMNS.filter((column) => new RegExp(`\\b${column}\\b`).test(message));
 }
 
-function isMissingFinderScanIntervalColumn(error: { code?: unknown; message?: unknown } | null): boolean {
-  if (!error) return false;
-  const code = typeof error.code === "string" ? error.code : "";
-  const message = typeof error.message === "string" ? error.message : "";
-  return (code === "42703" || code === "PGRST204") && /finder_scan_interval_minutes/.test(message);
+function finderOlxIntervalInput(value: unknown): number {
+  if (value === undefined || value === null) return FINDER_OLX_DEFAULT_INTERVAL_MINUTES;
+  if (!isFinderOlxIntervalMinutes(value)) throw new Error("Interwał OLX: dozwolone wartości to 24 h, 48 h albo 72 h (krótszy wymaga osobnej konfiguracji budżetu Cloudflare).");
+  return value;
 }
 
 function toDatabasePayload(input: SearchFilterInput) {
@@ -425,6 +425,7 @@ function toDatabasePayload(input: SearchFilterInput) {
     max_estimated_renovation_cost: input.maxEstimatedRenovationCost,
     scan_interval_minutes: input.scanIntervalMinutes,
     finder_scan_interval_minutes: input.finderScanIntervalMinutes ?? 60,
+    finder_olx_scan_interval_minutes: input.finderOlxScanIntervalMinutes ?? FINDER_OLX_DEFAULT_INTERVAL_MINUTES,
     is_active: input.isActive,
   };
 }
@@ -465,6 +466,9 @@ function toSearchFilter(row: Row): SearchFilter {
     ),
     scanIntervalMinutes: positiveInteger(row.scan_interval_minutes, "scan_interval_minutes"),
     finderScanIntervalMinutes: positiveIntegerOrDefault(row.finder_scan_interval_minutes, 60, "finder_scan_interval_minutes"),
+    // Absent column (migration not applied) or an unexpected value reads as
+    // null, never as the default: the OLX scheduler then queues nothing.
+    finderOlxScanIntervalMinutes: isFinderOlxIntervalMinutes(row.finder_olx_scan_interval_minutes) ? row.finder_olx_scan_interval_minutes : null,
     isActive: booleanValue(row.is_active, "is_active"),
     lastScannedAt: nullableString(row.last_scanned_at),
     createdAt: requiredString(row.created_at, "created_at"),

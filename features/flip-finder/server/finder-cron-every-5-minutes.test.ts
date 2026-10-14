@@ -54,6 +54,33 @@ test("a missing or duplicated Finder job aborts before any change", async () => 
   }
 });
 
+test("an unexpected current schedule or any change to a command aborts and changes nothing", async () => {
+  const odd = await cronDb([["finder-scan-scheduler", "*/2 * * * *"], ["finder-scan-continuation", "* * * * *"]]);
+  try {
+    await assert.rejects(odd.exec(FORWARD), /unexpected schedule/);
+    await odd.exec("ROLLBACK");
+    assert.deepEqual(await schedules(odd), { "finder-scan-continuation": "* * * * *", "finder-scan-scheduler": "*/2 * * * *" });
+  } finally { await odd.close(); }
+  // A (hypothetical) alter_job that also touched the command must be caught by the fingerprint.
+  const tampering = await cronDb([["finder-scan-scheduler", "* * * * *"], ["finder-scan-continuation", "* * * * *"]]);
+  try {
+    await tampering.exec(`CREATE OR REPLACE FUNCTION cron.alter_job(job_id bigint, schedule text default null) RETURNS void LANGUAGE sql
+      AS 'UPDATE cron.job SET schedule = coalesce(alter_job.schedule, cron.job.schedule), command = command || '' '' WHERE jobid = job_id'`);
+    await assert.rejects(tampering.exec(FORWARD), /A cron command, status or another job changed/);
+    await tampering.exec("ROLLBACK");
+    const rows = (await tampering.query<{ command: string; schedule: string }>("SELECT command, schedule FROM cron.job")).rows;
+    assert.ok(rows.every((row) => row.command === COMMAND && row.schedule === "* * * * *"), "rolled back");
+  } finally { await tampering.close(); }
+});
+
+test("the read-only check script only reads and never prints commands", () => {
+  const check = readFileSync("scripts/finder-cron-every-5-minutes.check.sql", "utf8");
+  const statements = check.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+  assert.doesNotMatch(statements, /\b(UPDATE|INSERT|DELETE|ALTER|DROP|CREATE|alter_job|schedule\(|unschedule)\b/i);
+  assert.doesNotMatch(statements, /SELECT[^;]*\bcommand\b(?!_md5)(?!\))/i, "commands appear only inside md5()");
+  assert.match(statements, /md5\(command\)/);
+});
+
 test("daily call budget: 2 jobs x 288 = 576 instead of 2 x 1440 = 2880; no secret in either draft", () => {
   assert.equal(2 * (24 * 60) / 5, 576);
   assert.equal(2 * 24 * 60, 2880);

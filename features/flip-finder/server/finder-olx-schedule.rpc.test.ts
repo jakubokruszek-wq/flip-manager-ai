@@ -5,56 +5,10 @@
  * backwards (the function always uses the database clock, as in Production).
  */
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 
-const MIGRATIONS = path.join(process.cwd(), "supabase/migrations");
-const QUEUE = fs.readFileSync(path.join(MIGRATIONS, "20260810190000_create_olx_local_worker_queue.sql"), "utf8");
-const SCHEDULE = fs.readFileSync(path.join(MIGRATIONS, "20261014120000_add_finder_olx_schedule.sql"), "utf8");
-const ROLLBACK = fs.readFileSync(path.join(process.cwd(), "scripts/finder-olx-schedule.rollback.sql"), "utf8");
-
-const FLIP = "22222222-2222-4222-8222-222222222222";
-const OTHER = "33333333-3333-4333-8333-333333333333";
-const OLX_ONLY = "55555555-5555-4555-8555-555555555555";
-const OWNER = "00000000-0000-4000-8000-000000000001";
-const URL = "https://www.olx.pl/nieruchomosci/mieszkania/sprzedaz/lodz/";
-
-type Decision = Record<string, unknown> & { decision: string; reason: string | null };
-
-async function database(): Promise<PGlite> {
-  const db = new PGlite();
-  await db.exec(`
-    create role anon; create role authenticated; create role service_role;
-    create schema auth; create table auth.users (id uuid primary key);
-    insert into auth.users (id) values ('${OWNER}');
-    create table public.search_filters (
-      id uuid primary key, is_active boolean not null default true, sources jsonb not null default '[]'::jsonb,
-      finder_scan_interval_minutes integer not null default 300, last_scanned_at timestamptz
-    );
-    insert into public.search_filters (id, sources) values
-      ('${FLIP}', '["otodom","gratka","olx"]'), ('${OTHER}', '["olx","morizon"]'), ('${OLX_ONLY}', '["olx"]');
-    create table public.source_scans (
-      id uuid primary key default gen_random_uuid(),
-      search_filter_id uuid not null references public.search_filters(id),
-      source text not null, status text not null default 'pending', scan_run_id uuid, filter_snapshot jsonb,
-      started_at timestamptz not null default now(), finished_at timestamptz, error_message text,
-      constraint source_scans_status_check check (status in ('pending','running','completed','failed','partial'))
-    );
-    create table public.price_radar_runs (id uuid primary key);
-  `);
-  await db.exec(QUEUE);
-  await db.exec(`
-    alter table public.olx_scan_jobs alter column source_scan_id drop not null, alter column search_filter_id drop not null;
-    alter table public.olx_scan_jobs add column if not exists context_type text not null default 'finder';
-    alter table public.olx_scan_jobs add column if not exists radar_owner_id uuid references auth.users(id);
-    alter table public.olx_scan_jobs add column if not exists radar_run_id uuid references public.price_radar_runs(id);
-    alter table public.olx_scan_jobs add column if not exists radar_lease_token uuid;
-  `);
-  await db.exec(SCHEDULE);
-  return db;
-}
+import { database, onlyActive, FLIP, OLX_ONLY, OTHER, OWNER, ROLLBACK, SCHEDULE, URL, elapseMinutes, type Decision } from "./finder-olx-schedule.fixture.ts";
 
 async function schedule(db: PGlite, filter = FLIP, options: { shared?: number; dryRun?: boolean } = {}): Promise<Decision> {
   const result = await db.query<{ result: Decision }>(
@@ -66,11 +20,7 @@ async function schedule(db: PGlite, filter = FLIP, options: { shared?: number; d
 
 /** Moves every stored OLX timestamp back, i.e. lets `hours` pass. */
 async function elapse(db: PGlite, hours: number) {
-  await db.exec(`
-    update public.olx_scan_jobs set created_at = created_at - interval '${hours} hours',
-      started_at = started_at - interval '${hours} hours', finished_at = finished_at - interval '${hours} hours';
-    update public.source_scans set started_at = started_at - interval '${hours} hours';
-  `);
+  await elapseMinutes(db, hours * 60);
 }
 
 async function finishAll(db: PGlite, status: "completed" | "failed" = "completed") {
@@ -97,6 +47,7 @@ test("first call queues exactly one automatic job with a pending OLX source scan
 
 test("no second OLX job before 24 h, even after the first one completed; exactly one after 24 h", async () => {
   const db = await database();
+  await onlyActive(db, FLIP);
   assert.equal((await schedule(db)).decision, "enqueued");
   assert.equal((await schedule(db)).reason, "OLX_JOB_IN_FLIGHT");
   await finishAll(db);
@@ -113,6 +64,7 @@ test("no second OLX job before 24 h, even after the first one completed; exactly
 
 test("next allowed time is counted from when the job was ordered, not from its late completion", async () => {
   const db = await database();
+  await onlyActive(db, FLIP);
   await schedule(db);
   await elapse(db, 12);
   await finishAll(db); // finished 12 h after it was ordered
@@ -126,6 +78,7 @@ test("next allowed time is counted from when the job was ordered, not from its l
 
 test("a 48 h interval waits 48 h; the budget is shared by every filter", async () => {
   const db = await database();
+  await onlyActive(db, FLIP, OTHER);
   await db.exec(`update public.search_filters set finder_olx_scan_interval_minutes = 2880 where id = '${FLIP}'`);
   assert.equal((await schedule(db, FLIP)).decision, "enqueued");
   await finishAll(db);
@@ -138,6 +91,17 @@ test("a 48 h interval waits 48 h; the budget is shared by every filter", async (
   await finishAll(db);
   await elapse(db, 24);
   assert.equal((await schedule(db, FLIP)).decision, "enqueued");
+});
+
+test("fairness: the filter that waited longer goes first, regardless of call order", async () => {
+  const db = await database();
+  await db.exec(`update public.search_filters set is_active = false where id = '${OLX_ONLY}'`);
+  assert.equal((await schedule(db, FLIP)).decision, "enqueued", "neither filter has an OLX history: first caller wins");
+  await finishAll(db);
+  await elapse(db, 24);
+  const flipAgain = await schedule(db, FLIP);
+  assert.equal(flipAgain.reason, "ANOTHER_FILTER_FIRST", "OTHER has never been scanned");
+  assert.equal((await schedule(db, OTHER)).decision, "enqueued");
 });
 
 test("database refuses an OLX interval shorter than 24 h", async () => {
@@ -228,6 +192,7 @@ test("state is durable: a new connection after a restart sees the same budget", 
   assert.equal((await schedule(restarted)).reason, "OLX_JOB_IN_FLIGHT");
   await finishAll(restarted);
   assert.equal((await schedule(restarted)).reason, "OLX_INTERVAL_NOT_ELAPSED");
+  await restarted.close();
 });
 
 test("rollback removes only what the migration added", async () => {
@@ -237,7 +202,7 @@ test("rollback removes only what the migration added", async () => {
   const columns = (await db.query<{ column_name: string }>(`select column_name from information_schema.columns where table_name in ('search_filters','olx_scan_jobs') and column_name in ('finder_olx_scan_interval_minutes','requested_by')`)).rows;
   assert.deepEqual(columns, []);
   assert.equal((await db.query(`select 1 from pg_proc where proname = 'enqueue_scheduled_finder_olx_job'`)).rows.length, 0);
-  assert.equal((await jobs(db)).length, 1, "existing OLX jobs are kept");
+  assert.equal((await db.query(`select id from public.olx_scan_jobs`)).rows.length, 1, "existing OLX jobs are kept");
   // Re-applying the migration after a rollback works (idempotent draft).
   await db.exec(SCHEDULE);
   await db.exec(SCHEDULE);

@@ -23,7 +23,9 @@
 --        24 hours, for all filters together (hard-coded, not a parameter);
 --      * shared budget: OLX jobs of every kind (automatic, manual Finder,
 --        Price Radar) ordered or claimed in the last 24 hours must be below
---        p_shared_limit (1..20, default 1 in the application).
+--        p_shared_limit (1..20, default 1 in the application);
+--      * fairness: when several filters are due, the one whose last OLX order
+--        is oldest goes first (ANOTHER_FILTER_FIRST for the others).
 --    p_dry_run = true only reports the decision (diagnostics), writes nothing.
 --
 -- Rollback: scripts/finder-olx-schedule.rollback.sql
@@ -177,6 +179,24 @@ begin
     reason := 'AUTOMATIC_DAILY_BUDGET_USED';
   elsif total_count >= p_shared_limit then
     reason := 'SHARED_DAILY_BUDGET_USED';
+  elsif exists (
+    -- Fairness for one shared budget: another active OLX filter that is due
+    -- and has waited longer (older last OLX order, or none) goes first.
+    select 1
+      from public.search_filters f
+      left join lateral (
+        select max(j.created_at) as last_at from public.olx_scan_jobs j
+         where j.context_type = 'finder' and j.search_filter_id = f.id
+      ) other_last on true
+     where f.id <> p_filter_id
+       and f.is_active
+       and coalesce(f.sources, '[]'::jsonb) ? 'olx'
+       and coalesce(other_last.last_at, '-infinity'::timestamptz) < coalesce(last_job.created_at, '-infinity'::timestamptz)
+       and (other_last.last_at is null or other_last.last_at + make_interval(mins => f.finder_olx_scan_interval_minutes) <= checked_at)
+       and not exists (select 1 from public.olx_scan_jobs j where j.context_type = 'finder' and j.search_filter_id = f.id and j.status in ('queued', 'running'))
+       and not exists (select 1 from public.source_scans s where s.search_filter_id = f.id and s.source = 'olx' and s.status in ('pending', 'running'))
+  ) then
+    reason := 'ANOTHER_FILTER_FIRST';
   end if;
 
   if reason is null and not p_dry_run then

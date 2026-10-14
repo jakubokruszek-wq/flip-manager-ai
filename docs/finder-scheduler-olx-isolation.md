@@ -1,5 +1,9 @@
 # Harmonogram Findera: izolacja OLX i pg_cron co 5 minut
 
+> **Aktualizacja (następny etap):** automatyczny scheduler nie zleca już OLX w cyklu portali. OLX ma osobny
+> interwał (24/48/72 h) i centralny budżet Cloudflare. Zob. [`finder-olx-schedule.md`](finder-olx-schedule.md).
+> Opis poniżej dotyczy teraz ścieżki ręcznej „Skanuj” oraz izolacji kolejki OLX od portali.
+
 ## 1. Przyczyna (13.10.2026)
 
 Filtr „Flip” obejmuje 12 źródeł, `finder_scan_interval_minutes = 300`.

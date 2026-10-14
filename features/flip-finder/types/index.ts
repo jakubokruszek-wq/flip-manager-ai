@@ -101,6 +101,11 @@ export type SearchFilter = {
   scanIntervalMinutes: number;
   /** Finder-only cadence; the legacy field remains the global Facebook Watcher setting. */
   finderScanIntervalMinutes?: number;
+  /**
+   * Separate OLX cadence (24/48/72 h). null when the column is not readable
+   * yet (migration not applied): no automatic OLX job is queued then.
+   */
+  finderOlxScanIntervalMinutes?: number | null;
   isActive: boolean;
   lastScannedAt: string | null;
   createdAt: string;

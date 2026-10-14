@@ -120,6 +120,7 @@ export function createEmptySearchFilter(): SearchFilterInput {
     maxEstimatedRenovationCost: null,
     scanIntervalMinutes: 60,
     finderScanIntervalMinutes: 60,
+    finderOlxScanIntervalMinutes: 1440,
     isActive: true,
   };
 }
