@@ -124,7 +124,19 @@ Dla porównania odrzucony tryb `auto`: ~2 200 claimów na dobę (~66 tys./mies.)
    - wygaszanie jest no-op;
    - watchdog ręcznych zadań działa jak dotąd.
 2. **Migracja** `20261015120000_add_scheduled_olx_claim.sql`. Przełącznik zostaje **false**. Kontrola: `check.sql` (krok 1).
-3. **GitHub:** utwórz środowisko `olx-cloudflare-scheduled` (zalecane: wymagany recenzent) i sekrety `CLOUDFLARE_API_TOKEN_SCHEDULED`, `OLX_CLOUD_ADMIN_TOKEN_SCHEDULED`, `OLX_WORKER_SECRET_SCHEDULED`.
+3. **GitHub:** utwórz środowisko `olx-cloudflare-scheduled` (zalecane: wymagany recenzent) i sekret `OLX_CLOUD_ADMIN_TOKEN_SCHEDULED`. Token Cloudflare i sekret Workera mogą pochodzić z istniejących sekretów Stage2 (tabela niżej).
+
+   | Sekret w workflow | Źródło (pierwsze niepuste wygrywa) | Uwagi |
+   |---|---|---|
+   | token API Cloudflare | `CLOUDFLARE_API_TOKEN_SCHEDULED`, potem `CLOUDFLARE_API_TOKEN_STAGE2` | wymagany dla `deploy-disabled`, `enable`, `disable` |
+   | `CLOUDFLARE_ACCOUNT_ID` | `CLOUDFLARE_ACCOUNT_ID` | bez zmian |
+   | sekret Workera (`OLX_WORKER_SECRET`) | `OLX_WORKER_SECRET_SCHEDULED`, potem `OLX_WORKER_SECRET_STAGE2` | ta sama wartość co `OLX_WORKER_SECRET` w Vercel; wymagany dla `deploy-disabled` |
+   | token admina Workera | **tylko** `OLX_CLOUD_ADMIN_TOKEN_SCHEDULED` | osobny, obowiązkowy dla każdej akcji (≥ 32 znaki); nigdy token admina Stage2 |
+
+   - Dodanie sekretu `_SCHEDULED` ma zawsze pierwszeństwo przed Stage2, bez zmiany workflow.
+   - Krok „Kontrola sekretów” wypisuje tylko **nazwę** użytego sekretu, nigdy wartość.
+   - Wykorzystywane są wyłącznie **wartości** sekretów Stage2. Workflow wdraża, konfiguruje i wywołuje tylko `flip-manager-olx-cloud-scheduled` (`wrangler.scheduled.toml`), nigdy Workera Stage2. Pilnuje tego test `workers/olx-cloudflare/test/scheduled-config.test.ts`.
+   - **Widoczność:** GitHub udostępnia jobowi tylko sekrety repozytorium i sekrety jego środowiska (`olx-cloudflare-scheduled`). Jeśli sekrety `_STAGE2` są zapisane tylko w środowisku `olx-cloudflare-stage2`, fallback ich nie zobaczy, a krok „Kontrola sekretów” zakończy się jasnym błędem. Wtedy trzeba je dodać na poziomie repozytorium albo w środowisku `olx-cloudflare-scheduled`.
 4. **Workflow `deploy-disabled`**, potem `check`. Oczekiwane: tryb `scheduled`, OFF, Worker i DO na jednej wersji, HMAC 409.
 5. **Weryfikacja budżetu przed włączeniem:**
    - z podsumowania stage2 z 14.10 (`browserSecondsUsedToday`, `chargedMs`) potwierdź, że 1 zadanie mieści się w 120 s;

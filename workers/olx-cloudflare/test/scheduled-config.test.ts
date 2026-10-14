@@ -64,8 +64,39 @@ test("workflow: manual only, main only, confirmed enable, no /run-once, STOP alw
   assert.match(workflow, /\[ "\$GITHUB_REF" = "refs\/heads\/main" \]/);
   const commands = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
   assert.doesNotMatch(commands, /run-once/, "no manual run of the unattended Worker");
-  assert.doesNotMatch(workflow, /STAGE2|stage2\.toml/, "never touches the stage-2 test Worker");
+  assert.doesNotMatch(commands, /stage2\.toml|olx-cloud-stage2|--name\b|--env\b/, "never deploys, configures or calls the stage-2 test Worker");
   assert.match(workflow, /--var OLX_CLOUD_ENABLED:1/);
   assert.match(workflow, /failure\(\) && inputs\.action == 'enable'/, "an unconfirmed enable is rolled back to disabled");
   assert.doesNotMatch(workflow, /echo "\$\{?(ADMIN_TOKEN|WORKER_SECRET|CLOUDFLARE_API_TOKEN)/, "no secret is printed");
 });
+
+test("workflow secrets: stage-2 VALUES may be reused as fallbacks, *_SCHEDULED wins, admin token stays separate and required", () => {
+  const workflow = readFileSync(new URL("../../../.github/workflows/olx-cloudflare-scheduled.yml", import.meta.url), "utf8");
+  const commands = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  const values = (name: string) => [...commands.matchAll(new RegExp(`^\\s+${name}: (.+)$`, "gm"))].map((match) => match[1]);
+
+  // Only these two stage-2 secrets may be read, and only as a fallback after the scheduled one.
+  assert.deepEqual([...new Set([...commands.matchAll(/secrets\.([A-Z0-9_]*STAGE2)\b/g)].map((match) => match[1]))].sort(),
+    ["CLOUDFLARE_API_TOKEN_STAGE2", "OLX_WORKER_SECRET_STAGE2"]);
+  assert.doesNotMatch(commands, /OLX_CLOUD_ADMIN_TOKEN_STAGE2/, "the admin token of stage 2 is never used");
+  const apiTokens = values("CLOUDFLARE_API_TOKEN");
+  assert.ok(apiTokens.length >= 4);
+  for (const value of apiTokens) assert.equal(value, "${{ secrets.CLOUDFLARE_API_TOKEN_SCHEDULED || secrets.CLOUDFLARE_API_TOKEN_STAGE2 }}");
+  const workerSecrets = values("WORKER_SECRET");
+  assert.ok(workerSecrets.length >= 2);
+  for (const value of workerSecrets) assert.equal(value, "${{ secrets.OLX_WORKER_SECRET_SCHEDULED || secrets.OLX_WORKER_SECRET_STAGE2 }}");
+  const adminTokens = values("ADMIN_TOKEN");
+  assert.ok(adminTokens.length >= 4);
+  for (const value of adminTokens) assert.equal(value, "${{ secrets.OLX_CLOUD_ADMIN_TOKEN_SCHEDULED }}", "no fallback for the admin token");
+  assert.match(commands, /\[ "\$\{#ADMIN_TOKEN\}" -ge 32 \] \|\| \{ echo "::error::Brak lub zbyt krótki OLX_CLOUD_ADMIN_TOKEN_SCHEDULED"; exit 1; \}/, "admin token required for every action");
+  for (const value of values("CLOUDFLARE_ACCOUNT_ID")) assert.equal(value, "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}");
+
+  // Whatever token is used, every wrangler command targets only the scheduled Worker's config.
+  const wrangler = commands.split("\n").filter((line) => /wrangler (deploy|secret)/.test(line));
+  assert.ok(wrangler.length >= 6);
+  for (const line of wrangler) assert.match(line, /--config "\$SCHEDULED_CONFIG"/, line);
+  assert.match(commands, /^  SCHEDULED_CONFIG: wrangler\.scheduled\.toml$/m);
+  assert.match(commands, /^  SCHEDULED_NAME: flip-manager-olx-cloud-scheduled$/m);
+  for (const url of commands.match(/https:\/\/[^\s"']+/g) ?? []) assert.match(url, /^https:\/\/flip-manager-olx-cloud-scheduled\./, url);
+});
+
