@@ -97,8 +97,8 @@ test("Finder prioritizes offers and keeps the modal as a quick preview with a ca
   assert.ok(await page.getByRole("link", { name: "Pulpit" }).first().isVisible(), "the shared navigation title must be localized");
   const listingCard = page.getByRole("button", { name: /Łódź · 2 pokoje · 45 m²/ }).first();
   await listingCard.waitFor({ state: "visible", timeout: 20_000 });
-  const filterSettings = page.locator("details").filter({ hasText: "Ustawienia filtra" }).first();
-  assert.equal(await filterSettings.evaluate((element) => element.open), false, "filter settings should not precede the offers by default");
+  assert.ok(await page.getByRole("button", { name: "Ustawienia filtra" }).first().isVisible(), "filter settings stay one click away");
+  assert.equal(await page.getByTestId("filter-settings-dialog").count(), 0, "filter settings should not precede the offers by default");
   assert.equal(await page.evaluate(() => { const offers = document.querySelector("[data-finder-offers]"); const sources = [...document.querySelectorAll("details")].find((element) => element.textContent?.includes("Źródła i historia skanów")); return Boolean(offers && sources && (offers.compareDocumentPosition(sources) & Node.DOCUMENT_POSITION_FOLLOWING)); }), true, "offer cards must precede configuration and scan-history controls");
   const listingCardShell = listingCard.locator("xpath=..");
   const cardTop = await listingCardShell.evaluate((element) => element.getBoundingClientRect().top);
