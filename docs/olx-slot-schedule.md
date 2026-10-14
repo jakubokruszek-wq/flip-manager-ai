@@ -5,7 +5,7 @@ Stan: **kod gotowy, nic nie wdrożono.**
 - Limit automatycznych zadań zostaje **1 na 24 h**, dopóki operator go nie podniesie.
 - Worker `scheduled` pozostaje wyłączony; stage2 pozostaje testowym Workerem `manual`, OFF.
 
-Uzupełnia: [`finder-olx-schedule.md`](finder-olx-schedule.md) (PR #15), [`olx-cloud-scheduled.md`](olx-cloud-scheduled.md) (Worker `scheduled`) i [`radar-olx-removal.md`](radar-olx-removal.md).
+Uzupełnia: [`finder-olx-schedule.md`](finder-olx-schedule.md) (PR #15), [`olx-cloud-scheduled.md`](olx-cloud-scheduled.md) (Worker `scheduled`), [`radar-olx-removal.md`](radar-olx-removal.md) i [`olx-claim-coordination.md`](olx-claim-coordination.md) (audyt: koordynacja trzech claimów, STOP, stary przebieg Radaru).
 
 ## 1. Godzina startu i harmonogram w slotach
 
@@ -33,6 +33,7 @@ Uzupełnia: [`finder-olx-schedule.md`](finder-olx-schedule.md) (PR #15), [`olx-c
   - Bieżący termin w tolerancji uruchomi się z widocznym opóźnieniem.
   - Po tolerancji jest zapisany jako `missed` z przyczyną (np. `OLX_JOB_IN_FLIGHT`, `AUTOMATIC_DAILY_BUDGET_USED`) i czeka się na następny.
 - **Zadanie nieodebrane przez Workera:** po 6 h `failed` z kodem `OLX_SCHEDULED_JOB_NOT_CLAIMED`. Historii się nie usuwa i nie ponawia.
+- **STOP (automat OFF):** termin nie tworzy zadania (powód `AUTOMATION_DISABLED`). Włączenie w tolerancji uruchamia go jeszcze raz, z opóźnieniem. Po tolerancji jest zapisany raz jako `missed AUTOMATION_DISABLED`. Zadanie czekające w chwili STOP jest wycofywane w ciągu 5 min jako `OLX_SCHEDULED_JOB_STOPPED`. Szczegóły: [`olx-claim-coordination.md`](olx-claim-coordination.md) §3.
 
 ### UI (ustawienia filtra → Harmonogram, gdy wybrany jest OLX)
 
@@ -71,17 +72,20 @@ Szczegóły: [`radar-olx-removal.md`](radar-olx-removal.md).
 
 ## 4. Plan wdrożenia (każdy krok po osobnej zgodzie)
 
-Wymaga wcześniej wdrożonych migracji `20261014120000` (PR #15, jest) i `20261015120000` (Worker `scheduled`).
+Wymaga wcześniej wdrożonej migracji `20261014120000` (PR #15, jest). Migracje `20261015120000`, `20261016120000` i `20261017120000` stosuje się razem, po kolei, w jednym oknie SQL Editora (kolejność i uzasadnienie: [`olx-claim-coordination.md`](olx-claim-coordination.md) §5).
 
+0. **Wyłącz lokalny worker OLX** na czas kroków 1–2, żeby nie odebrał starego zadania OLX Radaru `09b4e9b6` przed jego wycofaniem.
 1. **Merge → Vercel.** Przed migracją kod działa bez zmian:
    - harmonogram według PR #15;
    - zapis filtra pomija brakującą kolumnę godziny;
    - claim bez funkcji 3-argumentowej → 503 / brak zadania.
    - **Radar od razu przestaje zlecać OLX** (kod).
-2. **Migracja `20261016120000`** (SQL Editor). Kontrola: `scripts/olx-cloud-scheduled.check.sql`, kroki 6–9:
+2. **Migracje `20261015120000`, `20261016120000`, `20261017120000`** (SQL Editor, od razu po merge). Automat zostaje OFF: terminy są pomijane z powodem `AUTOMATION_DISABLED`, nie powstaje żadne zadanie. Kontrola: `scripts/olx-cloud-scheduled.check.sql`, kroki 6–12:
    - kotwice i bieżące terminy;
-   - brak oczekujących zadań OLX Radaru;
-   - wycofane z audytem.
+   - brak oczekujących zadań OLX Radaru, wycofane z audytem;
+   - trzy claimy na wspólnej blokadzie i trigger ochronny.
+
+   Potem włącz z powrotem lokalny worker OLX: skany ręczne działają jak dotąd.
 3. **Worker `scheduled`:** workflow `deploy-disabled`, potem `check` (`maxJobsPerDay = 2`, budżet 120 s, OFF).
 4. **Weryfikacja budżetu, zanim limit wzrośnie do 2:**
    - przez kilka dni z limitem 1 sprawdź `olx_cloud_budget` (`job_estimate_ms`, `account_browser_ms`) oraz `/status` (`browserSecondsUsedToday`, `OLX_CLOUD_JOB_BROWSER_COST`);
@@ -99,6 +103,7 @@ Wymaga wcześniej wdrożonych migracji `20261014120000` (PR #15, jest) i `202610
 | Limit 2 | `update public.olx_automation_control set max_claims_24h = 1;` (natychmiast) |
 | STOP automatu | `scripts/olx-cloud-scheduled.stop.sql` / workflow `disable` |
 | Kod | revert PR (Radar wraca do starego kodu, ale baza dalej blokuje OLX Radaru, dopóki działa trigger) |
+| Koordynacja claimów | po STOP: `scripts/olx-claim-coordination.rollback.sql` (przywraca 3 funkcje bajt w bajt, usuwa trigger); zawsze **przed** rollbackiem poniżej |
 | Migracja | po STOP i revercie kodu: `scripts/olx-slot-schedule.rollback.sql`. Przywraca funkcję PR #15 1:1, filtry 12 h wracają do 24 h, usuwa sloty, raporty budżetu i trigger Radaru. Zadania i historia zostają; wycofane zadania OLX Radaru **pozostają** `failed` (świadomie). |
 
 ## 6. Testy

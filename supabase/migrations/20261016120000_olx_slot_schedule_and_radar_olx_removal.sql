@@ -18,6 +18,10 @@
 --    * Only the CURRENT slot is ever considered, and only within its grace
 --      (min(3 h, interval / 2)); after a restart or an outage older slots are
 --      not caught up (no avalanche), the current one is recorded as missed.
+--    * STOP (olx_automation_control.scheduled_claim_enabled = false): no job
+--      is queued (nothing would claim it); the slot waits with the blocker
+--      AUTOMATION_DISABLED and, past its grace, is recorded once as missed
+--      with that reason. Switching on within the grace still runs the slot.
 -- B. Up to 2 automatic OLX jobs per rolling 24 h, gated by real browser time
 --    * olx_automation_control.max_claims_24h may be 0..2 (stays 1 until the
 --      operator raises it after the budget check); the enqueue and the claim
@@ -244,6 +248,7 @@ declare
   last_job record;
   in_flight integer;
   automatic_limit integer;
+  automation_enabled boolean;
   effective_shared integer;
   automatic_count integer;
   finder_other_count integer;
@@ -279,6 +284,7 @@ begin
   end if;
 
   select coalesce((select c.max_claims_24h from public.olx_automation_control c where c.id = 1), 1) into automatic_limit;
+  select coalesce((select c.scheduled_claim_enabled from public.olx_automation_control c where c.id = 1), false) into automation_enabled;
   effective_shared := greatest(p_shared_limit, automatic_limit);
 
   select
@@ -340,7 +346,12 @@ begin
   elsif slot_row.slot_at is not null then
     reason := 'SLOT_ALREADY_HANDLED';
   else
-    if in_flight > 0 then
+    if not automation_enabled then
+      -- STOP: nothing would claim the job. Queue nothing (no job that can only
+      -- end as NOT_CLAIMED, no use of the shared budget); past the grace the
+      -- slot is recorded once as missed with this reason.
+      blocker := 'AUTOMATION_DISABLED';
+    elsif in_flight > 0 then
       blocker := 'OLX_JOB_IN_FLIGHT';
     elsif automatic_count >= automatic_limit then
       blocker := 'AUTOMATIC_DAILY_BUDGET_USED';
@@ -404,6 +415,9 @@ begin
 
   if reason is null or reason in ('SLOT_ALREADY_HANDLED', 'SLOT_MISSED', 'BEFORE_FIRST_SLOT') then
     next_allowed := slot.next_slot;
+  elsif reason = 'AUTOMATION_DISABLED' then
+    -- Switching the automation on within the grace still runs this slot.
+    next_allowed := case when checked_at <= slot.current_slot + grace then checked_at else slot.next_slot end;
   elsif reason in ('OLX_JOB_IN_FLIGHT', 'AUTOMATIC_DAILY_BUDGET_USED', 'SHARED_DAILY_BUDGET_USED', 'BROWSER_BUDGET_INSUFFICIENT', 'ANOTHER_FILTER_FIRST') then
     next_allowed := greatest(checked_at,
       case when automatic_count >= automatic_limit then oldest_automatic + window_length else checked_at end,
@@ -444,6 +458,7 @@ begin
     'cloudflare_jobs_in_window', cloudflare_count,
     'total_jobs_in_window', total_count,
     'shared_limit', effective_shared,
+    'automation_enabled', automation_enabled,
     'browser_budget', budget_json
   );
 end;

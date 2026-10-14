@@ -105,7 +105,7 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
     console.warn("FINDER_OLX_EXPIRE_FAILED", { detail: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
     return null;
   });
-  if (expired && (expired.unclaimedExpired || expired.leaseExpired)) console.warn("FINDER_OLX_SCHEDULED_JOBS_EXPIRED", expired);
+  if (expired && (expired.stopped || expired.unclaimedExpired || expired.leaseExpired)) console.warn("FINDER_OLX_SCHEDULED_JOBS_EXPIRED", expired);
   const olxPhase = await runFinderOlxSchedulerPhase(filters, dependencies.scheduleOlx);
   const olxDecisions = new Map(olxPhase.decisions.map((decision) => [decision.filterId, decision]));
   const summary: FinderSchedulerSummary = {

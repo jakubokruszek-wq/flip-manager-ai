@@ -26,6 +26,7 @@ const REASONS: Record<string, string> = {
   AUTOMATIC_DAILY_BUDGET_USED: "wykorzystany globalny limit automatycznych skanów OLX na 24 h (wszystkie filtry)",
   SHARED_DAILY_BUDGET_USED: "wykorzystany wspólny budżet OLX na 24 h (razem z ręcznymi skanami)",
   BROWSER_BUDGET_INSUFFICIENT: "brak dziennego budżetu przeglądarki Cloudflare na kolejne zadanie",
+  AUTOMATION_DISABLED: "automat OLX wyłączony (STOP) — termin nie jest zlecany",
   ANOTHER_FILTER_FIRST: "pierwszeństwo ma inny filtr z OLX, który czeka dłużej",
   BEFORE_FIRST_SLOT: "pierwszy termin jeszcze nie nadszedł",
   SLOT_ALREADY_HANDLED: "bieżący termin już obsłużono",

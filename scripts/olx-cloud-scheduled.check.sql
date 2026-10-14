@@ -62,3 +62,30 @@ select * from public.olx_cloud_budget_today(now());
 select id, status, error_code, result_summary->'radarOlxRemoved' as audit
   from public.olx_scan_jobs where context_type = 'price_radar' and status in ('queued', 'running');
 select status, error_code, count(*) from public.olx_scan_jobs where context_type = 'price_radar' group by 1, 2 order by 1, 2;
+
+-- ---- Claim coordination (migration 20261017120000) ----
+
+-- 10. All three claims (4 functions: the scheduled one has 2 overloads) share one lock and leave
+--     automatic jobs to the scheduled Worker; the guard trigger exists (expected: every column true, 1 trigger).
+select p.proname, pg_get_functiondef(p.oid) like '%finder-olx-scheduled-claim%' as uses_shared_lock,
+       pg_get_functiondef(p.oid) like '%requested_by is distinct from ''scheduler''%' or p.proname = 'claim_scheduled_finder_olx_job' as excludes_automatic_jobs
+  from pg_proc p
+ where p.pronamespace = 'public'::regnamespace
+   and p.proname in ('claim_olx_scan_job', 'claim_olx_scan_job_selective', 'claim_scheduled_finder_olx_job')
+ order by 1;
+select tgname from pg_trigger where tgname = 'olx_scan_jobs_guard_scheduled';
+
+-- 11. Automatic jobs taken by a worker other than the scheduled one, or tried twice. Rows from before
+--     20261017120000 are the old behaviour (PR #15 jobs went to the regular worker); none may be newer.
+select id, created_at, status, attempts, worker_id, error_code
+  from public.olx_scan_jobs
+ where requested_by = 'scheduler'
+   and (attempts > 1 or (worker_id is not null and worker_id not like 'cloudflare-olx-scheduled%'))
+ order by created_at desc
+ limit 20;
+
+-- 12. Slots skipped because of STOP, and automatic jobs retired by STOP (diagnostics of the switch).
+select date_trunc('day', slot_at) as day, count(*) as missed_while_stopped
+  from public.finder_olx_slots where status = 'missed' and reason = 'AUTOMATION_DISABLED'
+ group by 1 order by 1 desc limit 14;
+select count(*) as retired_by_stop from public.olx_scan_jobs where error_code = 'OLX_SCHEDULED_JOB_STOPPED';

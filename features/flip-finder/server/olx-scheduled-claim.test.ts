@@ -62,7 +62,7 @@ test("fails closed: missing function, unknown reason, non-automatic or Radar job
 
 test("expiry: counts on success, null (no change) before the migration, never throws", async () => {
   const client = (result: unknown) => ({ rpc: () => ({ abortSignal: async () => result }) }) as never;
-  assert.deepEqual(await expireStaleScheduledOlxJobs(client({ data: { unclaimed_expired: 1, lease_expired: 0 }, error: null })), { unclaimedExpired: 1, leaseExpired: 0 });
+  assert.deepEqual(await expireStaleScheduledOlxJobs(client({ data: { stopped: 2, unclaimed_expired: 1, lease_expired: 0 }, error: null })), { stopped: 2, unclaimedExpired: 1, leaseExpired: 0 });
   assert.equal(await expireStaleScheduledOlxJobs(client({ data: null, error: { code: "PGRST202", message: "missing" } })), null);
   const warn = mock.method(console, "warn", () => undefined);
   try {

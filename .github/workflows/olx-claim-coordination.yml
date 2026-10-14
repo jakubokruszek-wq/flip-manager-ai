@@ -1,0 +1,75 @@
+name: OLX claim coordination, schedule and Radar removal
+
+# Offline checks only. SQL runs on PGlite and on a disposable `services:
+# postgres` container (real concurrency of the three OLX claims); never on
+# Production or Supabase. Nothing is deployed, migrated or enabled.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/migrations/**"
+      - "scripts/olx-*.sql"
+      - "features/flip-finder/server/olx-*"
+      - "features/flip-finder/server/finder-olx-*"
+      - "features/flip-finder/server/finder-scheduler*"
+      - "features/price-radar/server/**"
+      - ".github/workflows/olx-claim-coordination.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: olx-claim-coordination-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: olx_claim_race
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d olx_claim_race"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      OLX_RACE_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/olx_claim_race
+      OLX_RACE_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - name: Real concurrency of the three OLX claims (two and nine live connections)
+        run: |
+          node --import ./scripts/register-test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test \
+            features/flip-finder/server/olx-claim-coordination.race.test.ts
+      - name: OLX schedule, claims, STOP, rollback and the Production Radar case (PGlite, real migrations)
+        run: |
+          node --import ./scripts/register-test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test --test-concurrency=4 \
+            features/flip-finder/server/olx-claim-coordination.rpc.test.ts \
+            features/flip-finder/server/olx-slot-schedule.rpc.test.ts \
+            features/flip-finder/server/olx-slot-schedule.e2e.test.ts \
+            features/flip-finder/server/olx-scheduled-claim.rpc.test.ts \
+            features/flip-finder/server/olx-scheduled-claim.test.ts \
+            features/flip-finder/server/olx-selective-claim.rpc.test.ts \
+            features/flip-finder/server/olx-selective-claim.test.ts \
+            features/flip-finder/server/finder-olx-schedule.rpc.test.ts \
+            features/flip-finder/server/finder-olx-schedule.test.ts \
+            features/price-radar/server/radar-legacy-olx-run.e2e.test.ts

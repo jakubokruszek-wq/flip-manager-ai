@@ -33,6 +33,7 @@ export type FinderOlxScheduleReason =
   | "SHARED_DAILY_BUDGET_USED"
   | "ANOTHER_FILTER_FIRST"
   | "BROWSER_BUDGET_INSUFFICIENT"
+  | "AUTOMATION_DISABLED"
   | "BEFORE_FIRST_SLOT"
   | "SLOT_ALREADY_HANDLED"
   | "SLOT_MISSED"
@@ -99,6 +100,7 @@ export const FINDER_OLX_SCHEDULE_REASON_LABELS: Record<FinderOlxScheduleReason, 
   AUTOMATIC_DAILY_BUDGET_USED: "wykorzystany globalny limit automatycznych skanów OLX na 24 h (wszystkie filtry)",
   SHARED_DAILY_BUDGET_USED: "wykorzystany wspólny budżet OLX na 24 h (razem z ręcznymi skanami Findera)",
   BROWSER_BUDGET_INSUFFICIENT: "brak dziennego budżetu przeglądarki Cloudflare na kolejne zadanie (wg zużycia zgłoszonego przez Workera)",
+  AUTOMATION_DISABLED: "automat OLX wyłączony (STOP): termin nie jest zlecany, bo żaden Worker by go nie odebrał",
   BEFORE_FIRST_SLOT: "pierwszy termin nowego harmonogramu jeszcze nie nadszedł",
   SLOT_ALREADY_HANDLED: "bieżący termin już obsłużono",
   SLOT_MISSED: "termin pominięty: nie udało się zlecić w czasie tolerancji (bez nadrabiania)",

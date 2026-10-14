@@ -25,6 +25,7 @@ const { database, onlyActive, FLIP, OTHER } = await import("./finder-olx-schedul
 const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
 const CLAIM = read("supabase/migrations/20261015120000_add_scheduled_olx_claim.sql");
 const SLOTS = read("supabase/migrations/20261016120000_olx_slot_schedule_and_radar_olx_removal.sql");
+const COORDINATION = read("supabase/migrations/20261017120000_coordinate_olx_claims.sql");
 const ENABLE = read("scripts/olx-cloud-scheduled.enable.sql");
 const START = Date.parse("2026-10-20T06:00:00.000Z"); // 08:00 Warsaw (CEST)
 
@@ -69,6 +70,7 @@ async function setup(filters: string[]) {
   const db = await database();
   await db.exec(CLAIM);
   await db.exec(SLOTS);
+  await db.exec(COORDINATION);
   await db.exec(ENABLE);
   await db.exec(`update public.olx_automation_control set max_claims_24h = 2`);
   await onlyActive(db, ...filters);
@@ -79,7 +81,7 @@ async function setup(filters: string[]) {
   return db;
 }
 
-async function simulate(db: PGlite, filters: string[], hours: number, cloudflareDown: (minute: number) => boolean) {
+async function simulate(db: PGlite, filters: string[], hours: number, cloudflareDown: (minute: number) => boolean, beforeTick?: (minute: number) => Promise<void>) {
   const last = new Map<string, string | null>(filters.map((id) => [id, null]));
   const portalStarts: number[] = [];
   const info = mock.method(console, "info", () => undefined);
@@ -87,6 +89,7 @@ async function simulate(db: PGlite, filters: string[], hours: number, cloudflare
   try {
     for (let minute = 0; minute < hours * 60; minute += 5) {
       const now = new Date(START + minute * 60_000);
+      await beforeTick?.(minute);
       await runFinderScanScheduler(now, {
         listFilters: async () => filters.map((id) => filter(id, last.get(id) ?? null)),
         hasRunningScan: async () => false,
@@ -149,4 +152,20 @@ test("two filters, 12 h each, global limit 2: never more than 2 automatic jobs i
   assert.equal(created.length, 4, "2 per 24 h over 48 h, shared by both filters");
   const missed = (await db.query<{ reason: string }>(`select reason from public.finder_olx_slots where status = 'missed'`)).rows;
   assert.ok(missed.length > 0 && missed.every((slot) => ["AUTOMATIC_DAILY_BUDGET_USED", "SHARED_DAILY_BUDGET_USED", "ANOTHER_FILTER_FIRST", "OLX_JOB_IN_FLIGHT"].includes(slot.reason)), JSON.stringify(missed));
+});
+
+test("STOP for a day (Worker and switch off): no job is queued, each slot is recorded once as missed AUTOMATION_DISABLED; after ON the next slot runs", async () => {
+  const db = await setup([FLIP]);
+  const stop = read("scripts/olx-cloud-scheduled.stop.sql");
+  await simulate(db, [FLIP], 48, (minute) => minute < 1410, async (minute) => {
+    if (minute === 0) await db.exec(stop);
+    if (minute === 1410) await db.exec(ENABLE); // 07:30 on day 2
+  });
+  const slots = (await db.query<{ status: string; reason: string | null; offset_minutes: number }>(`select status, reason,
+    (extract(epoch from (slot_at - (select min(slot_at) from public.finder_olx_slots))) / 60)::int as offset_minutes from public.finder_olx_slots order by slot_at`)).rows;
+  assert.deepEqual(slots.map((slot) => [slot.offset_minutes, slot.status, slot.reason]), [
+    [0, "missed", "AUTOMATION_DISABLED"], [720, "missed", "AUTOMATION_DISABLED"], [1440, "enqueued", null], [2160, "enqueued", null],
+  ], "no job while stopped, no catch-up after ON");
+  const jobs = (await db.query<{ status: string }>(`select status from public.olx_scan_jobs`)).rows;
+  assert.deepEqual(jobs.map((job) => job.status), ["completed", "completed"], "nothing ends as OLX_SCHEDULED_JOB_NOT_CLAIMED");
 });

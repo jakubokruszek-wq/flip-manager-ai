@@ -79,12 +79,14 @@ export function parseScheduledClaimBody(value: unknown): { workerId: string; usa
   return { workerId: row.workerId, usage: Object.fromEntries(keys.map((key) => [key, usage[key]])) as ScheduledClaimUsage };
 }
 
-export type ExpiredScheduledJobs = { unclaimedExpired: number; leaseExpired: number };
+export type ExpiredScheduledJobs = { stopped: number; unclaimedExpired: number; leaseExpired: number };
 
 /**
  * Marks automatic jobs never claimed within the expiry (default 6 h) or whose
  * lease died as failed with OLX_SCHEDULED_JOB_NOT_CLAIMED /
- * OLX_SCHEDULED_JOB_LEASE_EXPIRED. Nothing is deleted or retried.
+ * OLX_SCHEDULED_JOB_LEASE_EXPIRED, and -- while the automation is stopped --
+ * queued ones at once with OLX_SCHEDULED_JOB_STOPPED (migration
+ * 20261017120000). Nothing is deleted or retried.
  */
 export async function expireStaleScheduledOlxJobs(supabase: DatabaseClient): Promise<ExpiredScheduledJobs | null> {
   const result = await supabase.rpc("expire_stale_scheduled_finder_olx_jobs").abortSignal(AbortSignal.timeout(5_000));
@@ -94,7 +96,7 @@ export async function expireStaleScheduledOlxJobs(supabase: DatabaseClient): Pro
     return null;
   }
   const row = asRow(result.data);
-  return { unclaimedExpired: count(row?.unclaimed_expired), leaseExpired: count(row?.lease_expired) };
+  return { stopped: count(row?.stopped), unclaimedExpired: count(row?.unclaimed_expired), leaseExpired: count(row?.lease_expired) };
 }
 
 type Row = Record<string, unknown>;

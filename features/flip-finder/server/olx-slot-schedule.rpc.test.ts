@@ -22,11 +22,13 @@ const RADAR_RUN = "44444444-4444-4444-8444-444444444444";
 
 type Decision = Record<string, unknown> & { decision: string; reason: string | null; blocker: string | null };
 
-async function db(options: { beforeSlots?: (instance: PGlite) => Promise<void> } = {}): Promise<PGlite> {
+/** Automation switched ON (the slot decision queues nothing while it is OFF: AUTOMATION_DISABLED). */
+async function db(options: { beforeSlots?: (instance: PGlite) => Promise<void>; enabled?: boolean } = {}): Promise<PGlite> {
   const instance = await database();
   await instance.exec(CLAIM);
   await options.beforeSlots?.(instance);
   await instance.exec(SLOTS);
+  if (options.enabled ?? true) await instance.exec(ENABLE);
   return instance;
 }
 

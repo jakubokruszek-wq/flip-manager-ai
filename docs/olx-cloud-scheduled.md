@@ -80,7 +80,9 @@ a niepewność oznacza brak startu.
 
 | Sytuacja | Diagnoza |
 |---|---|
-| Zadanie automatyczne nieodebrane przez 6 h (Worker OFF, STOP, awaria) | `failed`, `OLX_SCHEDULED_JOB_NOT_CLAIMED`, także jego `source_scans`; scheduler (co 5 min) |
+| Zadanie automatyczne nieodebrane przez 6 h (Worker OFF, awaria) | `failed`, `OLX_SCHEDULED_JOB_NOT_CLAIMED`, także jego `source_scans`; scheduler (co 5 min) |
+| Automat wyłączony (STOP) | po migracji `20261017120000`: termin nie tworzy zadania (`AUTOMATION_DISABLED`, po tolerancji `missed`); czekające zadanie → `failed`, `OLX_SCHEDULED_JOB_STOPPED` w ciągu 5 min ([`olx-claim-coordination.md`](olx-claim-coordination.md) §3) |
+| Zwykły lub selektywny worker a zadanie automatyczne | po migracji `20261017120000` nigdy go nie bierze, nie wraca do kolejki jego wygasłego lease i nic nie wydaje, gdy ono trwa; spóźniony heartbeat nie wskrzesza lease ([`olx-claim-coordination.md`](olx-claim-coordination.md) §2) |
 | Lease zadania automatycznego martwe > 10 min | `failed`, `OLX_SCHEDULED_JOB_LEASE_EXPIRED` |
 | 90-sekundowy watchdog podglądu skanu | **nie dotyczy** zadań automatycznych (czekają na Cron do 15 min); zadania ręczne bez zmian |
 | Błąd strony, odmowa, budżet | `/fail` z kodem (bez zmian); `attempts > 0` → nigdy ponownie |
@@ -138,10 +140,10 @@ Dla porównania odrzucony tryb `auto`: ~2 200 claimów na dobę (~66 tys./mies.)
 
 | Poziom | Działanie | Czas |
 |---|---|---|
-| STOP w bazie | `scripts/olx-cloud-scheduled.stop.sql` → każdy claim `AUTOMATION_DISABLED` | natychmiast, bez wdrożenia |
+| STOP w bazie | `scripts/olx-cloud-scheduled.stop.sql` → każdy claim `AUTOMATION_DISABLED`; terminy nie tworzą zadań; czekające zadanie wycofane (`OLX_SCHEDULED_JOB_STOPPED`) przy następnym tiku | natychmiast, bez wdrożenia |
 | STOP Workera | workflow `disable` (wdrożenie z `OLX_CLOUD_ENABLED=0`, potwierdzone `/status`) | ~1–2 min |
 | Wycofanie kodu | revert PR (Vercel); Worker zostaje OFF | wdrożenie |
-| Wycofanie migracji | najpierw STOP, potem `scripts/olx-cloud-scheduled.rollback.sql` (usuwa 2 funkcje i tabelę przełącznika; zadania i historia zostają) | ręcznie |
+| Wycofanie migracji | najpierw STOP, potem po kolei `scripts/olx-claim-coordination.rollback.sql`, `scripts/olx-slot-schedule.rollback.sql`, `scripts/olx-cloud-scheduled.rollback.sql` (zadania i historia zostają; po wszystkich trzech funkcje są jak przed PR #16 — sprawdza to test) | ręcznie |
 | Usunięcie Workera | Cloudflare → Workers → `flip-manager-olx-cloud-scheduled` → Delete (po STOP) | ręcznie |
 
 Trwające zadanie (najwyżej 1, ≤ ~4 min) po STOP kończy się normalnie. Portale Findera, Radar i ręczne skany nie są

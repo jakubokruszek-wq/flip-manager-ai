@@ -279,6 +279,9 @@ test("Finder reports the OLX decision in readable Polish", () => {
   assert.equal(budget.schedule?.startTime, "08:00");
   assert.equal(skipped.budget?.totalJobs, 1);
   assert.equal(parseDecision(FLIP, { decision: "skipped", reason: "SOMETHING_NEW" }, 1).reason, "OLX_SCHEDULE_CHECK_FAILED", "an unknown reason is not trusted");
+  const stopped = parseDecision(FLIP, { decision: "skipped", reason: "AUTOMATION_DISABLED", next_allowed_at: "2026-10-14T06:00:00+00:00" }, 1);
+  assert.equal(stopped.reason, "AUTOMATION_DISABLED", "STOP is a known, readable reason (migration 20261016120000)");
+  assert.match(olxScheduleNote(stopped), /^olx: OLX_SKIPPED_AUTOMATION_DISABLED: automat OLX wyłączony \(STOP\)/);
 });
 
 test("orphaned automatic jobs are expired first on every tick; an expiry failure never stops OLX or the portals", async () => {
@@ -291,11 +294,11 @@ test("orphaned automatic jobs are expired first on every tick; an expiry failure
     const result = await runFinderScanScheduler(now, {
       listFilters: async () => [filter(FLIP)],
       ...store.deps(now),
-      expireOlx: async () => { order.push("expire"); return { unclaimedExpired: 1, leaseExpired: 0 }; },
+      expireOlx: async () => { order.push("expire"); return { stopped: 1, unclaimedExpired: 1, leaseExpired: 0 }; },
       scheduleOlx: async (candidate: SearchFilter) => { order.push("schedule"); return parseDecision(candidate.id, { decision: "skipped", reason: "OLX_INTERVAL_NOT_ELAPSED" }, 1); },
     } as never);
     assert.deepEqual(order, ["expire", "schedule"]);
-    assert.deepEqual(result.olx.expired, { unclaimedExpired: 1, leaseExpired: 0 });
+    assert.deepEqual(result.olx.expired, { stopped: 1, unclaimedExpired: 1, leaseExpired: 0 });
     assert.ok(warn.mock.calls.some((call) => call.arguments[0] === "FINDER_OLX_SCHEDULED_JOBS_EXPIRED"));
     const failing = await runFinderScanScheduler(now, {
       listFilters: async () => [filter(FLIP)],

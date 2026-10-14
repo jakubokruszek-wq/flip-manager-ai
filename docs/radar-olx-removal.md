@@ -16,6 +16,15 @@ OLX zostaje wyłącznie w Flip Finderze. Pozostałe źródła Radaru działają 
 | Istniejące zadania OLX Radaru | `queued` i `running` → `failed` z kodem `RADAR_OLX_REMOVED` i audytem (`retiredFromStatus`, poprzedni kod). Bez uruchamiania; nic nie jest usuwane. |
 | Oferty OLX w `price_radar_listings` | Zostają (historia). `getRadarResults` pomija `source = 'olx'`, więc nie ma ich w bieżących ofertach, próbkach A/B ani średnich. |
 
+## Przypadek z Production: przebieg `13ac1f61…` i zadanie `09b4e9b6…`
+
+Przebieg ma wygasły lease, a zadanie OLX czeka w kolejce. Test `features/price-radar/server/radar-legacy-olx-run.e2e.test.ts` uruchamia prawdziwy `collect.ts` na prawdziwych migracjach, z tymi samymi identyfikatorami:
+- migracja wycofuje zadanie z audytem, bez uruchamiania;
+- przebieg kończy się bez OLX (`partial`, etap OLX `RADAR_OLX_REMOVED`), zarówno przez automatyczną kontynuację, jak i przez wznowienie operatora;
+- żaden claim nie wyda zadania.
+
+Do czasu migracji lokalny worker mógłby je odebrać, więc na czas wdrożenia trzeba go wyłączyć. Szczegóły: [`olx-claim-coordination.md`](olx-claim-coordination.md) §4–5.
+
 ## Kontrola po wdrożeniu (tylko odczyt)
 
 `scripts/olx-cloud-scheduled.check.sql`, krok 9:
