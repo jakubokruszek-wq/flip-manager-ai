@@ -189,8 +189,11 @@ export async function runFinderOlxSchedulerPhase(
   return phase;
 }
 
-/** Text added to a portals' run of a filter with OLX, so a skipped OLX is visible in Finder. */
-export function olxScheduleNote(decision: FinderOlxScheduleDecision | undefined): string {
+/**
+ * Readable text of the separate OLX schedule's decision (scheduler diagnostics).
+ * Since 14.10.2026 it is never added to a portals' run: OLX is not a Finder stage.
+ */
+export function olxScheduleNote(decision: Pick<FinderOlxScheduleDecision, "decision" | "reason" | "runId" | "nextAllowedAt"> | undefined): string {
   if (!decision) return "olx: OLX_SEPARATE_SCHEDULE: OLX ma osobny harmonogram; w tym cyklu nie sprawdzono kolejki OLX.";
   if (decision.decision === "enqueued") return `olx: OLX_SCHEDULED: zlecono automatyczny skan OLX (przebieg ${decision.runId}).`;
   const reason = decision.reason ? FINDER_OLX_SCHEDULE_REASON_LABELS[decision.reason] : "brak powodu";

@@ -72,9 +72,10 @@ function portalStore(ids: string[]) {
         starts.push({ id: candidate.id, at: now.getTime() });
         return { runId: `run-${candidate.id}-${now.getTime()}`, status: "running" as const, background: true, scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
       },
-      runScan: async (_candidate: unknown, start: { runId: string }, context?: { olxNote: string | null }) => {
-        if (context?.olxNote) notes.push(context.olxNote);
-        return summary(start.runId, context?.olxNote ? [context.olxNote] : []);
+      // 14.10.2026: the portals' run gets no OLX context at all; OLX is not a stage of it.
+      runScan: async (_candidate: unknown, start: { runId: string }, ...extra: unknown[]) => {
+        assert.deepEqual(extra, [], "runScan receives no OLX context");
+        return summary(start.runId);
       },
     }),
   };
@@ -96,11 +97,13 @@ test("72 h of 5-minute ticks: portals every 300 min, OLX every 1440 min, OLX com
     for (let at = START; at < START + 72 * 60 * 60_000; at += TICK_MS) {
       const now = new Date(at);
       const flip = filter(FLIP, { lastScannedAt: store.last.get(FLIP) });
-      await runFinderScanScheduler(now, {
+      const result = await runFinderScanScheduler(now, {
         listFilters: async () => [flip],
         ...store.deps(now),
         scheduleOlx: (candidate: SearchFilter) => scheduleFinderOlxJob(rpcClient(db, calls), candidate),
       } as never);
+      // The OLX decision is reported by the scheduler (summary.olx), never inside the portals' run.
+      store.notes.push(...result.olx.decisions.map((decision) => olxScheduleNote(decision)));
       ticks += 1;
       // The OLX worker finishes each job 12 h after it was ordered (13.10: 07:30 -> 20:06).
       await db.exec(`update public.olx_scan_jobs set status = 'completed', finished_at = now() where status = 'queued' and created_at <= now() - interval '12 hours';
@@ -193,7 +196,8 @@ test("an OLX failure never stops the portals: RPC error, missing function, timeo
       assert.equal(result.status, "completed");
       assert.equal(result.olx.enqueued, 0);
       assert.equal(result.olx.decisions[0].reason, reason);
-      assert.ok(store.notes[0].startsWith(`olx: OLX_SKIPPED_${reason}:`), store.notes[0]);
+      assert.ok(olxScheduleNote(result.olx.decisions[0]).startsWith(`olx: OLX_SKIPPED_${reason}:`));
+      assert.deepEqual(store.notes, [], "the portals' run carries no OLX warning");
     }
     // The column is not readable yet (migration not applied): no database call at all.
     let rpcCalls = 0;

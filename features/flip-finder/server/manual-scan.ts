@@ -4,7 +4,7 @@ import { evaluateListingAgainstFilter } from "@/features/flip-finder/filter-eval
 import { addMatchDiagnostic, createMatchDiagnostic, emptyMatchDiagnosticSummary, mergeMatchDiagnosticSummaries, type MatchDiagnosticSummary } from "@/features/flip-finder/match-diagnostics";
 import { addScanItemCounts, type ScanItemCounts } from "@/features/flip-finder/scan-counters";
 import { activeSources, type SourceFetchResult, type SourceListing, type SearchSource } from "@/features/flip-finder/server/search-source-registry";
-import { enqueueOlxJob, existingOlxScanResult, resumableOlxRunId } from "@/features/flip-finder/server/olx-jobs";
+import { finderPortalSources, OLX_ONLY_FILTER_MESSAGE } from "@/features/flip-finder/server/finder-portal-sources";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { invalidSalePriceWarning, validSaleListings } from "@/features/flip-finder/sale-price";
 import { reuseExistingListingAttributes } from "@/features/flip-finder/server/listing-attribute-reuse";
@@ -34,14 +34,6 @@ export type ManualScanOptions = {
   filter?: LoadedFilter;
   /** Reuse the scheduler's already-created service client. */
   supabase?: SupabaseClient;
-  /**
-   * "queue" (default: operator "Scan now"): OLX is queued with the run as
-   * before. "separate-schedule" (automatic scheduler): this run never touches
-   * the OLX queue -- automatic OLX jobs come only from the separate OLX
-   * schedule (finder-olx-schedule.ts) -- and olxNote reports its decision.
-   */
-  olxMode?: "queue" | "separate-schedule";
-  olxNote?: string | null;
 };
 export type FinderScanOrigin = "manual" | "scheduler";
 
@@ -54,7 +46,7 @@ const DATABASE_TIMEOUT_MS = 12_000;
 export const WORKER_MAX_DURATION_MS = 50_000;
 // Reserves time for everything in runManualOtodomScan besides the sequential
 // per-source fetch loop itself: getSearchFilter, lock/staleness checks,
-// enqueueOlxJob, reconciliation, final updates, and cleanup writes.
+// reconciliation, final updates, and cleanup writes.
 export const WORKER_OVERHEAD_RESERVE_MS = 15_000;
 // A meaningful lower bound when a caller supplies a shorter remaining slice.
 // The worker's deadline defers sources rather than dividing 35s among all
@@ -109,51 +101,19 @@ export async function startManualOtodomScan(filterId: string): Promise<ManualSca
  */
 export async function startFinderScanForFilter(filter: LoadedFilter, runId = crypto.randomUUID(), supabase = createAdminClient(), origin: FinderScanOrigin = "manual"): Promise<ManualScanStart> {
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
-  const sources = activeSources(filter);
+  // OLX is not a stage of a Finder run (see finderPortalSources): no OLX job is
+  // queued, read or waited for here, whoever starts the run.
+  const sources = finderPortalSources(filter);
   const sourceIds = [...sources.map((source) => source.id), ...(filter.sources.includes("facebook") ? ["facebook"] : [])];
-  if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
-  // OLX is owned by its separate local-worker queue. Do not reserve a
-  // Finder source_scans row for it; enqueueOlxJob creates the one async row.
-  const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
-  // The automatic scheduler never queues OLX with the portals' cycle: OLX has
-  // its own interval and Cloudflare budget (finder-olx-schedule.ts).
-  const queueOlx = origin !== "scheduler" && sources.some((source) => source.id === "olx");
-  let olxRunId: string | null = null;
-  // Set when the OLX queue cannot be read unambiguously. With other portals,
-  // that is an OLX-only problem: no OLX job is queued, the others still run.
-  let olxQueueProblem: string | null = null;
-  if (queueOlx) {
-    try {
-      olxRunId = await resumableOlxRunId(filter.id, supabase);
-    } catch (error) {
-      const multiple = error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS";
-      if (!lockableSourceIds.length) {
-        if (multiple) throw statusError(429, "Kolejka OLX ma niespójne, równoległe przebiegi.");
-        throw statusError(500, error instanceof Error ? error.message : "Nie udało się sprawdzić kolejki OLX.");
-      }
-      olxQueueProblem = olxQueueProblemCode(error);
-      console.warn("FINDER_OLX_QUEUE_DEGRADED", { filterId: filter.id, code: olxQueueProblem, detail: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
-    }
-  }
-  // OLX is isolated from the other portals: an OLX job still waiting in its
-  // own queue (possibly for hours) never pulls the other portals into its old
-  // run, and never blocks them. The other portals resume their own unfinished
-  // run or reserve a fresh one; an OLX-only filter keeps following its job.
-  let actualRunId = lockableSourceIds.length ? runId : olxRunId ?? runId;
+  if (!sourceIds.length) throw statusError(activeSources(filter).length ? 409 : 400, activeSources(filter).length ? OLX_ONLY_FILTER_MESSAGE : "Filtr nie zawiera aktywnego obsługiwanego źródła.");
+  const lockableSourceIds = sources.map((source) => source.id);
+  let actualRunId = runId;
   if (lockableSourceIds.length) {
     await failStaleScans(supabase, filter.id, lockableSourceIds);
     actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter, origin);
   }
-  if (queueOlx && !olxQueueProblem) {
-    if (olxRunId && olxRunId !== actualRunId) {
-      // At most one OLX job per filter in flight: no second job for the new run.
-      console.info("FINDER_OLX_JOB_STILL_QUEUED", { filterId: filter.id, olxRunId, runId: actualRunId });
-    } else if (!(await existingOlxScanResult(actualRunId, supabase))) {
-      await enqueueOlxJob(filter, actualRunId, supabase);
-    }
-  }
   console.info("FINDER_SCAN_START_REQUEST", { filterId: filter.id, runId: actualRunId, requestedBy: origin, resumed: actualRunId !== runId });
-  return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0 || queueOlx, scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
+  return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0, scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
 }
 
 /**
@@ -271,17 +231,14 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   const scanStarted = Date.now();
   const ownedScans = new Map<string, ScanClock>();
   const sourceResults: SourceScanResult[] = [];
-  let olxQueueWarning: string | null = null;
   const filter = options.filter ?? await getSearchFilter(filterId);
   if (!filter) throw statusError(404, "Nie znaleziono filtra.");
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
-  const olxSeparate = options.olxMode === "separate-schedule";
-  // Automatic runs leave OLX to its own schedule: OLX is not a source of this run.
-  const sources = activeSources(filter).filter((source) => !olxSeparate || source.id !== "olx");
-  if (olxSeparate && options.olxNote) olxQueueWarning = options.olxNote;
+  // OLX is never a source of a Finder run, manual or automatic (finderPortalSources).
+  const sources = finderPortalSources(filter);
   const facebookEnabled = filter.sources.includes("facebook");
   const sourceIds = [...sources.map((source) => source.id), ...(facebookEnabled ? ["facebook"] : [])];
-  if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
+  if (!sourceIds.length) throw statusError(activeSources(filter).length ? 409 : 400, activeSources(filter).length ? OLX_ONLY_FILTER_MESSAGE : "Filtr nie zawiera aktywnego obsługiwanego źródła.");
   // Second Finder/Watcher separation bug, proven live: source_scans has no
   // per-row owner. Every source_scans row with source="facebook" is written
   // exclusively by the Watcher's own scheduler (features/facebook-worker/
@@ -297,8 +254,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   // scans are already self-healing on the Watcher's own schedule
   // (scheduler.ts's repairOrphanedCycleScans/FAIL_NEVER_CLAIMED), so Finder
   // must never lock on, or "recover", a source_scans row it did not create.
-  // OLX is dispatched exclusively to olx_scan_jobs/local worker below.
-  const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
+  const lockableSourceIds = sources.map((source) => source.id);
   // The scan/persist/reconciliation pipeline below writes through
   // reconcile_canonical_listing_decision (a service_role-only RPC, by
   // design — see the grant migration), plus source_scans/listings rows.
@@ -323,7 +279,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
 
   scanLog("SCAN START", { scanId: runId, source: "all", checked: 0, new: 0, matched: 0, durationMs: 0 });
   try {
-    const sequentialSources = sources.filter((item) => item.id !== "olx");
+    const sequentialSources = sources;
     // One source gets a useful portion; untouched reservations remain ready
     // immediately, rather than splitting 35s across every portal in a filter.
     const perSourceTimeoutMs = sourceTimeoutBudgetMs(1);
@@ -352,39 +308,6 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
       }
       sourceResults.push(await scanSource(source, filterId, filter, supabase, runId, ownedScans, prepared, perSourceTimeoutMs));
     }
-    if (sources.some((source) => source.id === "olx")) {
-      try {
-        let existing: SourceScanResult | null = null;
-        let olxRunId: string | null = null;
-        let queueReadable = true;
-        try {
-          existing = await existingOlxScanResult(runId, supabase);
-          olxRunId = existing ? null : await resumableOlxRunId(filterId, supabase);
-        } catch (queueError) {
-          // OLX-only filter: unchanged, the failure is the run's result below.
-          if (!sources.some((source) => source.id !== "olx")) throw queueError;
-          // Mixed filter: the OLX queue is unreadable or ambiguous. Queue nothing, keep the other portals' result.
-          const code = olxQueueProblemCode(queueError);
-          olxQueueWarning = `olx: ${code}: kolejka OLX nie została jednoznacznie odczytana; nie dodano zadania OLX, pozostałe portale działają.`;
-          console.warn("FINDER_OLX_QUEUE_DEGRADED", { filterId, runId, code, detail: queueError instanceof Error ? queueError.message.slice(0, 200) : "unknown" });
-          queueReadable = false;
-        }
-        if (!queueReadable) {
-          // Nothing is queued while the OLX queue state is unknown; the warning above is the OLX result.
-        } else if (existing) {
-          sourceResults.push(existing);
-        } else if (olxRunId && olxRunId !== runId) {
-          // The filter's OLX job from an earlier run is still in the OLX queue:
-          // it is not part of this run, and no second job is queued for it.
-          olxQueueWarning = `olx: OLX_PREVIOUS_JOB_IN_QUEUE: zadanie OLX z przebiegu ${olxRunId} wciąż czeka w kolejce; nie dodano drugiego.`;
-        } else {
-          await enqueueOlxJob(filter, runId, supabase);
-          sourceResults.push((await existingOlxScanResult(runId, supabase)) ?? pendingResult("olx"));
-        }
-      } catch (error) {
-        sourceResults.push(failedResult("olx", 0, "OLX_ENQUEUE_FAILED", error instanceof Error ? error.message : "Nie udało się dodać OLX do kolejki."));
-      }
-    }
     if (facebookEnabled) {
       sourceResults.push(await reconcileFacebookFromCanonicalListings(filterId, runId));
     }
@@ -402,7 +325,7 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
     const warnings = [...sourceResults.flatMap((result) => [
       ...(result.warnings ?? []).map((warning) => `${result.source}: ${warning}`),
       ...(result.errorMessage ? [`${result.source}: ${result.errorMessage}`] : []),
-    ]), ...(olxQueueWarning ? [olxQueueWarning] : [])];
+    ])];
     const matchDiagnostics = mergeMatchDiagnosticSummaries(sourceResults.map((result) => result.matchDiagnostics));
     console.info("MATCH DIAGNOSTICS SUMMARY", JSON.stringify(matchDiagnostics));
     const { error: updateError } = await supabase.from("search_filters").update({ last_scanned_at: new Date().toISOString() }).eq("id", filterId).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
@@ -454,7 +377,7 @@ export async function runFinderScanPortion(runId: string, options: {
   const filter = await (options.loadFilter ?? getSearchFilter)(rows[0].search_filter_id, { supabase, signal: AbortSignal.timeout(5_000) });
   if (!filter) throw statusError(404, "FILTER_NOT_FOUND");
   if (!filter.isActive) throw statusError(409, "FILTER_PAUSED");
-  const sources = activeSources(filter);
+  const sources = finderPortalSources(filter);
   const owned = new Map<string, ScanClock>();
   let claimed = 0;
   try {
@@ -814,11 +737,6 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
  * skips every "failed" prepared row -- defeating the entire point of
  * resuming instead of refusing.
  */
-/** Diagnostic code for an OLX queue that cannot be read unambiguously. */
-function olxQueueProblemCode(error: unknown): "OLX_MULTIPLE_RUN_IDS" | "OLX_QUEUE_READ_FAILED" {
-  return error instanceof Error && error.message === "OLX_MULTIPLE_RUN_IDS" ? "OLX_MULTIPLE_RUN_IDS" : "OLX_QUEUE_READ_FAILED";
-}
-
 async function failStaleScans(supabase: SupabaseClient, filterId: string, sourceIds: string[]): Promise<void> {
   const now = Date.now();
   const { data: candidates, error: readError } = await supabase.from("source_scans").select("id,status,started_at,filter_snapshot,error_message,continuation_next_at,continuation_lease_until,continuation_lease_token").eq("search_filter_id", filterId).in("source", sourceIds).in("status", RECOVERABLE_SCAN_STATUSES).lt("started_at", staleScanCutoff(now)).abortSignal(AbortSignal.timeout(DATABASE_TIMEOUT_MS));
@@ -969,7 +887,7 @@ async function reconcileFacebookFromCanonicalListings(filterId: string, runId: s
 }
 
 function failedResult(source: string, durationMs: number, errorCode: string, errorMessage: string): SourceScanResult { return { source, status: "failed", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs, errorCode, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
-function pendingResult(source: string, errorMessage = `${source === "olx" ? "OLX" : "Facebook"}: oczekuje na lokalny worker`, errorCode: string | null = null): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
+function pendingResult(source: string, errorMessage: string, errorCode: string | null = null): SourceScanResult { return { source, status: "pending", fetched: 0, normalized: 0, matched: 0, listingsCreated: 0, newMatches: 0, updated: 0, priceDrops: 0, rejected: 0, durationMs: 0, errorCode, errorMessage, warnings: [], matchDiagnostics: emptyMatchDiagnosticSummary() }; }
 function total(results: SourceScanResult[], key: "fetched" | "newMatches" | "matched"): number { return results.reduce((sum, result) => sum + result[key], 0); }
 function scanLog(event: "SCAN START" | "SOURCE START" | "SOURCE DONE" | "SOURCE ERROR" | "SCAN FINALIZE", data: { scanId: string; source: string; checked: number; new: number; matched: number; durationMs: number }): void { if (process.env.NODE_ENV === "development") console.info(event, data); }
 

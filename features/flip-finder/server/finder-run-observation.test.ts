@@ -34,7 +34,15 @@ function readOnlyDb() {
         select(columns: string) { calls.push({ table, op: "select", args: [columns] }); return builder; },
         eq(column: string, value: unknown) { selected = selected.filter((row) => row[column] === value); return builder; },
         neq(column: string, value: unknown) { selected = selected.filter((row) => row[column] !== value); return builder; },
-        not(column: string, op: string, value: unknown) { assert.equal(op, "is"); assert.equal(value, null); selected = selected.filter((row) => row[column] != null); return builder; },
+        not(column: string, op: string, value: unknown) {
+          if (op === "in") {
+            assert.equal(typeof value, "string");
+            const excluded = String(value).replace(/^\(|\)$/g, "").split(",");
+            selected = selected.filter((row) => !excluded.includes(String(row[column])));
+            return builder;
+          }
+          assert.equal(op, "is"); assert.equal(value, null); selected = selected.filter((row) => row[column] != null); return builder;
+        },
         order(column: string, options: { ascending: boolean }) { orders.push({ column, ...options }); return builder; },
         limit(value: number) { count = value; calls.push({ table, op: "limit", args: [value] }); return builder; },
         abortSignal() { return builder; },
@@ -71,6 +79,17 @@ test("discovery selects Finder's latest run for this filter, skips newer Watcher
   assert.deepEqual(await getLatestFinderRun(filterId), { runId });
   assert.deepEqual(calls.filter((call) => call.op === "select").map((call) => call.args), [["scan_run_id"]]);
   assert.deepEqual(calls.filter((call) => call.op === "limit").map((call) => call.args), [[1]]);
+});
+
+test("discovery never takes the separate OLX schedule's newer run for the latest portals' run (production case 14.10.2026)", async () => {
+  const scheduledOlxRunId = "02e88883-970c-4a87-a646-90c540deb568";
+  seed([
+    source("portal", "completed"),
+    source("olx-scheduled", "failed", { source: "olx", scan_run_id: scheduledOlxRunId, started_at: "2026-10-14T18:49:00Z", error_message: "OLX_WORKER_CLAIM_TIMEOUT" }),
+  ]);
+  assert.deepEqual(await getLatestFinderRun(filterId), { runId }, "the portals' run, not the OLX one");
+  seed([source("olx-only", "running", { source: "olx", scan_run_id: scheduledOlxRunId })]);
+  assert.deepEqual(await getLatestFinderRun(filterId), { runId: null }, "an OLX-only history is no Finder run");
 });
 
 test("real observation GET groups completed and pending sources by run ID, waits for continuation and does zero writes", async () => {

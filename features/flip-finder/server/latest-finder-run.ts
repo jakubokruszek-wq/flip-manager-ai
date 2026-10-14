@@ -2,7 +2,10 @@ import "server-only";
 
 import { createFacebookWatcherAdminClient } from "@/features/facebook-watcher/supabase-admin";
 
-/** Finder never reserves Facebook source rows; those belong to Watcher.
+/** Finder never reserves Facebook source rows; those belong to Watcher. Nor
+ * OLX rows: OLX is not a stage of a Finder run, and the separate OLX schedule
+ * (Cloudflare) creates its own source_scans row under its own scan_run_id,
+ * which must never be taken for the latest portals' scan.
  * Discover only the latest run ID, without listings, filter snapshots or jobs.
  * The progress reader separately groups ALL source rows of that exact run.
  */
@@ -12,7 +15,7 @@ export async function getLatestFinderRun(filterId: string): Promise<{ runId: str
   const { data, error } = await supabase.from("source_scans")
     .select("scan_run_id")
     .eq("search_filter_id", filterId)
-    .neq("source", "facebook")
+    .not("source", "in", "(facebook,olx)")
     .not("scan_run_id", "is", null)
     .order("started_at", { ascending: false })
     .order("id", { ascending: false })
