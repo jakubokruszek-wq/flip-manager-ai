@@ -74,7 +74,11 @@ test("filter dashboard labels its canonical visible result count separately from
 
 test("Finder keeps offer results primary and hides filter configuration until requested", () => {
   assert.match(page, /Ustawienia filtra/);
-  assert.match(page, /<details className="relative">[\s\S]*FilterActions filter=\{activeFilter\}/);
+  // A centred dialog since 14.10.2026 (the old dropdown ran off a phone's left edge), closed until requested.
+  assert.match(page, /const \[filterSettingsOpen, setFilterSettingsOpen\] = useState\(false\)/);
+  assert.match(page, /<FilterSettingsDialog filter=\{activeFilter\}[^>]*open=\{filterSettingsOpen\}/);
+  assert.match(page, /function FilterSettingsDialog[\s\S]*<FilterActions filter=\{filter\}/);
+  assert.doesNotMatch(page, /absolute right-0 z-30 mt-2 w-\[min\(92vw,34rem\)\]/);
   assert.match(inlineResults, /Źródła i historia skanów/);
   assert.match(inlineResults, /Strefa niebezpieczna · usuwanie danych/);
   assert.match(inlineResults, /function QuickInvestmentPreview/);

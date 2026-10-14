@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ChevronDown, MoreHorizontal } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, Coins, Copy, DoorOpen, MapPin, Pause, Pencil, Play, Radio, Ruler, SlidersHorizontal, Trash2, XIcon } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
 
 import {
@@ -25,7 +25,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MetricCard } from "@/components/ui/metric-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InlineFilterResults } from "@/features/flip-finder/components/inline-filter-results";
 import { ScanProgressPanel, VisionCostPanel } from "@/features/flip-finder/components/scan-progress-panel";
 import { hasActiveBackendWork, hasQueuedOrRunningFacebookWork, isAwaitingContinuation, type ScanProgressResponse } from "@/features/flip-finder/scan-progress";
@@ -126,6 +126,7 @@ export function FlipFinderPage() {
   const [collectorValidation, setCollectorValidation] = useState<{ requestId: string; pageBootstrap: boolean; bootstrapBackground: boolean; result: CollectorValidation | null; error: string | null } | null>(null);
   const [externalPingResult, setExternalPingResult] = useState<{ requestId: string; ok: boolean; error?: string } | null>(null);
   const [clearResultsOpen, setClearResultsOpen] = useState(false);
+  const [filterSettingsOpen, setFilterSettingsOpen] = useState(false);
   const [clearingResults, setClearingResults] = useState(false);
   const [clearResultsError, setClearResultsError] = useState<string | null>(null);
   const scanningFilterIdsRef = useRef(new Set<string>());
@@ -500,25 +501,17 @@ export function FlipFinderPage() {
               </Button>
               {scanningFilterIds.has(activeFilter.id) ? <Button className="h-11" onClick={() => void stopScan(activeFilter)} variant="destructive">Zatrzymaj skanowanie</Button> : null}
               <Button className="h-11" onClick={() => { clearingResultsRef.current = false; setClearResultsError(null); setClearResultsOpen(true); }} type="button" variant="outline">Wyczyść wyniki</Button>
-              <details className="relative">
-                <summary className="flex min-h-11 cursor-pointer list-none items-center rounded-xl border border-border px-3 text-sm font-semibold text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary">Ustawienia filtra</summary>
-                <div className="absolute right-0 z-30 mt-2 w-[min(92vw,34rem)] rounded-2xl border border-border bg-card p-4 shadow-2xl">
-                  <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground">
-                    <span>{formatFilterLocation(activeFilter)}</span>
-                    <span>Maks. cena/m²: {activeFilter.maxPricePerSqm !== null ? formatCurrency(activeFilter.maxPricePerSqm) : "Nie ustawiono"}</span>
-                    <span>Powierzchnia: {formatAreaRange(activeFilter)}</span>
-                    <span>Pokoje: {activeFilter.rooms.length ? activeFilter.rooms.join(", ") : "Nie ustawiono"}</span>
-                    <span>Aktywne źródła: {activeFilterSources(activeFilter.sources).map(sourceLabel).join(", ") || "brak"}</span>
-                  </div>
-                  <div className="mt-3 border-t border-border/70 pt-3"><FilterActions filter={activeFilter} onAction={manageFilter} /></div>
-                </div>
-              </details>
+              <Button aria-haspopup="dialog" className="h-11" onClick={() => setFilterSettingsOpen(true)} type="button" variant="outline">
+                <SlidersHorizontal aria-hidden className="text-gold" />
+                Ustawienia filtra
+              </Button>
             </div>
           </div>
           {observationError?.filterId === activeFilter.id ? <p role="alert" className="text-sm text-destructive">{observationError.message} Ostatni odczyt może być nieaktualny.</p> : null}
           {visibleScanProgress ? <ScanProgressPanel progress={visibleScanProgress} /> : null}
           <InlineFilterResults deepLinkListingId={deepLinkListingId} key={`${activeFilter.id}-${resultsRevision}`} filterId={activeFilter.id} />
           {visibleScanProgress ? <VisionCostPanel progress={visibleScanProgress} /> : null}
+          <FilterSettingsDialog filter={activeFilter} onAction={manageFilter} onOpenChange={setFilterSettingsOpen} open={filterSettingsOpen} />
           <Dialog onOpenChange={(open) => { if (!clearingResults) setClearResultsOpen(open); }} open={clearResultsOpen}>
             <DialogContent className="max-w-md">
               <DialogHeader>
@@ -1015,16 +1008,81 @@ function formatPercent(value: number, total: number): string { return `${percent
 // just run on Facebook.
 function sourceDisplayLabel(value: string): string { return value === "otodom" ? "Otodom" : value === "olx" ? "OLX" : value === "morizon" ? "Morizon" : value === "facebook" ? "Facebook — przeliczono z zapisanych ofert" : value; }
 
-function FilterActions({ filter, onAction }: { filter: SearchFilterListItem; onAction: (filter: SearchFilterListItem, action: "toggle" | "duplicate" | "delete") => Promise<void> }) {
+type FilterAction = "toggle" | "duplicate" | "delete";
+
+/**
+ * "Ustawienia filtra": a centred dialog, not a dropdown anchored to the
+ * trigger. The old absolute panel (right-0, 92vw) was aligned to a narrow
+ * button and ran off the left edge of a phone screen.
+ */
+function FilterSettingsDialog({ filter, onAction, open, onOpenChange }: { filter: SearchFilterListItem; onAction: (filter: SearchFilterListItem, action: FilterAction) => Promise<void>; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const sources = activeFilterSources(filter.sources);
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent
+        className="block max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-xl overflow-x-hidden overflow-y-auto overscroll-contain p-0 sm:max-w-xl"
+        data-testid="filter-settings-dialog"
+        showCloseButton={false}
+      >
+        <div className="sticky top-0 z-10 flex items-start gap-3 border-b border-border/80 bg-popover/95 px-5 pt-5 pb-4 backdrop-blur-xl">
+          <span aria-hidden className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border border-gold/30 bg-gold/10 text-gold">
+            <SlidersHorizontal className="size-4" />
+          </span>
+          <DialogHeader className="min-w-0 flex-1 gap-1">
+            <p className="text-[11px] font-bold tracking-[0.16em] text-gold uppercase">Ustawienia filtra</p>
+            <DialogTitle className="text-lg leading-snug font-semibold [overflow-wrap:anywhere]">{filter.name}</DialogTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <FilterStatusBadge isActive={filter.isActive} />
+              <DialogDescription className="text-xs">Kryteria wyszukiwania i zarządzanie filtrem.</DialogDescription>
+            </div>
+          </DialogHeader>
+          <DialogClose render={<Button className="-mt-1 -mr-2 size-11 shrink-0" size="icon-sm" variant="ghost" />}>
+            <XIcon />
+            <span className="sr-only">Zamknij</span>
+          </DialogClose>
+        </div>
+        <dl className="grid gap-3 px-5 py-5 sm:grid-cols-2">
+          <FilterSetting className="sm:col-span-2" icon={<MapPin />} label="Lokalizacja">{formatFilterLocation(filter)}</FilterSetting>
+          <FilterSetting icon={<Coins />} label="Maks. cena za m²">{filter.maxPricePerSqm !== null ? formatCurrency(filter.maxPricePerSqm) : "Nie ustawiono"}</FilterSetting>
+          <FilterSetting icon={<Ruler />} label="Powierzchnia">{formatAreaRange(filter)}</FilterSetting>
+          <FilterSetting icon={<DoorOpen />} label="Liczba pokoi">{filter.rooms.length ? filter.rooms.join(", ") : "Nie ustawiono"}</FilterSetting>
+          <FilterSetting className="sm:col-span-2" icon={<Radio />} label="Aktywne źródła ogłoszeń">
+            {sources.length ? (
+              <ul aria-label="Aktywne źródła ogłoszeń" className="mt-1 flex flex-wrap gap-1.5">
+                {sources.map((source) => <li className="max-w-full rounded-full border border-gold/25 bg-gold/[0.08] px-2.5 py-1 text-xs font-medium text-foreground [overflow-wrap:anywhere]" key={source}>{sourceLabel(source)}</li>)}
+              </ul>
+            ) : "brak"}
+          </FilterSetting>
+        </dl>
+        <div className="border-t border-border/80 bg-surface/70 px-5 py-4">
+          <FilterActions filter={filter} onAction={onAction} onDeleted={() => onOpenChange(false)} />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function FilterSetting({ icon, label, className = "", children }: { icon: ReactNode; label: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={`min-w-0 rounded-xl border border-border/70 bg-surface-elevated/60 p-3.5 ${className}`}>
+      <dt className="flex items-center gap-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-gold">{icon}{label}</dt>
+      <dd className="mt-1.5 text-sm font-medium text-foreground [overflow-wrap:anywhere]">{children}</dd>
+    </div>
+  );
+}
+
+/** All four actions stay directly visible, also on phones (no "more" menu). */
+function FilterActions({ filter, onAction, onDeleted }: { filter: SearchFilterListItem; onAction: (filter: SearchFilterListItem, action: FilterAction) => Promise<void>; onDeleted?: () => void }) {
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const run = async (action: "toggle" | "duplicate" | "delete") => {
+  const run = async (action: FilterAction) => {
     setBusy(true);
     setActionError(null);
     try {
       await onAction(filter, action);
       setConfirmationOpen(false);
+      if (action === "delete") onDeleted?.();
     } catch (reason) {
       setActionError(reason instanceof Error ? reason.message : "Nie udało się wykonać operacji.");
     } finally {
@@ -1032,29 +1090,16 @@ function FilterActions({ filter, onAction }: { filter: SearchFilterListItem; onA
     }
   };
   const editHref = `/flip-finder/filters/${filter.id}/edit?returnTo=%2Fflip-finder&activeFilter=${filter.id}`;
-  const actionButtons = (
-    <>
-      <Button nativeButton={false} render={<Link href={editHref} />} size="sm" variant="outline">Edytuj filtr</Button>
-      <Button disabled={busy} onClick={() => void run("toggle")} size="sm" variant="outline">{filter.isActive ? "Wstrzymaj" : "Wznów"}</Button>
-      <Button disabled={busy} onClick={() => void run("duplicate")} size="sm" variant="outline">Duplikuj</Button>
-    </>
-  );
 
   return (
-    <div className="flex items-center gap-2">
-      <div className="hidden items-center gap-2 md:flex">
-        {actionButtons}
-        <Button onClick={() => setConfirmationOpen(true)} size="sm" variant="destructive">Usuń</Button>
+    <div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Button className="h-11 w-full" nativeButton={false} render={<Link href={editHref} />} variant="outline"><Pencil aria-hidden />Edytuj filtr</Button>
+        <Button className="h-11 w-full" disabled={busy} onClick={() => void run("toggle")} variant="outline">{filter.isActive ? <Pause aria-hidden /> : <Play aria-hidden />}{filter.isActive ? "Wstrzymaj" : "Wznów"}</Button>
+        <Button className="h-11 w-full" disabled={busy} onClick={() => void run("duplicate")} variant="outline"><Copy aria-hidden />Duplikuj</Button>
+        <Button className="h-11 w-full" disabled={busy} onClick={() => { setActionError(null); setConfirmationOpen(true); }} variant="destructive"><Trash2 aria-hidden />Usuń</Button>
       </div>
-      <details className="relative md:hidden">
-        <summary className="flex size-10 cursor-pointer list-none items-center justify-center rounded-xl border border-border/80 bg-surface-elevated text-muted-foreground transition-colors hover:text-foreground"><MoreHorizontal className="size-4" /><span className="sr-only">Więcej akcji filtra</span></summary>
-        <div className="absolute right-0 z-20 mt-2 flex w-44 flex-col gap-1 rounded-xl border border-border/80 bg-popover p-2 shadow-xl">
-          <Link className="rounded-lg px-3 py-2 text-sm hover:bg-surface-hover" href={editHref}>Edytuj filtr</Link>
-          <button className="rounded-lg px-3 py-2 text-left text-sm hover:bg-surface-hover" disabled={busy} onClick={() => void run("toggle")}>{filter.isActive ? "Wstrzymaj" : "Wznów"}</button>
-          <button className="rounded-lg px-3 py-2 text-left text-sm hover:bg-surface-hover" disabled={busy} onClick={() => void run("duplicate")}>Duplikuj</button>
-          <button className="rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" onClick={() => setConfirmationOpen(true)}>Usuń</button>
-        </div>
-      </details>
+      {actionError && !confirmationOpen ? <p className="mt-3 text-sm text-destructive [overflow-wrap:anywhere]" role="alert">{actionError}</p> : null}
       <Dialog open={confirmationOpen} onOpenChange={setConfirmationOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Usunąć filtr?</DialogTitle><DialogDescription>Tej operacji nie można cofnąć.</DialogDescription></DialogHeader>
