@@ -9,12 +9,15 @@
 -- are not changed. This is the trigger frequency only: each filter's own
 -- cadence stays search_filters.finder_scan_interval_minutes (Flip: 300).
 --
+-- Before: scripts/finder-cron-every-5-minutes.check.sql (read-only).
 -- Rollback: scripts/finder-cron-every-5-minutes.rollback.sql
 BEGIN;
 
-DO $preflight$
+DO $change$
 DECLARE
   job_name text;
+  before_fingerprint text;
+  after_fingerprint text;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
     RAISE EXCEPTION 'pg_cron is not available; nothing changed';
@@ -23,23 +26,38 @@ BEGIN
     IF (SELECT count(*) FROM cron.job WHERE jobname = job_name) <> 1 THEN
       RAISE EXCEPTION 'Expected exactly one cron job named %; nothing changed', job_name;
     END IF;
+    -- Only the known states: every minute (today) or already every 5 minutes (re-run).
+    IF (SELECT schedule FROM cron.job WHERE jobname = job_name) NOT IN ('* * * * *', '*/5 * * * *') THEN
+      RAISE EXCEPTION 'Cron job % has an unexpected schedule; nothing changed', job_name;
+    END IF;
   END LOOP;
-END;
-$preflight$;
 
-SELECT cron.alter_job(jobid, schedule := '*/5 * * * *')
-  FROM cron.job
- WHERE jobname IN ('finder-scan-scheduler', 'finder-scan-continuation');
+  -- Fingerprint of everything except the schedule, for ALL cron jobs: the
+  -- commands are compared by md5 only, so no URL or secret is ever printed.
+  SELECT string_agg(jobid || ':' || jobname || ':' || md5(command) || ':' || active
+                    || ':' || CASE WHEN jobname IN ('finder-scan-scheduler', 'finder-scan-continuation') THEN '' ELSE schedule END,
+                    ',' ORDER BY jobid)
+    INTO before_fingerprint FROM cron.job;
 
-DO $verify$
-BEGIN
+  PERFORM cron.alter_job(jobid, schedule := '*/5 * * * *')
+     FROM cron.job
+    WHERE jobname IN ('finder-scan-scheduler', 'finder-scan-continuation');
+
+  SELECT string_agg(jobid || ':' || jobname || ':' || md5(command) || ':' || active
+                    || ':' || CASE WHEN jobname IN ('finder-scan-scheduler', 'finder-scan-continuation') THEN '' ELSE schedule END,
+                    ',' ORDER BY jobid)
+    INTO after_fingerprint FROM cron.job;
+
+  IF after_fingerprint IS DISTINCT FROM before_fingerprint THEN
+    RAISE EXCEPTION 'A cron command, status or another job changed; rolled back';
+  END IF;
   IF (SELECT count(*) FROM cron.job
        WHERE jobname IN ('finder-scan-scheduler', 'finder-scan-continuation')
          AND schedule = '*/5 * * * *' AND active) <> 2 THEN
     RAISE EXCEPTION 'Finder cron jobs are not both active every 5 minutes; rolled back';
   END IF;
 END;
-$verify$;
+$change$;
 
 COMMIT;
 

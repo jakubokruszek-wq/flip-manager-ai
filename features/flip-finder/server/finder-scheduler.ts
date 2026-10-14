@@ -9,6 +9,7 @@ import {
   type ManualScanStart,
   type ScanSummary,
 } from "@/features/flip-finder/server/manual-scan";
+import { olxScheduleNote, runFinderOlxSchedulerPhase, scheduleFinderOlxJob, type FinderOlxScheduleDecision } from "@/features/flip-finder/server/finder-olx-schedule";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient as DatabaseClient } from "@supabase/supabase-js";
 import { FINDER_SCHEDULER_DEFAULT_INTERVAL_MINUTES, finderScanIntervalMinutes, isFinderScanDue } from "@/features/flip-finder/finder-schedule";
@@ -42,6 +43,8 @@ export type FinderSchedulerSummary = {
   partial: number;
   errors: string[];
   runs: Array<{ filterId: string; runId: string; status: ScanSummary["status"] }>;
+  /** Separate automatic OLX schedule of this tick (finder-olx-schedule.ts). */
+  olx: { enqueued: number; decisions: Array<Pick<FinderOlxScheduleDecision, "filterId" | "decision" | "reason" | "runId" | "nextAllowedAt">> };
 };
 
 export type FinderSchedulerDependencies = {
@@ -60,12 +63,19 @@ export type FinderSchedulerDependencies = {
    */
   revertClaim: (filter: SearchFilter, claimedAt: Date) => Promise<void>;
   startScan: (filter: SearchFilter) => Promise<ManualScanStart>;
-  runScan: (filter: SearchFilter, start: ManualScanStart) => Promise<ScanSummary>;
+  /** olxNote: how the separate OLX schedule decided this tick, reported in the portals' run. */
+  runScan: (filter: SearchFilter, start: ManualScanStart, context?: { olxNote: string | null }) => Promise<ScanSummary>;
+  /** Asks enqueue_scheduled_finder_olx_job for one filter; never part of the portals' cycle. */
+  scheduleOlx: (filter: SearchFilter) => Promise<FinderOlxScheduleDecision>;
 };
 
-/** A filter with only unavailable source IDs is never handed to a worker. */
+/**
+ * A filter with only unavailable source IDs is never handed to a worker.
+ * OLX is not part of the portals' cycle (it has its own schedule), so an
+ * OLX-only filter never starts a portals' run either.
+ */
 export function finderFilterCanRun(filter: SearchFilter): boolean {
-  return activeSources(filter).length > 0 || filter.sources.includes("facebook");
+  return activeSources(filter).some((source) => !FINDER_SCHEDULER_INDEPENDENT_SOURCES.has(source.id)) || filter.sources.includes("facebook");
 }
 
 export function dueFinderFilters(filters: readonly SearchFilter[], now: Date | number): SearchFilter[] {
@@ -82,6 +92,12 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
   const filters = await dependencies.listFilters();
   const due = dueFinderFilters(filters, now);
   console.info("FINDER_SCHEDULER_CYCLE_START", { at: now.toISOString(), checked: filters.length, due: due.map((filter) => filter.id) });
+  // OLX first and bounded (5 s database timeout, never throws): its own
+  // interval and the shared Cloudflare budget decide, not this 5-minute tick
+  // or the portals' 300-minute cadence. Whatever happens here, the portals
+  // below run exactly as before.
+  const olxPhase = await runFinderOlxSchedulerPhase(filters, dependencies.scheduleOlx);
+  const olxDecisions = new Map(olxPhase.decisions.map((decision) => [decision.filterId, decision]));
   const summary: FinderSchedulerSummary = {
     status: "completed",
     checked: filters.length,
@@ -93,6 +109,10 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
     partial: 0,
     errors: [],
     runs: [],
+    olx: {
+      enqueued: olxPhase.enqueued,
+      decisions: olxPhase.decisions.map(({ filterId, decision, reason, runId, nextAllowedAt }) => ({ filterId, decision, reason, runId, nextAllowedAt })),
+    },
   };
 
   for (const filter of due) {
@@ -130,7 +150,8 @@ export async function runFinderScanScheduler(now = new Date(), overrides: Partia
         throw startError;
       }
       summary.started += 1;
-      const result = await dependencies.runScan(filter, start);
+      const hasOlx = activeSources(filter).some((source) => source.id === "olx");
+      const result = await dependencies.runScan(filter, start, { olxNote: hasOlx ? olxScheduleNote(olxDecisions.get(filter.id)) : null });
       summary.runs.push({ filterId: filter.id, runId: result.runId, status: result.status });
       if (result.status === "completed") summary.completed += 1;
       else summary.partial += 1;
@@ -169,13 +190,16 @@ function defaultDependencies(overrides: Partial<FinderSchedulerDependencies>): F
     claimFilter: (filter, now) => claimFinderFilter(supabase, filter, now),
     revertClaim: (filter, claimedAt) => revertFinderFilterClaim(supabase, filter, claimedAt),
     startScan: (filter) => startFinderScanForFilter(filter, undefined, supabase, "scheduler"),
-    runScan: (filter, start) => runManualOtodomScan(filter.id, {
+    runScan: (filter, start, context) => runManualOtodomScan(filter.id, {
       filter,
       runId: start.runId,
       supabase,
       skipLock: true,
       usePreparedRows: true,
+      olxMode: "separate-schedule",
+      olxNote: context?.olxNote ?? null,
     }),
+    scheduleOlx: (filter) => scheduleFinderOlxJob(supabase, filter),
     ...overrides,
   };
 }

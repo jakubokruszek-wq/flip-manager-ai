@@ -34,6 +34,14 @@ export type ManualScanOptions = {
   filter?: LoadedFilter;
   /** Reuse the scheduler's already-created service client. */
   supabase?: SupabaseClient;
+  /**
+   * "queue" (default: operator "Scan now"): OLX is queued with the run as
+   * before. "separate-schedule" (automatic scheduler): this run never touches
+   * the OLX queue -- automatic OLX jobs come only from the separate OLX
+   * schedule (finder-olx-schedule.ts) -- and olxNote reports its decision.
+   */
+  olxMode?: "queue" | "separate-schedule";
+  olxNote?: string | null;
 };
 export type FinderScanOrigin = "manual" | "scheduler";
 
@@ -107,11 +115,14 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
   // OLX is owned by its separate local-worker queue. Do not reserve a
   // Finder source_scans row for it; enqueueOlxJob creates the one async row.
   const lockableSourceIds = sources.filter((source) => source.id !== "olx").map((source) => source.id);
+  // The automatic scheduler never queues OLX with the portals' cycle: OLX has
+  // its own interval and Cloudflare budget (finder-olx-schedule.ts).
+  const queueOlx = origin !== "scheduler" && sources.some((source) => source.id === "olx");
   let olxRunId: string | null = null;
   // Set when the OLX queue cannot be read unambiguously. With other portals,
   // that is an OLX-only problem: no OLX job is queued, the others still run.
   let olxQueueProblem: string | null = null;
-  if (sources.some((source) => source.id === "olx")) {
+  if (queueOlx) {
     try {
       olxRunId = await resumableOlxRunId(filter.id, supabase);
     } catch (error) {
@@ -133,7 +144,7 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
     await failStaleScans(supabase, filter.id, lockableSourceIds);
     actualRunId = await reserveOrResumeSourceScans(supabase, filter.id, lockableSourceIds, actualRunId, filter, origin);
   }
-  if (sources.some((source) => source.id === "olx") && !olxQueueProblem) {
+  if (queueOlx && !olxQueueProblem) {
     if (olxRunId && olxRunId !== actualRunId) {
       // At most one OLX job per filter in flight: no second job for the new run.
       console.info("FINDER_OLX_JOB_STILL_QUEUED", { filterId: filter.id, olxRunId, runId: actualRunId });
@@ -142,7 +153,7 @@ export async function startFinderScanForFilter(filter: LoadedFilter, runId = cry
     }
   }
   console.info("FINDER_SCAN_START_REQUEST", { filterId: filter.id, runId: actualRunId, requestedBy: origin, resumed: actualRunId !== runId });
-  return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0 || sources.some((source) => source.id === "olx"), scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
+  return { runId: actualRunId, status: "running", background: lockableSourceIds.length > 0 || queueOlx, scannedCount: 0, matchedCount: 0, newCount: 0, updatedCount: 0, priceDropCount: 0 };
 }
 
 /**
@@ -264,7 +275,10 @@ export async function runManualOtodomScan(filterId: string, options: ManualScanO
   const filter = options.filter ?? await getSearchFilter(filterId);
   if (!filter) throw statusError(404, "Nie znaleziono filtra.");
   if (!filter.isActive) throw statusError(409, "Filtr jest wstrzymany.");
-  const sources = activeSources(filter);
+  const olxSeparate = options.olxMode === "separate-schedule";
+  // Automatic runs leave OLX to its own schedule: OLX is not a source of this run.
+  const sources = activeSources(filter).filter((source) => !olxSeparate || source.id !== "olx");
+  if (olxSeparate && options.olxNote) olxQueueWarning = options.olxNote;
   const facebookEnabled = filter.sources.includes("facebook");
   const sourceIds = [...sources.map((source) => source.id), ...(facebookEnabled ? ["facebook"] : [])];
   if (!sourceIds.length) throw statusError(400, "Filtr nie zawiera aktywnego obsługiwanego źródła.");
