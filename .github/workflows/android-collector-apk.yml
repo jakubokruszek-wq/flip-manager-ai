@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      FLIP_OFFLINE_TEST_ORIGIN: ${{ inputs.offline_test_origin || '' }}
+      FLIP_OFFLINE_TEST_ORIGIN: ${{ inputs.offline_test_origin || (github.event_name == 'push' && github.ref_name == 'feat/facebook-android-integration' && 'https://flip-watcher-offline-test.onrender.com') || '' }}
     defaults:
       run:
         working-directory: android/flip-collector
