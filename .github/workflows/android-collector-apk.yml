@@ -78,7 +78,7 @@ jobs:
           aapt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2"
           "$aapt" dump badging "$apk" | tee badging.txt | head -5
           if [ -n "$FLIP_OFFLINE_TEST_ORIGIN" ]; then
-            expected="pl.jakubokruszek.flipcollector.remote"
+            expected="pl.jakubokruszek.flipcollector.remote2"
           else
             expected="pl.jakubokruszek.flipcollector.integration"
           fi
