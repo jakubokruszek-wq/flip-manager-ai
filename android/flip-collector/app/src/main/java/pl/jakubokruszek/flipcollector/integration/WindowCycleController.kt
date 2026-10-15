@@ -11,13 +11,17 @@ interface WindowCursorStorage {
 enum class SourceSettlement { SETTLED, SETTLED_FAILURE, DEFERRED, RECONCILIATION_REQUIRED }
 
 /** Not scheduled by default. Only a terminal receipt may consume a source. */
-class WindowCycleController(private val storage: WindowCursorStorage, private val clock: () -> Long = System::currentTimeMillis) {
+class WindowCycleController(private val storage: WindowCursorStorage, private val clock: () -> Long = System::currentTimeMillis,
+    private val cycleStartedAt: Long? = null) {
     suspend fun runCycle(windowKey: String, mode: String, authorizedSourceIds: List<String>, windowEndsAt: Long,
         conditions: () -> CycleConditions, runSource: suspend (String) -> SourceSettlement): String = lock.withLock {
         require(mode in setOf("DEMO","LIVE","OFFLINE_TEST") && authorizedSourceIds.distinct().size == authorizedSourceIds.size)
-        val started = clock()
-        if (started >= windowEndsAt) return@withLock "WINDOW_ENDED"
-        if (windowEndsAt - started <= 35_000) return@withLock "WINDOW_ENDED"
+        val started = cycleStartedAt ?: clock()
+        val now=clock()
+        require(started<=now)
+        if (now >= windowEndsAt || windowEndsAt-now<=35_000) return@withLock "WINDOW_ENDED"
+        val remaining=minOf(started+WindowContinuation.AUTOMATIC_BUDGET_MS,windowEndsAt)-now-35_000
+        if(remaining<=0) return@withLock "CONTINUE_NEXT_CYCLE"
         val old=storage.load(windowKey,mode)
         val authorized=authorizedSourceIds.toSet()
         // Drop sources whose access was removed, append newly authorized ones;
@@ -25,7 +29,7 @@ class WindowCycleController(private val storage: WindowCursorStorage, private va
         var cursor=WindowCursor(windowKey,mode,
             ((old?.pending.orEmpty().filter { it in authorized })+authorizedSourceIds).distinct(),old?.finished.orEmpty())
         storage.save(cursor)
-        val result=withTimeoutOrNull(minOf(WindowContinuation.AUTOMATIC_BUDGET_MS,windowEndsAt-started) - 35_000) {
+        val result=withTimeoutOrNull(remaining) {
             var reason="WINDOW_COMPLETE"
             while (true) {
                 val next=WindowContinuation.next(cursor,mode,clock(),started,windowEndsAt,conditions())

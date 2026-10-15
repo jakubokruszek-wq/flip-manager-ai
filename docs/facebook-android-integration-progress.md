@@ -246,3 +246,13 @@ stanowi zgody na produkcyjną migrację, deployment lub skan Facebooka.
   between different batch IDs proving one insert and one duplicate, zero updates.
 - Local backend suite: 88 PASS (plus unchanged 243 regressions and 58 offline/core).
   Full CI for these final reliability changes is required before release evidence.
+
+### 0.6 checkpoint: include sync/recovery in the automatic deadline
+
+- Review found the source-loop budget began after sync and recovery, allowing
+  setup network time to extend the total worker cycle. The controller now receives
+  the engine's start time and deducts all setup time plus the 35-second reserve.
+- Added a JVM regression with a two-minute synchronization: only five one-minute
+  sources are allowed before continuation, not seven additional minutes.
+- Latest published backend/APK/standalone Android 16 workflows are green. New
+  deadline behavior still requires Kotlin and full E2E verification.

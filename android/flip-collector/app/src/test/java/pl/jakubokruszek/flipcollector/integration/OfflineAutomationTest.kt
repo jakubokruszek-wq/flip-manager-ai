@@ -24,8 +24,9 @@ class OfflineAutomationTest {
         val receipts=mutableMapOf<String,JSONObject>()
         var claims=0; var writes=0; var renewals=0
         var responseLoss=false; var expired=false; var offline=false
+        var beforeDeviceStatus: () -> Unit = {}
         override fun sources()=sources
-        override fun deviceStatus(): JSONObject { if(offline) throw IOException(); return JSONObject().put("paired",true).put("consumerType","ANDROID_WEBVIEW") }
+        override fun deviceStatus(): JSONObject { beforeDeviceStatus(); if(offline) throw IOException(); return JSONObject().put("paired",true).put("consumerType","ANDROID_WEBVIEW") }
         override fun claim(sourceIds: List<String>?): ClaimedJob? {
             claims++;val source=sources.first { it.remoteId in sourceIds.orEmpty() }
             return ClaimedJob(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"run","SOURCE_SCAN",
@@ -132,5 +133,13 @@ class OfflineAutomationTest {
             seen+=it.group!!.getString("id");JSONObject()
         })
         assertEquals(2,seen.size);assertEquals(2,seen.distinct().size);assertEquals(2,api.writes)
+    }
+    @Test fun synchronizationTimeCountsAgainstTheEightMinuteCycleBudget()=runBlocking {
+        val state=AutomationState(Disk());val api=Api();var now=0L;var collected=0
+        api.beforeDeviceStatus={now+=120_000}
+        assertEquals("CONTINUE_NEXT_CYCLE",OfflineAutomation(api,state,{now}).run("night",2_000_000,{conditions}) {
+            collected++;now+=60_000;JSONObject()
+        })
+        assertEquals(5,collected);assertEquals(420_000L,now)
     }
 }

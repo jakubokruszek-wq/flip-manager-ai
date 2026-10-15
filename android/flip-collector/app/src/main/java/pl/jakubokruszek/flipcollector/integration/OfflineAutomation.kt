@@ -16,6 +16,7 @@ class OfflineAutomation(
     suspend fun run(windowKey: String, windowEndsAt: Long, conditions: () -> CycleConditions,
         collect: suspend (ClaimedJob) -> JSONObject): String = lock.withLock {
         val outbox=CompletionOutbox(state)
+        val cycleStartedAt=clock()
         try {
             val deviceConditions=conditions()
             if(!deviceConditions.wifi || !deviceConditions.charging || deviceConditions.thermalSevere || deviceConditions.batteryPercent==null || deviceConditions.batteryPercent<20 || clock()>=windowEndsAt) {
@@ -51,7 +52,7 @@ class OfflineAutomation(
                     }
                 }
             }
-            val result=WindowCycleController(state,clock).runCycle(windowKey,"OFFLINE_TEST",ids,windowEndsAt,conditions) { source ->
+            val result=WindowCycleController(state,clock,cycleStartedAt).runCycle(windowKey,"OFFLINE_TEST",ids,windowEndsAt,conditions) { source ->
                 if(state.groups().none { it.remoteId==source && it.scannable }) return@runCycle SourceSettlement.DEFERRED
                 state.event("RUNNING")
                 try {
