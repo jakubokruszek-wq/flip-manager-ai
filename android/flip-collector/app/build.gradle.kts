@@ -40,10 +40,12 @@ android {
 
     buildTypes {
         debug {
-            // Installs beside a production build instead of replacing it.
-            applicationIdSuffix = ".integration"
+            // A remote OFFLINE_TEST build must also install beside any previous
+            // .integration APK: GitHub-hosted runners have fresh debug signing keys.
+            val remoteOfflineBuild = providers.gradleProperty("FLIP_OFFLINE_TEST_ORIGIN").orElse("").get().isNotEmpty()
+            applicationIdSuffix = if (remoteOfflineBuild) ".remote" else ".integration"
             versionNameSuffix = "-debug"
-            resValue("string", "app_name", "Flip Collector (offline integration)")
+            resValue("string", "app_name", if (remoteOfflineBuild) "Flip Collector (remote test)" else "Flip Collector (offline integration)")
         }
     }
 
