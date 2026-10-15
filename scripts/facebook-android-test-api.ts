@@ -2,6 +2,7 @@
  * loopback bridge. Never imports Supabase admin clients or production secrets.
  * The persistence adapter is a test schema, not the full Finder persistence. */
 import https from "node:https";
+import { remoteOfflineTestConfig } from "../features/collector/android/offline-test-config.ts";
 import fs from "node:fs";
 import { handleAndroidRequest, type AndroidAction } from "../features/collector/android/handler.ts";
 import { handleAndroidMetadata, type AndroidMetadataAction, type AndroidSourceRow } from "../features/collector/android/metadata.ts";
@@ -14,6 +15,7 @@ import { aggregateFacebookScanAccounting, type FacebookPostOutcome } from "../fe
 import { buildFacebookBatchQuality } from "../features/collector/android/quality.ts";
 
 if (process.env.GITHUB_ACTIONS !== "true" && process.env.FLIP_ISOLATED_TESTS !== "1") throw Error("ISOLATED_TESTS_ONLY");
+const remote = remoteOfflineTestConfig(process.env);
 const DEVICE="00000000-0000-4000-8000-000000000001";
 async function db(path: string, body: unknown): Promise<unknown> {
   const result=await fetch("http://127.0.0.1:55440"+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(10_000)});
@@ -26,8 +28,9 @@ const store: AndroidJobStore={
   loadCompletedBatch:async binding=>await db("/checkpoint",binding) as {status:string}|null,
 };
 async function authenticate(request: Request, pathname: string, body: string) {
+  if(remote && Date.now() >= remote.expiresAt) throw new AndroidJobError(401,"OFFLINE_TEST_EXPIRED");
   if(request.headers.get("x-flip-collector-device-id")!==DEVICE)throw new AndroidJobError(401,"INVALID_DEVICE");
-  const auth=await verifyCollectorAuth({signingKey:collectorSigningKey("isolated-ci-device-token"),method:request.method,pathname,body,headers:request.headers,
+  const auth=await verifyCollectorAuth({signingKey:remote?.signingKey ?? collectorSigningKey("isolated-ci-device-token"),method:request.method,pathname,body,headers:request.headers,
     useNonce:async nonce=>(await db("/nonce",{deviceId:DEVICE,nonce}) as {accepted:boolean}).accepted});
   if(!auth.ok)throw new AndroidJobError(401,auth.code);
   return DEVICE;
@@ -53,6 +56,7 @@ const metadata=new Set(["sources/sync","device/status","diagnostics"]);
 const server=https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_KEY!),cert:fs.readFileSync(process.env.FLIP_TEST_TLS_CERT!)},async(req,res)=>{
   try{
     const path=new URL(req.url??"/","https://localhost").pathname;
+    if(remote && path.startsWith("/__test/")) { res.writeHead(404); res.end(); return; }
     if(path==="/__test/health"){res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');return;}
     if(path==="/__test/stats"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(await db("/stats",{})));return;}
     if(path==="/__test/requeue" && req.method==="POST"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(await db("/requeue",{})));return;}
@@ -70,4 +74,4 @@ const server=https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_K
     res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());
   }catch{res.writeHead(503,{"content-type":"application/json"});res.end('{"ok":false,"code":"ISOLATED_API_FAILURE"}');}
 });
-server.listen(55441,"127.0.0.1",()=>process.stdout.write("Isolated HTTPS test API ready on loopback:55441\n"));
+server.listen(55441,remote ? "0.0.0.0" : "127.0.0.1",()=>process.stdout.write("Isolated HTTPS test API ready\n"));

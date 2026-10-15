@@ -278,3 +278,30 @@ Pełny raport, link APK/hash, ryzyka i lista kroków do LIVE:
 `docs/facebook-android-0.6-offline.md`. Wszystkie bramki produkcyjne false;
 bez LIVE, produkcyjnego Supabase, zmian OLX/Cloudflare, merge i deploymentu.
 Nowych płatnych usług nie utworzono. Oryginalny ZIP/commity bez zmian.
+
+## 0.7 checkpoint — full application schema and remote test preparation
+
+Local base: `2d098b0a0dfe9535fd9babdb3ea3e568ca64d394`;
+remote base: `99ae4a54433c2ae1aa3e43f6923804e824672dea`.
+Read-only catalog export: 51 public application tables, 49 functions, 400
+constraints, 82 independent indexes, 24 triggers, 23 policies, table/function
+grants. No row data, production credentials, cron schedules or sessions copied.
+Snapshot: `scripts/fixtures/facebook-public-schema.sql`, SHA-256
+`091e893cb3b3fcec17b77cfe4bf25970c2d67b5b224e4763900fe70a6ca19db2`.
+Managed auth/storage are not cloned: CI supplies only auth.uid/jwt/users
+interfaces referenced by application DDL. Full-schema import CI is new and
+not yet executed at this checkpoint; previous 16 PG tests use minimal tables.
+
+Fixed direct Vision extraction bypass in request-local Android data-only mode.
+Fenced legacy cross-source mutation of portal listings during Android import
+(`ANDROID_CROSS_SOURCE_RECONCILIATION_REQUIRED`), without editing OLX paths.
+Prepared remote OFFLINE_TEST profile: compiled approved HTTPS origin, separate
+provisioned device secret in Keystore-encrypted storage, seven-day maximum
+expiration, redirects disabled and signed HMAC requests. Default APK has no
+remote origin. CI fixture controls and fixed CI key are forbidden remotely.
+No remote environment has been deployed or provisioned.
+
+Local checks: Node 395/395 (90 backend, 243 regression, 62 offline/core),
+including six new checks. Full tsc/lint/build/PG/JVM/emulator await isolated CI;
+local dependency downloads blocked by unavailable configured proxy.
+Production flags remain false. Original ZIP/history preserved.

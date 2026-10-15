@@ -56,10 +56,12 @@ class SignedCollectorClient(
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val metadataEnabled: Boolean = false,
     private val dataMode: String = "LIVE",
+    private val offlineTestProfile: OfflineTestProfile? = null,
 ) : AndroidQueueClient {
     init {
         require(dataMode in setOf("LIVE", "OFFLINE_TEST"))
-        require(dataMode != "OFFLINE_TEST" || URI(credentials.baseUrl).host in setOf("localhost", "127.0.0.1", "10.0.2.2")) { "Offline imports require loopback fixture API" }
+        require(dataMode != "OFFLINE_TEST" || URI(credentials.baseUrl).host in setOf("localhost", "127.0.0.1", "10.0.2.2") ||
+            (offlineTestProfile != null && offlineTestProfile.credentials == credentials && offlineTestProfile.expiresAt > nowMillis())) { "Offline imports require an approved test profile" }
     }
 
     private val transport = client.newBuilder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
@@ -143,6 +145,7 @@ class SignedCollectorClient(
     }
 
     private fun post(pathname: String, body: String): JSONObject {
+        require(offlineTestProfile == null || offlineTestProfile.expiresAt > nowMillis()) { "REMOTE_TEST_EXPIRED" }
         if (pathname.startsWith("/api/collector/android/jobs/") && dataMode != "OFFLINE_TEST") gate.check()
         else if (pathname.startsWith("/api/collector/android/jobs/")) check(metadataEnabled) { "Offline fixture integration disabled" }
         else check(metadataEnabled) { "Android backend integration is disabled" }

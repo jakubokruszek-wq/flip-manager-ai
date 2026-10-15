@@ -1,4 +1,5 @@
 import "server-only";
+import { androidDataOnlyImportActive } from "../collector/android/import-policy";
 
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
@@ -144,6 +145,11 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   const externalId = context?.postId ?? extracted.originalUrl?.match(/(?:posts|videos)\/(\d+)/)?.[1] ?? hash.slice(0, 32);
   const supabase = createFacebookWatcherAdminClient();
   const existing = await findExisting(supabase, extracted, sourceUrl, externalId, hash, context?.activeListingsCache);
+  // The legacy cross-source branch changes images, status and lifecycle on the
+  // matched portal listing. Android's data-only import must never mutate OLX
+  // (or another source). Keep the identity, but fence this ambiguous write.
+  if (androidDataOnlyImportActive() && existing && existing.source !== "facebook")
+    throw new Error("ANDROID_CROSS_SOURCE_RECONCILIATION_REQUIRED");
   const now = context?.checkedAt ?? new Date().toISOString();
   if (context) return importAutomatedFacebook({ supabase, normalized, extracted, context, sourceUrl, externalId, existing, now, buildingType: apartmentSafety?.buildingType ?? null, buildingEvidence });
   let listingId = existing?.id;

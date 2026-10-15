@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,7 +15,15 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = providers.gradleProperty("FLIP_COLLECTOR_VERSION_CODE").orElse("16").get().toInt()
-        versionName = "0.6.0-offline"
+        versionName = "0.7.0-offline"
+
+        val testOrigin = providers.gradleProperty("FLIP_OFFLINE_TEST_ORIGIN").orElse("").get()
+        require(testOrigin.isEmpty() || Regex("https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?").matches(testOrigin))
+        if (testOrigin.isNotEmpty()) {
+            val testHost = URI(testOrigin).host.lowercase()
+            require(testHost != "flip-manager-ai.vercel.app" && !testHost.endsWith(".supabase.co"))
+        }
+        buildConfigField("String", "OFFLINE_TEST_API_ORIGIN", "\"$testOrigin\"")
 
         buildConfigField(
             "String",
