@@ -19,8 +19,21 @@ def validate_database(env):
     host = uri.hostname or ""
     direct = host == "db." + project + ".supabase.co" and uri.username == "postgres"
     pooled = host.endswith(".pooler.supabase.com") and uri.username == "postgres." + project
-    if uri.scheme not in ("postgres", "postgresql") or not (direct or pooled) or uri.port not in (None, 5432) or uri.path != "/postgres" or not uri.password or uri.query or uri.fragment:
-        raise ValueError("OFFLINE_TEST_DATABASE_INVALID")
+    # Safe, non-secret diagnostic codes; never log the supplied connection URI.
+    if not env.get("FLIP_TEST_DATABASE_URL", ""):
+        raise ValueError("OFFLINE_TEST_DATABASE_URL_MISSING")
+    if uri.scheme not in ("postgres", "postgresql"):
+        raise ValueError("OFFLINE_TEST_DATABASE_SCHEME_INVALID")
+    if not (direct or pooled):
+        raise ValueError("OFFLINE_TEST_DATABASE_HOST_OR_USER_INVALID")
+    if uri.port not in (None, 5432):
+        raise ValueError("OFFLINE_TEST_DATABASE_PORT_INVALID")
+    if uri.path != "/postgres":
+        raise ValueError("OFFLINE_TEST_DATABASE_NAME_INVALID")
+    if not uri.password:
+        raise ValueError("OFFLINE_TEST_DATABASE_PASSWORD_MISSING")
+    if uri.query or uri.fragment:
+        raise ValueError("OFFLINE_TEST_DATABASE_EXTRA_PARAMETERS")
     return {"host": host, "port": 5432, "dbname": "postgres", "user": unquote(uri.username), "password": unquote(uri.password),
             "sslmode": "verify-full", "sslrootcert": "/etc/ssl/certs/ca-certificates.crt", "connect_timeout": 10,
             "autocommit": True, "options": "-c statement_timeout=10000 -c lock_timeout=5000"}
