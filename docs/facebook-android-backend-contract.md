@@ -234,7 +234,7 @@ tego samego zadania dostaje konflikt. Nie generuj nowego completionId po timeout
 | 422 | `ANDROID_BATCH_INVALID`, `ANDROID_BATCH_JOB_MISMATCH` | popraw dane źródła i powiązanie z claim |
 | 503 | `ANDROID_QUEUE_UNAVAILABLE`, `ANDROID_REQUEST_FAILED`, `ANDROID_RECEIPT_INVALID`, `ANDROID_PROCESSING_RESULT_INVALID` | backoff i ponowienie tego samego body z nowym podpisem |
 
-Importu ofert **nie uruchamiamy ponownie automatycznie**. Jeżeli batch ma już trwały wynik końcowy, identyczny request może odzyskać wyłącznie finalizację zadania. Odczyt jest związany z urządzeniem, completionId/batchId, runId, źródłem i sourceScanId. Jeśli wynik nie jest kompletny lub powiązanie jest niejednoznaczne, rezerwacja pozostaje zablokowana, nawet po wygaśnięciu lease: zapisy ofert mogą być częściowo zatwierdzone. Jest to ochrona przed
+W trybie historycznym (bez opcjonalnej transakcyjnej ścieżki 0.7 opisanej poniżej) importu ofert **nie uruchamiamy ponownie automatycznie**. Jeżeli batch ma już trwały wynik końcowy, identyczny request może odzyskać wyłącznie finalizację zadania. Odczyt jest związany z urządzeniem, completionId/batchId, runId, źródłem i sourceScanId. Jeśli wynik nie jest kompletny lub powiązanie jest niejednoznaczne, rezerwacja pozostaje zablokowana, nawet po wygaśnięciu lease: zapisy ofert mogą być częściowo zatwierdzone. Jest to ochrona przed
 ponownymi skutkami ubocznymi, a nie obietnica atomowego „exactly once” całego
 importu. Operator sprawdza `android_completion_state`, `android_completion_started_at`,
 `collector_scan_batches`, skan źródła oraz zapisane oferty. Dopiero po uzgodnieniu
@@ -351,10 +351,12 @@ batch. Działa z Node 24. Testy nie łączą się z Facebookiem, Supabase ani Op
 Użyto `--test-isolation=none`, ponieważ w tym środowisku domyślna izolacja Node
 raportowała tylko pliki bez uruchamiania zagnieżdżonych testów.
 
-Testy mocków i sprawdzenie zabezpieczeń SQL nie zastępują wykonania draftu na
-odizolowanym PostgreSQL. Pełny build Next/TypeScript i taki test bazy pozostają
-niewykonane w tym środowisku: nie zainstalowano zależności, a proxy dla pobrania
-repozytorium jest niedostępne. Nie wykonano skanów, merge ani deploymentu.
+Testy mocków nie zastępują wykonania SQL. W 0.7 pełny typecheck, ESLint,
+build Next.js, izolowany PostgreSQL i natywny importer na kopii publicznego
+schematu zostały wykonane w GitHub Actions. Dowody i dokładny zakres:
+[raport 0.7](facebook-android-0.7-validation.md). Lokalnie brakuje pełnych
+zależności i PostgreSQL; nie traktujemy lokalnych mocków jako dowodu SQL.
+Nie wykonano skanów Facebooka, merge ani deploymentu.
 
 ## Rozszerzenie integracyjne: źródła, urządzenie i diagnostyka
 
@@ -448,7 +450,26 @@ JSON. A replay of the same job/post returns the original operation witness;
 a new job reports unchanged content as DUPLICATE. `writeAccounting` is emitted
 only when every persisted post has a validated transaction witness, one target
 filter is used, and there are no processing errors. Historical/legacy positive
-observations remain unverified. Ambiguous whole-batch replay is still fenced.
+observations remain unverified. Legacy ambiguous reservations remain fenced.
+
+With the atomic Finder flag enabled by the operator, the server uses
+`begin_android_facebook_finder_completion`. Only a NEW reservation receives
+`android_finder_write_version=1` in the same transaction. Existing version-0
+reservations are never upgraded; they require reconciliation. Version-1 retry
+with the exact completion/body hash may resume even after lease expiration:
+the reservation fences replacement owners and every committed post has an
+immutable receipt. `checkpoint_android_facebook_finder_batch` locks the job,
+checks the exact post receipt set, derives INSERT/UPDATE/DUPLICATE counters from
+the ledger and commits batch/source/device counters together. A terminal batch
+rejects late new post writes. The original queue finalization persists the job
+receipt; retry recovers it without another increment. A transient import or
+post-commit response failure returns 503 and retains the processing reservation;
+retry the exact outbox bytes with a fresh HMAC nonce, never regenerate the batch.
+Changed owner/body/completion remains a conflict. This internal capability cannot
+be enabled in request JSON. Both SQL drafts must first be installed on approved
+isolated staging; no production installation or flag activation was performed.
+Native CI exercises real HMAC, post-commit response loss, lease expiry, recovery,
+repeated jobs, concurrent imports, history preservation and RLS denial.
 
 Remote OFFLINE_TEST preparation uses a dedicated compiled test origin and a
 separate provisioned 256-bit device token. The private setup JSON is version 1,

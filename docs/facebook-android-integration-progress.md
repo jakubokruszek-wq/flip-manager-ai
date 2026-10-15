@@ -356,3 +356,23 @@ native failures came from test devices reusing a token_hash prohibited by the
 real unique constraint. Changed fixtures to unique per-device hashes/tokens;
 the constraint and auth behavior stay unchanged. Full schema native suite still
 not entirely PASS. Legacy-reservation refusal is now also tested explicitly.
+
+## 0.7 completed verification checkpoint — 2026-10-15
+
+Resumed without reimplementation. Clean local HEAD `4d9810b1df8b03714ab72623cc6676aa6fffb8d1`
+corresponds to published `646f91dfe0676d70dba24e73786e7d50a7d1dd32`, exact tree
+`f968e6e3ce6ac7643df28bfccec35fefa0588c3a`. All six workflows finished PASS.
+398 Node, 16 queue PostgreSQL, 12 native full-schema Finder, 1 remote ingress,
+3 Python remote-store/config checks, 120 JVM and 9/9 Android system E2E passed;
+TypeScript, ESLint, full Next build, API36 standalone and container validation PASS.
+Earlier WIP statements above are historical: version-1 atomic Finder recovery is
+now proven, including post-commit response loss and lease expiry. Version-0
+ambiguous reservations remain fenced. No production SQL/flags were activated.
+
+APK 0.7 assembled and downloadable from run 38769849362, artifact 11990853146.
+Default origin is empty: remote phone use awaits separate deployment approval,
+free quota verification and an origin-bound build. No new provider was created.
+Original recovery ZIP hash is unchanged. Final evidence, scope distinctions,
+APK checksum, limitations and rollback: `docs/facebook-android-0.7-validation.md`.
+Documentation-only finalization follows this code checkpoint; no tests rerun
+solely for prose. No merge, deployment, production changes or Facebook access.

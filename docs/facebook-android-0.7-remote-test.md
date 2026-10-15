@@ -123,9 +123,16 @@ web service and revoke its test credential. Retain/export synthetic receipts if
 needed. Deleting the NEW database is a separate irreversible operation, not
 performed by startup or rollback code. Production flags remain false throughout.
 
-Before a real scan: finish whole-batch production recovery/fencing and retention
-review, validate the actual schema/drafts on approved staging, review per-device
+Before a real scan: review the now CI-verified versioned whole-batch recovery
+and retention policy, validate the schema/drafts on approved staging, review per-device
 source grants, approve backend deployment separately, then obtain explicit user
 consent for the Facebook session and one real group. A new separately reviewed
 build/activation is required for LIVE. Physical Samsung Android 16 background,
 Doze/locked-screen behavior and real Facebook HTML are not certified by fixtures.
+
+## Verified checkpoint
+
+All six CI workflows passed for remote commit `646f91dfe0676d70dba24e73786e7d50a7d1dd32`.
+See [validation and APK report](facebook-android-0.7-validation.md). This does not
+constitute provider deployment or a Samsung test. The default APK has no approved
+remote origin; building an origin-bound APK follows approval and provisioning.
