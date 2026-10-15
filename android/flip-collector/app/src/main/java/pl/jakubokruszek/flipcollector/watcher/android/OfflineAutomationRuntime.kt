@@ -44,7 +44,7 @@ object OfflineAutomationRuntime {
         val profile = OfflineTestProfile.parse(raw, BuildConfig.OFFLINE_TEST_API_ORIGIN)
         check(state(context).load()==null && state(context).activeJob()==null) { "UNSETTLED_FIXTURE_CANNOT_CHANGE" }
         profileStorage(context).write(raw)
-        check(prefs(context).edit().putString("origin",profile.credentials.baseUrl).putBoolean("remote",true).putBoolean("enabled",true).commit())
+        check(prefs(context).edit().putString("origin",profile.credentials.baseUrl).putString("deviceId",profile.credentials.deviceId).putBoolean("remote",true).putBoolean("enabled",true).commit())
     }
     fun disable(context: Context) {
         check(prefs(context).edit().putBoolean("enabled",false).commit())
@@ -52,8 +52,10 @@ object OfflineAutomationRuntime {
         androidx.work.WorkManager.getInstance(context).cancelUniqueWork("flip-offline-continuation")
     }
     fun state(context: Context): AutomationState {
-        val origin=prefs(context).getString("origin",null) ?: "not-configured"
-        return AutomationState(EncryptedAutomationStorage(context,CollectorSigner.sha256Hex(("OFFLINE_TEST:"+origin).toByteArray())))
+        val config=prefs(context)
+        val origin=config.getString("origin",null) ?: "not-configured"
+        val namespace="OFFLINE_TEST:"+origin+(if(config.getBoolean("remote",false)) ":device:"+requireNotNull(config.getString("deviceId",null)) else "")
+        return AutomationState(EncryptedAutomationStorage(context,CollectorSigner.sha256Hex(namespace.toByteArray())))
     }
     fun client(context: Context): SignedCollectorClient {
         check(enabled(context))
@@ -61,7 +63,7 @@ object OfflineAutomationRuntime {
         val origin=requireNotNull(config.getString("origin",null))
         if(config.getBoolean("remote",false)) {
             val profile=OfflineTestProfile.parse(requireNotNull(profileStorage(context).read()), BuildConfig.OFFLINE_TEST_API_ORIGIN)
-            check(profile.credentials.baseUrl==origin)
+            check(profile.credentials.baseUrl==origin && profile.credentials.deviceId==config.getString("deviceId",null))
             return SignedCollectorClient(profile.credentials,LiveCollectionGate(false,false),metadataEnabled=true,dataMode="OFFLINE_TEST",offlineTestProfile=profile)
         }
         val cert=CertificateFactory.getInstance("X.509").generateCertificate(requireNotNull(config.getString("certificate",null)).byteInputStream())

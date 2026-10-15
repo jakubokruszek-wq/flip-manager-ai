@@ -287,7 +287,7 @@ Read-only catalog export: 51 public application tables, 49 functions, 400
 constraints, 82 independent indexes, 24 triggers, 23 policies, table/function
 grants. No row data, production credentials, cron schedules or sessions copied.
 Snapshot: `scripts/fixtures/facebook-public-schema.sql`, SHA-256
-`d6e8bef1f1a1fe512ed545736550debe3a6f756163adf59ec3fd379196c8c266`.
+`3ee5b756be67b43e02809ba818e0f1e9417aef08e4ee60ceedebdd5bd4779069`.
 Managed auth/storage are not cloned: CI supplies only auth.uid/jwt/users
 interfaces referenced by application DDL. Full-schema import CI is new and
 not yet executed at this checkpoint; previous 16 PG tests use minimal tables.
@@ -318,3 +318,16 @@ reports DUPLICATE. Only the request-local Android context and explicit
 `FACEBOOK_ANDROID_ATOMIC_FINDER_ENABLED=true` may select this path. Default false;
 legacy browser/OLX persistence paths remain unchanged. Whole-batch ambiguous
 replay remains fenced pending proof of a safe execution fence/checkpoint.
+
+0.7 remote preparation checkpoint: reviewed Render Free + separate Supabase
+Free proposal in `docs/facebook-android-0.7-remote-test.md`, Docker image/blueprint
+prepared, no resource created. Persistent initialization refuses a nonempty or
+production database; 13 synthetic sources and three durable rounds survive
+restart. All test tables use RLS with anon/authenticated access revoked. Remote
+API rejects fixture controls, production Host and unsigned/replayed requests.
+Added local-only CI proofs for bootstrap/restart/permissions and remote ingress;
+not yet run. Database URI identity/TLS guard passes locally (1 Python test).
+Schema snapshot now terminates every pg_get_functiondef statement, including
+inline function bodies; hash `3ee5b756be67b43e02809ba818e0f1e9417aef08e4ee60ceedebdd5bd4779069`.
+Local Node checks now 398/398 (90 backend, 243 regression, 65 offline/core).
+New changes still await full CI; no claims of remote deployment or phone tests.

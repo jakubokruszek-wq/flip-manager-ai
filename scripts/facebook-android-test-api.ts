@@ -2,6 +2,7 @@
  * loopback bridge. Never imports Supabase admin clients or production secrets.
  * The persistence adapter is a test schema, not the full Finder persistence. */
 import https from "node:https";
+import http from "node:http";
 import { remoteOfflineTestConfig } from "../features/collector/android/offline-test-config.ts";
 import fs from "node:fs";
 import { handleAndroidRequest, type AndroidAction } from "../features/collector/android/handler.ts";
@@ -53,9 +54,11 @@ async function processBatch(deviceId:string,batch:FacebookCollectorBatch,context
 }
 const jobs=new Set(["claim","heartbeat","complete","status"]);
 const metadata=new Set(["sources/sync","device/status","diagnostics"]);
-const server=https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_KEY!),cert:fs.readFileSync(process.env.FLIP_TEST_TLS_CERT!)},async(req,res)=>{
+const listener: http.RequestListener=async(req,res)=>{
   try{
     const path=new URL(req.url??"/","https://localhost").pathname;
+    if(remote && (req.headers.host!==new URL(remote.origin).host || req.headers["x-forwarded-proto"]!=="https")) {res.writeHead(421);res.end();return;}
+    if(remote && path==="/healthz") {res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end('{"ok":true,"dataMode":"OFFLINE_TEST"}');return;}
     if(remote && path.startsWith("/__test/")) { res.writeHead(404); res.end(); return; }
     if(path==="/__test/health"){res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');return;}
     if(path==="/__test/stats"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(await db("/stats",{})));return;}
@@ -73,5 +76,9 @@ const server=https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_K
     else result=Response.json({ok:false,code:"NOT_FOUND"},{status:404});
     res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());
   }catch{res.writeHead(503,{"content-type":"application/json"});res.end('{"ok":false,"code":"ISOLATED_API_FAILURE"}');}
-});
-server.listen(55441,remote ? "0.0.0.0" : "127.0.0.1",()=>process.stdout.write("Isolated HTTPS test API ready\n"));
+};
+const server=remote ? http.createServer(listener) : https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_KEY!),cert:fs.readFileSync(process.env.FLIP_TEST_TLS_CERT!)},listener);
+server.requestTimeout=30_000;server.headersTimeout=15_000;server.keepAliveTimeout=5_000;server.maxConnections=32;server.maxRequestsPerSocket=20;
+const port=remote ? Number(process.env.PORT??10000) : 55441;
+if(!Number.isInteger(port)||port<1024||port>65535)throw Error("OFFLINE_TEST_PORT_INVALID");
+server.listen(port,remote ? "0.0.0.0" : "127.0.0.1",()=>process.stdout.write("Isolated test API ready\n"));

@@ -45,6 +45,12 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: python -m pip install 'psycopg[binary]==3.2.6'
+      - name: Remote database identity and TLS configuration guard
+        run: python scripts/test-facebook-remote-config.py
+      - name: Persistent synthetic store restart and permissions
+        run: python scripts/test-facebook-remote-store.py
+      - name: Remote ingress auth and receipt replay (loopback, no deployment)
+        run: node --import ./scripts/test-alias-loader.mjs --test --test-isolation=none scripts/test-facebook-remote-api.ts
       - name: Restore schema only and apply Android draft to disposable PostgreSQL
         run: python scripts/setup-facebook-full-schema.py
       - name: Wait for PostgREST schema reload

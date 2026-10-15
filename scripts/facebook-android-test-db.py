@@ -16,31 +16,38 @@ from psycopg.types.json import Jsonb
 from psycopg.rows import dict_row
 from facebook_android_fixture_store import create_fixture_tables, persist_fixture_import
 
-suite = pg.AndroidPostgres()
-suite.setUp()
-db = suite.db
-RUN = "22222222-2222-4222-8222-222222222222"
-db.execute("alter table facebook_scan_jobs add column scan_run_id uuid default '" + RUN + "'")
-create_fixture_tables(db)
-db.execute("create table test_nonces(device_id text not null,nonce text not null,primary key(device_id,nonce))")
-db.execute("delete from facebook_scan_jobs where consumer_type='BROWSER_EXTENSION'")
-groups = []
-for index in range(13):
-    profile = index >= 11
-    source_id = str(123456 + index) if profile else ("offline-lodz" if index == 0 else "offline-" + str(index))
-    group_id = "00000000-0000-4000-8000-000000000008" if index == 0 else str(uuid4())
-    url = "https://www.facebook.com/profile.php?id=" + source_id if profile else "https://www.facebook.com/groups/" + source_id + "/"
-    group = {"id": group_id, "name": "Offline source " + str(index), "url": url, "sourceId": source_id, "type": "PROFILE" if profile else "GROUP"}
-    groups.append({**group, "priority": "high" if index == 0 else "normal", "enabled": True, "access_status": "UNAVAILABLE" if index == 12 else "CONNECTED"})
-    if index == 0:
-        db.execute("update facebook_scan_jobs set group_snapshot=%s,priority=100 where id=%s", (Jsonb([group]), pg.JOB))
-    else:
-        db.execute("insert into watched_facebook_groups(id,access_status) values(%s,%s)", (group_id, "UNAVAILABLE" if index == 12 else "CONNECTED"))
-        scan = uuid4()
-        db.execute("insert into source_scans(id) values(%s)", (scan,))
-        db.execute("insert into facebook_scan_jobs(id,source_scan_id,consumer_type,group_snapshot) values(%s,%s,'ANDROID_WEBVIEW',%s)", (uuid4(), scan, Jsonb([group])))
-        db.execute("insert into collector_android_source_grants(device_id,watched_group_id,search_filter_id) values(%s,%s,'00000000-0000-4000-8000-000000000007')", (pg.DEVICE, group_id))
-db.close()
+if os.environ.get("FLIP_OFFLINE_REMOTE_TEST") == "true":
+    from facebook_android_remote_store import configure
+    try:
+        groups = configure(pg)
+    except Exception:
+        raise SystemExit("OFFLINE_TEST_DATABASE_INITIALIZATION_REFUSED") from None
+else:
+    suite = pg.AndroidPostgres()
+    suite.setUp()
+    db = suite.db
+    RUN = "22222222-2222-4222-8222-222222222222"
+    db.execute("alter table facebook_scan_jobs add column scan_run_id uuid default '" + RUN + "'")
+    create_fixture_tables(db)
+    db.execute("create table test_nonces(device_id text not null,nonce text not null,expires_at timestamptz not null default now()+interval '10 minutes',primary key(device_id,nonce))")
+    db.execute("delete from facebook_scan_jobs where consumer_type='BROWSER_EXTENSION'")
+    groups = []
+    for index in range(13):
+        profile = index >= 11
+        source_id = str(123456 + index) if profile else ("offline-lodz" if index == 0 else "offline-" + str(index))
+        group_id = "00000000-0000-4000-8000-000000000008" if index == 0 else str(uuid4())
+        url = "https://www.facebook.com/profile.php?id=" + source_id if profile else "https://www.facebook.com/groups/" + source_id + "/"
+        group = {"id": group_id, "name": "Offline source " + str(index), "url": url, "sourceId": source_id, "type": "PROFILE" if profile else "GROUP"}
+        groups.append({**group, "priority": "high" if index == 0 else "normal", "enabled": True, "access_status": "UNAVAILABLE" if index == 12 else "CONNECTED"})
+        if index == 0:
+            db.execute("update facebook_scan_jobs set group_snapshot=%s,priority=100 where id=%s", (Jsonb([group]), pg.JOB))
+        else:
+            db.execute("insert into watched_facebook_groups(id,access_status) values(%s,%s)", (group_id, "UNAVAILABLE" if index == 12 else "CONNECTED"))
+            scan = uuid4()
+            db.execute("insert into source_scans(id) values(%s)", (scan,))
+            db.execute("insert into facebook_scan_jobs(id,source_scan_id,consumer_type,group_snapshot) values(%s,%s,'ANDROID_WEBVIEW',%s)", (uuid4(), scan, Jsonb([group])))
+            db.execute("insert into collector_android_source_grants(device_id,watched_group_id,search_filter_id) values(%s,%s,'00000000-0000-4000-8000-000000000007')", (pg.DEVICE, group_id))
+    db.close()
 
 RPC = {
     "claim_android_facebook_scan_job": ["p_device_id", "p_lease_seconds", "p_source_ids"],
@@ -86,7 +93,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/job":
             return conn.execute("select * from facebook_scan_jobs where id=%s", (body["id"],)).fetchone()
         if self.path == "/nonce":
-            row=conn.execute("insert into test_nonces values(%s,%s) on conflict do nothing returning nonce", (body["deviceId"],body["nonce"])).fetchone()
+            conn.execute("delete from test_nonces where expires_at < now()")
+            row=conn.execute("insert into test_nonces(device_id,nonce) values(%s,%s) on conflict do nothing returning nonce", (body["deviceId"],body["nonce"])).fetchone()
             return {"accepted": row is not None}
         if self.path == "/sources":
             ids = {str(row["watched_group_id"]) for row in conn.execute("select watched_group_id from collector_android_source_grants where device_id=%s and (expires_at is null or expires_at>now())", (body["deviceId"],)).fetchall()}

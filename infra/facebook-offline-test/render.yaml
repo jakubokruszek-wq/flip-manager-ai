@@ -1,0 +1,28 @@
+# REVIEW ONLY: applying this blueprint is a remote deployment and requires consent.
+# Dedicated NEW service; never import the production Vercel project/env.
+services:
+  - type: web
+    name: flip-watcher-offline-test
+    runtime: docker
+    plan: free
+    branch: feat/facebook-android-integration
+    autoDeployTrigger: off
+    dockerfilePath: ./infra/facebook-offline-test/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: FLIP_OFFLINE_REMOTE_TEST
+        value: "true"
+      - key: FLIP_OFFLINE_TEST_ORIGIN
+        sync: false
+      - key: FLIP_TEST_PROJECT_REF
+        sync: false
+      - key: FLIP_TEST_DATABASE_URL
+        sync: false
+      - key: FLIP_OFFLINE_DEVICE_SIGNING_KEY
+        sync: false
+      - key: FLIP_OFFLINE_TEST_EXPIRES_AT
+        sync: false
+      - key: FACEBOOK_ANDROID_QUEUE_ENABLED
+        value: "false"
+      - key: FACEBOOK_ANDROID_INTEGRATION_ENABLED
+        value: "false"

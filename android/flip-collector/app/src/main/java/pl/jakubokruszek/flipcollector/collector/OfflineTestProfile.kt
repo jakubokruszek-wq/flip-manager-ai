@@ -12,8 +12,9 @@ class OfflineTestProfile private constructor(val credentials: CollectorCredentia
             require(raw.length <= 8192 && approvedOrigin.isNotBlank()) { "REMOTE_TEST_NOT_CONFIGURED" }
             val uri = URI(approvedOrigin)
             require(uri.scheme == "https" && uri.host != null && uri.userInfo == null && uri.rawQuery == null && uri.fragment == null && uri.path.orEmpty() in setOf("", "/"))
-            require(uri.host != "flip-manager-ai.vercel.app" && !uri.host.endsWith(".supabase.co"))
-            require(uri.host !in setOf("localhost", "127.0.0.1", "10.0.2.2"))
+            val host=uri.host.lowercase()
+            require(host != "flip-manager-ai.vercel.app" && !host.endsWith(".supabase.co"))
+            require(host !in setOf("localhost", "127.0.0.1", "10.0.2.2"))
             val value = JSONObject(raw)
             require(value.getInt("version") == 1 && value.getString("dataMode") == "OFFLINE_TEST")
             val origin = value.getString("origin")

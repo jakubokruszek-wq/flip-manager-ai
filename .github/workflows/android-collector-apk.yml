@@ -55,6 +55,18 @@ jobs:
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }} "-PFLIP_OFFLINE_TEST_ORIGIN=$FLIP_OFFLINE_TEST_ORIGIN"
 
+      - name: Count completed JVM tests
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          files=glob.glob("app/build/test-results/testDebugUnitTest/TEST-*.xml")
+          assert files, "Missing JVM test reports"
+          roots=[ET.parse(path).getroot() for path in files]
+          totals={key:sum(int(root.get(key,"0")) for root in roots) for key in ("tests","failures","errors","skipped")}
+          print("JVM:",totals)
+          assert totals["failures"]==0 and totals["errors"]==0
+          PY
+
       - name: Assemble debug APK
         run: ./gradlew --no-daemon assembleDebug -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }} "-PFLIP_OFFLINE_TEST_ORIGIN=$FLIP_OFFLINE_TEST_ORIGIN"
 

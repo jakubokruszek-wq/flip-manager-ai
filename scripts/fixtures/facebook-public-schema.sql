@@ -3922,7 +3922,7 @@ $function$;
 CREATE OR REPLACE FUNCTION public.set_investment_os_updated_at()
  RETURNS trigger
  LANGUAGE plpgsql
-AS $function$ begin new.updated_at = now(); return new; end; $function$
+AS $function$ begin new.updated_at = now(); return new; end; $function$;
 
 CREATE OR REPLACE FUNCTION public.set_listing_updated_at()
  RETURNS trigger
