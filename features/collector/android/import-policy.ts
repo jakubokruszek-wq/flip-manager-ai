@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { AndroidBatchContext } from "./jobs.ts";
 
 // Request-local policy: never change process environment or another consumer.
-const androidDataOnly = new AsyncLocalStorage<boolean>();
-export function runAndroidDataOnlyImport<T>(task: () => T): T { return androidDataOnly.run(true, task); }
-export function androidDataOnlyImportActive(): boolean { return androidDataOnly.getStore() === true; }
+export type AndroidFinderOwnership = AndroidBatchContext & { deviceId: string };
+const androidDataOnly = new AsyncLocalStorage<{ ownership?: AndroidFinderOwnership }>();
+export function runAndroidDataOnlyImport<T>(task: () => T, ownership?: AndroidFinderOwnership): T { return androidDataOnly.run({ ownership }, task); }
+export function androidDataOnlyImportActive(): boolean { return androidDataOnly.getStore() !== undefined; }
+export function androidFinderOwnership(): AndroidFinderOwnership | undefined { return androidDataOnly.getStore()?.ownership; }

@@ -436,3 +436,28 @@ that atomic adapter with the exact same batch ID; database batch locks and the
 unique persisted checkpoint serialize concurrent attempts. LIVE ignores the flag
 and retains the previous reconciliation fence. This opt-in must not be copied to
 the non-atomic production Finder importer.
+
+### 0.7 isolated preparation (not deployed)
+
+`FACEBOOK_ANDROID_ATOMIC_FINDER_ENABLED` defaults to false. The optional draft
+`supabase/drafts/android-facebook-finder.sql` adds per-post transactional Finder
+writes, canonical membership, metadata, history, group increments and receipt.
+A verified completion's internal job/device/lease/completion/body-hash context is
+passed to the RPC; clients cannot request atomic mode or supply this context in
+JSON. A replay of the same job/post returns the original operation witness;
+a new job reports unchanged content as DUPLICATE. `writeAccounting` is emitted
+only when every persisted post has a validated transaction witness, one target
+filter is used, and there are no processing errors. Historical/legacy positive
+observations remain unverified. Ambiguous whole-batch replay is still fenced.
+
+Remote OFFLINE_TEST preparation uses a dedicated compiled test origin and a
+separate provisioned 256-bit device token. The private setup JSON is version 1,
+`dataMode: "OFFLINE_TEST"`, `origin`, `deviceId`, `deviceToken` (43 base64url chars)
+and `expiresAt` (epoch milliseconds, maximum seven days). It is pasted into the
+debug APK and encrypted using Android Keystore-backed storage; never put it in
+Git/CI logs. Default APK has an empty approved remote origin and cannot enable
+remote test. HTTP, redirects, the production origin and Supabase project URLs
+are rejected. The request HMAC protocol is unchanged. The remote server refuses
+production keys, enabled production queues, the shared CI fixture key and all
+`/__test/*` controls. No remote environment is currently running; operator
+approval and a separately isolated durable database are required first.

@@ -27,6 +27,7 @@ with psycopg.connect(host="127.0.0.1", port=55439, dbname="flip_android_test", u
     count=db.execute("select count(*) from pg_tables where schemaname='public'").fetchone()[0]
     assert count == 51, count
     db.execute((root / "supabase/drafts/android-webview-backend.sql").read_text())
+    db.execute((root / "supabase/drafts/android-facebook-finder.sql").read_text())
     db.execute("insert into search_filters(id,name,sources,city) values('66666666-6666-4666-8666-666666666666','Synthetic Finder integration','[\"facebook\"]','Łódź')")
     db.execute("insert into source_scans(id,search_filter_id,source,status) values('44444444-4444-4444-8444-444444444444','66666666-6666-4666-8666-666666666666','facebook','running')")
     db.execute("notify pgrst, 'reload schema'")

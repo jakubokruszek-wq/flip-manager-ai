@@ -1,4 +1,5 @@
 import "server-only";
+import { androidFinderOwnership } from "./android/import-policy";
 
 import { buildFacebookBatchQuality, type FacebookBatchQuality } from "./android/quality";
 
@@ -33,6 +34,7 @@ export type CollectorBatchResult = {
   /** Deterministic scan accounting (see scan-accounting.ts) for this batch's raw captured posts. Absent on batches recorded before this feature — callers must degrade gracefully, never fabricate it. */
   accounting?: FacebookScanAccounting;
   quality?: FacebookBatchQuality;
+  writeAccounting?: { version: 1; basis: "TRANSACTIONAL"; created: number; updated: number; duplicates: number };
   accountingError?: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED";
   /** Sanitized per-post detail for FACEBOOK_FILTER_RECONCILE_FAILED outcomes only (see post-flow.ts). Never changes accounting; purely diagnostic. */
   reconciliationDiagnostics?: FacebookReconciliationFailureDiagnostic[];
@@ -102,6 +104,8 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     const historicalIdentityConflicts = findHistoricalCollectorIdentityConflicts(batch, (history.data ?? []).map((row) => row.payload));
     const sourceScanIds: string[] = [];
     let processed = 0; let listingsCreated = 0; let listingsUpdated = 0; let skipped = 0; let errors = 0;
+    const transactionalWrites: { created: number; updated: number; duplicates: number }[] = [];
+    let unverifiedWrites = false;
     const persistenceDiagnostics: FacebookPersistenceDiagnostics[] = [];
     const eligibilityCheckedAt = Date.now();
     const posts = collectorPostsForProcessing(batch, eligibilityCheckedAt, historicalIdentityConflicts);
@@ -145,7 +149,14 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
         if (sourceScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_START_FAILED: ${sourceScan.error.message}`);
       }
       sourceScanIds.push(sourceScanId);
-      const summary = await processFacebookPostBatch(posts, (post) => importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: post.imageUrls, mediaCandidates: post.mediaCandidates, discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, activeListingsCache, ...COLLECTOR_IMAGE_IMPORT_OPTIONS }), { jobId: `collector:${batch.batchId}`, sourceScanId });
+      const summary = await processFacebookPostBatch(posts, async (post) => {
+        const imported = await importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: post.imageUrls, mediaCandidates: post.mediaCandidates, discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, activeListingsCache, ...COLLECTOR_IMAGE_IMPORT_OPTIONS });
+        if (imported.status !== "skipped") {
+          if (imported.transactionalWrite) transactionalWrites.push(imported.transactionalWrite);
+          else unverifiedWrites = true;
+        }
+        return imported;
+      }, { jobId: `collector:${batch.batchId}`, sourceScanId });
       processed = Math.max(processed, summary.postsProcessed);
       listingsCreated += summary.listingsCreated;
       listingsUpdated += summary.listingsUpdated;
@@ -179,7 +190,14 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     if (!accountingValidation.ok) {
       return finishBatch(supabase, deviceId, batchRowId, batch, { status: "degraded", batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors: errors + 1, sourceScanIds, health: batch.health, persistenceDiagnostics, accountingError: accountingValidation.errorCode ?? undefined, reconciliationDiagnostics }, accountingValidation.errorCode ?? undefined);
     }
-    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting, ...(quality ? { quality } : {}), reconciliationDiagnostics });
+    const writeAccounting = androidFinderOwnership() && targets.length === 1 && !unverifiedWrites && errors === 0 ? {
+      version: 1 as const, basis: "TRANSACTIONAL" as const,
+      created: transactionalWrites.reduce((n,row)=>n+row.created,0),
+      updated: transactionalWrites.reduce((n,row)=>n+row.updated,0),
+      duplicates: transactionalWrites.reduce((n,row)=>n+row.duplicates,0),
+    } : undefined;
+    if (writeAccounting) skipped = batch.posts.length - writeAccounting.created - writeAccounting.updated - writeAccounting.duplicates;
+    return finishBatch(supabase, deviceId, batchRowId, batch, { ...(writeAccounting ? { writeAccounting } : {}), status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting, ...(quality ? { quality } : {}), reconciliationDiagnostics });
   } catch (error) {
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));
   }

@@ -58,12 +58,13 @@ export async function heartbeatAndroidJob(store: AndroidJobStore, deviceId: stri
   if (typeof row?.leased_until !== "string") throw new AndroidJobError(409, "ANDROID_JOB_LEASE_LOST");
   return row.leased_until;
 }
+export type AndroidBatchContext = { sourceScanId: string; jobId: string; leaseToken: string; completionId: string; payloadHash: string };
 export async function completeAndroidJob(input: {
   store: AndroidJobStore; deviceId: string; value: unknown; rawBody: string;
   expectedDataMode?: "LIVE" | "OFFLINE_TEST";
   /** Internal opt-in for the isolated adapter with atomic import+checkpoint only. */
   atomicOfflineImportReplay?: boolean;
-  processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: { sourceScanId: string }) => Promise<{ status: string }>;
+  processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: AndroidBatchContext) => Promise<{ status: string }>;
 }): Promise<AndroidReceipt> {
   const { jobId, leaseToken } = androidLeaseInput(input.value);
   const value = record(input.value)!;
@@ -87,6 +88,7 @@ export async function completeAndroidJob(input: {
     if (batch.scanId !== job.scan_run_id || batch.sourceId !== source.sourceId || batch.sourceType !== source.type || batch.sourceUrl !== source.url || batch.batchId !== completionId) throw new AndroidJobError(422, "ANDROID_BATCH_JOB_MISMATCH");
   }
   const payloadHash = createHash("sha256").update(input.rawBody).digest("hex");
+  const importContext: AndroidBatchContext = { sourceScanId: job.source_scan_id, jobId, leaseToken, completionId, payloadHash };
   const args = { p_job_id: jobId, p_device_id: input.deviceId, p_lease_token: leaseToken, p_completion_id: completionId, p_payload_hash: payloadHash };
   const reservation = record(await rpc(input.store, "begin_android_facebook_completion", args));
   if (reservation?.outcome === "duplicate") return validateReceipt(reservation.receipt, completionId);
@@ -102,7 +104,7 @@ export async function completeAndroidJob(input: {
       // The fixture adapter serializes by batch ID and commits every listing,
       // exact counters and its checkpoint in ONE transaction. Production import
       // cannot opt into this recovery path, even if a caller sets the flag.
-      saved = await input.processBatch(input.deviceId, batch, { sourceScanId: job.source_scan_id });
+      saved = await input.processBatch(input.deviceId, batch, importContext);
     }
     if (!saved) throw new AndroidJobError(409, "ANDROID_COMPLETION_IN_PROGRESS");
     if (!["completed", "degraded", "failed"].includes(saved.status)) throw new AndroidJobError(503, "ANDROID_PROCESSING_RESULT_INVALID");
@@ -112,7 +114,7 @@ export async function completeAndroidJob(input: {
   if (reservation?.outcome !== "reserved") throw new AndroidJobError(409, "ANDROID_JOB_LEASE_LOST");
   // Reservation is deliberately never cleared on failure: side effects may have
   // committed. An operator must reconcile a stuck import before authorizing a retry.
-  const result = batch ? await input.processBatch(input.deviceId, batch, { sourceScanId: job.source_scan_id }) : null;
+  const result = batch ? await input.processBatch(input.deviceId, batch, importContext) : null;
   if (result?.status === "duplicate") throw new AndroidJobError(409, "ANDROID_BATCH_REQUIRES_RECONCILIATION");
   if (result && !["completed", "degraded", "failed"].includes(result.status)) throw new AndroidJobError(503, "ANDROID_PROCESSING_RESULT_INVALID");
   const receipt: AndroidReceipt = { ok: true, completionId, status: failed || result?.status === "failed" ? "failed" : "completed", result: result ?? failureResult };

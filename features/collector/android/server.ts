@@ -35,7 +35,7 @@ export function androidRoute(request: Request, action: AndroidAction) {
   return handleAndroidRequest(request, action, {
     enabled: () => process.env.FACEBOOK_ANDROID_QUEUE_ENABLED === "true",
     store: androidJobStore,
-    processBatch: (deviceId, batch, context) => runAndroidDataOnlyImport(() => processFacebookCollectorBatch(deviceId, batch, { ...context, qualityReport: process.env.FACEBOOK_ANDROID_DIAGNOSTICS_ENABLED === "true" })),
+    processBatch: (deviceId, batch, context) => runAndroidDataOnlyImport(() => processFacebookCollectorBatch(deviceId, batch, { ...context, qualityReport: process.env.FACEBOOK_ANDROID_DIAGNOSTICS_ENABLED === "true" }), process.env.FACEBOOK_ANDROID_ATOMIC_FINDER_ENABLED === "true" ? { ...context, deviceId } : undefined),
     authenticate: async (request, pathname, body) => {
       try {
         const { device } = await authenticateSignedCollectorRequest({ request, pathname, body, markHealthy: true, expectedConsumerType: "ANDROID_WEBVIEW" });

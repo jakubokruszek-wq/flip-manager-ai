@@ -1510,7 +1510,7 @@ begin
   return query select p_listing_id, normalized_decision, l.lifecycle_status, affected_memberships
   from public.listings l where l.id = p_listing_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.apply_investment_override_cas(p_deal_id uuid, p_expected_version integer, p_values jsonb, p_invalidated text[] DEFAULT '{}'::text[], p_events jsonb DEFAULT '[]'::jsonb, p_user_id text DEFAULT 'application'::text)
  RETURNS integer
@@ -1554,7 +1554,7 @@ begin
   end if;
   return v_version;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.apply_listing_review_decision(p_listing_id uuid, p_decision text, p_reason text DEFAULT NULL::text, p_now timestamp with time zone DEFAULT now())
  RETURNS TABLE(listing_id uuid, decision text, lifecycle_status text, membership_count bigint)
@@ -1641,7 +1641,7 @@ begin
   from public.listings as l
   where l.id = p_listing_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.assign_price_radar_district_queue_candidate(p_owner_id uuid, p_queue_id uuid, p_district text, p_assigned_by uuid, p_confirmed jsonb)
  RETURNS uuid
@@ -1710,7 +1710,7 @@ begin
 
   return saved_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.block_price_radar_olx_jobs()
  RETURNS trigger
@@ -1736,7 +1736,7 @@ begin
   end if;
   return new;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.checkpoint_price_radar_run(p_owner_id uuid, p_run_id uuid, p_lease_token uuid, p_checkpoint jsonb, p_source_statuses jsonb, p_scanned_count integer, p_qualified_count integer, p_status text, p_error_message text, p_lease_seconds integer DEFAULT 120)
  RETURNS boolean
@@ -1757,7 +1757,7 @@ begin
      and (r.stop_requested_at is null or (p_status = 'partial' and p_error_message = 'RADAR_STOPPED_BY_OPERATOR'));
   return found;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.claim_facebook_scan_job(p_worker_id text, p_lease_seconds integer DEFAULT 180, p_consumer_type text DEFAULT 'LEGACY_WORKER'::text)
  RETURNS SETOF facebook_scan_jobs
@@ -1836,7 +1836,7 @@ begin
 
   return next claimed;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.claim_finder_scan_source(p_cycle_at timestamp with time zone, p_now timestamp with time zone DEFAULT now(), p_lease_seconds integer DEFAULT 240)
  RETURNS SETOF source_scans
@@ -1891,7 +1891,7 @@ begin
      where id = claimed_id
      returning *;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.claim_olx_scan_job(p_worker_id text, p_lease_seconds integer DEFAULT 120)
  RETURNS SETOF olx_scan_jobs
@@ -1989,7 +1989,7 @@ begin
 
   return next claimed;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.claim_olx_scan_job_selective(p_worker_id text, p_job_id uuid, p_lease_seconds integer DEFAULT 120)
  RETURNS SETOF olx_scan_jobs
@@ -2055,7 +2055,7 @@ begin
 
   return next claimed;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.claim_price_radar_run(p_owner_id uuid, p_initial_checkpoint jsonb, p_lease_seconds integer DEFAULT 120)
  RETURNS TABLE(run_id uuid, lease_token uuid, status text, checkpoint jsonb, source_statuses jsonb, scanned_count integer, qualified_count integer, started_at timestamp with time zone, error_message text)
@@ -2111,7 +2111,7 @@ begin
 exception when unique_violation then
   return;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.claim_scheduled_finder_olx_job(p_worker_id text, p_lease_seconds integer DEFAULT 120)
  RETURNS jsonb
@@ -2192,7 +2192,7 @@ begin
 
   return jsonb_build_object('job', to_jsonb(claimed), 'reason', null);
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.claim_scheduled_finder_olx_job(p_worker_id text, p_lease_seconds integer, p_usage jsonb)
  RETURNS jsonb
@@ -2297,7 +2297,7 @@ begin
 
   return jsonb_build_object('job', to_jsonb(claimed), 'reason', null, 'budget', budget_json);
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.cleanup_listing_visibility_lifecycle(p_now timestamp with time zone DEFAULT now())
  RETURNS TABLE(stale_count bigint, archived_count bigint)
@@ -2329,7 +2329,7 @@ begin
 
   return next;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.clear_facebook_watcher_history_atomic()
  RETURNS TABLE(pure_facebook_listing_ids uuid[], preserved_listing_ids uuid[], removed_association_listing_ids uuid[])
@@ -2377,7 +2377,7 @@ begin
 
   return query select coalesce(pure_ids, '{}'), coalesce(preserved_ids, '{}'), coalesce(preserved_ids, '{}');
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.confirm_investment_override(p_override_event_id uuid, p_deal_id uuid, p_field text, p_user_id text, p_reason text, p_confirmed_at timestamp with time zone DEFAULT now())
  RETURNS uuid
@@ -2399,7 +2399,7 @@ begin
   end if;
   return confirmation_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.enqueue_facebook_gallery_job(p_listing_id uuid, p_search_filter_id uuid, p_post_id text, p_source_url text)
  RETURNS TABLE(job_id uuid, gallery_status text, job_created boolean)
@@ -2504,7 +2504,7 @@ begin
 
   return query select new_job.id, 'PENDING'::text, true;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.enqueue_scheduled_finder_olx_job(p_filter_id uuid, p_run_id uuid, p_request_url text, p_filter_snapshot jsonb, p_shared_limit integer DEFAULT 1, p_dry_run boolean DEFAULT false)
  RETURNS jsonb
@@ -2739,7 +2739,7 @@ begin
     'browser_budget', budget_json
   );
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.expire_stale_scheduled_finder_olx_jobs()
  RETURNS jsonb
@@ -2818,7 +2818,7 @@ begin
   return jsonb_build_object('stopped', stopped, 'unclaimed_expired', unclaimed, 'lease_expired', lease_expired,
     'expiry_minutes', expiry_minutes, 'automation_enabled', enabled);
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.finalize_price_radar_olx_job(p_owner_id uuid, p_run_id uuid, p_radar_lease_token uuid, p_job_id uuid, p_worker_id text, p_job_lease_token uuid, p_checkpoint jsonb, p_source_statuses jsonb, p_scanned_count integer, p_qualified_count integer, p_run_status text, p_error_message text, p_job_status text, p_result_summary jsonb, p_error_code text, p_job_error_message text)
  RETURNS boolean
@@ -2877,7 +2877,7 @@ begin
   if not found then raise exception 'OLX_JOB_LEASE_LOST'; end if;
   return true;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.finder_olx_first_slot(p_start_time time without time zone, p_interval_minutes integer, p_now timestamp with time zone)
  RETURNS timestamp without time zone
@@ -2892,7 +2892,7 @@ AS $function$
   )
   select base + make_interval(secs => step_seconds * ceil(greatest(0, extract(epoch from (wall_now - base))) / step_seconds))
     from clock;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.finder_olx_slot_window(p_anchor timestamp without time zone, p_interval_minutes integer, p_now timestamp with time zone)
  RETURNS TABLE(current_slot timestamp with time zone, next_slot timestamp with time zone, current_local timestamp without time zone, next_local timestamp without time zone)
@@ -2919,7 +2919,7 @@ begin
   next_slot := next_local at time zone 'Europe/Warsaw';
   return next;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.get_facebook_watcher_history_summary()
  RETURNS TABLE(pure_facebook_listing_ids uuid[], preserved_listing_ids uuid[], removed_association_listing_ids uuid[])
@@ -2951,7 +2951,7 @@ begin
 
   return query select coalesce(pure_ids, '{}'), coalesce(preserved_ids, '{}'), coalesce(preserved_ids, '{}');
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.guard_scheduled_olx_job()
  RETURNS trigger
@@ -2972,7 +2972,7 @@ begin
   end if;
   return new;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.heartbeat_price_radar_olx_job(p_job_id uuid, p_worker_id text, p_job_lease_token uuid, p_radar_lease_token uuid, p_lease_seconds integer DEFAULT 120)
  RETURNS boolean
@@ -3024,7 +3024,7 @@ begin
   if not found then raise exception 'RADAR_LEASE_LOST'; end if;
   return true;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.manage_finder_listing_identity(p_owner_id uuid, p_search_filter_id uuid, p_action text, p_listing_a uuid, p_listing_b uuid DEFAULT NULL::uuid)
  RETURNS TABLE(action text, group_id uuid, affected_listing_ids uuid[])
@@ -3153,7 +3153,7 @@ begin
     on conflict (owner_id, search_filter_id, listing_a, listing_b) do update set decision = 'link', created_at = now();
   return query select normalized_action, target_group, members;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.mark_investment_deal_stale_cas(p_deal_id uuid, p_expected_version integer, p_directors text[])
  RETURNS integer
@@ -3179,7 +3179,7 @@ begin
   returning d.version into v_version;
   return v_version;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.olx_cloud_budget_today(p_now timestamp with time zone)
  RETURNS TABLE(worker_id text, reported_at timestamp with time zone, account_browser_ms integer, worker_browser_ms integer, safe_budget_ms integer, job_estimate_ms integer, remaining_ms integer, fits_one_job boolean)
@@ -3194,7 +3194,7 @@ AS $function$
    where b.utc_day = (p_now at time zone 'UTC')::date
    order by b.reported_at desc
    limit 1;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.persist_investment_deal_cas(p_deal jsonb, p_expected_version integer, p_source_updated_at timestamp with time zone)
  RETURNS integer
@@ -3272,7 +3272,7 @@ begin
 
   return v_version;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.persist_price_radar_listing(p_owner_id uuid, p_run_id uuid, p_lease_token uuid, p_listing jsonb)
  RETURNS uuid
@@ -3335,7 +3335,7 @@ begin
   end if;
   return saved_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.prevent_investment_history_mutation()
  RETURNS trigger
@@ -3344,7 +3344,7 @@ AS $function$
 begin
   raise exception 'INVESTMENT_HISTORY_APPEND_ONLY:%', TG_TABLE_NAME;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.reconcile_canonical_listing_decision(p_listing_id uuid, p_filter_id uuid, p_bucket text, p_reasons jsonb, p_missing_fields jsonb, p_lifecycle_status text, p_match_origin text DEFAULT 'scan'::text, p_source_scan_id uuid DEFAULT NULL::uuid, p_matched_at timestamp with time zone DEFAULT NULL::timestamp with time zone)
  RETURNS TABLE(listing_id uuid, search_filter_id uuid, bucket text, lifecycle_status text, is_current_match boolean, match_reasons jsonb)
@@ -3539,7 +3539,7 @@ begin
       current_match,
       normalized_reasons;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.renew_facebook_scan_job(p_job_id uuid, p_worker_id text, p_lease_token uuid, p_lease_seconds integer DEFAULT 180)
  RETURNS TABLE(job_id uuid, leased_until timestamp with time zone)
@@ -3567,7 +3567,7 @@ begin
      and jobs.leased_until >= now()
    returning jobs.id, jobs.leased_until;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.repair_facebook_gallery_job(p_listing_id uuid)
  RETURNS TABLE(listing_id uuid, gallery_job_id uuid, expected_post_id text)
@@ -3656,7 +3656,7 @@ begin
   update public.listings set gallery_status = 'PENDING', gallery_job_id = new_job.id, gallery_requested_at = now(), gallery_error = null where id = p_listing_id;
   return query select p_listing_id, new_job.id, listing_post_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.request_price_radar_run_stop(p_owner_id uuid, p_run_id uuid)
  RETURNS text
@@ -3755,7 +3755,7 @@ begin
 
   return 'stopping';
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.reserve_source_scans(p_search_filter_id uuid, p_sources text[], p_scan_run_id uuid, p_filter_snapshot jsonb)
  RETURNS SETOF source_scans
@@ -3805,7 +3805,7 @@ begin
       from unnest(p_sources) as src
     returning *;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.resolve_price_radar_verification_candidate(p_owner_id uuid, p_queue_id uuid, p_operator_id uuid, p_decision jsonb)
  RETURNS uuid
@@ -3888,7 +3888,7 @@ begin
    where q.id = queue_row.id and q.owner_id = p_owner_id;
   return saved_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_facebook_scan_job_updated_at()
  RETURNS trigger
@@ -3898,7 +3898,7 @@ begin
   new.updated_at = now();
   return new;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_finder_olx_schedule_anchor()
  RETURNS trigger
@@ -3917,7 +3917,7 @@ begin
   end if;
   return new;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_investment_os_updated_at()
  RETURNS trigger
@@ -3932,7 +3932,7 @@ begin
   new.updated_at = now();
   return new;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_olx_scan_job_updated_at()
  RETURNS trigger
@@ -3942,7 +3942,7 @@ begin
   new.updated_at = now();
   return new;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_price_radar_district_queue_rejection(p_owner_id uuid, p_queue_id uuid, p_rejected boolean)
  RETURNS boolean
@@ -3957,7 +3957,7 @@ begin
    where q.id = p_queue_id and q.owner_id = p_owner_id and q.status in ('pending', 'rejected');
   return found;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_price_radar_listing_exclusion(p_owner_id uuid, p_listing_id uuid, p_excluded boolean, p_reason text DEFAULT NULL::text)
  RETURNS boolean
@@ -3977,7 +3977,7 @@ begin
    where l.owner_id = p_owner_id and (l.id = p_listing_id or (identity is not null and l.cross_source_identity = identity));
   return true;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_price_radar_verification_queue_rejection(p_owner_id uuid, p_queue_id uuid, p_rejected boolean)
  RETURNS boolean
@@ -3993,7 +3993,7 @@ begin
    where q.owner_id = p_owner_id and q.id = p_queue_id and q.status in ('pending','rejected');
   return found;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.set_search_filter_updated_at()
  RETURNS trigger
@@ -4003,7 +4003,7 @@ begin
   new.updated_at = now();
   return new;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.terminate_price_radar_run(p_owner_id uuid, p_run_id uuid)
  RETURNS text
@@ -4088,7 +4088,7 @@ begin
 
   return 'terminated';
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.upsert_price_radar_district_queue_candidate(p_owner_id uuid, p_candidate jsonb)
  RETURNS uuid
@@ -4145,7 +4145,7 @@ begin
   end if;
   return saved_id;
 end;
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION public.upsert_price_radar_verification_candidate(p_owner_id uuid, p_candidate jsonb)
  RETURNS uuid
@@ -4220,7 +4220,7 @@ exception when unique_violation then
   update public.price_radar_verification_queue q set last_seen_at = now() where q.id = queue_row.id;
   return queue_row.id;
 end;
-$function$
+$function$;
 
 CREATE TRIGGER ceo_decisions_append_only BEFORE DELETE OR UPDATE ON public.ceo_decisions FOR EACH ROW EXECUTE FUNCTION prevent_investment_history_mutation();
 CREATE TRIGGER deal_actual_outcomes_append_only BEFORE DELETE OR UPDATE ON public.deal_actual_outcomes FOR EACH ROW EXECUTE FUNCTION prevent_investment_history_mutation();

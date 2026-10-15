@@ -1,4 +1,4 @@
-import { AndroidJobError, claimAndroidJob, completeAndroidJob, heartbeatAndroidJob, readAndroidJobStatus, type AndroidJobStore } from "./jobs.ts";
+import { AndroidJobError, claimAndroidJob, completeAndroidJob, heartbeatAndroidJob, readAndroidJobStatus, type AndroidJobStore, type AndroidBatchContext } from "./jobs.ts";
 import type { FacebookCollectorBatch } from "../facebook-batch.ts";
 
 export const ANDROID_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -9,7 +9,7 @@ export type AndroidDependencies = {
   atomicOfflineImportReplay?: boolean;
   authenticate: (request: Request, pathname: string, body: string) => Promise<string>;
   store: () => AndroidJobStore;
-  processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: { sourceScanId: string }) => Promise<{ status: string }>;
+  processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: AndroidBatchContext) => Promise<{ status: string }>;
 };
 export async function handleAndroidRequest(request: Request, action: AndroidAction, deps: AndroidDependencies): Promise<Response> {
   try {
