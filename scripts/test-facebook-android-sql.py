@@ -92,9 +92,9 @@ begin
  outcome := begin_android_facebook_completion(j.id,device,j.lease_token,completion,repeat('a',64));
  assert outcome->>'outcome'='duplicate' and outcome->'receipt'=receipt;
  assert (select status='queued' and attempts=0 from facebook_scan_jobs where consumer_type='BROWSER_EXTENSION');
- assert not has_function_privilege('anon','public.claim_android_facebook_scan_job(uuid,integer)','execute');
- assert not has_function_privilege('authenticated','public.claim_android_facebook_scan_job(uuid,integer)','execute');
- assert has_function_privilege('service_role','public.claim_android_facebook_scan_job(uuid,integer)','execute');
+ assert not has_function_privilege('anon','public.claim_android_facebook_scan_job(uuid,integer,uuid[])','execute');
+ assert not has_function_privilege('authenticated','public.claim_android_facebook_scan_job(uuid,integer,uuid[])','execute');
+ assert has_function_privilege('service_role','public.claim_android_facebook_scan_job(uuid,integer,uuid[])','execute');
 end $$;
 """
 

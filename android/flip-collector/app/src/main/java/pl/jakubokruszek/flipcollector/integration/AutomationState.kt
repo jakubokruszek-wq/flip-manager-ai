@@ -13,7 +13,11 @@ interface AtomicAutomationStorage {
 
 /** Separate OFFLINE_TEST journal; never consumes DEMO/LIVE cursors or outboxes. */
 class AutomationState(private val disk: AtomicAutomationStorage) : CompletionStorage, WindowCursorStorage {
-    private fun read(): JSONObject = disk.read()?.let(::JSONObject) ?: JSONObject().put("mode", "OFFLINE_TEST")
+    private fun read(): JSONObject {
+        val row=disk.read()?.let(::JSONObject) ?: JSONObject().put("mode", "OFFLINE_TEST")
+        check(row.getString("mode")=="OFFLINE_TEST") { "AUTOMATION_DOMAIN_MISMATCH" }
+        return row
+    }
     private fun <T> change(block: (JSONObject) -> T): T = synchronized(lock) {
         val row = read(); check(row.getString("mode") == "OFFLINE_TEST")
         val result = block(row); disk.write(row.toString()); result
@@ -48,6 +52,16 @@ class AutomationState(private val disk: AtomicAutomationStorage) : CompletionSto
     }
     fun groups(value: List<SyncedGroup>, syncedAt: Long? = null) { change { row ->
         row.put("groups", WatcherCodec.encodeSyncedGroups(value)); if (syncedAt != null) row.put("lastSync", syncedAt)
+    } }
+    fun sync(remote: List<RemoteGroup>, now: Long): List<SyncedGroup> = change { row ->
+        val merged=GroupSync.merge(groups(),remote) { it.remoteId }.first
+        row.put("groups",WatcherCodec.encodeSyncedGroups(merged)).put("lastSync",now)
+        merged
+    }
+    fun toggle(sourceId: String, enabled: Boolean) { change { row ->
+        row.put("groups",WatcherCodec.encodeSyncedGroups(groups().map {
+            if(it.remoteId==sourceId) it.copy(group=it.group.copy(active=enabled)) else it
+        }))
     } }
     fun active(): JSONObject? = synchronized(lock) { read().optJSONObject("active") }
     fun claimed(window: String, source: String, job: ClaimedJob) { change { row ->

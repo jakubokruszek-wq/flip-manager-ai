@@ -27,8 +27,7 @@ class OfflineAutomation(
             check(device.getBoolean("paired") && device.getString("consumerType") == "ANDROID_WEBVIEW")
             state.device(true)
             val remote=withContext(Dispatchers.IO) { api.sources() }
-            val merged=GroupSync.merge(state.groups(),remote) { it.remoteId }.first
-            state.groups(merged,clock())
+            val merged=state.sync(remote,clock())
             val eligible=merged.filter { it.scannable && it.remoteId != null }.sortedWith(
                 compareBy<SyncedGroup> { when(it.priority) { "high" -> 0; "normal" -> 1; else -> 2 } }.thenBy { it.remoteId })
             // A killed process may leave a claimed lease but no completion body.

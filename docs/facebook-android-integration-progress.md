@@ -196,3 +196,17 @@ stanowi zgody na produkcyjną migrację, deployment lub skan Facebooka.
   New Kotlin/PostgreSQL/emulator/build checks are pending CI; not yet claimed PASS.
 - Local HTTPS proxy remains unavailable, so dependencies/Gradle/PostgreSQL are
   verified through the isolated Actions workflows, not a production environment.
+
+### 0.6 checkpoint: first CI and race review
+
+- Remote snapshot b4e42f2b616487b83a74fe5131d6f45b2f265591 has tree
+  6ccc72667cf3bb0f4f6d898de81766eb53a4f7ed (local 656abf0).
+- TypeScript, ESLint, full Next build and Node suites PASS in backend job
+  116417165417. Kotlin compilation and JVM tests PASS in APK job 116417112605.
+- PostgreSQL: 15/16 passed; one privilege assertion still named the previous
+  two-argument function OID. Updated the assertion to the scoped signature.
+- Made source sync/toggles atomic in the same encrypted journal, validated corrupt
+  group state fail-closed, and added heartbeat-loss/domain-corruption regressions.
+- Added docs/facebook-android-0.6-offline.md with pinned local HTTPS/adb setup,
+  continuation, recovery semantics, transactional fixture counters and LIVE gaps.
+- Remaining CI results are pending; no production actions performed.

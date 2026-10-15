@@ -56,7 +56,7 @@ fun OfflineAutomationPanel(context: Context) {
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
                     Text(item.group.name+" · "+item.sourceType+" · "+item.accessStatus,Modifier.weight(1f))
                     Switch(checked=item.group.active,onCheckedChange={ enabled ->
-                        state.groups(state.groups().map { if(it.remoteId==item.remoteId) it.copy(group=it.group.copy(active=enabled)) else it })
+                        state.toggle(requireNotNull(item.remoteId),enabled)
                         snapshot=state.diagnostics()
                     })
                 }

@@ -107,4 +107,15 @@ class OfflineAutomationTest {
         assertEquals("DEVICE_CONSTRAINT",OfflineAutomation(api,state,{0}).run("night",200_000,{conditions.copy(wifi=false)}) { error("must not collect") })
         assertEquals(0,api.claims)
     }
+    @Test fun lostHeartbeatFencesCollectionWithoutCreatingStaleCompletion()=runBlocking {
+        val state=AutomationState(Disk());val api=Api();api.sources=api.sources.take(1);api.expired=true
+        val result=OfflineAutomation(api,state,heartbeatMs=5).run("night",System.currentTimeMillis()+200_000,{conditions}) { delay(200);JSONObject() }
+        assertEquals("SOURCE_DEFERRED",result);assertNull(state.load());assertNull(state.activeJob());assertEquals(0,api.writes)
+    }
+    @Test fun corruptGroupsAndWrongDataDomainFailClosed() {
+        val disk=Disk();disk.raw=JSONObject().put("mode","DEMO").toString()
+        try { AutomationState(disk).diagnostics();fail("domain mismatch") } catch(_: IllegalStateException) {}
+        disk.raw=JSONObject().put("mode","OFFLINE_TEST").put("groups","broken").toString()
+        try { AutomationState(disk).groups();fail("corrupt groups") } catch(_: org.json.JSONException) {}
+    }
 }
