@@ -256,3 +256,25 @@ stanowi zgody na produkcyjną migrację, deployment lub skan Facebooka.
   sources are allowed before continuation, not seven additional minutes.
 - Latest published backend/APK/standalone Android 16 workflows are green. New
   deadline behavior still requires Kotlin and full E2E verification.
+
+## 0.6 — końcowy checkpoint: pełne CI PASS
+
+Kod remote 34c45a86339fab4bb721abd9c68a97e47bb673cc / local
+9c34516319c1abf153a51b6ccefed2f9feef3ad6, drzewo
+82bc92b2968710e600d6d477241542515573f380. Cztery workflow completed/success:
+
+- 38737248165: TypeScript, ESLint, pełny Next build, 389 Node, PostgreSQL 16/16.
+- 38737245746: Kotlin/JVM, APK 0.6.0-offline-debug, versionCode 27, .integration.
+- 38737245847: Android 16 emulator (fixture E2E pominięte tylko w tym workflow).
+- 38737248216: pełne E2E 9/9, 0 skipped, rzeczywisty AutoScanWorker i PostgreSQL.
+
+Dowód E2E: 13 źródeł, lokalne wyłączenie/niedostępność/błąd/puste źródło,
+awaria po rezerwacji przed transakcją, utrata odpowiedzi po commit, odtworzenie
+zaszyfrowanego stanu; powtórny cykl nadal 9 ofert, 0 insertów/aktualizacji,
+9 duplikatów. Limit 8 minut obejmuje też synchronizację i odzyskiwanie.
+
+Pełny raport, link APK/hash, ryzyka i lista kroków do LIVE:
+`docs/facebook-android-0.6-validation.md`. Instrukcja Samsunga/fixture:
+`docs/facebook-android-0.6-offline.md`. Wszystkie bramki produkcyjne false;
+bez LIVE, produkcyjnego Supabase, zmian OLX/Cloudflare, merge i deploymentu.
+Nowych płatnych usług nie utworzono. Oryginalny ZIP/commity bez zmian.
