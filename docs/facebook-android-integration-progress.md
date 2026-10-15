@@ -349,3 +349,10 @@ replay. New native test drives actual HMAC auth -> job API -> real normalizer ->
 Finder RPC -> PostgreSQL, injects response loss AFTER a post commit, expires the
 lease, resumes, and repeats a new job. These new checks await CI. Both production
 gates/atomic feature remain disabled; remote approval question remains pending.
+
+Native schema checkpoint at remote `ae3e54d`: actual first Watcher -> Finder
+import, real sale gate, RLS/grants and OLX isolation checks passed. Remaining
+native failures came from test devices reusing a token_hash prohibited by the
+real unique constraint. Changed fixtures to unique per-device hashes/tokens;
+the constraint and auth behavior stay unchanged. Full schema native suite still
+not entirely PASS. Legacy-reservation refusal is now also tested explicitly.

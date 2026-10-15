@@ -55,7 +55,7 @@ async function ownership(profile=false,reserve=true): Promise<AndroidFinderOwner
   const groupId=profile ? "00000000-0000-4000-8000-000000000009" : "00000000-0000-4000-8000-000000000008";
   const group={id:groupId,name:context.groupName,url:profile ? "https://www.facebook.com/profile.php?id=123456" : context.groupUrl,sourceId:profile ? "123456" : context.groupId,type:profile ? "PROFILE" : "GROUP"};
   for(const result of [
-    await db.from("collector_devices").insert({id:deviceId,device_name:"Synthetic test",installation_id:deviceId,token_hash:"synthetic-only",consumer_type:"ANDROID_WEBVIEW"}),
+    await db.from("collector_devices").insert({id:deviceId,device_name:"Synthetic test",installation_id:deviceId,token_hash:createHash("sha256").update(deviceId).digest("hex"),consumer_type:"ANDROID_WEBVIEW"}),
     await db.from("watched_facebook_groups").upsert({id:groupId,name:"Synthetic only",url:group.url,enabled:true,access_status:"CONNECTED"}),
     await db.from("source_scans").insert({id:sourceScanId,search_filter_id:context.filter.id,source:"facebook",status:"running",scan_run_id:runId,filter_snapshot:context.filter}),
     await db.from("collector_android_source_grants").insert({device_id:deviceId,watched_group_id:groupId,search_filter_id:context.filter.id}),
@@ -160,8 +160,9 @@ test("confirmed profile permalink is supported by the same atomic Finder RPC",as
 });
 test("signed API recovers a real Finder post-commit failure after lease expiry and repeats without duplicates",async()=>{
   const path="/api/collector/android/jobs/complete",postId="543210123456789";
-  const token=randomUUID()+randomUUID();
+  const tokens=new Map<string,string>();
   async function completion(owner:AndroidFinderOwnership) {
+    const token=randomUUID()+randomUUID();tokens.set(owner.deviceId,token);
     const key=await db.from("collector_devices").update({token_hash:collectorSigningKey(token)}).eq("id",owner.deviceId);assert.equal(key.error,null);
     const job=await db.from("facebook_scan_jobs").select("scan_run_id").eq("id",owner.jobId).single();assert.ok(job.data);
     const now=new Date().toISOString();
@@ -173,6 +174,7 @@ test("signed API recovers a real Finder post-commit failure after lease expiry a
     }});
   }
   async function send(owner:AndroidFinderOwnership,body:string,nonce?:string) {
+    const token=tokens.get(owner.deviceId);assert.ok(token);
     const auth=createCollectorAuthHeaders({deviceId:owner.deviceId,deviceToken:token,method:"POST",pathname:path,body,nonce});
     const request=new Request("https://offline.invalid"+path,{method:"POST",headers:{"content-type":"application/json","x-flip-collector-device-id":auth.deviceId,"x-flip-collector-timestamp":auth.timestamp,"x-flip-collector-nonce":auth.nonce,"x-flip-collector-signature":auth.signature},body});
     return handleAndroidRequest(request,"complete",{enabled:()=>true,expectedDataMode:"OFFLINE_TEST",atomicFinderImportReplay:true,store:androidJobStore,
@@ -204,6 +206,14 @@ test("real RLS and grants deny anonymous listing writes and Android RPCs",async(
   const denied=await anon.from("listings").insert({source:"facebook",external_listing_id:"forbidden",original_url:input.url});
   assert.ok(denied.error);
   const rpc=await anon.rpc("claim_android_facebook_scan_job",{p_device_id:"00000000-0000-4000-8000-000000000001",p_lease_seconds:180});assert.ok(rpc.error);
+  const begin=await anon.rpc("begin_android_facebook_finder_completion",{p_job_id:randomUUID(),p_device_id:randomUUID(),p_lease_token:randomUUID(),p_completion_id:randomUUID(),p_payload_hash:"a".repeat(64)});assert.ok(begin.error);
+});
+test("new recovery capability never upgrades an ambiguous legacy reservation",async()=>{
+  const owner=await ownership(false,false);
+  const args={p_job_id:owner.jobId,p_device_id:owner.deviceId,p_lease_token:owner.leaseToken,p_completion_id:owner.completionId,p_payload_hash:owner.payloadHash};
+  const legacy=await db.rpc("begin_android_facebook_completion",args);assert.equal(legacy.data?.outcome,"reserved");
+  const refused=await db.rpc("begin_android_facebook_finder_completion",args);assert.equal(refused.data?.outcome,"legacy");
+  const row=await db.from("facebook_scan_jobs").select("android_finder_write_version").eq("id",owner.jobId).single();assert.equal(row.data?.android_finder_write_version,0);
 });
 test("Finder import never inserts OLX jobs or changes OLX automation",async()=>{
   for(const table of ["olx_scan_jobs","finder_olx_slots","olx_automation_control","price_radar_runs"]) {
