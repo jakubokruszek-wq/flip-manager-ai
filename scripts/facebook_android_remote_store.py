@@ -51,7 +51,24 @@ def configure(pg):
     def connect():
         try:
             return psycopg.connect(**parameters)
-        except psycopg.Error:
+        except psycopg.Error as exc:
+            # Only allowlisted labels, never exception text, URI, SQL or secrets.
+            reason = str(exc).lower()
+            if exc.sqlstate == "28P01" or "password authentication failed" in reason:
+                category = "AUTHENTICATION_FAILED"
+            elif "certificate verify failed" in reason or "certificate" in reason or "ssl root" in reason:
+                category = "TLS_CERTIFICATE_REJECTED"
+            elif "could not translate host name" in reason or "name or service not known" in reason:
+                category = "DNS_RESOLUTION_FAILED"
+            elif "timeout" in reason:
+                category = "CONNECTION_TIMEOUT"
+            elif "connection refused" in reason:
+                category = "CONNECTION_REFUSED"
+            elif "tenant or user not found" in reason:
+                category = "POOLER_USER_REJECTED"
+            else:
+                category = "OTHER_CONNECTION_ERROR"
+            print("OFFLINE_TEST_CONNECTION_CATEGORY=" + category, flush=True)
             raise RuntimeError("OFFLINE_TEST_DATABASE_UNAVAILABLE") from None
     # Verify connectivity separately from potentially mutating initialization.
     with connect() as db:
