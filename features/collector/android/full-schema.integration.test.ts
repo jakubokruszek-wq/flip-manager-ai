@@ -13,10 +13,25 @@ function jwt(role: string) {
   const body=Buffer.from(JSON.stringify({role,exp:Math.floor(Date.now()/1000)+3600})).toString("base64url");
   return head+"."+body+"."+createHmac("sha256",secret).update(head+"."+body).digest("base64url");
 }
-const db=createClient("http://127.0.0.1:55442",jwt("service_role"),{auth:{persistSession:false,autoRefreshToken:false}});
+// Standalone PostgREST has no Supabase gateway. Remove only its /rest/v1
+// prefix and forbid all other hosts; SQL and client query builders stay real.
+const gateway: typeof fetch=(input,init)=>{
+  const url=new URL(typeof input==="string" || input instanceof URL ? input.toString() : input.url);
+  if(url.origin!=="http://127.0.0.1:55442" || !url.pathname.startsWith("/rest/v1/")) throw Error("ISOLATED_GATEWAY_ONLY");
+  url.pathname=url.pathname.slice("/rest/v1".length);
+  return fetch(url,init);
+};
+const db=createClient("http://127.0.0.1:55442",jwt("service_role"),{global:{fetch:gateway},auth:{persistSession:false,autoRefreshToken:false}});
 mock.module("@/features/facebook-watcher/supabase-admin",{namedExports:{createFacebookWatcherAdminClient:()=>db}});
 const {importFacebookWatcher}=await import("../../facebook-watcher/server.ts");
 const {getSearchFilter}=await import("../../flip-finder/server/search-filters.ts");
+let schemaReady=false;
+for(let n=0;n<30;n++) {
+  const probe=await db.from("search_filters").select("id").limit(1);
+  if(!probe.error){schemaReady=true;break;}
+  await new Promise(resolve=>setTimeout(resolve,250));
+}
+assert.equal(schemaReady,true,"PostgREST schema/role did not become ready");
 const filter=await getSearchFilter("66666666-6666-4666-8666-666666666666",{supabase:db});
 assert.ok(filter);
 const context={filter,sourceScanId:"44444444-4444-4444-8444-444444444444",groupId:"synthetic-lodz",groupName:"Synthetic only",groupUrl:"https://www.facebook.com/groups/synthetic-lodz/",postId:"987654321012345",checkedAt:new Date().toISOString(),imageMode:"SEARCH_DATA_FIRST" as const};
@@ -128,7 +143,7 @@ test("confirmed profile permalink is supported by the same atomic Finder RPC",as
   assert.equal(metadata.data?.source_post_url,url);
 });
 test("real RLS and grants deny anonymous listing writes and Android RPCs",async()=>{
-  const anon=createClient("http://127.0.0.1:55442",jwt("anon"),{auth:{persistSession:false,autoRefreshToken:false}});
+  const anon=createClient("http://127.0.0.1:55442",jwt("anon"),{global:{fetch:gateway},auth:{persistSession:false,autoRefreshToken:false}});
   const denied=await anon.from("listings").insert({source:"facebook",external_listing_id:"forbidden",original_url:input.url});
   assert.ok(denied.error);
   const rpc=await anon.rpc("claim_android_facebook_scan_job",{p_device_id:"00000000-0000-4000-8000-000000000001",p_lease_seconds:180});assert.ok(rpc.error);
