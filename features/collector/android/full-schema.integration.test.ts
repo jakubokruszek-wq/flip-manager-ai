@@ -21,17 +21,18 @@ const filter=await getSearchFilter("66666666-6666-4666-8666-666666666666",{supab
 assert.ok(filter);
 const context={filter,sourceScanId:"44444444-4444-4444-8444-444444444444",groupId:"synthetic-lodz",groupName:"Synthetic only",groupUrl:"https://www.facebook.com/groups/synthetic-lodz/",postId:"987654321012345",checkedAt:new Date().toISOString(),imageMode:"SEARCH_DATA_FIRST" as const};
 const input={url:"https://www.facebook.com/groups/synthetic-lodz/posts/987654321012345/",postText:"Sprzedam mieszkanie 50 m2, 2 pokoje, Łódź Bałuty, w bloku z cegły. Cena 260 tyś. zł. Bezpośrednio właściciel.",images:[]};
-async function ownership(): Promise<AndroidFinderOwnership> {
+async function ownership(profile=false): Promise<AndroidFinderOwnership> {
   const deviceId=randomUUID(),jobId=randomUUID(),sourceScanId=randomUUID(),completionId=randomUUID(),runId=randomUUID();
   const payloadHash=createHash("sha256").update(completionId).digest("hex");
-  const groupId="00000000-0000-4000-8000-000000000008";
+  const groupId=profile ? "00000000-0000-4000-8000-000000000009" : "00000000-0000-4000-8000-000000000008";
+  const group={id:groupId,name:context.groupName,url:profile ? "https://www.facebook.com/profile.php?id=123456" : context.groupUrl,sourceId:profile ? "123456" : context.groupId,type:profile ? "PROFILE" : "GROUP"};
   for(const result of [
     await db.from("collector_devices").insert({id:deviceId,device_name:"Synthetic test",installation_id:deviceId,token_hash:"synthetic-only",consumer_type:"ANDROID_WEBVIEW"}),
-    await db.from("watched_facebook_groups").upsert({id:groupId,name:"Synthetic only",url:context.groupUrl,enabled:true,access_status:"CONNECTED"}),
+    await db.from("watched_facebook_groups").upsert({id:groupId,name:"Synthetic only",url:group.url,enabled:true,access_status:"CONNECTED"}),
     await db.from("source_scans").insert({id:sourceScanId,search_filter_id:context.filter.id,source:"facebook",status:"running",scan_run_id:runId,filter_snapshot:context.filter}),
     await db.from("collector_android_source_grants").insert({device_id:deviceId,watched_group_id:groupId,search_filter_id:context.filter.id}),
     await db.from("facebook_scan_jobs").insert({id:jobId,scan_run_id:runId,source_scan_id:sourceScanId,search_filter_id:context.filter.id,consumer_type:"ANDROID_WEBVIEW",idempotency_key:jobId,
-      group_snapshot:[{id:groupId,name:context.groupName,url:context.groupUrl,sourceId:context.groupId,type:"GROUP"}]})
+      group_snapshot:[group]})
   ]) assert.equal(result.error,null,result.error?.message);
   const claimed=await db.rpc("claim_android_facebook_scan_job",{p_device_id:deviceId,p_lease_seconds:180});
   assert.equal(claimed.error,null);const lease:unknown=claimed.data;
@@ -75,7 +76,7 @@ test("failure after listing/history writes rolls back metadata, membership, coun
   const owner=await ownership(),postId="876543210123456",url=`https://facebook.com/groups/synthetic-lodz/posts/${postId}`;
   const prepared={sourceScanId:owner.sourceScanId,postId,checkedAt:new Date().toISOString(),
     listing:{source:"facebook",external_listing_id:postId,original_url:url,normalized_url:url,title:"Synthetic transaction",description:"Synthetic only",price:500000,area:70,rooms:3,images:[],content_hash:"isolated-transaction",flip_score:50},
-    metadata:{source_post_url:url,group_name:"Synthetic only",metadata:{postId}},
+    metadata:{source_post_url:url,group_name:"Synthetic only",metadata:{postId,groupId:context.groupId}},
     decision:{bucket:"INVALID",reasons:[],missingFields:[]}};
   await assert.rejects(persistAndroidFinderPost(db,owner,prepared),/TRANSACTION_FAILED/);
   const absent=await db.from("listings").select("id").eq("source","facebook").eq("external_listing_id",postId);
@@ -92,6 +93,39 @@ test("atomic Finder RPC fences stale owners and another source",async()=>{
   const prepared={sourceScanId:owner.sourceScanId,postId:"876543210123457",checkedAt:new Date().toISOString(),listing:{source:"olx"},metadata:{},decision:{bucket:"REVIEW",reasons:[],missingFields:[]}};
   await assert.rejects(persistAndroidFinderPost(db,owner,prepared),/TRANSACTION_FAILED/);
   await assert.rejects(persistAndroidFinderPost(db,{...owner,leaseToken:randomUUID()},prepared),/TRANSACTION_FAILED/);
+});
+test("two concurrent first imports produce one physical INSERT and one DUPLICATE",async()=>{
+  const owners=await Promise.all([ownership(),ownership()]),postId="765432101234567";
+  const raw={...input,url:`https://www.facebook.com/groups/synthetic-lodz/posts/${postId}/`,postText:"Sprzedam mieszkanie 95 m2, 4 pokoje, Łódź Widzew, blok z cegły. Cena 750000 zł. Właściciel."};
+  const results=await Promise.all(owners.map(owner=>runAndroidDataOnlyImport(()=>importFacebookWatcher(raw,{...context,postId,sourceScanId:owner.sourceScanId}),owner)));
+  assert.equal(results.reduce((n,r)=>n+(r.transactionalWrite?.created??-100),0),1);
+  assert.equal(results.reduce((n,r)=>n+(r.transactionalWrite?.updated??-100),0),0);
+  assert.equal(results.reduce((n,r)=>n+(r.transactionalWrite?.duplicates??-100),0),1);
+  assert.equal(results[0].listingId,results[1].listingId);
+  const history=await db.from("listing_snapshots").select("id").eq("listing_id",results[0].listingId);
+  assert.equal(history.data?.length,1);
+});
+test("a price update is counted once; archived history is never reactivated by a later job",async()=>{
+  const owner=await ownership();
+  const result=await runAndroidDataOnlyImport(()=>importFacebookWatcher({...input,postText:input.postText.replace("260 tyś.","250 tyś.")},{...context,sourceScanId:owner.sourceScanId}),owner);
+  assert.deepEqual(result.transactionalWrite,{created:0,updated:1,duplicates:0});assert.ok(result.listingId);
+  const before=await db.from("listings").select("price,first_seen_at").eq("id",result.listingId).single();
+  assert.equal(before.data?.price,250000);
+  const archived=await db.from("listings").update({lifecycle_status:"ARCHIVED",archived_at:new Date().toISOString()}).eq("id",result.listingId);assert.equal(archived.error,null);
+  const later=await ownership();
+  const replay=await runAndroidDataOnlyImport(()=>importFacebookWatcher({...input,postText:input.postText.replace("260 tyś.","240 tyś.")},{...context,sourceScanId:later.sourceScanId}),later);
+  assert.deepEqual(replay.transactionalWrite,{created:0,updated:0,duplicates:1});assert.equal(replay.matched,false);
+  const row=await db.from("listings").select("price,first_seen_at,lifecycle_status").eq("id",result.listingId).single();
+  assert.equal(row.data?.price,250000);assert.equal(row.data?.first_seen_at,before.data?.first_seen_at);assert.equal(row.data?.lifecycle_status,"ARCHIVED");
+});
+test("confirmed profile permalink is supported by the same atomic Finder RPC",async()=>{
+  const owner=await ownership(true),postId="654321012345678",url=`https://facebook.com/123456/posts/${postId}`;
+  const result=await persistAndroidFinderPost(db,owner,{sourceScanId:owner.sourceScanId,postId,checkedAt:new Date().toISOString(),
+    listing:{source:"facebook",external_listing_id:postId,original_url:url,normalized_url:url,title:"Synthetic profile post",price:320000,area:40,images:[],content_hash:"synthetic-profile"},
+    metadata:{source_post_url:url,metadata:{postId,groupId:"123456"}},decision:{bucket:"REVIEW",reasons:[],missingFields:["rooms"]}});
+  assert.equal(result.created,1);
+  const metadata=await db.from("listing_source_metadata").select("source_post_url").eq("listing_id",result.listingId).single();
+  assert.equal(metadata.data?.source_post_url,url);
 });
 test("real RLS and grants deny anonymous listing writes and Android RPCs",async()=>{
   const anon=createClient("http://127.0.0.1:55442",jwt("anon"),{auth:{persistSession:false,autoRefreshToken:false}});

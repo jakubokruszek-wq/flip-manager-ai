@@ -331,3 +331,11 @@ Schema snapshot now terminates every pg_get_functiondef statement, including
 inline function bodies; hash `3ee5b756be67b43e02809ba818e0f1e9417aef08e4ee60ceedebdd5bd4779069`.
 Local Node checks now 398/398 (90 backend, 243 regression, 65 offline/core).
 New changes still await full CI; no claims of remote deployment or phone tests.
+
+Remote preparation CI: container build/safe-off and PostgreSQL persistent-store
+restart/permission tests PASS at remote `1e9b956`. Remote ingress loopback test
+failed health readiness because its HTTP client replaced the required Host;
+changed only the test proxy simulator to an explicit HTTP/1 request, retaining
+server Host/HTTPS checks. Added native Finder INSERT race, UPDATE, archive and
+PROFILE checks and strengthened RPC's post/source binding. Full-schema import
+still awaits execution beyond ingress; no PASS claimed yet.

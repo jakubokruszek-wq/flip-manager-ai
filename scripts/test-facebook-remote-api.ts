@@ -3,12 +3,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { request as proxyRequest } from "node:http";
 import { collectorSigningKey, createCollectorAuthHeaders } from "../features/collector/protocol.ts";
 if(process.env.GITHUB_ACTIONS!=="true" && process.env.FLIP_ISOLATED_TESTS!=="1")throw Error("ISOLATED_TESTS_ONLY");
 const origin="https://watcher-test.example.org",deviceId="00000000-0000-4000-8000-000000000001";
 const token=randomBytes(32).toString("base64url");
 const children:ChildProcess[]=[];
 const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+// Simulate the trusted HTTPS proxy on loopback. Fetch implementations may
+// replace the Host header, so send an actual HTTP/1 request with that header.
+function viaProxy(url:string,init:{method?:string;headers:Record<string,string>;body?:string;signal?:AbortSignal}):Promise<Response> {
+  return new Promise((resolve,reject)=>{
+    const req=proxyRequest(url,{method:init.method??"GET",headers:init.headers,signal:init.signal},res=>{
+      const chunks:Buffer[]=[];let size=0;
+      res.on("data",(chunk:Buffer)=>{size+=chunk.length;if(size>2*1024*1024){req.destroy(Error("ISOLATED_RESPONSE_TOO_LARGE"));return;}chunks.push(chunk);});
+      res.on("end",()=>resolve(new Response(Buffer.concat(chunks).toString("utf8"),{status:res.statusCode??500})));
+      res.on("error",reject);
+    });req.on("error",reject);req.end(init.body);
+  });
+}
 async function shutdown(child:ChildProcess) {
   if(child.exitCode!==null || child.signalCode!==null)return;
   const exited=new Promise<void>(resolve=>child.once("exit",()=>resolve()));
@@ -31,17 +44,17 @@ test("remote OFFLINE_TEST ingress keeps signed sources, claim, checkpoint and re
     ready=false;
     for(let n=0;n<30;n++){
       if(children[1].exitCode!==null)throw Error("ISOLATED_API_START_FAILED");
-      try{const r=await fetch(url+"/healthz",{headers,signal:AbortSignal.timeout(1000)});if(r.ok){ready=true;break;}}catch{}
+      try{const r=await viaProxy(url+"/healthz",{headers,signal:AbortSignal.timeout(1000)});if(r.ok){ready=true;break;}}catch{}
       await sleep(500);
     }
     assert.equal(ready,true);
     async function signed(path:string,body="{}",nonce?:string){
       const auth=createCollectorAuthHeaders({deviceId,deviceToken:token,method:"POST",pathname:path,body,nonce});
-      return fetch(url+path,{method:"POST",headers:{...headers,"x-flip-collector-device-id":deviceId,"x-flip-collector-timestamp":auth.timestamp,"x-flip-collector-nonce":auth.nonce,"x-flip-collector-signature":auth.signature},body});
+      return viaProxy(url+path,{method:"POST",headers:{...headers,"x-flip-collector-device-id":deviceId,"x-flip-collector-timestamp":auth.timestamp,"x-flip-collector-nonce":auth.nonce,"x-flip-collector-signature":auth.signature},body});
     }
-    for(const path of ["/__test/stats","/__test/requeue","/__test/fail-next-import"])assert.equal((await fetch(url+path,{headers})).status,404);
-    assert.equal((await fetch(url+"/healthz",{headers:{...headers,host:"flip-manager-ai.vercel.app"}})).status,421);
-    assert.equal((await fetch(url+"/api/collector/android/sources/sync",{method:"POST",headers,body:"{}"})).status,401);
+    for(const path of ["/__test/stats","/__test/requeue","/__test/fail-next-import"])assert.equal((await viaProxy(url+path,{headers})).status,404);
+    assert.equal((await viaProxy(url+"/healthz",{headers:{...headers,host:"flip-manager-ai.vercel.app"}})).status,421);
+    assert.equal((await viaProxy(url+"/api/collector/android/sources/sync",{method:"POST",headers,body:"{}"})).status,401);
     const syncPath="/api/collector/android/sources/sync",nonce="synthetic_remote_nonce_000001";
     const response=await signed(syncPath,"{}",nonce);assert.equal(response.status,200);
     const sources=await response.json();assert.equal(sources.sources.length,13);assert.equal(sources.sources.filter((s:{type:string})=>s.type==="GROUP").length,11);

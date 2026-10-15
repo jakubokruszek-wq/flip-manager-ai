@@ -34,12 +34,22 @@ begin
        and (g.expires_at is null or g.expires_at>clock_timestamp()))
  then raise exception 'ANDROID_FINDER_OWNER_LOST' using errcode='42501'; end if;
  if p_post_id is null or p_post_id !~ '^[0-9]{5,30}$' or p_checked_at is null
+   or coalesce(j.group_snapshot->0->>'type','') not in ('GROUP','PROFILE')
+   or nullif(j.group_snapshot->0->>'sourceId','') is null
+   or p_decision->>'bucket' is null
    or p_listing->>'source' is distinct from 'facebook'
+   or p_metadata->'metadata'->>'postId' is distinct from p_post_id
    or p_metadata->>'source_post_url' is distinct from p_listing->>'normalized_url'
+   or p_metadata->'metadata'->>'groupId' is distinct from j.group_snapshot->0->>'sourceId'
    or p_listing->>'normalized_url' !~ '^https://(www[.])?facebook[.]com/'
    or not ((p_listing->>'normalized_url') ~ ('/(posts|permalink)/'||p_post_id||'/?$')
      or (p_listing->>'normalized_url') ~ ('/(permalink|story)[.]php[?]([^#]*&)?story_fbid='||p_post_id||'(&|$)'))
  then raise exception 'ANDROID_FINDER_IDENTITY_INVALID' using errcode='22023'; end if;
+ if (j.group_snapshot->0->>'type'='GROUP' and strpos(p_listing->>'normalized_url','facebook.com/groups/'||(j.group_snapshot->0->>'sourceId')||'/')=0)
+   or (j.group_snapshot->0->>'type'='PROFILE' and
+     strpos(p_listing->>'normalized_url','facebook.com/'||(j.group_snapshot->0->>'sourceId')||'/posts/')=0 and
+     substring(p_listing->>'normalized_url' from '[?&]id=([^&]+)') is distinct from j.group_snapshot->0->>'sourceId')
+ then raise exception 'ANDROID_FINDER_SOURCE_MISMATCH' using errcode='22023'; end if;
  perform pg_advisory_xact_lock(hashtextextended('android-finder-post:'||p_job_id::text||':'||p_post_id,0));
  select * into saved_receipt from public.android_facebook_post_receipts where job_id=p_job_id and post_id=p_post_id;
  if found then
