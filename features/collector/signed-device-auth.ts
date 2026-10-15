@@ -16,13 +16,15 @@ export async function authenticateSignedCollectorRequest(input: {
   body: string;
   now?: number;
   markHealthy?: boolean;
+  expectedConsumerType?: "BROWSER_EXTENSION" | "ANDROID_WEBVIEW";
 }): Promise<{ device: SignedCollectorDevice; auth: Extract<CollectorAuthResult, { ok: true }> }> {
   const deviceId = input.request.headers.get(COLLECTOR_DEVICE_HEADER)?.trim();
   if (!deviceId) throw new SignedCollectorAuthError(401, "MISSING_AUTH");
   const supabase = createAdminClient();
-  const deviceResult = await supabase.from("collector_devices").select("id,device_name,token_hash,revoked_at").eq("id", deviceId).maybeSingle();
+  const deviceResult = await supabase.from("collector_devices").select("id,device_name,token_hash,revoked_at,consumer_type").eq("id", deviceId).maybeSingle();
   const row = record(deviceResult.data);
   if (deviceResult.error || !row || typeof row.id !== "string" || typeof row.token_hash !== "string" || row.revoked_at) throw new SignedCollectorAuthError(401, "INVALID_DEVICE");
+  if (row.consumer_type !== (input.expectedConsumerType ?? "BROWSER_EXTENSION")) throw new SignedCollectorAuthError(403, "COLLECTOR_CONSUMER_MISMATCH");
   const auth = await verifyCollectorAuth({
     signingKey: row.token_hash,
     method: input.request.method,

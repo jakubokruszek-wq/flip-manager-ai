@@ -1,5 +1,7 @@
 import "server-only";
 
+import { buildFacebookBatchQuality, type FacebookBatchQuality } from "./android/quality";
+
 import { createHash } from "node:crypto";
 
 import { processFacebookPostBatch, mergeReconciliationDiagnostics, type FacebookPersistenceDiagnostics, type FacebookReconciliationFailureDiagnostic } from "@/features/facebook-worker/post-flow";
@@ -30,12 +32,13 @@ export type CollectorBatchResult = {
   persistenceDiagnostics?: FacebookPersistenceDiagnostics[];
   /** Deterministic scan accounting (see scan-accounting.ts) for this batch's raw captured posts. Absent on batches recorded before this feature — callers must degrade gracefully, never fabricate it. */
   accounting?: FacebookScanAccounting;
+  quality?: FacebookBatchQuality;
   accountingError?: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED";
   /** Sanitized per-post detail for FACEBOOK_FILTER_RECONCILE_FAILED outcomes only (see post-flow.ts). Never changes accounting; purely diagnostic. */
   reconciliationDiagnostics?: FacebookReconciliationFailureDiagnostic[];
 };
 
-export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
+export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch, context?: { sourceScanId: string; qualityReport?: boolean }): Promise<CollectorBatchResult> {
   // The database-backed watched_facebook_groups registry is the single
   // canonical eligibility source, matching the scheduler that enqueued this
   // batch's job in the first place -- an imported group's collected results
@@ -78,16 +81,18 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
   if (batch.health.status === "FAILED") return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), "COLLECTOR_DISCOVERY_FAILED");
 
   try {
-    const existingScan = await supabase.from("source_scans")
+    let scanQuery = supabase.from("source_scans")
       .select("id,search_filter_id,filter_snapshot,status,warnings")
       .eq("scan_run_id", batch.scanId)
       .eq("source", "facebook")
       .in("status", ["pending", "running"])
       .order("started_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    if (context) scanQuery = scanQuery.eq("id", context.sourceScanId);
+    const existingScan = await scanQuery.maybeSingle();
     if (existingScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_LOOKUP_FAILED: ${existingScan.error.message}`);
     const existingScanRow = record(existingScan.data);
+    if (context && !existingScanRow) throw new Error("COLLECTOR_CLAIMED_SOURCE_SCAN_NOT_RUNNING");
     const targets: Array<{ filter: SearchFilter; sourceScanId: string | null; existingWarnings: string[] }> = existingScanRow
       ? [{ filter: filterFromSnapshot(existingScanRow.filter_snapshot, String(existingScanRow.search_filter_id)), sourceScanId: String(existingScanRow.id), existingWarnings: stringArray(existingScanRow.warnings) }]
       : (await getActiveSearchFiltersForSource("facebook")).map((filter) => ({ filter, sourceScanId: null, existingWarnings: [] }));
@@ -168,12 +173,13 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     });
     const accounting = aggregateFacebookScanAccounting(uniqueOutcomes, batch.posts.length);
     const accountingValidation = validateFacebookScanAccounting(accounting);
+    const quality = context?.qualityReport === true ? buildFacebookBatchQuality(batch, uniqueOutcomes, historicalIdentityConflicts) : undefined;
     const mergedReconciliationDiagnostics = mergeReconciliationDiagnostics(allReconciliationDiagnostics);
     const reconciliationDiagnostics = mergedReconciliationDiagnostics.length ? mergedReconciliationDiagnostics : undefined;
     if (!accountingValidation.ok) {
       return finishBatch(supabase, deviceId, batchRowId, batch, { status: "degraded", batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors: errors + 1, sourceScanIds, health: batch.health, persistenceDiagnostics, accountingError: accountingValidation.errorCode ?? undefined, reconciliationDiagnostics }, accountingValidation.errorCode ?? undefined);
     }
-    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting, reconciliationDiagnostics });
+    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting, ...(quality ? { quality } : {}), reconciliationDiagnostics });
   } catch (error) {
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));
   }
