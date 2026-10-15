@@ -222,3 +222,14 @@ stanowi zgody na produkcyjną migrację, deployment lub skan Facebooka.
   Configuration cannot be changed during a running cycle.
 - Added Wi-Fi-loss/API-reconnect regression asserting only unfinished sources resume.
 - These final runtime changes require another CI run before being called verified.
+
+### 0.6 checkpoint: E2E fixture isolation
+
+- The 13-source Android/API/PostgreSQL test itself passed in workflow 38734070376,
+  but its fixture configuration leaked into following DEMO WorkManager tests,
+  causing two legacy assertions to fail. This was not a production or SQL failure.
+- Added finally cleanup to disable the fixture for every exit path. The repeat
+  cycle now uses actual AutoScanWorker with a real allowed window, emulator Wi-Fi
+  and charging/battery conditions; it asserts WINDOW_COMPLETE and 9 duplicates.
+- Previous full backend validation and APK/JVM remain green; revised instrumented
+  scenario requires another isolated emulator/E2E run before claiming completion.

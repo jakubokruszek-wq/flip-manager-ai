@@ -2,6 +2,8 @@ package pl.jakubokruszek.flipcollector
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.work.ListenableWorker
+import androidx.work.testing.TestListenableWorkerBuilder
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -14,6 +16,9 @@ import org.junit.runner.RunWith
 import pl.jakubokruszek.flipcollector.collector.*
 import pl.jakubokruszek.flipcollector.integration.*
 import pl.jakubokruszek.flipcollector.watcher.android.OfflineAutomationRuntime
+import pl.jakubokruszek.flipcollector.watcher.android.AutoScanWorker
+import pl.jakubokruszek.flipcollector.watcher.android.WatcherRuntime
+import pl.jakubokruszek.flipcollector.watcher.ScanSchedule
 import java.io.IOException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
@@ -29,6 +34,7 @@ class LoopbackSystemE2ETest {
         val context=instrumentation.targetContext
         val pem=instrumentation.context.assets.open("isolated-test-cert.pem").bufferedReader().use { it.readText() }
         OfflineAutomationRuntime.configure(context,origin!!,pem)
+        try {
         val signed=OfflineAutomationRuntime.client(context)
         assertFalse(BuildConfig.LIVE_COLLECTION_ENABLED)
         assertFalse(BuildConfig.ANDROID_BACKEND_INTEGRATION_ENABLED)
@@ -82,14 +88,34 @@ class LoopbackSystemE2ETest {
         assertEquals(9,stats().getInt("listings"));assertEquals(10,stats().getInt("completedBatches"))
         // Repeat every eligible source in a NEW window: no new rows or inflated updates.
         http.newCall(okhttp3.Request.Builder().url(origin+"/__test/requeue").post("{}".toRequestBody()).build()).execute().use { assertTrue(it.isSuccessful) }
-        assertEquals("WINDOW_COMPLETE",OfflineAutomation(signed,state).run("fixture-next-night",System.currentTimeMillis()+480_000,{conditions},::collect))
+        fun shell(command: String) { instrumentation.uiAutomation.executeShellCommand(command).use { descriptor ->
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readBytes() }
+        } }
+        shell("dumpsys battery set level 90");shell("dumpsys battery set ac 1");shell("dumpsys battery set status 2")
+        shell("svc wifi enable")
+        val now=java.time.ZonedDateTime.now(pl.jakubokruszek.flipcollector.watcher.WARSAW)
+        val minute=now.hour*60+now.minute
+        val schedule=ScanSchedule(enabled=true,startMinutes=(minute+1439)%1440,endMinutes=(minute+60)%1440)
+        WatcherRuntime.settings(context).saveSchedule(schedule)
+        val window=requireNotNull(schedule.windowContaining(now))
+        var attempts=0
+        while(attempts++<50 && !OfflineAutomationRuntime.conditions(context).let { it.wifi && it.charging && (it.batteryPercent ?: 0)>=20 }) kotlinx.coroutines.delay(200)
+        assertTrue("Emulator requires Wi-Fi",OfflineAutomationRuntime.conditions(context).wifi)
+        val worker=TestListenableWorkerBuilder<AutoScanWorker>(context).build()
+        assertEquals(ListenableWorker.Result.success(),worker.doWork())
+        assertEquals("WINDOW_COMPLETE",state.diagnostics().getString("queue"))
         val repeated=state.diagnostics().getJSONArray("results")
-        val next=(0 until repeated.length()).map { repeated.getJSONObject(it) }.filter { it.getString("window")=="fixture-next-night" }
+        val next=(0 until repeated.length()).map { repeated.getJSONObject(it) }.filter { it.getString("window")==window.key }
         assertEquals(11,next.size)
         assertEquals(0,next.sumOf { if(it.isNull("created")) 0 else it.getInt("created") })
         assertEquals(9,next.sumOf { if(it.isNull("duplicates")) 0 else it.getInt("duplicates") })
         assertEquals(0,next.sumOf { if(it.isNull("updated")) 0 else it.getInt("updated") })
         assertEquals(9,stats().getInt("listings"));assertEquals(20,stats().getInt("completedBatches"))
         assertFalse(report.toString().contains("isolated-ci-device-token"));assertFalse(report.toString().contains("leaseToken"))
+        } finally {
+            // A fixture-enabled test must not change following DEMO worker tests.
+            OfflineAutomationRuntime.disable(context)
+            instrumentation.uiAutomation.executeShellCommand("dumpsys battery reset").close()
+        }
     }
 }
