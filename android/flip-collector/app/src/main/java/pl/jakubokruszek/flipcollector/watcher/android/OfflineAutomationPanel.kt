@@ -20,10 +20,24 @@ fun OfflineAutomationPanel(context: Context) {
     var message by remember { mutableStateOf("") }
     var remoteProfile by remember { mutableStateOf("") }
     var snapshot by remember { mutableStateOf(OfflineAutomationRuntime.state(context).diagnostics()) }
+    var device by remember { mutableStateOf(OfflineAutomationRuntime.conditions(context)) }
+    var inScheduledWindow by remember {
+        mutableStateOf(WatcherRuntime.settings(context).schedule().let { s ->
+            s.windowContaining(java.time.ZonedDateTime.now(s.zone)) != null
+        })
+    }
     var task by remember { mutableStateOf<Job?>(null) }
     var running by remember { mutableStateOf(OfflineAutomationRuntime.isRunning()) }
     LaunchedEffect(Unit) {
-        while(isActive) { snapshot=OfflineAutomationRuntime.state(context).diagnostics(); running=OfflineAutomationRuntime.isRunning(); delay(2_000) }
+        while(isActive) {
+            snapshot=OfflineAutomationRuntime.state(context).diagnostics()
+            running=OfflineAutomationRuntime.isRunning()
+            device=OfflineAutomationRuntime.conditions(context)
+            inScheduledWindow=WatcherRuntime.settings(context).schedule().let { s ->
+                s.windowContaining(java.time.ZonedDateTime.now(s.zone)) != null
+            }
+            delay(2_000)
+        }
     }
     Card {
         Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -33,6 +47,13 @@ fun OfflineAutomationPanel(context: Context) {
             Text("Synchronizacja: "+snapshot.optLong("lastSync").takeIf { it>0 }?.let { Instant.ofEpochMilli(it).toString() }.orEmpty())
             Text("Kolejka: "+snapshot.optString("queue")+" · outbox: "+(if(snapshot.optBoolean("pending")) "oczekuje" else "pusty"))
             Text("Błąd: "+snapshot.optString("error").ifBlank { "brak" })
+            Text(
+                "Warunki: Wi-Fi="+(if(device.wifi) "OK" else "BRAK")+
+                " · zasilanie="+(if(device.charging) "OK" else "BRAK")+
+                " · bateria="+(device.batteryPercent?.toString() ?: "?")+"%"+
+                " · temp.="+(if(device.thermalSevere) "ZA WYSOKA" else "OK")+
+                " · okno="+(if(inScheduledWindow) "AKTYWNE" else "POZA OKNEM")
+            )
             if(!OfflineAutomationRuntime.enabled(context)) {
                 if(BuildConfig.OFFLINE_TEST_API_ORIGIN.isNotBlank()) {
                     Text("Zatwierdzone testowe API: "+BuildConfig.OFFLINE_TEST_API_ORIGIN)
