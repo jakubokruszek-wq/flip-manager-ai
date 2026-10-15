@@ -40,12 +40,14 @@ export class MockAndroidStore implements AndroidJobStore {
       const android = this.jobs.filter(j => j.consumer_type === "ANDROID_WEBVIEW" && j.job_type === "SOURCE_SCAN");
       if (android.some(j => j.worker_id === p.p_device_id && j.status === "running" && this.reservations.has(j.id))) return { data: [], error: null };
       let job = android.find(j => j.status === "running" && j.worker_id === p.p_device_id && Date.parse(j.leased_until ?? "") > this.now);
+      const selected = (j: AndroidJobRow) => p.p_source_ids === undefined || Array.isArray(p.p_source_ids) && p.p_source_ids.includes((j.group_snapshot as { id: string }[])[0].id);
+      if (job && !selected(job)) return { data: [], error: null };
       if (!job) {
         for (const old of android) if (old.status === "running" && Date.parse(old.leased_until ?? "") <= this.now && !this.reservations.has(old.id)) {
           if (old.attempts >= (old.max_attempts ?? 3)) { old.status = "failed"; old.leased_until = null; }
           else { old.status = "queued"; old.worker_id = ""; old.lease_token = ""; old.available_at = new Date(this.now + 15_000).toISOString(); }
         }
-        job = android.find(j => !this.reservations.has(j.id) && j.attempts < (j.max_attempts ?? 3) && (!j.available_at || Date.parse(j.available_at) <= this.now) && (j.status === "queued" || j.status === "running" && Date.parse(j.leased_until ?? "") <= this.now));
+        job = android.find(j => selected(j) && !this.reservations.has(j.id) && j.attempts < (j.max_attempts ?? 3) && (!j.available_at || Date.parse(j.available_at) <= this.now) && (j.status === "queued" || j.status === "running" && Date.parse(j.leased_until ?? "") <= this.now));
         if (job) { job.status = "running"; job.attempts++; job.worker_id = String(p.p_device_id); job.lease_token = randomUUID(); job.leased_until = new Date(this.now + 180_000).toISOString(); }
       }
       return { data: job ? [{ ...job }] : [], error: null };

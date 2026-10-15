@@ -83,6 +83,18 @@ test("reason counters cannot inject prototype keys or raw diagnostic text", () =
   assert.deepEqual(report.rejectionReasons, { buy_request: 1 });
 });
 const NOW = Date.parse("2026-10-15T06:00:00Z");
+test("transactional receipt counters include duplicates without inflating repeated job observations", () => {
+  const summary={status:"completed",captured:5,skipped:2,listingsCreated:1,listingsUpdated:1,
+    writeAccounting:{version:1,basis:"TRANSACTIONAL",created:1,updated:1,duplicates:1}};
+  const row=job("exact",summary);
+  const report=buildFacebookRunQualityReport([row,row],{runId:RUN});
+  assert.equal(report.metrics.listingsAdded.value,1);
+  assert.equal(report.metrics.listingsUpdated.value,1);
+  assert.equal(report.metrics.listingsDuplicated.value,1);
+  assert.equal(report.metrics.postsSkipped.value,2);
+  const legacy=job("legacy",{status:"completed",listingsCreated:1,listingsUpdated:0});
+  assert.equal(buildFacebookRunQualityReport([row,legacy],{runId:RUN}).metrics.listingsAdded.value,null);
+});
 function source(id: string, patch: Partial<FacebookPlanningSource> = {}): FacebookPlanningSource { return { id, name: id, url: `https://www.facebook.com/groups/${id}/`, priority: "normal", enabled: true, last_checked_at: "2026-10-15T05:00:00Z", access_status: "CONNECTED", ...patch }; }
 function history(sourceId: string, created: number, durationMs: number): FacebookScanObservation { return { sourceId, finishedAt: "2026-10-15T05:00:00Z", status: "completed", durationMs, listingsCreated: created, listingsUpdated: 0 }; }
 test("new planner is disabled by default and cannot mutate inputs or enqueue", () => {

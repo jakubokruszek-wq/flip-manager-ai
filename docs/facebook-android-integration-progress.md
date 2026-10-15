@@ -179,3 +179,20 @@ stanowi zgody na produkcyjną migrację, deployment lub skan Facebooka.
   importu ręcznego nie jest dowodem autoryzacji Watchera. Nie migrujemy istniejących
   urządzeń Chrome. Claim klienta sprawdza consumer/jobType/imageMode odpowiedzi.
 - Zmiany Kotlin pozostają niewykonane w CI; flagi false, bez wywołań produkcji.
+
+## 0.6 — checkpoint: engine wiring (in progress)
+
+- Continue from remote f09e6cd (local equivalent 8c899ab); preserve original ZIP.
+- Added OFFLINE_TEST automation using scoped queue claims, encrypted single-record
+  active job/outbox/cursor/source preferences/results journal and receipt-before-clear.
+- Hooked the existing AutoScanWorker to the explicit loopback fixture configuration;
+  8 minute budget, serialized WebViews, charging/Wi-Fi/battery/thermal checks and
+  same-window continuation. DEMO and production paths remain separate.
+- Added debug diagnostics and local source toggles. LIVE and production integration
+  flags remain false. Only pinned HTTPS loopback fixture uses OFFLINE_TEST requests.
+- Added transactional fixture counters, binding checks, no-op duplicate detection,
+  SQL selection/concurrency tests, JVM recovery tests and full 13-source E2E scenario.
+- Local Node checkpoint: 87 backend +243 regressions +58 offline/core =388 PASS.
+  New Kotlin/PostgreSQL/emulator/build checks are pending CI; not yet claimed PASS.
+- Local HTTPS proxy remains unavailable, so dependencies/Gradle/PostgreSQL are
+  verified through the isolated Actions workflows, not a production environment.

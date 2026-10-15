@@ -215,6 +215,7 @@ fun FacebookWatcherScreen(context: Context, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (mode == ScanMode.DEMO) DemoBanner("Dane testowe. Facebook nie jest otwierany, nic nie trafia do Flip Managera.")
+            if (pl.jakubokruszek.flipcollector.BuildConfig.DEBUG && tab == WatcherTab.HOME) OfflineAutomationPanel(context)
             when (tab) {
                 WatcherTab.HOME -> HomeTab(mode, scanState, conditions, schedule, liveHistory, demoHistory, groups, selection, message, lastAutoCheck, ::startScan, onStop = { coordinator.stop() })
                 WatcherTab.SCHEDULE -> ScheduleTab(context, store, schedule, lastAutoCheck, ::updateSchedule)

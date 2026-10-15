@@ -168,6 +168,15 @@ object WatcherRuntime {
     const val PROBE_TAG = "flip-collector-probe"
     const val AUTO_WORK_NAME = AUTO_WORK
 
+    fun scheduleOfflineContinuation(context: Context) {
+        check(OfflineAutomationRuntime.enabled(context))
+        val request=OneTimeWorkRequestBuilder<AutoScanWorker>()
+            .setInitialDelay(30,TimeUnit.SECONDS)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).setRequiresCharging(true).build())
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("flip-offline-continuation",ExistingWorkPolicy.APPEND_OR_REPLACE,request)
+    }
+
     fun conditions(context: Context): DeviceConditions {
         val app = context.applicationContext
         val connectivity = app.getSystemService(ConnectivityManager::class.java)

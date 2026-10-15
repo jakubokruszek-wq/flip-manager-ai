@@ -8,7 +8,7 @@ data class NextSource(val id: String?, val reason: String)
 object WindowContinuation {
     const val AUTOMATIC_BUDGET_MS = 8 * 60 * 1000L
     fun next(cursor: WindowCursor, mode: String, now: Long, cycleStartedAt: Long, windowEndsAt: Long, conditions: CycleConditions, estimatedSourceMs: Long = 60_000): NextSource {
-        require(mode in setOf("DEMO", "LIVE") && estimatedSourceMs > 0 && cycleStartedAt <= now)
+        require(mode in setOf("DEMO", "LIVE", "OFFLINE_TEST") && estimatedSourceMs > 0 && cycleStartedAt <= now)
         if (cursor.mode != mode) return NextSource(null,"DATA_DOMAIN_MISMATCH")
         if (now >= windowEndsAt) return NextSource(null,"WINDOW_ENDED")
         if (!conditions.screenOn && mode == "LIVE") return NextSource(null,"SCREEN_OFF")

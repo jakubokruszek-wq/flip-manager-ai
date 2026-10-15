@@ -56,7 +56,7 @@ class SignedCollectorClient(
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val metadataEnabled: Boolean = false,
     private val dataMode: String = "LIVE",
-) {
+) : AndroidQueueClient {
     init {
         require(dataMode in setOf("LIVE", "OFFLINE_TEST"))
         require(dataMode != "OFFLINE_TEST" || URI(credentials.baseUrl).host in setOf("localhost", "127.0.0.1", "10.0.2.2")) { "Offline imports require loopback fixture API" }
@@ -64,8 +64,9 @@ class SignedCollectorClient(
 
     private val transport = client.newBuilder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
 
-    fun claim(): ClaimedJob? {
-        val response = post(CLAIM_PATH, "{}")
+    override fun claim(sourceIds: List<String>?): ClaimedJob? {
+        require(sourceIds == null || (sourceIds.size <= 50 && sourceIds.all { runCatching { UUID.fromString(it).toString() == it }.getOrDefault(false) }))
+        val response = post(CLAIM_PATH, if (sourceIds == null) "{}" else JSONObject().put("sourceIds", org.json.JSONArray(sourceIds)).toString())
         val job = response.optJSONObject("job") ?: return null
         require(job.getString("consumerType") == "ANDROID_WEBVIEW" && job.getString("jobType") == "SOURCE_SCAN" && job.getString("imageMode") == "SOURCE_SCAN_DATA_ONLY") { "Unexpected job contract" }
         return ClaimedJob(
@@ -77,12 +78,12 @@ class SignedCollectorClient(
         )
     }
 
-    fun renewLease(job: ClaimedJob): String? =
+    override fun renewLease(job: ClaimedJob): String? =
         post(HEARTBEAT_PATH, JSONObject().put("jobId", job.id).put("leaseToken", job.leaseToken).toString()).optString("leasedUntil").ifBlank { null }
 
-    fun deviceStatus(): JSONObject = post(DEVICE_STATUS_PATH, "{}")
+    override fun deviceStatus(): JSONObject = post(DEVICE_STATUS_PATH, "{}")
 
-    fun sources(): List<RemoteGroup> {
+    override fun sources(): List<RemoteGroup> {
         val snapshot = post(SOURCES_PATH, "{}")
         require(snapshot.optBoolean("completeSnapshot")) { "Incomplete source snapshot" }
         val rows = snapshot.getJSONArray("sources")
@@ -98,10 +99,10 @@ class SignedCollectorClient(
         return sources
     }
 
-    fun status(job: ClaimedJob): JSONObject = post(STATUS_PATH, leaseBody(job).toString())
-    fun diagnostics(job: ClaimedJob): JSONObject = post(DIAGNOSTICS_PATH, leaseBody(job).toString())
+    override fun status(job: ClaimedJob): JSONObject = post(STATUS_PATH, leaseBody(job).toString())
+    override fun diagnostics(job: ClaimedJob): JSONObject = post(DIAGNOSTICS_PATH, leaseBody(job).toString())
 
-    fun prepareCompletion(job: ClaimedJob, batch: JSONObject? = null, failure: String? = null, cancelled: Boolean = false): PendingCompletion {
+    override fun prepareCompletion(job: ClaimedJob, batch: JSONObject?, failure: String?, cancelled: Boolean): PendingCompletion {
         require(!(cancelled && batch != null) && !(failure != null && batch != null))
         val id = UUID.randomUUID().toString()
         val body = leaseBody(job).put("completionId", id).put("dataMode", dataMode)
@@ -119,7 +120,7 @@ class SignedCollectorClient(
     }
 
     /** Exact persisted bytes; retry creates new auth headers, never a new body. */
-    fun sendCompletion(pending: PendingCompletion): JSONObject {
+    override fun sendCompletion(pending: PendingCompletion): JSONObject {
         require(pending.deviceId == credentials.deviceId) { "Outbox belongs to another device" }
         val receipt = post(COMPLETE_PATH, pending.rawBody)
         require(receipt.optBoolean("ok") && receipt.getString("completionId") == pending.completionId && receipt.getString("status") in listOf("completed", "failed")) { "Invalid receipt" }
@@ -142,7 +143,8 @@ class SignedCollectorClient(
     }
 
     private fun post(pathname: String, body: String): JSONObject {
-        if (pathname.startsWith("/api/collector/android/jobs/")) gate.check()
+        if (pathname.startsWith("/api/collector/android/jobs/") && dataMode != "OFFLINE_TEST") gate.check()
+        else if (pathname.startsWith("/api/collector/android/jobs/")) check(metadataEnabled) { "Offline fixture integration disabled" }
         else check(metadataEnabled) { "Android backend integration is disabled" }
         transport.newCall(buildSignedPost(pathname, body)).execute().use { response ->
             val source = response.body?.source()

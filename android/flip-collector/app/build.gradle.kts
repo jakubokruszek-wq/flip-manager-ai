@@ -12,8 +12,8 @@ android {
         applicationId = "pl.jakubokruszek.flipcollector"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("FLIP_COLLECTOR_VERSION_CODE").orElse("11").get().toInt()
-        versionName = "0.5.0-offline"
+        versionCode = providers.gradleProperty("FLIP_COLLECTOR_VERSION_CODE").orElse("16").get().toInt()
+        versionName = "0.6.0-offline"
 
         buildConfigField(
             "String",

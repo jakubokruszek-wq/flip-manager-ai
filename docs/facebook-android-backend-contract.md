@@ -404,3 +404,27 @@ Wyłącznie lokalny serwer testowy CI jawnie wymaga OFFLINE_TEST; nie ma flagi
 środowiskowej zezwalającej produkcyjnemu route na przyjęcie danych testowych.
 Klient Kotlin dopuszcza OFFLINE_TEST wyłącznie dla loopback fixture origin.
 DEMO nigdy nie korzysta z kolejki ani outboxa. Podpis obejmuje również dataMode.
+
+## 0.6 offline integration additions
+
+Claim may include `sourceIds: string[]` (0–50 unique watched-source UUIDs).
+`{}` preserves the previous polling contract; `[]` claims nothing. This is an
+additional restriction intersected with server device grants and source status,
+never an authorization grant. A running job outside the selection prevents new
+claims for that device; recover/cancel the stored lease first. Draft SQL now uses
+`claim_android_facebook_scan_job(uuid, integer, uuid[] default null)`.
+
+The offline fixture requires `dataMode=OFFLINE_TEST`. It is a loopback HTTPS
+service only, uses synthetic credentials, a pinned ephemeral certificate, an
+isolated PostgreSQL database and no Supabase production client. Production routes
+still require LIVE mode, and both Android production gates remain false. Neither
+DEMO nor production outboxes/cursors are read by the offline automation engine.
+
+Fixture completion results include `skipped` and `writeAccounting`:
+`{version:1,basis:"TRANSACTIONAL",created:number,updated:number,duplicates:number}`.
+Counts come from the same database transaction as the persisted receipt. An
+unchanged existing listing is a duplicate, not an update. Replaying a completion
+returns its persisted receipt without new writes or count increments. The Android
+journal stores a result keyed by completion ID atomically with cursor advancement
+before clearing exact outbox bytes. Unknown historical production write counts
+remain unknown; this fixture evidence does not certify production Finder counters.

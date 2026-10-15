@@ -21,9 +21,10 @@ class CompletionOutbox(private val storage: CompletionStorage) {
         check(old == null || old == value) { "Unsettled completion already exists" }
         storage.save(value)
     }
-    @Synchronized fun flush(client: SignedCollectorClient): JSONObject? {
+    @Synchronized fun flush(client: AndroidQueueClient, onReceipt: (PendingCompletion, JSONObject) -> Unit = { _, _ -> }): JSONObject? {
         val item = storage.load() ?: return null
         val receipt = client.sendCompletion(item) // Exceptions leave identical bytes durable.
+        onReceipt(item, receipt) // Cursor + result must be durable BEFORE dropping the bytes.
         storage.save(null) // A clear failure is safe: replay returns the same receipt.
         return receipt
     }

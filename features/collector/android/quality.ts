@@ -24,7 +24,7 @@ export type FacebookQualityJob = {
   id: string; scan_run_id: string; consumer_type: string; job_type: string; status: string; attempts: number;
   group_snapshot: unknown; result_summary?: unknown;
 };
-export const FACEBOOK_QUALITY_METRICS = ["postsCaptured", "postsWithSaleIntent", "postsWithConfirmedIdentity", "postsWithMissingData", "postsRejected", "listingsAdded", "listingsUpdated", "processingErrors"] as const;
+export const FACEBOOK_QUALITY_METRICS = ["postsCaptured", "postsWithSaleIntent", "postsWithConfirmedIdentity", "postsWithMissingData", "postsRejected", "listingsAdded", "listingsUpdated", "listingsDuplicated", "postsSkipped", "processingErrors"] as const;
 export type FacebookQualityMetric = typeof FACEBOOK_QUALITY_METRICS[number];
 export type FacebookQualityReport = {
   version: 1; source: "facebook"; runId: string; generatedAt: string;
@@ -51,6 +51,7 @@ export function buildFacebookRunQualityReport(jobs: FacebookQualityJob[], input:
   const report: FacebookQualityReport = { version: 1, source: "facebook", runId: input.runId, generatedAt: input.now ?? new Date().toISOString(), consumerTypes: [...new Set(consumers)],
     groups: { planned: 0, attempted: 0, scanned: 0, successful: 0, failed: 0 }, metrics: totals, rejectionReasons: {}, missingDataReasons: {}, failures: { terminalScans: 0, leaseRecoveries: 0, cancelledScans: 0 }, coverage: { jobs: rows.size, accountingJobs: 0, qualityJobs: 0, warnings: [] }, writeObservations: { reportedCreated: 0, reportedUpdated: 0 } };
   const groups = { planned: new Set<string>(), attempted: new Set<string>(), scanned: new Set<string>(), successful: new Set<string>(), failed: new Set<string>() };
+  let unverifiedCreated = false; let unverifiedUpdated = false;
   function observe(key: FacebookQualityMetric, value: unknown) {
     if (!count(value)) return;
     const metric = totals[key]; metric.value = (metric.value ?? 0) + value; metric.observedJobs++;
@@ -77,9 +78,21 @@ export function buildFacebookRunQualityReport(jobs: FacebookQualityJob[], input:
     // additions/updates, even when this report contains only one job.
     if (count(summary.listingsCreated)) report.writeObservations.reportedCreated += summary.listingsCreated;
     if (count(summary.listingsUpdated)) report.writeObservations.reportedUpdated += summary.listingsUpdated;
-    if (summary.listingsCreated === 0) observe("listingsAdded", 0);
-    if (summary.listingsUpdated === 0) observe("listingsUpdated", 0);
-    if ((count(summary.listingsCreated) && summary.listingsCreated > 0) || (count(summary.listingsUpdated) && summary.listingsUpdated > 0)) report.coverage.warnings.push("DISTINCT_LISTING_WRITES_UNVERIFIED");
+    const writes = object(summary.writeAccounting);
+    const exact = writes?.version === 1 && writes.basis === "TRANSACTIONAL" &&
+      [writes.created, writes.updated, writes.duplicates, summary.skipped, summary.captured].every(count) &&
+      Number(writes.created) + Number(writes.updated) + Number(writes.duplicates) + Number(summary.skipped) === summary.captured &&
+      writes.created === summary.listingsCreated && writes.updated === summary.listingsUpdated;
+    if (exact && writes) {
+      observe("listingsAdded", writes.created); observe("listingsUpdated", writes.updated);
+      observe("listingsDuplicated", writes.duplicates); observe("postsSkipped", summary.skipped);
+    } else {
+      if (summary.listingsCreated === 0) observe("listingsAdded", 0);
+      if (summary.listingsUpdated === 0) observe("listingsUpdated", 0);
+      unverifiedCreated ||= count(summary.listingsCreated) && summary.listingsCreated > 0;
+      unverifiedUpdated ||= count(summary.listingsUpdated) && summary.listingsUpdated > 0;
+      if ((count(summary.listingsCreated) && summary.listingsCreated > 0) || (count(summary.listingsUpdated) && summary.listingsUpdated > 0)) report.coverage.warnings.push("DISTINCT_LISTING_WRITES_UNVERIFIED");
+    }
     observe("processingErrors", summary.errors);
     const accounting = readAccounting(summary.accounting);
     if (summary.accounting !== undefined && !accounting) report.coverage.warnings.push("INVALID_PERSISTED_ACCOUNTING");
@@ -99,8 +112,8 @@ export function buildFacebookRunQualityReport(jobs: FacebookQualityJob[], input:
   }
   for (const key of Object.keys(groups) as (keyof typeof groups)[]) report.groups[key] = groups[key].size;
   // A zero observed in one job cannot conceal an unverified positive in another.
-  if (report.writeObservations.reportedCreated > 0) totals.listingsAdded.value = null;
-  if (report.writeObservations.reportedUpdated > 0) totals.listingsUpdated.value = null;
+  if (unverifiedCreated) totals.listingsAdded.value = null;
+  if (unverifiedUpdated) totals.listingsUpdated.value = null;
   if (Object.values(totals).some(metric => metric.observedJobs < metric.totalJobs)) report.coverage.warnings.push("PARTIAL_HISTORICAL_COVERAGE");
   report.coverage.warnings = [...new Set(report.coverage.warnings)];
   return report;

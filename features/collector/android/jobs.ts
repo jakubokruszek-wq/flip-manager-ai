@@ -41,8 +41,12 @@ export function androidJobContract(job: AndroidJobRow) {
     leasedUntil: job.leased_until, attempts: job.attempts, heartbeatIntervalSeconds: 45,
   };
 }
-export async function claimAndroidJob(store: AndroidJobStore, deviceId: string) {
-  const data = await rpc(store, "claim_android_facebook_scan_job", { p_device_id: deviceId, p_lease_seconds: ANDROID_LEASE_SECONDS });
+export async function claimAndroidJob(store: AndroidJobStore, deviceId: string, value: unknown = {}) {
+  const selection = record(value)?.sourceIds;
+  if (selection !== undefined && (!Array.isArray(selection) || selection.length > 50)) throw new AndroidJobError(400, "INVALID_PAYLOAD");
+  const sourceIds = selection === undefined ? undefined : [...new Set((selection as unknown[]).map(uuid))];
+  const data = await rpc(store, "claim_android_facebook_scan_job", { p_device_id: deviceId, p_lease_seconds: ANDROID_LEASE_SECONDS,
+    ...(sourceIds === undefined ? {} : { p_source_ids: sourceIds }) });
   const row = Array.isArray(data) ? data[0] : data;
   if (row && (typeof (row as AndroidJobRow).leased_until !== "string" || !Number.isFinite(Date.parse((row as AndroidJobRow).leased_until!)))) throw new AndroidJobError(503, "ANDROID_JOB_INVALID");
   return row ? androidJobContract(row as AndroidJobRow) : null;

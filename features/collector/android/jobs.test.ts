@@ -7,6 +7,15 @@ import { MockAndroidStore, jobRow, completionPayload, DEVICE, OTHER_DEVICE, SOUR
 function run(store: MockAndroidStore, value = completionPayload(store.jobs[0]), processBatch = async () => ({ status: "completed" })) {
   return completeAndroidJob({ store, deviceId: DEVICE, value, rawBody: JSON.stringify(value), processBatch });
 }
+test("scoped claim preserves locally disabled jobs and rejects invalid selections", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const store = new MockAndroidStore([jobRow({status:"queued", worker_id:"", attempts:0, group_snapshot:[{id,name:"Fixture",url:"https://www.facebook.com/groups/mock-group/",type:"GROUP"}]})]);
+  assert.equal(await claimAndroidJob(store,DEVICE,{sourceIds:[]}),null);
+  assert.equal(store.jobs[0].attempts,0);
+  await assert.rejects(claimAndroidJob(store,DEVICE,{sourceIds:["not-a-uuid"]}));
+  await assert.rejects(claimAndroidJob(store,DEVICE,{sourceIds:"all"}));
+  assert.equal((await claimAndroidJob(store,DEVICE,{sourceIds:[id]}))?.group.id,id);
+});
 test("claim returns only source scans for Android and never steals extension work", async () => {
   const store = new MockAndroidStore([jobRow({ id: "browser", consumer_type: "BROWSER_EXTENSION", status: "queued" }), jobRow({ id: "gallery", job_type: "GALLERY_HYDRATION", status: "queued" }), jobRow({ status: "queued", worker_id: "", attempts: 0 })]);
   const job = await claimAndroidJob(store, DEVICE);

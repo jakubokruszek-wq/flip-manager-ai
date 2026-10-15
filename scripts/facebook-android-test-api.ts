@@ -13,7 +13,7 @@ import { resolveFacebookListingIntent } from "../features/facebook-watcher/faceb
 import { aggregateFacebookScanAccounting, type FacebookPostOutcome } from "../features/facebook-worker/scan-accounting.ts";
 import { buildFacebookBatchQuality } from "../features/collector/android/quality.ts";
 
-if (process.env.GITHUB_ACTIONS !== "true") throw Error("ISOLATED_CI_ONLY");
+if (process.env.GITHUB_ACTIONS !== "true" && process.env.FLIP_ISOLATED_TESTS !== "1") throw Error("ISOLATED_TESTS_ONLY");
 const DEVICE="00000000-0000-4000-8000-000000000001";
 async function db(path: string, body: unknown): Promise<unknown> {
   const result=await fetch("http://127.0.0.1:55440"+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:AbortSignal.timeout(10_000)});
@@ -44,7 +44,7 @@ async function processBatch(deviceId:string,batch:FacebookCollectorBatch,context
     outcomes.push({postId:post.postId,primaryOutcome:"REVIEW",reasonCodes:[]});
   }
   const binding={deviceId,batchId:batch.batchId,runId:batch.scanId,sourceScanId:context.sourceScanId,sourceId:batch.sourceId,sourceUrl:batch.sourceUrl};
-  return await db("/import",{binding,listings,result:{status:"completed",batchId:batch.batchId,captured:batch.posts.length,errors:0,sourceScanIds:[context.sourceScanId],accounting:aggregateFacebookScanAccounting(outcomes,batch.posts.length),quality:buildFacebookBatchQuality(batch,outcomes,new Set())}}) as {status:string};
+  return await db("/import",{binding,listings,result:{status:"completed",batchId:batch.batchId,captured:batch.posts.length,skipped:batch.posts.length-listings.length,errors:0,sourceScanIds:[context.sourceScanId],accounting:aggregateFacebookScanAccounting(outcomes,batch.posts.length),quality:buildFacebookBatchQuality(batch,outcomes,new Set())}}) as {status:string};
 }
 const jobs=new Set(["claim","heartbeat","complete","status"]);
 const metadata=new Set(["sources/sync","device/status","diagnostics"]);
@@ -53,6 +53,7 @@ const server=https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_K
     const path=new URL(req.url??"/","https://localhost").pathname;
     if(path==="/__test/health"){res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');return;}
     if(path==="/__test/stats"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(await db("/stats",{})));return;}
+    if(path==="/__test/requeue" && req.method==="POST"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(await db("/requeue",{})));return;}
     const chunks:Buffer[]=[];let size=0;
     for await(const chunk of req){size+=chunk.length;if(size>2*1024*1024){res.writeHead(413);res.end();return;}chunks.push(chunk);}
     const headers=new Headers(); for(const [key,value] of Object.entries(req.headers)) if(value!==undefined) headers.set(key,Array.isArray(value)?value.join(","):value);

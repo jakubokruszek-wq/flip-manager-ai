@@ -14,7 +14,7 @@ enum class SourceSettlement { SETTLED, SETTLED_FAILURE, DEFERRED, RECONCILIATION
 class WindowCycleController(private val storage: WindowCursorStorage, private val clock: () -> Long = System::currentTimeMillis) {
     suspend fun runCycle(windowKey: String, mode: String, authorizedSourceIds: List<String>, windowEndsAt: Long,
         conditions: () -> CycleConditions, runSource: suspend (String) -> SourceSettlement): String = lock.withLock {
-        require(mode in setOf("DEMO","LIVE") && authorizedSourceIds.distinct().size == authorizedSourceIds.size)
+        require(mode in setOf("DEMO","LIVE","OFFLINE_TEST") && authorizedSourceIds.distinct().size == authorizedSourceIds.size)
         val started = clock()
         if (started >= windowEndsAt) return@withLock "WINDOW_ENDED"
         if (windowEndsAt - started <= 35_000) return@withLock "WINDOW_ENDED"

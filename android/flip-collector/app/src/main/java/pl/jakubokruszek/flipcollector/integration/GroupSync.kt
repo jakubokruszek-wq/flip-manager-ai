@@ -35,7 +35,8 @@ data class SyncedGroup(
     val accessStatus: String = "CONNECTED",
 ) {
     /** Scanned only when both the phone and Flip Manager agree. */
-    val scannable: Boolean get() = group.active && serverEnabled && origin != GroupOrigin.REMOVED_ON_SERVER
+    val scannable: Boolean get() = group.active && serverEnabled && origin != GroupOrigin.REMOVED_ON_SERVER &&
+        sourceType in setOf("GROUP", "PROFILE") && accessStatus in setOf("CONNECTED", "MANUAL_IMPORT") && group.url.isNotBlank()
 }
 
 sealed interface GroupFetchResult {

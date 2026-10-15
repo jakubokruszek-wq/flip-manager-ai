@@ -7,21 +7,21 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import uuid4
 
-if os.environ.get("GITHUB_ACTIONS") != "true":
+if os.environ.get("GITHUB_ACTIONS") != "true" and os.environ.get("FLIP_ISOLATED_TESTS") != "1":
     raise SystemExit("BLOCKED: isolated GitHub CI service only")
 spec = importlib.util.spec_from_file_location("isolated_pg", Path(__file__).with_name("test-facebook-android-postgres.py"))
 pg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pg)
 from psycopg.types.json import Jsonb
 from psycopg.rows import dict_row
+from facebook_android_fixture_store import create_fixture_tables, persist_fixture_import
 
 suite = pg.AndroidPostgres()
 suite.setUp()
 db = suite.db
 RUN = "22222222-2222-4222-8222-222222222222"
 db.execute("alter table facebook_scan_jobs add column scan_run_id uuid default '" + RUN + "'")
-db.execute("create table test_completed_batches(batch_id uuid primary key,binding jsonb not null,result jsonb not null)")
-db.execute("create table test_listings(id uuid primary key default gen_random_uuid(),source text not null,external_listing_id text not null,source_id text not null,price numeric,unique(source,external_listing_id))")
+create_fixture_tables(db)
 db.execute("create table test_nonces(device_id text not null,nonce text not null,primary key(device_id,nonce))")
 db.execute("delete from facebook_scan_jobs where consumer_type='BROWSER_EXTENSION'")
 groups = []
@@ -43,7 +43,7 @@ for index in range(13):
 db.close()
 
 RPC = {
-    "claim_android_facebook_scan_job": ["p_device_id", "p_lease_seconds"],
+    "claim_android_facebook_scan_job": ["p_device_id", "p_lease_seconds", "p_source_ids"],
     "renew_android_facebook_scan_job": ["p_job_id", "p_device_id", "p_lease_token", "p_lease_seconds"],
     "begin_android_facebook_completion": ["p_job_id", "p_device_id", "p_lease_token", "p_completion_id", "p_payload_hash"],
     "finish_android_facebook_completion": ["p_job_id", "p_device_id", "p_lease_token", "p_completion_id", "p_payload_hash", "p_receipt", "p_error_code"],
@@ -78,7 +78,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/rpc":
             name = body["name"]
             keys = RPC[name] # Whitelisted function and parameter ordering only.
-            args = [Jsonb(body["args"][key]) if key == "p_receipt" else body["args"][key] for key in keys]
+            args = [Jsonb(body["args"][key]) if key == "p_receipt" else body["args"].get(key) for key in keys]
             if name.startswith(("claim_", "renew_")):
                 return conn.execute("select * from " + name + "(" + ",".join(["%s"]*len(args)) + ")", args).fetchall()
             row = conn.execute("select " + name + "(" + ",".join(["%s"]*len(args)) + ") as result", args).fetchone()
@@ -95,17 +95,11 @@ class Handler(BaseHTTPRequestHandler):
             row=conn.execute("select result from test_completed_batches where binding=%s",(Jsonb(body),)).fetchone()
             return row["result"] if row else None
         if self.path == "/import":
-            with conn.transaction():
-                existing=conn.execute("select result from test_completed_batches where batch_id=%s",(body["binding"]["batchId"],)).fetchone()
-                if existing:
-                    return existing["result"]
-                created=0;updated=0
-                for listing in body["listings"]:
-                    row=conn.execute("insert into test_listings(source,external_listing_id,source_id,price) values('facebook',%s,%s,%s) on conflict(source,external_listing_id) do update set price=excluded.price returning (xmax=0) as inserted",(listing["postId"],listing["sourceId"],listing["price"])).fetchone()
-                    created+=int(row["inserted"]);updated+=int(not row["inserted"])
-                result={**body["result"],"listingsCreated":created,"listingsUpdated":updated}
-                conn.execute("insert into test_completed_batches values(%s,%s,%s)",(body["binding"]["batchId"],Jsonb(body["binding"]),Jsonb(result)))
-                return result
+            return persist_fixture_import(conn, body)
+        if self.path == "/requeue":
+            conn.execute("update facebook_scan_jobs set status='queued',attempts=0,android_completion_id=null,android_payload_hash=null,android_completion_state=null,android_completion_started_at=null,android_receipt=null,lease_token=null,leased_until=null,worker_id=null where consumer_type='ANDROID_WEBVIEW' and status in ('completed','failed')")
+            conn.execute("update source_scans set status='pending'")
+            return {"ok": True}
         if self.path == "/stats":
             return {"listings":conn.execute("select count(*) as n from test_listings").fetchone()["n"],"completedBatches":conn.execute("select count(*) as n from test_completed_batches").fetchone()["n"]}
         raise ValueError("unknown isolated endpoint")

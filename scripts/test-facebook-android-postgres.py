@@ -8,7 +8,7 @@ import time
 import unittest
 from uuid import UUID
 
-if os.environ.get("GITHUB_ACTIONS") != "true":
+if os.environ.get("GITHUB_ACTIONS") != "true" and os.environ.get("FLIP_ISOLATED_TESTS") != "1":
     raise SystemExit("BLOCKED: this suite targets only the explicitly provisioned GitHub CI service")
 import psycopg
 from psycopg.types.json import Jsonb
@@ -29,6 +29,52 @@ COMPLETION = UUID("00000000-0000-4000-8000-000000000006")
 HASH = "a" * 64
 
 class AndroidPostgres(unittest.TestCase):
+    def test_scoped_claim_empty_unrelated_and_selected_source(self):
+        source=self.db.execute("select watched_group_id from collector_android_source_grants where device_id=%s",(DEVICE,)).fetchone()[0]
+        self.assertIsNone(self.db.execute("select id from claim_android_facebook_scan_job(%s,180,%s)",(DEVICE,[])).fetchone())
+        self.assertIsNone(self.db.execute("select id from claim_android_facebook_scan_job(%s,180,%s)",(DEVICE,[OTHER])).fetchone())
+        self.assertIsNotNone(self.db.execute("select id from claim_android_facebook_scan_job(%s,180,%s)",(DEVICE,[source])).fetchone())
+        self.assertIsNone(self.db.execute("select id from claim_android_facebook_scan_job(%s,180,%s)",(DEVICE,[])).fetchone())
+
+    def fixture_import_body(self, batch=COMPLETION, price=260000):
+        return {"binding":{"batchId":str(batch),"deviceId":str(DEVICE),"sourceId":"fixture"},
+                "listings":[{"postId":"post","sourceId":"fixture","price":price}],
+                "result":{"status":"completed","captured":1,"skipped":0}}
+
+    def test_exact_fixture_counts_under_concurrent_retry_and_noop(self):
+        from facebook_android_fixture_store import create_fixture_tables, persist_fixture_import
+        from psycopg.rows import dict_row
+        create_fixture_tables(self.db)
+        body=self.fixture_import_body()
+        def write(_):
+            with connect() as db:
+                db.row_factory=dict_row
+                return persist_fixture_import(db,body)
+        with ThreadPoolExecutor(2) as pool:
+            results=list(pool.map(write,range(2)))
+        self.assertEqual(results[0],results[1])
+        self.assertEqual(results[0]["writeAccounting"]["created"],1)
+        self.assertEqual(self.db.execute("select count(*) from test_listings").fetchone()[0],1)
+        self.db.row_factory=dict_row
+        second=persist_fixture_import(self.db,self.fixture_import_body(OTHER))
+        self.assertEqual(second["writeAccounting"],{"version":1,"basis":"TRANSACTIONAL","created":0,"updated":0,"duplicates":1})
+        third=persist_fixture_import(self.db,self.fixture_import_body(JOB,250000))
+        self.assertEqual(third["writeAccounting"]["updated"],1)
+
+    def test_fixture_binding_and_cross_source_conflicts_roll_back(self):
+        from facebook_android_fixture_store import create_fixture_tables, persist_fixture_import
+        from psycopg.rows import dict_row
+        create_fixture_tables(self.db);self.db.row_factory=dict_row
+        original=self.fixture_import_body()
+        persist_fixture_import(self.db,original)
+        mismatch=self.fixture_import_body();mismatch["binding"]["deviceId"]=str(OTHER)
+        with self.assertRaises(ValueError):
+            persist_fixture_import(self.db,mismatch)
+        mismatch=self.fixture_import_body(OTHER);mismatch["listings"][0]["sourceId"]="another"
+        with self.assertRaises(ValueError):
+            persist_fixture_import(self.db,mismatch)
+        self.assertEqual(self.db.execute("select count(*) n from test_completed_batches").fetchone()["n"],1)
+
     def setUp(self):
         self.db = connect()
         self.db.execute("drop schema public cascade; create schema public")

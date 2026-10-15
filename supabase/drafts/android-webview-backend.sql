@@ -44,12 +44,13 @@ grant select, insert, update, delete on public.collector_android_source_grants t
 
 -- The generic extension/legacy RPC is deliberately unchanged. It rejects
 -- ANDROID_WEBVIEW; Android has its own recovery, device lock and source-only claim.
-create function public.claim_android_facebook_scan_job(p_device_id uuid, p_lease_seconds integer default 180)
+create function public.claim_android_facebook_scan_job(p_device_id uuid, p_lease_seconds integer default 180, p_source_ids uuid[] default null)
 returns setof public.facebook_scan_jobs
 language plpgsql security invoker set search_path = '' as $$
 declare claimed public.facebook_scan_jobs%rowtype;
 begin
   if p_lease_seconds is null or p_lease_seconds < 30 or p_lease_seconds > 300 then raise exception 'invalid lease duration'; end if;
+  if cardinality(p_source_ids) > 50 then raise exception 'invalid source selection'; end if;
   if not exists (select 1 from public.collector_devices d where d.id = p_device_id and d.consumer_type = 'ANDROID_WEBVIEW' and d.revoked_at is null) then raise exception 'invalid Android device'; end if;
   -- Serializes polling from the same installation across backend processes.
   perform pg_advisory_xact_lock(hashtextextended('android-facebook:' || p_device_id::text, 0));
@@ -61,7 +62,10 @@ begin
     where j.consumer_type = 'ANDROID_WEBVIEW' and j.job_type = 'SOURCE_SCAN' and j.status = 'running'
       and j.worker_id = p_device_id::text and j.leased_until > clock_timestamp()
     order by j.created_at limit 1 for update;
-  if claimed.id is not null then return next claimed; return; end if;
+  if claimed.id is not null then
+    if p_source_ids is null or claimed.group_snapshot->0->>'id' = any(p_source_ids::text[]) then return next claimed; end if;
+    return;
+  end if;
 
   with exhausted_candidates as (
     select j.id from public.facebook_scan_jobs j
@@ -89,6 +93,7 @@ begin
   select j.* into claimed from public.facebook_scan_jobs j
     where j.consumer_type = 'ANDROID_WEBVIEW' and j.job_type = 'SOURCE_SCAN' and j.status = 'queued'
       and j.available_at <= clock_timestamp() and j.attempts < j.max_attempts and j.android_completion_state is null
+      and (p_source_ids is null or j.group_snapshot->0->>'id' = any(p_source_ids::text[]))
       and exists (select 1 from public.collector_android_source_grants scope
         join public.watched_facebook_groups source on source.id = scope.watched_group_id
         where source.enabled = true and source.access_status in ('CONNECTED', 'MANUAL_IMPORT')
@@ -181,11 +186,11 @@ begin
   return p_receipt;
 end;
 $$;
-revoke all on function public.claim_android_facebook_scan_job(uuid, integer) from public, anon, authenticated;
+revoke all on function public.claim_android_facebook_scan_job(uuid, integer, uuid[]) from public, anon, authenticated;
 revoke all on function public.renew_android_facebook_scan_job(uuid, uuid, uuid, integer) from public, anon, authenticated;
 revoke all on function public.begin_android_facebook_completion(uuid, uuid, uuid, uuid, text) from public, anon, authenticated;
 revoke all on function public.finish_android_facebook_completion(uuid, uuid, uuid, uuid, text, jsonb, text) from public, anon, authenticated;
-grant execute on function public.claim_android_facebook_scan_job(uuid, integer) to service_role;
+grant execute on function public.claim_android_facebook_scan_job(uuid, integer, uuid[]) to service_role;
 grant execute on function public.renew_android_facebook_scan_job(uuid, uuid, uuid, integer) to service_role;
 grant execute on function public.begin_android_facebook_completion(uuid, uuid, uuid, uuid, text) to service_role;
 grant execute on function public.finish_android_facebook_completion(uuid, uuid, uuid, uuid, text, jsonb, text) to service_role;

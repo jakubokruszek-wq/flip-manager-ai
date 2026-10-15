@@ -32,6 +32,17 @@ import java.time.format.DateTimeFormatter
  */
 class AutoScanWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
+        // Only an explicitly configured, pinned loopback fixture can take this
+        // branch. Production integration and LIVE flags remain false.
+        if (OfflineAutomationRuntime.enabled(applicationContext)) {
+            val schedule=WatcherRuntime.settings(applicationContext).schedule()
+            val window=schedule.windowContaining(ZonedDateTime.now(schedule.zone))
+            if (!schedule.enabled || window==null) return Result.success()
+            val result=OfflineAutomationRuntime.run(applicationContext,window.key,window.end.toInstant().toEpochMilli())
+            if(result in setOf("CONTINUE_NEXT_CYCLE","SOURCE_DEFERRED","RECONCILIATION_REQUIRED","RETRY_REQUIRED"))
+                WatcherRuntime.scheduleOfflineContinuation(applicationContext)
+            return Result.success()
+        }
         // A journal left by a killed process becomes an INTERRUPTED record first,
         // so the planner below sees the window as interrupted, not running.
         WatcherRuntime.recoverInterruptedScan(applicationContext)

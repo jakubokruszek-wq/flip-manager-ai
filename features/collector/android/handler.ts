@@ -23,7 +23,7 @@ export async function handleAndroidRequest(request: Request, action: AndroidActi
     if (action === "claim" && !deps.enabled()) return json({ ok: true, job: null, code: "ANDROID_QUEUE_DISABLED" });
     const store = deps.store();
     if (action === "claim") {
-      const job = await claimAndroidJob(store, deviceId);
+      const job = await claimAndroidJob(store, deviceId, value);
       return json({ ok: true, job, code: job ? "JOB_CLAIMED" : "NO_PENDING_JOB" });
     }
     if (action === "status") return json(await readAndroidJobStatus(store, deviceId, value));
