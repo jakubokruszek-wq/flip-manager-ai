@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = providers.gradleProperty("FLIP_COLLECTOR_VERSION_CODE").orElse("16").get().toInt()
-        versionName = "0.7.0-offline"
+        versionName = "0.7.1-offline"
 
         val testOrigin = providers.gradleProperty("FLIP_OFFLINE_TEST_ORIGIN").orElse("").get()
         require(testOrigin.isEmpty() || Regex("https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?").matches(testOrigin))
@@ -43,9 +43,9 @@ android {
             // A remote OFFLINE_TEST build must also install beside any previous
             // .integration APK: GitHub-hosted runners have fresh debug signing keys.
             val remoteOfflineBuild = providers.gradleProperty("FLIP_OFFLINE_TEST_ORIGIN").orElse("").get().isNotEmpty()
-            applicationIdSuffix = if (remoteOfflineBuild) ".remote" else ".integration"
+            applicationIdSuffix = if (remoteOfflineBuild) ".remote2" else ".integration"
             versionNameSuffix = "-debug"
-            resValue("string", "app_name", if (remoteOfflineBuild) "Flip Collector (remote test)" else "Flip Collector (offline integration)")
+            resValue("string", "app_name", if (remoteOfflineBuild) "Flip Collector (remote test 0.7.1)" else "Flip Collector (offline integration)")
         }
     }
 
