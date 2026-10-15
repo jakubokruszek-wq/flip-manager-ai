@@ -20,7 +20,25 @@ if os.environ.get("FLIP_OFFLINE_REMOTE_TEST") == "true":
     from facebook_android_remote_store import configure
     try:
         groups = configure(pg)
-    except Exception:
+    except Exception as exc:
+        # Log a strictly allowlisted *category* only. Never expose database
+        # connection strings, passwords, SQL text or exception messages.
+        safe_categories = {
+            "OFFLINE_TEST_PROJECT_REQUIRED",
+            "OFFLINE_TEST_DATABASE_INVALID",
+            "OFFLINE_TEST_NONEMPTY_DATABASE_REFUSED",
+            "OFFLINE_TEST_SCHEMA_MISMATCH",
+            "OFFLINE_TEST_DATABASE_UNAVAILABLE",
+        }
+        safe_exception_types = {
+            "OperationalError", "InvalidPassword", "InsufficientPrivilege",
+            "UndefinedTable", "UndefinedFunction", "DuplicateTable",
+            "DuplicateObject", "ForeignKeyViolation", "CheckViolation",
+        }
+        category = str(exc) if str(exc) in safe_categories else type(exc).__name__
+        if category not in safe_categories and category not in safe_exception_types:
+            category = "UNCLASSIFIED_BOOTSTRAP_ERROR"
+        print("OFFLINE_TEST_STARTUP_CATEGORY=" + category, flush=True)
         raise SystemExit("OFFLINE_TEST_DATABASE_INITIALIZATION_REFUSED") from None
 else:
     suite = pg.AndroidPostgres()
