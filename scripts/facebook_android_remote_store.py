@@ -15,10 +15,16 @@ def validate_database(env):
     project = env.get("FLIP_TEST_PROJECT_REF", "")
     if not re.fullmatch(r"[a-z]{20}", project) or project == PRODUCTION:
         raise ValueError("OFFLINE_TEST_PROJECT_REQUIRED")
-    uri = urlparse(env.get("FLIP_TEST_DATABASE_URL", ""))
-    host = uri.hostname or ""
-    direct = host == "db." + project + ".supabase.co" and uri.username == "postgres"
-    pooled = host.endswith(".pooler.supabase.com") and uri.username == "postgres." + project
+    try:
+        uri = urlparse(env.get("FLIP_TEST_DATABASE_URL", ""))
+        port = uri.port
+        host = uri.hostname or ""
+        username = uri.username or ""
+        password = uri.password
+    except ValueError:
+        raise ValueError("OFFLINE_TEST_DATABASE_URI_MALFORMED") from None
+    direct = host == "db." + project + ".supabase.co" and username == "postgres"
+    pooled = host.endswith(".pooler.supabase.com") and username == "postgres." + project
     # Safe, non-secret diagnostic codes; never log the supplied connection URI.
     if not env.get("FLIP_TEST_DATABASE_URL", ""):
         raise ValueError("OFFLINE_TEST_DATABASE_URL_MISSING")
@@ -26,15 +32,15 @@ def validate_database(env):
         raise ValueError("OFFLINE_TEST_DATABASE_SCHEME_INVALID")
     if not (direct or pooled):
         raise ValueError("OFFLINE_TEST_DATABASE_HOST_OR_USER_INVALID")
-    if uri.port not in (None, 5432):
+    if port not in (None, 5432):
         raise ValueError("OFFLINE_TEST_DATABASE_PORT_INVALID")
     if uri.path != "/postgres":
         raise ValueError("OFFLINE_TEST_DATABASE_NAME_INVALID")
-    if not uri.password:
+    if not password:
         raise ValueError("OFFLINE_TEST_DATABASE_PASSWORD_MISSING")
     if uri.query or uri.fragment:
         raise ValueError("OFFLINE_TEST_DATABASE_EXTRA_PARAMETERS")
-    return {"host": host, "port": 5432, "dbname": "postgres", "user": unquote(uri.username), "password": unquote(uri.password),
+    return {"host": host, "port": 5432, "dbname": "postgres", "user": unquote(username), "password": unquote(password),
             "sslmode": "verify-full", "sslrootcert": "/etc/ssl/certs/ca-certificates.crt", "connect_timeout": 10,
             "autocommit": True, "options": "-c statement_timeout=10000 -c lock_timeout=5000"}
 
