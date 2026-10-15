@@ -41,11 +41,16 @@ def validate_database(env):
 def configure(pg):
     import psycopg
     parameters = validate_database(os.environ)
+    print("OFFLINE_TEST_STAGE=URL_VALIDATED", flush=True)
     def connect():
         try:
             return psycopg.connect(**parameters)
         except psycopg.Error:
             raise RuntimeError("OFFLINE_TEST_DATABASE_UNAVAILABLE") from None
+    # Verify connectivity separately from potentially mutating initialization.
+    with connect() as db:
+        db.execute("select 1")
+    print("OFFLINE_TEST_STAGE=DATABASE_CONNECTED", flush=True)
     return initialize(pg, connect, os.environ["FLIP_TEST_PROJECT_REF"])
 
 def initialize(pg, connect, project_ref):
