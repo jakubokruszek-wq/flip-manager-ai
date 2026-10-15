@@ -6,8 +6,11 @@ import { createHmac, randomUUID, createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { runAndroidDataOnlyImport, type AndroidFinderOwnership } from "./import-policy.ts";
 import { persistAndroidFinderPost } from "./finder-write.ts";
+import { handleAndroidRequest } from "./handler.ts";
+import { collectorSigningKey, createCollectorAuthHeaders } from "../protocol.ts";
 if (process.env.GITHUB_ACTIONS !== "true" && process.env.FLIP_ISOLATED_TESTS !== "1") throw Error("ISOLATED_TESTS_ONLY");
 const secret="isolated-full-schema-postgrest-signing-key-only";
+let loseNextPostResponse=false;
 function jwt(role: string) {
   const head=Buffer.from(JSON.stringify({alg:"HS256",typ:"JWT"})).toString("base64url");
   const body=Buffer.from(JSON.stringify({role,exp:Math.floor(Date.now()/1000)+3600})).toString("base64url");
@@ -15,16 +18,26 @@ function jwt(role: string) {
 }
 // Standalone PostgREST has no Supabase gateway. Remove only its /rest/v1
 // prefix and forbid all other hosts; SQL and client query builders stay real.
-const gateway: typeof fetch=(input,init)=>{
+const gateway: typeof fetch=async(input,init)=>{
   const url=new URL(typeof input==="string" || input instanceof URL ? input.toString() : input.url);
   if(url.origin!=="http://127.0.0.1:55442" || !url.pathname.startsWith("/rest/v1/")) throw Error("ISOLATED_GATEWAY_ONLY");
   url.pathname=url.pathname.slice("/rest/v1".length);
-  return fetch(url,init);
+  const response=await fetch(url,init);
+  if(loseNextPostResponse && url.pathname==="/rpc/persist_android_facebook_finder_post" && response.ok) {
+    loseNextPostResponse=false;await response.text();
+    return Response.json({code:"ISOLATED_RESPONSE_LOST",message:"Synthetic post-commit response loss"},{status:503});
+  }
+  return response;
 };
 const db=createClient("http://127.0.0.1:55442",jwt("service_role"),{global:{fetch:gateway},auth:{persistSession:false,autoRefreshToken:false}});
 mock.module("@/features/facebook-watcher/supabase-admin",{namedExports:{createFacebookWatcherAdminClient:()=>db}});
+mock.module("@/lib/supabase/admin",{namedExports:{createAdminClient:()=>db}});
 const {importFacebookWatcher}=await import("../../facebook-watcher/server.ts");
 const {getSearchFilter}=await import("../../flip-finder/server/search-filters.ts");
+const {processFacebookCollectorBatch}=await import("../facebook-batch-server.ts");
+const {authenticateSignedCollectorRequest,SignedCollectorAuthError}=await import("../signed-device-auth.ts");
+const {androidJobStore}=await import("./server.ts");
+const {AndroidJobError}=await import("./jobs.ts");
 let schemaReady=false;
 for(let n=0;n<30;n++) {
   const probe=await db.from("search_filters").select("id").limit(1);
@@ -36,7 +49,7 @@ const filter=await getSearchFilter("66666666-6666-4666-8666-666666666666",{supab
 assert.ok(filter);
 const context={filter,sourceScanId:"44444444-4444-4444-8444-444444444444",groupId:"synthetic-lodz",groupName:"Synthetic only",groupUrl:"https://www.facebook.com/groups/synthetic-lodz/",postId:"987654321012345",checkedAt:new Date().toISOString(),imageMode:"SEARCH_DATA_FIRST" as const};
 const input={url:"https://www.facebook.com/groups/synthetic-lodz/posts/987654321012345/",postText:"Sprzedam mieszkanie 50 m2, 2 pokoje, Łódź Bałuty, w bloku z cegły. Cena 260 tyś. zł. Bezpośrednio właściciel.",images:[]};
-async function ownership(profile=false): Promise<AndroidFinderOwnership> {
+async function ownership(profile=false,reserve=true): Promise<AndroidFinderOwnership> {
   const deviceId=randomUUID(),jobId=randomUUID(),sourceScanId=randomUUID(),completionId=randomUUID(),runId=randomUUID();
   const payloadHash=createHash("sha256").update(completionId).digest("hex");
   const groupId=profile ? "00000000-0000-4000-8000-000000000009" : "00000000-0000-4000-8000-000000000008";
@@ -51,11 +64,14 @@ async function ownership(profile=false): Promise<AndroidFinderOwnership> {
   ]) assert.equal(result.error,null,result.error?.message);
   const claimed=await db.rpc("claim_android_facebook_scan_job",{p_device_id:deviceId,p_lease_seconds:180});
   assert.equal(claimed.error,null);const lease:unknown=claimed.data;
-  assert.ok(Array.isArray(lease) && lease.length===1 && typeof lease[0].lease_token==="string");
+  assert.ok(Array.isArray(lease) && lease.length===1 && typeof lease[0].lease_token==="string" && typeof lease[0].id==="string" && typeof lease[0].source_scan_id==="string");
   const leaseToken=String(lease[0].lease_token);
-  const begun=await db.rpc("begin_android_facebook_completion",{p_job_id:jobId,p_device_id:deviceId,p_lease_token:leaseToken,p_completion_id:completionId,p_payload_hash:payloadHash});
-  assert.equal(begun.error,null);assert.equal(begun.data?.outcome,"reserved");
-  return {jobId,deviceId,sourceScanId,completionId,leaseToken,payloadHash};
+  const claimedJobId=String(lease[0].id),claimedScanId=String(lease[0].source_scan_id);
+  if(reserve) {
+    const begun=await db.rpc("begin_android_facebook_finder_completion",{p_job_id:claimedJobId,p_device_id:deviceId,p_lease_token:leaseToken,p_completion_id:completionId,p_payload_hash:payloadHash});
+    assert.equal(begun.error,null);assert.equal(begun.data?.outcome,"reserved");
+  }
+  return {jobId:claimedJobId,deviceId,sourceScanId:claimedScanId,completionId,leaseToken,payloadHash};
 }
 test("actual importer normalizes 260 tyś and persists Finder membership, metadata and history", async()=>{
   const owner=await ownership();const atomicContext={...context,sourceScanId:owner.sourceScanId};
@@ -141,6 +157,47 @@ test("confirmed profile permalink is supported by the same atomic Finder RPC",as
   assert.equal(result.created,1);
   const metadata=await db.from("listing_source_metadata").select("source_post_url").eq("listing_id",result.listingId).single();
   assert.equal(metadata.data?.source_post_url,url);
+});
+test("signed API recovers a real Finder post-commit failure after lease expiry and repeats without duplicates",async()=>{
+  const path="/api/collector/android/jobs/complete",postId="543210123456789";
+  const token=randomUUID()+randomUUID();
+  async function completion(owner:AndroidFinderOwnership) {
+    const key=await db.from("collector_devices").update({token_hash:collectorSigningKey(token)}).eq("id",owner.deviceId);assert.equal(key.error,null);
+    const job=await db.from("facebook_scan_jobs").select("scan_run_id").eq("id",owner.jobId).single();assert.ok(job.data);
+    const now=new Date().toISOString();
+    const texts=["Sprzedam mieszkanie 120 m2, 5 pokoi, Łódź Widzew. Blok z cegły, cena 900000 zł. Bezpośrednio właściciel.","Wynajmę mieszkanie Łódź 2000 zł miesięcznie","Kupię mieszkanie w Łodzi do 300000 zł"];
+    return JSON.stringify({jobId:owner.jobId,leaseToken:owner.leaseToken,completionId:owner.completionId,dataMode:"OFFLINE_TEST",status:"completed",batch:{
+      scanId:job.data.scan_run_id,batchId:owner.completionId,sourceId:context.groupId,sourceType:"GROUP",sourceUrl:context.groupUrl,collectedAt:now,imageMode:"SOURCE_SCAN_DATA_ONLY",
+      health:{status:"HEALTHY",visibleCardCount:3,capturedPostCount:3,scrolls:0,durationMs:0,stopReason:"NO_NEW_IDS",reasons:[]},
+      posts:texts.map((text,index)=>({postId:String(BigInt(postId)+BigInt(index)),permalink:`https://www.facebook.com/groups/synthetic-lodz/posts/${BigInt(postId)+BigInt(index)}/`,sourceId:context.groupId,sourceType:"GROUP",text,author:"Synthetic owner",publishedAt:now,identityConfidence:"EXACT",media:[]})),
+    }});
+  }
+  async function send(owner:AndroidFinderOwnership,body:string,nonce?:string) {
+    const auth=createCollectorAuthHeaders({deviceId:owner.deviceId,deviceToken:token,method:"POST",pathname:path,body,nonce});
+    const request=new Request("https://offline.invalid"+path,{method:"POST",headers:{"content-type":"application/json","x-flip-collector-device-id":auth.deviceId,"x-flip-collector-timestamp":auth.timestamp,"x-flip-collector-nonce":auth.nonce,"x-flip-collector-signature":auth.signature},body});
+    return handleAndroidRequest(request,"complete",{enabled:()=>true,expectedDataMode:"OFFLINE_TEST",atomicFinderImportReplay:true,store:androidJobStore,
+      authenticate:async(request,pathname,body)=>{
+        try{return (await authenticateSignedCollectorRequest({request,pathname,body,expectedConsumerType:"ANDROID_WEBVIEW",markHealthy:true})).device.id;}
+        catch(error){if(error instanceof SignedCollectorAuthError)throw new AndroidJobError(error.status,error.code);throw error;}
+      },
+      processBatch:(deviceId,batch,ownerContext)=>runAndroidDataOnlyImport(()=>processFacebookCollectorBatch(deviceId,batch,{...ownerContext,qualityReport:true}),{...ownerContext,deviceId}),
+    });
+  }
+  const owner=await ownership(false,false),body=await completion(owner);
+  loseNextPostResponse=true;
+  const first=await send(owner,body);assert.equal(first.status,503);
+  const scan=await db.from("source_scans").select("status,listings_created").eq("id",owner.sourceScanId).single();
+  assert.equal(scan.data?.status,"running");assert.equal(scan.data?.listings_created,0);
+  const partial=await db.from("android_facebook_post_receipts").select("*").eq("job_id",owner.jobId);assert.equal(partial.data?.length,1);
+  const expire=await db.from("facebook_scan_jobs").update({leased_until:new Date(Date.now()-1000).toISOString()}).eq("id",owner.jobId);assert.equal(expire.error,null);
+  const recovered=await send(owner,body);assert.equal(recovered.status,200);const receipt=await recovered.json();
+  assert.deepEqual(receipt.result.writeAccounting,{version:1,basis:"TRANSACTIONAL",created:1,updated:0,duplicates:0});assert.equal(receipt.result.skipped,2);
+  const replay=await send(owner,body);assert.deepEqual(await replay.json(),receipt);
+  const next=await ownership(false,false),nextBody=await completion(next),repeat=await send(next,nextBody);assert.equal(repeat.status,200);
+  const repeated=await repeat.json();assert.deepEqual(repeated.result.writeAccounting,{version:1,basis:"TRANSACTIONAL",created:0,updated:0,duplicates:1});assert.equal(repeated.result.skipped,2);
+  const rows=await db.from("listings").select("id").eq("source","facebook").eq("external_listing_id",postId);assert.equal(rows.data?.length,1);
+  const nonce="full_schema_replay_nonce_000001";
+  assert.equal((await send(next,nextBody,nonce)).status,200);assert.equal((await send(next,nextBody,nonce)).status,401);
 });
 test("real RLS and grants deny anonymous listing writes and Android RPCs",async()=>{
   const anon=createClient("http://127.0.0.1:55442",jwt("anon"),{global:{fetch:gateway},auth:{persistSession:false,autoRefreshToken:false}});

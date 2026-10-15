@@ -34,6 +34,7 @@ export function androidJobStore(): AndroidJobStore {
 export function androidRoute(request: Request, action: AndroidAction) {
   return handleAndroidRequest(request, action, {
     enabled: () => process.env.FACEBOOK_ANDROID_QUEUE_ENABLED === "true",
+    atomicFinderImportReplay: process.env.FACEBOOK_ANDROID_ATOMIC_FINDER_ENABLED === "true",
     store: androidJobStore,
     processBatch: (deviceId, batch, context) => runAndroidDataOnlyImport(() => processFacebookCollectorBatch(deviceId, batch, { ...context, qualityReport: process.env.FACEBOOK_ANDROID_DIAGNOSTICS_ENABLED === "true" }), process.env.FACEBOOK_ANDROID_ATOMIC_FINDER_ENABLED === "true" ? { ...context, deviceId } : undefined),
     authenticate: async (request, pathname, body) => {

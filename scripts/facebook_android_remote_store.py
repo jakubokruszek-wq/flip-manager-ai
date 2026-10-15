@@ -51,7 +51,9 @@ def initialize(pg, connect, project_ref):
                 raise ValueError("OFFLINE_TEST_SCHEMA_MISMATCH")
             groups = saved[2]
         else:
-            if db.execute("select 1 from pg_tables where schemaname='public' limit 1").fetchone():
+            if db.execute("""select 1 from pg_class where relnamespace='public'::regnamespace and relkind in ('r','p','v','m','S')
+                union all select 1 from pg_proc p where p.pronamespace='public'::regnamespace
+                and not exists(select 1 from pg_depend d where d.objid=p.oid and d.classid='pg_proc'::regclass and d.deptype='e') limit 1""").fetchone():
                 raise ValueError("OFFLINE_TEST_NONEMPTY_DATABASE_REFUSED")
             # The managed test project already owns anon/authenticated/service_role.
             db.execute("create table" + pg.constants["FIXTURE"].split("create table", 1)[1])

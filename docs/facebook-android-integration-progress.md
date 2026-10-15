@@ -339,3 +339,13 @@ changed only the test proxy simulator to an explicit HTTP/1 request, retaining
 server Host/HTTPS checks. Added native Finder INSERT race, UPDATE, archive and
 PROFILE checks and strengthened RPC's post/source binding. Full-schema import
 still awaits execution beyond ingress; no PASS claimed yet.
+
+0.7 transactional recovery WIP: reservation wrapper marks version 1 atomically
+on NEW completions only; legacy in-progress reservations remain fenced. Added a
+transactional batch checkpoint using the post ledger, with late-write fencing
+and immutable retry. Source/batch/device counters finalize together. Transient
+post/metadata response failures keep the batch processing for safe receipt-based
+replay. New native test drives actual HMAC auth -> job API -> real normalizer ->
+Finder RPC -> PostgreSQL, injects response loss AFTER a post commit, expires the
+lease, resumes, and repeats a new job. These new checks await CI. Both production
+gates/atomic feature remain disabled; remote approval question remains pending.

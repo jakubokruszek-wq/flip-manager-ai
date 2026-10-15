@@ -1,5 +1,21 @@
 -- OPTIONAL DRAFT. Only for isolated verification. Never auto-migrated/deployed.
 begin;
+alter table public.facebook_scan_jobs add column android_finder_write_version integer not null default 0 check(android_finder_write_version in (0,1));
+create function public.begin_android_facebook_finder_completion(p_job_id uuid,p_device_id uuid,p_lease_token uuid,p_completion_id uuid,p_payload_hash text)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare outcome jsonb; version integer;
+begin
+ outcome:=public.begin_android_facebook_completion(p_job_id,p_device_id,p_lease_token,p_completion_id,p_payload_hash);
+ if outcome->>'outcome'='reserved' then
+   update public.facebook_scan_jobs set android_finder_write_version=1 where id=p_job_id;
+ elsif outcome->>'outcome'='busy' then
+   select android_finder_write_version into version from public.facebook_scan_jobs where id=p_job_id;
+   if version is distinct from 1 then return jsonb_build_object('outcome','legacy'); end if;
+ end if;
+ return outcome;
+end; $$;
+revoke all on function public.begin_android_facebook_finder_completion(uuid,uuid,uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.begin_android_facebook_finder_completion(uuid,uuid,uuid,uuid,text) to service_role;
 create table public.android_facebook_post_receipts (
  job_id uuid not null references public.facebook_scan_jobs(id) on delete cascade,
  post_id text not null check(post_id ~ '^[0-9]{5,30}$'),
@@ -26,8 +42,8 @@ begin
  if j.id is null or j.consumer_type<>'ANDROID_WEBVIEW' or j.job_type<>'SOURCE_SCAN'
    or j.status<>'running' or j.worker_id is distinct from p_device_id::text
    or j.lease_token is distinct from p_lease_token or j.android_completion_id is distinct from p_completion_id
-   or p_completion_id is null or p_payload_hash is null
-   or j.android_payload_hash is distinct from p_payload_hash or j.android_completion_state is distinct from 'in_progress'
+   or j.android_finder_write_version<>1 or p_completion_id is null or p_payload_hash is null
+   or j.android_payload_hash is distinct from p_payload_hash or j.android_completion_state is distinct from 'processing'
    or not exists(select 1 from public.collector_devices where id=p_device_id and consumer_type='ANDROID_WEBVIEW' and revoked_at is null)
    or not exists(select 1 from public.collector_android_source_grants g join public.watched_facebook_groups s on s.id=g.watched_group_id
      where g.device_id=p_device_id and g.search_filter_id=j.search_filter_id and s.id::text=j.group_snapshot->0->>'id'
@@ -56,6 +72,8 @@ begin
    if saved_receipt.payload_hash<>p_payload_hash then raise exception 'ANDROID_FINDER_RECEIPT_CONFLICT'; end if;
    return saved_receipt.result;
  end if;
+ if exists(select 1 from public.collector_scan_batches b where b.device_id=p_device_id and b.batch_id=p_completion_id
+   and b.status in ('completed','degraded','failed')) then raise exception 'ANDROID_FINDER_BATCH_ALREADY_CHECKPOINTED'; end if;
  incoming:=jsonb_populate_record(null::public.listings,p_listing);
  if incoming.external_listing_id is null or incoming.original_url is null or incoming.normalized_url is null
  then raise exception 'ANDROID_FINDER_IDENTITY_MISSING'; end if;
@@ -116,4 +134,58 @@ begin
 end; $$;
 revoke all on function public.persist_android_facebook_finder_post(uuid,uuid,uuid,uuid,text,text,jsonb,jsonb,jsonb,timestamptz) from public,anon,authenticated;
 grant execute on function public.persist_android_facebook_finder_post(uuid,uuid,uuid,uuid,text,text,jsonb,jsonb,jsonb,timestamptz) to service_role;
+
+-- Final checkpoint fences late writes and stores the complete batch + source
+-- counters in one transaction. Retry returns the immutable first checkpoint.
+create function public.checkpoint_android_facebook_finder_batch(
+ p_job_id uuid,p_device_id uuid,p_lease_token uuid,p_completion_id uuid,p_payload_hash text,
+ p_batch_row_id uuid,p_written_post_ids text[],p_result jsonb
+) returns jsonb language plpgsql security invoker set search_path='' as $$
+declare
+ j public.facebook_scan_jobs%rowtype; b public.collector_scan_batches%rowtype;
+ actual_ids text[]; expected_ids text[]; created_count integer; updated_count integer; duplicate_count integer;
+ v_matched_count integer; price_drops integer; captured_count integer; final_result jsonb; now_at timestamptz:=clock_timestamp();
+begin
+ select * into j from public.facebook_scan_jobs where id=p_job_id for update;
+ if j.id is null or j.consumer_type<>'ANDROID_WEBVIEW' or j.job_type<>'SOURCE_SCAN' or j.status<>'running'
+   or j.worker_id is distinct from p_device_id::text or j.lease_token is distinct from p_lease_token
+   or j.android_finder_write_version<>1 or p_completion_id is null or p_payload_hash is null or j.android_completion_id is distinct from p_completion_id
+   or j.android_payload_hash is distinct from p_payload_hash or j.android_completion_state is distinct from 'processing'
+   or not exists(select 1 from public.collector_devices where id=p_device_id and consumer_type='ANDROID_WEBVIEW' and revoked_at is null)
+ then raise exception 'ANDROID_FINDER_CHECKPOINT_OWNER_LOST' using errcode='42501'; end if;
+ select * into b from public.collector_scan_batches where id=p_batch_row_id for update;
+ if b.id is null or b.device_id<>p_device_id or b.batch_id<>p_completion_id or b.scan_id<>j.scan_run_id
+   or b.source_id is distinct from j.group_snapshot->0->>'sourceId'
+   or b.source_url is distinct from j.group_snapshot->0->>'url'
+ then raise exception 'ANDROID_FINDER_CHECKPOINT_BINDING_INVALID'; end if;
+ if b.status in ('completed','degraded','failed') then return b.result; end if;
+ if coalesce(p_result->>'status','') not in ('completed','degraded','failed')
+   or p_result->>'batchId' is distinct from p_completion_id::text then raise exception 'ANDROID_FINDER_CHECKPOINT_INVALID'; end if;
+ captured_count:=(p_result->>'captured')::integer;
+ if captured_count is null or captured_count<0 or captured_count>150 then raise exception 'ANDROID_FINDER_CAPTURE_COUNT_INVALID'; end if;
+ select coalesce(array_agg(post_id order by post_id),'{}'::text[]),
+   coalesce(sum((result->>'created')::integer),0),coalesce(sum((result->>'updated')::integer),0),
+   coalesce(sum((result->>'duplicates')::integer),0),coalesce(sum((result->>'matched')::boolean::integer),0),
+   coalesce(sum((result->>'priceDrop')::integer),0)
+ into actual_ids,created_count,updated_count,duplicate_count,v_matched_count,price_drops
+ from public.android_facebook_post_receipts where job_id=p_job_id and payload_hash=p_payload_hash;
+ select coalesce(array_agg(distinct id order by id),'{}'::text[]) into expected_ids from unnest(p_written_post_ids) id;
+ if actual_ids is distinct from expected_ids or captured_count<cardinality(actual_ids)
+   or created_count<0 or updated_count<0 or duplicate_count<0
+   or created_count+updated_count+duplicate_count<>cardinality(actual_ids)
+ then raise exception 'ANDROID_FINDER_CHECKPOINT_INCOMPLETE'; end if;
+ final_result:=p_result||jsonb_build_object('listingsCreated',created_count,'listingsUpdated',updated_count,
+   'sourceScanIds',jsonb_build_array(j.source_scan_id),'skipped',captured_count-created_count-updated_count-duplicate_count,
+   'writeAccounting',jsonb_build_object('version',1,'basis','TRANSACTIONAL','created',created_count,'updated',updated_count,'duplicates',duplicate_count));
+ update public.collector_scan_batches set status=final_result->>'status',result=final_result,error_message=null,finished_at=now_at where id=b.id;
+ update public.source_scans s set status=case when final_result->>'status'='degraded' then 'partial' else final_result->>'status' end,
+   finished_at=now_at,scanned_count=captured_count,matched_count=v_matched_count,listings_found=created_count+updated_count,
+   listings_created=created_count,new_count=created_count,listings_updated=updated_count,price_drop_count=price_drops,error_message=null
+ where s.id=j.source_scan_id and s.source='facebook' and s.search_filter_id=j.search_filter_id;
+ if not found then raise exception 'ANDROID_FINDER_SOURCE_SCAN_MISSING'; end if;
+ update public.collector_devices set last_source_scan_at=now_at,last_captured_count=captured_count,health_status=p_result->'health'->>'status' where id=p_device_id;
+ return final_result;
+end; $$;
+revoke all on function public.checkpoint_android_facebook_finder_batch(uuid,uuid,uuid,uuid,text,uuid,text[],jsonb) from public,anon,authenticated;
+grant execute on function public.checkpoint_android_facebook_finder_batch(uuid,uuid,uuid,uuid,text,uuid,text[],jsonb) to service_role;
 commit;

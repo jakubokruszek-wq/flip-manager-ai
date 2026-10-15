@@ -64,6 +64,8 @@ export async function completeAndroidJob(input: {
   expectedDataMode?: "LIVE" | "OFFLINE_TEST";
   /** Internal opt-in for the isolated adapter with atomic import+checkpoint only. */
   atomicOfflineImportReplay?: boolean;
+  /** Server-only capability: every Finder post has an atomic durable receipt. */
+  atomicFinderImportReplay?: boolean;
   processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: AndroidBatchContext) => Promise<{ status: string }>;
 }): Promise<AndroidReceipt> {
   const { jobId, leaseToken } = androidLeaseInput(input.value);
@@ -90,7 +92,8 @@ export async function completeAndroidJob(input: {
   const payloadHash = createHash("sha256").update(input.rawBody).digest("hex");
   const importContext: AndroidBatchContext = { sourceScanId: job.source_scan_id, jobId, leaseToken, completionId, payloadHash };
   const args = { p_job_id: jobId, p_device_id: input.deviceId, p_lease_token: leaseToken, p_completion_id: completionId, p_payload_hash: payloadHash };
-  const reservation = record(await rpc(input.store, "begin_android_facebook_completion", args));
+  const reservation = record(await rpc(input.store, input.atomicFinderImportReplay === true ? "begin_android_facebook_finder_completion" : "begin_android_facebook_completion", args));
+  if (reservation?.outcome === "legacy") throw new AndroidJobError(409, "ANDROID_BATCH_REQUIRES_RECONCILIATION");
   if (reservation?.outcome === "duplicate") return validateReceipt(reservation.receipt, completionId);
   if (reservation?.outcome === "busy") {
     // A finished batch is a durable checkpoint. Resume ONLY finalization, never
@@ -100,10 +103,11 @@ export async function completeAndroidJob(input: {
       deviceId: input.deviceId, batchId: completionId, runId: job.scan_run_id,
       sourceScanId: job.source_scan_id, sourceId: batch.sourceId, sourceUrl: batch.sourceUrl,
     }) : null;
-    if (!saved && batch && input.atomicOfflineImportReplay === true && input.expectedDataMode === "OFFLINE_TEST") {
-      // The fixture adapter serializes by batch ID and commits every listing,
-      // exact counters and its checkpoint in ONE transaction. Production import
-      // cannot opt into this recovery path, even if a caller sets the flag.
+    if (!saved && batch && (input.atomicFinderImportReplay === true || (input.atomicOfflineImportReplay === true && input.expectedDataMode === "OFFLINE_TEST"))) {
+      // Capabilities come only from trusted server wiring, never request JSON.
+      // Finder's reservation wrapper refuses pre-existing legacy reservations;
+      // each post has an atomic receipt and finalization freezes the batch.
+      // The separate fixture flag remains restricted to OFFLINE_TEST.
       saved = await input.processBatch(input.deviceId, batch, importContext);
     }
     if (!saved) throw new AndroidJobError(409, "ANDROID_COMPLETION_IN_PROGRESS");

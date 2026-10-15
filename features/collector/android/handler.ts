@@ -7,6 +7,7 @@ export type AndroidDependencies = {
   enabled: () => boolean;
   expectedDataMode?: "LIVE" | "OFFLINE_TEST";
   atomicOfflineImportReplay?: boolean;
+  atomicFinderImportReplay?: boolean;
   authenticate: (request: Request, pathname: string, body: string) => Promise<string>;
   store: () => AndroidJobStore;
   processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: AndroidBatchContext) => Promise<{ status: string }>;
@@ -29,7 +30,7 @@ export async function handleAndroidRequest(request: Request, action: AndroidActi
     }
     if (action === "status") return json(await readAndroidJobStatus(store, deviceId, value));
     if (action === "heartbeat") return json({ ok: true, leasedUntil: await heartbeatAndroidJob(store, deviceId, value) });
-    return json(await completeAndroidJob({ store, deviceId, value, rawBody: body, processBatch: deps.processBatch, expectedDataMode: deps.expectedDataMode, atomicOfflineImportReplay: deps.atomicOfflineImportReplay }));
+    return json(await completeAndroidJob({ store, deviceId, value, rawBody: body, processBatch: deps.processBatch, expectedDataMode: deps.expectedDataMode, atomicOfflineImportReplay: deps.atomicOfflineImportReplay, atomicFinderImportReplay: deps.atomicFinderImportReplay }));
   } catch (error) {
     const known = error instanceof AndroidJobError;
     const code = known ? error.code : "ANDROID_REQUEST_FAILED";
