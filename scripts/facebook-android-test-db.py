@@ -46,6 +46,12 @@ if os.environ.get("FLIP_OFFLINE_REMOTE_TEST") == "true":
         if category not in safe_categories and category not in safe_exception_types:
             category = "UNCLASSIFIED_BOOTSTRAP_ERROR"
         print("OFFLINE_TEST_STARTUP_CATEGORY=" + category, flush=True)
+        # Exception *type* is safe diagnostic metadata, unlike exception text.
+        # Deliberately do not print exception arguments, SQL, URI, or traceback.
+        import re
+        exception_type = type(exc).__name__
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", exception_type):
+            print("OFFLINE_TEST_STARTUP_TYPE=" + exception_type, flush=True)
         raise SystemExit("OFFLINE_TEST_DATABASE_INITIALIZATION_REFUSED") from None
 else:
     suite = pg.AndroidPostgres()
