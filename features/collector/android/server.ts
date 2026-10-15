@@ -16,10 +16,12 @@ export function androidJobStore(): AndroidJobStore {
         .eq("source_id", binding.sourceId).eq("source_url", binding.sourceUrl)
         .in("status", ["completed", "degraded", "failed"]).maybeSingle();
       if (result.error) throw new AndroidJobError(503, "ANDROID_QUEUE_UNAVAILABLE");
-      const saved = result.data?.result;
+      const batch = result.data;
+      if (!batch) return null;
+      const saved = batch.result;
       if (!saved || typeof saved !== "object" || Array.isArray(saved)) return null;
       const row = saved as Record<string, unknown>;
-      return row.batchId === binding.batchId && row.status === result.data.status && Array.isArray(row.sourceScanIds) && row.sourceScanIds.includes(binding.sourceScanId)
+      return row.batchId === binding.batchId && row.status === batch.status && Array.isArray(row.sourceScanIds) && row.sourceScanIds.includes(binding.sourceScanId)
         ? row as { status: string } : null;
     },
     loadJob: async (id) => {

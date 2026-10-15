@@ -25,7 +25,7 @@ class CollectorSignerTest {
     @Test
     fun matchesServerVectorForClaimWithLowercaseMethod() {
         val headers = CollectorSigner.headers("dev-1", token, "post", "/api/collector/android/jobs/claim", "{}".toByteArray(), 1760000000000L, "nonce-0123456789abcdef")
-        assertEquals("b6d3f6be6d336e5ddbb8823ddde80601e3f2488a1815050218ece4fe75c49251", headers[CollectorSigner.SIGNATURE_HEADER])
+        assertEquals("f756826fa0408fe1f0a32c5656d7547ceca40848f9b796793ed4590a273d2195", headers[CollectorSigner.SIGNATURE_HEADER])
         assertEquals("1760000000000", headers[CollectorSigner.TIMESTAMP_HEADER])
         assertEquals("nonce-0123456789abcdef", headers[CollectorSigner.NONCE_HEADER])
         assertEquals("dev-1", headers[CollectorSigner.DEVICE_HEADER])

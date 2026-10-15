@@ -39,7 +39,7 @@ async function processBatch(deviceId:string,batch:FacebookCollectorBatch,context
     const intent=resolveFacebookListingIntent(post.text,null,null).intent;
     if(post.identityConfidence!=="EXACT"){outcomes.push({postId:post.postId,primaryOutcome:"IDENTITY_UNVERIFIED",reasonCodes:["identity_unverified"]});continue;}
     if(intent!=="SELL_PROPERTY"){outcomes.push({postId:post.postId,primaryOutcome:intent==="RENT_OFFER"?"RENTAL":"NON_SALE",reasonCodes:["non_sale"]});continue;}
-    const extracted=await extractFacebookProperty({postText:post.text,images:[]});
+    const extracted=await extractFacebookProperty({postText:post.text ?? undefined,images:[]});
     listings.push({postId:post.postId,sourceId:post.sourceId,price:extracted.price});
     outcomes.push({postId:post.postId,primaryOutcome:"REVIEW",reasonCodes:[]});
   }

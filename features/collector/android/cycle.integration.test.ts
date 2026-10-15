@@ -26,7 +26,7 @@ test("13-source signed API simulation recovers leases, response loss and cancell
       imports++;for(const post of batch.posts){
         assert.equal(post.sourceId,batch.sourceId);
         if(post.identityConfidence!=="EXACT"||resolveFacebookListingIntent(post.text,null,null).intent!=="SELL_PROPERTY")continue;
-        const property=await extractFacebookProperty({postText:post.text,images:[]});
+        const property=await extractFacebookProperty({postText:post.text ?? undefined,images:[]});
         const old=listings.get(post.postId);assert.ok(!old||old.sourceId===batch.sourceId);
         listings.set(post.postId,{sourceId:batch.sourceId,price:property.price});
       }return {status:"completed"};
