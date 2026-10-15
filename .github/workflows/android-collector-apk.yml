@@ -77,7 +77,12 @@ jobs:
           test -f "$apk"
           aapt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2"
           "$aapt" dump badging "$apk" | tee badging.txt | head -5
-          grep -q "package: name='pl.jakubokruszek.flipcollector.integration'" badging.txt
+          if [ -n "$FLIP_OFFLINE_TEST_ORIGIN" ]; then
+            expected="pl.jakubokruszek.flipcollector.remote"
+          else
+            expected="pl.jakubokruszek.flipcollector.integration"
+          fi
+          grep -q "package: name='$expected'" badging.txt
           sha256sum "$apk"
 
       - name: Upload unit test reports
