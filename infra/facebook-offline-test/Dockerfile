@@ -15,6 +15,9 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node features ./features
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node supabase/drafts ./supabase/drafts
+COPY --chown=node:node infra/facebook-offline-test/supabase-root-ca-2021.crt /app/certs/supabase-root-ca-2021.crt
+# Pin the exact public Supabase Root 2021 CA file (not a credential).
+RUN echo '700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7  /app/certs/supabase-root-ca-2021.crt' | sha256sum --check
 USER node
 ENV FLIP_ISOLATED_TESTS=1 PORT=10000
 EXPOSE 10000
