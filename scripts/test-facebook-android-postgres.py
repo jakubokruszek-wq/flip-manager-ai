@@ -60,6 +60,17 @@ class AndroidPostgres(unittest.TestCase):
         self.assertEqual(second["writeAccounting"],{"version":1,"basis":"TRANSACTIONAL","created":0,"updated":0,"duplicates":1})
         third=persist_fixture_import(self.db,self.fixture_import_body(JOB,250000))
         self.assertEqual(third["writeAccounting"]["updated"],1)
+        def race(index):
+            body=self.fixture_import_body(UUID(int=1000+index))
+            body["listings"][0]["postId"]="concurrent-post"
+            with connect() as db:
+                db.row_factory=dict_row
+                return persist_fixture_import(db,body)["writeAccounting"]
+        with ThreadPoolExecutor(2) as pool:
+            counts=list(pool.map(race,[1,2]))
+        self.assertEqual(sum(row["created"] for row in counts),1)
+        self.assertEqual(sum(row["duplicates"] for row in counts),1)
+        self.assertEqual(sum(row["updated"] for row in counts),0)
 
     def test_fixture_binding_and_cross_source_conflicts_roll_back(self):
         from facebook_android_fixture_store import create_fixture_tables, persist_fixture_import

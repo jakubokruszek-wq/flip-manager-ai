@@ -233,3 +233,16 @@ stanowi zgody na produkcyjną migrację, deployment lub skan Facebooka.
   and charging/battery conditions; it asserts WINDOW_COMPLETE and 9 duplicates.
 - Previous full backend validation and APK/JVM remain green; revised instrumented
   scenario requires another isolated emulator/E2E run before claiming completion.
+
+### 0.6 checkpoint: recovery across pre-transaction API failure
+
+- Added explicit fixture-only atomic replay after a completion reservation when
+  no import checkpoint exists. Only OFFLINE_TEST server dependencies can opt in;
+  LIVE continues to return ANDROID_COMPLETION_IN_PROGRESS and remains fenced.
+- E2E now injects failure after reservation/before import, then loses the response
+  after the retried atomic commit, then recreates Android state and resumes the
+  same raw completion. It also checks the repeated cycle through AutoScanWorker.
+- Added a regression proving the LIVE fence still holds and a PostgreSQL race
+  between different batch IDs proving one insert and one duplicate, zero updates.
+- Local backend suite: 88 PASS (plus unchanged 243 regressions and 58 offline/core).
+  Full CI for these final reliability changes is required before release evidence.

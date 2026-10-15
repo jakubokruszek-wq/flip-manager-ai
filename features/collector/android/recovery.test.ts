@@ -4,6 +4,21 @@ import { completeAndroidJob, claimAndroidJob, heartbeatAndroidJob, readAndroidJo
 import { MockAndroidStore, jobRow, completionPayload, DEVICE, OTHER_DEVICE, COMPLETION, RUN, SOURCE_SCAN } from "./fixtures.test-support.ts";
 
 const binding = { deviceId: DEVICE, batchId: COMPLETION, runId: RUN, sourceScanId: SOURCE_SCAN, sourceId: "mock-group", sourceUrl: "https://www.facebook.com/groups/mock-group/" };
+test("only explicit OFFLINE_TEST atomic adapters resume a reserved batch without a checkpoint", async () => {
+  for (const mode of ["OFFLINE_TEST","LIVE"] as const) {
+    const store=new MockAndroidStore();let calls=0;
+    const value={...completionPayload(),dataMode:mode};
+    const processBatch=async () => { calls++;if(calls===1)throw Error("failure before atomic import");return {status:"completed"}; };
+    const send=()=>completeAndroidJob({store,deviceId:DEVICE,value,rawBody:JSON.stringify(value),expectedDataMode:mode,atomicOfflineImportReplay:true,processBatch});
+    await assert.rejects(send(),/failure before atomic import/);
+    if(mode==="LIVE") {
+      await assert.rejects(send(),/ANDROID_COMPLETION_IN_PROGRESS/);assert.equal(calls,1);
+    } else {
+      const receipt=await send();assert.equal(receipt.status,"completed");assert.equal(calls,2);
+      assert.deepEqual(await send(),receipt);assert.equal(calls,2);
+    }
+  }
+});
 class FaultStore extends MockAndroidStore {
   fault: { name: string; phase: "before" | "after" } | null = null;
   async rpc(name: string, args: Record<string, unknown>) {

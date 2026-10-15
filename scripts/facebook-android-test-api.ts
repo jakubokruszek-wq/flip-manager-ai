@@ -32,7 +32,9 @@ async function authenticate(request: Request, pathname: string, body: string) {
   if(!auth.ok)throw new AndroidJobError(401,auth.code);
   return DEVICE;
 }
+let failNextImport = false;
 async function processBatch(deviceId:string,batch:FacebookCollectorBatch,context:{sourceScanId:string}) {
+  if(failNextImport) { failNextImport=false; throw Error("ISOLATED_PRE_TRANSACTION_FAILURE"); }
   const listings:{postId:string;sourceId:string;price:number|null}[]=[];
   const outcomes:FacebookPostOutcome[]=[];
   for(const post of batch.posts){
@@ -54,6 +56,7 @@ const server=https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_K
     if(path==="/__test/health"){res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');return;}
     if(path==="/__test/stats"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(await db("/stats",{})));return;}
     if(path==="/__test/requeue" && req.method==="POST"){res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(await db("/requeue",{})));return;}
+    if(path==="/__test/fail-next-import" && req.method==="POST"){failNextImport=true;res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');return;}
     const chunks:Buffer[]=[];let size=0;
     for await(const chunk of req){size+=chunk.length;if(size>2*1024*1024){res.writeHead(413);res.end();return;}chunks.push(chunk);}
     const headers=new Headers(); for(const [key,value] of Object.entries(req.headers)) if(value!==undefined) headers.set(key,Array.isArray(value)?value.join(","):value);
@@ -61,7 +64,7 @@ const server=https.createServer({key:fs.readFileSync(process.env.FLIP_TEST_TLS_K
     const action=path.replace("/api/collector/android/jobs/","");
     const meta=path.replace("/api/collector/android/","");
     let result:Response;
-    if(jobs.has(action)) result=await handleAndroidRequest(request,action as AndroidAction,{enabled:()=>true,expectedDataMode:"OFFLINE_TEST",authenticate,store:()=>store,processBatch});
+    if(jobs.has(action)) result=await handleAndroidRequest(request,action as AndroidAction,{enabled:()=>true,expectedDataMode:"OFFLINE_TEST",atomicOfflineImportReplay:true,authenticate,store:()=>store,processBatch});
     else if(metadata.has(meta)) result=await handleAndroidMetadata(request,meta as AndroidMetadataAction,{enabled:()=>true,authenticate,store:()=>store,loadSources:async deviceId=>await db("/sources",{deviceId}) as AndroidSourceRow[]});
     else result=Response.json({ok:false,code:"NOT_FOUND"},{status:404});
     res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());

@@ -61,6 +61,8 @@ export async function heartbeatAndroidJob(store: AndroidJobStore, deviceId: stri
 export async function completeAndroidJob(input: {
   store: AndroidJobStore; deviceId: string; value: unknown; rawBody: string;
   expectedDataMode?: "LIVE" | "OFFLINE_TEST";
+  /** Internal opt-in for the isolated adapter with atomic import+checkpoint only. */
+  atomicOfflineImportReplay?: boolean;
   processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: { sourceScanId: string }) => Promise<{ status: string }>;
 }): Promise<AndroidReceipt> {
   const { jobId, leaseToken } = androidLeaseInput(input.value);
@@ -92,10 +94,16 @@ export async function completeAndroidJob(input: {
     // A finished batch is a durable checkpoint. Resume ONLY finalization, never
     // the listing import. Incomplete/ambiguous writes remain fenced.
     if (failed) return finishReceipt(input.store, args, { ok: true, completionId, status: "failed", result: failureResult }, String(errorCode));
-    const saved = batch && input.store.loadCompletedBatch ? await input.store.loadCompletedBatch({
+    let saved = batch && input.store.loadCompletedBatch ? await input.store.loadCompletedBatch({
       deviceId: input.deviceId, batchId: completionId, runId: job.scan_run_id,
       sourceScanId: job.source_scan_id, sourceId: batch.sourceId, sourceUrl: batch.sourceUrl,
     }) : null;
+    if (!saved && batch && input.atomicOfflineImportReplay === true && input.expectedDataMode === "OFFLINE_TEST") {
+      // The fixture adapter serializes by batch ID and commits every listing,
+      // exact counters and its checkpoint in ONE transaction. Production import
+      // cannot opt into this recovery path, even if a caller sets the flag.
+      saved = await input.processBatch(input.deviceId, batch, { sourceScanId: job.source_scan_id });
+    }
     if (!saved) throw new AndroidJobError(409, "ANDROID_COMPLETION_IN_PROGRESS");
     if (!["completed", "degraded", "failed"].includes(saved.status)) throw new AndroidJobError(503, "ANDROID_PROCESSING_RESULT_INVALID");
     return finishReceipt(input.store, args, { ok: true, completionId, status: saved.status === "failed" ? "failed" : "completed", result: saved }, saved.status === "failed" ? "ANDROID_BATCH_FAILED" : null);

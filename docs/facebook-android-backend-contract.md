@@ -428,3 +428,11 @@ returns its persisted receipt without new writes or count increments. The Androi
 journal stores a result keyed by completion ID atomically with cursor advancement
 before clearing exact outbox bytes. Unknown historical production write counts
 remain unknown; this fixture evidence does not certify production Finder counters.
+
+The isolated fixture opts into `atomicOfflineImportReplay` in server dependencies
+(not in request JSON). It is honored ONLY with server `expectedDataMode=OFFLINE_TEST`.
+When the completion is reserved and its batch checkpoint is absent, it may rerun
+that atomic adapter with the exact same batch ID; database batch locks and the
+unique persisted checkpoint serialize concurrent attempts. LIVE ignores the flag
+and retains the previous reconciliation fence. This opt-in must not be copied to
+the non-atomic production Finder importer.

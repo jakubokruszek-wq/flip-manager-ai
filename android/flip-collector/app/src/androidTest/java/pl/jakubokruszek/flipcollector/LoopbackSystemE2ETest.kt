@@ -35,6 +35,10 @@ class LoopbackSystemE2ETest {
         val pem=instrumentation.context.assets.open("isolated-test-cert.pem").bufferedReader().use { it.readText() }
         OfflineAutomationRuntime.configure(context,origin!!,pem)
         try {
+        val cert=CertificateFactory.getInstance("X.509").generateCertificate(pem.byteInputStream()) as X509Certificate
+        val tls=HandshakeCertificates.Builder().addTrustedCertificate(cert).build()
+        val http=OkHttpClient.Builder().sslSocketFactory(tls.sslSocketFactory(),tls.trustManager).build()
+        http.newCall(okhttp3.Request.Builder().url(origin+"/__test/fail-next-import").post("{}".toRequestBody()).build()).execute().use { assertTrue(it.isSuccessful) }
         val signed=OfflineAutomationRuntime.client(context)
         assertFalse(BuildConfig.LIVE_COLLECTION_ENABLED)
         assertFalse(BuildConfig.ANDROID_BACKEND_INTEGRATION_ENABLED)
@@ -62,6 +66,11 @@ class LoopbackSystemE2ETest {
         }
         assertEquals("RECONCILIATION_REQUIRED",OfflineAutomation(flaky,state).run("fixture-night",System.currentTimeMillis()+480_000,{conditions},::collect))
         val firstPending=requireNotNull(state.load())
+        // Reservation survived but the transaction did not start. Retry through
+        // the atomic fixture, then lose the successful HTTP response as well.
+        state=OfflineAutomationRuntime.state(context)
+        assertEquals("RECONCILIATION_REQUIRED",OfflineAutomation(flaky,state).run("fixture-night",System.currentTimeMillis()+480_000,{conditions},::collect))
+        assertEquals(firstPending.rawBody,requireNotNull(state.load()).rawBody)
         // Simulate a killed process: recreate the encrypted journal and engine.
         state=OfflineAutomationRuntime.state(context)
         assertEquals("WINDOW_COMPLETE",OfflineAutomation(signed,state).run("fixture-night",System.currentTimeMillis()+480_000,{conditions},::collect))
@@ -79,9 +88,6 @@ class LoopbackSystemE2ETest {
         assertEquals(1,receipt.getJSONObject("result").getInt("listingsCreated"))
         assertEquals("WINDOW_COMPLETE",OfflineAutomation(signed,state).run("fixture-night",System.currentTimeMillis()+480_000,{conditions},::collect))
         assertEquals(11,state.diagnostics().getJSONArray("results").length())
-        val cert=CertificateFactory.getInstance("X.509").generateCertificate(pem.byteInputStream()) as X509Certificate
-        val tls=HandshakeCertificates.Builder().addTrustedCertificate(cert).build()
-        val http=OkHttpClient.Builder().sslSocketFactory(tls.sslSocketFactory(),tls.trustManager).build()
         fun stats(): JSONObject = http.newCall(okhttp3.Request.Builder().url(origin+"/__test/stats").build()).execute().use {
             assertTrue(it.isSuccessful);JSONObject(it.body!!.string())
         }
