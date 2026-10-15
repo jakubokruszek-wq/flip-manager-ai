@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -184,7 +185,12 @@ object WatcherRuntime {
         val onWifi = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         val battery = app.getSystemService(BatteryManager::class.java)
-        val charging = battery?.isCharging == true
+        // Some Samsung builds report isCharging=false despite a plugged-in
+        // charger. Cross-check the official sticky battery broadcast rather
+        // than treating an externally powered test phone as unplugged.
+        val batteryBroadcast = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val powerSource = batteryBroadcast?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val charging = externallyPowered(battery?.isCharging == true, powerSource)
         val percent = battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 }
         return DeviceConditions(onWifi = onWifi, charging = charging, paired = DeviceTokenStore(app).token() != null, batteryPercent = percent)
     }
