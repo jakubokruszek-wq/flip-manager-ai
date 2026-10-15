@@ -41,7 +41,7 @@ def validate_database(env):
     if uri.query or uri.fragment:
         raise ValueError("OFFLINE_TEST_DATABASE_EXTRA_PARAMETERS")
     return {"host": host, "port": 5432, "dbname": "postgres", "user": unquote(username), "password": unquote(password),
-            "sslmode": "verify-full", "sslrootcert": "/etc/ssl/certs/ca-certificates.crt", "connect_timeout": 10,
+            "sslmode": "verify-full", "sslrootcert": "/app/certs/supabase-root-ca-2021.crt", "connect_timeout": 10,
             "autocommit": True, "options": "-c statement_timeout=10000 -c lock_timeout=5000"}
 
 def configure(pg):
