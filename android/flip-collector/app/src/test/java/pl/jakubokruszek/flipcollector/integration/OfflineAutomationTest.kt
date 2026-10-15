@@ -118,4 +118,19 @@ class OfflineAutomationTest {
         disk.raw=JSONObject().put("mode","OFFLINE_TEST").put("groups","broken").toString()
         try { AutomationState(disk).groups();fail("corrupt groups") } catch(_: org.json.JSONException) {}
     }
+    @Test fun wifiLossAndApiReconnectResumeOnlyUnfinishedSource()=runBlocking {
+        val state=AutomationState(Disk());val api=Api();api.sources=api.sources.take(2)
+        api.offline=true
+        assertEquals("RETRY_REQUIRED",OfflineAutomation(api,state).run("night",System.currentTimeMillis()+300_000,{conditions}) { error("must not collect") })
+        assertEquals(0,api.claims)
+        api.offline=false;var wifi=true;val seen=mutableListOf<String>()
+        assertEquals("DEVICE_CONSTRAINT",OfflineAutomation(api,state).run("night",System.currentTimeMillis()+300_000,{conditions.copy(wifi=wifi)}) {
+            seen+=it.group!!.getString("id");wifi=false;JSONObject()
+        })
+        wifi=true
+        assertEquals("WINDOW_COMPLETE",OfflineAutomation(api,state).run("night",System.currentTimeMillis()+300_000,{conditions.copy(wifi=wifi)}) {
+            seen+=it.group!!.getString("id");JSONObject()
+        })
+        assertEquals(2,seen.size);assertEquals(2,seen.distinct().size);assertEquals(2,api.writes)
+    }
 }

@@ -210,3 +210,15 @@ stanowi zgody na produkcyjną migrację, deployment lub skan Facebooka.
 - Added docs/facebook-android-0.6-offline.md with pinned local HTTPS/adb setup,
   continuation, recovery semantics, transactional fixture counters and LIVE gaps.
 - Remaining CI results are pending; no production actions performed.
+
+### 0.6 checkpoint: full validation and runtime stop
+
+- Remote c5258fd4966da5f048d35a8125d5c2c9145b59e1: isolated validation workflow
+  38734070082 PASS (TypeScript/ESLint/Next build/Node/PostgreSQL 16 tests).
+- APK workflow 38734070141 PASS, including Kotlin/JVM and side-by-side identity.
+- Full E2E and emulator for this checkpoint are still running.
+- Added one shared runtime job handle: UI stop interrupts the background cycle too;
+  disabling fixture cancels pending continuation without deleting recovery data.
+  Configuration cannot be changed during a running cycle.
+- Added Wi-Fi-loss/API-reconnect regression asserting only unfinished sources resume.
+- These final runtime changes require another CI run before being called verified.

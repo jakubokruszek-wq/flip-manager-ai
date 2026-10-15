@@ -18,8 +18,9 @@ fun OfflineAutomationPanel(context: Context) {
     var message by remember { mutableStateOf("") }
     var snapshot by remember { mutableStateOf(OfflineAutomationRuntime.state(context).diagnostics()) }
     var task by remember { mutableStateOf<Job?>(null) }
+    var running by remember { mutableStateOf(OfflineAutomationRuntime.isRunning()) }
     LaunchedEffect(Unit) {
-        while(isActive) { snapshot=OfflineAutomationRuntime.state(context).diagnostics(); delay(2_000) }
+        while(isActive) { snapshot=OfflineAutomationRuntime.state(context).diagnostics(); running=OfflineAutomationRuntime.isRunning(); delay(2_000) }
     }
     Card {
         Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -37,7 +38,7 @@ fun OfflineAutomationPanel(context: Context) {
                 }) { Text("Połącz z lokalnym fixture") }
             }
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                Button(enabled=task?.isActive!=true && OfflineAutomationRuntime.enabled(context),onClick={
+                Button(enabled=task?.isActive!=true && !running && OfflineAutomationRuntime.enabled(context),onClick={
                     task=scope.launch {
                         try {
                             val schedule=WatcherRuntime.settings(context).schedule()
@@ -47,7 +48,7 @@ fun OfflineAutomationPanel(context: Context) {
                         catch(_: Exception) { message="OFFLINE_CYCLE_FAILED" }
                     }
                 }) { Text("Cykl offline") }
-                OutlinedButton(enabled=task?.isActive==true,onClick={task?.cancel()}) { Text("Zatrzymaj") }
+                OutlinedButton(enabled=running || task?.isActive==true,onClick={task?.cancel();OfflineAutomationRuntime.stop()}) { Text("Zatrzymaj") }
             }
             OutlinedButton(onClick={task?.cancel(); OfflineAutomationRuntime.disable(context); message="Fixture wyłączone; stan zachowany"}) { Text("Odłącz fixture") }
             Text(message)
