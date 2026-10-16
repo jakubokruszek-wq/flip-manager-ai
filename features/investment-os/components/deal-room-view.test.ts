@@ -36,7 +36,7 @@ test("canonical listing route keeps GET read-only and exposes initialization onl
   assert.match(desk, /loadInvestmentDeal\(result\.id\)/);
   assert.match(client, /InvestmentDealNotComputedError/);
   assert.match(desk, /notComputed/);
-  assert.match(getRoute, /investmentDealReadResponse\(\(await params\)\.id, getInvestmentDeal\)/);
+  assert.match(getRoute, /getInvestmentDeal\(listingId, actorId\)/);
   assert.doesNotMatch(getRoute, /initializeInvestmentDeal|method:\s*["']POST["']/);
   assert.match(desk, /if \(!notComputed \|\| initializationInFlight\.current\) return/);
   assert.match(desk, /\/investment\/initialize/);

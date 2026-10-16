@@ -10,6 +10,7 @@ export type AnswerRound = { requestId: string; savedAt: string; actorId: string;
 export type DealRoomState = { version: number; answers: Record<string, SavedAnswer>; baselineOverrides: DealFactOverrides; rounds: AnswerRound[] };
 export type AnswerCommand = { requestId: string; expectedVersion: number; answers: AnswerInput[] };
 export class DealRoomInputError extends Error {}
+export class DealRoomNotFound extends Error {}
 const numeric: Record<string, { min: number; max: number; unit: string }> = {
   negotiatedPrice: { min: 1, max: 100_000_000, unit: "PLN — założenie ceny zakupu" },
   askingPrice: { min: 1, max: 100_000_000, unit: "PLN" }, areaM2: { min: 1, max: 10_000, unit: "m²" },

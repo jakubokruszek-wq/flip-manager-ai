@@ -2,13 +2,13 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildDealBrain } from "../brain";
-import { affectedDirectors, answerOverrides, mergeAnswers, parseAnswerCommand, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
+import { DealRoomNotFound, affectedDirectors, answerOverrides, mergeAnswers, parseAnswerCommand, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
 import { InvestmentDealVersionConflict } from "./deal-cas";
 import { prepareInvestmentDeal, readStoredDeal, toDealRow } from "./deal-service";
 import type { DealFactOverrides } from "../types";
 
 export function dealRoomEnabled(): boolean { return process.env.DEAL_ROOM_QA_ENABLED === "true"; }
-export class DealRoomNotFound extends Error {}
+export { DealRoomNotFound } from "../deal-room-answers";
 export async function readDealRoom(listingId: string, actorId: string): Promise<DealRoomState | null> {
   const db = createAdminClient(), stored = await readStoredDeal(db, listingId);
   if (!stored) return null;
@@ -41,7 +41,7 @@ export async function saveDealRoomAnswers(listingId: string, actorId: string, ra
   const now = new Date().toISOString();
   const answers = mergeAnswers(stored.deal, state, command, actorId, now);
   const values = answerOverrides(stored.deal, state.baselineOverrides, answers);
-  const prepared = await prepareInvestmentDeal(db, listingId, values);
+  const prepared = await prepareInvestmentDeal(db, listingId, values, actorId);
   if (!prepared.value || prepared.expectedVersion !== stored.version || prepared.sourceUpdatedAt !== stored.sourceUpdatedAt) throw new InvestmentDealVersionConflict();
   const deal = preserveUnchangedDirectors(stored.deal, prepared.value);
   const changedFields = command.answers.map((a) => a.field), invalidated = affectedDirectors(changedFields);

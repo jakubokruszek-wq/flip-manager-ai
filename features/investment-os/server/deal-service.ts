@@ -1,6 +1,6 @@
 import "server-only";
 
-import { answerOverrides, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
+import { DealRoomNotFound, answerOverrides, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { calculateResaleArv, selectResaleComps } from "@/features/market-intelligence/resale-arv";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
@@ -14,9 +14,10 @@ import { classifyFacebookConditionFromText } from "@/features/facebook-watcher/e
 type Row = Record<string, unknown>;
 type InvestmentSettings = UnderwritingSettings & { decisionPolicy: InvestmentDecisionPolicy };
 
-export async function getInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
+export async function getInvestmentDeal(listingId: string, actorId?: string): Promise<CanonicalDeal | null> {
   const db = createAdminClient();
   const stored = await readStoredDeal(db, listingId);
+  if (stored?.ownerId && stored.ownerId !== actorId) throw new DealRoomNotFound();
   return stored?.deal ?? null;
 }
 
@@ -32,11 +33,11 @@ export async function getListingMedia(listingId: string): Promise<{ images: stri
   return { images: Array.isArray(data?.images) ? data.images.filter((value): value is string => typeof value === "string") : [] };
 }
 
-export async function initializeInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
+export async function initializeInvestmentDeal(listingId: string, actorId?: string): Promise<CanonicalDeal | null> {
   const db = createAdminClient();
   const deal = await initializeDealWithCas<CanonicalDeal | null>({
     compute: async (): Promise<VersionedDealCandidate<CanonicalDeal | null>> => {
-      return prepareInvestmentDeal(db, listingId);
+      return prepareInvestmentDeal(db, listingId, undefined, actorId);
     },
     commit: async (candidate) => commitDealCas(async () => {
       const { data, error } = await db.rpc("persist_investment_deal_cas", { p_deal: toDealRow(candidate.value as CanonicalDeal), p_expected_version: candidate.expectedVersion, p_source_updated_at: candidate.sourceUpdatedAt });
@@ -45,6 +46,7 @@ export async function initializeInvestmentDeal(listingId: string): Promise<Canon
     }),
     readCurrent: async () => {
       const current = await readStoredDeal(db, listingId);
+      if (current?.ownerId && current.ownerId !== actorId) throw new DealRoomNotFound();
       return current ? { value: current.deal, sourceUpdatedAt: current.sourceUpdatedAt } : null;
     },
   });
@@ -52,11 +54,12 @@ export async function initializeInvestmentDeal(listingId: string): Promise<Canon
   return deal;
 }
 
-export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminClient>, listingId: string, overrideValues?: DealFactOverrides): Promise<VersionedDealCandidate<CanonicalDeal | null>> {
+export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminClient>, listingId: string, overrideValues?: DealFactOverrides, actorId?: string): Promise<VersionedDealCandidate<CanonicalDeal | null>> {
       const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
       if (error) throw error;
       if (!listing) return { value: null, expectedVersion: 0, sourceUpdatedAt: null, unchanged: true };
       const existing = await readStoredDeal(db, listingId);
+      if (existing?.ownerId && existing.ownerId !== actorId) throw new DealRoomNotFound();
       const dealId = existing?.deal.id ?? crypto.randomUUID();
       const overridesResult = existing ? await db.from("deal_fact_overrides").select("values").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
       if (overridesResult.error) throw overridesResult.error;
@@ -82,10 +85,11 @@ export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminCli
       return { value: deal, expectedVersion: existing?.version ?? 0, sourceUpdatedAt };
 }
 
-export async function saveDealOverrides(listingId: string, values: DealFactOverrides): Promise<{ deal: CanonicalDeal; invalidated: string[] }> {
-  await initializeInvestmentDeal(listingId);
+export async function saveDealOverrides(listingId: string, values: DealFactOverrides, actorId?: string): Promise<{ deal: CanonicalDeal; invalidated: string[] }> {
+  await initializeInvestmentDeal(listingId, actorId);
   const db = createAdminClient();
   const currentStored = await readStoredDeal(db, listingId);
+  if (currentStored?.ownerId && currentStored.ownerId !== actorId) throw new DealRoomNotFound();
   const current = currentStored?.deal ?? null;
   if (!current) throw new Error("DEAL_LISTING_NOT_FOUND");
   const clean = sanitizeOverrides(values);
@@ -103,7 +107,7 @@ export async function saveDealOverrides(listingId: string, values: DealFactOverr
   });
   const { error } = await db.rpc("apply_investment_override_cas", { p_deal_id: current.id, p_expected_version: currentStored!.version, p_values: clean, p_invalidated: [...invalidated], p_events: events, p_user_id: "application" });
   if (error) throw error;
-  const deal = await initializeInvestmentDeal(listingId);
+  const deal = await initializeInvestmentDeal(listingId, actorId);
   if (!deal) throw new Error("DEAL_RECOMPUTE_FAILED");
   return { deal, invalidated: [...invalidated] };
 }
