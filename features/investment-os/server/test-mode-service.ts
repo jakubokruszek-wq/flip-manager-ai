@@ -10,7 +10,7 @@ export async function prepareTestCases(actorId: string) {
     id: c.id, source: "facebook", external_listing_id: c.id,
     original_url: `https://example.test/deal-room/${c.id}`, title: c.title,
     city: "Łódź", district: "Górna", address: c.title, area: 45, rooms: 2,
-    updated_at: now, updated_at: now, price: c.price, building_type: "BLOCK", ownership: "pełna własność",
+    updated_at: now, price: c.price, building_type: "BLOCK", ownership: "pełna własność",
     lifecycle_status: "ACTIVE", manual_decision: c.key === "reject" ? "REJECTED" : null,
     description: "WYŁĄCZNIE SYNTETYCZNY TEST. Mieszkanie do remontu. Brak zweryfikowanej dokumentacji prawnej.",
     images: [], gallery_status: "NOT_REQUESTED", last_seen_at: now,

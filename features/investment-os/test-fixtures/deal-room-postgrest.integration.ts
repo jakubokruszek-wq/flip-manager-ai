@@ -223,6 +223,13 @@ test("Finder TEST real API/DB: isolated preparation, repeat safety, account fenc
  assert.equal((await prep()).status,200);
  const history=await import("../../../app/api/flip-finder/listings/[id]/investment/history/route");
  const historyResponse=await history.GET(new Request(origin+"/history"),ctx);assert.equal(historyResponse.status,200);assert.equal((await historyResponse.json()).rounds.length,1);
+ const stored=await db.from("deals").select("id").eq("listing_id",cases[0].id).single();assert.ifError(stored.error);
+ const tiedAt=new Date(Date.now()+10000).toISOString();
+ const syntheticRounds=Array.from({length:21},()=>({deal_id:stored.data!.id,owner_id:owner,request_id:randomUUID(),payload_hash:"c".repeat(64),response:saved,created_at:tiedAt}));
+ const inserted=await db.from("deal_room_rounds").insert(syntheticRounds);assert.ifError(inserted.error);
+ const firstPage=await (await history.GET(new Request(origin+"/history"),ctx)).json();assert.equal(firstPage.rounds.length,20);assert.ok(firstPage.nextBefore);
+ const secondPage=await (await history.GET(new Request(origin+"/history?before="+encodeURIComponent(firstPage.nextBefore)),ctx)).json();assert.equal(secondPage.rounds.length,2);assert.equal(secondPage.nextBefore,null);assert.equal(new Set([...firstPage.rounds,...secondPage.rounds].map((row:{requestId:string})=>row.requestId)).size,22);
+ assert.equal((await history.GET(new Request(origin+"/history?before=bad"),ctx)).status,400);
  actor=other;assert.equal((await history.GET(new Request(origin+"/history"),ctx)).status,404);actor=owner;
  assert.equal((await (await answersApi.GET(new Request(origin+"/answers"),ctx)).json()).room.answers.renovationBudget.value,40000);
  actor=other;assert.equal((await api.GET()).status,404);assert.equal((await prep()).status,404);assert.equal((await dealApi.GET(new Request(origin),ctx)).status,404);assert.equal((await initializeApi.POST(request({},"/initialize"),ctx)).status,404);assert.equal((await answersApi.GET(new Request(origin+"/answers"),ctx)).status,404);

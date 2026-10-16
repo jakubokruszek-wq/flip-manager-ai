@@ -7,7 +7,7 @@ export const TEST_CASES = [
   { key: "reject", title: "TEST · Łódź — ryzykowny zakup", price: 680000 },
 ] as const;
 /** Server-side configuration only. Never uses email or user-editable metadata. */
-export function testModeAllowed(actorId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+export function testModeAllowed(actorId: string, env: Readonly<Partial<Record<"DEAL_ROOM_TEST_ENABLED" | "DEAL_ROOM_QA_ENABLED" | "VERCEL_ENV" | "DEAL_ROOM_TEST_DATABASE_ORIGIN" | "NEXT_PUBLIC_SUPABASE_URL" | "DEAL_ROOM_TEST_OPERATOR_IDS", string>>> = process.env): boolean {
   if (env.DEAL_ROOM_TEST_ENABLED !== "true" || env.DEAL_ROOM_QA_ENABLED !== "true" || env.VERCEL_ENV === "production" || !UUID.test(actorId)) return false;
   const configured = env.DEAL_ROOM_TEST_DATABASE_ORIGIN;
   try {

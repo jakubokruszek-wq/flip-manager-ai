@@ -9,7 +9,7 @@ fixture = runpy.run_path(str(root / 'scripts/test-deal-room-postgres.py'), run_n
 fixture['DealRoomSql'].setUpClass()
 with fixture['psycopg'].connect(fixture['DSN'], autocommit=True) as c:
     c.execute('''alter table listings
-      add column title text, add column title text, add column source text, add column original_url text, add column external_listing_id text,
+      add column title text, add column source text, add column original_url text, add column external_listing_id text,
       add column lifecycle_status text, add column manual_decision text, add column city text,
       add column district text, add column address text, add column area numeric, add column rooms integer,
       add column floor text, add column building_type text, add column ownership text, add column description text,
