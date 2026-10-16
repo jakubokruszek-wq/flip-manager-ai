@@ -64,7 +64,7 @@ test("nonfinancial legal note leaves financial tracks and timestamps unchanged",
 });
 test("invalid, duplicate, injected and secret-bearing answers are rejected", () => {
   assert.throws(() => parseAnswerCommand({ requestId: "-".repeat(36), expectedVersion: 1, answers: [answer("negotiatedPrice", 260000)] }));
-  for (const answers of [[answer("askingPrice", -1)], [answer("askingPrice", NaN)], [answer("ownership", "Bearer secret")], [answer("ownerId", "another-user")], [answer("__proto__", 1)], [answer("constructor", 1)], [answer("askingPrice", 1), answer("askingPrice", 2)], [{ ...answer("legalStatus", "doc"), evidenceUrl: "https://example.test/doc?token=abc" }]]) assert.throws(() => parseAnswerCommand({ requestId, expectedVersion: 1, answers }));
+  for (const answers of [[answer("rooms", 1.5)], [answer("askingPrice", -1)], [answer("askingPrice", NaN)], [answer("ownership", "Bearer secret")], [answer("ownerId", "another-user")], [answer("__proto__", 1)], [answer("constructor", 1)], [answer("askingPrice", 1), answer("askingPrice", 2)], [{ ...answer("legalStatus", "doc"), evidenceUrl: "https://example.test/doc?token=abc" }]]) assert.throws(() => parseAnswerCommand({ requestId, expectedVersion: 1, answers }));
 });
 
 test("a correction contradicting the advertised source price remains a material conflict", () => {
@@ -105,4 +105,13 @@ test("a nonfinancial note does not refresh the date or reset a manual resale ass
   assert.equal(after.market, before.market);
   assert.equal(after.underwriting, before.underwriting);
   assert.equal(after.market.result?.observedAt, base.now);
+});
+
+test("a typed answer supplies missing room count to the existing dependent analyses", () => {
+  const base = lodzDeal();
+  const { before, after } = apply([answer("rooms",2)], { ...base, listing: { ...base.listing, rooms: null } });
+  assert.ok(before.verify.result?.missingCriticalFields.includes("rooms"));
+  assert.equal(after.facts.rooms.effectiveValue,2);
+  assert.ok(!after.verify.result?.missingCriticalFields.includes("rooms"));
+  assert.notEqual(after.ceo.result?.action,"KUP");
 });

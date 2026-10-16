@@ -12,6 +12,7 @@ export type AnswerCommand = { requestId: string; expectedVersion: number; answer
 export class DealRoomInputError extends Error {}
 export class DealRoomNotFound extends Error {}
 const numeric: Record<string, { min: number; max: number; unit: string }> = {
+  rooms: { min: 1, max: 100, unit: "liczba pokoi" },
   resalePerM2: { min: 1, max: 1000000, unit: "PLN/m² — założenie wyjścia" }, additionalCosts: { min: 0, max: 10000000, unit: "PLN dodatkowo" },
   negotiatedPrice: { min: 1, max: 100_000_000, unit: "PLN — założenie ceny zakupu" },
   askingPrice: { min: 1, max: 100_000_000, unit: "PLN" }, areaM2: { min: 1, max: 10_000, unit: "m²" },
@@ -33,7 +34,7 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
     let result: string | number | null = null;
     if (kind === "VALUE") {
       if (numeric[field]) {
-        if (typeof a.value !== "number" || !Number.isFinite(a.value) || a.value < numeric[field].min || a.value > numeric[field].max) throw new DealRoomInputError(`Podaj poprawną wartość: ${answerUnit(field)}.`);
+        if (typeof a.value !== "number" || !Number.isFinite(a.value) || a.value < numeric[field].min || a.value > numeric[field].max || (field === "rooms" && !Number.isInteger(a.value))) throw new DealRoomInputError(`Podaj poprawną wartość: ${answerUnit(field)}.`);
         result = a.value;
       } else {
         if (typeof a.value !== "string" || !a.value.trim() || a.value.length > 2000) throw new DealRoomInputError("Odpowiedź musi mieć od 1 do 2000 znaków.");
@@ -74,7 +75,7 @@ export function answerOverrides(deal: CanonicalDeal, baseline: DealFactOverrides
   const result = { ...baseline };
   for (const [field, answer] of Object.entries(answers)) {
     if (answer.kind !== "VALUE" || answer.sourceFingerprint !== answerSourceFingerprint(deal, field)) continue;
-    if ((field === "askingPrice" || field === "areaM2" || field === "holdingMonths" || field === "negotiatedPrice" || field === "resalePerM2" || field === "additionalCosts") && typeof answer.value === "number") result[field] = answer.value;
+    if ((field === "askingPrice" || field === "areaM2" || field === "holdingMonths" || field === "negotiatedPrice" || field === "resalePerM2" || field === "additionalCosts" || field === "rooms") && typeof answer.value === "number") result[field] = answer.value;
     if ((field === "city" || field === "district" || field === "street" || field === "ownership" || field === "condition" || field === "buildingType") && typeof answer.value === "string") result[field] = answer.value;
   }
   const budget = answers.renovationBudget, area = typeof result.areaM2 === "number" ? result.areaM2 : deal.facts.areaM2.sourceValue;
