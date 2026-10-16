@@ -133,7 +133,7 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   assert.equal(arithmeticSaved.deal.underwriting.result.cfo.taxReview.conditional.amountPLN,19000);assert.equal(arithmeticSaved.deal.underwriting.result.cfo.taxReview.conditional.actualLiabilityPLN,null);assert.equal(arithmeticSaved.deal.underwriting.result.cfo.netProfit,null);assert.notEqual(arithmeticSaved.deal.ceo.inputFingerprint,arithmeticInitial.ceo.inputFingerprint);
   assert.deepEqual(await (await answersApi.POST(request(arithmeticCommand),context)).json(),arithmeticSaved);assert.equal((await current()).answers.taxRuleBase.value,"100000.00");
   const withdrawRule={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxRuleBase",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
-  const withdrawn=await answersApi.POST(request(withdrawRule),context);assert.equal(withdrawn.status,200);assert.equal((await withdrawn.json()).deal.underwriting.result.cfo.taxReview.conditional,null);
+  const arithmeticWithdrawn=await answersApi.POST(request(withdrawRule),context);assert.equal(arithmeticWithdrawn.status,200);assert.equal((await arithmeticWithdrawn.json()).deal.underwriting.result.cfo.taxReview.conditional,null);
   process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED="false";
   process.env.DEAL_ROOM_TAX_REVIEW_ENABLED="false";
   process.env.DEAL_ROOM_CFO_ENABLED="false";
