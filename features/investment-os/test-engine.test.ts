@@ -13,7 +13,7 @@ test("virtual cases reuse all ten directors, synthetic indicative fallback, CFO/
  for(const c of testCases(owner)){
   const deal=buildTestDeal(owner,c.id,{costScope:"BRUTTO",financingMode:"CASH",equity:800000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6,renovationTotal:40000,taxScenario:"JDG"});
   const brain=buildDealBrain(deal);for(const d of BRAIN_DIRECTORS)assert.ok(brain.directors[d]);
-  assert.equal(deal.market.result?.indicative,true);assert.notEqual(deal.ceo.result?.action,"KUP");assert.notEqual(brain.ceo.decision,"BUY");
+  assert.equal(deal.market.result?.indicative,true);assert.notEqual(deal.ceo.result?.action,"KUP");assert.notEqual(brain.ceo.decision,"BUY");assert.equal(deal.ceo.result?.openingOffer,null);assert.ok(deal.ceo.result?.criticalGates.some(g=>g.fact==="testOnly"&&!g.passed));
   assert.equal(deal.underwriting.result?.cfo?.taxStatus,"UNKNOWN");assert.equal(deal.underwriting.result?.cfo?.netProfit,null);
   if(c.key==="reject")assert.equal(deal.ceo.result?.action,"ODRZUĆ");else profits.push(deal.underwriting.result!.cfo!.selected!.projectProfitBeforeTax!);
   const state={answers:{},baselineOverrides:{},rounds:[],version:1};

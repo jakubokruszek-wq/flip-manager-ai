@@ -10,6 +10,9 @@ export function buildTestDeal(actorId:string,id:string,overrides:DealFactOverrid
  const base=lodzDeal("UNCLEAR_RENOVATION");
  const deal=buildCanonicalDeal({...base,features:TEST_DEAL_FEATURES,dealId:id,now,listing:{...base.listing,id,sourceUrl:`https://example.test/deal-room/${id}`,externalListingId:id,street:item.title,askingPrice:item.price,identityExact:false,imageCount:0,manualDecision:item.key==="reject"?"REJECTED":null},market:base.market?markIndicative(base.market,"syntetyczne porównania TEST — brak rzeczywistego Radaru",null):null,overrides});
  // TEST can demonstrate rejection, never authorize a transaction, even after all answers.
- if(deal.ceo.result && deal.ceo.result.action!=="ODRZUĆ")deal.ceo.result={...deal.ceo.result,action:"HOLD / ZBIERZ DANE",decision:"REVIEW",risks:[...deal.ceo.result.risks,"TEST_ONLY_NO_PURCHASE"]};
+ if(deal.ceo.result){
+  const reject=deal.ceo.result.action==="ODRZUĆ";
+  deal.ceo.result={...deal.ceo.result,action:reject?"ODRZUĆ":"HOLD / ZBIERZ DANE",decision:reject?"REJECT":"REVIEW",openingOffer:null,targetPurchasePrice:null,headline:reject?"TEST · zachowaj odrzucenie":"TEST · analiza syntetyczna, bez zakupu",recommendation:"Wyłącznie test pytań i przeliczeń. Nie składaj oferty ani nie kupuj na tej podstawie.",nextBestAction:"Kontynuuj wyłącznie test na danych syntetycznych.",risks:[...deal.ceo.result.risks,"TEST_ONLY_NO_PURCHASE"],criticalGates:[...deal.ceo.result.criticalGates,{fact:"testOnly",passed:false,reason:"Wirtualny scenariusz TEST nigdy nie uprawnia do zakupu."}]};
+ }
  return deal;
 }
