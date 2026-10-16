@@ -2,7 +2,7 @@ name: Deal Room Q&A isolated validation
 on:
   pull_request:
     branches: [main, feat/deal-room-qa, feat/deal-room-market, feat/deal-room-cfo, feat/deal-room-tax-scenarios, feat/deal-room-tax-model, feat/deal-room-private-tax]
-    paths: ['features/investment-os/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', 'scripts/test-tax-arithmetic-reference.py', 'scripts/test-private-tax-reference.py', 'scripts/test-jdg-tax-reference.py', 'scripts/setup-deal-room-service.py', '.github/workflows/deal-room-qa.yml']
+    paths: ['features/investment-os/**', 'app/(app)/flip-finder/page.tsx', 'app/(app)/deals/**', 'app/api/deal-room/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', 'scripts/test-tax-arithmetic-reference.py', 'scripts/test-private-tax-reference.py', 'scripts/test-jdg-tax-reference.py', 'scripts/setup-deal-room-service.py', '.github/workflows/deal-room-qa.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,9 +27,11 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npx tsc --noEmit
-      - run: npx eslint features/investment-os 'app/api/flip-finder/listings/[id]/investment' features/flip-finder/underwriting.ts
+      - run: npx eslint features/investment-os 'app/api/flip-finder/listings/[id]/investment' features/flip-finder/underwriting.ts 'app/(app)/flip-finder/page.tsx' 'app/(app)/deals' app/api/deal-room
       - name: Unit and existing regression with coverage
         run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test-isolation=none --experimental-test-coverage --test features/investment-os/*.test.ts features/investment-os/brain/*.test.ts features/investment-os/server/*.test.ts features/investment-os/components/*.test.ts features/flip-finder/underwriting.test.ts
+      - name: Existing MARKET and Radar regressions
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --test features/market-intelligence/*.test.mjs features/price-radar/qualification.test.ts features/price-radar/stats.test.ts
       - name: Independent decimal arithmetic reference
         run: python3 scripts/test-tax-arithmetic-reference.py
       - name: Independent full private transaction reference

@@ -53,3 +53,20 @@ export async function saveDealRoomAnswers(listingId: string, actorId: string, ra
   if (error) { if (error.message.includes("INVESTMENT_DEAL_VERSION_CONFLICT")) throw new InvestmentDealVersionConflict(); if (error.message.includes("DEAL_ROOM_NOT_FOUND")) throw new DealRoomNotFound(); throw error; }
   return data;
 }
+
+/** Bounded immutable receipt history; no arbitrary actor/deal identifier from request body. */
+export async function readDealRoomHistory(listingId: string, actorId: string, before: string | null) {
+  const db = createAdminClient(), stored = await readStoredDeal(db, listingId);
+  if (!stored || stored.ownerId !== actorId) throw new DealRoomNotFound();
+  let query = db.from("deal_room_rounds").select("request_id,created_at,response").eq("deal_id",stored.deal.id).eq("owner_id",actorId).order("created_at",{ascending:false}).order("request_id",{ascending:false}).limit(21);
+  if (before) {
+    const [createdAt, requestId] = before.split("|");
+    query=query.or(`created_at.lt.${createdAt},and(created_at.eq.${createdAt},request_id.lt.${requestId})`);
+  }
+  const {data,error}=await query;if(error)throw error;
+  const rows=data??[], page=rows.slice(0,20);
+  return { rounds: page.map(row=>{
+    const round=(row.response as {room?: DealRoomState}).room?.rounds?.[0];
+    return {requestId:row.request_id,createdAt:row.created_at,changedFields:round?.changedFields??[],beforeProfit:round?.before.financials?.profitBase??null,afterProfit:round?.after.financials?.profitBase??null,recommendation:round?.after.ceo.reasoningSummary??"Brak projekcji"};
+  }), nextBefore:rows.length>20?`${page.at(-1)!.created_at}|${page.at(-1)!.request_id}`:null };
+}

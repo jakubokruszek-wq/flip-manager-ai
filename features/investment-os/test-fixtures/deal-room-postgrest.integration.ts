@@ -201,3 +201,31 @@ test("three isolated Finder listings: high profit, thin margin, hard reject; ful
  }
  assert.ok(results[0]>100000);assert.ok(results[1]>0&&results[1]<20000,"thin-margin fixture must have a small POSITIVE operating profit");assert.ok(results[0]>results[1]+75000);
 });
+
+
+test("Finder TEST real API/DB: isolated preparation, repeat safety, account fences, Q&A and production refusal",async()=>{
+ actor=owner;
+ const {testCases}=await import("../test-mode");
+ const api=await import("../../../app/api/deal-room/test/route");
+ const keys=["DEAL_ROOM_TEST_ENABLED","DEAL_ROOM_TEST_DATABASE_ORIGIN","DEAL_ROOM_TEST_OPERATOR_IDS","NEXT_PUBLIC_SUPABASE_URL","VERCEL_ENV"];
+ const old=keys.map(k=>process.env[k]);
+ try{
+ Object.assign(process.env,{DEAL_ROOM_TEST_ENABLED:"true",DEAL_ROOM_QA_ENABLED:"true",DEAL_ROOM_TEST_DATABASE_ORIGIN:"http://127.0.0.1:55439",NEXT_PUBLIC_SUPABASE_URL:"http://127.0.0.1:55439",DEAL_ROOM_TEST_OPERATOR_IDS:owner,VERCEL_ENV:"preview"});
+ const prep=()=>api.POST(new Request("http://localhost/api/deal-room/test",{method:"POST",headers:{origin:"http://localhost"}}));
+ assert.equal((await api.POST(new Request("http://localhost/api/deal-room/test",{method:"POST",headers:{origin:"https://evil.test"}}))).status,403);
+ assert.equal((await prep()).status,200);assert.equal((await prep()).status,200);
+ const cases=testCases(owner);const count=await db.from("listings").select("id").in("id",cases.map(c=>c.id));assert.ifError(count.error);assert.equal(count.data?.length,3);
+ const ctx={params:Promise.resolve({id:cases[0].id})};
+ const init=await initializeApi.POST(request({},"/initialize"),ctx);assert.equal(init.status,200,await init.clone().text());
+ const before=await (await answersApi.GET(new Request(origin+"/answers"),ctx)).json();
+ const result=await answersApi.POST(request(command(before.room.version,"renovationBudget",40000)),ctx);assert.equal(result.status,200,await result.clone().text());
+ const saved=await result.json();assert.equal(saved.deal.underwriting.result.renovationTotal,40000);
+ assert.equal((await prep()).status,200);
+ const history=await import("../../../app/api/flip-finder/listings/[id]/investment/history/route");
+ const historyResponse=await history.GET(new Request(origin+"/history"),ctx);assert.equal(historyResponse.status,200);assert.equal((await historyResponse.json()).rounds.length,1);
+ actor=other;assert.equal((await history.GET(new Request(origin+"/history"),ctx)).status,404);actor=owner;
+ assert.equal((await (await answersApi.GET(new Request(origin+"/answers"),ctx)).json()).room.answers.renovationBudget.value,40000);
+ actor=other;assert.equal((await api.GET()).status,404);assert.equal((await prep()).status,404);assert.equal((await dealApi.GET(new Request(origin),ctx)).status,404);assert.equal((await initializeApi.POST(request({},"/initialize"),ctx)).status,404);assert.equal((await answersApi.GET(new Request(origin+"/answers"),ctx)).status,404);
+ actor=owner;process.env.VERCEL_ENV="production";assert.equal((await prep()).status,404);assert.equal((await dealApi.GET(new Request(origin),ctx)).status,404);
+ }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});actor=owner;}
+});

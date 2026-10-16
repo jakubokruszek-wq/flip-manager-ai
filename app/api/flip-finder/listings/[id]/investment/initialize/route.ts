@@ -1,3 +1,4 @@
+import { testListingAllowed } from "@/features/investment-os/test-mode";
 import { assertDealRoomOwner, DealRoomNotFound } from "@/features/investment-os/server/deal-room-service";
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 
@@ -12,6 +13,7 @@ export async function POST(request: Request, { params }: Context): Promise<Respo
   try {
     const actor = await requireOperator();
     actorId = actor.id;
+    if (!testListingAllowed((await params).id, actor.id)) throw new DealRoomNotFound();
     await assertDealRoomOwner((await params).id, actor.id);
   } catch (error) {
     if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });

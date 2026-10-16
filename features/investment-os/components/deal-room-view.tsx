@@ -1,5 +1,6 @@
 "use client";
 
+import { AnalysisHistory } from "./analysis-history";
 import { CfoPanel } from "./cfo-panel";
 import Link from "next/link";
 import { ArrowLeft, ChevronRight, ExternalLink, Landmark, ShieldAlert, ShieldCheck } from "lucide-react";
@@ -69,6 +70,7 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onA
           <NextAction brain={brain} />
         </div>
         <DirectorQuestions deal={deal} onAnalyzed={onAnalyzed ?? (() => onRefresh())} />
+        <AnalysisHistory key={deal.listingId} listingId={deal.listingId} />
         <DirectorCouncil directors={directorCards} expanded={expandedDirector} onToggle={setExpandedDirector} />
         <ScenarioAndTriggers deal={deal} />
         <DealTabs activeTab={activeTab} deal={deal} onChange={setActiveTab} />

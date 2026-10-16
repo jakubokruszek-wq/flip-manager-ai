@@ -16,7 +16,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   const input=lodzDeal("UNCLEAR_RENOVATION"); let current=buildCanonicalDeal(input);
   let room={version:1,answers:{},baselineOverrides:{},rounds:[]}; const receipts=new Map();
   const root=path.resolve(__dirname,'../../..'), auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
-  const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only'};
+  const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_QA_ENABLED:'true',DEAL_ROOM_TEST_OPERATOR_IDS:'44444444-4444-4444-8444-444444444444',DEAL_ROOM_TEST_DATABASE_ORIGIN:auth.url};
   const nextBin=require.resolve('next/dist/bin/next'); await ensureProductionBuild(nextBin,root,env);
   const port=await freePort(), base=`http://127.0.0.1:${port}`;
   const server=spawn(process.execPath,[nextBin,'start','--hostname','127.0.0.1','--port',String(port)],{cwd:root,env,stdio:'ignore'});t.after(()=>server.kill());
@@ -39,10 +39,18 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
           body={ok:true,deal:current,room};receipts.set(cmd.requestId,body);
         }
       }
-    } else if(url.pathname.endsWith('/investment')) body={ok:true,deal:current,media:[]};
+    } else if(url.pathname.endsWith('/investment/history')) body={rounds:room.rounds.map(r=>({requestId:r.requestId,createdAt:r.savedAt,changedFields:r.changedFields,beforeProfit:r.before.financials?.profitBase??null,afterProfit:r.after.financials?.profitBase??null,recommendation:r.after.ceo.reasoningSummary})),nextBefore:null};
+    else if(url.pathname.endsWith('/investment')) body={ok:true,deal:current,media:[]};
     else body={ok:true};
     return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
   });
+  await page.goto(base+'/flip-finder');
+  await page.getByRole('heading',{name:'Deal Room 2.0 · TEST',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Przygotuj / wznów testy',exact:true}).click();
+  await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).first().waitFor();
+  assert.equal(await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).count(),3);
+  assert.match(await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).first().getAttribute('href'),/^\/deals\/deadbeef-/);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'test Finder stays within mobile viewport');
   await page.goto(base+`/deals/${input.listing.id}`);
   await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
   const before=current.underwriting.result.profitBase;
@@ -50,6 +58,8 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   await page.getByLabel('Odpowiedź: negotiatedPrice',{exact:true}).fill('260000');
   await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
   await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();
+  await page.getByRole('button',{name:'Wczytaj / odśwież historię'}).click();
+  await page.getByLabel('Historia analiz',{exact:true}).getByText(/Zmienione pola: negotiatedPrice/).waitFor();
   assert.equal(current.underwriting.result.purchasePrice,260000);assert.ok(current.underwriting.result.profitBase>before);
   await page.reload();await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();
   assert.equal(room.answers.negotiatedPrice.value,260000);
