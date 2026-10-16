@@ -45,7 +45,9 @@ Cena `negotiatedPrice` jest założeniem ceny zakupu dla priceOverride istnieją
 kalkulatora. `askingPrice` jest korektą faktu źródłowego i przy sprzeczności
 blokuje VERIFY; nie używać go do symulowania rabatu. `renovationBudget` to PLN
 łącznie PRZED rezerwą; rezerwę dolicza dotychczasowy silnik. `areaM2` jest w m²,
-`holdingMonths` w miesiącach. Istniejące założenia podatków/finansowania nie są
+`holdingMonths` w miesiącach. `resalePerM2` to PLN/m² — jawne założenie ceny
+wyjścia, nie dowód transakcji; `additionalCosts` to dodatkowe PLN projektu.
+Oba wcześniejsze mechanizmy pozostają dostępne w Q&A po objęciu korekt rundą. Istniejące założenia podatków/finansowania nie są
 faktami; notatka financing ich nie zmienia automatycznie.
 
 Od 1 do 20 unikalnych pól na request, maksymalnie 24 KB JSON. Kwoty muszą być
@@ -61,9 +63,9 @@ sesji ani tokenów. Interfejs renderuje tekst jako tekst, nie HTML.
 Brak odpowiedzi = OPEN. VALUE zapisuje przejścia OPEN → ANSWERED → RESOLVED
 wyłącznie dla typowanej wartości liczbowej przyjętej jako założenie. Inne
 ustalenia mają OPEN → ANSWERED → NEEDS_EVIDENCE. Link NIE awansuje odpowiedzi
-do VERIFIED lub faktu potwierdzonego prawnie. UNKNOWN/LATER/WITHDRAW zachowują
-historię, stan OPEN i nie zmieniają liczb. WITHDRAW przywraca właściwą wartość
-sprzed Q&A, bez usuwania niezależnych odpowiedzi lub notatek. Profesjonalne
+do VERIFIED lub faktu potwierdzonego prawnie. UNKNOWN/LATER/WITHDRAW zachowują historię i stan OPEN, bez nowej wartości
+do kalkulacji. Gdy zastępują wcześniejszą wartość, wycofują to założenie do
+baseline sprzed Q&A, bez usuwania niezależnych odpowiedzi lub notatek. Profesjonalne
 VERIFIED wymaga osobnego, jeszcze niewdrożonego workflow uprawnień i dowodów.
 
 Zapisana odpowiedź zawiera actorId, savedAt, questionId, sourceFingerprint,
@@ -104,3 +106,15 @@ Findera pozostaje wspólny dla operatorów; nie jest to migracja całej aplikacj
 do multi-tenancy. Wyłączenie flagi nie wyłącza kontroli właściciela: optional deals.deal_room_owner_id
 jest czytane przez select(*) także po wyłączeniu Q&A. Przed cofnięciem samego
 kodu owner guard odciąć dostęp do Deal Room; zachować ledger i prywatne workspace.
+
+Ręczna stawka odsprzedaży ma trwałe overrideObservedAt (data ostatniej jej
+zmiany), a baseline zachowuje pierwotną datę. Dopisanie notatki nie odmładza
+założenia rynkowego ani nie resetuje niezależnego wyniku. Odrębne dokumenty
+z evidenceFabric są zachowywane po ID podczas ponownego zbudowania analizy;
+nie zmienia to ich statusu weryfikacji.
+
+Odpowiedzi liczbowe o metrażu i liczbie pokoi przechodzą do kanonicznych faktów
+USER_OVERRIDE, z zachowaniem oryginalnej sourceValue. Dobór kompów/założeń jest
+ponawiany przez istniejący resolver dla efektywnych cech i lokalizacji. Konflikt
+z niepustym źródłem nadal blokuje VERIFY. Zmienione źródło unieważnia odpowiedź:
+UI jawnie pokazuje, że nie jest stosowana, i wymaga świadomego potwierdzenia.

@@ -18,7 +18,7 @@ prawnika/wykonawcy. Wyjaśnienia i kwoty nie wymagają płatnego AI.
 |---|---|---|---|
 | SCOUT | listings, identyfikator, URL, fakty źródłowe | kompletność i pochodzenie; fingerprint źródła | nie wyszukuje ponownie ofert; brak niezależnej inspekcji |
 | VERIFY | SCOUT, canonical facts, konflikty ostatniego snapshotu | missing fields, konflikty, validation, observedAt | nie sprawdza KW; override sprzeczny ze źródłem nie usuwa konfliktu |
-| MARKET | VERIFY, istniejące resale comps/Radar i market assumptions | low/base/high, liczba kompów, fallback, daty, confidence | ceny ofertowe nie stają się transakcyjnymi; brak niezależnej wyceny |
+| MARKET | VERIFY, istniejące resale_comps i market_assumptions | low/base/high, liczba kompów, fallback, daty, confidence | ceny ofertowe nie stają się transakcyjnymi; brak niezależnej wyceny |
 | RENOVATION | VERIFY, metraż, condition, underwriting | koszt z istniejącego silnika; freshness odziedziczona | brak podpisanego kosztorysu i osobnego wyniku wykonawcy |
 | UNDERWRITER | VERIFY, MARKET, ustawienia, korekty | trzy scenariusze, koszt, profit/ROI, Max Buy; walidator granicy | założenia podatków i finansowania nie są potwierdzonymi faktami |
 | RISK_LEGAL | VERIFY, bramki CEO, konflikty | lista ryzyk i brakujących dowodów | legalStatus jest obecnie zawsze false; brak procedury profesjonalnego zatwierdzenia |
@@ -36,8 +36,14 @@ była zapisywana po CAS, a nie w tej samej transakcji.
 ## Radar, dane i finanse
 
 `resolveMarketEvidence` wykorzystuje obecne selectResaleComps/calculateResaleArv,
-które filtrują cechy, aktywność, daty i jakość remontu. ID/fingerprint i istniejące
-mechanizmy deduplikacji nie są zastępowane. Warstwa Q&A nie tworzy nowych kompów,
+które filtrują cechy, aktywność i jakość remontu oraz WAŻĄ daty. Istniejące
+mechanizmy zapisu/deduplikacji nie są zastępowane. Sam selektor kompów nie
+zapewnia niezależnej deduplikacji syndykowanych ofert między portalami ani
+twardego odcięcia wieku każdej pozycji; resolver bierze najnowszą datę zestawu.
+To luka P1, a nie dowód aktualności całej próbki. Resolver nie czyta bezpośrednio radar_listings: Radar Cen ma osobną ścieżkę
+kwalifikacji/statystyk, której integracja z deal wymaga adaptera i jawnego
+pochodzenia (P1). Nie nazywamy obecnego fallbacku cenami z Radaru.
+Warstwa Q&A nie tworzy nowych kompów,
 cen ani transakcji. Source/priceEvidenceType i daty są zachowane w snapshotach.
 Aktywny profil/filtry pozostają niezmienione. Nie certyfikujemy tutaj, że
 listing spoza profilu nigdy nie jest kamienicą: brak jawnego modelu profilu
@@ -104,3 +110,26 @@ Nie zmieniamy źródłowej ceny ofertowej ani nie usuwamy konfliktu faktów.
 Zmiana listing.updated_at przed zapisem rundy wymaga jawnego odświeżenia
 analizy przyciskiem (POST initialize); GET nadal nigdy nie przelicza ani zapisuje.
 Legacy panel korekt nie może nadpisać wartości należących do istniejącej rundy.
+
+Testy istniejących mechanizmów rynku/Radaru: 97/97 lokalnie (Node 24), komenda:
+`node --experimental-strip-types --import ./scripts/test-alias-loader.mjs --test-isolation=none --test features/market-intelligence/*.test.mjs features/price-radar/qualification.test.ts features/price-radar/stats.test.ts`.
+To testy syntetyczne; nie potwierdzają jakości aktualnych danych produkcyjnych.
+
+Dodatkowo naprawiono błędne mapowanie kodowania tekstu „ODRZUĆ” w trwałej
+projekcji ceo_decisions: wcześniej mogło zapisywać HOLD zamiast ODRZUC.
+Natywny test API → serwisy → PostgREST → PostgreSQL sprawdza teraz także ten
+przypadek. Nie zmieniono obliczeń kwot, progów inwestora ani źródeł produkcji.
+
+Dodatkowe regresje P0: zachowanie niezależnie dołączonych dowodów dokumentowych
+bez nadawania im VERIFIED; zachowanie dotychczasowych korekt resalePerM2
+i additionalCosts w Q&A; stabilna data ręcznej stawki odsprzedaży podczas
+zapisu notatki bez wpływu finansowego. Nie odmładzamy założenia przez sam
+rebuild. Weryfikacja dotyczy domyślnej polityki Investment OS; alternatywne
+polityki bramek wymagają osobnego przeglądu przed aktywacją.
+
+Naprawiono też wejścia zależnego MARKET: oryginalny resolver dostawał surowe
+cechy listing, więc uzupełnienie brakującego metrażu nie dobierało ponownie
+kompów/assumptions. Teraz po zmianie efektywnych cech odpytywany jest ten sam
+resolver; źródłowe fakty nie są nadpisywane. Natywny scenariusz usuwa metraż,
+potwierdza blokadę finansów, zapisuje odpowiedź 45 m² i oczekuje odtworzenia
+wyniku, przy wciąż niepotwierdzonym stanie prawnym.
