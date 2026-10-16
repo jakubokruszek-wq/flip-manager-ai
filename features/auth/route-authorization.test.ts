@@ -72,5 +72,10 @@ test("signed extension, worker, cron and operator-secret routes keep their dedic
 
 test("human authorization no longer relies on forgeable action or origin headers", () => {
   const humanSource = mutationRoutes.filter((route) => classifyMutationRoute(route.method, route.pathname) === "HUMAN_OPERATOR").map((route) => route.source).join("\n");
-  assert.doesNotMatch(humanSource, /x-flip-finder-action|x-facebook-watcher-action|sec-fetch-site|headers\.get\(["']origin/i);
+  assert.doesNotMatch(humanSource, /x-flip-finder-action|x-facebook-watcher-action|sec-fetch-site/i);
+  // Origin is an additional CSRF check, never an authentication substitute.
+  for(const route of mutationRoutes.filter(r=>classifyMutationRoute(r.method,r.pathname)==="HUMAN_OPERATOR")){
+    const origin=route.source.search(/headers\.get\(["']origin/i);
+    if(origin>=0){const guard=route.source.indexOf("await requireOperator()");assert.ok(guard>=0&&guard<origin,`${route.pathname} must authenticate BEFORE Origin validation`);}
+  }
 });
