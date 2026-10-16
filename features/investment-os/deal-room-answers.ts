@@ -85,7 +85,8 @@ export function answerOverrides(deal: CanonicalDeal, baseline: DealFactOverrides
 }
 export function preserveUnchangedDirectors(previous: CanonicalDeal, next: CanonicalDeal): CanonicalDeal {
   for (const key of ["scout", "verify", "market", "underwriting", "ceo"] as const) {
-    if (previous[key].inputFingerprint === next[key].inputFingerprint && previous[key].status === next[key].status) {
+    const semantic = (output: CanonicalDeal[typeof key]) => fingerprint({ result: output.result, status: output.status, confidence: output.confidence, provenance: output.provenance, warnings: output.warnings, missing: output.missingFields, validation: output.validation.checks, freshUntil: output.freshUntil });
+    if (previous[key].inputFingerprint === next[key].inputFingerprint && semantic(previous[key]) === semantic(next[key])) {
       // Preserve the actual typed track, including timestamps, when its inputs did not change.
       switch (key) {
         case "scout": next.scout = previous.scout; break;

@@ -189,7 +189,8 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
   const sourcePriceCents = sourcePrice === null ? null : moneyCents(sourcePrice);
   const purchasePriceCents = positive(input.priceOverride) === null ? sourcePriceCents : moneyCents(input.priceOverride!);
   const renovationMode = input.renovationMode ?? inferRenovationMode(input.condition);
-  const renovationPerM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[renovationMode];
+  const explicitTotal = nonnegative(input.renovationTotalOverride);
+  const renovationPerM2 = explicitTotal !== null && area !== null ? explicitTotal / area : positive(input.renovationPerM2Override) ?? settings.renovationPerM2[renovationMode];
   const renovationPerM2Cents = moneyCents(renovationPerM2);
   const holdingMonths = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
   const additionalCostsCents = moneyCents(nonnegative(input.additionalCostsOverride) ?? 0);

@@ -34,6 +34,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Mobile question answer save recalculate reload
         run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --test features/investment-os/components/director-questions.browser.test.cjs
+      - name: Existing Deal Room and Finder mobile browser regression
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --test --test-concurrency=1 features/investment-os/components/deal-room.browser.test.cjs features/investment-os/brain/deal-room-brain.browser.test.cjs features/investment-os/components/investment-command-center.browser.test.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

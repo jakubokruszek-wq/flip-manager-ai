@@ -14,6 +14,8 @@ function apply(answers: AnswerInput[], base = lodzDeal()) {
 test("260k answer updates actual canonical purchase, profit and ROI without declaring legal proof", () => {
   const { before, after, merged } = apply([answer("negotiatedPrice", 260000)]);
   assert.equal(after.underwriting.result?.purchasePrice, 260000);
+  assert.equal(after.facts.askingPrice.sourceValue, 300000);
+  assert.equal(after.facts.askingPrice.effectiveValue, 300000);
   assert.ok(after.underwriting.result!.profitBase! > before.underwriting.result!.profitBase!);
   assert.ok(after.underwriting.result!.roiBase! > before.underwriting.result!.roiBase!);
   assert.deepEqual(after.market.result, before.market.result);
@@ -62,4 +64,17 @@ test("nonfinancial legal note leaves financial tracks and timestamps unchanged",
 });
 test("invalid, duplicate, injected and secret-bearing answers are rejected", () => {
   for (const answers of [[answer("askingPrice", -1)], [answer("askingPrice", NaN)], [answer("ownership", "Bearer secret")], [answer("ownerId", "another-user")], [answer("__proto__", 1)], [answer("constructor", 1)], [answer("askingPrice", 1), answer("askingPrice", 2)], [{ ...answer("legalStatus", "doc"), evidenceUrl: "https://example.test/doc?token=abc" }]]) assert.throws(() => parseAnswerCommand({ requestId, expectedVersion: 1, answers }));
+});
+
+test("a correction contradicting the advertised source price remains a material conflict", () => {
+  const { after } = apply([answer("askingPrice", 260000)]);
+  assert.equal(after.verify.status, "BLOCKED");
+  assert.equal(after.underwriting.result, null);
+  assert.notEqual(after.ceo.result?.action, "KUP");
+});
+test("preservation never hides changed provenance with unchanged numeric inputs", () => {
+  const base = buildCanonicalDeal(lodzDeal());
+  const changed = structuredClone(base);
+  changed.market.provenance = [...changed.market.provenance, { field: "marketEvidence", provenance: "USER_ASSUMPTION", observedAt: "2026-10-16T00:00:00Z" }];
+  assert.notEqual(preserveUnchangedDirectors(base, changed).market, base.market);
 });

@@ -13,7 +13,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   const {buildCanonicalDeal}=await import('../engine.ts');
   const {buildDealBrain}=await import('../brain/index.ts');
   const {mergeAnswers,answerOverrides,parseAnswerCommand,affectedDirectors}=await import('../deal-room-answers.ts');
-  const input=lodzDeal(); let current=buildCanonicalDeal(input);
+  const input=lodzDeal("UNCLEAR_RENOVATION"); let current=buildCanonicalDeal(input);
   let room={version:1,answers:{},baselineOverrides:{},rounds:[]}; const receipts=new Map();
   const root=path.resolve(__dirname,'../../..'), auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
   const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only'};
@@ -54,6 +54,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   await page.reload();await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();
   assert.equal(room.answers.negotiatedPrice.value,260000);
   const max=current.underwriting.result.maxPurchasePrice;
+  assert.ok(current.underwriting.result.renovationTotal<100000, "fixture starts below the new 100k quote");
   const moreAgain=page.getByRole('button',{name:/Pozostałe pytania/});if(await moreAgain.count())await moreAgain.click();
   await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('100000');
   await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
