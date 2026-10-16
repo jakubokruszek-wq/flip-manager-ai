@@ -1,7 +1,9 @@
+import {TAX_LABELS} from "../tax-review";
 import type { CanonicalDeal, InformationRequest } from "../types.ts";
 import { BRAIN_DIRECTORS, type BrainDirector, type BrainDirectorId, type BrainQuestion, type BrainQuestionCategory } from "./types.ts";
 
 const SPEC: Record<string, { question: string; why: string; evidence: string; metrics: string[]; decision: InformationRequest["decisionImpact"] }> = {
+  ...Object.fromEntries(Object.entries(TAX_LABELS).map(([field,question])=>[field,{question,why:"Zmienia kwalifikację, podatek i dostępność gotówki. Brak danych nie oznacza zera podatku.",evidence:"Odrębna kwalifikacja i uzgodnione dokumenty; deklaracja nie jest dowodem.",metrics:["Podatek","Wynik właściciela","Płynność"],decision:["HOLD","BUY"] as InformationRequest["decisionImpact"]}])),
   legalStatus: { question: "Czy możesz udostępnić numer księgi wieczystej lub dokument potwierdzający stan prawny?", why: "Bez dowodu prawnego kanoniczna bramka zakupu pozostaje zamknięta; brak dokumentu nie oznacza wykrytej wady.", evidence: "Księga wieczysta, dokument własności lub ocena uprawnionego specjalisty.", metrics: ["Bramka zakupu", "Decyzja CEO"], decision: ["HOLD", "BUY", "REJECT"] },
   ownership: { question: "Jaka jest forma własności i jaki dokument ją potwierdza?", why: "Forma własności wpływa na możliwość bezpiecznego przeprowadzenia transakcji.", evidence: "Dokument własności lub właściwy dokument spółdzielczy.", metrics: ["Bramka zakupu", "Ryzyko prawne"], decision: ["HOLD", "BUY", "REJECT"] },
   askingPrice: { question: "Jaka jest aktualna cena ofertowa i jaki zakres negocjacji dopuszcza sprzedający?", why: "Cena jest porównywana z istniejącym limitem zakupu i kanoniczną ekonomią.", evidence: "Aktualne potwierdzenie ceny od sprzedającego.", metrics: ["Maksymalna cena zakupu", "Zysk", "ROI"], decision: ["NEGOTIATE", "BUY", "REJECT"] },
@@ -21,6 +23,7 @@ const SPEC: Record<string, { question: string; why: string; evidence: string; me
 };
 
 const DIRECTOR_CONSUMERS: Record<string, BrainDirectorId[]> = {
+  ...Object.fromEntries(Object.keys(TAX_LABELS).map(field=>[field,["CFO","UNDERWRITER","CEO"] as BrainDirectorId[]])),
   legalStatus: ["VERIFY", "RISK_LEGAL", "ACQUISITION", "CEO"],
   ownership: ["VERIFY", "RISK_LEGAL", "ACQUISITION", "CEO"],
   askingPrice: ["SCOUT", "VERIFY", "UNDERWRITER", "ACQUISITION", "CEO"],
@@ -71,6 +74,7 @@ export function buildBrainQuestions(deal: CanonicalDeal, directors: Partial<Reco
     });
   }
 
+  for(const q of deal.underwriting.result?.cfo?.taxReview?.questions??[])addRequest({id:`brain-question:${deal.id}:${q.field}`,field:q.field,question:q.question,priority:"CRITICAL",valueOfInformation:0,decisionImpact:["HOLD","BUY"],requestedBy:"UNDERWRITER",evidenceNeeded:SPEC[q.field].evidence,status:"OPEN"});
   const questions = [...requests.values()].map((request): BrainQuestion => {
     const spec = SPEC[request.field];
     const gateBlocks = deal.ceo.result?.criticalGates.some((gate) => gate.fact === request.field && !gate.passed) ?? false;

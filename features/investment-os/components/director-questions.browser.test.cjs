@@ -122,5 +122,26 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'PRIVATE — zamknięty scenariusz warunkowy'}).waitFor();
   assert.equal(current.underwriting.result.cfo.privateTax.status,'MODELLED_ESTIMATE');assert.equal(current.underwriting.result.cfo.privateTax.actualLiability,null);
   assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  process.env.DEAL_ROOM_JDG_TAX_ENABLED='true';t.after(()=>delete process.env.DEAL_ROOM_JDG_TAX_ENABLED);
+  current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,room.answers)});
+  await page.reload();await page.getByText('Zapisane odpowiedzi — edycja i cofnięcie',{exact:true}).click();
+  await page.locator('details article').filter({has:page.locator('strong',{hasText:/^taxScenario$/})}).getByRole('button',{name:'Edytuj',exact:true}).click();
+  await page.getByLabel('Odpowiedź: taxScenario',{exact:true}).fill('JDG');
+  const jdgVersion=room.version;await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();for(let i=0;i<100&&room.version===jdgVersion;i++)await page.waitForTimeout(50);assert.equal(room.version,jdgVersion+1);
+  const jdgU=current.underwriting.result,jdgIncome=jdgU.scenarios.base.resaleValue-jdgU.purchasePrice-Math.round(Math.round(jdgU.purchasePrice)*.02)-12000-1000-5000,jdgPit=Math.round(Math.round(Math.max(0,jdgIncome))*.19);
+  const paymentPlan=`2026-05-20 | SOCIAL | 12000\n2026-05-20 | FUND | 1000\n2026-12-20 | HEALTH | 6000\n2026-11-20 | PIT | ${jdgPit}`;
+  for(const fields of [
+   {jdgForm:'LINEAR_2026_ELECTED_ELIGIBLE',jdgAsset:'TRADING_GOOD_KPIR_FULLY_SOLD',jdgVat:'EXEMPT_43_1_10_NO_OPTION_NO_INPUT_CORRECTION',jdgOccupationOn:'2020-01-01',jdgPcc:'STANDARD_MARKET_PRICE'},
+   {jdgAnnual:'SOLE_2026_ZERO_OTHER_INVENTORY_LOSSES_RELIEFS',jdgSolidarity:'UNDER_1M_ALL_RELEVANT',jdgZus:'RECONCILED_2026_NO_LATER_ADJUSTMENTS',jdgCosts:'DOCUMENTED_ZUS_OUTSIDE_CFO',jdgAcquisitionFees:'0'},
+   {jdgOperatingCosts:'0',jdgDisposalCosts:'0',jdgHealthDeduction:'5000',jdgPayments:paymentPlan,jdgQualificationRef:'https://example.test/synthetic-assessment'}
+  ]) {
+   await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();const moreJdg=page.getByRole('button',{name:/Pozostałe pytania/});if(await moreJdg.count())await moreJdg.click();
+   for(const [field,value] of Object.entries(fields))await page.getByLabel(`Odpowiedź: ${field}`,{exact:true}).fill(value);
+   const v=room.version;await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();for(let i=0;i<100&&room.version===v;i++)await page.waitForTimeout(50);assert.equal(room.version,v+1);
+  }
+  await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'JDG — model warunkowy'}).waitFor();
+  assert.equal(current.underwriting.result.cfo.jdgTax.status,'MODELLED_ESTIMATE');assert.equal(room.answers.jdgPayments.value,paymentPlan);assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');
+  const jdgBrain=buildDealBrain(current);assert.ok(jdgBrain.directors.CFO.metrics.some(m=>m.key==='conditionalAfterTaxProfit'&&m.value===current.underwriting.result.cfo.jdgTax.profitAfterTaxAndContributions));
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });

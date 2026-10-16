@@ -1,3 +1,4 @@
+import {reconcileTaxCash,type TaxCashRow,type TaxEconomics} from "./tax-cash";
 import { conditionalTax, validTaxAmount } from "./tax-arithmetic";
 /** A complete conditional transaction model; never infers legal facts from a listing.
  * See docs/deal-room-private-tax-model.md for the bounded legal and time contract. */
@@ -17,8 +18,8 @@ export const PRIVATE_TAX_LABELS = {
 export type PrivateTaxInputs = Partial<Record<keyof typeof PRIVATE_TAX_LABELS,string|null>>;
 export const PRIVATE_ENUMS:Partial<Record<keyof PrivateTaxInputs,string>>={privateActivity:"NON_BUSINESS",privateTitle:"PAID_SOLE_OWNER",privateVat:"OUTSIDE_VAT_NO_DEDUCTION",privateExclusions:"STANDARD_ONLY",privatePcc:"STANDARD_MARKET_PRICE",privateCostEvidence:"DOCUMENTED",privateSaleMarket:"MARKET_PRICE"};
 export const PRIVATE_AMOUNTS = ["privateAcquisitionFees","privateImprovements","privateDisposalCosts"] as const;
-export type PrivateLedgerRow={month:number;phase:string;expenses:number;funding:number;receipts:number;debtPayment:number;balance:number};
-export type PrivateEconomics={mode:string;purchase:number;purchaseCosts:number;embeddedPcc:number;improvementBudget:number;sale:number;saleCosts:number;projectProfit:number;equity:number;liquidityReserve:number;months:PrivateLedgerRow[]};
+export type PrivateLedgerRow=TaxCashRow;
+export type PrivateEconomics=TaxEconomics;
 export type PrivateTaxResult={
  version:1;status:"UNKNOWN"|"MODELLED_ESTIMATE";scenario:"PRIVATE";missing:string[];reasons:string[];
  ruleCoverage:{from:"2026-04-01";through:"2026-10-16";reviewedOn:"2026-10-16"};
@@ -55,16 +56,9 @@ export function privateTaxModel(inputs:PrivateTaxInputs,dates:{acquired?:string|
  const income=revenue-acquisition-improvements;
  // A loss is zero tax in this no-relief, single-disposal model, NOT a cash refund/loss carryforward.
  const pit=conditionalTax("PRIVATE_PIT19",pln(Math.max(0,income)).toFixed(2))!.amountPLN;
- let balance=cents(e.equity),minimum=balance;const ledger:PrivateLedgerRow[]=[];
- const purchaseIndex=e.months.findIndex(r=>r.month===1&&r.expenses>=e.purchaseCosts);
- if(purchaseIndex<0){reasons.push("PURCHASE_CASH_ROW_REQUIRED");return result;}
- for(const [i,row] of e.months.entries()){
-  const expenses=cents(row.expenses)+(i===purchaseIndex?delta:0);
-  balance+=cents(row.receipts)-expenses;minimum=Math.min(minimum,balance);
-  ledger.push({...row,expenses:pln(expenses),balance:pln(balance)});
- }
- const expectedEnd=cents(e.equity)+cents(e.projectProfit)-delta;
- if(Math.abs(balance-expectedEnd)>1){reasons.push("CASH_PROFIT_RECONCILIATION_FAILED");return result;}
+ const reconciled=reconcileTaxCash(e,delta);
+ if(!reconciled){reasons.push("CASH_PROFIT_RECONCILIATION_FAILED");return result;}
+ let {balance,minimum}=reconciled;const ledger=reconciled.ledger;
  const before=cents(e.projectProfit)-delta,net=before-cents(pit);
  balance-=cents(pit);minimum=Math.min(minimum,balance);
  const taxMonth=(2027-Number(a.slice(0,4)))*12+4-Number(a.slice(5,7));
