@@ -161,7 +161,7 @@ test('mobile main Finder virtual TEST: dedicated API only, persisted answers and
  const {testCases}=await import('../test-mode.ts');
  const {TEST_DEAL_FEATURES}=await import('../feature-context.ts');
  const {buildDealBrain}=await import('../brain/index.ts');
- const {parseAnswerCommand,mergeAnswers,answerOverrides}=await import('../deal-room-answers.ts');
+ const {parseAnswerCommand,mergeAnswers,answerOverrides,affectedDirectors}=await import('../deal-room-answers.ts');
  const owner='44444444-4444-4444-8444-444444444444',cases=testCases(owner),id=cases[0].id;
  let current=buildTestDeal(owner,id),room={version:1,answers:{},baselineOverrides:{},rounds:[]},normalInvestmentCalls=0;const paths=[],errors=[];
  const receipts=new Map(),root=path.resolve(__dirname,'../../..'),auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
@@ -179,7 +179,7 @@ test('mobile main Finder virtual TEST: dedicated API only, persisted answers and
    else{
     const cmd=parseAnswerCommand(req.postDataJSON(),TEST_DEAL_FEATURES);
     if(receipts.has(cmd.requestId))body=receipts.get(cmd.requestId);
-    else{assert.equal(cmd.expectedVersion,room.version);const before=current,answers=mergeAnswers(current,room,cmd,owner,new Date().toISOString(),TEST_DEAL_FEATURES);current=buildTestDeal(owner,id,answerOverrides(current,{},answers));room={...room,version:room.version+1,answers,rounds:[{requestId:cmd.requestId,savedAt:new Date().toISOString(),changedFields:cmd.answers.map(a=>a.field),before:buildDealBrain(before),after:buildDealBrain(current)}]};body={deal:current,room};receipts.set(cmd.requestId,body);}
+    else{assert.equal(cmd.expectedVersion,room.version);const before=current,answers=mergeAnswers(current,room,cmd,owner,new Date().toISOString(),TEST_DEAL_FEATURES);current=buildTestDeal(owner,id,answerOverrides(current,{},answers));room={...room,version:room.version+1,answers,rounds:[{requestId:cmd.requestId,savedAt:new Date().toISOString(),actorId:owner,changedFields:cmd.answers.map(a=>a.field),invalidated:affectedDirectors(cmd.answers.map(a=>a.field)),before:buildDealBrain(before),after:buildDealBrain(current)}]};body={deal:current,room};receipts.set(cmd.requestId,body);}
    }
   }else if(url.pathname===`/api/deal-room/test/${id}/history`)body={rounds:room.rounds.map(r=>({requestId:r.requestId,createdAt:r.savedAt,changedFields:r.changedFields,beforeProfit:r.before.financials?.profitBase,afterProfit:r.after.financials?.profitBase,recommendation:r.after.ceo.reasoningSummary})),nextBefore:null};
   else if(url.pathname===`/api/deal-room/test/${id}`)body={deal:current,media:[]};
