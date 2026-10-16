@@ -13,9 +13,16 @@ export const TAX_RULES = {
   VAT_GROSS8: { label: "Faktura brutto — VAT 8%", percent: 8, basis: "Kwota brutto jednej kwalifikowanej pozycji/faktury", provision: "VAT art. 41, 146ef", scenario: null },
 } as const;
 export type TaxRule = keyof typeof TAX_RULES;
+const PRIMARY_SOURCES = {
+ PIT: { url: "https://eli.gov.pl/api/acts/DU/2026/592/text/U/D20260592Lj.pdf", edition: "2026-09-16" },
+ CIT: { url: "https://eli.gov.pl/api/acts/DU/2026/554/text/U/D20260554Lj.pdf", edition: "2026-10-08" },
+ PCC: { url: "https://eli.gov.pl/api/acts/DU/2026/191/text/T/D20260191L.pdf", edition: "2026-02-20" },
+ VAT: { url: "https://eli.gov.pl/api/acts/DU/2026/1263/text/T/D20261263L.pdf", edition: "2026-09-30" },
+} as const;
 export type ConditionalTax = {
   status: "CONDITIONAL_ARITHMETIC"; rule: TaxRule; inputPLN: number; roundedBasePLN: number | null;
   amountPLN: number; netInvoicePLN: number | null; provision: string;
+  source: { url: string; edition: string }; researchedOn: "2026-10-16";
   applicability: "UNKNOWN"; actualLiabilityPLN: null; effectiveFrom: null; effectiveTo: null;
 };
 export function isTaxRule(value: string): value is TaxRule { return Object.hasOwn(TAX_RULES, value); }
@@ -28,9 +35,10 @@ export function conditionalTax(rule: string, amount: string): ConditionalTax | n
   const [whole, fraction = ""] = amount.split(".");
   const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
   const definition = TAX_RULES[rule];
+  const source = PRIMARY_SOURCES[rule.startsWith("PCC") ? "PCC" : rule.startsWith("VAT") ? "VAT" : rule === "COMPANY_CIT19" ? "CIT" : "PIT"];
   const invoice = rule === "VAT_GROSS23" || rule === "VAT_GROSS8";
   const roundedBasePLN = invoice ? null : Math.floor((cents + 50) / 100);
   // Integer ratios stay below Number.MAX_SAFE_INTEGER for the explicit input bound.
   const taxCents = invoice ? Math.floor((cents * definition.percent + (100 + definition.percent) / 2) / (100 + definition.percent)) : Math.floor((roundedBasePLN! * definition.percent + 50) / 100) * 100;
-  return { status: "CONDITIONAL_ARITHMETIC", rule, inputPLN: cents / 100, roundedBasePLN, amountPLN: taxCents / 100, netInvoicePLN: invoice ? (cents - taxCents) / 100 : null, provision: definition.provision, applicability: "UNKNOWN", actualLiabilityPLN: null, effectiveFrom: null, effectiveTo: null };
+  return { status: "CONDITIONAL_ARITHMETIC", rule, inputPLN: cents / 100, roundedBasePLN, amountPLN: taxCents / 100, netInvoicePLN: invoice ? (cents - taxCents) / 100 : null, provision: definition.provision, source, researchedOn: "2026-10-16", applicability: "UNKNOWN", actualLiabilityPLN: null, effectiveFrom: null, effectiveTo: null };
 }
