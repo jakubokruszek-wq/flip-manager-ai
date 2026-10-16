@@ -20,6 +20,8 @@ with fixture['psycopg'].connect(fixture['DSN'], autocommit=True) as c:
       create table resale_comps(id uuid primary key, active boolean);
       grant select, insert, update on listings to service_role;
       grant select on listing_snapshots, listing_source_metadata, resale_comps to service_role;''')
+    c.execute("drop table resale_comps")
+    c.execute((root / "supabase/migrations/20260905120000_create_resale_comps.sql").read_text())
     c.execute("insert into auth.users values ('33333333-3333-4333-8333-333333333333'), ('55555555-5555-4555-8555-555555555555')")
     c.execute('''insert into listings(id,updated_at,source,original_url,external_listing_id,lifecycle_status,city,district,address,area,rooms,floor,building_type,ownership,price,gallery_status,images,last_seen_at)
       values ('22222222-2222-4222-8222-222222222222',now(),'facebook','https://www.facebook.com/groups/12345/posts/67890','67890','ACTIVE','Łódź','Górna','Syntetyczna',45,2,'2','BLOCK','pełna własność',300000,'NOT_REQUESTED','[]',now())''')

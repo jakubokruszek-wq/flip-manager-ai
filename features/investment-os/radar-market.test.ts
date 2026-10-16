@@ -31,3 +31,9 @@ test("comparison prices invalidate MARKET, UNDERWRITER and CEO; small samples ca
  for(const data of [rows().slice(0,5),rows().map(r=>({...r,collectedAt:"2020-01-01"}))]) { const d=buildCanonicalDeal({...input,market:radarMarketEvidence(subject,data,now).evidence}); assert.equal(d.market.status,"BLOCKED"); assert.notEqual(d.ceo.result?.action,"KUP"); assert.ok(d.ceo.result?.missingBeforePurchase.includes("marketEvidence")); }
  const manual=buildCanonicalDeal({...input,overrides:{resalePerM2:10000},market:radarMarketEvidence(subject,rows(),now).evidence}); assert.equal(manual.market.result?.resalePricePerM2Base,10000); assert.equal(manual.market.result?.sourceComparison?.compCount,20);
 });
+
+test("indicative district and city estimates feed finance but cannot authorize BUY; manual benchmark stays visible",async()=>{
+ const { buildCanonicalDeal }=await import("./engine");const { lodzDeal }=await import("./test-fixtures/lodz-deals"); const { markIndicative }=await import("./market-fallback");
+ const input=lodzDeal();input.now=now;
+ for(const level of [2,4]) { const market=markIndicative({...input.market!,fallbackLevel:level,compCount:0,observedAt:now,priceEvidenceType:"USER_ASSUMPTION"},level===4?"założenie miasta: Łódź":"średnia-założenie dzielnicy: Górna",null);const deal=buildCanonicalDeal({...input,market});assert.equal(deal.market.status,"COMPLETE");assert.ok(deal.underwriting.result);assert.notEqual(deal.ceo.result?.action,"KUP");assert.match(deal.ceo.result!.investmentThesis,/WYCENA ORIENTACYJNA/);const manual=buildCanonicalDeal({...input,market,overrides:{resalePerM2:11000}});assert.equal(manual.market.result?.resalePricePerM2Base,11000);assert.equal(manual.market.result?.sourceComparison?.base,10000); }
+});

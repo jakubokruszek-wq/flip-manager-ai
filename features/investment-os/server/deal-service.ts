@@ -1,4 +1,5 @@
 import "server-only";
+import { eligibleGeneralComp, generalCompKey, freshMarketDate, markIndicative, usableRadar } from "../market-fallback";
 import { radarMarketEvidence } from "../radar-market";
 import { getRadarResults } from "@/features/price-radar/server/radar-results";
 import { readRadarSettings, radarSettingsSourcesWereFilteredToEmpty } from "@/features/price-radar/server/radar-settings";
@@ -198,32 +199,42 @@ async function loadDirectorTrackRecords(db: ReturnType<typeof createAdminClient>
 }
 
 async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, listing: DealListingInput, actorId?: string): Promise<MarketEvidence | null> {
-  if (process.env.DEAL_ROOM_RADAR_ENABLED === "true") {
-    if (!actorId) return null;
+  const radarEnabled = process.env.DEAL_ROOM_RADAR_ENABLED === "true";
+  const now = new Date().toISOString();
+  let radar: MarketEvidence | null = null;
+  if (radarEnabled && actorId) {
     const filters = await readRadarSettings(actorId, db);
     const disabledSources = await radarSettingsSourcesWereFilteredToEmpty(actorId, db);
     const results = disabledSources ? { listings: [], excludedListings: [] } : await getRadarResults(actorId, filters, db);
-    // Fail closed: insufficient Radar evidence never silently falls back to older global comps.
+    // Read private Radar only for an owned deal; general evidence remains available.
     const maximumAgeDays = Number(process.env.DEAL_ROOM_RADAR_MAX_AGE_DAYS ?? 30);
-    return radarMarketEvidence(listing, [...results.listings, ...results.excludedListings], new Date().toISOString(), { maximumAgeDays, minimumSample: 10 }).evidence;
+    radar = radarMarketEvidence(listing, [...results.listings, ...results.excludedListings], now, { maximumAgeDays, minimumSample: 10 }).evidence;
+    if (usableRadar(radar, now)) return { ...radar, sourceLabel: "Radar Cen" };
   }
   const { data: rows, error } = await db.from("resale_comps").select("*").eq("active", true).limit(500);
   if (error && error.code !== "42P01") throw error;
-  const comps = (rows ?? []).map(toComp).filter((item): item is ResaleCompRecord => item !== null);
+  const seen = new Set<string>();
+  const comps = (rows ?? []).flatMap((raw) => {
+    const row = raw as Row, comp = toComp(row); if (!comp) return [];
+    if (radarEnabled) { if (!eligibleGeneralComp(row, comp, listing, actorId, now)) return []; const key = generalCompKey(row, comp); if (seen.has(key)) return []; seen.add(key); }
+    return [comp];
+  });
   const selected = selectResaleComps({ id: listing.id, area: listing.areaM2, rooms: listing.rooms, city: listing.city, district: listing.district, address: listing.street, buildingType: listing.buildingType, floor: listing.floor }, comps);
   const arv = calculateResaleArv({ area: listing.areaM2 }, selected);
-  if (arv.conservativePrice && arv.expectedPrice && arv.optimisticPrice && listing.areaM2) {
-    const observedAt = selected.map((item) => item.lastSeenAt).sort().at(-1) ?? null;
-    return { id: null, matchedBy: "RESALE_COMPS", low: arv.conservativePrice / listing.areaM2, base: arv.expectedPrice / listing.areaM2, high: arv.optimisticPrice / listing.areaM2, confidence: Math.min(90, 45 + selected.length * 5), provenance: "DERIVED", compCount: selected.length, fallbackLevel: 0, fallbackReason: "DIRECT_COMPARABLE_SET", confidencePenalty: 0, observedAt, evidenceId: selected.length ? `resale-comps:${selected.map((item) => item.id).sort().join(",")}` : null, priceEvidenceType: "ASKING", comparables: selected.map((item) => ({ id: item.id, source: item.source, sourceUrl: item.originalUrl, pricePerM2: item.pricePerSqm!, similarityScore: item.similarityScore, dataQuality: comparableDataQuality(item), freshnessDays: item.freshnessDays ?? null, distanceMeters: item.distanceMeters ?? null, adjustments: item.matchReasons, weight: comparableWeight(item.similarityScore, item.freshnessDays ?? null, item.renovationConfidence ?? "LOW"), outlierReason: item.outlierReason ?? null, priceEvidenceType: "ASKING" as const })) };
+  if (arv.conservativePrice && arv.expectedPrice && arv.optimisticPrice && listing.areaM2 && (!radarEnabled || selected.length >= 3)) {
+    const observedAt = selected.map((item) => item.lastSeenAt).sort().at(0) ?? null;
+    const general: MarketEvidence = { id: null, matchedBy: "RESALE_COMPS", low: arv.conservativePrice / listing.areaM2, base: arv.expectedPrice / listing.areaM2, high: arv.optimisticPrice / listing.areaM2, confidence: Math.min(90, 45 + selected.length * 5), provenance: "DERIVED", compCount: selected.length, fallbackLevel: 0, fallbackReason: "DIRECT_COMPARABLE_SET", confidencePenalty: 0, observedAt, evidenceId: selected.length ? `resale-comps:${selected.map((item) => item.id).sort().join(",")}` : null, priceEvidenceType: "ASKING", comparables: selected.map((item) => ({ id: item.id, source: item.source, sourceUrl: item.originalUrl, pricePerM2: item.pricePerSqm!, similarityScore: item.similarityScore, dataQuality: comparableDataQuality(item), freshnessDays: item.freshnessDays ?? null, distanceMeters: item.distanceMeters ?? null, adjustments: item.matchReasons, weight: comparableWeight(item.similarityScore, item.freshnessDays ?? null, item.renovationConfidence ?? "LOW"), outlierReason: item.outlierReason ?? null, priceEvidenceType: "ASKING" as const })) };
+    return radarEnabled ? markIndicative({ ...general, fallbackLevel: 1 }, "ogólne porównania", radar) : general;
   }
   const { data: assumptions, error: assumptionError } = await db.from("market_assumptions").select("*").eq("active", true).eq("city", listing.city ?? "").order("effective_from", { ascending: false });
   if (assumptionError) throw assumptionError;
-  const matched = (assumptions ?? []).map((row) => ({ row: row as Row, score: assumptionScore(row as Row, listing) })).filter((item) => item.score >= 0).sort((a, b) => b.score - a.score)[0]?.row;
+  const matched = (assumptions ?? []).map((row) => ({ row: row as Row, score: assumptionScore(row as Row, listing) })).filter((item) => item.score >= 0 && (!radarEnabled || ((item.row.owner_id == null || item.row.owner_id === actorId) && freshMarketDate(item.row.effective_from ?? item.row.updated_at, now) && number(item.row.resale_price_per_m2_low) > 0 && number(item.row.resale_price_per_m2_low) <= number(item.row.resale_price_per_m2_base) && number(item.row.resale_price_per_m2_base) <= number(item.row.resale_price_per_m2_high)))).sort((a, b) => b.score - a.score)[0]?.row;
   if (!matched) return null;
   const specificity = assumptionScore(matched, listing);
   const fallbackLevel = specificity >= 15 ? 1 : specificity >= 9 ? 2 : specificity >= 5 ? 3 : 4;
   const confidencePenalty = fallbackLevel * 5;
-  return { id: text(matched.id), matchedBy: assumptionMatchLabel(matched), low: number(matched.resale_price_per_m2_low), base: number(matched.resale_price_per_m2_base), high: number(matched.resale_price_per_m2_high), confidence: number(matched.confidence), provenance: matched.provenance === "MARKET_ASSUMPTION" ? "MARKET_ASSUMPTION" : "USER_ASSUMPTION", compCount: 0, fallbackLevel, fallbackReason: fallbackLevel === 1 ? "SPECIFIC_MARKET_ASSUMPTION" : fallbackLevel === 2 ? "DISTRICT_MARKET_FALLBACK" : fallbackLevel === 3 ? "PROPERTY_PROFILE_FALLBACK" : "CITY_ONLY_FALLBACK", confidencePenalty, observedAt: text(matched.effective_from) ?? text(matched.updated_at) ?? null, evidenceId: text(matched.id), priceEvidenceType: "USER_ASSUMPTION", comparables: [] };
+  const assumption: MarketEvidence = { id: text(matched.id), matchedBy: assumptionMatchLabel(matched), low: number(matched.resale_price_per_m2_low), base: number(matched.resale_price_per_m2_base), high: number(matched.resale_price_per_m2_high), confidence: number(matched.confidence), provenance: matched.provenance === "MARKET_ASSUMPTION" ? "MARKET_ASSUMPTION" : "USER_ASSUMPTION", compCount: 0, fallbackLevel, fallbackReason: fallbackLevel === 1 ? "SPECIFIC_MARKET_ASSUMPTION" : fallbackLevel === 2 ? "DISTRICT_MARKET_FALLBACK" : fallbackLevel === 3 ? "PROPERTY_PROFILE_FALLBACK" : "CITY_ONLY_FALLBACK", confidencePenalty, observedAt: text(matched.effective_from) ?? text(matched.updated_at) ?? null, evidenceId: text(matched.id), priceEvidenceType: "USER_ASSUMPTION", comparables: [] };
+  return radarEnabled ? markIndicative(assumption, `${matched.district ? "średnia-założenie dzielnicy" : "założenie miasta"}: ${assumptionMatchLabel(matched)}`, radar) : assumption;
 }
 
 function toListingInput(row: Row, snapshot: Row | null, facebookCondition: string | null = null): DealListingInput {
