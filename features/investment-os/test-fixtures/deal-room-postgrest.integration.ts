@@ -146,6 +146,16 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   const withdrawPrivate={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"privateVat",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
   const privateWithdrawResponse=await answersApi.POST(request(withdrawPrivate),context);assert.equal(privateWithdrawResponse.status,200);assert.equal((await privateWithdrawResponse.json()).deal.underwriting.result.cfo.privateTax.status,"UNKNOWN");
   process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="false";
+  process.env.DEAL_ROOM_JDG_TAX_ENABLED="true";
+  const {JDG_ENUMS}=await import("../jdg-tax");const jdgInitial=await refreshMarket();const jdgU=jdgInitial.underwriting.result;
+  const jdgIncome=jdgU.scenarios.base.resaleValue-jdgU.purchasePrice-Math.round(Math.round(jdgU.purchasePrice)*.02)-12000-1000-5000;
+  const jdgPit=Math.round(Math.round(Math.max(0,jdgIncome))*.19);
+  const jdgValues={...JDG_ENUMS,taxScenario:"JDG",taxAcquiredOn:"2026-04-01",taxSaleOn:"2026-10-01",jdgOccupationOn:"2020-01-01",jdgAcquisitionFees:"0",jdgOperatingCosts:"0",jdgDisposalCosts:"0",jdgHealthDeduction:"5000",jdgQualificationRef:"https://example.test/synthetic-assessment",jdgPayments:`2026-05-20 | SOCIAL | 12000\n2026-05-20 | FUND | 1000\n2026-12-20 | HEALTH | 6000\n2026-11-20 | PIT | ${jdgPit}`};
+  const jdgCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:Object.entries(jdgValues).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const jdgResponse=await answersApi.POST(request(jdgCommand),context);assert.equal(jdgResponse.status,200,await jdgResponse.clone().text());const jdgSaved=await jdgResponse.json();assert.equal(jdgSaved.deal.underwriting.result.cfo.jdgTax.status,"MODELLED_ESTIMATE");assert.equal(jdgSaved.deal.underwriting.result.cfo.jdgTax.pit,jdgPit);assert.equal(jdgSaved.deal.underwriting.result.cfo.jdgTax.actualLiability,null);assert.notEqual(jdgSaved.deal.ceo.inputFingerprint,jdgInitial.ceo.inputFingerprint);
+  assert.deepEqual(await (await answersApi.POST(request(jdgCommand),context)).json(),jdgSaved);assert.equal((await current()).answers.jdgPayments.value,jdgValues.jdgPayments);
+  const unknownJdg={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"jdgZus",kind:"UNKNOWN",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
+  const unknownJdgResponse=await answersApi.POST(request(unknownJdg),context);assert.equal(unknownJdgResponse.status,200);assert.equal((await unknownJdgResponse.json()).deal.underwriting.result.cfo.jdgTax.status,"UNKNOWN");process.env.DEAL_ROOM_JDG_TAX_ENABLED="false";
   process.env.DEAL_ROOM_TAX_REVIEW_ENABLED="false";
   process.env.DEAL_ROOM_CFO_ENABLED="false";
   process.env.DEAL_ROOM_RADAR_ENABLED="false";
@@ -153,4 +163,41 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   const rejection=await initializeApi.POST(request({},"/initialize"),context); assert.equal(rejection.status,200,await rejection.clone().text());
   const decisions=await db.from("ceo_decisions").select("user_facing_action").order("created_at",{ascending:false}).limit(1); assert.ifError(decisions.error);
   assert.equal(decisions.data?.[0]?.user_facing_action,"ODRZUC","persisted CEO action must preserve a hard reject");
+});
+test("three isolated Finder listings: high profit, thin margin, hard reject; full director loop and general fallback",async(t)=>{
+ const {buildDealBrain,BRAIN_DIRECTORS}=await import("../brain/index");actor=owner;
+ process.env.DEAL_ROOM_QA_ENABLED="true";process.env.DEAL_ROOM_CFO_ENABLED="true";process.env.DEAL_ROOM_RADAR_ENABLED="true";
+ const template=await db.from("listings").select("*").eq("id",id).single();assert.ifError(template.error);
+ const assumptions=await db.from("market_assumptions").update({active:true}).eq("city","Łódź");assert.ifError(assumptions.error);
+ const comparisons=await db.from("resale_comps").update({active:true,last_seen_at:new Date().toISOString()}).eq("city","Łódź");assert.ifError(comparisons.error);
+ const results=[];
+ for(const [i,price] of [200000,340000,680000].entries()){
+  const listingId=randomUUID(),caseContext={params:Promise.resolve({id:listingId})},caseUrl=`http://localhost/api/flip-finder/listings/${listingId}/investment`;
+  const make=(body:unknown,suffix:string)=>new Request(caseUrl+suffix,{method:"POST",headers:{"content-type":"application/json",origin:"http://localhost"},body:JSON.stringify(body)});
+  const row={...template.data,id:listingId,updated_at:new Date().toISOString(),manual_decision:i===2?"REJECTED":null,lifecycle_status:"ACTIVE",price,area:45,description:"Syntetyczne mieszkanie do remontu",external_listing_id:String(90001+i),original_url:`https://www.facebook.com/groups/12345/posts/${90001+i}`};
+  const inserted=await db.from("listings").insert(row);assert.ifError(inserted.error);
+  const init=await initializeApi.POST(make({},"/initialize"),caseContext);assert.equal(init.status,200,await init.clone().text());
+  const roomResponse=await answersApi.GET(new Request(caseUrl+"/answers"),caseContext);assert.equal(roomResponse.status,200);const room=(await roomResponse.json()).room;
+  const values={costScope:"BRUTTO",financingMode:"CASH",equity:800000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6,renovationBudget:40000};
+  const cmd={requestId:randomUUID(),expectedVersion:room.version,answers:Object.entries(values).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const saved=await answersApi.POST(make(cmd,"/answers"),caseContext);assert.equal(saved.status,200,await saved.clone().text());const receipt=await saved.json();assert.deepEqual(await (await answersApi.POST(make(cmd,"/answers"),caseContext)).json(),receipt);
+  const refreshed=await initializeApi.POST(make({},"/initialize"),caseContext);assert.equal(refreshed.status,200);const deal=(await refreshed.json()).deal,brain=buildDealBrain(deal);
+  t.diagnostic(JSON.stringify({syntheticCase:["high_profit","thin_margin","hard_reject"][i],purchasePrice:price,profitBeforeTax:deal.underwriting.result?.cfo?.selected?.projectProfitBeforeTax??null,ceo:deal.ceo.result?.action,comparisons:deal.market.result?.compCount,marketSource:deal.market.result?.sourceLabel}));
+  for(const director of BRAIN_DIRECTORS)assert.ok(brain.directors[director]);assert.equal(deal.market.result.assumptionMatchedBy,"PRICE_RADAR");assert.equal(deal.facts.askingPrice.effectiveValue,price);assert.notEqual(deal.ceo.result.action,"KUP");
+  if(i===2){assert.equal(deal.ceo.result.action,"ODRZUĆ");assert.equal(brain.ceo.decision,"REJECT");continue;}
+  results.push(deal.underwriting.result.cfo.selected.projectProfitBeforeTax);
+  if(i===0){
+   const currentRoom=(await (await answersApi.GET(new Request(caseUrl+"/answers"),caseContext)).json()).room;
+   const change={requestId:randomUUID(),expectedVersion:currentRoom.version,answers:[{field:"renovationBudget",value:100000,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}]};
+   const changed=await answersApi.POST(make(change,"/answers"),caseContext);assert.equal(changed.status,200);const next=(await changed.json()).deal;
+   assert.ok(next.underwriting.result.cfo.selected.projectProfitBeforeTax<results[0]);assert.notEqual(next.ceo.inputFingerprint,deal.ceo.inputFingerprint);
+   assert.equal((await (await answersApi.GET(new Request(caseUrl+"/answers"),caseContext)).json()).room.answers.renovationBudget.value,100000);
+  }
+  if(i===1){
+   const excluded=await db.from("price_radar_listings").update({excluded_at:new Date().toISOString()}).eq("owner_id",owner);assert.ifError(excluded.error);
+   const fallback=await initializeApi.POST(make({},"/initialize"),caseContext);assert.equal(fallback.status,200);const general=(await fallback.json()).deal;assert.equal(general.market.result.sourceLabel,"ogólne porównania");assert.equal(general.market.result.indicative,true);assert.notEqual(general.ceo.result.action,"KUP");
+   const restored=await db.from("price_radar_listings").update({excluded_at:null,excluded_reason:null}).eq("owner_id",owner).lte("price_per_sqm",9600);assert.ifError(restored.error);
+  }
+ }
+ assert.ok(results[0]>100000);assert.ok(results[1]>0&&results[1]<20000,"thin-margin fixture must have a small POSITIVE operating profit");assert.ok(results[0]>results[1]+75000);
 });

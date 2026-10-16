@@ -1,3 +1,4 @@
+import {JDG_TAX_LABELS,JDG_ENUMS,JDG_AMOUNTS,parseJdgPayments} from "./jdg-tax";
 import { PRIVATE_TAX_LABELS, PRIVATE_ENUMS, PRIVATE_AMOUNTS } from "./private-tax";
 import { isTaxRule, validTaxAmount } from "./tax-arithmetic";
 import { TAX_LABELS, validTaxDate } from "./tax-review";
@@ -37,6 +38,7 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
     if (field in TAX_LABELS && (process.env.DEAL_ROOM_TAX_REVIEW_ENABLED !== "true" || process.env.DEAL_ROOM_CFO_ENABLED !== "true")) throw new DealRoomInputError("Scenariusze podatkowe są wyłączone.");
     if (["taxRule","taxRuleBase"].includes(field) && process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED !== "true") throw new DealRoomInputError("Obliczenia warunkowe są wyłączone.");
     if(field in PRIVATE_TAX_LABELS && process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED!=="true")throw new DealRoomInputError("Prywatny model podatkowy jest wyłączony.");
+    if(field in JDG_TAX_LABELS && process.env.DEAL_ROOM_JDG_TAX_ENABLED!=="true")throw new DealRoomInputError("Model JDG jest wyłączony.");
     seen.add(field);
     if (!["VALUE", "UNKNOWN", "LATER", "WITHDRAW"].includes(String(a.kind)) || !["DECLARATION", "ASSUMPTION", "DOCUMENT_REFERENCE"].includes(String(a.basis))) throw new DealRoomInputError("Wybierz rodzaj odpowiedzi i jej podstawę.");
     const kind = a.kind as AnswerKind, basis = a.basis as AnswerInput["basis"];
@@ -48,9 +50,13 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
       } else {
         if (typeof a.value !== "string" || !a.value.trim() || a.value.length > 2000) throw new DealRoomInputError("Odpowiedź musi mieć od 1 do 2000 znaków.");
         result = a.value.trim();
+        if(field in JDG_ENUMS && result!==JDG_ENUMS[field as keyof typeof JDG_ENUMS])throw new DealRoomInputError("Potwierdź kwalifikację JDG albo wybierz Nie wiem.");
+        if((JDG_AMOUNTS as readonly string[]).includes(field)&&!validTaxAmount(result))throw new DealRoomInputError("Podaj poprawną kwotę PLN z kropką.");
+        if(field==="jdgOccupationOn"&&!validTaxDate(result))throw new DealRoomInputError("Podaj rzeczywistą datę zasiedlenia.");
+        if(field==="jdgPayments"&&!parseJdgPayments(result))throw new DealRoomInputError("Uzupełnij uzgodnione daty, typy i kwoty wpłat albo wybierz Nie wiem.");
         if(field in PRIVATE_ENUMS && result!==PRIVATE_ENUMS[field as keyof typeof PRIVATE_ENUMS]) throw new DealRoomInputError("Wymagane jawne potwierdzenie kwalifikacji albo Nie wiem.");
         if((PRIVATE_AMOUNTS as readonly string[]).includes(field) && !validTaxAmount(result))throw new DealRoomInputError("Podaj kwotę PLN z kropką, maks. 2 miejsca.");
-        if(field === "privateQualificationRef") {try {const u=new URL(result);if(u.protocol!=="https:"||u.username||u.password||u.search||u.hash)throw Error();}catch{throw new DealRoomInputError("Publiczna referencja musi być HTTPS bez parametrów i danych logowania.");}}
+        if(field === "privateQualificationRef" || field === "jdgQualificationRef") {try {const u=new URL(result);if(u.protocol!=="https:"||u.username||u.password||u.search||u.hash)throw Error();}catch{throw new DealRoomInputError("Publiczna referencja musi być HTTPS bez parametrów i danych logowania.");}}
         if(field === "taxRule" && !isTaxRule(result)) throw new DealRoomInputError("Nieobsługiwana reguła podatkowa; pozostaje nieustalona.");
         if(field === "taxRuleBase" && !validTaxAmount(result)) throw new DealRoomInputError("Podaj PLN od 0 do 100000000 z kropką i maks. 2 miejscami.");
         if(field === "taxScenario" && !["PRIVATE","JDG","SP_ZOO"].includes(result)) throw new DealRoomInputError("Wybierz PRIVATE, JDG lub SP_ZOO; inne modele nie są obsługiwane.");
@@ -93,6 +99,10 @@ export function mergeAnswers(deal: CanonicalDeal, state: DealRoomState, command:
   if(process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED==="true" && command.answers.some(a=>["negotiatedPrice","askingPrice","areaM2","renovationBudget","holdingMonths","financingMode","equipment","additionalCosts","resalePerM2","taxScenario","taxAcquiredOn","taxSaleOn"].includes(a.field))) {
     const explicitlyReconfirmed=new Set(command.answers.map(a=>a.field));
     for(const field of Object.keys(PRIVATE_TAX_LABELS))if(result[field]&&!explicitlyReconfirmed.has(field))result[field]={...result[field],kind:"LATER",status:"OPEN",savedAt:now,actorId,transitions:[...result[field].transitions,"INVALIDATED_BY_CASE_CHANGE"]};
+  }
+  if(process.env.DEAL_ROOM_JDG_TAX_ENABLED==="true" && command.answers.some(a=>["negotiatedPrice","askingPrice","areaM2","renovationBudget","holdingMonths","financingMode","equipment","additionalCosts","resalePerM2","taxScenario","taxAcquiredOn","taxSaleOn"].includes(a.field))) {
+    const explicitlyReconfirmed=new Set(command.answers.map(a=>a.field));
+    for(const field of Object.keys(JDG_TAX_LABELS))if(result[field]&&!explicitlyReconfirmed.has(field))result[field]={...result[field],kind:"LATER",status:"OPEN",savedAt:now,actorId,transitions:[...result[field].transitions,"INVALIDATED_BY_CASE_CHANGE"]};
   }
   return result;
 }

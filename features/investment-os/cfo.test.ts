@@ -54,3 +54,13 @@ test("bounded PRIVATE model integrates Q&A, reanalyzes all dependent directors a
   process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="false";assert.throws(()=>parseAnswerCommand(cmd),/wyłączony/);assert.equal(buildCanonicalDeal(base).underwriting.result?.cfo?.privateTax,undefined);
  }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
 });
+test("JDG questions update UNDERWRITER/CFO/CEO, retain safe gates and reopen assessed schedule after a case change",async()=>{
+ const {JDG_ENUMS}=await import("./jdg-tax");const keys=["DEAL_ROOM_CFO_ENABLED","DEAL_ROOM_TAX_REVIEW_ENABLED","DEAL_ROOM_JDG_TAX_ENABLED"] as const,old=keys.map(k=>process.env[k]);
+ try{keys.forEach(k=>process.env[k]="true");const b=lodzDeal(),base={...b,overrides:{...params,taxScenario:"JDG",taxAcquiredOn:"2026-04-01",taxSaleOn:"2026-10-01"}},first=buildCanonicalDeal(base);
+ const command=parseAnswerCommand({requestId:crypto.randomUUID(),expectedVersion:1,answers:[{field:"jdgForm",kind:"VALUE",value:JDG_ENUMS.jdgForm,basis:"ASSUMPTION",evidenceUrl:null}]});
+ const state={version:1,answers:{},baselineOverrides:base.overrides,rounds:[]};const answers=mergeAnswers(first,state,command,"synthetic",b.now),next=buildCanonicalDeal({...base,overrides:answerOverrides(first,base.overrides,answers)});
+ assert.equal(next.underwriting.result?.cfo?.jdgTax?.status,"UNKNOWN");assert.notEqual(next.ceo.inputFingerprint,first.ceo.inputFingerprint);assert.notEqual(next.underwriting.inputFingerprint,first.underwriting.inputFingerprint);assert.equal(next.market.inputFingerprint,first.market.inputFingerprint);assert.notEqual(next.ceo.result?.action,"KUP");
+ const change=parseAnswerCommand({requestId:crypto.randomUUID(),expectedVersion:2,answers:[{field:"negotiatedPrice",kind:"VALUE",value:260000,basis:"ASSUMPTION",evidenceUrl:null}]});assert.equal(mergeAnswers(next,{...state,version:2,answers},change,"synthetic",b.now).jdgForm.kind,"LATER");
+ process.env.DEAL_ROOM_JDG_TAX_ENABLED="false";assert.throws(()=>parseAnswerCommand(command),/wyłączony/);assert.equal(buildCanonicalDeal(base).underwriting.result?.cfo?.jdgTax,undefined);
+ }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
+});

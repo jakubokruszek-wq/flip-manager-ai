@@ -156,3 +156,65 @@ No production reads/writes, schema/grant migrations, activation, merge, deployme
 “Kontynuuj Issue #30 od najnowszego checkpointu Draft PR #33, gałąź feat/deal-room-private-tax w /workspace/flip-deal-private-tax. Sprawdź HEAD/status bez resetu. Nie powtarzaj zielonego CI 38891870180 przy samych zmianach Markdown. Zachowaj sprawdzony kontrakt PRIVATE i UNKNOWN poza nim. Następny wariant opracuj dopiero po niezależnym audycie kwalifikacji, okresów i podstaw: JDG (forma, roczne księgi/remanent/składki/danina/VAT) albo SP_ZOO (reżim, podstawa CIT a zysk bilansowy, legalna wypłata i wspólnik). Nie dodawaj stawek bez zastosowania. Bez produkcji, aktywacji, merge i deploymentu.”
 
 No credit exhaustion was observed; no balance/renewal/persistent-wake API is available. No fictitious monitor was created. This durable checkpoint records completed evidence and remaining scope without claiming a complete Polish tax platform.
+
+## JDG + three-property audit in progress — 2026-10-16
+
+Worktree `/workspace/flip-deal-jdg`, branch `feat/deal-room-jdg-audit`, base PR #33 remote `e80f32564215e69fdac9439697542d89200b2b79`, identical local `e325265`. Contract `docs/deal-room-jdg-audit.md`: explicitly elected eligible linear PIT, ordinary KPiR trading good, independently qualified used-flat VAT exemption, standard PCC, documented eligible costs, explicit annual social/Fund/health/PIT cash schedule and capped health deduction. Actual ZUS category, income/month/minimum and annual assessment are NOT calculated by software: incomplete/unresolved schedule or later contribution adjustment => UNKNOWN. All results are conditional; actual liability/canonical net UNKNOWN, CEO HOLD. Flags OFF. No new general ZUS/rate engine or automatic VAT/form classification.
+
+Existing CFO cash reconciliation extracted as a shared helper and regression tested against PRIVATE. Local 5 JDG + 7 PRIVATE tests PASS, independent JDG algebra/cash oracle 4/4, existing complete PRIVATE oracle12/12. These verify supplied synthetic assumptions, NOT statutory correctness of contribution amounts or tax filings. Full CI pending; no unexecuted PASS claim.
+
+Audit found Brain CFO ignored tax projections and Brain questions omitted tax questions, despite canonical Q&A supporting them. Fix reuses existing metrics/question engine, adding conditional projections and unresolved tax questions without changing buy/owner gates. Stage2 synthetic high/small-margin/hard-reject cases and actual API/PostgreSQL checks are being added. Risk reject fixture includes an explicit existing human hard-reject veto, not a claim that software diagnoses a legal defect automatically.
+
+Resume: inspect WIP/HEAD, latest new stacked PR/CI; do not repeat completed prior CI for docs-only changes. Finish real integration/mobile/three-property regression and final report. Preserve previous branches/ZIP; no production, migration, deployment, activation, merge, Watcher/OLX or paid services. No persistent credit/wake tool exists.
+
+## Final JDG + Deal Room audit checkpoint — Draft PR #34
+
+Branch `feat/deal-room-jdg-audit`, worktree `/workspace/flip-deal-jdg`, base #33 / `feat/deal-room-private-tax`, remote base `e80f32564215e69fdac9439697542d89200b2b79`. PR https://github.com/jakubokruszek-wq/flip-manager-ai/pull/34.
+
+Runtime tested local `9069e4b1f8843e5859e5eee0dfb926efbd42c6c0`, remote `acb39a35b5d74c30ee7671d68e3670cb384bdfd3`, identical tree `24474c40aeda6dd6ca545c5dcd71a3028ee03536`. Prior local commits `481e141` (model/Brain/contract) and `76600b5` (mobile/actual DB scenarios) preserved. Subsequent changes are Markdown-only [skip ci]. Connector publication checked each blob/tree; original branches/worktrees/ZIP untouched.
+
+### What works
+
+Bounded JDG model with explicit eligible linear election, KPiR trading-good/annual inventory qualification, used-flat VAT exemption/occupation history without deductions or option, ordinary PCC, documented tax cost budgets, explicit paid/qualified social/Fund/health/PIT cash schedule, health deduction guards, cash/owner/reserve reconciliation. No double PCC, ZUS cost or health credit, no company dividend on own capital. Missing form/qualification/cost/schedule or unresolved annual adjustment => questions and UNKNOWN. Actual taxpayer liability is not certified; canonical net/tax status UNKNOWN, CEO HOLD.
+
+Existing CFO cash reconciliation shared with PRIVATE, not a new Finder/renovation/financing engine. UNDERWRITER/CFO/CEO fingerprints, conditional metrics/reasons and tax questions update. Economic changes reopen stored JDG qualification unless explicitly reconfirmed. New JDG flag OFF, needs CFO/TAX_REVIEW. No feature activation outside disposable tests.
+
+Audit fixes: Brain CFO omitted tax projections, Brain questions omitted tax requirements, single-line control could not preserve payment-plan lines, long legends needed width bounding. Fixed within existing components/rules, preserving gates, evidence and receipts.
+
+### Verified tests — final source
+
+[CI38907529725](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38907529725), app/service/postgres all SUCCESS:
+- Full TypeScript and Next.js build PASS; scoped Deal Room ESLint 0 errors/2 pre-existing warnings.
+- Node158/158, all canonical/Brain/director/finance/Q&A/CEO regressions included.
+- Independent rule-level Decimal80/80; complete PRIVATE12/12; JDG algebra/cash4/4. They verify equations on supplied assumptions, NOT legal correctness of a ZUS assessment.
+- Actual isolated PostgreSQL CAS/ownership/replay/rollback/RLS/grants8/8.
+- Actual API/services/PostgREST/PostgreSQL composites2/2: original path plus JDG persistence/replay/reload/withdraw-to-UNKNOWN; three Finder DB listings/all10directors, changed renovation, persisted answer/replay, Radar→general fallback.
+- Browser4/4: extended mobile now includes JDG form/history, all new questions, multiline payment schedule persistence, conditional CFO metric, HOLD/no overflow; three existing Deal Room/Brain/Finder regressions.
+- Existing local MARKET/Radar97/97; pure tax20/20 locally (subset of158).
+- [Screenshot artifact](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38907529725/artifacts/12048618304), SHA256 `bb2e3c659c6edf4cf721dc5321f9cc2649cc272874d7aef8772d9234728cffe5`.
+
+First full CI38906802090 also passed. The final test-only follow-up tightened the positive thin-margin assertion and emitted per-case evidence; final CI above verifies it. No failed test/build was left unresolved. No runtime changes followed the tested code.
+
+### Actual three-property outcomes, BEFORE tax/contributions
+
+| Łódź synthetic case | Purchase PLN | Operating profit PLN | CEO | Evidence |
+|---|---:|---:|---|---|
+| Opportunity | 200000 | 150732.50 | HOLD / ZBIERZ DANE | 12 Radar comparables |
+| Thin positive margin | 340000 | 7932.50 | HOLD / ZBIERZ DANE | 12 Radar comparables |
+| Known hard reject | 680000 | -338867.50 | ODRZUĆ | 12 Radar comparables; explicit existing veto |
+
+Hard reject is a known human veto, not automatic proof of a legal defect. High profit does not close legal/tax gates. These numerical results were captured as synthetic diagnostics from the actual service test, not inferred from prior reports.
+
+### Limits and readiness — do not overstate
+
+Code/test logic is ready for controlled synthetic testing in a confirmed isolated environment. **No interactive environment was deployed/activated; a user cannot start hosted tests yet from this task alone.** Separate authorization and confirmed database/credential isolation are required to prepare such access. Do not use an unverified repository preview against production Supabase.
+
+JDG is NOT a universal statutory ZUS calculator: actual category, monthly income/minima, contribution-year boundary and annual health reconciliation require an externally assessed complete schedule. Missing/unresolved inputs block the whole net estimate. Test contribution amounts are synthetic algebra assumptions, not verified real ZUS assessments. Tax form/VAT/property/activity eligibility remain declared, not certified by a URL or this software. Scale/ryczałt, other annual activity, taxable/partial VAT/refunds, contribution/PIT refunds/later adjustments, debt/investor, SP_ZOO and future dates beyond reviewed2026-10-16 remain UNKNOWN. Post-tax Max Buy/stress remain null. No accountant-reviewed tax filing, autonomous legal diagnosis or production readiness claim.
+
+Browser/auth transport is mocked; actual DB checked separately. No single authenticated browser→DB test, physical Samsung test, production read/write, migration/grant, deployment, merge, paid service or Watcher/OLX change. Allnewflags defaultOFF. Full report/source contract/instructions: `docs/deal-room-jdg-audit.md`.
+
+### Resume exactly from here
+
+“Wznów Deal Room od Draft PR #34 i ostatniego docs/deal-room-30-progress.md na feat/deal-room-jdg-audit w /workspace/flip-deal-jdg. Sprawdź HEAD/status bez resetu. Nie powtarzaj zielonego CI38907529725 przy samych zmianach Markdown. Zachowaj ograniczony JDG/PRIVATE i UNKNOWN poza kwalifikacją. Ustal następny zatwierdzony zakres: izolowane kontrolowane testy użytkownika albo odrębnie zweryfikowany model rocznych składek/innej formy/SP_ZOO. Bez automatycznej kwalifikacji, produkcji, migracji, aktywacji, merge, wdrożeń, Watchera/OLX i płatnych usług.”
+
+No quota exhaustion was observed; no credit-balance/renewal/persistent-wake tool exists. No fictitious background monitor was started. Checkpoint is durable and does not claim automatic future resumption.
