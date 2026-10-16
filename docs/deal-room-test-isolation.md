@@ -41,4 +41,38 @@ Disable DEAL_ROOM_TEST_ENABLED first (all reads, saves, replay/calculations deni
 
 ## Verification / checkpoint
 
-Current implementation pending fresh CI. Prior PR35 run38922124037 tested the SUPERSEDED separate-database/normal-table seed, not this rewrite. It is not evidence that this revised storage is safe. Fresh unit/director, full build/TypeScript/scoped lint, PostgreSQL17 SQL/CAS/security, API/DB denied-real-traffic and mobile suites must pass before final report. Hosted authenticated browser→DB on Samsung is still a future controlled acceptance step; no production test writes performed here.
+Final runtime verified: local `0ced74c`, remote `05231b8d0002147e3611975bb815ce4e646658cc`, tree `ce9e203e17c3dbf7ee992c580aa1124f502722de`. [Deal Room CI38928254069](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38928254069) all3 jobs SUCCESS. Existing [Price Radar CI38928253770](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38928253770) both jobs SUCCESS on the same runtime. Final follow-up changes documentation only, skip-ci; do not confuse earlier superseded PR35 green with this rewrite's evidence.
+
+| Verification | Actual outcome |
+|---|---|
+| Full project TypeScript | PASS in both workflows |
+| Full Next.js build | PASS in both workflows |
+| Full repository ESLint (Radar workflow) | 0errors,24warnings |
+| Scoped changed Deal Room/app/auth ESLint | 0errors,2existingwarnings |
+| Node director/CFO/tax/Q&A tests | 161/161 |
+| Trusted operator + all mutation-route/client-secret contracts | 12/12 |
+| Existing MARKET/Radar module tests | 97/97 |
+| PG17 real QA regressions + independent TEST SQL | 8/8 +9/9 |
+| Real API/services/PostgREST/PG composites | 3/3 |
+| Deal Room mobile browser | 5/5 |
+| Additional existing Radar/shared adapter/scheduler tests | 493/493 |
+| Additional existing Radar mobile browser | 4/4 |
+| Independent rule / PRIVATE / JDG Decimal vectors | 80/80,12/12,4/4 |
+
+Counts overlap between workflows/local subsets; no combined unique grand total claimed. Decimal vectors certify arithmetic under declared facts, not statutory ZUS eligibility or actual tax liability. Physical Samsung and one real authenticated hosted browser→API→current database flow NOT run; browser Auth/transport fixture and actual API/DB composites are separate suites. Do not activate a production test to fill that gap without approval.
+
+The new API/DB composite runs as a verified-identity fixture against real PG17/PostgREST. During TEST it forbids EVERY DB/network route except dedicated test cases/rounds/contract/CAS. It compares complete real listing/snapshot/source metadata/deal/override/round/workspace/comparable/Radar/settings rows before/after: unchanged. Three virtual cases retain ten directors, indicative synthetic fallback, tax UNKNOWN/HOLD or known hard reject. Answer save survives lost response/replay/reprepare; stale/concurrent requests have one winner; other actors, disabled/missing switches, invalid/missing allowlist, missing schema RPC, wrong Origin and ordinary investment namespace are denied. History23 rows paginates20+3 with21 tied timestamps, no loss/duplicates; bad cursor400. Missing migration is fault-injected as actual PostgREST PGRST202/404 at the test fetch boundary; no fallback. SQL suite separately observes absent contract before creating it in an empty auth-only database with NO real listing/deal/QA schema, then runs preflight/contract successfully.
+
+SQL checks prove RLS/FORCE RLS, browser/public denial, service-only invoker RPC, CAS/race/replay/owner/atomic rollback, BUY/missing identity rejection, only Auth/test-store FKs, no user triggers and lossless permission rollback with retained data. The migration/draft was applied ONLY to fixed localhost disposable CI PG17, never production. No production advisors/full data clone asserted.
+
+Mobile new scenario enters existing main Finder→TEST catalog→virtual case→save/reload→history with real QA/CFO/tax flags OFF and ZERO ordinary investment API calls. Original Q&A/tax/director and Radar mobile regressions remain passing. [Screenshots](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38928254069/artifacts/12056714722), artifact SHA256 `6168a128c65553ad527adea2f71d2b048dc98eac0d9690b4e4a24dd31cda6f9c`.
+
+Audit follow-ups: two old source-contract assertions assumed a hardcoded normal route; now check the shared router plus the exact unchanged real route behavior. New mobile receipt mock initially missed required invalidated metadata (real API was already correct); fixed without relaxing UI assertions. Broader auth audit found missing TEST/real-Q&A route classifications; registered them, with reviewed gateway auth-before-storage order. Origin remains ADDITIONAL CSRF validation after operator authorization, never an auth replacement. Source-action forgery checks preserved. Full route/client-secret contracts now included in CI.
+
+## Final stop / approval checkpoint
+
+PR35 remains DRAFT, base main642fdf3, no conflicts. Original stack preserved. No merge, production migration/data writes, manual/production deployment, feature activation, Watcher/OLX/cron changes, new paid service or preview database rebind. Repository Vercel integration can generate automatic PR previews; those are not main activation or proof of safe runtime configuration. We did not alter Vercel settings or request a deployment. Protected Watcher/collector/workers/extensions/android/vercel.json diff remains empty. No owner UID was guessed or installed. Pattern scan found no high-confidence private-key/GitHub/OpenAI secret matches in changed tracked code; not an exhaustive credential audit.
+
+READY FOR REVIEW/APPROVAL of exact steps1–8 above. NOT activated or available as TEST in main yet. Remaining approvals/prerequisites: reviewed SQL/preflight and backup/change tracking; verified investor Auth UID/server allowlist; separately authorized merge/application deployment/TEST flags; real Samsung acceptance and runtime observation. Keep all current real module flags and Watcher/OLX settings unchanged. Existing Supabase storage/CI quota should be checked before activation; no new service or billing configuration was provisioned and no claim of unlimited free storage is made.
+
+Resume from PR35 and this final runtime/checkpoint after explicit approval; do not repeat completed implementation/CI without new changes/failures. No credit-monitor or persistent auto-resume process is running.
