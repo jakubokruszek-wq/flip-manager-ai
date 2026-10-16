@@ -21,7 +21,7 @@ test("comparison prices invalidate MARKET, UNDERWRITER and CEO; small samples ca
  const first=buildCanonicalDeal({...input,market:radarMarketEvidence(subject,rows(),now).evidence});
  const second=buildCanonicalDeal({...input,market:radarMarketEvidence(subject,rows().map(r=>({...r,price:r.price*.8,pricePerSqm:r.pricePerSqm*.8})),now).evidence});
  const { buildDealBrain } = await import("./brain/index");
- const sale=buildDealBrain(first).directors.find(d=>d.id === "SALE");
+ const sale=buildDealBrain(first).directors.SALE;
  assert.ok(sale); assert.match(sale.summary,/ofertowe, nie transakcyjne/);
  assert.notEqual(first.market.inputFingerprint,second.market.inputFingerprint);
  assert.notEqual(first.underwriting.inputFingerprint,second.underwriting.inputFingerprint);
