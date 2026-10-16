@@ -127,6 +127,8 @@ export type VerifyResult = {
 };
 
 export type MarketResult = {
+  radarAudit?: MarketEvidence["radarAudit"];
+  sourceComparison?: { base: number; compCount: number; observedAt: string | null };
   resalePricePerM2Low: number;
   resalePricePerM2Base: number;
   resalePricePerM2High: number;
@@ -219,6 +221,8 @@ export type DealFactOverrides = Partial<Record<keyof DealFacts, string | number 
 };
 
 export type MarketEvidence = {
+  radarAudit?: Array<{ id: string; sourceUrl: string | null; accepted: boolean; reasons: string[] }>;
+  minimumSample?: number;
   id: string | null;
   matchedBy: string;
   low: number;

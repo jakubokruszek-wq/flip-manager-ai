@@ -1,4 +1,7 @@
 import "server-only";
+import { radarMarketEvidence } from "../radar-market";
+import { getRadarResults } from "@/features/price-radar/server/radar-results";
+import { readRadarSettings, radarSettingsSourcesWereFilteredToEmpty } from "@/features/price-radar/server/radar-settings";
 
 import { DealRoomNotFound, answerOverrides, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -68,7 +71,7 @@ export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminCli
       if (snapshotError) throw snapshotError;
       const facebookCondition = text(listing.source) === "facebook" ? await readFacebookCondition(db, listingId, text((listing as Row).description)) : null;
       const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null, facebookCondition);
-      const market = await resolveMarketEvidence(db, listingInput);
+      const market = await resolveMarketEvidence(db, listingInput, actorId);
       const trackRecords = await loadDirectorTrackRecords(db);
       const now = new Date().toISOString();
       const buildInput = { overrideObservedAt: overrideObservedAt ?? text(overridesResult.data?.updated_at) ?? undefined, dealId, listing: listingInput, overrides: overrideValues ?? object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords };
@@ -83,7 +86,7 @@ export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminCli
       // answered dimensions/location, not a stale raw listing with missing area.
       const marketSubject = { ...listingInput, areaM2: deal.facts.areaM2.effectiveValue, rooms: deal.facts.rooms.effectiveValue, city: deal.facts.city.effectiveValue, district: deal.facts.district.effectiveValue, street: deal.facts.street.effectiveValue, buildingType: deal.facts.buildingType.effectiveValue, floor: deal.facts.floor.effectiveValue };
       if (["areaM2", "rooms", "city", "district", "street", "buildingType", "floor"].some((field) => marketSubject[field as keyof DealListingInput] !== listingInput[field as keyof DealListingInput])) {
-        deal = buildCanonicalDeal({ ...resolvedInput, market: await resolveMarketEvidence(db, marketSubject) });
+        deal = buildCanonicalDeal({ ...resolvedInput, market: await resolveMarketEvidence(db, marketSubject, actorId) });
       }
       if (existing) deal = preserveUnchangedDirectors(existing.deal, deal);
       const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
@@ -190,7 +193,15 @@ async function loadDirectorTrackRecords(db: ReturnType<typeof createAdminClient>
   return (data ?? []).flatMap((row) => { const director = text(row.director); if (!director || !["SCOUT","VERIFY","MARKET","UNDERWRITER","CEO","RISK","LEGAL"].includes(director)) return []; return [{ director: director as DirectorTrackRecord["director"], dealCount: number(row.deal_count), medianErrorPercent: nullableNumber(row.median_error_percent), p90ErrorPercent: nullableNumber(row.p90_error_percent), confidenceCalibration: text(row.confidence_calibration), criticalMisses: number(row.critical_misses), computedAt: text(row.computed_at) }]; });
 }
 
-async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, listing: DealListingInput): Promise<MarketEvidence | null> {
+async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, listing: DealListingInput, actorId?: string): Promise<MarketEvidence | null> {
+  if (process.env.DEAL_ROOM_RADAR_ENABLED === "true") {
+    if (!actorId) throw new DealRoomNotFound();
+    const filters = await readRadarSettings(actorId, db);
+    const disabledSources = await radarSettingsSourcesWereFilteredToEmpty(actorId, db);
+    const results = disabledSources ? { listings: [], excludedListings: [] } : await getRadarResults(actorId, filters, db);
+    // Fail closed: insufficient Radar evidence never silently falls back to older global comps.
+    return radarMarketEvidence(listing, [...results.listings, ...results.excludedListings], new Date().toISOString()).evidence;
+  }
   const { data: rows, error } = await db.from("resale_comps").select("*").eq("active", true).limit(500);
   if (error && error.code !== "42P01") throw error;
   const comps = (rows ?? []).map(toComp).filter((item): item is ResaleCompRecord => item !== null);
