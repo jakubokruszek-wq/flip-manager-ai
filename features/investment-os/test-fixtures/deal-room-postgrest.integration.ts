@@ -252,6 +252,12 @@ test("virtual TEST API/DB: no production tables, all owner/flag gates, dedicated
   actor=owner;
  }
  const c=ctx(cases[0].id);
+ const caseRow=await db.from("deal_room_test_cases").select("deal,state,version").eq("owner_id",owner).eq("case_id",cases[0].id).single();assert.ifError(caseRow.error);
+ const tiedAt=new Date(Date.now()+10000).toISOString();
+ const inserts=await db.from("deal_room_test_rounds").insert(Array.from({length:21},()=>({owner_id:owner,case_id:cases[0].id,request_id:randomUUID(),payload_hash:"d".repeat(64),created_at:tiedAt,response:{deal:caseRow.data!.deal,room:{...caseRow.data!.state,version:caseRow.data!.version}}})));assert.ifError(inserts.error);
+ const page1=await (await history.GET(req("/"+cases[0].id+"/history"),c)).json();assert.equal(page1.rounds.length,20);assert.ok(page1.nextBefore);
+ const page2=await (await history.GET(req("/"+cases[0].id+"/history?before="+encodeURIComponent(page1.nextBefore)),c)).json();assert.equal(page2.rounds.length,3);assert.equal(page2.nextBefore,null);assert.equal(new Set([...page1.rounds,...page2.rounds].map((row:{requestId:string})=>row.requestId)).size,23);
+ assert.equal((await history.GET(req("/"+cases[0].id+"/history?before=invalid"),c)).status,400);
  for(const patch of [{DEAL_ROOM_TEST_ENABLED:"false"},{DEAL_ROOM_TEST_OPERATOR_IDS:""},{DEAL_ROOM_TEST_OPERATOR_IDS:"invalid"},{DEAL_ROOM_TEST_STORAGE_VERSION:""}]){
   const prev={...process.env};Object.assign(process.env,patch);
   assert.equal((await api.GET(req())).status,404);assert.equal((await initialize.POST(req("/"+cases[0].id+"/initialize","POST"),c)).status,404);assert.equal((await answers.POST(req("/"+cases[0].id+"/answers","POST",{}),c)).status,404);assert.equal((await deal.GET(req("/"+cases[0].id),c)).status,404);assert.equal((await answers.GET(req("/"+cases[0].id+"/answers"),c)).status,404);assert.equal((await history.GET(req("/"+cases[0].id+"/history"),c)).status,404);assert.equal((await api.POST(req("","POST"))).status,404);
