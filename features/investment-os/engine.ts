@@ -58,7 +58,7 @@ function buildMarket(input: BuildDealInput, facts: DealFacts, verify: DirectorOu
   const started = performance.now();
   const area = positive(facts.areaM2.effectiveValue); const override = positive(input.overrides.resalePerM2);
   const selected: import("./types").MarketEvidence | null = override === null ? input.market : { id: null, matchedBy: "DEAL_OVERRIDE", low: money(override * .95), base: override, high: money(override * 1.05), confidence: 65, provenance: "USER_ASSUMPTION" as const, compCount: 0, fallbackLevel: 0, fallbackReason: "EXPLICIT_DEAL_OVERRIDE", confidencePenalty: 0, observedAt: input.overrideObservedAt ?? input.now, evidenceId: `deal:${input.dealId}:resale-override`, priceEvidenceType: "USER_ASSUMPTION" as const, comparables: [] };
-  const fp = fingerprint({ area, selected, verify: verify.inputFingerprint, policy });
+  const fp = fingerprint({ area, selected, radarComparison: override !== null && input.market?.matchedBy === "PRICE_RADAR" ? input.market : undefined, verify: verify.inputFingerprint, policy });
   if (verify.status === "BLOCKED") return output<MarketResult>("MARKET", fp, input.now, 0, null, verify.result?.conflicts ?? [], verify.warnings, ["MARKET_VERIFY_BLOCKED"], [], "BLOCKED", { analysisLevel, elapsedMs: elapsed(started) });
   if (area === null) return output<MarketResult>("MARKET", fp, input.now, 0, null, ["areaM2"], [], ["MARKET_AREA_MISSING"], [], "BLOCKED", { analysisLevel, elapsedMs: elapsed(started) });
   if (!selected) return output<MarketResult>("MARKET", fp, input.now, 0, null, ["resaleAssumption"], [], ["RESALE_ASSUMPTION_MISSING"], [], "BLOCKED", { analysisLevel, elapsedMs: elapsed(started) });

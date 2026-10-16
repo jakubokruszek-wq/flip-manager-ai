@@ -147,7 +147,7 @@ export type MarketResult = {
   comparables: MarketComparableEvidence[];
 };
 
-export type MarketComparableEvidence = { id: string; source: string; sourceUrl: string | null; pricePerM2: number; similarityScore: number; dataQuality: number; freshnessDays: number | null; distanceMeters: number | null; adjustments: string[]; weight: number; outlierReason: string | null; priceEvidenceType: "ASKING" | "TRANSACTION" };
+export type MarketComparableEvidence = { radarDetails?: { area: number; rooms: number | null; city: string; district: string; buildingType: string; standard: string; collectedAt: string; status: string; linkVerified: false; photosVerified: false }; id: string; source: string; sourceUrl: string | null; pricePerM2: number; similarityScore: number; dataQuality: number; freshnessDays: number | null; distanceMeters: number | null; adjustments: string[]; weight: number; outlierReason: string | null; priceEvidenceType: "ASKING" | "TRANSACTION" };
 
 export type CeoResult = {
   decision: "HOT" | "GOOD" | "REVIEW" | "TOO_EXPENSIVE" | "REJECT";

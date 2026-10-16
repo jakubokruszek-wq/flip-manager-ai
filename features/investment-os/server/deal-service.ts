@@ -200,7 +200,8 @@ async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, l
     const disabledSources = await radarSettingsSourcesWereFilteredToEmpty(actorId, db);
     const results = disabledSources ? { listings: [], excludedListings: [] } : await getRadarResults(actorId, filters, db);
     // Fail closed: insufficient Radar evidence never silently falls back to older global comps.
-    return radarMarketEvidence(listing, [...results.listings, ...results.excludedListings], new Date().toISOString()).evidence;
+    const maximumAgeDays = Number(process.env.DEAL_ROOM_RADAR_MAX_AGE_DAYS ?? 30);
+    return radarMarketEvidence(listing, [...results.listings, ...results.excludedListings], new Date().toISOString(), { maximumAgeDays, minimumSample: 10 }).evidence;
   }
   const { data: rows, error } = await db.from("resale_comps").select("*").eq("active", true).limit(500);
   if (error && error.code !== "42P01") throw error;
