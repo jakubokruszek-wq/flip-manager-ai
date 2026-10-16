@@ -31,7 +31,7 @@ jobs:
       - name: Unit and existing regression with coverage
         run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test-isolation=none --experimental-test-coverage --test features/investment-os/*.test.ts features/investment-os/brain/*.test.ts features/investment-os/server/*.test.ts features/investment-os/components/*.test.ts features/flip-finder/underwriting.test.ts
       - name: Existing trusted operator authentication regression
-        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test-isolation=none --test features/auth/operator.test.ts
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test-isolation=none --test features/auth/operator.test.ts features/auth/route-authorization.test.ts features/auth/security-contract.test.ts
       - name: Existing MARKET and Radar regressions
         run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --test features/market-intelligence/*.test.mjs features/price-radar/qualification.test.ts features/price-radar/stats.test.ts
       - name: Independent decimal arithmetic reference
