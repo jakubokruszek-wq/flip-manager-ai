@@ -30,7 +30,7 @@ class DealRoomSql(unittest.TestCase):
         with psycopg.connect(DSN) as c:
             c.execute('insert into listings values (%s,%s)', (self.listing, NOW))
             c.execute("insert into deals(id,listing_id,facts_fingerprint,source_updated_at) values (%s,%s,'synthetic',%s)", (self.deal,self.listing,NOW))
-    def write(self, request=None, owner=OWNER, version=1, hash_value='hash', valid=True):
+    def write(self, request=None, owner=OWNER, version=1, hash_value='a'*64, valid=True):
         request = request or str(uuid.uuid4())
         deal = dict(id=self.deal, listing_id=self.listing, stage='VERIFYING', facts_fingerprint='after', facts={}, scout={},verify={},market={},underwriting={},ceo={},playbook={},evidence_fabric=[],information_requests=[],analysis_level=1)
         response = dict(ok=True,deal=dict(id=self.deal),room=dict(version=version+1 if valid else -1))
@@ -48,7 +48,7 @@ class DealRoomSql(unittest.TestCase):
             self.assertEqual(c.execute('select state from deal_room_workspaces where deal_id=%s',(self.deal,)).fetchone()[0]['answers']['askingPrice']['value'],260000)
     def test_different_payload_same_id_conflicts(self):
         request=str(uuid.uuid4()); self.write(request)
-        with self.assertRaisesRegex(psycopg.Error,'VERSION_CONFLICT'): self.write(request,hash_value='changed')
+        with self.assertRaisesRegex(psycopg.Error,'VERSION_CONFLICT'): self.write(request,hash_value='b'*64)
     def test_other_owner_denied(self):
         self.write()
         with self.assertRaisesRegex(psycopg.Error,'DEAL_ROOM_NOT_FOUND'): self.write(owner=OTHER,version=2)

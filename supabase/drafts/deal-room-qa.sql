@@ -11,7 +11,7 @@ create table public.deal_room_rounds (
   deal_id uuid not null references public.deals(id) on delete cascade,
   request_id uuid not null,
   owner_id uuid not null references auth.users(id),
-  payload_hash text not null,
+  payload_hash text not null check (payload_hash ~ '^[0-9a-f]{64}$'),
   response jsonb not null check (jsonb_typeof(response) = 'object'),
   created_at timestamptz not null default now(),
   primary key (deal_id, request_id)
@@ -34,7 +34,7 @@ declare
   v_version integer;
 begin
   if p_owner_id is null or p_request_id is null or p_expected_version is null or p_expected_version < 1
-    or p_payload_hash is null or length(p_payload_hash) > 200
+    or p_payload_hash is null or p_payload_hash !~ '^[0-9a-f]{64}$'
     or jsonb_typeof(p_state) is distinct from 'object'
     or jsonb_typeof(p_values) is distinct from 'object'
     or jsonb_typeof(p_response) is distinct from 'object' then

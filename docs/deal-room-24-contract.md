@@ -79,7 +79,7 @@ zapisy; lock źródła stabilizuje source_updated_at. Rozbieżna wersja/source
 wycofuje CAŁY zapis. Kopie round response pozostają niezmienne.
 
 Po błędzie sieci/503 ponawiać dokładny JSON z tym samym requestId/version.
-Ten sam request/hash zwraca oryginalny receipt bez nowej rundy. Zmienione body
+Ten sam request/SHA-256 znormalizowanego polecenia zwraca oryginalny receipt bez nowej rundy. Zmienione body
 wymaga nowego requestId; ponowne użycie ID z inną treścią = konflikt.
 Po 409 zachować szkic, jawnie odświeżyć analizę (POST istniejącego initialize),
 pobrać stan GET i świadomie zapisać nową rundę. Nie nadpisywać wersji w ciemno.

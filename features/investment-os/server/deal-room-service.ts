@@ -1,8 +1,8 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildDealBrain } from "../brain";
 import { affectedDirectors, answerOverrides, mergeAnswers, parseAnswerCommand, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
-import { fingerprint } from "../engine";
 import { InvestmentDealVersionConflict } from "./deal-cas";
 import { prepareInvestmentDeal, readStoredDeal, toDealRow } from "./deal-service";
 import type { DealFactOverrides } from "../types";
@@ -33,7 +33,7 @@ export async function saveDealRoomAnswers(listingId: string, actorId: string, ra
   if (!stored) throw new DealRoomNotFound();
   const state = await readDealRoom(listingId, actorId);
   if (!state) throw new DealRoomNotFound();
-  const payloadHash = fingerprint(command);
+  const payloadHash = createHash("sha256").update(JSON.stringify(command)).digest("hex");
   const { data: replay, error: replayError } = await db.from("deal_room_rounds").select("payload_hash,response").eq("deal_id", stored.deal.id).eq("owner_id", actorId).eq("request_id", command.requestId).maybeSingle();
   if (replayError) throw replayError;
   if (replay) { if (replay.payload_hash !== payloadHash) throw new InvestmentDealVersionConflict(); return replay.response; }
