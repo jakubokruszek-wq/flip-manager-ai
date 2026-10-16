@@ -21,7 +21,7 @@ const numeric: Record<string, { min: number; max: number; unit: string }> = {
   renovationBudget: { min: 0, max: 10_000_000, unit: "PLN łącznie, przed rezerwą" }, holdingMonths: { min: 1, max: 120, unit: "miesiące" },
 };
 export const ANSWER_LABELS: Record<string, string> = { ...CFO_LABELS, resalePerM2: "Jaką cenę odsprzedaży za m² przyjmujesz jako założenie?", additionalCosts: "Jakie dodatkowe koszty projektu przyjąć (PLN)?", negotiatedPrice: "Jaka jest uzgodniona cena zakupu po negocjacjach?", askingPrice: "Jaka jest aktualna cena ofertowa w źródle?", renovationBudget: "Jaki jest budżet remontu przed rezerwą (PLN łącznie)?", holdingMonths: "Ile miesięcy potrwa projekt?" };
-const narrative = new Set(["financingMode", "loanSchedule", "loanSecurity", "legalStatus", "ownership", "condition", "renovationScope", "financing", "marketEvidence", "riskReview", "identity", "city", "district", "street", "rooms", "buildingType", "economics"]);
+const narrative = new Set(["costScope", "financingMode", "loanSchedule", "loanSecurity", "legalStatus", "ownership", "condition", "renovationScope", "financing", "marketEvidence", "riskReview", "identity", "city", "district", "street", "rooms", "buildingType", "economics"]);
 export function answerUnit(field: string): string { return numeric[field]?.unit ?? "opis / ustalenie"; }
 export function parseAnswerCommand(value: unknown): AnswerCommand {
   const v = record(value);
@@ -42,6 +42,7 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
       } else {
         if (typeof a.value !== "string" || !a.value.trim() || a.value.length > 2000) throw new DealRoomInputError("Odpowiedź musi mieć od 1 do 2000 znaków.");
         result = a.value.trim();
+        if (field === "costScope") { result=result.toUpperCase(); if(result!=="BRUTTO") throw new DealRoomInputError("Potwierdź BRUTTO albo wybierz Nie wiem."); }
         if (field === "financingMode" && !["CASH","LOAN","INVESTOR"].includes(result)) throw new DealRoomInputError("Wybierz CASH, LOAN lub INVESTOR.");
         if (field === "loanSchedule" && !["INTEREST_ONLY","ANNUITY"].includes(result)) throw new DealRoomInputError("Wybierz INTEREST_ONLY lub ANNUITY.");
         if (/-----BEGIN .*PRIVATE KEY|\b(?:Bearer\s+|sk-proj-|sb_secret_|gh[pousr]_|(?:cookie|authorization|access_token|refresh_token)\s*[:=])/i.test(result)) throw new DealRoomInputError("Nie zapisuj sekretów ani tokenów w odpowiedziach.");
@@ -71,7 +72,7 @@ export function affectedDirectors(fields: string[]): BrainDirectorId[] {
 export function mergeAnswers(deal: CanonicalDeal, state: DealRoomState, command: AnswerCommand, actorId: string, now: string): Record<string, SavedAnswer> {
   const result = { ...state.answers };
   for (const answer of command.answers) {
-    const numericValue = Boolean(numeric[answer.field]) || ["financingMode","loanSchedule"].includes(answer.field);
+    const numericValue = Boolean(numeric[answer.field]) || ["financingMode","loanSchedule","costScope"].includes(answer.field);
     result[answer.field] = { ...answer, questionId: `brain-question:${deal.id}:${answer.field}`, actorId, savedAt: now, sourceFingerprint: answerSourceFingerprint(deal, answer.field), status: answer.kind !== "VALUE" ? "OPEN" : numericValue ? "RESOLVED" : "NEEDS_EVIDENCE", transitions: answer.kind !== "VALUE" ? ["OPEN"] : ["OPEN", "ANSWERED", numericValue ? "RESOLVED" : "NEEDS_EVIDENCE"] };
   }
   return result;

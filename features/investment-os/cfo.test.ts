@@ -6,7 +6,7 @@ import { lodzDeal } from "./test-fixtures/lodz-deals";
 import { buildCanonicalDeal } from "./engine";
 import { parseAnswerCommand,mergeAnswers,answerOverrides,affectedDirectors } from "./deal-room-answers";
 const input={listingId:"1",source:"facebook",sourceUrl:"https://example.test/1",areaM2:45,rooms:2,askingPrice:300000,priceOverride:260000,renovationTotalOverride:100000,holdingMonthsOverride:6,resalePerM2:{low:9000,base:10000,high:11000,provenance:"MARKET_ASSUMPTION",confidence:80},condition:"do remontu"} as UnderwritingInput;
-const params:CfoInputs={financingMode:"CASH",equity:500000,liquidityReserve:30000,deposit:26000,renovationMonths:3,equipment:0,loanAmount:200000,loanRate:12,loanFee:2000,loanTermMonths:120,loanSchedule:"INTEREST_ONLY",loanSecurity:"Deklarowana hipoteka, oferta do sprawdzenia",investorCapital:200000,investorProfitShare:50,investorLossShare:50};
+const params:CfoInputs={costScope:"BRUTTO",financingMode:"CASH",equity:500000,liquidityReserve:30000,deposit:26000,renovationMonths:3,equipment:0,loanAmount:200000,loanRate:12,loanFee:2000,loanTermMonths:120,loanSchedule:"INTEREST_ONLY",loanSecurity:"Deklarowana hipoteka, oferta do sprawdzenia",investorCapital:200000,investorProfitShare:50,investorLossShare:50};
 test("same operating base, cash equals existing calculator; loan fees/interest and investor capital are not double costs",()=>{
  const c=analyseCfo(input,DEFAULT_UNDERWRITING_SETTINGS,params), u=calculateUnderwriting(input,{...DEFAULT_UNDERWRITING_SETTINGS,financingEnabled:false});
  assert.equal(c.variants[0].projectProfitBeforeTax,u.profitBase);assert.equal(c.variants[1].financingCost,14000);assert.equal(c.variants[1].projectProfitBeforeTax,Math.round((u.profitBase!-14000)*100)/100);

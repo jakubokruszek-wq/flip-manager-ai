@@ -66,7 +66,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,room.answers)});
   await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
   const cfoMore=page.getByRole('button',{name:/Pozostałe pytania/});if(await cfoMore.count())await cfoMore.click();
-  for(const [field,value] of Object.entries({financingMode:'CASH',equity:'500000',liquidityReserve:'30000',deposit:'20000',renovationMonths:'3',equipment:'0'}))await page.getByLabel(`Odpowiedź: ${field}`,{exact:true}).fill(value);
+  for(const [field,value] of Object.entries({costScope:'BRUTTO',financingMode:'CASH',equity:'500000',liquidityReserve:'30000',deposit:'20000',renovationMonths:'3',equipment:'0'}))await page.getByLabel(`Odpowiedź: ${field}`,{exact:true}).fill(value);
   await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
   await page.waitForFunction(()=>document.querySelector('[aria-label="Rekomendacja przed i po odpowiedziach"]')?.textContent.includes('equity'));
   assert.equal(current.underwriting.result.cfo.selected.mode,'CASH');assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');
