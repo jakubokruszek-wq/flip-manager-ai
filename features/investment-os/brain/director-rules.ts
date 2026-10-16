@@ -175,7 +175,7 @@ function acquisition(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWa
   return output(deal, "ACQUISITION", status, `Działanie warunkowe: ${action}`, `Kierunek wynika z kanonicznej decyzji CEO, Max Buy, bramek i nadrzędnej decyzji ręcznej. Otwarte bramki: ${openGates.length}.`, recommendation, [
     metric(deal, "acquisitionAction", "Działanie", action, provenance("ceo.result.action", deal.ceo.inputFingerprint, "FACT", deal.ceo.computedAt)),
     metric(deal, "askingPrice", "Cena ofertowa", deal.facts.askingPrice.effectiveValue, factProvenance("askingPrice", deal.facts.askingPrice), "PLN"),
-    metric(deal, "maxPurchasePrice", "Maksymalna cena zakupu", result?.maxPurchasePrice ?? ceo?.maxPurchasePrice ?? null, provenance("underwriting.result.maxPurchasePrice", deal.underwriting.inputFingerprint, "ESTIMATE", deal.underwriting.computedAt), "PLN"),
+    metric(deal, "maxPurchasePrice", "Maksymalna cena zakupu", result?.cfo ? ceo?.maxPurchasePrice ?? null : result?.maxPurchasePrice ?? ceo?.maxPurchasePrice ?? null, provenance("underwriting.result.maxPurchasePrice", deal.underwriting.inputFingerprint, "ESTIMATE", deal.underwriting.computedAt), "PLN"),
     metric(deal, "openCriticalGates", "Otwarte bramki krytyczne", openGates.length, provenance("ceo.result.criticalGates", deal.ceo.inputFingerprint, "FACT", deal.ceo.computedAt), "COUNT"),
   ], missing, [...inheritedWarnings, ...openGates.map((gate) => gate.reason)], evidence, evidence, freshness, "Działanie pochodzi z kanonicznego CEO i Max Buy; nie dodano drugiego progu zakupu.");
 }

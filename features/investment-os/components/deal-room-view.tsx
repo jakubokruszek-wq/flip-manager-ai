@@ -107,13 +107,13 @@ function DealGallery({ images }: { images: string[] }) {
 function ExecutiveHero({ deal }: { deal: CanonicalDeal }) {
   const ceo = deal.ceo.result;
   const underwriting = deal.underwriting.result;
-  const expectedProfit = ceo?.expectedProfitBase ?? underwriting?.profitBase ?? null;
+  const expectedProfit = underwriting?.cfo ? ceo?.expectedProfitBase ?? null : ceo?.expectedProfitBase ?? underwriting?.profitBase ?? null;
   return <section aria-label="Kluczowe metryki finansowe" className="grid grid-cols-2 gap-2 sm:grid-cols-2 xl:grid-cols-5">
     <HeroMetric className="order-4 sm:order-none" detail={`Cena za m²: ${pln(askingPricePerSqm(deal))}`} label="Cena ofertowa" value={pln(deal.facts.askingPrice.effectiveValue)} />
-    <HeroMetric className="order-1 col-span-2 sm:order-none sm:col-span-1" emphasis label="Maks. cena zakupu" value={pln(ceo?.maxPurchasePrice ?? underwriting?.maxPurchasePrice)} />
-    <HeroMetric className="order-5 sm:order-none" label="Cel negocjacyjny" value={pln(ceo?.targetPurchasePrice ?? underwriting?.targetPurchasePrice)} />
-    <HeroMetric className="order-2 sm:order-none" label="Oczekiwany zysk" negative={expectedProfit != null && expectedProfit < 0} positive={expectedProfit != null && expectedProfit >= 0} value={pln(expectedProfit)} />
-    <HeroMetric className="order-3 sm:order-none" label="Zwrot z inwestycji (ROI)" value={percent(underwriting?.roiBase)} />
+    <HeroMetric className="order-1 col-span-2 sm:order-none sm:col-span-1" emphasis label="Maks. cena zakupu" value={pln(underwriting?.cfo ? ceo?.maxPurchasePrice : ceo?.maxPurchasePrice ?? underwriting?.maxPurchasePrice)} />
+    <HeroMetric className="order-5 sm:order-none" label="Cel negocjacyjny" value={pln(underwriting?.cfo ? ceo?.targetPurchasePrice : ceo?.targetPurchasePrice ?? underwriting?.targetPurchasePrice)} />
+    <HeroMetric className="order-2 sm:order-none" label={underwriting?.cfo ? "Właściciel — przed podatkiem" : "Oczekiwany zysk"} negative={expectedProfit != null && expectedProfit < 0} positive={expectedProfit != null && expectedProfit >= 0} value={pln(expectedProfit)} />
+    <HeroMetric className="order-3 sm:order-none" label="Zwrot z inwestycji (ROI)" value={percent(underwriting?.cfo ? underwriting.cfo.selected?.roiOnPeakEquity : underwriting?.roiBase)} />
   </section>;
 }
 
