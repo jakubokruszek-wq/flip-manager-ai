@@ -19,7 +19,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
       setRoom(body.room);
     }).catch(() => { if (active) setError("Nie udało się wczytać odpowiedzi. Odśwież stronę."); });
     return () => { active = false; };
-  }, [path]);
+  }, [path, deal.updatedAt]);
   const change = (field: string, patch: Partial<AnswerInput>) => {
     pending.current = null;
     setDraft((current) => {
@@ -47,7 +47,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   const visible = (more ? questions : questions.slice(0, 5)).concat(editing.map((field) => ({ field, question: `Edytuj odpowiedź: ${field}`, directors: "CEO", why: "Nowa runda zachowa poprzednią odpowiedź w historii.", evidence: "Deklaracja nie jest automatycznie zweryfikowanym dowodem.", blocking: false })));
   return <section data-user-questions aria-label="Dyrektorzy pytają Ciebie" className="min-w-0 space-y-4 rounded-2xl border border-amber-400/20 p-4">
     <h2 className="text-lg font-semibold">Dyrektorzy pytają Ciebie</h2>
-    <p className="text-xs text-muted-foreground">Analizy regułowe Investment OS. Odpowiedź i link do dokumentu nie są automatycznym potwierdzeniem faktu prawnego ani ceny transakcyjnej. Nie wpisuj haseł, tokenów ani danych osób z dokumentów.</p>
+    <p className="text-xs text-muted-foreground">Analizy regułowe Investment OS. PCC, notariusz, finansowanie i sprzedaż są scenariuszem z ustawień, a nie potwierdzonymi kosztami tej transakcji. Odpowiedź i link do dokumentu nie są automatycznym potwierdzeniem faktu prawnego ani ceny transakcyjnej. Nie wpisuj haseł, tokenów ani danych osób z dokumentów.</p>
     {disabled ? <p>Trwałe odpowiedzi nie są aktywne w tym środowisku.</p> : null}
     {visible.map((q) => { const answer = draft[q.field] ?? room?.answers[q.field], unit = answerUnit(q.field), numeric = unit !== "opis / ustalenie"; return <fieldset key={q.field} disabled={saving || !room} className="min-w-0 space-y-2 rounded-xl border border-white/10 p-3" data-question-field={q.field}>
       <legend className="break-words text-sm font-semibold">{q.question}</legend>

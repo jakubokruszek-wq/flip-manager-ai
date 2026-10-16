@@ -12,12 +12,12 @@ function apply(answers: AnswerInput[], base = lodzDeal()) {
   return { before, merged, overrides, after: preserveUnchangedDirectors(before, buildCanonicalDeal({ ...base, overrides, now: "2026-10-15T12:05:00.000Z" })) };
 }
 test("260k answer updates actual canonical purchase, profit and ROI without declaring legal proof", () => {
-  const { before, after, merged } = apply([answer("askingPrice", 260000)]);
+  const { before, after, merged } = apply([answer("negotiatedPrice", 260000)]);
   assert.equal(after.underwriting.result?.purchasePrice, 260000);
   assert.ok(after.underwriting.result!.profitBase! > before.underwriting.result!.profitBase!);
   assert.ok(after.underwriting.result!.roiBase! > before.underwriting.result!.roiBase!);
   assert.deepEqual(after.market.result, before.market.result);
-  assert.equal(merged.askingPrice.actorId, actor);
+  assert.equal(merged.negotiatedPrice.actorId, actor);
   assert.equal(after.ceo.result?.criticalGates.find((g) => g.fact === "legalStatus")?.passed, false);
   assert.notEqual(after.ceo.result?.action, "KUP");
 });
@@ -42,15 +42,15 @@ test("three Łódź synthetic cases retain missing legal gate and material confl
   }
 });
 test("withdrawal restores baseline without dropping other answers; source change reopens resolved question", () => {
-  const { before, merged } = apply([answer("askingPrice", 260000), answer("renovationBudget", 100000)]);
+  const { before, merged } = apply([answer("negotiatedPrice", 260000), answer("renovationBudget", 100000)]);
   const room = { ...state(), answers: merged };
-  assert.ok(!roomQuestions(before, room).some((q) => q.field === "askingPrice"));
+  assert.ok(!roomQuestions(before, room).some((q) => q.field === "negotiatedPrice"));
   const newSource = buildCanonicalDeal({ ...lodzDeal(), listing: { ...lodzDeal().listing, askingPrice: 310000 } });
-  assert.ok(roomQuestions(newSource, room).some((q) => q.field === "askingPrice"));
-  assert.equal(answerOverrides(newSource, {}, merged).askingPrice, undefined);
-  const withdrawn = mergeAnswers(before, room, { requestId, expectedVersion: 1, answers: [{ ...answer("askingPrice", 1), kind: "WITHDRAW", value: null }] }, actor, lodzDeal().now);
+  assert.ok(roomQuestions(newSource, room).some((q) => q.field === "negotiatedPrice"));
+  assert.equal(answerOverrides(newSource, {}, merged).negotiatedPrice, undefined);
+  const withdrawn = mergeAnswers(before, room, { requestId, expectedVersion: 1, answers: [{ ...answer("negotiatedPrice", 1), kind: "WITHDRAW", value: null }] }, actor, lodzDeal().now);
   const overrides = answerOverrides(before, room.baselineOverrides, withdrawn);
-  assert.equal(overrides.askingPrice, undefined);
+  assert.equal(overrides.negotiatedPrice, undefined);
   assert.ok(overrides.renovationPerM2);
   assert.equal(overrides.holdingMonths, 5);
 });

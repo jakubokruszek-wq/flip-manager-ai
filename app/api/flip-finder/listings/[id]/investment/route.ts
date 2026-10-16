@@ -1,4 +1,4 @@
-import { assertDealRoomOwner, DealRoomNotFound } from "@/features/investment-os/server/deal-room-service";
+import { assertDealRoomOwner, dealRoomEnabled, readDealRoom, DealRoomNotFound } from "@/features/investment-os/server/deal-room-service";
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 
 import { getInvestmentDeal, getListingMedia, saveDealOverrides } from "@/features/investment-os/server/deal-service";
@@ -33,6 +33,7 @@ export async function PUT(request: Request, { params }: Context): Promise<Respon
   try {
     const actor = await requireOperator();
     await assertDealRoomOwner((await params).id, actor.id);
+    if (dealRoomEnabled() && (await readDealRoom((await params).id, actor.id))?.rounds.length) return Response.json({ code: "USE_DEAL_ROOM_ANSWERS", message: "Ta analiza ma zapisane odpowiedzi. Edytuj je w module Dyrektorzy pytają Ciebie, aby zachować historię." }, { status: 409 });
   } catch (error) {
     if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     return operatorAuthorizationResponse(error);

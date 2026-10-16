@@ -38,7 +38,7 @@ export async function saveDealRoomAnswers(listingId: string, actorId: string, ra
   const answers = mergeAnswers(stored.deal, state, command, actorId, now);
   const values = answerOverrides(stored.deal, state.baselineOverrides, answers);
   const prepared = await prepareInvestmentDeal(db, listingId, values);
-  if (!prepared.value || prepared.expectedVersion !== stored.version) throw new InvestmentDealVersionConflict();
+  if (!prepared.value || prepared.expectedVersion !== stored.version || prepared.sourceUpdatedAt !== stored.sourceUpdatedAt) throw new InvestmentDealVersionConflict();
   const deal = preserveUnchangedDirectors(stored.deal, prepared.value);
   const changedFields = command.answers.map((a) => a.field), invalidated = affectedDirectors(changedFields);
   const round = { requestId: command.requestId, savedAt: now, actorId, changedFields, invalidated, before: buildDealBrain(stored.deal), after: buildDealBrain(deal) };

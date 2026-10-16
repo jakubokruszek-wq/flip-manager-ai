@@ -28,7 +28,7 @@ const TABS: Array<{ id: RoomTab; label: string }> = [
 
 const DIRECTORS = ["SCOUT", "VERIFY", "MARKET", "RENOVATION", "UNDERWRITER", "RISK / LEGAL", "CFO", "ACQUISITION", "SALE", "CEO"] as const;
 
-export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onAnalyzed }: { deal: CanonicalDeal; images?: string[]; saving: boolean; onRefresh: () => void; onSave: (overrides: DealFactOverrides) => Promise<void>; onAnalyzed?: (deal: CanonicalDeal) => void }) {
+export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onAnalyzed, error }: { deal: CanonicalDeal; images?: string[]; saving: boolean; onRefresh: () => void; onSave: (overrides: DealFactOverrides) => Promise<void>; onAnalyzed?: (deal: CanonicalDeal) => void; error?: string | null }) {
   const [activeTab, setActiveTab] = useState<RoomTab>("SUMMARY");
   const [expandedDirector, setExpandedDirector] = useState<string | null>(null);
   const title = deal.facts.street.effectiveValue || deal.facts.district.effectiveValue || "Analizowana oferta";
@@ -39,6 +39,7 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onA
   const timeline = useMemo(() => buildTimeline(deal), [deal]);
 
   return <main className="mx-auto w-full max-w-[1720px] space-y-4 px-3 pb-10 pt-3 sm:px-6 lg:px-8" data-deal-room>
+    {error ? <p role="alert" className="rounded border border-red-400/30 p-3 text-sm text-red-300">{error}</p> : null}
     <header className="border-b border-white/10 pb-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link className="inline-flex min-h-9 items-center gap-2 rounded-lg px-1 text-xs font-semibold text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-gold" href="/flip-finder"><ArrowLeft className="size-3.5" />Flip Finder <span className="text-white/25">/</span> Oferta <span className="text-white/25">/</span> <span className="text-gold">Pokój transakcji</span></Link>

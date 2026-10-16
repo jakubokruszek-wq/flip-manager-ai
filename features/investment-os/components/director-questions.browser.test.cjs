@@ -47,12 +47,12 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
   const before=current.underwriting.result.profitBase;
   const more=page.getByRole('button',{name:/Pozostałe pytania/});if(await more.count())await more.click();
-  await page.getByLabel('Odpowiedź: askingPrice',{exact:true}).fill('260000');
+  await page.getByLabel('Odpowiedź: negotiatedPrice',{exact:true}).fill('260000');
   await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
   await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();
   assert.equal(current.underwriting.result.purchasePrice,260000);assert.ok(current.underwriting.result.profitBase>before);
   await page.reload();await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();
-  assert.equal(room.answers.askingPrice.value,260000);
+  assert.equal(room.answers.negotiatedPrice.value,260000);
   const max=current.underwriting.result.maxPurchasePrice;
   const moreAgain=page.getByRole('button',{name:/Pozostałe pytania/});if(await moreAgain.count())await moreAgain.click();
   await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('100000');

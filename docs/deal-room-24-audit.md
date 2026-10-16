@@ -62,7 +62,7 @@ underwritingu nie zmienia się.
 
 | Przypadek | Celowe braki | Oczekiwany bezpieczny wynik |
 |---|---|---|
-| Górna, blok, 45 m², 300 tys. | brak KW; deklaracja negocjacji 260 tys. | aktualizacja ceny/profit/ROI; brak bezwarunkowego KUP |
+| Górna, blok, 45 m², 300 tys. | brak KW; deklaracja negocjacji 260 tys. | aktualizacja ceny zakupu/profit/ROI; cena ofertowa źródła pozostaje 300 tys.; brak bezwarunkowego KUP |
 | Ten sam syntetyczny lokal, stan nieznany | budżet remontu 100 tys. przed rezerwą | dokładny koszt, niższy zysk i Max Buy; nie udajemy kosztorysu |
 | 650 tys., 45 vs 52 m² | drogo, konflikt metrażu, brak KW | VERIFY blocked; brak bezwarunkowego KUP pomimo odpowiedzi |
 
@@ -96,3 +96,10 @@ Wyłączenie flagi jest przełącznikiem funkcji, nie usuwa danych. Przed wyłą
 w środowisku wielooperatorowym trzeba odciąć dostęp do już prywatnych analiz;
 stary globalny model dostępu nie chroni owner scope po usunięciu nowej bramki.
 Bezpieczny rollback: zatrzymać dostęp do Deal Room, zachować ledger, bez DROP.
+
+Checkpoint finansowy: cena wynegocjowana jest odrębnym założeniem
+`negotiatedPrice`, przekazanym jako istniejący `priceOverride` underwritingu.
+Nie zmieniamy źródłowej ceny ofertowej ani nie usuwamy konfliktu faktów.
+Zmiana listing.updated_at przed zapisem rundy wymaga jawnego odświeżenia
+analizy przyciskiem (POST initialize); GET nadal nigdy nie przelicza ani zapisuje.
+Legacy panel korekt nie może nadpisać wartości należących do istniejącej rundy.
