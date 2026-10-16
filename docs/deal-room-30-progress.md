@@ -69,3 +69,42 @@ Use only an independently verified isolated environment with the existing Q&A dr
 ### Next implementation checkpoint
 
 Continue from PR #31 HEAD (confirm SHA via Git, do not hardcode a stale documentation-commit SHA). Do not rerun the successful code suite for docs-only updates. Next deliverable is a small reviewed legal/model contract: explicit tax regime, property/activity qualification, dated statutory provisions/amendments and applicability, VAT entitlement and gross/net bases, income and withdrawal allocation, payment schedule and independent numeric test vectors. PRIVATE/JDG/SP_ZOO estimates must remain UNKNOWN until their selected contract is complete; unsupported forms remain unmodelled. No automatic tax-free private sale, threshold selection or deduction. No merges/deployments/migrations/production actions are authorized.
+
+## P2b.2 in progress — 2026-10-16
+
+New worktree `/workspace/flip-deal-tax-model`, branch `feat/deal-room-tax-model`, based on clean PR #31 tree `b5d05400a65d0c8cc4c86230081f9bb327ac3f65`. Original PRs/worktrees and ZIP preserved. Source/calculation contract committed as `8bcf53b`; see `docs/deal-room-30-p2b2-model.md` for current Sejm texts, replaced VAT consolidation, known dates, applicability gaps and independent numeric vectors.
+
+Implemented bounded conditional arithmetic for explicit PRIVATE PIT19, JDG linear PIT19, classical company CIT19, separate natural-person dividend PIT19, alternative PCC2/PCC6, invoice gross VAT23/VAT8. New `DEAL_ROOM_TAX_ARITHMETIC_ENABLED` OFF, additionally requires existing CFO/TAX_REVIEW projection. Typed rule/base answers use existing immutable Q&A/CAS/receipt and invalidate dependent CEO. Scenario mismatch/unsupported input -> no arithmetic. Integer cents, full-PLN base/tax rounding, no implicit exemption, no tax deduction or cost mutation. Actual liabilities and all after-tax project outputs remain UNKNOWN because a full effective-period/qualification model is not yet verified. This is not a completed P2b.2 tax-liability engine.
+
+Local pure tests 8/8 PASS. Full TypeScript/lint/build/Node/PG/API/mobile tests pending on the new PR. Added native API checks for arithmetic answer persistence/replay, CEO fingerprint, withdrawal and no manufactured net profit. Do not claim these pending checks PASS yet.
+
+Resume: inspect clean/WIP status in the new worktree; check new stacked PR CI before rerunning anything; fix actual failures. Then continue the amendment/transition and transaction eligibility audit, define evidence-qualified bases, VAT entitlement, contributions and payout timing. Do not release automatic net cash/ROI/Max Buy while UNKNOWN. No credit monitor or persistent wake-up is available.
+
+## P2b.2 checkpoint — tested bounded stage, full tax model NOT complete
+
+Draft PR #32: https://github.com/jakubokruszek-wq/flip-manager-ai/pull/32, stacked base `feat/deal-room-tax-scenarios` / #31. Worktree `/workspace/flip-deal-tax-model`, branch `feat/deal-room-tax-model`.
+
+Runtime code tested: local `dad6196`, remote `f7a8f45f726b92c220df2e761820310fd09d5a90`, exact tree `2029af0c130aed96283e7df349904a85a685d96e`. Subsequent changes are Markdown only [skip ci]; original local commits preserved and each Git Data API publication checked against the local tree.
+
+[CI run 38887999924](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38887999924), all 3 jobs SUCCESS:
+- Full TypeScript and Next.js build PASS; scoped Deal Room ESLint PASS, 0 errors / 2 existing warnings.
+- 142/142 Node PASS (includes 8 pure tax tests and CFO answer/dependency regression).
+- Independent Python Decimal oracle: 80/80 vectors PASS, in CI and locally. This is arithmetic verification, not tax qualification.
+- 8/8 isolated PostgreSQL CAS/owner/replay/rollback/RLS/grants PASS.
+- Native API → services → PostgREST → isolated PostgreSQL composite 1/1 PASS, including conditional basis answer, persistence, immutable replay, changed CEO and withdrawal removing arithmetic. No fabricated net profit.
+- 4/4 browser regressions PASS. Extended mobile Q&A supplies tax facts, JDG linear rule and separate basis, saves/reloads conditional 19000 PLN, checks unchanged cash ledger / UNKNOWN net / HOLD / no overflow. Browser auth/API transport is mocked; actual database flow is tested separately, not one authenticated browser-to-DB test.
+- Existing local market/Radar regressions: 97/97 PASS.
+
+First CI failed because the new API test redeclared `withdrawn`; fixed in local `8d05756` / remote `210b810ee91deeecc038477ba62a48a8c137cf5e`. The final run above verifies the fix. Intermediate superseded runs are not the basis for PASS claims.
+
+### Exact remaining scope / no false completion
+
+This delivery verifies explicit rate arithmetic and the existing answer/reanalysis flow. It DOES NOT complete the requested effective-period/eligibility model for real PRIVATE/JDG/SP_ZOO liabilities. No complete amendment/transition interval is certified; effectiveFrom/effectiveTo and actualLiability stay null. Classification of the particular flip, eligible income bases/costs, VAT rights/adjustments, contributions and solidarity, CIT9/Estonian conditions, lawful distributions/investor contracts and payment dates still need modelling and independent legal/numeric fixtures. Therefore net project profit, payout, post-tax cash-flow, ROI, Max Buy, break-even and stress remain UNKNOWN. No accountant/legal review is represented as performed.
+
+No physical phone, actual tax return, production DB or live service test was performed. No migration/grant/schema change, deployment, merge, Watcher/OLX/Cloudflare/Render or paid service. All new flags OFF by default.
+
+### Resume without repeating completed tests
+
+“Wznów Issue #30 P2b.2 od docs/deal-room-30-progress.md na feat/deal-room-tax-model / Draft PR #32. Sprawdź aktualny HEAD i status, zachowaj wszystkie commity. Nie powtarzaj zielonego CI 38887999924 dla zmian Markdown. Kontynuuj brakujący model okresów obowiązywania i kwalifikacji według docs/deal-room-30-p2b2-model.md. Nie traktuj CONDITIONAL_ARITHMETIC jako zobowiązania. Najpierw zweryfikuj ustawowe warunki/podstawy i niezależne wzorce; dopiero potem połącz z cash-flow i przeliczaniem kandydatów Max Buy/stres. Bez zgadywania, produkcji, merge i deploymentu.”
+
+The toolset still has no credit-balance/renewal API or persistent wake-up. No fictitious background monitor was started. No credit exhaustion was observed in this stage; this checkpoint records the actual incomplete boundary rather than claiming quota failure or a complete tax engine.

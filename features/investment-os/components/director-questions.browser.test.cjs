@@ -79,5 +79,25 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   await page.getByLabel('Odpowiedź: taxScenario',{exact:true}).fill('JDG');await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
   await page.waitForFunction(()=>document.querySelector('[aria-label="Rekomendacja przed i po odpowiedziach"]')?.textContent.includes('taxScenario'));
   await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'Podatki — nieustalone'}).waitFor();assert.equal(room.answers.taxScenario.value,'JDG');assert.equal(current.underwriting.result.cfo.netProfit,null);assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED='true';t.after(()=>delete process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED);
+  current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,room.answers)});
+  const taxLedgerBefore=JSON.stringify(current.underwriting.result.cfo.selected.months);
+  for(const fields of [
+    {taxAcquiredOn:'2026-01-01',taxSaleOn:'2026-10-16',taxActivity:'Syntetyczny scenariusz do kwalifikacji',taxVatStatus:'Nieustalone — brak prawa do automatycznego odliczenia',taxCosts:'Odrębna podstawa do sprawdzenia'},
+    {taxOtherIncome:'Wpływ nieustalony',taxEvidence:'Źródła Sejm w dokumentacji, kwalifikacja niepotwierdzona',taxRule:'JDG_LINEAR19',taxRuleBase:'100000.00'}
+  ]) {
+    await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
+    const moreTax=page.getByRole('button',{name:/Pozostałe pytania/});if(await moreTax.count())await moreTax.click();
+    for(const [field,value] of Object.entries(fields))await page.getByLabel(`Odpowiedź: ${field}`,{exact:true}).fill(value);
+    const version=room.version;await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+    for(let i=0;i<100 && room.version===version;i++)await page.waitForTimeout(50);
+    assert.equal(room.version,version+1);
+  }
+  await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();
+  await page.getByText(/Wyłącznie warunkowa arytmetyka: JDG_LINEAR19/).waitFor();
+  assert.equal(room.answers.taxRuleBase.value,'100000.00');assert.equal(current.underwriting.result.cfo.taxReview.conditional.amountPLN,19000);
+  assert.equal(current.underwriting.result.cfo.taxReview.conditional.actualLiabilityPLN,null);assert.equal(current.underwriting.result.cfo.netProfit,null);assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');
+  assert.equal(JSON.stringify(current.underwriting.result.cfo.selected.months),taxLedgerBefore);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });

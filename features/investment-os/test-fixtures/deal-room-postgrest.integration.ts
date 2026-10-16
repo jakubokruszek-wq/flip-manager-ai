@@ -126,6 +126,15 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   const taxInitial=await refreshMarket();assert.equal(taxInitial.underwriting.result.cfo.taxReview.status,"UNKNOWN");
   const taxCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxScenario",kind:"VALUE",value:"SP_ZOO",basis:"ASSUMPTION",evidenceUrl:null},{field:"taxAcquiredOn",kind:"VALUE",value:"2026-01-01",basis:"DECLARATION",evidenceUrl:null}]};
   const taxResponse=await answersApi.POST(request(taxCommand),context);assert.equal(taxResponse.status,200,await taxResponse.clone().text());const taxSaved=await taxResponse.json();assert.equal(taxSaved.deal.underwriting.result.cfo.taxReview.scenario,"SP_ZOO");assert.equal(taxSaved.deal.underwriting.result.cfo.netProfit,null);assert.equal(taxSaved.deal.ceo.result.action,"HOLD / ZBIERZ DANE");assert.notEqual(taxSaved.deal.ceo.inputFingerprint,taxInitial.ceo.inputFingerprint);assert.deepEqual(await (await answersApi.POST(request(taxCommand),context)).json(),taxSaved);assert.equal((await current()).answers.taxScenario.value,"SP_ZOO");
+  process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED="true";
+  const arithmeticInitial=await refreshMarket();
+  const arithmeticCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxRule",kind:"VALUE",value:"COMPANY_CIT19",basis:"ASSUMPTION",evidenceUrl:null},{field:"taxRuleBase",kind:"VALUE",value:"100000.00",basis:"ASSUMPTION",evidenceUrl:null}]};
+  const arithmeticResponse=await answersApi.POST(request(arithmeticCommand),context);assert.equal(arithmeticResponse.status,200,await arithmeticResponse.clone().text());const arithmeticSaved=await arithmeticResponse.json();
+  assert.equal(arithmeticSaved.deal.underwriting.result.cfo.taxReview.conditional.amountPLN,19000);assert.equal(arithmeticSaved.deal.underwriting.result.cfo.taxReview.conditional.actualLiabilityPLN,null);assert.equal(arithmeticSaved.deal.underwriting.result.cfo.netProfit,null);assert.notEqual(arithmeticSaved.deal.ceo.inputFingerprint,arithmeticInitial.ceo.inputFingerprint);
+  assert.deepEqual(await (await answersApi.POST(request(arithmeticCommand),context)).json(),arithmeticSaved);assert.equal((await current()).answers.taxRuleBase.value,"100000.00");
+  const withdrawRule={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxRuleBase",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
+  const arithmeticWithdrawn=await answersApi.POST(request(withdrawRule),context);assert.equal(arithmeticWithdrawn.status,200);assert.equal((await arithmeticWithdrawn.json()).deal.underwriting.result.cfo.taxReview.conditional,null);
+  process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED="false";
   process.env.DEAL_ROOM_TAX_REVIEW_ENABLED="false";
   process.env.DEAL_ROOM_CFO_ENABLED="false";
   process.env.DEAL_ROOM_RADAR_ENABLED="false";
