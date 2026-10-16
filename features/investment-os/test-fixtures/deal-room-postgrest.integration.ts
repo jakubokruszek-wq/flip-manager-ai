@@ -233,6 +233,7 @@ test("virtual TEST API/DB: no production tables, all owner/flag gates, dedicated
   assert.equal((await dealApi.GET(new Request(origin),c)).status,404,"ordinary route NEVER accepts virtual ID");
   assert.equal((await initializeApi.POST(request({},"/initialize"),c)).status,404);
   assert.equal((await answersApi.GET(new Request(origin+"/answers"),c)).status,404,"even when real QA is OFF");
+  assert.equal((await dealApi.PUT(new Request(origin,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({overrides:{}})}),c)).status,404);
   const state=(await (await answers.GET(req("/"+item.id+"/answers"),c)).json()).room;
   const command={requestId:randomUUID(),expectedVersion:state.version,answers:[{field:"renovationBudget",kind:"VALUE",value:40000,basis:"ASSUMPTION",evidenceUrl:null},{field:"financingMode",kind:"VALUE",value:"CASH",basis:"ASSUMPTION",evidenceUrl:null},{field:"taxScenario",kind:"VALUE",value:"JDG",basis:"ASSUMPTION",evidenceUrl:null}]};
   dropTestCommit=true;assert.equal((await answers.POST(req("/"+item.id+"/answers","POST",command),c)).status,503);
@@ -253,7 +254,7 @@ test("virtual TEST API/DB: no production tables, all owner/flag gates, dedicated
  const c=ctx(cases[0].id);
  for(const patch of [{DEAL_ROOM_TEST_ENABLED:"false"},{DEAL_ROOM_TEST_OPERATOR_IDS:""},{DEAL_ROOM_TEST_OPERATOR_IDS:"invalid"},{DEAL_ROOM_TEST_STORAGE_VERSION:""}]){
   const prev={...process.env};Object.assign(process.env,patch);
-  assert.equal((await deal.GET(req("/"+cases[0].id),c)).status,404);assert.equal((await answers.GET(req("/"+cases[0].id+"/answers"),c)).status,404);assert.equal((await history.GET(req("/"+cases[0].id+"/history"),c)).status,404);assert.equal((await api.POST(req("","POST"))).status,404);
+  assert.equal((await api.GET(req())).status,404);assert.equal((await initialize.POST(req("/"+cases[0].id+"/initialize","POST"),c)).status,404);assert.equal((await answers.POST(req("/"+cases[0].id+"/answers","POST",{}),c)).status,404);assert.equal((await deal.GET(req("/"+cases[0].id),c)).status,404);assert.equal((await answers.GET(req("/"+cases[0].id+"/answers"),c)).status,404);assert.equal((await history.GET(req("/"+cases[0].id+"/history"),c)).status,404);assert.equal((await api.POST(req("","POST"))).status,404);
   for(const key of Object.keys(patch))if(prev[key]===undefined)delete process.env[key];else process.env[key]=prev[key];
  }
  // Missing migration/contract must fail CLOSED, not use real data tables.

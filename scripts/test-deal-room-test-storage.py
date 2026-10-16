@@ -59,4 +59,27 @@ class TestStore(unittest.TestCase):
    with self.assertRaises(psycopg.errors.CheckViolation):c.execute('insert into deal_room_test_cases(owner_id,case_id,deal,state) values (%s,%s,%s,%s)',(self.owner,'deadbeef-'+str(uuid.uuid4())[9:],Jsonb({}),Jsonb({})))
   self.deal['ceo']['result']['action']='KUP'
   with self.assertRaisesRegex(psycopg.Error,'TEST_INVALID'):self.commit()
+ def test_lossless_revoke_rollback(self):
+  with psycopg.connect(DSN) as c:
+   before=c.execute('select deal,state,version from deal_room_test_cases where owner_id=%s and case_id=%s',(self.owner,self.case)).fetchone()
+   sql=(ROOT/'supabase/drafts/deal-room-test-rollback.sql').read_text().replace('begin;','').replace('commit;','')
+   c.execute(sql);c.execute('set local role service_role')
+   self.assertEqual(c.execute('select count(*) from deal_room_test_cases where owner_id=%s',(self.owner,)).fetchone()[0],1)
+   for statement in ['select deal_room_test_contract()',"update deal_room_test_cases set version=version+1"]:
+    c.execute('savepoint denial')
+    with self.assertRaises(psycopg.errors.InsufficientPrivilege):c.execute(statement)
+    c.execute('rollback to savepoint denial')
+   c.execute('reset role')
+   self.assertEqual(c.execute('select deal,state,version from deal_room_test_cases where owner_id=%s and case_id=%s',(self.owner,self.case)).fetchone(),before)
+   c.rollback() # Restore grants for other isolated tests; no data deletion.
+ def test_standalone_without_real_qa_migration(self):
+  standalone=DSN.replace('dbname=deal_room_test ','dbname=deal_room_virtual_only ')
+  with psycopg.connect(DSN,autocommit=True) as c:c.execute('create database deal_room_virtual_only')
+  with psycopg.connect(standalone,autocommit=True) as c:
+   c.execute("create schema auth;create table auth.users(id uuid primary key,raw_app_meta_data jsonb not null default '{}'::jsonb)")
+   self.assertIsNone(c.execute("select to_regprocedure('public.deal_room_test_contract()')").fetchone()[0])
+   c.execute((ROOT/'supabase/drafts/deal-room-test-storage.sql').read_text())
+   self.assertIsNone(c.execute("select to_regclass('public.listings')").fetchone()[0]);self.assertIsNone(c.execute("select to_regclass('public.deals')").fetchone()[0])
+   c.execute((ROOT/'supabase/drafts/deal-room-test-preflight.sql').read_text())
+   c.execute('set role service_role');self.assertEqual(c.execute('select deal_room_test_contract()').fetchone()[0],1)
 if __name__=='__main__':unittest.main(verbosity=2)
