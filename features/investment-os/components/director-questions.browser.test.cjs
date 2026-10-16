@@ -70,7 +70,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
   await page.waitForFunction(()=>document.querySelector('[aria-label="Rekomendacja przed i po odpowiedziach"]')?.textContent.includes('equity'));
   assert.equal(current.underwriting.result.cfo.selected.mode,'CASH');assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');
-  await page.reload();await page.getByRole('button',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'CFO — płynność i finansowanie'}).waitFor();
+  await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'CFO — płynność i finansowanie'}).waitFor();
   assert.equal(room.answers.equity.value,500000);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });
