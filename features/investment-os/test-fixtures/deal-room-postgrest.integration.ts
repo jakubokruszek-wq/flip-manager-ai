@@ -164,7 +164,7 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   const decisions=await db.from("ceo_decisions").select("user_facing_action").order("created_at",{ascending:false}).limit(1); assert.ifError(decisions.error);
   assert.equal(decisions.data?.[0]?.user_facing_action,"ODRZUC","persisted CEO action must preserve a hard reject");
 });
-test("three isolated Finder listings: high profit, thin margin, hard reject; full director loop and general fallback",async()=>{
+test("three isolated Finder listings: high profit, thin margin, hard reject; full director loop and general fallback",async(t)=>{
  const {buildDealBrain,BRAIN_DIRECTORS}=await import("../brain/index");actor=owner;
  process.env.DEAL_ROOM_QA_ENABLED="true";process.env.DEAL_ROOM_CFO_ENABLED="true";process.env.DEAL_ROOM_RADAR_ENABLED="true";
  const template=await db.from("listings").select("*").eq("id",id).single();assert.ifError(template.error);
@@ -182,6 +182,7 @@ test("three isolated Finder listings: high profit, thin margin, hard reject; ful
   const cmd={requestId:randomUUID(),expectedVersion:room.version,answers:Object.entries(values).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
   const saved=await answersApi.POST(make(cmd,"/answers"),caseContext);assert.equal(saved.status,200,await saved.clone().text());const receipt=await saved.json();assert.deepEqual(await (await answersApi.POST(make(cmd,"/answers"),caseContext)).json(),receipt);
   const refreshed=await initializeApi.POST(make({},"/initialize"),caseContext);assert.equal(refreshed.status,200);const deal=(await refreshed.json()).deal,brain=buildDealBrain(deal);
+  t.diagnostic(JSON.stringify({syntheticCase:["high_profit","thin_margin","hard_reject"][i],purchasePrice:price,profitBeforeTax:deal.underwriting.result?.cfo?.selected?.projectProfitBeforeTax??null,ceo:deal.ceo.result?.action,comparisons:deal.market.result?.compCount,marketSource:deal.market.result?.sourceLabel}));
   for(const director of BRAIN_DIRECTORS)assert.ok(brain.directors[director]);assert.equal(deal.market.result.assumptionMatchedBy,"PRICE_RADAR");assert.equal(deal.facts.askingPrice.effectiveValue,price);assert.notEqual(deal.ceo.result.action,"KUP");
   if(i===2){assert.equal(deal.ceo.result.action,"ODRZUĆ");assert.equal(brain.ceo.decision,"REJECT");continue;}
   results.push(deal.underwriting.result.cfo.selected.projectProfitBeforeTax);
@@ -198,5 +199,5 @@ test("three isolated Finder listings: high profit, thin margin, hard reject; ful
    const restored=await db.from("price_radar_listings").update({excluded_at:null,excluded_reason:null}).eq("owner_id",owner).lte("price_per_sqm",9600);assert.ifError(restored.error);
   }
  }
- assert.ok(results[0]>100000);assert.ok(Math.abs(results[1])<80000);assert.ok(results[0]>results[1]+75000);
+ assert.ok(results[0]>100000);assert.ok(results[1]>0&&results[1]<20000,"thin-margin fixture must have a small POSITIVE operating profit");assert.ok(results[0]>results[1]+75000);
 });

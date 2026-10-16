@@ -20,7 +20,7 @@ test("three Łódź deals retain all directors, distinguish high/small margins a
   assert.ok(next.underwriting.result!.cfo!.selected!.projectProfitBeforeTax!<profit!);assert.notEqual(next.underwriting.inputFingerprint,first.underwriting.inputFingerprint);assert.notEqual(next.ceo.inputFingerprint,first.ceo.inputFingerprint);assert.equal(next.market.inputFingerprint,first.market.inputFingerprint);assert.equal(next.underwriting.result?.cfo?.jdgTax?.pit,null);
   for(const d of ["RENOVATION","UNDERWRITER","CFO","CEO"] as const)assert.ok(affectedDirectors(["renovationBudget"]).includes(d));
  }
- assert.ok(profits[0]>100000);assert.ok(Math.abs(profits[1])<80000);assert.ok(profits[0]>profits[1]+75000);
+ assert.ok(profits[0]>100000);assert.ok(profits[1]>0&&profits[1]<50000);assert.ok(profits[0]>profits[1]+75000);
  }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
 });
 test("insufficient Radar uses existing indicative general fallback, never a fabricated confident valuation",()=>{
