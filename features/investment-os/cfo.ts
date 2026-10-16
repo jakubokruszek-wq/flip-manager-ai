@@ -20,7 +20,7 @@ export function analyseCfo(input:UnderwritingInput,settings:UnderwritingSettings
   if((params.renovationMonths??1)>months)missing.push("renovationMonths");
   if(mode==="LOAN" && !["ANNUITY","INTEREST_ONLY"].includes(params.loanSchedule??""))missing.push("loanSchedule");
   const existing=calculateUnderwriting(input,baseSettings);
-  const u=calculateUnderwriting({...input,priceOverride:priceOverride??input.priceOverride,holdingMonthsOverride:months,renovationTotalOverride:existing.renovationTotal===null?null:existing.renovationTotal*renoFactor,resalePerM2Override:(input.resalePerM2Override??input.resalePerM2.base??0)*saleFactor},baseSettings);
+  const u=calculateUnderwriting({...input,priceOverride:priceOverride??input.priceOverride,holdingMonthsOverride:months,renovationTotalOverride:existing.renovationTotal===null?null:existing.renovationTotal*renoFactor,resalePerM2Override:(input.resalePerM2Override??input.resalePerM2?.base??0)*saleFactor},baseSettings);
   if(u.purchasePrice===null||u.renovationTotal===null||u.totalProjectCost===null||u.scenarios.base.resaleValue===null)missing.push("economics");
   if((params.deposit??0)>(u.purchasePrice??0))missing.push("deposit");
   if(mode==="LOAN" && (params.loanAmount??0)>(u.purchasePrice??0))missing.push("loanAmount");
