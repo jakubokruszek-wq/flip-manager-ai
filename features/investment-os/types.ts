@@ -275,6 +275,7 @@ export type BuildDealInput = {
   settings: UnderwritingSettings;
   now: string;
   createdAt?: string;
+  overrideObservedAt?: string;
   policy?: InvestmentDecisionPolicy;
   requestedAnalysisLevel?: AnalysisLevel;
   directorTrackRecords?: DirectorTrackRecord[];

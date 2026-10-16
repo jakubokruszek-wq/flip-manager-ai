@@ -7,7 +7,7 @@ export type AnswerKind = "VALUE" | "UNKNOWN" | "LATER" | "WITHDRAW";
 export type AnswerInput = { field: string; kind: AnswerKind; value: string | number | null; basis: "DECLARATION" | "ASSUMPTION" | "DOCUMENT_REFERENCE"; evidenceUrl: string | null };
 export type SavedAnswer = AnswerInput & { questionId: string; actorId: string; savedAt: string; sourceFingerprint: string; status: "RESOLVED" | "NEEDS_EVIDENCE" | "OPEN"; transitions: string[] };
 export type AnswerRound = { requestId: string; savedAt: string; actorId: string; changedFields: string[]; invalidated: BrainDirectorId[]; before: ReturnType<typeof buildDealBrain>; after: ReturnType<typeof buildDealBrain> };
-export type DealRoomState = { version: number; answers: Record<string, SavedAnswer>; baselineOverrides: DealFactOverrides; rounds: AnswerRound[] };
+export type DealRoomState = { version: number; answers: Record<string, SavedAnswer>; baselineOverrides: DealFactOverrides; baselineMarketObservedAt?: string; rounds: AnswerRound[] };
 export type AnswerCommand = { requestId: string; expectedVersion: number; answers: AnswerInput[] };
 export class DealRoomInputError extends Error {}
 export class DealRoomNotFound extends Error {}

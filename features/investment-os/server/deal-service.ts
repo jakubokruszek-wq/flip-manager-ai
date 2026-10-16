@@ -54,14 +54,14 @@ export async function initializeInvestmentDeal(listingId: string, actorId?: stri
   return deal;
 }
 
-export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminClient>, listingId: string, overrideValues?: DealFactOverrides, actorId?: string): Promise<VersionedDealCandidate<CanonicalDeal | null>> {
+export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminClient>, listingId: string, overrideValues?: DealFactOverrides, actorId?: string, overrideObservedAt?: string): Promise<VersionedDealCandidate<CanonicalDeal | null>> {
       const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
       if (error) throw error;
       if (!listing) return { value: null, expectedVersion: 0, sourceUpdatedAt: null, unchanged: true };
       const existing = await readStoredDeal(db, listingId);
       if (existing?.ownerId && existing.ownerId !== actorId) throw new DealRoomNotFound();
       const dealId = existing?.deal.id ?? crypto.randomUUID();
-      const overridesResult = existing ? await db.from("deal_fact_overrides").select("values").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
+      const overridesResult = existing ? await db.from("deal_fact_overrides").select("values,updated_at").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
       if (overridesResult.error) throw overridesResult.error;
       const settings = await loadSettings(db);
       const { data: latestSnapshot, error: snapshotError } = await db.from("listing_snapshots").select("id,captured_at,price,raw_data").eq("listing_id", listingId).order("captured_at", { ascending: false }).limit(1).maybeSingle();
@@ -71,12 +71,12 @@ export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminCli
       const market = await resolveMarketEvidence(db, listingInput);
       const trackRecords = await loadDirectorTrackRecords(db);
       const now = new Date().toISOString();
-      const buildInput = { dealId, listing: listingInput, overrides: overrideValues ?? object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords };
+      const buildInput = { overrideObservedAt: overrideObservedAt ?? text(overridesResult.data?.updated_at) ?? undefined, dealId, listing: listingInput, overrides: overrideValues ?? object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords };
       let deal = buildCanonicalDeal(buildInput);
       if (!overrideValues && existing && process.env.DEAL_ROOM_QA_ENABLED === "true") {
         const { data: workspace, error: workspaceError } = await db.from("deal_room_workspaces").select("state").eq("deal_id", dealId).maybeSingle();
         if (workspaceError) throw workspaceError;
-        if (workspace) { const state = workspace.state as DealRoomState; deal = buildCanonicalDeal({ ...buildInput, overrides: answerOverrides(deal, state.baselineOverrides, state.answers) }); }
+        if (workspace) { const state = workspace.state as DealRoomState; deal = buildCanonicalDeal({ ...buildInput, overrides: answerOverrides(deal, state.baselineOverrides, state.answers), overrideObservedAt: state.answers.resalePerM2?.kind === "VALUE" ? state.answers.resalePerM2.savedAt : state.baselineMarketObservedAt }); }
       }
       if (existing) deal = preserveUnchangedDirectors(existing.deal, deal);
       const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");

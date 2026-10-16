@@ -7,7 +7,7 @@ const actor = "33333333-3333-4333-8333-333333333333", requestId = "44444444-4444
 const state = (): DealRoomState => ({ version: 1, answers: {}, rounds: [], baselineOverrides: { holdingMonths: 5 } });
 const answer = (field: string, value: number | string): AnswerInput => ({ field, kind: "VALUE", value, basis: "DECLARATION", evidenceUrl: null });
 function apply(answers: AnswerInput[], base = lodzDeal()) {
-  const before = buildCanonicalDeal(base), room = state(), command = parseAnswerCommand({ requestId, expectedVersion: 1, answers });
+  const before = buildCanonicalDeal(base), room = { ...state(), baselineOverrides: { ...base.overrides, ...state().baselineOverrides } }, command = parseAnswerCommand({ requestId, expectedVersion: 1, answers });
   const merged = mergeAnswers(before, room, command, actor, base.now), overrides = answerOverrides(before, room.baselineOverrides, merged);
   return { before, merged, overrides, after: preserveUnchangedDirectors(before, buildCanonicalDeal({ ...base, overrides, now: "2026-10-15T12:05:00.000Z" })) };
 }
@@ -97,4 +97,12 @@ test("existing resale and additional-cost controls remain available after Q&A ow
   assert.equal(after.market.result?.resalePricePerM2Base,10500);
   assert.equal(after.market.result?.priceEvidenceType,"USER_ASSUMPTION");
   assert.notEqual(after.ceo.result?.action,"KUP");
+});
+
+test("a nonfinancial note does not refresh the date or reset a manual resale assumption", () => {
+  const base = lodzDeal();
+  const { before, after } = apply([answer("legalStatus", "Czekam na dokument")], { ...base, overrides: { holdingMonths: 5, resalePerM2: 10000 }, overrideObservedAt: base.now });
+  assert.equal(after.market, before.market);
+  assert.equal(after.underwriting, before.underwriting);
+  assert.equal(after.market.result?.observedAt, base.now);
 });
