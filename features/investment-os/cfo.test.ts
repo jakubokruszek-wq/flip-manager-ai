@@ -47,6 +47,10 @@ test("bounded PRIVATE model integrates Q&A, reanalyzes all dependent directors a
   assert.equal(next.market.inputFingerprint,first.market.inputFingerprint);assert.equal(next.verify.inputFingerprint,first.verify.inputFingerprint);assert.deepEqual(next.underwriting.result?.cfo?.variants,first.underwriting.result?.cfo?.variants);
   const changed=affectedDirectors(["privateImprovements"]);assert.ok(changed.includes("CFO"));assert.ok(changed.includes("CEO"));
   const without=buildCanonicalDeal({...base,overrides:{...answerOverrides(first,base.overrides,answers),privateVat:null}});assert.equal(without.underwriting.result?.cfo?.privateTax?.pit,null);
+  const priceCommand=parseAnswerCommand({requestId:crypto.randomUUID(),expectedVersion:2,answers:[{field:"negotiatedPrice",kind:"VALUE",value:260000,basis:"ASSUMPTION",evidenceUrl:null}]});
+  const changedAnswers=mergeAnswers(next,{...state,version:2,answers},priceCommand,"synthetic",base.now);
+  assert.equal(changedAnswers.privatePcc.kind,"LATER");assert.ok(changedAnswers.privatePcc.transitions.includes("INVALIDATED_BY_CASE_CHANGE"));
+  const changedDeal=buildCanonicalDeal({...base,overrides:answerOverrides(next,base.overrides,changedAnswers)});assert.equal(changedDeal.underwriting.result?.cfo?.privateTax?.status,"UNKNOWN");
   process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="false";assert.throws(()=>parseAnswerCommand(cmd),/wyłączony/);assert.equal(buildCanonicalDeal(base).underwriting.result?.cfo?.privateTax,undefined);
  }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
 });

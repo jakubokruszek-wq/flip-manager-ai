@@ -88,6 +88,12 @@ export function mergeAnswers(deal: CanonicalDeal, state: DealRoomState, command:
     const numericValue = Boolean(numeric[answer.field]) || ["financingMode","loanSchedule","costScope"].includes(answer.field);
     result[answer.field] = { ...answer, questionId: `brain-question:${deal.id}:${answer.field}`, actorId, savedAt: now, sourceFingerprint: answerSourceFingerprint(deal, answer.field), status: answer.kind !== "VALUE" ? "OPEN" : numericValue ? "RESOLVED" : "NEEDS_EVIDENCE", transitions: answer.kind !== "VALUE" ? ["OPEN"] : ["OPEN", "ANSWERED", numericValue ? "RESOLVED" : "NEEDS_EVIDENCE"] };
   }
+  // Qualification belongs to the current financial case. Do not reuse earlier legal/cost
+  // declarations after a price, budget, horizon, source-value or financing answer changes.
+  if(process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED==="true" && command.answers.some(a=>["negotiatedPrice","askingPrice","areaM2","renovationBudget","holdingMonths","financingMode","equipment","additionalCosts","resalePerM2","taxScenario","taxAcquiredOn","taxSaleOn"].includes(a.field))) {
+    const explicitlyReconfirmed=new Set(command.answers.map(a=>a.field));
+    for(const field of Object.keys(PRIVATE_TAX_LABELS))if(result[field]&&!explicitlyReconfirmed.has(field))result[field]={...result[field],kind:"LATER",status:"OPEN",savedAt:now,actorId,transitions:[...result[field].transitions,"INVALIDATED_BY_CASE_CHANGE"]};
+  }
   return result;
 }
 export function answerOverrides(deal: CanonicalDeal, baseline: DealFactOverrides, answers: Record<string, SavedAnswer>): DealFactOverrides {

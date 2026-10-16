@@ -51,3 +51,5 @@ A separate Python Decimal implementation cross-checks complete income/cost/PCC/o
 | SP_ZOO | UNKNOWN: classical/Estonian regime, reduced-rate conditions, company base vs accounting profit, shareholder identity/residence, company-law distribution and investor terms/timing. No automatic dividend on sale receipts or capital. |
 
 No new rates are added. Switch PRIVATE flag off and explicitly refresh to remove projection; Q&A/immutable receipts remain. Existing projections and statutory form are not rewritten. Nothing here enables a production feature, migrates a schema or changes Radar/Watcher/OLX.
+
+A change to price, area, resale, budget, horizon, financing or tax dates/scenario reopens stored private-case declarations (unless explicitly reconfirmed in the same command). The immutable prior receipt is retained. The next model is UNKNOWN until prerequisites are reconfirmed; a former qualification cannot silently survive a new economic case.
