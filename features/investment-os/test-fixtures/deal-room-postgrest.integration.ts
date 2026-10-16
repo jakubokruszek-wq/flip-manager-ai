@@ -31,6 +31,10 @@ async function current() { const response = await answersApi.GET(new Request(ori
 test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, replay, response loss and owner isolation", async () => {
   for (let i=0;i<40;i++) { const probe = await db.from("deals").select("id").limit(1); if (!probe.error) break; if (i===39) throw probe.error; await new Promise((r)=>setTimeout(r,250)); }
   process.env.DEAL_ROOM_QA_ENABLED = "true";
+  process.env.DEAL_ROOM_RADAR_ENABLED="true";
+  const unowned=await initializeApi.POST(request({},"/initialize"),context); assert.equal(unowned.status,200,await unowned.clone().text());
+  assert.equal((await unowned.json()).deal.market.status,"BLOCKED","unowned shared deals must not persist private Radar evidence");
+  process.env.DEAL_ROOM_RADAR_ENABLED="false";
   const init = await initializeApi.POST(request({},"/initialize"),context);
   assert.equal(init.status,200,await init.clone().text());
   const initial = (await init.json()).deal, baseProfit=initial.underwriting.result.profitBase;

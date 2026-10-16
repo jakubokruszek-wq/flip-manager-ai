@@ -30,5 +30,7 @@ with fixture['psycopg'].connect(fixture['DSN'], autocommit=True) as c:
     c.execute("insert into price_radar_settings(owner_id,filters) values ('33333333-3333-4333-8333-333333333333', '{\"districts\":[\"Górna\"],\"market\":\"secondary\"}')")
     c.execute('''insert into price_radar_listings(owner_id,source,external_listing_id,original_url,normalized_url,title,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash)
       select '33333333-3333-4333-8333-333333333333','otodom',i::text,'https://www.otodom.pl/pl/oferta/test-ID'||i,'https://www.otodom.pl/pl/oferta/test-ID'||i,'Syntetyczny lokal',(9000+i*50)*45,45,9000+i*50,2,'Łódź','Górna','blok','secondary','fresh_renovation',i::text from generate_series(1,20) i''')
+    c.execute('''insert into price_radar_listings(owner_id,source,external_listing_id,original_url,normalized_url,title,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash)
+      select '55555555-5555-4555-8555-555555555555',source,external_listing_id,original_url,normalized_url,title,price*2,area,price_per_sqm*2,rooms,city,district,building_type,market_type,renovation_status,content_hash from price_radar_listings where owner_id='33333333-3333-4333-8333-333333333333'''')
     c.execute("notify pgrst, 'reload schema'")
 print('Isolated service fixture ready; no production records or keys used.')
