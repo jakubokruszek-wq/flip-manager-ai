@@ -1,0 +1,6 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { buildTaxReview,validTaxDate,TAX_SOURCES } from "./tax-review";
+test("no chosen form, missing facts or links can manufacture tax/net/distribution amounts",()=>{for(const scenario of [undefined,"PRIVATE","JDG","SP_ZOO"]){const r=buildTaxReview({taxScenario:scenario},"2026-10-16");assert.equal(r.status,"UNKNOWN");assert.equal(r.roiAfterTax,null);assert.equal(r.maxBuyAfterTax,null);assert.equal(r.taxCashFlow,null);assert.ok(r.questions.length<=5);assert.ok(r.regimes.every(m=>m.profitAfterTax===null&&m.distributable===null));}});
+test("source availability is not legal validity, old reference requests refresh, reversed dates are flagged",()=>{const r=buildTaxReview({taxAcquiredOn:"2026-10-16",taxSaleOn:"2020-01-01"},"2027-10-16");assert.equal(r.sourceStatus,"STALE_REFERENCE");assert.ok(r.reasons.includes("SALE_BEFORE_ACQUISITION"));assert.ok(TAX_SOURCES.every(s=>s.effectiveFrom===null&&!s.professionallyReviewed&&!s.usableForCalculation));});
+test("calendar validation and company/investor dependency questions",()=>{assert.equal(validTaxDate("2025-02-29"),false);assert.equal(validTaxDate("2024-02-29"),true);const r=buildTaxReview({taxScenario:"SP_ZOO"},"2026-10-16",true);assert.ok(r.missing.includes("taxDistribution"));assert.ok(r.missing.includes("taxInvestorBasis"));});

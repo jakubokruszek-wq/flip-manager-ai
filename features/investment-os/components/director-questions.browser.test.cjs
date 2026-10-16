@@ -72,5 +72,12 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   assert.equal(current.underwriting.result.cfo.selected.mode,'CASH');assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');
   await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'CFO — płynność i finansowanie'}).waitFor();
   assert.equal(room.answers.equity.value,500000);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  process.env.DEAL_ROOM_TAX_REVIEW_ENABLED='true';t.after(()=>delete process.env.DEAL_ROOM_TAX_REVIEW_ENABLED);
+  current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,room.answers)});
+  await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
+  const taxMore=page.getByRole('button',{name:/Pozostałe pytania/});if(await taxMore.count())await taxMore.click();
+  await page.getByLabel('Odpowiedź: taxScenario',{exact:true}).fill('JDG');await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+  await page.waitForFunction(()=>document.querySelector('[aria-label="Rekomendacja przed i po odpowiedziach"]')?.textContent.includes('taxScenario'));
+  await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'Podatki — nieustalone'}).waitFor();assert.equal(room.answers.taxScenario.value,'JDG');assert.equal(current.underwriting.result.cfo.netProfit,null);assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });
