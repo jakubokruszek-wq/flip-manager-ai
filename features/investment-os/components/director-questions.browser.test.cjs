@@ -62,5 +62,15 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   assert.equal(current.underwriting.result.renovationTotal,100000);assert.ok(current.underwriting.result.maxPurchasePrice<max);assert.notEqual(current.ceo.result.action,'KUP');
   assert.ok(await page.getByRole('region',{name:'Rekomendacja przed i po odpowiedziach'}).count() || await page.locator('[aria-label="Rekomendacja przed i po odpowiedziach"]').count());
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  process.env.DEAL_ROOM_CFO_ENABLED='true';t.after(()=>delete process.env.DEAL_ROOM_CFO_ENABLED);
+  current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,room.answers)});
+  await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
+  const cfoMore=page.getByRole('button',{name:/Pozostałe pytania/});if(await cfoMore.count())await cfoMore.click();
+  for(const [field,value] of Object.entries({costScope:'BRUTTO',financingMode:'CASH',equity:'500000',liquidityReserve:'30000',deposit:'20000',renovationMonths:'3',equipment:'0'}))await page.getByLabel(`Odpowiedź: ${field}`,{exact:true}).fill(value);
+  await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+  await page.waitForFunction(()=>document.querySelector('[aria-label="Rekomendacja przed i po odpowiedziach"]')?.textContent.includes('equity'));
+  assert.equal(current.underwriting.result.cfo.selected.mode,'CASH');assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');
+  await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'CFO — płynność i finansowanie'}).waitFor();
+  assert.equal(room.answers.equity.value,500000);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });

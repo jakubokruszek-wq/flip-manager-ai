@@ -1,7 +1,7 @@
 name: Deal Room Q&A isolated validation
 on:
   pull_request:
-    branches: [main, feat/deal-room-qa]
+    branches: [main, feat/deal-room-qa, feat/deal-room-market]
     paths: ['features/investment-os/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', 'scripts/setup-deal-room-service.py', '.github/workflows/deal-room-qa.yml']
   workflow_dispatch:
 permissions:

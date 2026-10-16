@@ -214,7 +214,7 @@ export type CanonicalDeal = {
   updatedAt: string;
 };
 
-export type DealFactOverrides = Partial<Record<keyof DealFacts, string | number | null>> & {
+export type DealFactOverrides = Partial<Record<keyof DealFacts, string | number | null>> & import("./cfo").CfoInputs & {
   negotiatedPrice?: number | null;
   resalePerM2?: number | null;
   renovationPerM2?: number | null;

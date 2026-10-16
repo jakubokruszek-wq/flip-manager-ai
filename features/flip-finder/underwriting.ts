@@ -112,6 +112,8 @@ export type UnderwritingScenario = {
 };
 
 export type UnderwritingResult = {
+  /** Optional Investment OS projection; no Finder calculation or defaults change. */
+  cfo?: import("../investment-os/cfo").CfoAnalysis;
   listingId: string;
   provenance: Record<string, ValueProvenance>;
   purchasePrice: number | null;

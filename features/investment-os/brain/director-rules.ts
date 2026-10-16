@@ -147,6 +147,8 @@ function riskLegal(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWarn
 
 function cfo(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWarnings: string[]): BrainDirector {
   const result = deal.underwriting.result;
+  const model=result?.cfo;
+  if(model) { const selected=model.selected; return output(deal,"CFO", "NEEDS_DATA", "Cash-flow i finansowanie przed podatkiem", `Wybrany wariant: ${selected?.mode ?? "nieustalony"}. Kapitał szczytowy ${selected?.peakOwnCapital ?? "?"} PLN, luka ${selected?.fundingGap ?? "?"} PLN. Wynik właściciela przed podatkiem ${selected?.ownProfitBeforeTax ?? "?"} PLN. Podatki nieustalone.`,"Potwierdź brakujące parametry, zabezpieczenie, kosztorys i podatki; porównaj stres przed zakupem.", selected ? [metric(deal,"peakCash","Szczyt własnego kapitału",selected.peakOwnCapital,provenance("underwriting.cfo",deal.underwriting.inputFingerprint,"ASSUMPTION",deal.underwriting.computedAt),"PLN"),metric(deal,"fundingGap","Luka finansowania",selected.fundingGap,provenance("underwriting.cfo",deal.underwriting.inputFingerprint,"ASSUMPTION",deal.underwriting.computedAt),"PLN")] : [], model.missing,[...inheritedWarnings,...model.warnings],[],[],freshness,"Deklarowany model etapów i finansowania nad istniejącym kalkulatorem; brak automatycznej akceptacji kredytu lub modelu podatkowego."); }
   const missing = result ? ["financing"] : ["economics", "financing"];
   const status: BrainDirectorStatus = result ? "NEEDS_DATA" : "NEEDS_DATA";
   const evidence = provenanceEntries(deal.underwriting.provenance.filter((item) => ["totalProjectCost", "profit", "renovationPerM2"].includes(item.field)));
@@ -173,7 +175,7 @@ function acquisition(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWa
   return output(deal, "ACQUISITION", status, `Działanie warunkowe: ${action}`, `Kierunek wynika z kanonicznej decyzji CEO, Max Buy, bramek i nadrzędnej decyzji ręcznej. Otwarte bramki: ${openGates.length}.`, recommendation, [
     metric(deal, "acquisitionAction", "Działanie", action, provenance("ceo.result.action", deal.ceo.inputFingerprint, "FACT", deal.ceo.computedAt)),
     metric(deal, "askingPrice", "Cena ofertowa", deal.facts.askingPrice.effectiveValue, factProvenance("askingPrice", deal.facts.askingPrice), "PLN"),
-    metric(deal, "maxPurchasePrice", "Maksymalna cena zakupu", result?.maxPurchasePrice ?? ceo?.maxPurchasePrice ?? null, provenance("underwriting.result.maxPurchasePrice", deal.underwriting.inputFingerprint, "ESTIMATE", deal.underwriting.computedAt), "PLN"),
+    metric(deal, "maxPurchasePrice", "Maksymalna cena zakupu", result?.cfo ? ceo?.maxPurchasePrice ?? null : result?.maxPurchasePrice ?? ceo?.maxPurchasePrice ?? null, provenance("underwriting.result.maxPurchasePrice", deal.underwriting.inputFingerprint, "ESTIMATE", deal.underwriting.computedAt), "PLN"),
     metric(deal, "openCriticalGates", "Otwarte bramki krytyczne", openGates.length, provenance("ceo.result.criticalGates", deal.ceo.inputFingerprint, "FACT", deal.ceo.computedAt), "COUNT"),
   ], missing, [...inheritedWarnings, ...openGates.map((gate) => gate.reason)], evidence, evidence, freshness, "Działanie pochodzi z kanonicznego CEO i Max Buy; nie dodano drugiego progu zakupu.");
 }
