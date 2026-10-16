@@ -16,7 +16,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   const input=lodzDeal("UNCLEAR_RENOVATION"); let current=buildCanonicalDeal(input);
   let room={version:1,answers:{},baselineOverrides:{},rounds:[]}; const receipts=new Map();
   const root=path.resolve(__dirname,'../../..'), auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
-  const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_QA_ENABLED:'true',DEAL_ROOM_TEST_OPERATOR_IDS:'44444444-4444-4444-8444-444444444444',DEAL_ROOM_TEST_DATABASE_ORIGIN:auth.url};
+  const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_QA_ENABLED:'true',DEAL_ROOM_TEST_OPERATOR_IDS:'44444444-4444-4444-8444-444444444444',DEAL_ROOM_TEST_DATABASE_ORIGIN:auth.url};
   const nextBin=require.resolve('next/dist/bin/next'); await ensureProductionBuild(nextBin,root,env);
   const port=await freePort(), base=`http://127.0.0.1:${port}`;
   const server=spawn(process.execPath,[nextBin,'start','--hostname','127.0.0.1','--port',String(port)],{cwd:root,env,stdio:'ignore'});t.after(()=>server.kill());

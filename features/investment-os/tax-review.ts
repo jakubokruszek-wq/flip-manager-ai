@@ -1,3 +1,4 @@
+import { dealFeatures, type DealFeatures } from "./feature-context";
 import {JDG_TAX_LABELS,type JdgTaxInputs} from "./jdg-tax";
 import { PRIVATE_TAX_LABELS, type PrivateTaxInputs } from "./private-tax";
 import { conditionalTax, isTaxRule, TAX_RULES, type ConditionalTax } from "./tax-arithmetic";
@@ -11,18 +12,18 @@ export const TAX_SOURCES=[
  {id:"MF_PCC",url:"https://www.podatki.gov.pl/podatki-osobiste/pcc/informacje-podstawowe",topic:"PCC: przedmiot, podstawa i relacja do VAT"}
 ].map(s=>({...s,version:1,accessedOn:"2026-10-16",effectiveFrom:null,effectiveTo:null,professionallyReviewed:false as const,usableForCalculation:false as const}));
 export type TaxReview={version:1;conditional?:ConditionalTax|null;status:"UNKNOWN";scenario:string|null;inputs:TaxInputs;missing:string[];questions:Array<{field:string;question:string}>;reasons:string[];sourceStatus:"REFERENCE_ONLY"|"STALE_REFERENCE";sources:typeof TAX_SOURCES;regimes:Array<{id:string;status:"UNKNOWN";profitAfterTax:null;distributable:null}>;taxCashFlow:null;roiAfterTax:null;maxBuyAfterTax:null;breakEvenAfterTax:null;stressAfterTax:null};
-export function buildTaxReview(inputs:TaxInputs,now:string,investor=false):TaxReview{
+export function buildTaxReview(inputs:TaxInputs,now:string,investor=false,features:DealFeatures=dealFeatures()):TaxReview{
  const required=["taxScenario","taxAcquiredOn","taxSaleOn","taxActivity","taxVatStatus","taxCosts","taxOtherIncome","taxEvidence",...(inputs.taxScenario==="SP_ZOO"?["taxDistribution"]:[]),...(investor?["taxInvestorBasis"]:[])];
- if(process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED==="true"&&inputs.taxScenario==="PRIVATE")required.push(...Object.keys(PRIVATE_TAX_LABELS));
- if(process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED==="true")required.push("taxRule","taxRuleBase");
- if(process.env.DEAL_ROOM_JDG_TAX_ENABLED==="true"&&inputs.taxScenario==="JDG")required.push(...Object.keys(JDG_TAX_LABELS));
+ if(features.privateTax&&inputs.taxScenario==="PRIVATE")required.push(...Object.keys(PRIVATE_TAX_LABELS));
+ if(features.taxArithmetic)required.push("taxRule","taxRuleBase");
+ if(features.jdgTax&&inputs.taxScenario==="JDG")required.push(...Object.keys(JDG_TAX_LABELS));
  const missing=required.filter(f=>!inputs[f as keyof TaxInputs]);
  const dates=inputs.taxAcquiredOn&&inputs.taxSaleOn&&inputs.taxSaleOn<inputs.taxAcquiredOn;
  const age=(Date.parse(now)-Date.parse(TAX_SOURCES[0].accessedOn))/86400000;
  const stale=!Number.isFinite(age)||age<0||age>90;
  const rule=inputs.taxRule;
  const matches=!!rule&&isTaxRule(rule)&&(TAX_RULES[rule].scenario===null||TAX_RULES[rule].scenario===inputs.taxScenario);
- const conditional=process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED==="true"&&matches&&inputs.taxRuleBase?conditionalTax(rule!,inputs.taxRuleBase):null;
- return {version:1,...(process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED==="true"?{conditional}:{}),status:"UNKNOWN",scenario:inputs.taxScenario??null,inputs,missing,questions:(missing.length?missing:["taxEvidence"]).slice(0,5).map(field=>({field,question:TAX_LABELS[field]})),reasons:["NO_VERIFIED_TRANSACTION_TAX_MODEL",...(conditional?["CONDITIONAL_ARITHMETIC_IS_NOT_A_LIABILITY",`Warunkowa reguła ${conditional.rule}: kwota ${conditional.amountPLN} PLN od podanej podstawy/kwoty ${conditional.inputPLN} PLN; zastosowanie, rzeczywisty podatek i wpływ na zysk nieustalone.`]:[]),...(dates?["SALE_BEFORE_ACQUISITION"]:[]),...(stale?["LEGAL_REFERENCE_REFRESH_REQUIRED"]:[]),"Deklaracja ani link nie są weryfikacją księgową lub interpretacją urzędu."],sourceStatus:stale?"STALE_REFERENCE":"REFERENCE_ONLY",sources:TAX_SOURCES,regimes:["PRIVATE","JDG","SP_ZOO"].map(id=>({id,status:"UNKNOWN",profitAfterTax:null,distributable:null})),taxCashFlow:null,roiAfterTax:null,maxBuyAfterTax:null,breakEvenAfterTax:null,stressAfterTax:null};
+ const conditional=features.taxArithmetic&&matches&&inputs.taxRuleBase?conditionalTax(rule!,inputs.taxRuleBase):null;
+ return {version:1,...(features.taxArithmetic?{conditional}:{}),status:"UNKNOWN",scenario:inputs.taxScenario??null,inputs,missing,questions:(missing.length?missing:["taxEvidence"]).slice(0,5).map(field=>({field,question:TAX_LABELS[field]})),reasons:["NO_VERIFIED_TRANSACTION_TAX_MODEL",...(conditional?["CONDITIONAL_ARITHMETIC_IS_NOT_A_LIABILITY",`Warunkowa reguła ${conditional.rule}: kwota ${conditional.amountPLN} PLN od podanej podstawy/kwoty ${conditional.inputPLN} PLN; zastosowanie, rzeczywisty podatek i wpływ na zysk nieustalone.`]:[]),...(dates?["SALE_BEFORE_ACQUISITION"]:[]),...(stale?["LEGAL_REFERENCE_REFRESH_REQUIRED"]:[]),"Deklaracja ani link nie są weryfikacją księgową lub interpretacją urzędu."],sourceStatus:stale?"STALE_REFERENCE":"REFERENCE_ONLY",sources:TAX_SOURCES,regimes:["PRIVATE","JDG","SP_ZOO"].map(id=>({id,status:"UNKNOWN",profitAfterTax:null,distributable:null})),taxCashFlow:null,roiAfterTax:null,maxBuyAfterTax:null,breakEvenAfterTax:null,stressAfterTax:null};
 }
 export function validTaxDate(value:string):boolean { return /^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value; }

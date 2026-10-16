@@ -1,4 +1,5 @@
 "use client";
+import { investmentPath } from "../test-identity";
 import { useEffect, useRef, useState } from "react";
 import { answerSourceFingerprint, answerUnit, roomQuestions, type AnswerCommand, type AnswerInput, type DealRoomState } from "../deal-room-answers";
 import type { CanonicalDeal } from "../types";
@@ -8,7 +9,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   const [room, setRoom] = useState<DealRoomState | null>(null), [draft, setDraft] = useState<Record<string, AnswerInput>>({});
   const [error, setError] = useState<string | null>(null), [saving, setSaving] = useState(false), [more, setMore] = useState(false), [disabled, setDisabled] = useState(false);
   const pending = useRef<AnswerCommand | null>(null);
-  const path = `/api/flip-finder/listings/${encodeURIComponent(deal.listingId)}/investment/answers`;
+  const path = `${investmentPath(deal.listingId)}/answers`;
   useEffect(() => {
     let active = true;
     void fetch(path, { cache: "no-store" }).then(async (response) => {

@@ -1,3 +1,4 @@
+import { dealFeatures } from "./feature-context";
 import {jdgTaxReason} from "./jdg-tax";
 import { privateTaxReason } from "./private-tax";
 import { analyseCfo } from "./cfo";
@@ -83,9 +84,9 @@ function toUnderwritingInput(input: BuildDealInput, facts: DealFacts, market: Di
 
 function buildUnderwriter(input: BuildDealInput, facts: DealFacts, market: DirectorOutput<MarketResult>, verify: DirectorOutput<VerifyResult>, analysisLevel: AnalysisLevel) {
   const started = performance.now();
-  const fp = fingerprint({ facts: materialFactSnapshot(facts), market: market.result, settings: input.settings, overrides: input.overrides, jdgTaxEnabled:process.env.DEAL_ROOM_JDG_TAX_ENABLED === "true",privateTaxEnabled:process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED === "true",taxArithmeticEnabled:process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED === "true",taxReviewEnabled:process.env.DEAL_ROOM_TAX_REVIEW_ENABLED === "true", cfoEnabled: process.env.DEAL_ROOM_CFO_ENABLED === "true" });
+  const fp = fingerprint({ facts: materialFactSnapshot(facts), market: market.result, settings: input.settings, overrides: input.overrides, jdgTaxEnabled:(input.features ?? dealFeatures()).jdgTax,privateTaxEnabled:(input.features ?? dealFeatures()).privateTax,taxArithmeticEnabled:(input.features ?? dealFeatures()).taxArithmetic,taxReviewEnabled:(input.features ?? dealFeatures()).taxReview, cfoEnabled: (input.features ?? dealFeatures()).cfo });
   if (market.status !== "COMPLETE" || market.validation.status !== "PASS" || !market.result) return output<ReturnType<typeof calculateUnderwriting>>("UNDERWRITER", fp, input.now, 0, null, market.missingFields, market.warnings, ["UNDERWRITING_MARKET_BLOCKED"], [], "BLOCKED", { analysisLevel, elapsedMs: elapsed(started) });
-  const uInput = toUnderwritingInput(input, facts, market); const cfoEnabled = process.env.DEAL_ROOM_CFO_ENABLED === "true"; const effectiveSettings = cfoEnabled ? { ...input.settings, financingEnabled:false } : input.settings; const result = calculateUnderwriting(uInput, effectiveSettings); if(cfoEnabled) result.cfo = analyseCfo(uInput, effectiveSettings, input.overrides); const boundary = validateMaxPurchaseBoundary(uInput, effectiveSettings, result.maxPurchasePrice); const checked = validation("UNDERWRITER", input.now, boundary.status, boundary.checks);
+  const uInput = toUnderwritingInput(input, facts, market); const cfoEnabled = (input.features ?? dealFeatures()).cfo; const effectiveSettings = cfoEnabled ? { ...input.settings, financingEnabled:false } : input.settings; const result = calculateUnderwriting(uInput, effectiveSettings); if(cfoEnabled) result.cfo = analyseCfo(uInput, effectiveSettings, input.overrides, input.features); const boundary = validateMaxPurchaseBoundary(uInput, effectiveSettings, result.maxPurchasePrice); const checked = validation("UNDERWRITER", input.now, boundary.status, boundary.checks);
   const confidence = Math.round((verify.confidence + market.confidence) / 2);
   const predictions: PredictionMetric[] = [{ metric: "DURATION_DAYS", value: input.settings.holdingMonths * 30, unit: "DAYS", confidence, predictedAt: input.now }];
   if (result.renovationTotal !== null) predictions.push({ metric: "RENOVATION_COST", value: result.renovationTotal, unit: "PLN", confidence, predictedAt: input.now });

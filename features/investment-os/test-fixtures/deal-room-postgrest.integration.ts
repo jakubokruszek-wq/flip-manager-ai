@@ -4,7 +4,7 @@ import { mock, test } from "node:test";
 import { createClient } from "@supabase/supabase-js";
 if (process.env.GITHUB_ACTIONS !== "true") throw Error("GITHUB_ACTIONS_REQUIRED");
 const owner = "33333333-3333-4333-8333-333333333333", other = "55555555-5555-4555-8555-555555555555";
-let actor = owner, dropAfterCommit = false;
+let actor = owner, dropAfterCommit = false, testOnlyTraffic=false, dropTestCommit=false, missingTestContract=false;
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const head = encode({ alg: "HS256", typ: "JWT" }), payload = encode({ role: "service_role", exp: Math.floor(Date.now()/1000)+3600 });
 const signature = createHmac("sha256", "isolated-deal-room-postgrest-signing-key-only").update(`${head}.${payload}`).digest("base64url");
@@ -12,7 +12,10 @@ const db = createClient("http://127.0.0.1:55439", `${head}.${payload}.${signatur
   const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
   if (url.origin !== "http://127.0.0.1:55439") throw Error("EXTERNAL_REQUEST_FORBIDDEN");
   url.pathname = url.pathname.replace(/^\/rest\/v1/, "");
+  if(testOnlyTraffic && !/^\/(?:deal_room_test_(?:cases|rounds)|rpc\/deal_room_test_(?:contract|commit))$/.test(url.pathname))throw Error("TEST_TOUCHED_REAL_TABLE_OR_RPC");
+  if(missingTestContract && url.pathname==="/rpc/deal_room_test_contract")return new Response(JSON.stringify({message:"Could not find function public.deal_room_test_contract",code:"PGRST202"}),{status:404});
   const response = await fetch(url, init);
+  if(dropTestCommit && url.pathname==="/rpc/deal_room_test_commit" && response.ok){dropTestCommit=false;await response.arrayBuffer();return new Response(JSON.stringify({message:"SYNTHETIC_LOST_TEST_RESPONSE"}),{status:503});}
   if (dropAfterCommit && url.pathname === "/rpc/commit_deal_room_round_cas" && response.ok) {
     dropAfterCommit = false; await response.arrayBuffer();
     return new Response(JSON.stringify({ message: "SYNTHETIC_RESPONSE_LOSS_AFTER_COMMIT" }), { status: 503 });
@@ -203,36 +206,61 @@ test("three isolated Finder listings: high profit, thin margin, hard reject; ful
 });
 
 
-test("Finder TEST real API/DB: isolated preparation, repeat safety, account fences, Q&A and production refusal",async()=>{
- actor=owner;
- const {testCases}=await import("../test-mode");
+test("virtual TEST API/DB: no production tables, all owner/flag gates, dedicated persistence CAS/replay and missing migration",async()=>{
  const api=await import("../../../app/api/deal-room/test/route");
- const keys=["DEAL_ROOM_TEST_ENABLED","DEAL_ROOM_TEST_DATABASE_ORIGIN","DEAL_ROOM_TEST_OPERATOR_IDS","NEXT_PUBLIC_SUPABASE_URL","VERCEL_ENV"];
+ const deal=await import("../../../app/api/deal-room/test/[id]/route");
+ const answers=await import("../../../app/api/deal-room/test/[id]/answers/route");
+ const history=await import("../../../app/api/deal-room/test/[id]/history/route");
+ const initialize=await import("../../../app/api/deal-room/test/[id]/initialize/route");
+ const {testCases}=await import("../test-mode");
+ const {BRAIN_DIRECTORS,buildDealBrain}=await import("../brain");
+ const keys=["DEAL_ROOM_TEST_ENABLED","DEAL_ROOM_TEST_STORAGE_VERSION","DEAL_ROOM_TEST_OPERATOR_IDS","VERCEL_ENV","DEAL_ROOM_QA_ENABLED"];
  const old=keys.map(k=>process.env[k]);
+ const protectedTables=["listings","listing_snapshots","listing_source_metadata","deals","deal_fact_overrides","deal_room_rounds","deal_room_workspaces","resale_comps","price_radar_listings","price_radar_settings"];
+ async function snapshot(){const out:Record<string,unknown>={};for(const table of protectedTables){const result=await db.from(table).select("*");assert.ifError(result.error);out[table]=result.data;}return out;}
+ const before=await snapshot();
+ const req=(suffix="",method="GET",body?:unknown)=>new Request("http://localhost/api/deal-room/test"+suffix,{method,headers:{origin:"http://localhost","content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})});
+ const cases=testCases(owner),ctx=(id:string)=>({params:Promise.resolve({id})});
  try{
- Object.assign(process.env,{DEAL_ROOM_TEST_ENABLED:"true",DEAL_ROOM_QA_ENABLED:"true",DEAL_ROOM_TEST_DATABASE_ORIGIN:"http://127.0.0.1:55439",NEXT_PUBLIC_SUPABASE_URL:"http://127.0.0.1:55439",DEAL_ROOM_TEST_OPERATOR_IDS:owner,VERCEL_ENV:"preview"});
- const prep=()=>api.POST(new Request("http://localhost/api/deal-room/test",{method:"POST",headers:{origin:"http://localhost"}}));
+ Object.assign(process.env,{DEAL_ROOM_TEST_ENABLED:"true",DEAL_ROOM_TEST_STORAGE_VERSION:"1",DEAL_ROOM_TEST_OPERATOR_IDS:owner,VERCEL_ENV:"production",DEAL_ROOM_QA_ENABLED:"false"});actor=owner;testOnlyTraffic=true;
  assert.equal((await api.POST(new Request("http://localhost/api/deal-room/test",{method:"POST",headers:{origin:"https://evil.test"}}))).status,403);
- assert.equal((await prep()).status,200);assert.equal((await prep()).status,200);
- const cases=testCases(owner);const count=await db.from("listings").select("id").in("id",cases.map(c=>c.id));assert.ifError(count.error);assert.equal(count.data?.length,3);
- const ctx={params:Promise.resolve({id:cases[0].id})};
- const init=await initializeApi.POST(request({},"/initialize"),ctx);assert.equal(init.status,200,await init.clone().text());
- const before=await (await answersApi.GET(new Request(origin+"/answers"),ctx)).json();
- const result=await answersApi.POST(request(command(before.room.version,"renovationBudget",40000)),ctx);assert.equal(result.status,200,await result.clone().text());
- const saved=await result.json();assert.equal(saved.deal.underwriting.result.renovationTotal,40000);
- assert.equal((await prep()).status,200);
- const history=await import("../../../app/api/flip-finder/listings/[id]/investment/history/route");
- const historyResponse=await history.GET(new Request(origin+"/history"),ctx);assert.equal(historyResponse.status,200);assert.equal((await historyResponse.json()).rounds.length,1);
- const stored=await db.from("deals").select("id").eq("listing_id",cases[0].id).single();assert.ifError(stored.error);
- const tiedAt=new Date(Date.now()+10000).toISOString();
- const syntheticRounds=Array.from({length:21},()=>({deal_id:stored.data!.id,owner_id:owner,request_id:randomUUID(),payload_hash:"c".repeat(64),response:saved,created_at:tiedAt}));
- const inserted=await db.from("deal_room_rounds").insert(syntheticRounds);assert.ifError(inserted.error);
- const firstPage=await (await history.GET(new Request(origin+"/history"),ctx)).json();assert.equal(firstPage.rounds.length,20);assert.ok(firstPage.nextBefore);
- const secondPage=await (await history.GET(new Request(origin+"/history?before="+encodeURIComponent(firstPage.nextBefore)),ctx)).json();assert.equal(secondPage.rounds.length,2);assert.equal(secondPage.nextBefore,null);assert.equal(new Set([...firstPage.rounds,...secondPage.rounds].map((row:{requestId:string})=>row.requestId)).size,22);
- assert.equal((await history.GET(new Request(origin+"/history?before=bad"),ctx)).status,400);
- actor=other;assert.equal((await history.GET(new Request(origin+"/history"),ctx)).status,404);actor=owner;
- assert.equal((await (await answersApi.GET(new Request(origin+"/answers"),ctx)).json()).room.answers.renovationBudget.value,40000);
- actor=other;assert.equal((await api.GET()).status,404);assert.equal((await prep()).status,404);assert.equal((await dealApi.GET(new Request(origin),ctx)).status,404);assert.equal((await initializeApi.POST(request({},"/initialize"),ctx)).status,404);assert.equal((await answersApi.GET(new Request(origin+"/answers"),ctx)).status,404);
- actor=owner;process.env.VERCEL_ENV="production";assert.equal((await prep()).status,404);assert.equal((await dealApi.GET(new Request(origin),ctx)).status,404);
- }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});actor=owner;}
+ assert.equal((await api.POST(req("","POST"))).status,200);
+ for(const item of cases){
+  const c=ctx(item.id),initial=await deal.GET(req("/"+item.id),c);assert.equal(initial.status,200,await initial.clone().text());
+  const current=(await initial.json()).deal;for(const director of BRAIN_DIRECTORS)assert.ok(buildDealBrain(current).directors[director]);
+  assert.equal(current.market.result.indicative,true);assert.notEqual(current.ceo.result.action,"KUP");assert.deepEqual(current.underwriting.result.cfo.taxStatus,"UNKNOWN");
+  if(item.key==="reject")assert.equal(current.ceo.result.action,"ODRZUĆ");
+  assert.equal((await dealApi.GET(new Request(origin),c)).status,404,"ordinary route NEVER accepts virtual ID");
+  assert.equal((await initializeApi.POST(request({},"/initialize"),c)).status,404);
+  assert.equal((await answersApi.GET(new Request(origin+"/answers"),c)).status,404,"even when real QA is OFF");
+  const state=(await (await answers.GET(req("/"+item.id+"/answers"),c)).json()).room;
+  const command={requestId:randomUUID(),expectedVersion:state.version,answers:[{field:"renovationBudget",kind:"VALUE",value:40000,basis:"ASSUMPTION",evidenceUrl:null},{field:"financingMode",kind:"VALUE",value:"CASH",basis:"ASSUMPTION",evidenceUrl:null},{field:"taxScenario",kind:"VALUE",value:"JDG",basis:"ASSUMPTION",evidenceUrl:null}]};
+  dropTestCommit=true;assert.equal((await answers.POST(req("/"+item.id+"/answers","POST",command),c)).status,503);
+  const recovered=await answers.POST(req("/"+item.id+"/answers","POST",command),c);assert.equal(recovered.status,200,await recovered.clone().text());
+  const saved=await recovered.json();assert.equal(saved.deal.underwriting.result.renovationTotal,40000);assert.equal(saved.deal.underwriting.result.cfo.jdgTax.status,"UNKNOWN");
+  assert.deepEqual(await (await answers.POST(req("/"+item.id+"/answers","POST",command),c)).json(),saved);
+  assert.equal((await api.POST(req("","POST"))).status,200);assert.equal((await (await answers.GET(req("/"+item.id+"/answers"),c)).json()).room.answers.renovationBudget.value,40000);
+  assert.equal((await initialize.POST(req("/"+item.id+"/initialize","POST"),c)).status,200);
+  const stale={...command,requestId:randomUUID(),answers:[{field:"renovationBudget",kind:"VALUE",value:100000,basis:"ASSUMPTION",evidenceUrl:null}]};
+  assert.equal((await answers.POST(req("/"+item.id+"/answers","POST",stale),c)).status,409);
+  const a={...stale,expectedVersion:saved.room.version},b={...a,requestId:randomUUID()};
+  const statuses=await Promise.all([a,b].map(async cmd=>(await answers.POST(req("/"+item.id+"/answers","POST",cmd),c)).status));assert.deepEqual(statuses.sort(),[200,409]);
+  const rows=(await (await history.GET(req("/"+item.id+"/history"),c)).json()).rounds;assert.equal(rows.length,2);
+  actor=other;
+  for(const response of [await api.GET(req()),await api.POST(req("","POST")),await deal.GET(req("/"+item.id),c),await initialize.POST(req("/"+item.id+"/initialize","POST"),c),await answers.GET(req("/"+item.id+"/answers"),c),await answers.POST(req("/"+item.id+"/answers","POST",command),c),await history.GET(req("/"+item.id+"/history"),c)])assert.equal(response.status,404);
+  actor=owner;
+ }
+ const c=ctx(cases[0].id);
+ for(const patch of [{DEAL_ROOM_TEST_ENABLED:"false"},{DEAL_ROOM_TEST_OPERATOR_IDS:""},{DEAL_ROOM_TEST_OPERATOR_IDS:"invalid"},{DEAL_ROOM_TEST_STORAGE_VERSION:""}]){
+  const prev={...process.env};Object.assign(process.env,patch);
+  assert.equal((await deal.GET(req("/"+cases[0].id),c)).status,404);assert.equal((await answers.GET(req("/"+cases[0].id+"/answers"),c)).status,404);assert.equal((await history.GET(req("/"+cases[0].id+"/history"),c)).status,404);assert.equal((await api.POST(req("","POST"))).status,404);
+  for(const key of Object.keys(patch))if(prev[key]===undefined)delete process.env[key];else process.env[key]=prev[key];
+ }
+ // Missing migration/contract must fail CLOSED, not use real data tables.
+ missingTestContract=true;
+ assert.equal((await api.POST(req("","POST"))).status,503);assert.equal((await deal.GET(req("/"+cases[0].id),c)).status,503);
+ missingTestContract=false;
+ assert.equal((await api.POST(req("","POST"))).status,200);
+ }finally{missingTestContract=false;testOnlyTraffic=false;actor=owner;keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
+ assert.deepEqual(await snapshot(),before,"all real offer/analysis/Radar tables byte-for-byte untouched by TEST");
 });

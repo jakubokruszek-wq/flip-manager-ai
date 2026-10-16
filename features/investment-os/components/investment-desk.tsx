@@ -1,4 +1,5 @@
 "use client";
+import { investmentPath } from "../test-identity";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -52,7 +53,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     let initializeSucceeded = false;
 
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/investment/initialize`, {
+      const response = await fetch(`${investmentPath(result.id)}/initialize`, {
         method: "POST",
       });
       const body = await response.json().catch(() => null) as { deal?: CanonicalDeal; message?: string } | null;
@@ -86,7 +87,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/investment`, {
+      const response = await fetch(investmentPath(result.id), {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ overrides }),
@@ -104,7 +105,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
   const refreshAnalysis = async () => {
     setSaving(true); setError(null);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/investment/initialize`, { method: "POST" });
+      const response = await fetch(`${investmentPath(result.id)}/initialize`, { method: "POST" });
       if (!response.ok) throw Error("Nie udało się odświeżyć źródeł analizy.");
       await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Błąd odświeżenia."); }

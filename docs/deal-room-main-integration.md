@@ -1,5 +1,7 @@
 # Deal Room 2.0 — main integration / release gate
 
+> SUPERSEDED TEST ARCHITECTURE: see [deal-room-test-isolation.md](deal-room-test-isolation.md). The separate-database/normal-listing seed described below is historical, removed from current code and MUST NOT be deployed. Current TEST is virtual with dedicated owner stores in the existing database. The old CI evidence below applies to the old revision only.
+
 ## Provenance and scope
 
 Inspected 2026-10-16: main `642fdf3301d08cd0151526625bd05ced3bc2fd43`; PR25→27→29→31→32→33→34 are open and form one dependency chain. PR34 remote `4a03e1d67b5dfb5c41dadadc7eb8a72ac804618b`, tree `e38adab5af84ea84484edf67e39d55ae2bc02d34`, equals preserved local `1d88a3b`. This branch starts from that complete tree; no manual cherry-picking or rebuilding of directors. New Integration Draft PR targets main, original seven drafts remain unchanged. No main/production mutation.

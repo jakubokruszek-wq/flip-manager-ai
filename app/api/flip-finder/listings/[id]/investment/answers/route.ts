@@ -9,6 +9,7 @@ export async function POST(request: Request, context: Context): Promise<Response
 async function handle(request: Request | null, { params }: Context): Promise<Response> {
   let actor;
   try { actor = await requireOperator(); } catch (error) { return operatorAuthorizationResponse(error); }
+  if (!testListingAllowed((await params).id, actor.id)) return Response.json({code:"NOT_FOUND"},{status:404});
   if (!dealRoomEnabled()) return Response.json({ enabled: false }, { status: request ? 404 : 200 });
   try {
     const { id } = await params;

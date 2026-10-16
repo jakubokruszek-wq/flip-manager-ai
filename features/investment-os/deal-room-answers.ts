@@ -1,3 +1,4 @@
+import { dealFeatures, type DealFeatures } from "./feature-context";
 import {JDG_TAX_LABELS,JDG_ENUMS,JDG_AMOUNTS,parseJdgPayments} from "./jdg-tax";
 import { PRIVATE_TAX_LABELS, PRIVATE_ENUMS, PRIVATE_AMOUNTS } from "./private-tax";
 import { isTaxRule, validTaxAmount } from "./tax-arithmetic";
@@ -27,18 +28,18 @@ const numeric: Record<string, { min: number; max: number; unit: string }> = {
 export const ANSWER_LABELS: Record<string, string> = { ...TAX_LABELS, ...CFO_LABELS, resalePerM2: "Jaką cenę odsprzedaży za m² przyjmujesz jako założenie?", additionalCosts: "Jakie dodatkowe koszty projektu przyjąć (PLN)?", negotiatedPrice: "Jaka jest uzgodniona cena zakupu po negocjacjach?", askingPrice: "Jaka jest aktualna cena ofertowa w źródle?", renovationBudget: "Jaki jest budżet remontu przed rezerwą (PLN łącznie)?", holdingMonths: "Ile miesięcy potrwa projekt?" };
 const narrative = new Set([...Object.keys(TAX_LABELS),"costScope", "financingMode", "loanSchedule", "loanSecurity", "legalStatus", "ownership", "condition", "renovationScope", "financing", "marketEvidence", "riskReview", "identity", "city", "district", "street", "rooms", "buildingType", "economics"]);
 export function answerUnit(field: string): string { return numeric[field]?.unit ?? "opis / ustalenie"; }
-export function parseAnswerCommand(value: unknown): AnswerCommand {
+export function parseAnswerCommand(value: unknown, features:DealFeatures=dealFeatures()): AnswerCommand {
   const v = record(value);
   if (typeof v.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.requestId) || !Number.isSafeInteger(v.expectedVersion) || Number(v.expectedVersion) < 1 || !Array.isArray(v.answers) || v.answers.length < 1 || v.answers.length > 20) throw new DealRoomInputError("Nieprawidłowa wersja lub identyfikator zapisu.");
   const seen = new Set<string>();
   const answers = v.answers.map((raw): AnswerInput => {
     const a = record(raw), field = a.field;
     if (typeof field !== "string" || (!Object.hasOwn(numeric, field) && !narrative.has(field)) || seen.has(field)) throw new DealRoomInputError("Nieprawidłowe lub powtórzone pytanie.");
-    if ((field in CFO_LABELS) && process.env.DEAL_ROOM_CFO_ENABLED !== "true") throw new DealRoomInputError("CFO jest wyłączony.");
-    if (field in TAX_LABELS && (process.env.DEAL_ROOM_TAX_REVIEW_ENABLED !== "true" || process.env.DEAL_ROOM_CFO_ENABLED !== "true")) throw new DealRoomInputError("Scenariusze podatkowe są wyłączone.");
-    if (["taxRule","taxRuleBase"].includes(field) && process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED !== "true") throw new DealRoomInputError("Obliczenia warunkowe są wyłączone.");
-    if(field in PRIVATE_TAX_LABELS && process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED!=="true")throw new DealRoomInputError("Prywatny model podatkowy jest wyłączony.");
-    if(field in JDG_TAX_LABELS && process.env.DEAL_ROOM_JDG_TAX_ENABLED!=="true")throw new DealRoomInputError("Model JDG jest wyłączony.");
+    if ((field in CFO_LABELS) && !features.cfo) throw new DealRoomInputError("CFO jest wyłączony.");
+    if (field in TAX_LABELS && (!features.taxReview || !features.cfo)) throw new DealRoomInputError("Scenariusze podatkowe są wyłączone.");
+    if (["taxRule","taxRuleBase"].includes(field) && !features.taxArithmetic) throw new DealRoomInputError("Obliczenia warunkowe są wyłączone.");
+    if(field in PRIVATE_TAX_LABELS && !features.privateTax)throw new DealRoomInputError("Prywatny model podatkowy jest wyłączony.");
+    if(field in JDG_TAX_LABELS && !features.jdgTax)throw new DealRoomInputError("Model JDG jest wyłączony.");
     seen.add(field);
     if (!["VALUE", "UNKNOWN", "LATER", "WITHDRAW"].includes(String(a.kind)) || !["DECLARATION", "ASSUMPTION", "DOCUMENT_REFERENCE"].includes(String(a.basis))) throw new DealRoomInputError("Wybierz rodzaj odpowiedzi i jej podstawę.");
     const kind = a.kind as AnswerKind, basis = a.basis as AnswerInput["basis"];
@@ -88,7 +89,7 @@ export function affectedDirectors(fields: string[]): BrainDirectorId[] {
   for (const node of DEAL_BRAIN_DEPENDENCIES) if (node.dependsOnFields.some((field) => changed.includes(field)) || node.dependsOnDirectors.some((id) => result.has(id))) result.add(node.director);
   return [...result];
 }
-export function mergeAnswers(deal: CanonicalDeal, state: DealRoomState, command: AnswerCommand, actorId: string, now: string): Record<string, SavedAnswer> {
+export function mergeAnswers(deal: CanonicalDeal, state: DealRoomState, command: AnswerCommand, actorId: string, now: string, features:DealFeatures=dealFeatures()): Record<string, SavedAnswer> {
   const result = { ...state.answers };
   for (const answer of command.answers) {
     const numericValue = Boolean(numeric[answer.field]) || ["financingMode","loanSchedule","costScope"].includes(answer.field);
@@ -96,11 +97,11 @@ export function mergeAnswers(deal: CanonicalDeal, state: DealRoomState, command:
   }
   // Qualification belongs to the current financial case. Do not reuse earlier legal/cost
   // declarations after a price, budget, horizon, source-value or financing answer changes.
-  if(process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED==="true" && command.answers.some(a=>["negotiatedPrice","askingPrice","areaM2","renovationBudget","holdingMonths","financingMode","equipment","additionalCosts","resalePerM2","taxScenario","taxAcquiredOn","taxSaleOn"].includes(a.field))) {
+  if(features.privateTax && command.answers.some(a=>["negotiatedPrice","askingPrice","areaM2","renovationBudget","holdingMonths","financingMode","equipment","additionalCosts","resalePerM2","taxScenario","taxAcquiredOn","taxSaleOn"].includes(a.field))) {
     const explicitlyReconfirmed=new Set(command.answers.map(a=>a.field));
     for(const field of Object.keys(PRIVATE_TAX_LABELS))if(result[field]&&!explicitlyReconfirmed.has(field))result[field]={...result[field],kind:"LATER",status:"OPEN",savedAt:now,actorId,transitions:[...result[field].transitions,"INVALIDATED_BY_CASE_CHANGE"]};
   }
-  if(process.env.DEAL_ROOM_JDG_TAX_ENABLED==="true" && command.answers.some(a=>["negotiatedPrice","askingPrice","areaM2","renovationBudget","holdingMonths","financingMode","equipment","additionalCosts","resalePerM2","taxScenario","taxAcquiredOn","taxSaleOn"].includes(a.field))) {
+  if(features.jdgTax && command.answers.some(a=>["negotiatedPrice","askingPrice","areaM2","renovationBudget","holdingMonths","financingMode","equipment","additionalCosts","resalePerM2","taxScenario","taxAcquiredOn","taxSaleOn"].includes(a.field))) {
     const explicitlyReconfirmed=new Set(command.answers.map(a=>a.field));
     for(const field of Object.keys(JDG_TAX_LABELS))if(result[field]&&!explicitlyReconfirmed.has(field))result[field]={...result[field],kind:"LATER",status:"OPEN",savedAt:now,actorId,transitions:[...result[field].transitions,"INVALIDATED_BY_CASE_CHANGE"]};
   }

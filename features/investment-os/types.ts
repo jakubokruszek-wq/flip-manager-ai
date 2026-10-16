@@ -278,6 +278,7 @@ export const DEFAULT_INVESTMENT_DECISION_POLICY: InvestmentDecisionPolicy = {
 };
 
 export type BuildDealInput = {
+  features?: import("./feature-context").DealFeatures;
   dealId: string;
   listing: DealListingInput;
   overrides: DealFactOverrides;
