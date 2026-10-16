@@ -116,6 +116,13 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   const radarAgain=await refreshMarket(); assert.equal(radarAgain.market.result.assumptionMatchedBy,"PRICE_RADAR"); assert.equal(radarAgain.market.result.compCount,12); assert.ok(radarAgain.underwriting.result); assert.notEqual(radarAgain.ceo.inputFingerprint,general.ceo.inputFingerprint);
   assert.notEqual(narrowedDeal.ceo.result.action,"KUP");
   assert.notEqual(narrowedDeal.ceo.inputFingerprint,radarDeal.ceo.inputFingerprint);
+  process.env.DEAL_ROOM_CFO_ENABLED="true";
+  const cfoEmpty=await refreshMarket(); assert.ok(cfoEmpty.underwriting.result.cfo.missing.includes("equity"));
+  const cfoCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:Object.entries({financingMode:"CASH",equity:100000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6}).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const cfoSaved=await answersApi.POST(request(cfoCommand),context);assert.equal(cfoSaved.status,200,await cfoSaved.clone().text());const cash=(await cfoSaved.json()).deal;assert.ok(cash.underwriting.result.cfo.selected.fundingGap>0);assert.equal(cash.ceo.result.action,"HOLD / ZBIERZ DANE");
+  const cashReplay=await answersApi.POST(request(cfoCommand),context);assert.equal(cashReplay.status,200);assert.equal((await cashReplay.json()).deal.ceo.inputFingerprint,cash.ceo.inputFingerprint);
+  const fund=command((await current()).version,"equity",500000);const funded=await answersApi.POST(request(fund),context);assert.equal(funded.status,200,await funded.clone().text());const fundedDeal=(await funded.json()).deal;assert.equal(fundedDeal.underwriting.result.cfo.selected.fundingGap,0);assert.notEqual(fundedDeal.ceo.inputFingerprint,cash.ceo.inputFingerprint);assert.equal((await current()).answers.equity.value,500000);assert.equal(fundedDeal.underwriting.result.cfo.netProfit,null);
+  process.env.DEAL_ROOM_CFO_ENABLED="false";
   process.env.DEAL_ROOM_RADAR_ENABLED="false";
   const rejected=await db.from("listings").update({manual_decision:"REJECTED",updated_at:new Date(Date.now()+2000).toISOString()}).eq("id",id); assert.ifError(rejected.error);
   const rejection=await initializeApi.POST(request({},"/initialize"),context); assert.equal(rejection.status,200,await rejection.clone().text());

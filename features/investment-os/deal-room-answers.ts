@@ -1,3 +1,4 @@
+import { CFO_NUMERIC, CFO_LABELS } from "./cfo";
 import { buildDealBrain, DEAL_BRAIN_DEPENDENCIES } from "./brain/index.ts";
 import { fingerprint } from "./engine.ts";
 import type { BrainDirectorId } from "./brain/types.ts";
@@ -12,14 +13,15 @@ export type AnswerCommand = { requestId: string; expectedVersion: number; answer
 export class DealRoomInputError extends Error {}
 export class DealRoomNotFound extends Error {}
 const numeric: Record<string, { min: number; max: number; unit: string }> = {
+  ...Object.fromEntries(Object.entries(CFO_NUMERIC).map(([field,[min,max,unit]])=>[field,{min,max,unit}])),
   rooms: { min: 1, max: 100, unit: "liczba pokoi" },
   resalePerM2: { min: 1, max: 1000000, unit: "PLN/m² — założenie wyjścia" }, additionalCosts: { min: 0, max: 10000000, unit: "PLN dodatkowo" },
   negotiatedPrice: { min: 1, max: 100_000_000, unit: "PLN — założenie ceny zakupu" },
   askingPrice: { min: 1, max: 100_000_000, unit: "PLN" }, areaM2: { min: 1, max: 10_000, unit: "m²" },
   renovationBudget: { min: 0, max: 10_000_000, unit: "PLN łącznie, przed rezerwą" }, holdingMonths: { min: 1, max: 120, unit: "miesiące" },
 };
-export const ANSWER_LABELS: Record<string, string> = { resalePerM2: "Jaką cenę odsprzedaży za m² przyjmujesz jako założenie?", additionalCosts: "Jakie dodatkowe koszty projektu przyjąć (PLN)?", negotiatedPrice: "Jaka jest uzgodniona cena zakupu po negocjacjach?", askingPrice: "Jaka jest aktualna cena ofertowa w źródle?", renovationBudget: "Jaki jest budżet remontu przed rezerwą (PLN łącznie)?", holdingMonths: "Ile miesięcy potrwa projekt?" };
-const narrative = new Set(["legalStatus", "ownership", "condition", "renovationScope", "financing", "marketEvidence", "riskReview", "identity", "city", "district", "street", "rooms", "buildingType", "economics"]);
+export const ANSWER_LABELS: Record<string, string> = { ...CFO_LABELS, resalePerM2: "Jaką cenę odsprzedaży za m² przyjmujesz jako założenie?", additionalCosts: "Jakie dodatkowe koszty projektu przyjąć (PLN)?", negotiatedPrice: "Jaka jest uzgodniona cena zakupu po negocjacjach?", askingPrice: "Jaka jest aktualna cena ofertowa w źródle?", renovationBudget: "Jaki jest budżet remontu przed rezerwą (PLN łącznie)?", holdingMonths: "Ile miesięcy potrwa projekt?" };
+const narrative = new Set(["financingMode", "loanSchedule", "loanSecurity", "legalStatus", "ownership", "condition", "renovationScope", "financing", "marketEvidence", "riskReview", "identity", "city", "district", "street", "rooms", "buildingType", "economics"]);
 export function answerUnit(field: string): string { return numeric[field]?.unit ?? "opis / ustalenie"; }
 export function parseAnswerCommand(value: unknown): AnswerCommand {
   const v = record(value);
@@ -28,17 +30,20 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
   const answers = v.answers.map((raw): AnswerInput => {
     const a = record(raw), field = a.field;
     if (typeof field !== "string" || (!Object.hasOwn(numeric, field) && !narrative.has(field)) || seen.has(field)) throw new DealRoomInputError("Nieprawidłowe lub powtórzone pytanie.");
+    if ((field in CFO_LABELS) && process.env.DEAL_ROOM_CFO_ENABLED !== "true") throw new DealRoomInputError("CFO jest wyłączony.");
     seen.add(field);
     if (!["VALUE", "UNKNOWN", "LATER", "WITHDRAW"].includes(String(a.kind)) || !["DECLARATION", "ASSUMPTION", "DOCUMENT_REFERENCE"].includes(String(a.basis))) throw new DealRoomInputError("Wybierz rodzaj odpowiedzi i jej podstawę.");
     const kind = a.kind as AnswerKind, basis = a.basis as AnswerInput["basis"];
     let result: string | number | null = null;
     if (kind === "VALUE") {
       if (numeric[field]) {
-        if (typeof a.value !== "number" || !Number.isFinite(a.value) || a.value < numeric[field].min || a.value > numeric[field].max || (field === "rooms" && !Number.isInteger(a.value))) throw new DealRoomInputError(`Podaj poprawną wartość: ${answerUnit(field)}.`);
+        if (typeof a.value !== "number" || !Number.isFinite(a.value) || a.value < numeric[field].min || a.value > numeric[field].max || (["rooms","renovationMonths","loanTermMonths","holdingMonths"].includes(field) && !Number.isInteger(a.value))) throw new DealRoomInputError(`Podaj poprawną wartość: ${answerUnit(field)}.`);
         result = a.value;
       } else {
         if (typeof a.value !== "string" || !a.value.trim() || a.value.length > 2000) throw new DealRoomInputError("Odpowiedź musi mieć od 1 do 2000 znaków.");
         result = a.value.trim();
+        if (field === "financingMode" && !["CASH","LOAN","INVESTOR"].includes(result)) throw new DealRoomInputError("Wybierz CASH, LOAN lub INVESTOR.");
+        if (field === "loanSchedule" && !["INTEREST_ONLY","ANNUITY"].includes(result)) throw new DealRoomInputError("Wybierz INTEREST_ONLY lub ANNUITY.");
         if (/-----BEGIN .*PRIVATE KEY|\b(?:Bearer\s+|sk-proj-|sb_secret_|gh[pousr]_|(?:cookie|authorization|access_token|refresh_token)\s*[:=])/i.test(result)) throw new DealRoomInputError("Nie zapisuj sekretów ani tokenów w odpowiedziach.");
       }
     }
@@ -59,14 +64,14 @@ export function answerSourceFingerprint(deal: CanonicalDeal, field: string): str
 }
 export function affectedDirectors(fields: string[]): BrainDirectorId[] {
   const aliases: Record<string, string> = { renovationBudget: "renovationAssumption", holdingMonths: "transactionCosts", renovationScope: "renovationAssumption", negotiatedPrice: "askingPrice", resalePerM2: "marketEvidence", additionalCosts: "transactionCosts" };
-  const changed = fields.map((field) => aliases[field] ?? field), result = new Set<BrainDirectorId>();
+  const changed = fields.map((field) => field in CFO_LABELS ? "financing" : aliases[field] ?? field), result = new Set<BrainDirectorId>();
   for (const node of DEAL_BRAIN_DEPENDENCIES) if (node.dependsOnFields.some((field) => changed.includes(field)) || node.dependsOnDirectors.some((id) => result.has(id))) result.add(node.director);
   return [...result];
 }
 export function mergeAnswers(deal: CanonicalDeal, state: DealRoomState, command: AnswerCommand, actorId: string, now: string): Record<string, SavedAnswer> {
   const result = { ...state.answers };
   for (const answer of command.answers) {
-    const numericValue = Boolean(numeric[answer.field]);
+    const numericValue = Boolean(numeric[answer.field]) || ["financingMode","loanSchedule"].includes(answer.field);
     result[answer.field] = { ...answer, questionId: `brain-question:${deal.id}:${answer.field}`, actorId, savedAt: now, sourceFingerprint: answerSourceFingerprint(deal, answer.field), status: answer.kind !== "VALUE" ? "OPEN" : numericValue ? "RESOLVED" : "NEEDS_EVIDENCE", transitions: answer.kind !== "VALUE" ? ["OPEN"] : ["OPEN", "ANSWERED", numericValue ? "RESOLVED" : "NEEDS_EVIDENCE"] };
   }
   return result;
@@ -75,6 +80,7 @@ export function answerOverrides(deal: CanonicalDeal, baseline: DealFactOverrides
   const result = { ...baseline };
   for (const [field, answer] of Object.entries(answers)) {
     if (answer.kind !== "VALUE" || answer.sourceFingerprint !== answerSourceFingerprint(deal, field)) continue;
+    if (field in CFO_LABELS) Object.assign(result,{[field]:answer.value});
     if ((field === "askingPrice" || field === "areaM2" || field === "holdingMonths" || field === "negotiatedPrice" || field === "resalePerM2" || field === "additionalCosts" || field === "rooms") && typeof answer.value === "number") result[field] = answer.value;
     if ((field === "city" || field === "district" || field === "street" || field === "ownership" || field === "condition" || field === "buildingType") && typeof answer.value === "string") result[field] = answer.value;
   }
@@ -107,5 +113,6 @@ export function preserveUnchangedDirectors(previous: CanonicalDeal, next: Canoni
 export function roomQuestions(deal: CanonicalDeal, state: DealRoomState) {
   const questions = buildDealBrain(deal).questions.map((q) => ({ field: q.field, question: q.question, why: q.whyItMatters, evidence: q.evidenceNeeded, directors: q.requestingDirectors.join(", "), blocking: q.category === "BLOCKING" }));
   for (const field of ["negotiatedPrice", "renovationBudget", "holdingMonths", "financing", "resalePerM2", "additionalCosts"]) if (!questions.some((q) => q.field === field)) questions.push({ field, question: ANSWER_LABELS[field] ?? "Jakie źródło kapitału i warunki finansowania potwierdzono?", why: field === "negotiatedPrice" ? `Cena ofertowa w źródle: ${deal.facts.askingPrice.sourceValue ?? "brak danych"} PLN. Kwota po negocjacjach pozostaje odrębnym założeniem zakupu.` : "Zmiana założenia może zmienić wynik i warunki decyzji.", evidence: "Potwierdzenie sprzedającego, kosztorys lub warunki finansowania; deklaracja nie stanowi dowodu.", directors: field === "renovationBudget" ? "RENOVATION, UNDERWRITER, CEO" : "CFO, ACQUISITION, CEO", blocking: false });
-  return questions.filter((q) => !state.answers[q.field] || state.answers[q.field].status !== "RESOLVED" || state.answers[q.field].sourceFingerprint !== answerSourceFingerprint(deal, q.field));
+  if (deal.underwriting.result?.cfo) for(const field of deal.underwriting.result.cfo.missing) if(CFO_LABELS[field] && !questions.some(q=>q.field===field)) questions.push({field,question:CFO_LABELS[field],why:"Kapitał, koszt finansowania i warunki CEO zależą od tej deklaracji.",evidence:"Deklaracja lub dokument warunków; nie potwierdzenie bankowe.",directors:"CFO, UNDERWRITER, ACQUISITION, CEO",blocking:true});
+  return questions.filter((q) => !(deal.underwriting.result?.cfo && q.field === "financing") && (!state.answers[q.field] || state.answers[q.field].status !== "RESOLVED" || state.answers[q.field].sourceFingerprint !== answerSourceFingerprint(deal, q.field)));
 }
