@@ -61,4 +61,29 @@ Tax remains conditionally modelled, actual liability UNKNOWN; bounded 2026 PRIVA
 
 ## Verification checkpoint
 
-Implementation saved on feat/deal-room-main-integration. Local configuration/identity tests2/2 and independent arithmetic80/PRIVATE12/JDG4 passed. Full integration CI results pending publication; do not infer prior PR34 green as this branch green. Resume: inspect this branch, PR and CI; fix failed steps; update this section with actual run/results. No deployment authorized.
+Integration Draft PR: https://github.com/jakubokruszek-wq/flip-manager-ai/pull/35, base main. Final code verified in [CI38922124037](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38922124037), remote runtime `1a2a809041ce2e6dbab559534cfe48df56ec1821`, local runtime `22340ad`, tree `f98d799300f1da3e6d84145166207117b6e00c1d`. All3 jobs SUCCESS.
+
+| Check | Actual result |
+|---|---|
+| Full TypeScript / full Next.js build | PASS / PASS |
+| Scoped Deal Room + changed app/API ESLint | PASS,0errors,2pre-existingwarnings |
+| Node directors/finance/taxes/Q&A/security | 160/160 |
+| Existing MARKET/Radar | 97/97 |
+| PostgreSQL CAS/roles/replay/ownership/rollback | 8/8 |
+| Actual API→services→PostgREST→PostgreSQL composites | 3/3 |
+| Mobile browser (new Finder TEST + Q&A/history, existing regression) | 4/4 |
+| Independent Decimal rule / PRIVATE / JDG algebra vectors | 80/80,12/12,4/4 |
+
+Do not add local22 pure/config tests again to160, or local97 MARKET to CI97. The Decimal vectors verify independent arithmetic, not statutory contribution qualification. Mobile viewport390×844 tested by Playwright Chromium, not physical Samsung. Browser uses fake Auth + mocked API transport; real API/DB composites mock only identity/admin factory and use real isolated PostgreSQL/PostgREST. A single real authenticated browser→DB hosted flow has NOT been run. Repository-wide ESLint outside the integration surface has NOT been claimed.
+
+The three existing Radar-backed API cases reproduced operating pre-tax profits150732.50 /7932.50 /−338867.50 PLN and CEO HOLD/HOLD/ODRZUĆ. New TEST composite verifies repeated preparation preserves saved answers, rejects wrong actor/production/Origin and reads22 receipts across pages with21 tied timestamps without loss/duplication. Existing composites retain missing-Radar/general/district/city fallback, stale/source/owner fences, recoverable response loss and all PRIVATE/JDG withdrawal/reanalysis coverage. New phone UI catalog has three actor-scoped links and no horizontal overflow.
+
+Earlier integration runs38921739832 and38921929125 failed fixture/type checks (duplicated fields/column and ProcessEnv weak-type mismatch). Those were fixed through explicit keys, no assertions/looser null handling; final run above passes every step. Local clean diff check and high-confidence private-key/GitHub/OpenAI/JWT pattern scan of all68 changed tracked files found no matches; this is not an exhaustive credential audit. Protected Watcher/collector/workers/extensions/android/vercel.json diff vs main is empty. No remote production/advisor/configuration inspection or mutation was performed.
+
+## Stop / resume checkpoint
+
+Code integration and isolated CI complete; stop before merge/deployment/activation as instructed. Final follow-up commit changes documentation only, with skip-ci; tested runtime remains the SHA above. Original seven drafts/branches preserved; local original history preserved, published trees matched exactly via Git Data API. Main remains642fdf3. No paid service provisioned; existing GitHub Actions quota/billing was not inspected or altered.
+
+Ready for reviewed code acceptance and future controlled synthetic user testing AFTER separately approved isolation/deployment/account binding. Not currently reachable on the user's phone: no test host deployed, account UUID not configured, migrations not applied outside CI. No production/tax-decision readiness claim.
+
+Resume only after user's explicit deployment authorization: inspect PR35 and this checkpoint, reconfirm main/head/green run; confirm isolated host/database/Auth UUID/schedulers/outbound boundaries and free-resource budget; then execute the reviewed isolated setup and phone walkthrough above. Do not repeat completed implementation/CI without new code or failures. Production rollout/merge/real investment decisions require their own approval; never infer permission from test-host approval.

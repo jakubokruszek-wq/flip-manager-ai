@@ -218,3 +218,10 @@ Browser/auth transport is mocked; actual DB checked separately. No single authen
 “Wznów Deal Room od Draft PR #34 i ostatniego docs/deal-room-30-progress.md na feat/deal-room-jdg-audit w /workspace/flip-deal-jdg. Sprawdź HEAD/status bez resetu. Nie powtarzaj zielonego CI38907529725 przy samych zmianach Markdown. Zachowaj ograniczony JDG/PRIVATE i UNKNOWN poza kwalifikacją. Ustal następny zatwierdzony zakres: izolowane kontrolowane testy użytkownika albo odrębnie zweryfikowany model rocznych składek/innej formy/SP_ZOO. Bez automatycznej kwalifikacji, produkcji, migracji, aktywacji, merge, wdrożeń, Watchera/OLX i płatnych usług.”
 
 No quota exhaustion was observed; no credit-balance/renewal/persistent-wake tool exists. No fictitious background monitor was started. Checkpoint is durable and does not claim automatic future resumption.
+
+
+## 2026-10-16 — unified main integration checkpoint
+
+Integration branch `feat/deal-room-main-integration`, Draft PR35 (base main), preserves PR25/27/29/31/32/33/34. Tested remote runtime `1a2a809041ce2e6dbab559534cfe48df56ec1821`, local `22340ad`, tree `f98d799300f1da3e6d84145166207117b6e00c1d`. CI38922124037 allSUCCESS: fulltsc/build, scopedlint, Node160, MARKET/Radar97, PG8, actualAPI/DB3, mobile4, independent80/12/4. Account-scoped isolated synthetic Finder TEST, namespace API fences, replay-safe seeds and paginated persisted history added. No Watcher/OLX/production changes, no merge/deploy/activation/paid resource. Detailed evidence/limits/setup/rollback in docs/deal-room-main-integration.md. Final docs-only follow-up skip-ci.
+
+STOP before deployment, awaiting user approval. No authorized account UUID configured, no hosted mobile test URL, no full real authenticated browser→DB or physicalSamsung test. Existing bounded/UNKNOWN tax limits remain. Resume from PR35/checkpoint only after specific isolated deployment approval; confirm host/database/Auth account/cron/outbound separation before any setup. Do not repeat completed tasks. No automatic credit monitoring/resume process exists.
