@@ -44,3 +44,23 @@ The isolated service harness applies the existing Radar migration to disposable 
 - Refresh does not transactionally lock the entire Radar sample; it records the snapshot read. Concurrent operator changes are reflected on the next refresh, not by mutating an immutable past round.
 - The tests use isolated synthetic data, not production schema/data parity or live portal validation.
 - Existing private owner/CAS, legal and evidence gates remain required. No recommendation is permission to buy.
+
+## Final checkpoint — verified 2026-10-16
+
+- Draft PR #27: https://github.com/jakubokruszek-wq/flip-manager-ai/pull/27 (base `feat/deal-room-qa`, keeps #25 intact).
+- Tested remote code commit: `f2fbe4589134e19f3121072d6bec9afc242c2469`; corresponding local commit `08a9493`.
+- Identical local/remote tested tree: `7ada7c47c54a9a7e6a3eaa6d1c1b109db086d958`.
+- Final CI: https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38863006442 — all three jobs SUCCESS.
+- TypeScript, scoped ESLint, full Next.js production build: PASS.
+- Node Investment OS/Brain/Q&A/underwriting suite: 123/123 PASS (including seven new Radar scenarios).
+- PostgreSQL CAS/ownership/retry/source-fence/RLS/grant regression: 8/8 PASS.
+- Real API/service/PostgREST/PostgreSQL composite: 1/1 PASS. Includes actual Radar migration on a disposable database, two operators' synthetic samples, no private sample persisted into an unowned deal, owner-only sample, exclusions reducing 20 to five comps and recomputed blocked MARKET/CEO.
+- Browser scenarios: 4/4 PASS (mobile Q&A/reload, Brain, Premium Deal Room, Finder).
+- Existing market-intelligence and Radar qualification/stats run locally: 97/97 PASS.
+- Loaded Node suite coverage: 78.54% lines / 83.67% branches / 82.03% functions. Adding imports exposes more server modules in this denominator; this is not whole-repository coverage. Native service/database behavior is tested separately rather than counted as Node unit coverage.
+- Added-lines credential-pattern audit: no matched credentials. This is a bounded pattern check, not a guarantee that arbitrary private data can be automatically recognized.
+- No production or live portal tests performed; no claims about current real market prices. Browser transport uses existing fixture mocks; the real database path is a separate native API test, not one authenticated browser-to-DB scenario.
+- No new paid service or model, no remote migration or deployment. CI uses existing GitHub Actions with disposable services; account-level quota/billing was not queried.
+- Initial test setup failures (SQL string delimiter, missing empty historical queue dependency) were fixed; interrupted earlier runs are not counted as successes.
+
+The final follow-up changes only this Markdown report (`[skip ci]`); the tested application tree content is unchanged apart from documentation. Before activation, review the selection/profile/identity limitations above, obtain suitable independent comparables and legal evidence, provision the existing Q&A draft only in an approved environment, claim an owner through Q&A and explicitly refresh. This PR neither performs nor authorizes production activation.
