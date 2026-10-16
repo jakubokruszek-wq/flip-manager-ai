@@ -21,7 +21,7 @@ const narrative = new Set(["legalStatus", "ownership", "condition", "renovationS
 export function answerUnit(field: string): string { return numeric[field]?.unit ?? "opis / ustalenie"; }
 export function parseAnswerCommand(value: unknown): AnswerCommand {
   const v = record(value);
-  if (typeof v.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(v.requestId) || !Number.isSafeInteger(v.expectedVersion) || Number(v.expectedVersion) < 1 || !Array.isArray(v.answers) || v.answers.length < 1 || v.answers.length > 20) throw new DealRoomInputError("Nieprawidłowa wersja lub identyfikator zapisu.");
+  if (typeof v.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.requestId) || !Number.isSafeInteger(v.expectedVersion) || Number(v.expectedVersion) < 1 || !Array.isArray(v.answers) || v.answers.length < 1 || v.answers.length > 20) throw new DealRoomInputError("Nieprawidłowa wersja lub identyfikator zapisu.");
   const seen = new Set<string>();
   const answers = v.answers.map((raw): AnswerInput => {
     const a = record(raw), field = a.field;
@@ -85,6 +85,8 @@ export function answerOverrides(deal: CanonicalDeal, baseline: DealFactOverrides
   return result;
 }
 export function preserveUnchangedDirectors(previous: CanonicalDeal, next: CanonicalDeal): CanonicalDeal {
+  // Rebuilding calculations must not erase independently attached document evidence.
+  next.evidenceFabric = [...new Map([...previous.evidenceFabric, ...next.evidenceFabric].map((item) => [item.id, item])).values()];
   for (const key of ["scout", "verify", "market", "underwriting", "ceo"] as const) {
     const semantic = (output: CanonicalDeal[typeof key]) => fingerprint({ result: output.result, status: output.status, confidence: output.confidence, provenance: output.provenance, warnings: output.warnings, missing: output.missingFields, validation: output.validation.checks, freshUntil: output.freshUntil });
     if (previous[key].inputFingerprint === next[key].inputFingerprint && semantic(previous[key]) === semantic(next[key])) {

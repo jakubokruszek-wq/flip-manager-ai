@@ -11,7 +11,7 @@ async function handle(request: Request | null, { params }: Context): Promise<Res
   if (!dealRoomEnabled()) return Response.json({ enabled: false }, { status: request ? 404 : 200 });
   try {
     const { id } = await params;
-    if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     if (!request) { const room = await readDealRoom(id, actor.id); return room ? Response.json({ enabled: true, room }, { headers: { "Cache-Control": "no-store" } }) : Response.json({ code: "NOT_FOUND" }, { status: 404 }); }
     if (request.headers.get("origin") && request.headers.get("origin") !== new URL(request.url).origin) return Response.json({ code: "ORIGIN_MISMATCH" }, { status: 403 });
     if (!request.headers.get("content-type")?.startsWith("application/json")) return Response.json({ code: "JSON_REQUIRED" }, { status: 415 });

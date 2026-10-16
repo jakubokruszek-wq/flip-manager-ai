@@ -63,6 +63,7 @@ test("nonfinancial legal note leaves financial tracks and timestamps unchanged",
   assert.ok(!affectedDirectors(["legalStatus"]).includes("MARKET"));
 });
 test("invalid, duplicate, injected and secret-bearing answers are rejected", () => {
+  assert.throws(() => parseAnswerCommand({ requestId: "-".repeat(36), expectedVersion: 1, answers: [answer("negotiatedPrice", 260000)] }));
   for (const answers of [[answer("askingPrice", -1)], [answer("askingPrice", NaN)], [answer("ownership", "Bearer secret")], [answer("ownerId", "another-user")], [answer("__proto__", 1)], [answer("constructor", 1)], [answer("askingPrice", 1), answer("askingPrice", 2)], [{ ...answer("legalStatus", "doc"), evidenceUrl: "https://example.test/doc?token=abc" }]]) assert.throws(() => parseAnswerCommand({ requestId, expectedVersion: 1, answers }));
 });
 
@@ -77,4 +78,14 @@ test("preservation never hides changed provenance with unchanged numeric inputs"
   const changed = structuredClone(base);
   changed.market.provenance = [...changed.market.provenance, { field: "marketEvidence", provenance: "USER_ASSUMPTION", observedAt: "2026-10-16T00:00:00Z" }];
   assert.notEqual(preserveUnchangedDirectors(base, changed).market, base.market);
+});
+
+test("reanalysis preserves independent document evidence without promoting legal gates", () => {
+  const before = buildCanonicalDeal(lodzDeal());
+  const document = { ...before.evidenceFabric[0], id: "independent-document", documentId: "66666666-6666-4666-8666-666666666666", evidenceType: "DOCUMENT_OBSERVATION" as const, sourceName: "SYNTHETIC_DOCUMENT", verificationStatus: "UNVERIFIED" as const };
+  before.evidenceFabric.push(document);
+  const after = preserveUnchangedDirectors(before, buildCanonicalDeal({ ...lodzDeal(), overrides: { negotiatedPrice: 260000 } }));
+  assert.deepEqual(after.evidenceFabric.find((item) => item.id === document.id), document);
+  assert.equal(after.evidenceFabric.filter((item) => item.id === document.id).length, 1);
+  assert.notEqual(after.ceo.result?.action, "KUP");
 });
