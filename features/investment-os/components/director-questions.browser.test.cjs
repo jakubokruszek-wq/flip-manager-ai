@@ -155,3 +155,40 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });
+
+test('mobile main Finder virtual TEST: dedicated API only, persisted answers and history with real-deal features OFF',{timeout:180000},async(t)=>{
+ const {buildTestDeal}=await import('../test-engine.ts');
+ const {testCases}=await import('../test-mode.ts');
+ const {TEST_DEAL_FEATURES}=await import('../feature-context.ts');
+ const {buildDealBrain}=await import('../brain/index.ts');
+ const {parseAnswerCommand,mergeAnswers,answerOverrides}=await import('../deal-room-answers.ts');
+ const owner='44444444-4444-4444-8444-444444444444',cases=testCases(owner),id=cases[0].id;
+ let current=buildTestDeal(owner,id),room={version:1,answers:{},baselineOverrides:{},rounds:[]},normalInvestmentCalls=0;
+ const receipts=new Map(),root=path.resolve(__dirname,'../../..'),auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
+ const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_TEST_OPERATOR_IDS:owner,DEAL_ROOM_QA_ENABLED:'false',DEAL_ROOM_CFO_ENABLED:'false',DEAL_ROOM_TAX_REVIEW_ENABLED:'false'};
+ const nextBin=require.resolve('next/dist/bin/next');await ensureProductionBuild(nextBin,root,env);const port=await freePort(),base=`http://127.0.0.1:${port}`;
+ const server=spawn(process.execPath,[nextBin,'start','--hostname','127.0.0.1','--port',String(port)],{cwd:root,env,stdio:'ignore'});t.after(()=>server.kill());
+ for(let i=0;i<120;i++){try{if((await fetch(base+'/login')).ok)break;}catch{}await new Promise(r=>setTimeout(r,250));}
+ const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage({viewport:{width:390,height:844}});await addOperatorSessionCookie(page.context(),base);
+ await page.route('**/api/**',async route=>{
+  const req=route.request(),url=new URL(req.url());let body={ok:true};
+  if(url.pathname.startsWith('/api/flip-finder/listings/'))normalInvestmentCalls++;
+  if(url.pathname==='/api/deal-room/test')body={cases};
+  else if(url.pathname===`/api/deal-room/test/${id}/answers`){
+   if(req.method()==='GET')body={enabled:true,room};
+   else{
+    const cmd=parseAnswerCommand(req.postDataJSON(),TEST_DEAL_FEATURES);
+    if(receipts.has(cmd.requestId))body=receipts.get(cmd.requestId);
+    else{assert.equal(cmd.expectedVersion,room.version);const before=current,answers=mergeAnswers(current,room,cmd,owner,new Date().toISOString(),TEST_DEAL_FEATURES);current=buildTestDeal(owner,id,answerOverrides(current,{},answers));room={...room,version:room.version+1,answers,rounds:[{requestId:cmd.requestId,savedAt:new Date().toISOString(),changedFields:cmd.answers.map(a=>a.field),before:buildDealBrain(before),after:buildDealBrain(current)}]};body={deal:current,room};receipts.set(cmd.requestId,body);}
+   }
+  }else if(url.pathname===`/api/deal-room/test/${id}/history`)body={rounds:room.rounds.map(r=>({requestId:r.requestId,createdAt:r.savedAt,changedFields:r.changedFields,beforeProfit:r.before.financials?.profitBase,afterProfit:r.after.financials?.profitBase,recommendation:r.after.ceo.reasoningSummary})),nextBefore:null};
+  else if(url.pathname===`/api/deal-room/test/${id}`)body={deal:current,media:[]};
+  return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+ });
+ await page.goto(base+'/flip-finder');await page.getByRole('button',{name:'Przygotuj / wznów testy',exact:true}).click();await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).first().click();
+ await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();await page.getByRole('button',{name:/Pozostałe pytania/}).click();await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('40000');await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+ await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();assert.equal(room.answers.renovationBudget.value,40000);
+ await page.getByRole('button',{name:'Wczytaj / odśwież historię'}).click();await page.getByLabel('Historia analiz',{exact:true}).getByText(/Zmienione pola: renovationBudget/).waitFor();
+ assert.notEqual(current.ceo.result.action,'KUP');assert.equal(current.underwriting.result.cfo.taxStatus,'UNKNOWN');assert.equal(normalInvestmentCalls,0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/virtual-test-main-finder.png'),fullPage:true});
+});

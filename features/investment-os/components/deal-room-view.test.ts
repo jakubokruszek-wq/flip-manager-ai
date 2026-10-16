@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { investmentPath } from "../test-identity";
 
 const root = process.cwd();
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -39,7 +40,8 @@ test("canonical listing route keeps GET read-only and exposes initialization onl
   assert.match(getRoute, /getInvestmentDeal\(listingId, actorId\)/);
   assert.doesNotMatch(getRoute, /initializeInvestmentDeal|method:\s*["']POST["']/);
   assert.match(desk, /if \(!notComputed \|\| initializationInFlight\.current\) return/);
-  assert.match(desk, /\/investment\/initialize/);
+  assert.match(desk, /investmentPath\(result\.id\)\}\/initialize/);
+  assert.equal(`${investmentPath("22222222-2222-4222-8222-222222222222")}/initialize`, "/api/flip-finder/listings/22222222-2222-4222-8222-222222222222/investment/initialize");
   assert.match(desk, /method: "POST"/);
   assert.match(desk, /data-initialize-deal/);
   assert.match(desk, /onClick=\{\(\) => void initialize\(\)\}/);
