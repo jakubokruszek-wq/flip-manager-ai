@@ -89,3 +89,12 @@ test("reanalysis preserves independent document evidence without promoting legal
   assert.equal(after.evidenceFabric.filter((item) => item.id === document.id).length, 1);
   assert.notEqual(after.ceo.result?.action, "KUP");
 });
+
+test("existing resale and additional-cost controls remain available after Q&A owns overrides", () => {
+  const { after, overrides } = apply([answer("resalePerM2", 10500), answer("additionalCosts", 15000)]);
+  assert.equal(overrides.resalePerM2,10500);
+  assert.equal(overrides.additionalCosts,15000);
+  assert.equal(after.market.result?.resalePricePerM2Base,10500);
+  assert.equal(after.market.result?.priceEvidenceType,"USER_ASSUMPTION");
+  assert.notEqual(after.ceo.result?.action,"KUP");
+});
