@@ -69,3 +69,13 @@ Use only an independently verified isolated environment with the existing Q&A dr
 ### Next implementation checkpoint
 
 Continue from PR #31 HEAD (confirm SHA via Git, do not hardcode a stale documentation-commit SHA). Do not rerun the successful code suite for docs-only updates. Next deliverable is a small reviewed legal/model contract: explicit tax regime, property/activity qualification, dated statutory provisions/amendments and applicability, VAT entitlement and gross/net bases, income and withdrawal allocation, payment schedule and independent numeric test vectors. PRIVATE/JDG/SP_ZOO estimates must remain UNKNOWN until their selected contract is complete; unsupported forms remain unmodelled. No automatic tax-free private sale, threshold selection or deduction. No merges/deployments/migrations/production actions are authorized.
+
+## P2b.2 in progress — 2026-10-16
+
+New worktree `/workspace/flip-deal-tax-model`, branch `feat/deal-room-tax-model`, based on clean PR #31 tree `b5d05400a65d0c8cc4c86230081f9bb327ac3f65`. Original PRs/worktrees and ZIP preserved. Source/calculation contract committed as `8bcf53b`; see `docs/deal-room-30-p2b2-model.md` for current Sejm texts, replaced VAT consolidation, known dates, applicability gaps and independent numeric vectors.
+
+Implemented bounded conditional arithmetic for explicit PRIVATE PIT19, JDG linear PIT19, classical company CIT19, separate natural-person dividend PIT19, alternative PCC2/PCC6, invoice gross VAT23/VAT8. New `DEAL_ROOM_TAX_ARITHMETIC_ENABLED` OFF, additionally requires existing CFO/TAX_REVIEW projection. Typed rule/base answers use existing immutable Q&A/CAS/receipt and invalidate dependent CEO. Scenario mismatch/unsupported input -> no arithmetic. Integer cents, full-PLN base/tax rounding, no implicit exemption, no tax deduction or cost mutation. Actual liabilities and all after-tax project outputs remain UNKNOWN because a full effective-period/qualification model is not yet verified. This is not a completed P2b.2 tax-liability engine.
+
+Local pure tests 8/8 PASS. Full TypeScript/lint/build/Node/PG/API/mobile tests pending on the new PR. Added native API checks for arithmetic answer persistence/replay, CEO fingerprint, withdrawal and no manufactured net profit. Do not claim these pending checks PASS yet.
+
+Resume: inspect clean/WIP status in the new worktree; check new stacked PR CI before rerunning anything; fix actual failures. Then continue the amendment/transition and transaction eligibility audit, define evidence-qualified bases, VAT entitlement, contributions and payout timing. Do not release automatic net cash/ROI/Max Buy while UNKNOWN. No credit monitor or persistent wake-up is available.

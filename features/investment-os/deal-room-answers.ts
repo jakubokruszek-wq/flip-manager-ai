@@ -1,3 +1,4 @@
+import { isTaxRule, validTaxAmount } from "./tax-arithmetic";
 import { TAX_LABELS, validTaxDate } from "./tax-review";
 import { CFO_NUMERIC, CFO_LABELS } from "./cfo";
 import { buildDealBrain, DEAL_BRAIN_DEPENDENCIES } from "./brain/index.ts";
@@ -33,6 +34,7 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
     if (typeof field !== "string" || (!Object.hasOwn(numeric, field) && !narrative.has(field)) || seen.has(field)) throw new DealRoomInputError("Nieprawidłowe lub powtórzone pytanie.");
     if ((field in CFO_LABELS) && process.env.DEAL_ROOM_CFO_ENABLED !== "true") throw new DealRoomInputError("CFO jest wyłączony.");
     if (field in TAX_LABELS && (process.env.DEAL_ROOM_TAX_REVIEW_ENABLED !== "true" || process.env.DEAL_ROOM_CFO_ENABLED !== "true")) throw new DealRoomInputError("Scenariusze podatkowe są wyłączone.");
+    if (["taxRule","taxRuleBase"].includes(field) && process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED !== "true") throw new DealRoomInputError("Obliczenia warunkowe są wyłączone.");
     seen.add(field);
     if (!["VALUE", "UNKNOWN", "LATER", "WITHDRAW"].includes(String(a.kind)) || !["DECLARATION", "ASSUMPTION", "DOCUMENT_REFERENCE"].includes(String(a.basis))) throw new DealRoomInputError("Wybierz rodzaj odpowiedzi i jej podstawę.");
     const kind = a.kind as AnswerKind, basis = a.basis as AnswerInput["basis"];
@@ -44,6 +46,8 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
       } else {
         if (typeof a.value !== "string" || !a.value.trim() || a.value.length > 2000) throw new DealRoomInputError("Odpowiedź musi mieć od 1 do 2000 znaków.");
         result = a.value.trim();
+        if(field === "taxRule" && !isTaxRule(result)) throw new DealRoomInputError("Nieobsługiwana reguła podatkowa; pozostaje nieustalona.");
+        if(field === "taxRuleBase" && !validTaxAmount(result)) throw new DealRoomInputError("Podaj PLN od 0 do 100000000 z kropką i maks. 2 miejscami.");
         if(field === "taxScenario" && !["PRIVATE","JDG","SP_ZOO"].includes(result)) throw new DealRoomInputError("Wybierz PRIVATE, JDG lub SP_ZOO; inne modele nie są obsługiwane.");
         if(["taxAcquiredOn","taxSaleOn"].includes(field) && !validTaxDate(result)) throw new DealRoomInputError("Podaj rzeczywistą datę RRRR-MM-DD.");
         if (field === "costScope") { result=result.toUpperCase(); if(result!=="BRUTTO") throw new DealRoomInputError("Potwierdź BRUTTO albo wybierz Nie wiem."); }
