@@ -25,3 +25,42 @@ Explicit confirmations plus a safe public reference are required. No URL fetch o
 ## Stage 2 audit plan
 
 Use three synthetic Łódź listings: high profit, small margin, hard legal/identity reject. Exercise existing Finder adapter/CanonicalDeal/Brain, MARKET Radar and general/district/city fallback, renovation, underwriting, CFO, RISK_LEGAL, CEO. Assert relative profits, rejection precedence and no auto-BUY on missing qualification; answer persistence/replay/withdraw/change/reanalysis and owner boundaries. Browser transport and actual API/DB are separate tests and must not be described as one authenticated browser→DB test. Record only actual finished CI results in checkpoint.
+
+## Actual three-property evidence
+
+Executed through actual listing API/services/PostgREST in disposable PostgreSQL, using the existing Finder listing adapter. Each owned case selected the same 12 qualified synthetic Radar offers. Figures below are **operating results BEFORE income tax/contributions**, not net returns or transaction prices.
+
+| Synthetic Łódź case | Purchase PLN | Operating profit PLN | CEO |
+|---|---:|---:|---|
+| High-profit opportunity | 200000 | 150732.50 | HOLD / ZBIERZ DANE |
+| Positive thin margin | 340000 | 7932.50 | HOLD / ZBIERZ DANE |
+| Risk / known hard reject | 680000 | -338867.50 | ODRZUĆ |
+
+The third fixture has an explicit existing human hard-reject veto (and the pure regression also a material area conflict). This verifies veto precedence/persistence; it does NOT prove automatic legal-defect diagnosis. High profit is not authority to BUY while legal/tax/evidence gates remain open. The positive thin-margin case is asserted above zero and below PLN20000 in the real API fixture; the pure general-benchmark variant uses its own lower-profit threshold.
+
+All ten director projections were present. Saving renovation 40000→100000 lowered the existing financial result and changed the dependent CEO; replay was immutable and a subsequent GET retained the answer. Excluding the owner's Radar sample switched to actual eligible general comparisons, labelled indicative, with no BUY. Earlier existing composite additionally covers district/city fallback and no-data blocking. Another composite verifies full JDG field/payment save/replay/reload, conditional annual PIT reconciliation, and UNKNOWN after withdrawing the ZUS assessment. It also preserves prior PRIVATE/security/owner/CAS tests.
+
+## Audit fixes
+
+1. Brain CFO previously described only pre-tax liquidity, ignoring the canonical tax projections. It now also shows explicitly conditional owner result/funding gap and unresolved tax requirements, without marking actual tax verified.
+2. Brain's question engine previously omitted the tax questions that canonical Q&A supported. It now routes active tax questions to UNDERWRITER/CFO/CEO. The original questions/receipt system is reused.
+3. A single-line answer input cannot preserve a multi-payment schedule. Only that answer now uses an accessible bounded multiline field; long question legends are width-limited for mobile. Other answer types unchanged.
+4. PRIVATE and JDG share existing CFO-ledger reconciliation. No second renovation/financing/Finder calculator was introduced. Source identity, Radar deduplication, owner and buy gates were retained.
+
+## Readiness boundary
+
+Code is suitable for **controlled synthetic tests in a confirmed isolated environment**, subject to final CI linked in checkpoint. No interactive user test environment was deployed or activated by this task. Users cannot start a hosted test merely by opening this PR; no unverified repository preview should be used against production Supabase. Preparing an accessible isolated host requires separate authorization under the no-deployment instruction.
+
+Not ready for production decisions, automatic tax filings or general JDG tax advice. Election, trading classification, VAT occupation/improvement history, eligibility of costs and contributions remain declared/evidence-dependent. Software does NOT establish ZUS category, monthly minima/bases or annual health reconciliation; it consumes an externally reconciled schedule and blocks missing/adjusted cases. The synthetic schedule/oracle checks algebra/cash, not statutory correctness of an actual ZUS assessment. Unsupported scale/ryczałt, taxable/partly deductible VAT, other annual activity, contribution/PIT refunds, loans/investors and SP_ZOO remain UNKNOWN. Actual liability/canonical net stay UNKNOWN, CEO HOLD; post-tax Max Buy/stress not implemented. Coverage ends at 2026-10-16 and cannot be silently extended to a future flip.
+
+The browser test uses mocked API/auth transport and real canonical calculations; real API→DB is a separate composite. No single authenticated browser→DB test, physical Samsung test or tax return submission was performed. No production/paid service, schema change or feature activation.
+
+For a future controlled test: first verify database/credentials/network isolation; use only the three synthetic fixtures and a synthetic operator; enable QA/CFO/TAX_REVIEW/JDG only in that disposable process; verify missing qualifications give questions/UNKNOWN, then save the complete supplied assessment and payment plan, reload, alter a price/budget and confirm old assessment reopens. Withdraw a ZUS answer and confirm UNKNOWN. Verify Radar exclusion yields indicative general evidence and hard reject survives all recalculation. Disable flags and refresh to roll back projection without deleting receipts. No real investor identities, payroll, bank documents, tokens or Facebook sessions.
+
+## Final verification
+
+[CI38907529725](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38907529725), runtime `acb39a35b5d74c30ee7671d68e3670cb384bdfd3` (local `9069e4b`), all three jobs SUCCESS. TypeScript/full Next.js build PASS; scoped Deal Room ESLint PASS, 0 errors/2 pre-existing warnings. Node158/158; SQL8/8; actual API/DB2/2; browser4/4; independent rule80/80, PRIVATE12/12 and JDG algebra4/4; local existing MARKET/Radar97/97. The JDG oracle does not certify a statutory ZUS schedule. No failed run remained; initial full run38906802090 also passed, follow-up tightened the positive-margin assertion and emitted synthetic per-case evidence.
+
+[Mobile screenshots](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38907529725/artifacts/12048618304), SHA256 `bb2e3c659c6edf4cf721dc5321f9cc2649cc272874d7aef8772d9234728cffe5`.
+
+Draft PR #34: https://github.com/jakubokruszek-wq/flip-manager-ai/pull/34, stacked on #33. Final changes after tested code are documentation only. Full durable checkpoint: `docs/deal-room-30-progress.md`. All new features OFF; no merge, deployment, production migration, paid API/service or Watcher/OLX changes.
