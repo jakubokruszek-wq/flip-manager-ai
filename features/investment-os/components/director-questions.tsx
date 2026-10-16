@@ -22,7 +22,10 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   }, [path]);
   const change = (field: string, patch: Partial<AnswerInput>) => {
     pending.current = null;
-    setDraft((current) => ({ ...current, [field]: { field, kind: "VALUE", value: null, basis: "DECLARATION", evidenceUrl: null, ...room?.answers[field], ...current[field], ...patch } }));
+    setDraft((current) => {
+      const base: AnswerInput = current[field] ?? room?.answers[field] ?? { field, kind: "VALUE", value: null, basis: "DECLARATION", evidenceUrl: null };
+      return { ...current, [field]: { ...base, ...patch } };
+    });
   };
   const save = async () => {
     if (!room || saving) return;
@@ -37,7 +40,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Błąd połączenia. Ponów ten sam zapis."); }
     finally { setSaving(false); }
   };
-  const questions = room ? roomQuestions(deal, room) : [];
+  const questions = roomQuestions(deal, room ?? { version: 0, answers: {}, baselineOverrides: {}, rounds: [] });
   const latest = room?.rounds.at(-1);
   const keys = new Set(questions.map((q) => q.field));
   const editing = Object.keys(draft).filter((field) => !keys.has(field));

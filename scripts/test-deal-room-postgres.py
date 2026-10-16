@@ -20,6 +20,7 @@ class DealRoomSql(unittest.TestCase):
     def setUpClass(cls):
         with psycopg.connect(DSN, autocommit=True) as c:
             c.execute("create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key); create table public.listings(id uuid primary key, updated_at timestamptz)")
+            c.execute('grant select, update on public.listings to service_role')
             c.execute('insert into auth.users values (%s),(%s)', (OWNER, OTHER))
             for name in ['20260912120000_create_investment_os_phase1.sql', '20260912150000_investment_os_foundation.sql', '20260912180000_investment_os_deal_cas.sql']:
                 c.execute((ROOT / 'supabase/migrations' / name).read_text())
