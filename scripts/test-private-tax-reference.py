@@ -18,7 +18,7 @@ for price in [D("300000"), D("300025.01")]:
    acquisition=price+pcc+D(8000); revenue=sale-D(9000); income=revenue-acquisition-improvement
    pit=whole(whole(max(D(0),income))*D(".19")); net=profit-(pcc-embedded)-pit
    rows=[dict(month=0,phase="Deposit",expenses=30000,funding=0,receipts=0,debtPayment=0,balance=470000),dict(month=1,phase="Purchase",expenses=num(price-D(30000)+costs+D(50000)),funding=0,receipts=0,debtPayment=0,balance=0),dict(month=2,phase="Hold/equipment",expenses=20000,funding=0,receipts=0,debtPayment=0,balance=0),dict(month=6,phase="Sale",expenses=9000,funding=0,receipts=num(sale),debtPayment=0,balance=0)]
-   e=dict(mode="CASH",purchase=num(price),purchaseCosts=num(costs),embeddedPcc=num(embedded),improvementBudget=50000,sale=num(sale),saleCosts=9000,projectProfit=num(profit),equity=500000,months=rows)
+   e=dict(mode="CASH",purchase=num(price),purchaseCosts=num(costs),embeddedPcc=num(embedded),improvementBudget=50000,sale=num(sale),saleCosts=9000,projectProfit=num(profit),equity=500000,liquidityReserve=30000,months=rows)
    cases.append([dict(facts,privateImprovements=str(improvement)),dict(acquired="2026-04-01",sale="2026-10-01"),e])
    expected.append(dict(pcc=pcc,taxRevenue=revenue,acquisitionBasis=acquisition,taxableIncome=income,pit=pit,profitAfterPit=net,ending=D(500000)+net))
 js='import {privateTaxModel} from "./features/investment-os/private-tax.ts";console.log(JSON.stringify('+json.dumps(cases)+'.map(args=>privateTaxModel(...args))));'

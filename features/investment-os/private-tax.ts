@@ -18,13 +18,13 @@ export type PrivateTaxInputs = Partial<Record<keyof typeof PRIVATE_TAX_LABELS,st
 export const PRIVATE_ENUMS:Partial<Record<keyof PrivateTaxInputs,string>>={privateActivity:"NON_BUSINESS",privateTitle:"PAID_SOLE_OWNER",privateVat:"OUTSIDE_VAT_NO_DEDUCTION",privateExclusions:"STANDARD_ONLY",privatePcc:"STANDARD_MARKET_PRICE",privateCostEvidence:"DOCUMENTED",privateSaleMarket:"MARKET_PRICE"};
 export const PRIVATE_AMOUNTS = ["privateAcquisitionFees","privateImprovements","privateDisposalCosts"] as const;
 export type PrivateLedgerRow={month:number;phase:string;expenses:number;funding:number;receipts:number;debtPayment:number;balance:number};
-export type PrivateEconomics={mode:string;purchase:number;purchaseCosts:number;embeddedPcc:number;improvementBudget:number;sale:number;saleCosts:number;projectProfit:number;equity:number;months:PrivateLedgerRow[]};
+export type PrivateEconomics={mode:string;purchase:number;purchaseCosts:number;embeddedPcc:number;improvementBudget:number;sale:number;saleCosts:number;projectProfit:number;equity:number;liquidityReserve:number;months:PrivateLedgerRow[]};
 export type PrivateTaxResult={
  version:1;status:"UNKNOWN"|"MODELLED_ESTIMATE";scenario:"PRIVATE";missing:string[];reasons:string[];
  ruleCoverage:{from:"2026-04-01";through:"2026-10-16";reviewedOn:"2026-10-16"};
  qualification:"DECLARED_NOT_INDEPENDENTLY_VERIFIED";actualLiability:null;
  taxRevenue:number|null;acquisitionBasis:number|null;improvementBasis:number|null;taxableIncome:number|null;pit:number|null;pcc:number|null;pccReplacementDelta:number|null;
- economicProfitBeforePit:number|null;profitAfterPit:number|null;profitAvailableAfterTaxReserve:number|null;roiOnPeakEquity:number|null;
+ economicProfitBeforePit:number|null;profitAfterPit:number|null;profitAvailableAfterTaxReserve:number|null;roiOnPeakEquity:number|null;fundingGapAfterTax:number|null;
  cashFlow:PrivateLedgerRow[]|null;taxPayment:{on:"2027-04-30";amount:number}|null;maxBuyAfterTax:null;stressAfterTax:null;
 };
 const cents=(n:number)=>Math.round((n+Number.EPSILON)*100);
@@ -43,10 +43,10 @@ export function privateTaxModel(inputs:PrivateTaxInputs,dates:{acquired?:string|
   const expectedMonths=Math.max(1,(Number(s.slice(0,4))-Number(a.slice(0,4)))*12+Number(s.slice(5,7))-Number(a.slice(5,7)));
   if(e.months.at(-1)?.month!==expectedMonths||e.months.some((r,i)=>!Number.isInteger(r.month)||r.month<0||(i>0&&r.month<e.months[i-1].month)||r.expenses<0||r.receipts<0))reasons.push("CASH_DATES_OR_AMOUNTS_CONFLICT");
  }
- const result:PrivateTaxResult={version:1,status:"UNKNOWN",scenario:"PRIVATE",missing,reasons,ruleCoverage:{from:"2026-04-01",through:"2026-10-16",reviewedOn:"2026-10-16"},qualification:"DECLARED_NOT_INDEPENDENTLY_VERIFIED",actualLiability:null,taxRevenue:null,acquisitionBasis:null,improvementBasis:null,taxableIncome:null,pit:null,pcc:null,pccReplacementDelta:null,economicProfitBeforePit:null,profitAfterPit:null,profitAvailableAfterTaxReserve:null,roiOnPeakEquity:null,cashFlow:null,taxPayment:null,maxBuyAfterTax:null,stressAfterTax:null};
+ const result:PrivateTaxResult={version:1,status:"UNKNOWN",scenario:"PRIVATE",missing,reasons,ruleCoverage:{from:"2026-04-01",through:"2026-10-16",reviewedOn:"2026-10-16"},qualification:"DECLARED_NOT_INDEPENDENTLY_VERIFIED",actualLiability:null,taxRevenue:null,acquisitionBasis:null,improvementBasis:null,taxableIncome:null,pit:null,pcc:null,pccReplacementDelta:null,economicProfitBeforePit:null,profitAfterPit:null,profitAvailableAfterTaxReserve:null,roiOnPeakEquity:null,fundingGapAfterTax:null,cashFlow:null,taxPayment:null,maxBuyAfterTax:null,stressAfterTax:null};
  if(reasons.length||missing.length||!e)return result;
  // Defensive boundary for callers outside Q&A: no NaN, impossible budget or hidden funding.
- if(![e.purchase,e.purchaseCosts,e.embeddedPcc,e.improvementBudget,e.sale,e.saleCosts,e.equity].every(n=>Number.isFinite(n)&&n>=0&&n<=100000000)||!Number.isFinite(e.projectProfit)||!e.months.length||e.months.some(r=>![r.month,r.expenses,r.funding,r.receipts,r.debtPayment,r.balance].every(Number.isFinite)||r.funding!==0||r.debtPayment!==0)) {reasons.push("INVALID_ECONOMICS");return result;}
+ if(![e.purchase,e.purchaseCosts,e.embeddedPcc,e.improvementBudget,e.sale,e.saleCosts,e.equity,e.liquidityReserve].every(n=>Number.isFinite(n)&&n>=0&&n<=100000000)||!Number.isFinite(e.projectProfit)||!e.months.length||e.months.some(r=>![r.month,r.expenses,r.funding,r.receipts,r.debtPayment,r.balance].every(Number.isFinite)||r.funding!==0||r.debtPayment!==0)) {reasons.push("INVALID_ECONOMICS");return result;}
  const fees=cents(Number(inputs.privateAcquisitionFees)),improvements=cents(Number(inputs.privateImprovements)),disposal=cents(Number(inputs.privateDisposalCosts));
  if(fees>cents(e.purchaseCosts)-cents(e.embeddedPcc)||improvements>cents(e.improvementBudget)||disposal>cents(e.saleCosts)||disposal>cents(e.sale)){reasons.push("TAX_COST_NOT_PRESENT_IN_ECONOMIC_LEDGER");return result;}
  const pcc=conditionalTax("PCC2",e.purchase.toFixed(2))!.amountPLN;
@@ -70,5 +70,5 @@ export function privateTaxModel(inputs:PrivateTaxInputs,dates:{acquired?:string|
  const taxMonth=(2027-Number(a.slice(0,4)))*12+4-Number(a.slice(5,7));
  ledger.push({month:taxMonth,phase:"Rezerwa PIT / zapłata do 2027-04-30",expenses:pit,funding:0,receipts:0,debtPayment:0,balance:pln(balance)});
  const peak=cents(e.equity)-Math.min(cents(e.equity),minimum);
- return {...result,status:"MODELLED_ESTIMATE",reasons:["CONDITIONAL_ON_DECLARED_QUALIFICATION","PCC_REPLACED_NOT_ADDED","NO_COMPANY_DIVIDEND_FOR_PRIVATE_OWNER","POST_TAX_MAX_BUY_AND_STRESS_REQUIRE_NEW_COST_QUALIFICATION"],taxRevenue:pln(revenue),acquisitionBasis:pln(acquisition),improvementBasis:pln(improvements),taxableIncome:pln(income),pit,pcc,pccReplacementDelta:pln(delta),economicProfitBeforePit:pln(before),profitAfterPit:pln(net),profitAvailableAfterTaxReserve:pln(net),roiOnPeakEquity:peak>0?Math.round(net/peak*10000)/100:null,cashFlow:ledger,taxPayment:{on:"2027-04-30",amount:pit}};
+ return {...result,status:"MODELLED_ESTIMATE",reasons:["CONDITIONAL_ON_DECLARED_QUALIFICATION","PCC_REPLACED_NOT_ADDED","NO_COMPANY_DIVIDEND_FOR_PRIVATE_OWNER","POST_TAX_MAX_BUY_AND_STRESS_REQUIRE_NEW_COST_QUALIFICATION"],taxRevenue:pln(revenue),acquisitionBasis:pln(acquisition),improvementBasis:pln(improvements),taxableIncome:pln(income),pit,pcc,pccReplacementDelta:pln(delta),economicProfitBeforePit:pln(before),profitAfterPit:pln(net),profitAvailableAfterTaxReserve:pln(net),fundingGapAfterTax:pln(Math.max(0,cents(e.liquidityReserve)-minimum)),roiOnPeakEquity:peak>0?Math.round(net/peak*10000)/100:null,cashFlow:ledger,taxPayment:{on:"2027-04-30",amount:pit}};
 }
