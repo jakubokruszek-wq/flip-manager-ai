@@ -118,3 +118,41 @@ Contract: `docs/deal-room-private-tax-model.md`. Same-year ordinary private cash
 Commits so far: `405a8e5` implementation/source contract; `5ca92cb` oracle/API tests. Local 14/14 pure tax tests and independent 12/12 full-model Decimal cases PASS; original 80-vector reference retained. Full CI pending. Mobile save/edit/reload and actual API/DB replay/withdraw extended; do not claim unexecuted tests PASS.
 
 Resume by checking this worktree status and the new stacked PR CI before redoing tests. Fix actual failures; then update exact tested remote/tree and final report. New private-model flag defaults OFF; no production changes or feature activation. No credit monitor/wake-up API; this is a durable checkpoint, not an automatic quota-restart claim.
+
+## Final checkpoint — bounded PRIVATE case, Draft PR #33
+
+PR: https://github.com/jakubokruszek-wq/flip-manager-ai/pull/33, stacked on #32 / `feat/deal-room-tax-model`. Branch `feat/deal-room-private-tax`, worktree `/workspace/flip-deal-private-tax`. Runtime tested local `b9617f4`, remote `1e3d94df4ee6408db0b967917b9718e0385190b4`, identical tree `f44ac61d7cc1fd744c23cf3bb2a552a2eeed8e4e`. Following changes are Markdown-only [skip ci]. Original local commits remain intact; published trees were checked for identity.
+
+[CI run 38891870180](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38891870180): all 3 jobs SUCCESS.
+
+| Verification | Actual result |
+|---|---|
+| Full TypeScript / Next.js build | PASS |
+| Deal Room scoped ESLint | PASS, 0 errors / 2 pre-existing warnings |
+| Directors/Brain/finance/Q&A/CEO Node regression | 150/150 PASS |
+| Independent rule-level Decimal oracle | 80/80 PASS |
+| Independent complete PRIVATE transaction Decimal oracle | 12/12 PASS |
+| Isolated PostgreSQL CAS/ownership/replay/rollback/RLS/grants | 8/8 PASS |
+| Actual API → services → Supabase/PostgREST → isolated PostgreSQL | 1/1 composite PASS, includes PRIVATE save/replay/reload and withdrawal to UNKNOWN |
+| Mobile browser + existing Deal Room/Brain/Finder browser regressions | 4/4 PASS |
+| Existing local MARKET/Radar regression | 97/97 PASS |
+
+The mobile flow actually edits saved scenario/dates, answers all new qualifying/cost questions, saves/reloads the model and checks UNKNOWN actual liability, HOLD and no overflow. Financial-case changes reopen previous private qualifications unless explicitly reconfirmed in the same request. Tests verify preserved unaffected MARKET/VERIFY, changed CEO, immutable replies, tax cost/economic budget fencing, PCC replacement, reserve as liquidity rather than expense, no private dividend or tax on returned capital.
+
+[Mobile evidence artifact](https://github.com/jakubokruszek-wq/flip-manager-ai/actions/runs/38891870180/artifacts/12042177569), SHA-256 `b0be55e9ed241e3961f095a4c749011b15cc71ba7126d1c75aca9e651b92a217`.
+
+### Delivered / explicit limits
+
+One fully worked conditional calculation contract is delivered, not merely rate multiplication: eligible case facts, bounded dates, gross economic versus documented tax costs, income/PCC/PIT, separate capital/profit, estimated deadline cash flow, peak-equity ROI and reserve funding gap. Statutory source/change audit, formulas, independent fixtures and rollback are in `docs/deal-room-private-tax-model.md`. Reviewed coverage is 2026-04-01…2026-10-16; it is not a statute's inception/expiry. The model is retrospective/bounded and must not be extended to future sale dates without a new rules audit.
+
+Actual transaction classification is NOT independently certified by software. Declarations/public reference are not proof of legal facts. Result therefore says MODELLED_ESTIMATE, actualLiability=null; canonical CFO netProfit/taxStatus stay UNKNOWN and CEO HOLD. No accountant review or tax filing was performed. Browser transport/auth is mocked; actual DB verified in a separate API test. No single authenticated browser-to-database test or physical Samsung test is claimed.
+
+Remaining PRIVATE cases (other years, indexation, inheritance/gifts/marital ownership, business use, relief/depreciation, multiple sales, VAT, debt/investor), JDG and SP_ZOO remain UNKNOWN. Their required qualification/cost/timing/distribution inputs are documented; no new rates were added. General numerical JDG/SP_ZOO models are NOT implemented. Post-tax Max Buy/changed-cost stress remain UNKNOWN because invoices and legal conditions of the baseline do not prove candidate-price/future-cost eligibility; P2a pre-tax results retained. Issue #30 is not fully closed.
+
+No production reads/writes, schema/grant migrations, activation, merge, deployment, paid API/service or changes to Watcher/OLX/Cloudflare/Render. New private flag OFF, requires existing CFO/TAX_REVIEW. Only synthetic data and disposable CI services. Terminal curl to public legal metadata failed due unavailable proxy; primary law was read through the browser tool, tests completed in CI. This did not justify bypassing networking. Earlier runtime CI was superseded by commits adding invalidation/reserve/UI safeguards; use only the final run above for delivered code.
+
+### Exact next resume
+
+“Kontynuuj Issue #30 od najnowszego checkpointu Draft PR #33, gałąź feat/deal-room-private-tax w /workspace/flip-deal-private-tax. Sprawdź HEAD/status bez resetu. Nie powtarzaj zielonego CI 38891870180 przy samych zmianach Markdown. Zachowaj sprawdzony kontrakt PRIVATE i UNKNOWN poza nim. Następny wariant opracuj dopiero po niezależnym audycie kwalifikacji, okresów i podstaw: JDG (forma, roczne księgi/remanent/składki/danina/VAT) albo SP_ZOO (reżim, podstawa CIT a zysk bilansowy, legalna wypłata i wspólnik). Nie dodawaj stawek bez zastosowania. Bez produkcji, aktywacji, merge i deploymentu.”
+
+No credit exhaustion was observed; no balance/renewal/persistent-wake API is available. No fictitious monitor was created. This durable checkpoint records completed evidence and remaining scope without claiming a complete Polish tax platform.
