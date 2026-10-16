@@ -1,3 +1,4 @@
+import { privateTaxModel, type PrivateTaxResult } from "./private-tax";
 import { buildTaxReview, TAX_LABELS, type TaxInputs, type TaxReview } from "./tax-review";
 import { calculateUnderwriting, type UnderwritingInput, type UnderwritingSettings } from "../flip-finder/underwriting";
 export const CFO_NUMERIC = {
@@ -7,7 +8,7 @@ export const CFO_LABELS:Record<string,string> = {costScope:"Czy budżet remontu 
 export type CfoInputs = Partial<Record<keyof typeof CFO_NUMERIC,number|null>> & TaxInputs & {financingMode?:string|null;loanSchedule?:string|null;loanSecurity?:string|null;costScope?:string|null};
 export type CashMonth={month:number;phase:string;expenses:number;funding:number;receipts:number;debtPayment:number;balance:number};
 export type CfoScenario={mode:string;status:"MODELLED"|"UNKNOWN";missing:string[];months:CashMonth[];peakOwnCapital:number|null;fundingGap:number|null;financingCost:number|null;projectProfitBeforeTax:number|null;ownProfitBeforeTax:number|null;roiOnPeakEquity:number|null;breakEvenSale:number|null;maxBuy:number|null};
-export type CfoAnalysis={version:1;taxReview?:TaxReview;inputs:CfoInputs;selected:CfoScenario|null;variants:CfoScenario[];stress:Array<{label:string;result:CfoScenario}>;missing:string[];warnings:string[];taxStatus:"UNKNOWN";netProfit:null};
+export type CfoAnalysis={version:1;privateTax?:PrivateTaxResult;taxReview?:TaxReview;inputs:CfoInputs;selected:CfoScenario|null;variants:CfoScenario[];stress:Array<{label:string;result:CfoScenario}>;missing:string[];warnings:string[];taxStatus:"UNKNOWN";netProfit:null};
 const money=(n:number)=>Math.round((n+Number.EPSILON)*100)/100;
 export function analyseCfo(input:UnderwritingInput,settings:UnderwritingSettings,params:CfoInputs):CfoAnalysis{
  const baseSettings={...settings,financingEnabled:false};
@@ -63,5 +64,10 @@ export function analyseCfo(input:UnderwritingInput,settings:UnderwritingSettings
  const variants=["CASH","LOAN","INVESTOR"].map(mode=>simulate(mode,1,1,0,0,undefined,true));
  const selected=variants.find(v=>v.mode===params.financingMode)??null;
  const stress=selected?.status==="MODELLED"?[["Sprzedaż -5%",.95,1,0,0],["Sprzedaż -10%",.9,1,0,0],["Remont +20%",1,1.2,0,0],["Remont +30%",1,1.3,0,0],["Czas +3 mies.",1,1,3,0],["Czas +6 mies.",1,1,6,0],["Odsetki +2 pp",1,1,0,2],["Łączny: -10%, +30%, +3 mies.",.9,1.3,3,2]].map(([label,sale,reno,extra,rate])=>({label:String(label),result:simulate(selected.mode,Number(sale),Number(reno),Number(extra),Number(rate),undefined,true)})):[];
- return {version:1,...(process.env.DEAL_ROOM_TAX_REVIEW_ENABLED === "true" ? {taxReview:buildTaxReview(Object.fromEntries(Object.keys(TAX_LABELS).map(k=>[k,typeof params[k as keyof TaxInputs]==="string"?params[k as keyof TaxInputs]:null])),new Date().toISOString(),params.financingMode==="INVESTOR")} : {}),inputs:params,selected,variants,stress,missing:selected?.missing??["financingMode",...missingCommon],warnings:["P2a: podatek dochodowy nieustalony; wynik przed podatkiem, nie zysk netto.","Harmonogram jest deklarowanym modelem; kredyt nie jest zatwierdzony. Stopa nominalna nie jest RRSO.","Równe miesięczne etapy remontu; rezerwa kosztowa wydatkowana przy zakupie. Wymaga potwierdzenia kosztorysem."],taxStatus:"UNKNOWN",netProfit:null};
+ let privateTax:PrivateTaxResult|undefined;
+ if(process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED==="true"&&process.env.DEAL_ROOM_TAX_REVIEW_ENABLED==="true"&&params.taxScenario==="PRIVATE") {
+ const uTax=calculateUnderwriting(input,baseSettings);
+ privateTax=privateTaxModel(params,{acquired:params.taxAcquiredOn,sale:params.taxSaleOn},selected?.status==="MODELLED"&&uTax.purchasePrice!==null&&uTax.purchaseTransactionCosts!==null&&uTax.scenarios.base.resaleValue!==null&&uTax.renovationTotal!==null ? {mode:selected.mode,purchase:uTax.purchasePrice,purchaseCosts:uTax.purchaseTransactionCosts,embeddedPcc:money(uTax.purchasePrice*settings.purchaseTaxPercent/100),improvementBudget:money(uTax.renovationTotal+(uTax.contingency??0)),sale:uTax.scenarios.base.resaleValue,saleCosts:uTax.salesCosts??0,projectProfit:selected.projectProfitBeforeTax!,equity:params.equity!,liquidityReserve:params.liquidityReserve!,months:selected.months}:null);
+ }
+ return {version:1,...(privateTax?{privateTax}:{}),...(process.env.DEAL_ROOM_TAX_REVIEW_ENABLED === "true" ? {taxReview:buildTaxReview(Object.fromEntries(Object.keys(TAX_LABELS).map(k=>[k,typeof params[k as keyof TaxInputs]==="string"?params[k as keyof TaxInputs]:null])),new Date().toISOString(),params.financingMode==="INVESTOR")} : {}),inputs:params,selected,variants,stress,missing:selected?.missing??["financingMode",...missingCommon],warnings:["P2a: podatek dochodowy nieustalony; wynik przed podatkiem, nie zysk netto.","Harmonogram jest deklarowanym modelem; kredyt nie jest zatwierdzony. Stopa nominalna nie jest RRSO.","Równe miesięczne etapy remontu; rezerwa kosztowa wydatkowana przy zakupie. Wymaga potwierdzenia kosztorysem."],taxStatus:"UNKNOWN",netProfit:null};
 }

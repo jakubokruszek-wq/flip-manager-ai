@@ -1,8 +1,8 @@
 name: Deal Room Q&A isolated validation
 on:
   pull_request:
-    branches: [main, feat/deal-room-qa, feat/deal-room-market, feat/deal-room-cfo, feat/deal-room-tax-scenarios]
-    paths: ['features/investment-os/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', 'scripts/test-tax-arithmetic-reference.py', 'scripts/setup-deal-room-service.py', '.github/workflows/deal-room-qa.yml']
+    branches: [main, feat/deal-room-qa, feat/deal-room-market, feat/deal-room-cfo, feat/deal-room-tax-scenarios, feat/deal-room-tax-model]
+    paths: ['features/investment-os/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', 'scripts/test-tax-arithmetic-reference.py', 'scripts/test-private-tax-reference.py', 'scripts/setup-deal-room-service.py', '.github/workflows/deal-room-qa.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,6 +32,8 @@ jobs:
         run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test-isolation=none --experimental-test-coverage --test features/investment-os/*.test.ts features/investment-os/brain/*.test.ts features/investment-os/server/*.test.ts features/investment-os/components/*.test.ts features/flip-finder/underwriting.test.ts
       - name: Independent decimal arithmetic reference
         run: python3 scripts/test-tax-arithmetic-reference.py
+      - name: Independent full private transaction reference
+        run: python3 scripts/test-private-tax-reference.py
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - name: Mobile question answer save recalculate reload
