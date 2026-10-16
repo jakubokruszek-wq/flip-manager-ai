@@ -71,7 +71,11 @@ export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminCli
       if (snapshotError) throw snapshotError;
       const facebookCondition = text(listing.source) === "facebook" ? await readFacebookCondition(db, listingId, text((listing as Row).description)) : null;
       const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null, facebookCondition);
-      const market = await resolveMarketEvidence(db, listingInput, actorId);
+      // Radar data is private to its operator. Legacy unowned canonical deals
+      // must not persist one operator's sample into a shared record. A Q&A
+      // round claims ownership atomically; the next explicit refresh can use Radar.
+      const marketActor = existing?.ownerId === actorId ? actorId : undefined;
+      const market = await resolveMarketEvidence(db, listingInput, marketActor);
       const trackRecords = await loadDirectorTrackRecords(db);
       const now = new Date().toISOString();
       const buildInput = { overrideObservedAt: overrideObservedAt ?? text(overridesResult.data?.updated_at) ?? undefined, dealId, listing: listingInput, overrides: overrideValues ?? object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords };
@@ -86,7 +90,7 @@ export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminCli
       // answered dimensions/location, not a stale raw listing with missing area.
       const marketSubject = { ...listingInput, areaM2: deal.facts.areaM2.effectiveValue, rooms: deal.facts.rooms.effectiveValue, city: deal.facts.city.effectiveValue, district: deal.facts.district.effectiveValue, street: deal.facts.street.effectiveValue, buildingType: deal.facts.buildingType.effectiveValue, floor: deal.facts.floor.effectiveValue };
       if (["areaM2", "rooms", "city", "district", "street", "buildingType", "floor"].some((field) => marketSubject[field as keyof DealListingInput] !== listingInput[field as keyof DealListingInput])) {
-        deal = buildCanonicalDeal({ ...resolvedInput, market: await resolveMarketEvidence(db, marketSubject, actorId) });
+        deal = buildCanonicalDeal({ ...resolvedInput, market: await resolveMarketEvidence(db, marketSubject, marketActor) });
       }
       if (existing) deal = preserveUnchangedDirectors(existing.deal, deal);
       const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
@@ -195,7 +199,7 @@ async function loadDirectorTrackRecords(db: ReturnType<typeof createAdminClient>
 
 async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, listing: DealListingInput, actorId?: string): Promise<MarketEvidence | null> {
   if (process.env.DEAL_ROOM_RADAR_ENABLED === "true") {
-    if (!actorId) throw new DealRoomNotFound();
+    if (!actorId) return null;
     const filters = await readRadarSettings(actorId, db);
     const disabledSources = await radarSettingsSourcesWereFilteredToEmpty(actorId, db);
     const results = disabledSources ? { listings: [], excludedListings: [] } : await getRadarResults(actorId, filters, db);
