@@ -108,3 +108,13 @@ No physical phone, actual tax return, production DB or live service test was per
 “Wznów Issue #30 P2b.2 od docs/deal-room-30-progress.md na feat/deal-room-tax-model / Draft PR #32. Sprawdź aktualny HEAD i status, zachowaj wszystkie commity. Nie powtarzaj zielonego CI 38887999924 dla zmian Markdown. Kontynuuj brakujący model okresów obowiązywania i kwalifikacji według docs/deal-room-30-p2b2-model.md. Nie traktuj CONDITIONAL_ARITHMETIC jako zobowiązania. Najpierw zweryfikuj ustawowe warunki/podstawy i niezależne wzorce; dopiero potem połącz z cash-flow i przeliczaniem kandydatów Max Buy/stres. Bez zgadywania, produkcji, merge i deploymentu.”
 
 The toolset still has no credit-balance/renewal API or persistent wake-up. No fictitious background monitor was started. No credit exhaustion was observed in this stage; this checkpoint records the actual incomplete boundary rather than claiming quota failure or a complete tax engine.
+
+## Bounded PRIVATE transaction stage — in progress 2026-10-16
+
+Worktree `/workspace/flip-deal-private-tax`, branch `feat/deal-room-private-tax`, base PR #32 remote `7e1b64addaa5e2882d03c05a9dd0d4e6949dfda2`, identical local base `956a591`. Original branches and ZIP preserved.
+
+Contract: `docs/deal-room-private-tax-model.md`. Same-year ordinary private cash purchase/sale, explicit qualification and separately documented cost buckets; reviewed coverage 2026-04-01…2026-10-16, NOT asserted statute inception/expiry dates. No new rates. PCC reconciled by replacement, tax income differs from economic profit, owner capital distinct from profit, no dividend layer; estimated PIT payment and final cash/ROI reconcile. All prerequisite facts and reference mandatory. Missing/unsupported facts, dates, costs, business/VAT/loan/investor case => UNKNOWN. Actual factual qualification/liability still UNKNOWN; MODELLED_ESTIMATE is expressly conditional, CEO HOLD. JDG/SP_ZOO remain UNKNOWN with documented requirements. Post-tax Max Buy/changed-cost stress require fresh eligibility inputs and remain null.
+
+Commits so far: `405a8e5` implementation/source contract; `5ca92cb` oracle/API tests. Local 14/14 pure tax tests and independent 12/12 full-model Decimal cases PASS; original 80-vector reference retained. Full CI pending. Mobile save/edit/reload and actual API/DB replay/withdraw extended; do not claim unexecuted tests PASS.
+
+Resume by checking this worktree status and the new stacked PR CI before redoing tests. Fix actual failures; then update exact tested remote/tree and final report. New private-model flag defaults OFF; no production changes or feature activation. No credit monitor/wake-up API; this is a durable checkpoint, not an automatic quota-restart claim.

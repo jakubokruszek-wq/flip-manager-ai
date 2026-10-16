@@ -33,3 +33,20 @@ test("conditional tax Q&A recalculates CEO without altering gross costs, cash le
   process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED="false";assert.throws(()=>parseAnswerCommand(command),/wyłączone/);
  } finally {keys.forEach((k,i)=>{if(before[i]===undefined)delete process.env[k];else process.env[k]=before[i];});}
 });
+test("bounded PRIVATE model integrates Q&A, reanalyzes all dependent directors and keeps actual qualification UNKNOWN",async()=>{
+ const {PRIVATE_ENUMS}=await import("./private-tax");
+ const keys=["DEAL_ROOM_CFO_ENABLED","DEAL_ROOM_TAX_REVIEW_ENABLED","DEAL_ROOM_PRIVATE_TAX_ENABLED"] as const,old=keys.map(k=>process.env[k]);
+ try{
+  keys.forEach(k=>process.env[k]="true");const source=lodzDeal(),base={...source,overrides:{...params,taxScenario:"PRIVATE",taxAcquiredOn:"2026-04-01",taxSaleOn:"2026-10-01"}};
+  const first=buildCanonicalDeal(base),state={version:1,answers:{},baselineOverrides:base.overrides,rounds:[]};
+  const values={...PRIVATE_ENUMS,privateAcquisitionFees:"0",privateImprovements:"0",privateDisposalCosts:"0",privateQualificationRef:"https://example.test/synthetic-qualification"};
+  const cmd=parseAnswerCommand({requestId:crypto.randomUUID(),expectedVersion:1,answers:Object.entries(values).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))});
+  const answers=mergeAnswers(first,state,cmd,"synthetic",base.now);const next=buildCanonicalDeal({...base,overrides:answerOverrides(first,base.overrides,answers)});
+  assert.equal(first.underwriting.result?.cfo?.privateTax?.status,"UNKNOWN");assert.equal(next.underwriting.result?.cfo?.privateTax?.status,"MODELLED_ESTIMATE");
+  assert.equal(next.underwriting.result?.cfo?.privateTax?.actualLiability,null);assert.equal(next.underwriting.result?.cfo?.netProfit,null);assert.notEqual(first.ceo.inputFingerprint,next.ceo.inputFingerprint);assert.notEqual(next.ceo.result?.action,"KUP");
+  assert.equal(next.market.inputFingerprint,first.market.inputFingerprint);assert.equal(next.verify.inputFingerprint,first.verify.inputFingerprint);assert.deepEqual(next.underwriting.result?.cfo?.variants,first.underwriting.result?.cfo?.variants);
+  const changed=affectedDirectors(["privateImprovements"]);assert.ok(changed.includes("CFO"));assert.ok(changed.includes("CEO"));
+  const without=buildCanonicalDeal({...base,overrides:{...answerOverrides(first,base.overrides,answers),privateVat:null}});assert.equal(without.underwriting.result?.cfo?.privateTax?.pit,null);
+  process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="false";assert.throws(()=>parseAnswerCommand(cmd),/wyłączony/);assert.equal(buildCanonicalDeal(base).underwriting.result?.cfo?.privateTax,undefined);
+ }finally{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
+});

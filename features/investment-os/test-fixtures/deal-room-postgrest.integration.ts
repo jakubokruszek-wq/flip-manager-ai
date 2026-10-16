@@ -135,6 +135,17 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   const withdrawRule={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxRuleBase",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
   const arithmeticWithdrawn=await answersApi.POST(request(withdrawRule),context);assert.equal(arithmeticWithdrawn.status,200);assert.equal((await arithmeticWithdrawn.json()).deal.underwriting.result.cfo.taxReview.conditional,null);
   process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED="false";
+  process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="true";
+  const {PRIVATE_ENUMS}=await import("../private-tax");
+  const privateInitial=await refreshMarket();
+  const privateValues={...PRIVATE_ENUMS,taxScenario:"PRIVATE",taxAcquiredOn:"2026-04-01",taxSaleOn:"2026-10-01",privateAcquisitionFees:"0",privateImprovements:"0",privateDisposalCosts:"0",privateQualificationRef:"https://example.test/synthetic-qualification"};
+  const privateCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:Object.entries(privateValues).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const privateResponse=await answersApi.POST(request(privateCommand),context);assert.equal(privateResponse.status,200,await privateResponse.clone().text());const privateSaved=await privateResponse.json();
+  assert.equal(privateSaved.deal.underwriting.result.cfo.privateTax.status,"MODELLED_ESTIMATE");assert.equal(privateSaved.deal.underwriting.result.cfo.privateTax.actualLiability,null);assert.equal(privateSaved.deal.ceo.result.action,"HOLD / ZBIERZ DANE");assert.notEqual(privateSaved.deal.ceo.inputFingerprint,privateInitial.ceo.inputFingerprint);
+  assert.deepEqual(await (await answersApi.POST(request(privateCommand),context)).json(),privateSaved);assert.equal((await current()).answers.privateVat.value,"OUTSIDE_VAT_NO_DEDUCTION");
+  const withdrawPrivate={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"privateVat",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
+  const privateWithdrawResponse=await answersApi.POST(request(withdrawPrivate),context);assert.equal(privateWithdrawResponse.status,200);assert.equal((await privateWithdrawResponse.json()).deal.underwriting.result.cfo.privateTax.status,"UNKNOWN");
+  process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="false";
   process.env.DEAL_ROOM_TAX_REVIEW_ENABLED="false";
   process.env.DEAL_ROOM_CFO_ENABLED="false";
   process.env.DEAL_ROOM_RADAR_ENABLED="false";

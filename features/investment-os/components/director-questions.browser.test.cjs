@@ -99,5 +99,28 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   assert.equal(current.underwriting.result.cfo.taxReview.conditional.actualLiabilityPLN,null);assert.equal(current.underwriting.result.cfo.netProfit,null);assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');
   assert.equal(JSON.stringify(current.underwriting.result.cfo.selected.months),taxLedgerBefore);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED='true';t.after(()=>delete process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED);
+  current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,room.answers)});
+  await page.reload();await page.getByText('Zapisane odpowiedzi — edycja i cofnięcie',{exact:true}).click();
+  for(const [field,value] of Object.entries({taxScenario:'PRIVATE',taxAcquiredOn:'2026-04-01',taxSaleOn:'2026-10-01'})) {
+    await page.locator('details article').filter({has:page.locator('strong',{hasText:new RegExp('^'+field+'$')})}).getByRole('button',{name:'Edytuj',exact:true}).click();
+    await page.getByLabel(`Odpowiedź: ${field}`,{exact:true}).fill(value);
+  }
+  const privateVersion=room.version;await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+  for(let i=0;i<100&&room.version===privateVersion;i++)await page.waitForTimeout(50);assert.equal(room.version,privateVersion+1);
+  for(const fields of [
+    {privateActivity:'NON_BUSINESS',privateTitle:'PAID_SOLE_OWNER',privateVat:'OUTSIDE_VAT_NO_DEDUCTION',privateExclusions:'STANDARD_ONLY',privatePcc:'STANDARD_MARKET_PRICE'},
+    {privateSaleMarket:'MARKET_PRICE',privateCostEvidence:'DOCUMENTED',privateAcquisitionFees:'0',privateImprovements:'0',privateDisposalCosts:'0'},
+    {privateQualificationRef:'https://example.test/synthetic-qualification'}
+  ]) {
+    await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
+    const morePrivate=page.getByRole('button',{name:/Pozostałe pytania/});if(await morePrivate.count())await morePrivate.click();
+    for(const [field,value] of Object.entries(fields))await page.getByLabel(`Odpowiedź: ${field}`,{exact:true}).fill(value);
+    const version=room.version;await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+    for(let i=0;i<100&&room.version===version;i++)await page.waitForTimeout(50);assert.equal(room.version,version+1);
+  }
+  await page.reload();await page.getByRole('tab',{name:'Finanse',exact:true}).click();await page.getByRole('heading',{name:'PRIVATE — zamknięty scenariusz warunkowy'}).waitFor();
+  assert.equal(current.underwriting.result.cfo.privateTax.status,'MODELLED_ESTIMATE');assert.equal(current.underwriting.result.cfo.privateTax.actualLiability,null);
+  assert.equal(current.ceo.result.action,'HOLD / ZBIERZ DANE');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });
