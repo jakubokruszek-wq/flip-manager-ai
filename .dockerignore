@@ -1,0 +1,16 @@
+# Only the OLX cloud worker is built as a container (workers/olx-browser/Dockerfile).
+# Allowlist: everything else stays out of the build context, including .env*
+# files, node_modules, the Next.js app and the browser profiles.
+*
+!features/flip-finder/
+!features/properties/
+!workers/shared/
+!workers/olx-browser/package.json
+!workers/olx-browser/package-lock.json
+!workers/olx-browser/src/
+**/.env*
+**/node_modules
+**/*.test.ts
+**/*.test.mjs
+**/*.test.cjs
+**/__fixtures__

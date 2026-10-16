@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, type BrowserContext } from "playwright";
 
 import { assertAllowedOlxUrl, isOlxChallengeHtml, parseOlxHtml } from "../../../features/flip-finder/olx-parser.ts";
 import { ControlledOlxFailure } from "./retry.ts";
@@ -9,7 +9,18 @@ export function classifyOlxResponse(status: number | null, html: string): { bloc
   return { blocked: false, code: null };
 }
 
-export async function fetchOlxWithBrowser(requestUrl: string, signal: AbortSignal) {
+export type OlxBrowserFetcherOptions = {
+  /** Test-only hook (e.g. routing www.olx.pl to a local fixture); production passes nothing. */
+  prepareContext?(context: BrowserContext): Promise<void>;
+};
+
+export const fetchOlxWithBrowser = createOlxBrowserFetcher();
+
+export function createOlxBrowserFetcher(options: OlxBrowserFetcherOptions = {}) {
+  return (requestUrl: string, signal: AbortSignal) => fetchOlx(requestUrl, signal, options);
+}
+
+async function fetchOlx(requestUrl: string, signal: AbortSignal, options: OlxBrowserFetcherOptions) {
   const url = assertAllowedOlxUrl(requestUrl).toString();
   const startedAt = Date.now();
   const browser = await chromium.launch({ headless: true });
@@ -18,6 +29,7 @@ export async function fetchOlxWithBrowser(requestUrl: string, signal: AbortSigna
   try {
     signal.throwIfAborted();
     const context = await browser.newContext({ locale: "pl-PL" });
+    await options.prepareContext?.(context);
     const page = await context.newPage();
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
     signal.throwIfAborted();

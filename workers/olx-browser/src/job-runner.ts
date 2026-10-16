@@ -29,10 +29,32 @@ type RunnerOptions = {
   heartbeatIntervalMs?: number;
   wallClockLimitMs?: number;
   finalizationLimitMs?: number;
+  /** Optional monitoring hook; receives no lease tokens. */
+  onFinished?(summary: OlxJobSummary): void;
+};
+
+export type OlxJobOutcome = "completed" | "failed" | "lease_lost" | "shutdown";
+export type OlxJobSummary = {
+  jobId: string;
+  outcome: OlxJobOutcome;
+  code: string | null;
+  rawItems: number | null;
+  normalizedItems: number | null;
+  durationMs: number;
 };
 
 /** Executes one already-claimed queue job. Lease tokens are sent only to API methods and never logged. */
-export async function runOlxJob(options: RunnerOptions): Promise<"completed" | "failed" | "lease_lost" | "shutdown"> {
+export async function runOlxJob(options: RunnerOptions): Promise<OlxJobOutcome> {
+  const startedAt = Date.now();
+  const observed: Observed = { code: null, rawItems: null, normalizedItems: null };
+  const outcome = await executeJob(options, observed);
+  options.onFinished?.({ jobId: options.job.id, outcome, ...observed, durationMs: Date.now() - startedAt });
+  return outcome;
+}
+
+type Observed = Pick<OlxJobSummary, "code" | "rawItems" | "normalizedItems">;
+
+async function executeJob(options: RunnerOptions, observed: Observed): Promise<OlxJobOutcome> {
   const { job, api, scrape, shutdownSignal, log } = options;
   const durationMs = options.wallClockLimitMs ?? OLX_JOB_WALL_CLOCK_LIMIT_MS;
   const heartbeatMs = options.heartbeatIntervalMs ?? OLX_JOB_HEARTBEAT_INTERVAL_MS;
@@ -98,6 +120,8 @@ export async function runOlxJob(options: RunnerOptions): Promise<"completed" | "
       return scrape(job.requestUrl, signal);
     }, 1, signal);
     signal.throwIfAborted();
+    observed.rawItems = result.rawItems;
+    observed.normalizedItems = result.normalizedItems;
     log("OLX_BROWSER_DONE", { jobId: job.id, status: result.diagnostics.status, finalUrl: result.diagnostics.finalUrl, title: result.diagnostics.title, bodyLength: result.diagnostics.bodyLength, marker: result.diagnostics.marker, rawItems: result.rawItems, normalizedItems: result.normalizedItems, durationMs: result.durationMs });
 
     // Renew both relevant leases immediately before finalization, then stop the
@@ -118,6 +142,7 @@ export async function runOlxJob(options: RunnerOptions): Promise<"completed" | "
       : timedOut ? "OLX_JOB_DURATION_LIMIT"
       : error instanceof ControlledOlxFailure ? error.code
       : shutdownSignal.aborted ? "WORKER_SHUTDOWN" : "OLX_WORKER_ERROR";
+    observed.code = code;
     log("JOB_ERROR", { jobId: job.id, code, message: redactLeaseTokens(message) });
     if (leaseLost) return "lease_lost";
     if (shutdownSignal.aborted) return "shutdown";
