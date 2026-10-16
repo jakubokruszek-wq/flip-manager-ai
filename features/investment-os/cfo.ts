@@ -37,7 +37,7 @@ export function analyseCfo(input:UnderwritingInput,settings:UnderwritingSettings
   const inheritedAdditional=money(u.totalProjectCost!-price-(u.purchaseTransactionCosts??0)-renovation-u.holdingCosts-(u.salesCosts??0)-(u.contingency??0));
   for(let m=1;m<=months;m++){
    const interest=money(outstanding*rate);interestTotal+=interest;
-   const principal=mode==="LOAN"?(params.loanSchedule==="ANNUITY"?Math.min(outstanding,Math.max(0,payment-interest)):m>=term?outstanding:0):0;
+   const principal=money(mode==="LOAN"?(params.loanSchedule==="ANNUITY"?Math.min(outstanding,Math.max(0,payment-interest)):m>=term?outstanding:0):0);
    outstanding=money(outstanding-principal);
    const renoMonths=params.renovationMonths!;
    const renoPortion=m<=renoMonths?money(renovation*m/renoMonths)-money(renovation*(m-1)/renoMonths):0;
@@ -47,11 +47,12 @@ export function analyseCfo(input:UnderwritingInput,settings:UnderwritingSettings
   const financingCost=money(interestTotal+(mode==="LOAN"?params.loanFee!:0));
   const profit=money(sale-u.totalProjectCost!-equipment-financingCost);
   const share=mode==="INVESTOR"?(profit>=0?params.investorProfitShare!:params.investorLossShare!)/100:0;
-  const investorReturn=money(investor+profit*share);
+  const investorGain=money(profit*share);
+  const investorReturn=money(investor+investorGain);
   // Capture the pre-sale capital peak before final receipts; furniture is paid before sale.
   add(months,"Wyposażenie przed sprzedażą",equipment,0,0,0);
   add(months,"Sprzedaż / zwrot kapitału",u.salesCosts??0,0,sale,outstanding+(mode==="INVESTOR"?investorReturn:0));
-  const peak=money(Math.max(0,-minBalance)),ownProfit=money(profit*(1-share));
+  const peak=money(Math.max(0,-minBalance)),ownProfit=money(profit-investorGain);
   let maxBuy:number|null=null;
   if(withMax && u.maxPurchasePrice!==null){let lo=Math.max(params.deposit??0,mode==="LOAN"?(params.loanAmount??0):0),hi=u.maxPurchasePrice;for(let i=0;i<40;i++){const mid=(lo+hi)/2;const candidate=simulate(mode,saleFactor,renoFactor,extraMonths,rateExtra,mid,false);const p=candidate.projectProfitBeforeTax;const total=p===null?Infinity:sale-p;const pass=p!==null&&p>=settings.minimumProfitPLN&&p/sale*100>=settings.minimumMarginPercent&&p/total*100>=settings.minimumROI;if(pass)lo=mid;else hi=mid;}const final=simulate(mode,saleFactor,renoFactor,extraMonths,rateExtra,lo,false);const p=final.projectProfitBeforeTax;maxBuy=lo<=u.maxPurchasePrice && p!==null && p>=settings.minimumProfitPLN && p/sale*100>=settings.minimumMarginPercent && p/(sale-p)*100>=settings.minimumROI ? Math.floor(lo*100)/100 : null;}
   const saleRate=settings.salesCostPercent/100;
