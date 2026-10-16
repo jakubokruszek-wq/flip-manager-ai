@@ -33,8 +33,12 @@ test("every mutation route has an explicit authentication class", () => {
   assert.deepEqual(unclassified.map((route) => `${route.method} ${route.pathname}`), []);
 });
 
-test("every human mutation route directly calls the shared operator guard", () => {
-  const unguarded = mutationRoutes.filter((route) => classifyMutationRoute(route.method, route.pathname) === "HUMAN_OPERATOR" && !route.source.includes("requireOperator"));
+test("every human mutation route uses the shared operator guard or the reviewed TEST gateway", () => {
+  const gateway=fs.readFileSync(path.join(root,"features/investment-os/server/test-mode-api.ts"),"utf8");
+  const guard=gateway.indexOf("actor=await requireOperator()"),allowlist=gateway.indexOf("if(!testModeAllowed(actor.id)"),db=gateway.indexOf('if(action==="catalog")');
+  assert.ok(guard>=0&&allowlist>guard&&db>allowlist,"TEST gateway authenticates and authorizes before any storage or computation");
+  const delegated=(route:typeof mutationRoutes[number])=>route.pathname.startsWith("/api/deal-room/test") && route.source.includes('from "@/features/investment-os/server/test-mode-api"') && route.source.includes("testModeApi(request,") && !/createAdminClient|createFacebookWatcherAdminClient/.test(route.source);
+  const unguarded = mutationRoutes.filter((route) => classifyMutationRoute(route.method, route.pathname) === "HUMAN_OPERATOR" && !route.source.includes("requireOperator") && !delegated(route));
   assert.deepEqual(unguarded.map((route) => `${route.method} ${route.pathname}`), []);
 });
 
@@ -68,5 +72,10 @@ test("signed extension, worker, cron and operator-secret routes keep their dedic
 
 test("human authorization no longer relies on forgeable action or origin headers", () => {
   const humanSource = mutationRoutes.filter((route) => classifyMutationRoute(route.method, route.pathname) === "HUMAN_OPERATOR").map((route) => route.source).join("\n");
-  assert.doesNotMatch(humanSource, /x-flip-finder-action|x-facebook-watcher-action|sec-fetch-site|headers\.get\(["']origin/i);
+  assert.doesNotMatch(humanSource, /x-flip-finder-action|x-facebook-watcher-action|sec-fetch-site/i);
+  // Origin is an additional CSRF check, never an authentication substitute.
+  for(const route of mutationRoutes.filter(r=>classifyMutationRoute(r.method,r.pathname)==="HUMAN_OPERATOR")){
+    const origin=route.source.search(/headers\.get\(["']origin/i);
+    if(origin>=0){const guard=route.source.indexOf("await requireOperator()");assert.ok(guard>=0&&guard<origin,`${route.pathname} must authenticate BEFORE Origin validation`);}
+  }
 });

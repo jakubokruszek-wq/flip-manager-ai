@@ -1,3 +1,5 @@
+import { testListingAllowed } from "@/features/investment-os/test-mode";
+import { assertDealRoomOwner, dealRoomEnabled, readDealRoom, DealRoomNotFound } from "@/features/investment-os/server/deal-room-service";
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 
 import { getInvestmentDeal, getListingMedia, saveDealOverrides } from "@/features/investment-os/server/deal-service";
@@ -8,37 +10,50 @@ import { investmentDealReadResponse } from "@/features/investment-os/server/inve
 type Context = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: Context): Promise<Response> {
+  let actorId = "";
   try {
-    await requireOperator();
+    const actor = await requireOperator();
+    actorId = actor.id;
+    if (!testListingAllowed((await params).id, actor.id)) throw new DealRoomNotFound();
+    await assertDealRoomOwner((await params).id, actor.id);
   } catch (error) {
+    if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     return operatorAuthorizationResponse(error);
   }
   try {
     const { id } = await params;
-    const response = await investmentDealReadResponse((await params).id, getInvestmentDeal);
+    const response = await investmentDealReadResponse((await params).id, (listingId) => getInvestmentDeal(listingId, actorId));
     if (response.status !== 200) return response;
     const body = await response.json() as { ok: boolean; deal: CanonicalDeal };
     const media = await getListingMedia(id);
     return Response.json({ ...body, media: media.images });
   } catch (error) {
+    if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     console.error("INVESTMENT DEAL GET ERROR", error);
     return Response.json({ message: "Nie udało się przygotować Investment Desk." }, { status: 500 });
   }
 }
 
 export async function PUT(request: Request, { params }: Context): Promise<Response> {
+  let actorId = "";
   try {
-    await requireOperator();
+    const actor = await requireOperator();
+    actorId = actor.id;
+    if (!testListingAllowed((await params).id, actor.id)) throw new DealRoomNotFound();
+    await assertDealRoomOwner((await params).id, actor.id);
+    if (dealRoomEnabled() && (await readDealRoom((await params).id, actor.id))?.rounds.length) return Response.json({ code: "USE_DEAL_ROOM_ANSWERS", message: "Ta analiza ma zapisane odpowiedzi. Edytuj je w module Dyrektorzy pytają Ciebie, aby zachować historię." }, { status: 409 });
   } catch (error) {
+    if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     return operatorAuthorizationResponse(error);
   }
   try {
     const body = await request.json().catch(() => null) as { overrides?: DealFactOverrides } | null;
     if (!body?.overrides || typeof body.overrides !== "object" || Array.isArray(body.overrides)) return Response.json({ message: "Nieprawidłowe nadpisania." }, { status: 400 });
-    const result = await saveDealOverrides((await params).id, body.overrides);
+    const result = await saveDealOverrides((await params).id, body.overrides, actorId);
     return Response.json({ ok: true, ...result });
   } catch (error) {
     if (isInvestmentDealVersionConflict(error)) return Response.json({ ok: false, code: "INVESTMENT_DEAL_VERSION_CONFLICT" }, { status: 409 });
+    if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     console.error("INVESTMENT DEAL PUT ERROR", error);
     return Response.json({ message: error instanceof Error && error.message.startsWith("INVALID_") ? "Nieprawidłowa wartość." : "Nie udało się zapisać nadpisania." }, { status: 500 });
   }

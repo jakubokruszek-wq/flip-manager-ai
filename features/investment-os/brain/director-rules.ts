@@ -1,3 +1,5 @@
+import {jdgTaxReason} from "../jdg-tax";
+import {privateTaxReason} from "../private-tax";
 import type { CanonicalDeal, DealFacts, DirectorOutput, FactValue, ProvenanceEntry } from "../types.ts";
 import { dependenciesFor } from "./dependency-graph.ts";
 import type { BrainConfidenceState, BrainDirector, BrainDirectorId, BrainDirectorStatus, BrainFreshness, BrainMetric, BrainProvenance, BrainRisk } from "./types.ts";
@@ -82,7 +84,7 @@ function market(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWarning
   const missing = unique([...(deal.market.missingFields ?? []), ...(!result ? ["marketEvidence"] : [])]);
   const evidence = provenanceEntries(deal.market.provenance);
   const explanation = result
-    ? `Kanoniczny przedział wartości wyjścia wynosi ${result.resaleValueLow}–${result.resaleValueHigh} zł; baza ${result.resaleValueBase} zł. Źródło: ${result.compCount} porównań, typ ${result.priceEvidenceType.toLowerCase().replaceAll("_", " ")}.`
+    ? `Kanoniczny przedział wartości wyjścia wynosi ${result.resaleValueLow}–${result.resaleValueHigh} zł; baza ${result.resaleValueBase} zł. Źródło wyceny: ${result.sourceLabel ?? result.assumptionMatchedBy}. ${result.indicative ? "WYCENA ORIENTACYJNA. " : ""}Data: ${result.observedAt ?? "nieznana"}. Źródło: ${result.compCount} porównań, typ ${result.priceEvidenceType.toLowerCase().replaceAll("_", " ")}.`
     : "Nie ma wystarczającego kanonicznego wyniku rynku do podania wartości odsprzedaży.";
   return output(deal, "MARKET", status, result ? "Dostępny wynik rynku" : "Brak użytecznego wyniku rynku", explanation, stale ? "Odśwież dowody rynkowe przed użyciem wartości wyjścia." : needsData ? "Uzupełnij istniejące dane porównawcze; nie twórz porównań zastępczych." : "Przekaż kanoniczny przedział do underwritingu i oceny sprzedaży.", result ? [
     metric(deal, "resalePricePerM2Base", "Cena wyjścia za m² — baza", result.resalePricePerM2Base, provenance("market.result.resalePricePerM2Base", result.evidenceId, result.priceEvidenceType === "USER_ASSUMPTION" ? "ASSUMPTION" : "ESTIMATE", result.observedAt), "PLN_PER_M2"),
@@ -147,6 +149,8 @@ function riskLegal(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWarn
 
 function cfo(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWarnings: string[]): BrainDirector {
   const result = deal.underwriting.result;
+  const model=result?.cfo;
+  if(model) { const selected=model.selected;const taxProfit=model.jdgTax?.profitAfterTaxAndContributions??model.privateTax?.profitAfterPit??null;const taxGap=model.jdgTax?.fundingGap??model.privateTax?.fundingGapAfterTax??null;const taxMissing=[...new Set([...model.missing,...(model.taxReview?.missing??[])])];const taxWarnings=[...(model.jdgTax?.reasons.map(jdgTaxReason)??[]),...(model.privateTax?.reasons.map(privateTaxReason)??[])]; return output(deal,"CFO", "NEEDS_DATA", "Cash-flow i finansowanie przed podatkiem", `Wybrany wariant: ${selected?.mode ?? "nieustalony"}. Kapitał szczytowy ${selected?.peakOwnCapital ?? "?"} PLN, luka ${selected?.fundingGap ?? "?"} PLN. Wynik właściciela przed podatkiem ${selected?.ownProfitBeforeTax ?? "?"} PLN. Podatki rzeczywiste nieustalone. Warunkowy wynik po podatkach/składkach ${taxProfit ?? "nieustalony"} PLN, luka ${taxGap ?? "nieustalona"} PLN.`,"Potwierdź brakujące parametry, zabezpieczenie, kosztorys i podatki; porównaj stres przed zakupem.", selected ? [metric(deal,"peakCash","Szczyt własnego kapitału",selected.peakOwnCapital,provenance("underwriting.cfo",deal.underwriting.inputFingerprint,"ASSUMPTION",deal.underwriting.computedAt),"PLN"),metric(deal,"fundingGap","Luka finansowania",selected.fundingGap,provenance("underwriting.cfo",deal.underwriting.inputFingerprint,"ASSUMPTION",deal.underwriting.computedAt),"PLN"),metric(deal,"conditionalAfterTaxProfit","Warunkowy wynik po podatkach/składkach",taxProfit,provenance("underwriting.result.cfo",deal.underwriting.inputFingerprint,"ASSUMPTION",deal.underwriting.computedAt),"PLN"),metric(deal,"conditionalTaxFundingGap","Warunkowa luka po podatkach",taxGap,provenance("underwriting.result.cfo",deal.underwriting.inputFingerprint,"ASSUMPTION",deal.underwriting.computedAt),"PLN")] : [], taxMissing,[...inheritedWarnings,...model.warnings,...taxWarnings],[],[],freshness,"Deklarowany model etapów i finansowania nad istniejącym kalkulatorem; brak automatycznej akceptacji kredytu lub modelu podatkowego."); }
   const missing = result ? ["financing"] : ["economics", "financing"];
   const status: BrainDirectorStatus = result ? "NEEDS_DATA" : "NEEDS_DATA";
   const evidence = provenanceEntries(deal.underwriting.provenance.filter((item) => ["totalProjectCost", "profit", "renovationPerM2"].includes(item.field)));
@@ -173,7 +177,7 @@ function acquisition(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWa
   return output(deal, "ACQUISITION", status, `Działanie warunkowe: ${action}`, `Kierunek wynika z kanonicznej decyzji CEO, Max Buy, bramek i nadrzędnej decyzji ręcznej. Otwarte bramki: ${openGates.length}.`, recommendation, [
     metric(deal, "acquisitionAction", "Działanie", action, provenance("ceo.result.action", deal.ceo.inputFingerprint, "FACT", deal.ceo.computedAt)),
     metric(deal, "askingPrice", "Cena ofertowa", deal.facts.askingPrice.effectiveValue, factProvenance("askingPrice", deal.facts.askingPrice), "PLN"),
-    metric(deal, "maxPurchasePrice", "Maksymalna cena zakupu", result?.maxPurchasePrice ?? ceo?.maxPurchasePrice ?? null, provenance("underwriting.result.maxPurchasePrice", deal.underwriting.inputFingerprint, "ESTIMATE", deal.underwriting.computedAt), "PLN"),
+    metric(deal, "maxPurchasePrice", "Maksymalna cena zakupu", result?.cfo ? ceo?.maxPurchasePrice ?? null : result?.maxPurchasePrice ?? ceo?.maxPurchasePrice ?? null, provenance("underwriting.result.maxPurchasePrice", deal.underwriting.inputFingerprint, "ESTIMATE", deal.underwriting.computedAt), "PLN"),
     metric(deal, "openCriticalGates", "Otwarte bramki krytyczne", openGates.length, provenance("ceo.result.criticalGates", deal.ceo.inputFingerprint, "FACT", deal.ceo.computedAt), "COUNT"),
   ], missing, [...inheritedWarnings, ...openGates.map((gate) => gate.reason)], evidence, evidence, freshness, "Działanie pochodzi z kanonicznego CEO i Max Buy; nie dodano drugiego progu zakupu.");
 }
@@ -181,15 +185,15 @@ function acquisition(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWa
 function sale(deal: CanonicalDeal, freshness: BrainFreshness, inheritedWarnings: string[]): BrainDirector {
   const market = deal.market.result;
   const missing = market ? [] : ["marketEvidence"];
-  const supported = Boolean(market && market.compCount > 0 && market.priceEvidenceType !== "USER_ASSUMPTION" && market.fallbackLevel === 0);
+  const supported = Boolean(market && !market.indicative && market.compCount > 0 && market.priceEvidenceType !== "USER_ASSUMPTION" && market.fallbackLevel === 0);
   const status: BrainDirectorStatus = !market ? "NEEDS_DATA" : supported ? "READY" : "NEEDS_DATA";
   const evidence = provenanceEntries(deal.market.provenance);
-  return output(deal, "SALE", status, market ? "Przedział możliwej sprzedaży" : "Brak potwierdzonej wyceny wyjścia", market ? `Zakres z kanonicznego modułu rynku: ${market.resaleValueLow}–${market.resaleValueHigh} zł, wartość bazowa ${market.resaleValueBase} zł. System nie ma zapisanego dowodu czasu sprzedaży.` : "Nie ma użytecznego przedziału wyjścia; nie estymowano czasu sprzedaży.", supported ? "Sprawdź aktualność porównań przed przyjęciem ceny wyjścia." : "Uzupełnij wiarygodne porównania; nie traktuj założenia jako obserwacji rynku.", market ? [
+  return output(deal, "SALE", status, market ? "Przedział możliwej sprzedaży" : "Brak potwierdzonej wyceny wyjścia", market ? `Źródło wyceny: ${market.sourceLabel ?? market.assumptionMatchedBy}. ${market.indicative ? "WYCENA ORIENTACYJNA. " : ""}Data: ${market.observedAt ?? "nieznana"}. Zakres z kanonicznego modułu rynku: ${market.resaleValueLow}–${market.resaleValueHigh} zł, wartość bazowa ${market.resaleValueBase} zł. ${market.priceEvidenceType === "ASKING" ? "To ceny ofertowe, nie transakcyjne; realizacja tej ceny nie jest potwierdzona." : ""} System nie ma zapisanego dowodu czasu sprzedaży.` : "Nie ma użytecznego przedziału wyjścia; nie estymowano czasu sprzedaży.", supported ? "Sprawdź aktualność porównań przed przyjęciem ceny wyjścia." : "Uzupełnij wiarygodne porównania; nie traktuj założenia jako obserwacji rynku.", market ? [
     metric(deal, "resaleValueLow", "Wartość wyjścia — dół przedziału", market.resaleValueLow, provenance("market.result.resaleValueLow", market.evidenceId, "ESTIMATE", market.observedAt), "PLN"),
     metric(deal, "resaleValueBase", "Wartość wyjścia — baza", market.resaleValueBase, provenance("market.result.resaleValueBase", market.evidenceId, "ESTIMATE", market.observedAt), "PLN"),
     metric(deal, "resaleValueHigh", "Wartość wyjścia — góra przedziału", market.resaleValueHigh, provenance("market.result.resaleValueHigh", market.evidenceId, "ESTIMATE", market.observedAt), "PLN"),
     metric(deal, "comparableCount", "Liczba porównań", market.compCount, provenance("market.result.compCount", market.evidenceId, "FACT", market.observedAt), "COUNT"),
-  ] : [], missing, [...inheritedWarnings, ...(market && !supported ? ["Jakość lub źródło wartości wyjścia wymaga dodatkowego potwierdzenia."] : [])], evidence, evidence.length ? evidence : [provenance("market.result", deal.market.inputFingerprint, null, deal.market.computedAt)], freshness, "Wartości sprzedaży pochodzą z istniejącego wyniku MARKET; czas sprzedaży nie jest zgadywany.");
+  ] : [], missing, [...inheritedWarnings, ...deal.market.warnings, ...(market && !supported ? ["Jakość lub źródło wartości wyjścia wymaga dodatkowego potwierdzenia."] : [])], evidence, evidence.length ? evidence : [provenance("market.result", deal.market.inputFingerprint, null, deal.market.computedAt)], freshness, "Wartości sprzedaży pochodzą z istniejącego wyniku MARKET; czas sprzedaży nie jest zgadywany.");
 }
 
 export function createBrainDirector(deal: CanonicalDeal, id: "CEO", input: { status: BrainDirectorStatus; headline: string; summary: string; finding: string; recommendation: string; missingInputs: string[]; warnings: string[]; evidence: BrainProvenance[]; freshness: BrainFreshness; risks: BrainRisk[] }): BrainDirector {

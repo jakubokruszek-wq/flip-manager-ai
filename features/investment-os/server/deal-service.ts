@@ -1,5 +1,10 @@
 import "server-only";
+import { eligibleGeneralComp, generalCompKey, freshMarketDate, markIndicative, usableRadar } from "../market-fallback";
+import { radarMarketEvidence } from "../radar-market";
+import { getRadarResults } from "@/features/price-radar/server/radar-results";
+import { readRadarSettings, radarSettingsSourcesWereFilteredToEmpty } from "@/features/price-radar/server/radar-settings";
 
+import { DealRoomNotFound, answerOverrides, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { calculateResaleArv, selectResaleComps } from "@/features/market-intelligence/resale-arv";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
@@ -13,9 +18,10 @@ import { classifyFacebookConditionFromText } from "@/features/facebook-watcher/e
 type Row = Record<string, unknown>;
 type InvestmentSettings = UnderwritingSettings & { decisionPolicy: InvestmentDecisionPolicy };
 
-export async function getInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
+export async function getInvestmentDeal(listingId: string, actorId?: string): Promise<CanonicalDeal | null> {
   const db = createAdminClient();
   const stored = await readStoredDeal(db, listingId);
+  if (stored?.ownerId && stored.ownerId !== actorId) throw new DealRoomNotFound();
   return stored?.deal ?? null;
 }
 
@@ -31,30 +37,11 @@ export async function getListingMedia(listingId: string): Promise<{ images: stri
   return { images: Array.isArray(data?.images) ? data.images.filter((value): value is string => typeof value === "string") : [] };
 }
 
-export async function initializeInvestmentDeal(listingId: string): Promise<CanonicalDeal | null> {
+export async function initializeInvestmentDeal(listingId: string, actorId?: string): Promise<CanonicalDeal | null> {
   const db = createAdminClient();
   const deal = await initializeDealWithCas<CanonicalDeal | null>({
     compute: async (): Promise<VersionedDealCandidate<CanonicalDeal | null>> => {
-      const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
-      if (error) throw error;
-      if (!listing) return { value: null, expectedVersion: 0, sourceUpdatedAt: null, unchanged: true };
-      const existing = await readStoredDeal(db, listingId);
-      const dealId = existing?.deal.id ?? crypto.randomUUID();
-      const overridesResult = existing ? await db.from("deal_fact_overrides").select("values").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
-      if (overridesResult.error) throw overridesResult.error;
-      const settings = await loadSettings(db);
-      const { data: latestSnapshot, error: snapshotError } = await db.from("listing_snapshots").select("id,captured_at,price,raw_data").eq("listing_id", listingId).order("captured_at", { ascending: false }).limit(1).maybeSingle();
-      if (snapshotError) throw snapshotError;
-      const facebookCondition = text(listing.source) === "facebook" ? await readFacebookCondition(db, listingId, text((listing as Row).description)) : null;
-      const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null, facebookCondition);
-      const market = await resolveMarketEvidence(db, listingInput);
-      const trackRecords = await loadDirectorTrackRecords(db);
-      const now = new Date().toISOString();
-      const deal = buildCanonicalDeal({ dealId, listing: listingInput, overrides: object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords });
-      const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
-      const sourceUpdatedAt = text(listing.updated_at);
-      if (existing && settled && fingerprintsEqual(existing.deal, deal) && existing.sourceUpdatedAt === sourceUpdatedAt) return { value: existing.deal, expectedVersion: existing.version, sourceUpdatedAt, unchanged: true };
-      return { value: deal, expectedVersion: existing?.version ?? 0, sourceUpdatedAt };
+      return prepareInvestmentDeal(db, listingId, undefined, actorId);
     },
     commit: async (candidate) => commitDealCas(async () => {
       const { data, error } = await db.rpc("persist_investment_deal_cas", { p_deal: toDealRow(candidate.value as CanonicalDeal), p_expected_version: candidate.expectedVersion, p_source_updated_at: candidate.sourceUpdatedAt });
@@ -63,6 +50,7 @@ export async function initializeInvestmentDeal(listingId: string): Promise<Canon
     }),
     readCurrent: async () => {
       const current = await readStoredDeal(db, listingId);
+      if (current?.ownerId && current.ownerId !== actorId) throw new DealRoomNotFound();
       return current ? { value: current.deal, sourceUpdatedAt: current.sourceUpdatedAt } : null;
     },
   });
@@ -70,10 +58,53 @@ export async function initializeInvestmentDeal(listingId: string): Promise<Canon
   return deal;
 }
 
-export async function saveDealOverrides(listingId: string, values: DealFactOverrides): Promise<{ deal: CanonicalDeal; invalidated: string[] }> {
-  await initializeInvestmentDeal(listingId);
+export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminClient>, listingId: string, overrideValues?: DealFactOverrides, actorId?: string, overrideObservedAt?: string): Promise<VersionedDealCandidate<CanonicalDeal | null>> {
+      const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
+      if (error) throw error;
+      if (!listing) return { value: null, expectedVersion: 0, sourceUpdatedAt: null, unchanged: true };
+      const existing = await readStoredDeal(db, listingId);
+      if (existing?.ownerId && existing.ownerId !== actorId) throw new DealRoomNotFound();
+      const dealId = existing?.deal.id ?? crypto.randomUUID();
+      const overridesResult = existing ? await db.from("deal_fact_overrides").select("values,updated_at").eq("deal_id", dealId).maybeSingle() : { data: null, error: null };
+      if (overridesResult.error) throw overridesResult.error;
+      const settings = await loadSettings(db);
+      const { data: latestSnapshot, error: snapshotError } = await db.from("listing_snapshots").select("id,captured_at,price,raw_data").eq("listing_id", listingId).order("captured_at", { ascending: false }).limit(1).maybeSingle();
+      if (snapshotError) throw snapshotError;
+      const facebookCondition = text(listing.source) === "facebook" ? await readFacebookCondition(db, listingId, text((listing as Row).description)) : null;
+      const listingInput = toListingInput(listing as Row, latestSnapshot as Row | null, facebookCondition);
+      // Radar data is private to its operator. Legacy unowned canonical deals
+      // must not persist one operator's sample into a shared record. A Q&A
+      // round claims ownership atomically; the next explicit refresh can use Radar.
+      const marketActor = existing?.ownerId === actorId ? actorId : undefined;
+      const market = await resolveMarketEvidence(db, listingInput, marketActor);
+      const trackRecords = await loadDirectorTrackRecords(db);
+      const now = new Date().toISOString();
+      const buildInput = { overrideObservedAt: overrideObservedAt ?? text(overridesResult.data?.updated_at) ?? undefined, dealId, listing: listingInput, overrides: overrideValues ?? object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords };
+      let resolvedInput = buildInput;
+      let deal = buildCanonicalDeal(resolvedInput);
+      if (!overrideValues && existing && process.env.DEAL_ROOM_QA_ENABLED === "true") {
+        const { data: workspace, error: workspaceError } = await db.from("deal_room_workspaces").select("state").eq("deal_id", dealId).maybeSingle();
+        if (workspaceError) throw workspaceError;
+        if (workspace) { const state = workspace.state as DealRoomState; resolvedInput = { ...buildInput, overrides: answerOverrides(deal, state.baselineOverrides, state.answers), overrideObservedAt: state.answers.resalePerM2?.kind === "VALUE" ? state.answers.resalePerM2.savedAt : state.baselineMarketObservedAt }; deal = buildCanonicalDeal(resolvedInput); }
+      }
+      // Reuse the same resolver, but select comps/assumptions for effective
+      // answered dimensions/location, not a stale raw listing with missing area.
+      const marketSubject = { ...listingInput, areaM2: deal.facts.areaM2.effectiveValue, rooms: deal.facts.rooms.effectiveValue, city: deal.facts.city.effectiveValue, district: deal.facts.district.effectiveValue, street: deal.facts.street.effectiveValue, buildingType: deal.facts.buildingType.effectiveValue, floor: deal.facts.floor.effectiveValue };
+      if (["areaM2", "rooms", "city", "district", "street", "buildingType", "floor"].some((field) => marketSubject[field as keyof DealListingInput] !== listingInput[field as keyof DealListingInput])) {
+        deal = buildCanonicalDeal({ ...resolvedInput, market: await resolveMarketEvidence(db, marketSubject, marketActor) });
+      }
+      if (existing) deal = preserveUnchangedDirectors(existing.deal, deal);
+      const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
+      const sourceUpdatedAt = text(listing.updated_at);
+      if (!overrideValues && existing && settled && fingerprintsEqual(existing.deal, deal) && existing.sourceUpdatedAt === sourceUpdatedAt) return { value: existing.deal, expectedVersion: existing.version, sourceUpdatedAt, unchanged: true };
+      return { value: deal, expectedVersion: existing?.version ?? 0, sourceUpdatedAt };
+}
+
+export async function saveDealOverrides(listingId: string, values: DealFactOverrides, actorId?: string): Promise<{ deal: CanonicalDeal; invalidated: string[] }> {
+  await initializeInvestmentDeal(listingId, actorId);
   const db = createAdminClient();
   const currentStored = await readStoredDeal(db, listingId);
+  if (currentStored?.ownerId && currentStored.ownerId !== actorId) throw new DealRoomNotFound();
   const current = currentStored?.deal ?? null;
   if (!current) throw new Error("DEAL_LISTING_NOT_FOUND");
   const clean = sanitizeOverrides(values);
@@ -91,7 +122,7 @@ export async function saveDealOverrides(listingId: string, values: DealFactOverr
   });
   const { error } = await db.rpc("apply_investment_override_cas", { p_deal_id: current.id, p_expected_version: currentStored!.version, p_values: clean, p_invalidated: [...invalidated], p_events: events, p_user_id: "application" });
   if (error) throw error;
-  const deal = await initializeInvestmentDeal(listingId);
+  const deal = await initializeInvestmentDeal(listingId, actorId);
   if (!deal) throw new Error("DEAL_RECOMPUTE_FAILED");
   return { deal, invalidated: [...invalidated] };
 }
@@ -134,13 +165,13 @@ export async function saveMarketAssumption(value: unknown): Promise<Row> {
   return data as Row;
 }
 
-type StoredDeal = { deal: CanonicalDeal; version: number; sourceUpdatedAt: string | null };
+type StoredDeal = { deal: CanonicalDeal; version: number; sourceUpdatedAt: string | null; ownerId: string | null };
 
-async function readStoredDeal(db: ReturnType<typeof createAdminClient>, listingId: string): Promise<StoredDeal | null> {
+export async function readStoredDeal(db: ReturnType<typeof createAdminClient>, listingId: string): Promise<StoredDeal | null> {
   const { data, error } = await db.from("deals").select("*").eq("listing_id", listingId).maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return { deal: toCanonicalDeal(data as Row), version: number(data.version), sourceUpdatedAt: text(data.source_updated_at) };
+  return { deal: toCanonicalDeal(data as Row), version: number(data.version), sourceUpdatedAt: text(data.source_updated_at), ownerId: text(data.deal_room_owner_id) };
 }
 
 async function markDealStaleCas(db: ReturnType<typeof createAdminClient>, dealId: string, expectedVersion: number, directors: string[]): Promise<void> {
@@ -167,24 +198,43 @@ async function loadDirectorTrackRecords(db: ReturnType<typeof createAdminClient>
   return (data ?? []).flatMap((row) => { const director = text(row.director); if (!director || !["SCOUT","VERIFY","MARKET","UNDERWRITER","CEO","RISK","LEGAL"].includes(director)) return []; return [{ director: director as DirectorTrackRecord["director"], dealCount: number(row.deal_count), medianErrorPercent: nullableNumber(row.median_error_percent), p90ErrorPercent: nullableNumber(row.p90_error_percent), confidenceCalibration: text(row.confidence_calibration), criticalMisses: number(row.critical_misses), computedAt: text(row.computed_at) }]; });
 }
 
-async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, listing: DealListingInput): Promise<MarketEvidence | null> {
+async function resolveMarketEvidence(db: ReturnType<typeof createAdminClient>, listing: DealListingInput, actorId?: string): Promise<MarketEvidence | null> {
+  const radarEnabled = process.env.DEAL_ROOM_RADAR_ENABLED === "true";
+  const now = new Date().toISOString();
+  let radar: MarketEvidence | null = null;
+  if (radarEnabled && actorId) {
+    const filters = await readRadarSettings(actorId, db);
+    const disabledSources = await radarSettingsSourcesWereFilteredToEmpty(actorId, db);
+    const results = disabledSources ? { listings: [], excludedListings: [] } : await getRadarResults(actorId, filters, db);
+    // Read private Radar only for an owned deal; general evidence remains available.
+    const maximumAgeDays = Number(process.env.DEAL_ROOM_RADAR_MAX_AGE_DAYS ?? 30);
+    radar = radarMarketEvidence(listing, [...results.listings, ...results.excludedListings], now, { maximumAgeDays, minimumSample: 10 }).evidence;
+    if (usableRadar(radar, now)) return { ...radar, sourceLabel: "Radar Cen" };
+  }
   const { data: rows, error } = await db.from("resale_comps").select("*").eq("active", true).limit(500);
   if (error && error.code !== "42P01") throw error;
-  const comps = (rows ?? []).map(toComp).filter((item): item is ResaleCompRecord => item !== null);
+  const seen = new Set<string>();
+  const comps = (rows ?? []).flatMap((raw) => {
+    const row = raw as Row, comp = toComp(row); if (!comp) return [];
+    if (radarEnabled) { if (!eligibleGeneralComp(row, comp, listing, actorId, now)) return []; const key = generalCompKey(row, comp); if (seen.has(key)) return []; seen.add(key); }
+    return [comp];
+  });
   const selected = selectResaleComps({ id: listing.id, area: listing.areaM2, rooms: listing.rooms, city: listing.city, district: listing.district, address: listing.street, buildingType: listing.buildingType, floor: listing.floor }, comps);
   const arv = calculateResaleArv({ area: listing.areaM2 }, selected);
-  if (arv.conservativePrice && arv.expectedPrice && arv.optimisticPrice && listing.areaM2) {
-    const observedAt = selected.map((item) => item.lastSeenAt).sort().at(-1) ?? null;
-    return { id: null, matchedBy: "RESALE_COMPS", low: arv.conservativePrice / listing.areaM2, base: arv.expectedPrice / listing.areaM2, high: arv.optimisticPrice / listing.areaM2, confidence: Math.min(90, 45 + selected.length * 5), provenance: "DERIVED", compCount: selected.length, fallbackLevel: 0, fallbackReason: "DIRECT_COMPARABLE_SET", confidencePenalty: 0, observedAt, evidenceId: selected.length ? `resale-comps:${selected.map((item) => item.id).sort().join(",")}` : null, priceEvidenceType: "ASKING", comparables: selected.map((item) => ({ id: item.id, source: item.source, sourceUrl: item.originalUrl, pricePerM2: item.pricePerSqm!, similarityScore: item.similarityScore, dataQuality: comparableDataQuality(item), freshnessDays: item.freshnessDays ?? null, distanceMeters: item.distanceMeters ?? null, adjustments: item.matchReasons, weight: comparableWeight(item.similarityScore, item.freshnessDays ?? null, item.renovationConfidence ?? "LOW"), outlierReason: item.outlierReason ?? null, priceEvidenceType: "ASKING" as const })) };
+  if (arv.conservativePrice && arv.expectedPrice && arv.optimisticPrice && listing.areaM2 && (!radarEnabled || selected.length >= 3)) {
+    const observedAt = selected.map((item) => item.lastSeenAt).sort().at(0) ?? null;
+    const general: MarketEvidence = { id: null, matchedBy: "RESALE_COMPS", low: arv.conservativePrice / listing.areaM2, base: arv.expectedPrice / listing.areaM2, high: arv.optimisticPrice / listing.areaM2, confidence: Math.min(90, 45 + selected.length * 5), provenance: "DERIVED", compCount: selected.length, fallbackLevel: 0, fallbackReason: "DIRECT_COMPARABLE_SET", confidencePenalty: 0, observedAt, evidenceId: selected.length ? `resale-comps:${selected.map((item) => item.id).sort().join(",")}` : null, priceEvidenceType: "ASKING", comparables: selected.map((item) => ({ id: item.id, source: item.source, sourceUrl: item.originalUrl, pricePerM2: item.pricePerSqm!, similarityScore: item.similarityScore, dataQuality: comparableDataQuality(item), freshnessDays: item.freshnessDays ?? null, distanceMeters: item.distanceMeters ?? null, adjustments: item.matchReasons, weight: comparableWeight(item.similarityScore, item.freshnessDays ?? null, item.renovationConfidence ?? "LOW"), outlierReason: item.outlierReason ?? null, priceEvidenceType: "ASKING" as const })) };
+    return radarEnabled ? markIndicative({ ...general, fallbackLevel: 1 }, "ogólne porównania", radar) : general;
   }
   const { data: assumptions, error: assumptionError } = await db.from("market_assumptions").select("*").eq("active", true).eq("city", listing.city ?? "").order("effective_from", { ascending: false });
   if (assumptionError) throw assumptionError;
-  const matched = (assumptions ?? []).map((row) => ({ row: row as Row, score: assumptionScore(row as Row, listing) })).filter((item) => item.score >= 0).sort((a, b) => b.score - a.score)[0]?.row;
+  const matched = (assumptions ?? []).map((row) => ({ row: row as Row, score: assumptionScore(row as Row, listing) })).filter((item) => item.score >= 0 && (!radarEnabled || ((item.row.owner_id == null || item.row.owner_id === actorId) && freshMarketDate(item.row.effective_from ?? item.row.updated_at, now) && number(item.row.resale_price_per_m2_low) > 0 && number(item.row.resale_price_per_m2_low) <= number(item.row.resale_price_per_m2_base) && number(item.row.resale_price_per_m2_base) <= number(item.row.resale_price_per_m2_high)))).sort((a, b) => b.score - a.score)[0]?.row;
   if (!matched) return null;
   const specificity = assumptionScore(matched, listing);
   const fallbackLevel = specificity >= 15 ? 1 : specificity >= 9 ? 2 : specificity >= 5 ? 3 : 4;
   const confidencePenalty = fallbackLevel * 5;
-  return { id: text(matched.id), matchedBy: assumptionMatchLabel(matched), low: number(matched.resale_price_per_m2_low), base: number(matched.resale_price_per_m2_base), high: number(matched.resale_price_per_m2_high), confidence: number(matched.confidence), provenance: matched.provenance === "MARKET_ASSUMPTION" ? "MARKET_ASSUMPTION" : "USER_ASSUMPTION", compCount: 0, fallbackLevel, fallbackReason: fallbackLevel === 1 ? "SPECIFIC_MARKET_ASSUMPTION" : fallbackLevel === 2 ? "DISTRICT_MARKET_FALLBACK" : fallbackLevel === 3 ? "PROPERTY_PROFILE_FALLBACK" : "CITY_ONLY_FALLBACK", confidencePenalty, observedAt: text(matched.effective_from) ?? text(matched.updated_at) ?? null, evidenceId: text(matched.id), priceEvidenceType: "USER_ASSUMPTION", comparables: [] };
+  const assumption: MarketEvidence = { id: text(matched.id), matchedBy: assumptionMatchLabel(matched), low: number(matched.resale_price_per_m2_low), base: number(matched.resale_price_per_m2_base), high: number(matched.resale_price_per_m2_high), confidence: number(matched.confidence), provenance: matched.provenance === "MARKET_ASSUMPTION" ? "MARKET_ASSUMPTION" : "USER_ASSUMPTION", compCount: 0, fallbackLevel, fallbackReason: fallbackLevel === 1 ? "SPECIFIC_MARKET_ASSUMPTION" : fallbackLevel === 2 ? "DISTRICT_MARKET_FALLBACK" : fallbackLevel === 3 ? "PROPERTY_PROFILE_FALLBACK" : "CITY_ONLY_FALLBACK", confidencePenalty, observedAt: text(matched.effective_from) ?? text(matched.updated_at) ?? null, evidenceId: text(matched.id), priceEvidenceType: "USER_ASSUMPTION", comparables: [] };
+  return radarEnabled ? markIndicative(assumption, `${matched.district ? "średnia-założenie dzielnicy" : "założenie miasta"}: ${assumptionMatchLabel(matched)}`, radar) : assumption;
 }
 
 function toListingInput(row: Row, snapshot: Row | null, facebookCondition: string | null = null): DealListingInput {
@@ -228,7 +278,7 @@ function toComp(row: Row): ResaleCompRecord | null {
   return { id, source: source as ResaleCompRecord["source"], externalListingId, canonicalUrl: text(row.canonical_url), title: text(row.title), description: text(row.description), city: text(row.city), district: text(row.district), street: text(row.street), address: text(row.address), latitude: nullableNumber(row.latitude), longitude: nullableNumber(row.longitude), price: nullableNumber(row.price), areaM2: nullableNumber(row.area_m2), pricePerM2: nullableNumber(row.price_per_m2), rooms: nullableNumber(row.rooms), floor: text(row.floor), floors: text(row.floors), buildingType: text(row.building_type), constructionYear: nullableNumber(row.construction_year), ownership: text(row.ownership), balcony: bool(row.balcony), elevator: bool(row.elevator), parking: bool(row.parking), listingCreatedAt: text(row.listing_created_at), firstSeenAt: text(row.first_seen_at) ?? lastSeenAt, lastSeenAt, active: row.active === true, sellerType: text(row.seller_type), fingerprint: text(row.fingerprint), classification: { isCandidate: true, renovationStatus, renovationConfidence, finishLevel: text(row.finish_level), evidence: [], outlierReason: text(row.outlier_reason), exclusionReason: null } };
 }
 
-function toDealRow(deal: CanonicalDeal): Row { return { id: deal.id, listing_id: deal.listingId, stage: deal.stage, facts_fingerprint: deal.factsFingerprint, facts: deal.facts, scout: deal.scout, verify: deal.verify, market: deal.market, underwriting: deal.underwriting, ceo: deal.ceo, playbook: deal.playbook, evidence_fabric: deal.evidenceFabric, information_requests: deal.informationRequests, analysis_level: deal.analysisLevel, created_at: deal.createdAt, updated_at: deal.updatedAt }; }
+export function toDealRow(deal: CanonicalDeal): Row { return { id: deal.id, listing_id: deal.listingId, stage: deal.stage, facts_fingerprint: deal.factsFingerprint, facts: deal.facts, scout: deal.scout, verify: deal.verify, market: deal.market, underwriting: deal.underwriting, ceo: deal.ceo, playbook: deal.playbook, evidence_fabric: deal.evidenceFabric, information_requests: deal.informationRequests, analysis_level: deal.analysisLevel, created_at: deal.createdAt, updated_at: deal.updatedAt }; }
 function toCanonicalDeal(row: Row): CanonicalDeal { return { id: text(row.id)!, listingId: text(row.listing_id)!, stage: text(row.stage)! as CanonicalDeal["stage"], factsFingerprint: text(row.facts_fingerprint)!, facts: object(row.facts) as CanonicalDeal["facts"], scout: object(row.scout) as CanonicalDeal["scout"], verify: object(row.verify) as CanonicalDeal["verify"], market: object(row.market) as CanonicalDeal["market"], underwriting: object(row.underwriting) as CanonicalDeal["underwriting"], ceo: object(row.ceo) as CanonicalDeal["ceo"], playbook: object(row.playbook) as CanonicalDeal["playbook"], evidenceFabric: Array.isArray(row.evidence_fabric) ? row.evidence_fabric as CanonicalDeal["evidenceFabric"] : [], informationRequests: Array.isArray(row.information_requests) ? row.information_requests as CanonicalDeal["informationRequests"] : [], analysisLevel: [0, 1, 2, 3].includes(number(row.analysis_level)) ? number(row.analysis_level) as CanonicalDeal["analysisLevel"] : 1, createdAt: text(row.created_at)!, updatedAt: text(row.updated_at)! }; }
 
 async function persistIntelligence(db: ReturnType<typeof createAdminClient>, deal: CanonicalDeal): Promise<void> {
@@ -259,7 +309,7 @@ async function persistIntelligence(db: ReturnType<typeof createAdminClient>, dea
   if (deal.informationRequests.length) { const requestRows = deal.informationRequests.map((item) => ({ id: item.id, deal_id: deal.id, field: item.field, question: item.question, priority: item.priority, value_of_information: item.valueOfInformation, decision_impact: item.decisionImpact, requested_by: item.requestedBy, evidence_needed: item.evidenceNeeded, status: item.status })); const { error } = await db.from("director_information_requests").upsert(requestRows, { onConflict: "id" }); if (error) throw error; }
 }
 function evidenceTypeFor(item: EvidenceItem): EvidenceItem["evidenceType"] { if (item.type === "PREDICTION") return "AI_EXTRACTION"; if (item.sourceType === "USER_PROVIDED") return "MANUAL_INPUT"; if (item.sourceType === "MULTIPLE_INDEPENDENT_SOURCES") return "MARKET_COMPARABLE"; return "LISTING_OBSERVATION"; }
-function ceoAction(action: string): "JEDZ_OBEJRZEC" | "NEGOCJUJ" | "KUP" | "HOLD" | "ODRZUC" { if (action === "KUP") return "KUP"; if (action === "NEGOCJUJ") return "NEGOCJUJ"; if (action === "ZA DROGA") return "HOLD"; if (action === "ODRZUÄ†") return "ODRZUC"; if (action.startsWith("JED")) return "JEDZ_OBEJRZEC"; return "HOLD"; }
+function ceoAction(action: string): "JEDZ_OBEJRZEC" | "NEGOCJUJ" | "KUP" | "HOLD" | "ODRZUC" { if (action === "KUP") return "KUP"; if (action === "NEGOCJUJ") return "NEGOCJUJ"; if (action === "ZA DROGA") return "HOLD"; if (action === "ODRZUĆ") return "ODRZUC"; if (action.startsWith("JED")) return "JEDZ_OBEJRZEC"; return "HOLD"; }
 function sanitizeOverrides(value: DealFactOverrides): DealFactOverrides { const allowed = new Set(["city","district","street","areaM2","rooms","floor","floorsTotal","buildingType","yearBuilt","ownership","condition","monthlyFee","askingPrice","resalePerM2","renovationPerM2","holdingMonths","additionalCosts"]); return Object.fromEntries(Object.entries(value).filter(([key, item]) => allowed.has(key) && (item === null || typeof item === "string" || typeof item === "number") && !(typeof item === "number" && (!Number.isFinite(item) || item < 0)))); }
 function validateSettings(value: unknown): InvestmentSettings { const v = object(value); const renovation = object(v.renovationPerM2), market = object(v.marketResalePerM2), policy = object(v.decisionPolicy); const critical = Array.isArray(policy.criticalBuyFacts) ? policy.criticalBuyFacts.filter((item): item is InvestmentDecisionPolicy["criticalBuyFacts"][number] => typeof item === "string" && DEFAULT_INVESTMENT_DECISION_POLICY.criticalBuyFacts.includes(item as InvestmentDecisionPolicy["criticalBuyFacts"][number])) : DEFAULT_INVESTMENT_DECISION_POLICY.criticalBuyFacts; const decisionPolicy: InvestmentDecisionPolicy = { criticalBuyFacts: critical.length ? [...new Set(critical)] : DEFAULT_INVESTMENT_DECISION_POLICY.criticalBuyFacts, minimumBuyConfidence: bounded(policy.minimumBuyConfidence, DEFAULT_INVESTMENT_DECISION_POLICY.minimumBuyConfidence, 0, 100), maximumMarketFallbackLevel: bounded(policy.maximumMarketFallbackLevel, DEFAULT_INVESTMENT_DECISION_POLICY.maximumMarketFallbackLevel, 0, 4), maximumMarketAgeDays: bounded(policy.maximumMarketAgeDays, DEFAULT_INVESTMENT_DECISION_POLICY.maximumMarketAgeDays, 1, 365), minimumMarketComparableCount: bounded(policy.minimumMarketComparableCount, DEFAULT_INVESTMENT_DECISION_POLICY.minimumMarketComparableCount, 2, 10), deepDiveValueThresholdPLN: bounded(policy.deepDiveValueThresholdPLN, DEFAULT_INVESTMENT_DECISION_POLICY.deepDiveValueThresholdPLN, 1, 100_000_000) }; const result: InvestmentSettings = { ...DEFAULT_UNDERWRITING_SETTINGS, ...v, renovationPerM2: { LIGHT: nonnegative(renovation.LIGHT), STANDARD: nonnegative(renovation.STANDARD), FULL: nonnegative(renovation.FULL) }, marketResalePerM2: { low: nonnegative(market.low), base: nonnegative(market.base), high: nonnegative(market.high) }, marketResaleProvenance: "USER_ASSUMPTION", decisionPolicy } as InvestmentSettings; for (const key of ["contingencyPercent","purchaseTaxPercent","purchaseCommissionPercent","salesCostPercent","financingAnnualRatePercent","financingLoanPercent","minimumMarginPercent","minimumROI","targetNegotiationBufferPercent"] as const) if (result[key] < 0 || result[key] > 100) throw new Error(`INVALID_SETTING_${key}`); return result; }
 function validateAssumption(value: unknown): Row { const v = object(value); const city = text(v.city); const low = positive(v.low), base = positive(v.base), high = positive(v.high), confidence = number(v.confidence); if (!city || !low || !base || !high || low > base || base > high || confidence < 0 || confidence > 100) throw new Error("INVALID_MARKET_ASSUMPTION"); return { city: city.slice(0, 100), district: text(v.district)?.slice(0, 100) ?? null, building_type: text(v.buildingType)?.slice(0, 100) ?? null, area_min: nullableNumber(v.areaMin), area_max: nullableNumber(v.areaMax), rooms: nullableNumber(v.rooms), resale_price_per_m2_low: low, resale_price_per_m2_base: base, resale_price_per_m2_high: high, confidence, provenance: "USER_ASSUMPTION", active: true }; }

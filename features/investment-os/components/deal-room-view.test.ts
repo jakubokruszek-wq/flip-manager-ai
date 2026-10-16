@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { investmentPath } from "../test-identity";
 
 const root = process.cwd();
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
 test("Deal Room is a presentation over CanonicalDeal and does not add a second write path", () => {
   const view = read("features/investment-os/components/deal-room-view.tsx");
-  assert.match(view, /type \{ CanonicalDeal, DealFactOverrides, DirectorOutput, InformationRequest \}/);
+  assert.match(view, /type \{ CanonicalDeal, DealFactOverrides, DirectorOutput \}/);
   assert.match(view, /deal\.ceo\.result/);
   assert.match(view, /deal\.underwriting\.result/);
-  assert.match(view, /deal\.informationRequests/);
+  assert.match(view, /DirectorQuestions/);
   assert.match(view, /deal\.evidenceFabric/);
   assert.doesNotMatch(view, /fetch\(|\/api\//);
   assert.match(view, /Oczekuje na zapisane wyniki/);
@@ -36,10 +37,11 @@ test("canonical listing route keeps GET read-only and exposes initialization onl
   assert.match(desk, /loadInvestmentDeal\(result\.id\)/);
   assert.match(client, /InvestmentDealNotComputedError/);
   assert.match(desk, /notComputed/);
-  assert.match(getRoute, /investmentDealReadResponse\(\(await params\)\.id, getInvestmentDeal\)/);
+  assert.match(getRoute, /getInvestmentDeal\(listingId, actorId\)/);
   assert.doesNotMatch(getRoute, /initializeInvestmentDeal|method:\s*["']POST["']/);
   assert.match(desk, /if \(!notComputed \|\| initializationInFlight\.current\) return/);
-  assert.match(desk, /\/investment\/initialize/);
+  assert.match(desk, /investmentPath\(result\.id\)\}\/initialize/);
+  assert.equal(`${investmentPath("22222222-2222-4222-8222-222222222222")}/initialize`, "/api/flip-finder/listings/22222222-2222-4222-8222-222222222222/investment/initialize");
   assert.match(desk, /method: "POST"/);
   assert.match(desk, /data-initialize-deal/);
   assert.match(desk, /onClick=\{\(\) => void initialize\(\)\}/);

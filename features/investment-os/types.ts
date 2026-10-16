@@ -127,6 +127,11 @@ export type VerifyResult = {
 };
 
 export type MarketResult = {
+  indicative?: boolean;
+  sourceLabel?: string;
+  assumptionQuestion?: string;
+  radarAudit?: MarketEvidence["radarAudit"];
+  sourceComparison?: { base: number; compCount: number; observedAt: string | null; sourceLabel?: string };
   resalePricePerM2Low: number;
   resalePricePerM2Base: number;
   resalePricePerM2High: number;
@@ -145,7 +150,7 @@ export type MarketResult = {
   comparables: MarketComparableEvidence[];
 };
 
-export type MarketComparableEvidence = { id: string; source: string; sourceUrl: string | null; pricePerM2: number; similarityScore: number; dataQuality: number; freshnessDays: number | null; distanceMeters: number | null; adjustments: string[]; weight: number; outlierReason: string | null; priceEvidenceType: "ASKING" | "TRANSACTION" };
+export type MarketComparableEvidence = { radarDetails?: { area: number; rooms: number | null; city: string; district: string; buildingType: string; standard: string; collectedAt: string; status: string; linkVerified: false; photosVerified: false }; id: string; source: string; sourceUrl: string | null; pricePerM2: number; similarityScore: number; dataQuality: number; freshnessDays: number | null; distanceMeters: number | null; adjustments: string[]; weight: number; outlierReason: string | null; priceEvidenceType: "ASKING" | "TRANSACTION" };
 
 export type CeoResult = {
   decision: "HOT" | "GOOD" | "REVIEW" | "TOO_EXPENSIVE" | "REJECT";
@@ -209,14 +214,21 @@ export type CanonicalDeal = {
   updatedAt: string;
 };
 
-export type DealFactOverrides = Partial<Record<keyof DealFacts, string | number | null>> & {
+export type DealFactOverrides = Partial<Record<keyof DealFacts, string | number | null>> & import("./cfo").CfoInputs & {
+  negotiatedPrice?: number | null;
   resalePerM2?: number | null;
   renovationPerM2?: number | null;
+  renovationTotal?: number | null;
   holdingMonths?: number | null;
   additionalCosts?: number | null;
 };
 
 export type MarketEvidence = {
+  indicative?: boolean;
+  sourceLabel?: string;
+  assumptionQuestion?: string;
+  radarAudit?: Array<{ id: string; sourceUrl: string | null; accepted: boolean; reasons: string[] }>;
+  minimumSample?: number;
   id: string | null;
   matchedBy: string;
   low: number;
@@ -266,6 +278,7 @@ export const DEFAULT_INVESTMENT_DECISION_POLICY: InvestmentDecisionPolicy = {
 };
 
 export type BuildDealInput = {
+  features?: import("./feature-context").DealFeatures;
   dealId: string;
   listing: DealListingInput;
   overrides: DealFactOverrides;
@@ -273,6 +286,7 @@ export type BuildDealInput = {
   settings: UnderwritingSettings;
   now: string;
   createdAt?: string;
+  overrideObservedAt?: string;
   policy?: InvestmentDecisionPolicy;
   requestedAnalysisLevel?: AnalysisLevel;
   directorTrackRecords?: DirectorTrackRecord[];

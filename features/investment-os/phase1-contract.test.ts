@@ -1,3 +1,4 @@
+import { investmentPath } from "./test-identity";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -33,8 +34,9 @@ test("migration keeps one additive deal per listing with backend-only writes", (
 
 test("Investment Command Center keeps the API contract and presents the CEO decision first", () => {
   assert.match(desk, /loadInvestmentDeal\(result\.id\)/);
-  assert.match(desk, /\/api\/flip-finder\/listings\/\$\{result\.id\}\/investment/);
-  assert.match(desk, /\/investment\/initialize/);
+  assert.match(desk, /investmentPath\(result\.id\)/);
+  assert.equal(investmentPath("22222222-2222-4222-8222-222222222222"), "/api/flip-finder/listings/22222222-2222-4222-8222-222222222222/investment");
+  assert.match(desk, /investmentPath\(result\.id\)\}\/initialize/);
   assert.match(desk, /method: "POST"/);
   assert.match(desk, /data-initialize-deal/);
   assert.match(desk, /initializationInFlight\.current/);

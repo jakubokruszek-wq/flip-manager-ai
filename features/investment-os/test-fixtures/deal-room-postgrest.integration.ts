@@ -1,0 +1,273 @@
+import assert from "node:assert/strict";
+import { createHmac, randomUUID } from "node:crypto";
+import { mock, test } from "node:test";
+import { createClient } from "@supabase/supabase-js";
+if (process.env.GITHUB_ACTIONS !== "true") throw Error("GITHUB_ACTIONS_REQUIRED");
+const owner = "33333333-3333-4333-8333-333333333333", other = "55555555-5555-4555-8555-555555555555";
+let actor = owner, dropAfterCommit = false, testOnlyTraffic=false, dropTestCommit=false, missingTestContract=false;
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const head = encode({ alg: "HS256", typ: "JWT" }), payload = encode({ role: "service_role", exp: Math.floor(Date.now()/1000)+3600 });
+const signature = createHmac("sha256", "isolated-deal-room-postgrest-signing-key-only").update(`${head}.${payload}`).digest("base64url");
+const db = createClient("http://127.0.0.1:55439", `${head}.${payload}.${signature}`, { auth: { persistSession: false }, global: { fetch: async (input, init) => {
+  const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
+  if (url.origin !== "http://127.0.0.1:55439") throw Error("EXTERNAL_REQUEST_FORBIDDEN");
+  url.pathname = url.pathname.replace(/^\/rest\/v1/, "");
+  if(testOnlyTraffic && !/^\/(?:deal_room_test_(?:cases|rounds)|rpc\/deal_room_test_(?:contract|commit))$/.test(url.pathname))throw Error("TEST_TOUCHED_REAL_TABLE_OR_RPC");
+  if(missingTestContract && url.pathname==="/rpc/deal_room_test_contract")return new Response(JSON.stringify({message:"Could not find function public.deal_room_test_contract",code:"PGRST202"}),{status:404});
+  const response = await fetch(url, init);
+  if(dropTestCommit && url.pathname==="/rpc/deal_room_test_commit" && response.ok){dropTestCommit=false;await response.arrayBuffer();return new Response(JSON.stringify({message:"SYNTHETIC_LOST_TEST_RESPONSE"}),{status:503});}
+  if (dropAfterCommit && url.pathname === "/rpc/commit_deal_room_round_cas" && response.ok) {
+    dropAfterCommit = false; await response.arrayBuffer();
+    return new Response(JSON.stringify({ message: "SYNTHETIC_RESPONSE_LOSS_AFTER_COMMIT" }), { status: 503 });
+  }
+  return response;
+} } });
+mock.module(new URL("../../../lib/supabase/admin.ts", import.meta.url).href, { namedExports: { createAdminClient: () => db } });
+mock.module(new URL("../../auth/operator.ts", import.meta.url).href, { namedExports: { requireOperator: async () => ({ id: actor, email: null }), operatorAuthorizationResponse: () => new Response(null, { status: 401 }) } });
+const answersApi = await import("../../../app/api/flip-finder/listings/[id]/investment/answers/route.ts");
+const dealApi = await import("../../../app/api/flip-finder/listings/[id]/investment/route.ts");
+const initializeApi = await import("../../../app/api/flip-finder/listings/[id]/investment/initialize/route.ts");
+const id = "22222222-2222-4222-8222-222222222222", context = { params: Promise.resolve({ id }) }, origin = `http://localhost/api/flip-finder/listings/${id}/investment`;
+function request(body: unknown, suffix="/answers") { return new Request(origin+suffix, { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" }, body: JSON.stringify(body) }); }
+const command = (expectedVersion: number, field: string, value: number) => ({ requestId: randomUUID(), expectedVersion, answers: [{ field, kind: "VALUE", value, basis: "ASSUMPTION", evidenceUrl: null }] });
+async function current() { const response = await answersApi.GET(new Request(origin+"/answers"),context); assert.equal(response.status,200); return (await response.json()).room; }
+test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, replay, response loss and owner isolation", async () => {
+  for (let i=0;i<40;i++) { const probe = await db.from("deals").select("id").limit(1); if (!probe.error) break; if (i===39) throw probe.error; await new Promise((r)=>setTimeout(r,250)); }
+  process.env.DEAL_ROOM_QA_ENABLED = "true";
+  process.env.DEAL_ROOM_RADAR_ENABLED="true";
+  const unowned=await initializeApi.POST(request({},"/initialize"),context); assert.equal(unowned.status,200,await unowned.clone().text());
+  assert.notEqual((await unowned.json()).deal.market.result?.assumptionMatchedBy,"PRICE_RADAR","unowned shared deals must not persist private Radar evidence");
+  process.env.DEAL_ROOM_RADAR_ENABLED="false";
+  const init = await initializeApi.POST(request({},"/initialize"),context);
+  assert.equal(init.status,200,await init.clone().text());
+  const initial = (await init.json()).deal, baseProfit=initial.underwriting.result.profitBase;
+  const first = command((await current()).version,"negotiatedPrice",260000);
+  const firstResponse = await answersApi.POST(request(first),context);
+  assert.equal(firstResponse.status,200,await firstResponse.clone().text());
+  const saved = await firstResponse.json();
+  assert.equal(saved.deal.facts.askingPrice.effectiveValue,300000);
+  assert.equal(saved.deal.underwriting.result.purchasePrice,260000);
+  assert.ok(saved.deal.underwriting.result.profitBase>baseProfit);
+  assert.deepEqual(await (await answersApi.POST(request(first),context)).json(),saved);
+  const quote = command(saved.room.version,"renovationBudget",100000);
+  dropAfterCommit=true;
+  assert.equal((await answersApi.POST(request(quote),context)).status,503);
+  const recovered = await answersApi.POST(request(quote),context);
+  assert.equal(recovered.status,200,await recovered.clone().text());
+  const after = await recovered.json();
+  assert.equal(after.deal.underwriting.result.renovationTotal,100000);
+  assert.ok(after.deal.underwriting.result.maxPurchasePrice<saved.deal.underwriting.result.maxPurchasePrice);
+  assert.notEqual(after.deal.ceo.result.action,"KUP");
+  const ledger=await db.from("deal_room_rounds").select("request_id"); assert.ifError(ledger.error); assert.equal(ledger.data?.length,2);
+  assert.equal((await current()).answers.negotiatedPrice.value,260000);
+  actor=other;
+  assert.equal((await answersApi.GET(new Request(origin+"/answers"),context)).status,404);
+  assert.equal((await dealApi.GET(new Request(origin),context)).status,404);
+  assert.equal((await initializeApi.POST(request({},"/initialize"),context)).status,404);
+  process.env.DEAL_ROOM_QA_ENABLED="false";
+  assert.equal((await dealApi.GET(new Request(origin),context)).status,404,"owner guard survives feature rollback");
+  actor=owner; process.env.DEAL_ROOM_QA_ENABLED="true";
+  assert.equal((await dealApi.PUT(new Request(origin,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({overrides:{}})}),context)).status,409);
+  const changed=await db.from("listings").update({price:310000,updated_at:new Date(Date.now()+1000).toISOString()}).eq("id",id); assert.ifError(changed.error);
+  const stale=command((await current()).version,"holdingMonths",5);
+  assert.equal((await answersApi.POST(request(stale),context)).status,409);
+  const refresh=await initializeApi.POST(request({},"/initialize"),context); assert.equal(refresh.status,200,await refresh.clone().text());
+  const refreshed=(await refresh.json()).deal;
+  assert.equal(refreshed.underwriting.result.purchasePrice,310000,"stale negotiated answer is retained as history, not applied to changed source");
+  assert.equal((await current()).answers.negotiatedPrice.value,260000,"no answer history lost");
+  const missingArea=await db.from("listings").update({area:null,updated_at:new Date(Date.now()+1500).toISOString()}).eq("id",id); assert.ifError(missingArea.error);
+  const incomplete=await initializeApi.POST(request({},"/initialize"),context); assert.equal(incomplete.status,200,await incomplete.clone().text());
+  assert.equal((await incomplete.json()).deal.underwriting.result,null);
+  const areaAnswer=command((await current()).version,"areaM2",45);
+  const repaired=await answersApi.POST(request(areaAnswer),context); assert.equal(repaired.status,200,await repaired.clone().text());
+  const repairedDeal=(await repaired.json()).deal;
+  assert.equal(repairedDeal.facts.areaM2.sourceValue,null);
+  assert.equal(repairedDeal.facts.areaM2.effectiveValue,45);
+  assert.ok(repairedDeal.underwriting.result,"answered area must reselect market assumptions and restore finance");
+  process.env.DEAL_ROOM_RADAR_ENABLED="true";
+  const radarRefresh=await initializeApi.POST(request({},"/initialize"),context); assert.equal(radarRefresh.status,200,await radarRefresh.clone().text());
+  const radarDeal=(await radarRefresh.json()).deal;
+  assert.equal(radarDeal.market.result.assumptionMatchedBy,"PRICE_RADAR");
+  assert.equal(radarDeal.market.result.compCount,20);
+  assert.equal(radarDeal.market.result.priceEvidenceType,"ASKING");
+  const excluded=await db.from("price_radar_listings").update({excluded_at:new Date().toISOString(),excluded_reason:"synthetic operator exclusion"}).eq("owner_id",owner).gt("price_per_sqm",9200); assert.ifError(excluded.error);
+  const narrowed=await initializeApi.POST(request({},"/initialize"),context); assert.equal(narrowed.status,200,await narrowed.clone().text());
+  const narrowedDeal=(await narrowed.json()).deal;
+  assert.equal(narrowedDeal.market.status,"COMPLETE");
+  assert.equal(narrowedDeal.market.result.indicative,true);
+  assert.match(narrowedDeal.market.result.sourceLabel,/dzielnicy/);
+  const generalRows=Array.from({length:4},(_,i)=>({ source:"otodom",external_listing_id:`general-${i}`,canonical_url:`https://www.otodom.pl/pl/oferta/general-ID${i}`,city:"Łódź",district:"Górna",building_type:"BLOCK",rooms:2,area_m2:45,price:405000+i*4500,price_per_m2:9000+i*100,description:"Mieszkanie, rynek wtórny, po generalnym remoncie",renovation_status:"RENOVATED",renovation_confidence:"HIGH",last_seen_at:new Date().toISOString(),active:true }));
+  const inserted=await db.from("resale_comps").insert(generalRows); assert.ifError(inserted.error);
+  async function refreshMarket() { const r=await initializeApi.POST(request({},"/initialize"),context); assert.equal(r.status,200,await r.clone().text()); return (await r.json()).deal; }
+  const general=await refreshMarket(); assert.equal(general.market.result.sourceLabel,"ogólne porównania"); assert.equal(general.market.result.compCount,4); assert.equal(general.market.result.indicative,true); assert.ok(general.underwriting.result); assert.notEqual(general.ceo.result.action,"KUP");
+  const manualCommand=command((await current()).version,"resalePerM2",11000);
+  const manualResponse=await answersApi.POST(request(manualCommand),context); assert.equal(manualResponse.status,200,await manualResponse.clone().text());
+  const manualDeal=(await manualResponse.json()).deal; assert.equal(manualDeal.market.result.resalePricePerM2Base,11000); assert.equal(manualDeal.market.result.sourceComparison.sourceLabel,"ogólne porównania");
+  const withdraw={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"resalePerM2",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
+  const withdrawn=await answersApi.POST(request(withdraw),context); assert.equal(withdrawn.status,200,await withdrawn.clone().text());
+  const emptyRadar=await db.from("price_radar_listings").update({excluded_at:new Date().toISOString()}).eq("owner_id",owner); assert.ifError(emptyRadar.error);
+  assert.equal((await refreshMarket()).market.result.sourceLabel,"ogólne porównania","empty Radar still uses valid general comps");
+  const noGeneral=await db.from("resale_comps").update({active:false}).eq("active",true); assert.ifError(noGeneral.error);
+  const district=await refreshMarket(); assert.match(district.market.result.sourceLabel,/dzielnicy/);
+  const toCity=await db.from("market_assumptions").update({district:null,building_type:null,area_min:null,area_max:null,rooms:null}).eq("active",true); assert.ifError(toCity.error);
+  const city=await refreshMarket(); assert.match(city.market.result.sourceLabel,/miasta/); assert.ok(city.underwriting.result); assert.equal(city.market.result.indicative,true); assert.notEqual(city.ceo.result.action,"KUP");
+  const noAssumptions=await db.from("market_assumptions").update({active:false}).eq("active",true); assert.ifError(noAssumptions.error);
+  const absent=await refreshMarket(); assert.equal(absent.market.status,"BLOCKED"); assert.equal(absent.underwriting.result,null); assert.notEqual(absent.ceo.result.action,"KUP");
+  const staleComps=await db.from("resale_comps").update({active:true,last_seen_at:"2020-01-01T00:00:00Z"}).eq("active",false); assert.ifError(staleComps.error);
+  assert.equal((await refreshMarket()).market.status,"BLOCKED","old general offers cannot produce an estimate");
+  const returnRadar=await db.from("price_radar_listings").update({excluded_at:null,excluded_reason:null}).eq("owner_id",owner).lte("price_per_sqm",9600); assert.ifError(returnRadar.error);
+  const radarAgain=await refreshMarket(); assert.equal(radarAgain.market.result.assumptionMatchedBy,"PRICE_RADAR"); assert.equal(radarAgain.market.result.compCount,12); assert.ok(radarAgain.underwriting.result); assert.notEqual(radarAgain.ceo.inputFingerprint,general.ceo.inputFingerprint);
+  assert.notEqual(narrowedDeal.ceo.result.action,"KUP");
+  assert.notEqual(narrowedDeal.ceo.inputFingerprint,radarDeal.ceo.inputFingerprint);
+  process.env.DEAL_ROOM_CFO_ENABLED="true";
+  const cfoEmpty=await refreshMarket(); assert.ok(cfoEmpty.underwriting.result.cfo.missing.includes("equity"));
+  const cfoCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:Object.entries({costScope:"BRUTTO",financingMode:"CASH",equity:100000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6}).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const cfoSaved=await answersApi.POST(request(cfoCommand),context);assert.equal(cfoSaved.status,200,await cfoSaved.clone().text());const cash=(await cfoSaved.json()).deal;assert.ok(cash.underwriting.result.cfo.selected.fundingGap>0);assert.equal(cash.ceo.result.action,"HOLD / ZBIERZ DANE");
+  const cashReplay=await answersApi.POST(request(cfoCommand),context);assert.equal(cashReplay.status,200);assert.equal((await cashReplay.json()).deal.ceo.inputFingerprint,cash.ceo.inputFingerprint);
+  const fund=command((await current()).version,"equity",500000);const funded=await answersApi.POST(request(fund),context);assert.equal(funded.status,200,await funded.clone().text());const fundedDeal=(await funded.json()).deal;assert.equal(fundedDeal.underwriting.result.cfo.selected.fundingGap,0);assert.notEqual(fundedDeal.ceo.inputFingerprint,cash.ceo.inputFingerprint);assert.equal((await current()).answers.equity.value,500000);assert.equal(fundedDeal.underwriting.result.cfo.netProfit,null);
+  process.env.DEAL_ROOM_TAX_REVIEW_ENABLED="true";
+  const taxInitial=await refreshMarket();assert.equal(taxInitial.underwriting.result.cfo.taxReview.status,"UNKNOWN");
+  const taxCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxScenario",kind:"VALUE",value:"SP_ZOO",basis:"ASSUMPTION",evidenceUrl:null},{field:"taxAcquiredOn",kind:"VALUE",value:"2026-01-01",basis:"DECLARATION",evidenceUrl:null}]};
+  const taxResponse=await answersApi.POST(request(taxCommand),context);assert.equal(taxResponse.status,200,await taxResponse.clone().text());const taxSaved=await taxResponse.json();assert.equal(taxSaved.deal.underwriting.result.cfo.taxReview.scenario,"SP_ZOO");assert.equal(taxSaved.deal.underwriting.result.cfo.netProfit,null);assert.equal(taxSaved.deal.ceo.result.action,"HOLD / ZBIERZ DANE");assert.notEqual(taxSaved.deal.ceo.inputFingerprint,taxInitial.ceo.inputFingerprint);assert.deepEqual(await (await answersApi.POST(request(taxCommand),context)).json(),taxSaved);assert.equal((await current()).answers.taxScenario.value,"SP_ZOO");
+  process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED="true";
+  const arithmeticInitial=await refreshMarket();
+  const arithmeticCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxRule",kind:"VALUE",value:"COMPANY_CIT19",basis:"ASSUMPTION",evidenceUrl:null},{field:"taxRuleBase",kind:"VALUE",value:"100000.00",basis:"ASSUMPTION",evidenceUrl:null}]};
+  const arithmeticResponse=await answersApi.POST(request(arithmeticCommand),context);assert.equal(arithmeticResponse.status,200,await arithmeticResponse.clone().text());const arithmeticSaved=await arithmeticResponse.json();
+  assert.equal(arithmeticSaved.deal.underwriting.result.cfo.taxReview.conditional.amountPLN,19000);assert.equal(arithmeticSaved.deal.underwriting.result.cfo.taxReview.conditional.actualLiabilityPLN,null);assert.equal(arithmeticSaved.deal.underwriting.result.cfo.netProfit,null);assert.notEqual(arithmeticSaved.deal.ceo.inputFingerprint,arithmeticInitial.ceo.inputFingerprint);
+  assert.deepEqual(await (await answersApi.POST(request(arithmeticCommand),context)).json(),arithmeticSaved);assert.equal((await current()).answers.taxRuleBase.value,"100000.00");
+  const withdrawRule={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"taxRuleBase",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
+  const arithmeticWithdrawn=await answersApi.POST(request(withdrawRule),context);assert.equal(arithmeticWithdrawn.status,200);assert.equal((await arithmeticWithdrawn.json()).deal.underwriting.result.cfo.taxReview.conditional,null);
+  process.env.DEAL_ROOM_TAX_ARITHMETIC_ENABLED="false";
+  process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="true";
+  const {PRIVATE_ENUMS}=await import("../private-tax");
+  const privateInitial=await refreshMarket();
+  const privateValues={...PRIVATE_ENUMS,taxScenario:"PRIVATE",taxAcquiredOn:"2026-04-01",taxSaleOn:"2026-10-01",privateAcquisitionFees:"0",privateImprovements:"0",privateDisposalCosts:"0",privateQualificationRef:"https://example.test/synthetic-qualification"};
+  const privateCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:Object.entries(privateValues).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const privateResponse=await answersApi.POST(request(privateCommand),context);assert.equal(privateResponse.status,200,await privateResponse.clone().text());const privateSaved=await privateResponse.json();
+  assert.equal(privateSaved.deal.underwriting.result.cfo.privateTax.status,"MODELLED_ESTIMATE");assert.equal(privateSaved.deal.underwriting.result.cfo.privateTax.actualLiability,null);assert.equal(privateSaved.deal.ceo.result.action,"HOLD / ZBIERZ DANE");assert.notEqual(privateSaved.deal.ceo.inputFingerprint,privateInitial.ceo.inputFingerprint);
+  assert.deepEqual(await (await answersApi.POST(request(privateCommand),context)).json(),privateSaved);assert.equal((await current()).answers.privateVat.value,"OUTSIDE_VAT_NO_DEDUCTION");
+  const withdrawPrivate={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"privateVat",kind:"WITHDRAW",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
+  const privateWithdrawResponse=await answersApi.POST(request(withdrawPrivate),context);assert.equal(privateWithdrawResponse.status,200);assert.equal((await privateWithdrawResponse.json()).deal.underwriting.result.cfo.privateTax.status,"UNKNOWN");
+  process.env.DEAL_ROOM_PRIVATE_TAX_ENABLED="false";
+  process.env.DEAL_ROOM_JDG_TAX_ENABLED="true";
+  const {JDG_ENUMS}=await import("../jdg-tax");const jdgInitial=await refreshMarket();const jdgU=jdgInitial.underwriting.result;
+  const jdgIncome=jdgU.scenarios.base.resaleValue-jdgU.purchasePrice-Math.round(Math.round(jdgU.purchasePrice)*.02)-12000-1000-5000;
+  const jdgPit=Math.round(Math.round(Math.max(0,jdgIncome))*.19);
+  const jdgValues={...JDG_ENUMS,taxScenario:"JDG",taxAcquiredOn:"2026-04-01",taxSaleOn:"2026-10-01",jdgOccupationOn:"2020-01-01",jdgAcquisitionFees:"0",jdgOperatingCosts:"0",jdgDisposalCosts:"0",jdgHealthDeduction:"5000",jdgQualificationRef:"https://example.test/synthetic-assessment",jdgPayments:`2026-05-20 | SOCIAL | 12000\n2026-05-20 | FUND | 1000\n2026-12-20 | HEALTH | 6000\n2026-11-20 | PIT | ${jdgPit}`};
+  const jdgCommand={requestId:randomUUID(),expectedVersion:(await current()).version,answers:Object.entries(jdgValues).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const jdgResponse=await answersApi.POST(request(jdgCommand),context);assert.equal(jdgResponse.status,200,await jdgResponse.clone().text());const jdgSaved=await jdgResponse.json();assert.equal(jdgSaved.deal.underwriting.result.cfo.jdgTax.status,"MODELLED_ESTIMATE");assert.equal(jdgSaved.deal.underwriting.result.cfo.jdgTax.pit,jdgPit);assert.equal(jdgSaved.deal.underwriting.result.cfo.jdgTax.actualLiability,null);assert.notEqual(jdgSaved.deal.ceo.inputFingerprint,jdgInitial.ceo.inputFingerprint);
+  assert.deepEqual(await (await answersApi.POST(request(jdgCommand),context)).json(),jdgSaved);assert.equal((await current()).answers.jdgPayments.value,jdgValues.jdgPayments);
+  const unknownJdg={requestId:randomUUID(),expectedVersion:(await current()).version,answers:[{field:"jdgZus",kind:"UNKNOWN",value:null,basis:"ASSUMPTION",evidenceUrl:null}]};
+  const unknownJdgResponse=await answersApi.POST(request(unknownJdg),context);assert.equal(unknownJdgResponse.status,200);assert.equal((await unknownJdgResponse.json()).deal.underwriting.result.cfo.jdgTax.status,"UNKNOWN");process.env.DEAL_ROOM_JDG_TAX_ENABLED="false";
+  process.env.DEAL_ROOM_TAX_REVIEW_ENABLED="false";
+  process.env.DEAL_ROOM_CFO_ENABLED="false";
+  process.env.DEAL_ROOM_RADAR_ENABLED="false";
+  const rejected=await db.from("listings").update({manual_decision:"REJECTED",updated_at:new Date(Date.now()+2000).toISOString()}).eq("id",id); assert.ifError(rejected.error);
+  const rejection=await initializeApi.POST(request({},"/initialize"),context); assert.equal(rejection.status,200,await rejection.clone().text());
+  const decisions=await db.from("ceo_decisions").select("user_facing_action").order("created_at",{ascending:false}).limit(1); assert.ifError(decisions.error);
+  assert.equal(decisions.data?.[0]?.user_facing_action,"ODRZUC","persisted CEO action must preserve a hard reject");
+});
+test("three isolated Finder listings: high profit, thin margin, hard reject; full director loop and general fallback",async(t)=>{
+ const {buildDealBrain,BRAIN_DIRECTORS}=await import("../brain/index");actor=owner;
+ process.env.DEAL_ROOM_QA_ENABLED="true";process.env.DEAL_ROOM_CFO_ENABLED="true";process.env.DEAL_ROOM_RADAR_ENABLED="true";
+ const template=await db.from("listings").select("*").eq("id",id).single();assert.ifError(template.error);
+ const assumptions=await db.from("market_assumptions").update({active:true}).eq("city","Łódź");assert.ifError(assumptions.error);
+ const comparisons=await db.from("resale_comps").update({active:true,last_seen_at:new Date().toISOString()}).eq("city","Łódź");assert.ifError(comparisons.error);
+ const results=[];
+ for(const [i,price] of [200000,340000,680000].entries()){
+  const listingId=randomUUID(),caseContext={params:Promise.resolve({id:listingId})},caseUrl=`http://localhost/api/flip-finder/listings/${listingId}/investment`;
+  const make=(body:unknown,suffix:string)=>new Request(caseUrl+suffix,{method:"POST",headers:{"content-type":"application/json",origin:"http://localhost"},body:JSON.stringify(body)});
+  const row={...template.data,id:listingId,updated_at:new Date().toISOString(),manual_decision:i===2?"REJECTED":null,lifecycle_status:"ACTIVE",price,area:45,description:"Syntetyczne mieszkanie do remontu",external_listing_id:String(90001+i),original_url:`https://www.facebook.com/groups/12345/posts/${90001+i}`};
+  const inserted=await db.from("listings").insert(row);assert.ifError(inserted.error);
+  const init=await initializeApi.POST(make({},"/initialize"),caseContext);assert.equal(init.status,200,await init.clone().text());
+  const roomResponse=await answersApi.GET(new Request(caseUrl+"/answers"),caseContext);assert.equal(roomResponse.status,200);const room=(await roomResponse.json()).room;
+  const values={costScope:"BRUTTO",financingMode:"CASH",equity:800000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6,renovationBudget:40000};
+  const cmd={requestId:randomUUID(),expectedVersion:room.version,answers:Object.entries(values).map(([field,value])=>({field,value,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}))};
+  const saved=await answersApi.POST(make(cmd,"/answers"),caseContext);assert.equal(saved.status,200,await saved.clone().text());const receipt=await saved.json();assert.deepEqual(await (await answersApi.POST(make(cmd,"/answers"),caseContext)).json(),receipt);
+  const refreshed=await initializeApi.POST(make({},"/initialize"),caseContext);assert.equal(refreshed.status,200);const deal=(await refreshed.json()).deal,brain=buildDealBrain(deal);
+  t.diagnostic(JSON.stringify({syntheticCase:["high_profit","thin_margin","hard_reject"][i],purchasePrice:price,profitBeforeTax:deal.underwriting.result?.cfo?.selected?.projectProfitBeforeTax??null,ceo:deal.ceo.result?.action,comparisons:deal.market.result?.compCount,marketSource:deal.market.result?.sourceLabel}));
+  for(const director of BRAIN_DIRECTORS)assert.ok(brain.directors[director]);assert.equal(deal.market.result.assumptionMatchedBy,"PRICE_RADAR");assert.equal(deal.facts.askingPrice.effectiveValue,price);assert.notEqual(deal.ceo.result.action,"KUP");
+  if(i===2){assert.equal(deal.ceo.result.action,"ODRZUĆ");assert.equal(brain.ceo.decision,"REJECT");continue;}
+  results.push(deal.underwriting.result.cfo.selected.projectProfitBeforeTax);
+  if(i===0){
+   const currentRoom=(await (await answersApi.GET(new Request(caseUrl+"/answers"),caseContext)).json()).room;
+   const change={requestId:randomUUID(),expectedVersion:currentRoom.version,answers:[{field:"renovationBudget",value:100000,kind:"VALUE",basis:"ASSUMPTION",evidenceUrl:null}]};
+   const changed=await answersApi.POST(make(change,"/answers"),caseContext);assert.equal(changed.status,200);const next=(await changed.json()).deal;
+   assert.ok(next.underwriting.result.cfo.selected.projectProfitBeforeTax<results[0]);assert.notEqual(next.ceo.inputFingerprint,deal.ceo.inputFingerprint);
+   assert.equal((await (await answersApi.GET(new Request(caseUrl+"/answers"),caseContext)).json()).room.answers.renovationBudget.value,100000);
+  }
+  if(i===1){
+   const excluded=await db.from("price_radar_listings").update({excluded_at:new Date().toISOString()}).eq("owner_id",owner);assert.ifError(excluded.error);
+   const fallback=await initializeApi.POST(make({},"/initialize"),caseContext);assert.equal(fallback.status,200);const general=(await fallback.json()).deal;assert.equal(general.market.result.sourceLabel,"ogólne porównania");assert.equal(general.market.result.indicative,true);assert.notEqual(general.ceo.result.action,"KUP");
+   const restored=await db.from("price_radar_listings").update({excluded_at:null,excluded_reason:null}).eq("owner_id",owner).lte("price_per_sqm",9600);assert.ifError(restored.error);
+  }
+ }
+ assert.ok(results[0]>100000);assert.ok(results[1]>0&&results[1]<20000,"thin-margin fixture must have a small POSITIVE operating profit");assert.ok(results[0]>results[1]+75000);
+});
+
+
+test("virtual TEST API/DB: no production tables, all owner/flag gates, dedicated persistence CAS/replay and missing migration",async()=>{
+ const api=await import("../../../app/api/deal-room/test/route");
+ const deal=await import("../../../app/api/deal-room/test/[id]/route");
+ const answers=await import("../../../app/api/deal-room/test/[id]/answers/route");
+ const history=await import("../../../app/api/deal-room/test/[id]/history/route");
+ const initialize=await import("../../../app/api/deal-room/test/[id]/initialize/route");
+ const {testCases}=await import("../test-mode");
+ const {BRAIN_DIRECTORS,buildDealBrain}=await import("../brain");
+ const keys=["DEAL_ROOM_TEST_ENABLED","DEAL_ROOM_TEST_STORAGE_VERSION","DEAL_ROOM_TEST_OPERATOR_IDS","VERCEL_ENV","DEAL_ROOM_QA_ENABLED"];
+ const old=keys.map(k=>process.env[k]);
+ const protectedTables=["listings","listing_snapshots","listing_source_metadata","deals","deal_fact_overrides","deal_room_rounds","deal_room_workspaces","resale_comps","price_radar_listings","price_radar_settings"];
+ async function snapshot(){const out:Record<string,unknown>={};for(const table of protectedTables){const result=await db.from(table).select("*");assert.ifError(result.error);out[table]=result.data;}return out;}
+ const before=await snapshot();
+ const req=(suffix="",method="GET",body?:unknown)=>new Request("http://localhost/api/deal-room/test"+suffix,{method,headers:{origin:"http://localhost","content-type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})});
+ const cases=testCases(owner),ctx=(id:string)=>({params:Promise.resolve({id})});
+ try{
+ Object.assign(process.env,{DEAL_ROOM_TEST_ENABLED:"true",DEAL_ROOM_TEST_STORAGE_VERSION:"1",DEAL_ROOM_TEST_OPERATOR_IDS:owner,VERCEL_ENV:"production",DEAL_ROOM_QA_ENABLED:"false"});actor=owner;testOnlyTraffic=true;
+ assert.equal((await api.POST(new Request("http://localhost/api/deal-room/test",{method:"POST",headers:{origin:"https://evil.test"}}))).status,403);
+ assert.equal((await api.POST(req("","POST"))).status,200);
+ for(const item of cases){
+  const c=ctx(item.id),initial=await deal.GET(req("/"+item.id),c);assert.equal(initial.status,200,await initial.clone().text());
+  const current=(await initial.json()).deal;for(const director of BRAIN_DIRECTORS)assert.ok(buildDealBrain(current).directors[director]);
+  assert.equal(current.market.result.indicative,true);assert.notEqual(current.ceo.result.action,"KUP");assert.deepEqual(current.underwriting.result.cfo.taxStatus,"UNKNOWN");
+  if(item.key==="reject")assert.equal(current.ceo.result.action,"ODRZUĆ");
+  assert.equal((await dealApi.GET(new Request(origin),c)).status,404,"ordinary route NEVER accepts virtual ID");
+  assert.equal((await initializeApi.POST(request({},"/initialize"),c)).status,404);
+  assert.equal((await answersApi.GET(new Request(origin+"/answers"),c)).status,404,"even when real QA is OFF");
+  assert.equal((await dealApi.PUT(new Request(origin,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({overrides:{}})}),c)).status,404);
+  const state=(await (await answers.GET(req("/"+item.id+"/answers"),c)).json()).room;
+  const command={requestId:randomUUID(),expectedVersion:state.version,answers:[{field:"renovationBudget",kind:"VALUE",value:40000,basis:"ASSUMPTION",evidenceUrl:null},{field:"financingMode",kind:"VALUE",value:"CASH",basis:"ASSUMPTION",evidenceUrl:null},{field:"taxScenario",kind:"VALUE",value:"JDG",basis:"ASSUMPTION",evidenceUrl:null}]};
+  dropTestCommit=true;assert.equal((await answers.POST(req("/"+item.id+"/answers","POST",command),c)).status,503);
+  const recovered=await answers.POST(req("/"+item.id+"/answers","POST",command),c);assert.equal(recovered.status,200,await recovered.clone().text());
+  const saved=await recovered.json();assert.equal(saved.deal.underwriting.result.renovationTotal,40000);assert.equal(saved.deal.underwriting.result.cfo.jdgTax.status,"UNKNOWN");
+  assert.deepEqual(await (await answers.POST(req("/"+item.id+"/answers","POST",command),c)).json(),saved);
+  assert.equal((await api.POST(req("","POST"))).status,200);assert.equal((await (await answers.GET(req("/"+item.id+"/answers"),c)).json()).room.answers.renovationBudget.value,40000);
+  assert.equal((await initialize.POST(req("/"+item.id+"/initialize","POST"),c)).status,200);
+  const stale={...command,requestId:randomUUID(),answers:[{field:"renovationBudget",kind:"VALUE",value:100000,basis:"ASSUMPTION",evidenceUrl:null}]};
+  assert.equal((await answers.POST(req("/"+item.id+"/answers","POST",stale),c)).status,409);
+  const a={...stale,expectedVersion:saved.room.version},b={...a,requestId:randomUUID()};
+  const statuses=await Promise.all([a,b].map(async cmd=>(await answers.POST(req("/"+item.id+"/answers","POST",cmd),c)).status));assert.deepEqual(statuses.sort(),[200,409]);
+  const rows=(await (await history.GET(req("/"+item.id+"/history"),c)).json()).rounds;assert.equal(rows.length,2);
+  actor=other;
+  for(const response of [await api.GET(req()),await api.POST(req("","POST")),await deal.GET(req("/"+item.id),c),await initialize.POST(req("/"+item.id+"/initialize","POST"),c),await answers.GET(req("/"+item.id+"/answers"),c),await answers.POST(req("/"+item.id+"/answers","POST",command),c),await history.GET(req("/"+item.id+"/history"),c)])assert.equal(response.status,404);
+  actor=owner;
+ }
+ const c=ctx(cases[0].id);
+ const caseRow=await db.from("deal_room_test_cases").select("deal,state,version").eq("owner_id",owner).eq("case_id",cases[0].id).single();assert.ifError(caseRow.error);
+ const tiedAt=new Date(Date.now()+10000).toISOString();
+ const inserts=await db.from("deal_room_test_rounds").insert(Array.from({length:21},()=>({owner_id:owner,case_id:cases[0].id,request_id:randomUUID(),payload_hash:"d".repeat(64),created_at:tiedAt,response:{deal:caseRow.data!.deal,room:{...caseRow.data!.state,version:caseRow.data!.version}}})));assert.ifError(inserts.error);
+ const page1=await (await history.GET(req("/"+cases[0].id+"/history"),c)).json();assert.equal(page1.rounds.length,20);assert.ok(page1.nextBefore);
+ const page2=await (await history.GET(req("/"+cases[0].id+"/history?before="+encodeURIComponent(page1.nextBefore)),c)).json();assert.equal(page2.rounds.length,3);assert.equal(page2.nextBefore,null);assert.equal(new Set([...page1.rounds,...page2.rounds].map((row:{requestId:string})=>row.requestId)).size,23);
+ assert.equal((await history.GET(req("/"+cases[0].id+"/history?before=invalid"),c)).status,400);
+ for(const patch of [{DEAL_ROOM_TEST_ENABLED:"false"},{DEAL_ROOM_TEST_OPERATOR_IDS:""},{DEAL_ROOM_TEST_OPERATOR_IDS:"invalid"},{DEAL_ROOM_TEST_STORAGE_VERSION:""}]){
+  const prev={...process.env};Object.assign(process.env,patch);
+  assert.equal((await api.GET(req())).status,404);assert.equal((await initialize.POST(req("/"+cases[0].id+"/initialize","POST"),c)).status,404);assert.equal((await answers.POST(req("/"+cases[0].id+"/answers","POST",{}),c)).status,404);assert.equal((await deal.GET(req("/"+cases[0].id),c)).status,404);assert.equal((await answers.GET(req("/"+cases[0].id+"/answers"),c)).status,404);assert.equal((await history.GET(req("/"+cases[0].id+"/history"),c)).status,404);assert.equal((await api.POST(req("","POST"))).status,404);
+  for(const key of Object.keys(patch))if(prev[key]===undefined)delete process.env[key];else process.env[key]=prev[key];
+ }
+ // Missing migration/contract must fail CLOSED, not use real data tables.
+ missingTestContract=true;
+ assert.equal((await api.POST(req("","POST"))).status,503);assert.equal((await deal.GET(req("/"+cases[0].id),c)).status,503);
+ missingTestContract=false;
+ assert.equal((await api.POST(req("","POST"))).status,200);
+ }finally{missingTestContract=false;testOnlyTraffic=false;actor=owner;keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i];});}
+ assert.deepEqual(await snapshot(),before,"all real offer/analysis/Radar tables byte-for-byte untouched by TEST");
+});

@@ -1,3 +1,4 @@
+import { investmentPath } from "./test-identity";
 import type { CanonicalDeal } from "./types";
 
 type ApiBody = { ok?: boolean; code?: string; message?: string; deal?: CanonicalDeal; media?: string[] };
@@ -14,7 +15,7 @@ export class InvestmentDealNotComputedError extends Error {
 export type DealWithMedia = CanonicalDeal & { media?: string[] };
 
 export async function loadInvestmentDeal(listingId: string, request: Fetcher = fetch): Promise<CanonicalDeal> {
-  const url = `/api/flip-finder/listings/${listingId}/investment`;
+  const url = investmentPath(listingId);
   const response = await request(url, { cache: "no-store" });
   const body = await response.json() as ApiBody;
   if (response.status === 404 && body.code === "NOT_COMPUTED") {

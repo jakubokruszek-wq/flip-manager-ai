@@ -109,7 +109,7 @@ test("Deal Room Brain V1 renders CEO recommendation, one Next Best Action, real 
   const questions = page.locator("[data-user-questions]:visible").first();
   await questions.scrollIntoViewIfNeeded();
   await questions.waitFor({ state: "visible" });
-  assert.match(await questions.innerText(), /Pytania do Ciebie/);
+  assert.match(await questions.innerText(), /Dyrektorzy pytają Ciebie/);
 
   // --- Conflict / risk visible and Brain-derived (not the generic fallback) ---
   await page.evaluate(() => window.scrollTo(0, 0));

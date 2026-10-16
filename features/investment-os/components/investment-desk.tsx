@@ -1,4 +1,5 @@
 "use client";
+import { investmentPath } from "../test-identity";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -52,7 +53,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     let initializeSucceeded = false;
 
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/investment/initialize`, {
+      const response = await fetch(`${investmentPath(result.id)}/initialize`, {
         method: "POST",
       });
       const body = await response.json().catch(() => null) as { deal?: CanonicalDeal; message?: string } | null;
@@ -86,7 +87,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch(`/api/flip-finder/listings/${result.id}/investment`, {
+      const response = await fetch(investmentPath(result.id), {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ overrides }),
@@ -99,6 +100,16 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     } finally {
       setSaving(false);
     }
+  };
+
+  const refreshAnalysis = async () => {
+    setSaving(true); setError(null);
+    try {
+      const response = await fetch(`${investmentPath(result.id)}/initialize`, { method: "POST" });
+      if (!response.ok) throw Error("Nie udało się odświeżyć źródeł analizy.");
+      await load();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Błąd odświeżenia."); }
+    finally { setSaving(false); }
   };
 
   if (loading) return <InvestmentDeskSkeleton />;
@@ -151,7 +162,7 @@ export function InvestmentDesk({ result, room = false }: { result: Pick<FilterRe
     );
   }
 
-  if (room) return <DealRoomView deal={deal} images={images} onRefresh={() => { setLoading(true); void load(); }} onSave={save} saving={saving} />;
+  if (room) return <DealRoomView error={error} onAnalyzed={setDeal} deal={deal} images={images} onRefresh={() => void refreshAnalysis()} onSave={save} saving={saving} />;
   const ceo = deal.ceo.result;
   return (
     <div className="min-w-0 max-w-full space-y-5 px-4 py-5 sm:px-7 sm:py-7">

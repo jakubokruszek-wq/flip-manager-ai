@@ -1,0 +1,29 @@
+import { dealFeatures, type DealFeatures } from "./feature-context";
+import {JDG_TAX_LABELS,type JdgTaxInputs} from "./jdg-tax";
+import { PRIVATE_TAX_LABELS, type PrivateTaxInputs } from "./private-tax";
+import { conditionalTax, isTaxRule, TAX_RULES, type ConditionalTax } from "./tax-arithmetic";
+/** P2b.1: evidence workflow only. No rate, exemption or legal form is inferred. */
+export const TAX_LABELS:Record<string,string>={...JDG_TAX_LABELS,...PRIVATE_TAX_LABELS,taxRule:"Którą regułę sprawdzić warunkowo: PRIVATE_PIT19 / JDG_LINEAR19 / COMPANY_CIT19 / DIVIDEND_PIT19 / PCC2 / PCC6 / VAT_GROSS23 / VAT_GROSS8? Nie potwierdza zastosowania.",taxRuleBase:"Jaka jest odrębnie ustalona podstawa reguły w PLN (kropka, maks. 2 miejsca)? Dla PCC wartość rynkowa; dla VAT kwota brutto faktury. Nie przepisuj automatycznie zysku CFO.",taxScenario:"Który scenariusz analizujemy: PRIVATE / JDG / SP_ZOO? To nie wybór formy przez system.",taxAcquiredOn:"Jaka jest data nabycia (RRRR-MM-DD)?",taxSaleOn:"Jaka jest planowana data sprzedaży (RRRR-MM-DD)?",taxActivity:"Jaki cel nabycia i charakter/częstotliwość sprzedaży potwierdzono z księgowym? Bez danych osobowych.",taxVatStatus:"Jak ustalono VAT zakupu, remontu i sprzedaży oraz prawo do odliczeń?",taxCosts:"Które koszty brutto i dokumenty uznano za podatkowe, a które nie?",taxDistribution:"Jak i kiedy planowana jest wypłata zysku?",taxInvestorBasis:"Czy udział inwestora rozliczany jest przed czy po konkretnych podatkach i kiedy?",taxOtherIncome:"Czy inne przychody, progi lub składki wpływają na scenariusz? Nie podawaj identyfikatorów ani dokumentów osób.",taxEvidence:"Jakie datowane źródła, okresy obowiązywania i opinie księgowe potwierdzają ten scenariusz?"};
+export type TaxInputs=JdgTaxInputs & PrivateTaxInputs & Partial<Record<"taxRule"|"taxRuleBase"|"taxScenario"|"taxAcquiredOn"|"taxSaleOn"|"taxActivity"|"taxVatStatus"|"taxCosts"|"taxDistribution"|"taxInvestorBasis"|"taxOtherIncome"|"taxEvidence",string|null>>;
+export const TAX_SOURCES=[
+ {id:"MF_PRIVATE_SALE",url:"https://www.podatki.gov.pl/podatki-osobiste/pit/informacje-podstawowe/co-jest-opodatkowane/zbycie-nieruchomosci",topic:"PIT / kwalifikacja sprzedaży prywatnej"},
+ {id:"MF_CIT",url:"https://www.podatki.gov.pl/podatki-firmowe/cit/stawki-i-limity",topic:"CIT i wypłaty udziałowe"},
+ {id:"MF_VAT",url:"https://www.podatki.gov.pl/podatki-firmowe/vat/stawki-i-limity",topic:"VAT: stawki, warunki i limity"},
+ {id:"MF_PCC",url:"https://www.podatki.gov.pl/podatki-osobiste/pcc/informacje-podstawowe",topic:"PCC: przedmiot, podstawa i relacja do VAT"}
+].map(s=>({...s,version:1,accessedOn:"2026-10-16",effectiveFrom:null,effectiveTo:null,professionallyReviewed:false as const,usableForCalculation:false as const}));
+export type TaxReview={version:1;conditional?:ConditionalTax|null;status:"UNKNOWN";scenario:string|null;inputs:TaxInputs;missing:string[];questions:Array<{field:string;question:string}>;reasons:string[];sourceStatus:"REFERENCE_ONLY"|"STALE_REFERENCE";sources:typeof TAX_SOURCES;regimes:Array<{id:string;status:"UNKNOWN";profitAfterTax:null;distributable:null}>;taxCashFlow:null;roiAfterTax:null;maxBuyAfterTax:null;breakEvenAfterTax:null;stressAfterTax:null};
+export function buildTaxReview(inputs:TaxInputs,now:string,investor=false,features:DealFeatures=dealFeatures()):TaxReview{
+ const required=["taxScenario","taxAcquiredOn","taxSaleOn","taxActivity","taxVatStatus","taxCosts","taxOtherIncome","taxEvidence",...(inputs.taxScenario==="SP_ZOO"?["taxDistribution"]:[]),...(investor?["taxInvestorBasis"]:[])];
+ if(features.privateTax&&inputs.taxScenario==="PRIVATE")required.push(...Object.keys(PRIVATE_TAX_LABELS));
+ if(features.taxArithmetic)required.push("taxRule","taxRuleBase");
+ if(features.jdgTax&&inputs.taxScenario==="JDG")required.push(...Object.keys(JDG_TAX_LABELS));
+ const missing=required.filter(f=>!inputs[f as keyof TaxInputs]);
+ const dates=inputs.taxAcquiredOn&&inputs.taxSaleOn&&inputs.taxSaleOn<inputs.taxAcquiredOn;
+ const age=(Date.parse(now)-Date.parse(TAX_SOURCES[0].accessedOn))/86400000;
+ const stale=!Number.isFinite(age)||age<0||age>90;
+ const rule=inputs.taxRule;
+ const matches=!!rule&&isTaxRule(rule)&&(TAX_RULES[rule].scenario===null||TAX_RULES[rule].scenario===inputs.taxScenario);
+ const conditional=features.taxArithmetic&&matches&&inputs.taxRuleBase?conditionalTax(rule!,inputs.taxRuleBase):null;
+ return {version:1,...(features.taxArithmetic?{conditional}:{}),status:"UNKNOWN",scenario:inputs.taxScenario??null,inputs,missing,questions:(missing.length?missing:["taxEvidence"]).slice(0,5).map(field=>({field,question:TAX_LABELS[field]})),reasons:["NO_VERIFIED_TRANSACTION_TAX_MODEL",...(conditional?["CONDITIONAL_ARITHMETIC_IS_NOT_A_LIABILITY",`Warunkowa reguła ${conditional.rule}: kwota ${conditional.amountPLN} PLN od podanej podstawy/kwoty ${conditional.inputPLN} PLN; zastosowanie, rzeczywisty podatek i wpływ na zysk nieustalone.`]:[]),...(dates?["SALE_BEFORE_ACQUISITION"]:[]),...(stale?["LEGAL_REFERENCE_REFRESH_REQUIRED"]:[]),"Deklaracja ani link nie są weryfikacją księgową lub interpretacją urzędu."],sourceStatus:stale?"STALE_REFERENCE":"REFERENCE_ONLY",sources:TAX_SOURCES,regimes:["PRIVATE","JDG","SP_ZOO"].map(id=>({id,status:"UNKNOWN",profitAfterTax:null,distributable:null})),taxCashFlow:null,roiAfterTax:null,maxBuyAfterTax:null,breakEvenAfterTax:null,stressAfterTax:null};
+}
+export function validTaxDate(value:string):boolean { return /^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value; }
