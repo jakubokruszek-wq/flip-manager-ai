@@ -1,5 +1,6 @@
 import "server-only";
 
+import { answerOverrides, preserveUnchangedDirectors, type DealRoomState } from "../deal-room-answers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { calculateResaleArv, selectResaleComps } from "@/features/market-intelligence/resale-arv";
 import type { ResaleCompRecord } from "@/features/market-intelligence/resale-comps";
@@ -35,6 +36,23 @@ export async function initializeInvestmentDeal(listingId: string): Promise<Canon
   const db = createAdminClient();
   const deal = await initializeDealWithCas<CanonicalDeal | null>({
     compute: async (): Promise<VersionedDealCandidate<CanonicalDeal | null>> => {
+      return prepareInvestmentDeal(db, listingId);
+    },
+    commit: async (candidate) => commitDealCas(async () => {
+      const { data, error } = await db.rpc("persist_investment_deal_cas", { p_deal: toDealRow(candidate.value as CanonicalDeal), p_expected_version: candidate.expectedVersion, p_source_updated_at: candidate.sourceUpdatedAt });
+      if (error) throw error;
+      return parseVersion(data);
+    }),
+    readCurrent: async () => {
+      const current = await readStoredDeal(db, listingId);
+      return current ? { value: current.deal, sourceUpdatedAt: current.sourceUpdatedAt } : null;
+    },
+  });
+  if (deal) await persistIntelligence(db, deal);
+  return deal;
+}
+
+export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminClient>, listingId: string, overrideValues?: DealFactOverrides): Promise<VersionedDealCandidate<CanonicalDeal | null>> {
       const { data: listing, error } = await db.from("listings").select("id,source,original_url,external_listing_id,lifecycle_status,manual_decision,city,district,address,area,rooms,floor,building_type,ownership,description,rent,price,price_per_sqm,gallery_status,images,last_seen_at,updated_at").eq("id", listingId).maybeSingle();
       if (error) throw error;
       if (!listing) return { value: null, expectedVersion: 0, sourceUpdatedAt: null, unchanged: true };
@@ -50,24 +68,18 @@ export async function initializeInvestmentDeal(listingId: string): Promise<Canon
       const market = await resolveMarketEvidence(db, listingInput);
       const trackRecords = await loadDirectorTrackRecords(db);
       const now = new Date().toISOString();
-      const deal = buildCanonicalDeal({ dealId, listing: listingInput, overrides: object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords });
+      const buildInput = { dealId, listing: listingInput, overrides: overrideValues ?? object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords };
+      let deal = buildCanonicalDeal(buildInput);
+      if (!overrideValues && existing && process.env.DEAL_ROOM_QA_ENABLED === "true") {
+        const { data: workspace, error: workspaceError } = await db.from("deal_room_workspaces").select("state").eq("deal_id", dealId).maybeSingle();
+        if (workspaceError) throw workspaceError;
+        if (workspace) { const state = workspace.state as DealRoomState; deal = buildCanonicalDeal({ ...buildInput, overrides: answerOverrides(deal, state.baselineOverrides, state.answers) }); }
+      }
+      if (existing) deal = preserveUnchangedDirectors(existing.deal, deal);
       const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
       const sourceUpdatedAt = text(listing.updated_at);
-      if (existing && settled && fingerprintsEqual(existing.deal, deal) && existing.sourceUpdatedAt === sourceUpdatedAt) return { value: existing.deal, expectedVersion: existing.version, sourceUpdatedAt, unchanged: true };
+      if (!overrideValues && existing && settled && fingerprintsEqual(existing.deal, deal) && existing.sourceUpdatedAt === sourceUpdatedAt) return { value: existing.deal, expectedVersion: existing.version, sourceUpdatedAt, unchanged: true };
       return { value: deal, expectedVersion: existing?.version ?? 0, sourceUpdatedAt };
-    },
-    commit: async (candidate) => commitDealCas(async () => {
-      const { data, error } = await db.rpc("persist_investment_deal_cas", { p_deal: toDealRow(candidate.value as CanonicalDeal), p_expected_version: candidate.expectedVersion, p_source_updated_at: candidate.sourceUpdatedAt });
-      if (error) throw error;
-      return parseVersion(data);
-    }),
-    readCurrent: async () => {
-      const current = await readStoredDeal(db, listingId);
-      return current ? { value: current.deal, sourceUpdatedAt: current.sourceUpdatedAt } : null;
-    },
-  });
-  if (deal) await persistIntelligence(db, deal);
-  return deal;
 }
 
 export async function saveDealOverrides(listingId: string, values: DealFactOverrides): Promise<{ deal: CanonicalDeal; invalidated: string[] }> {
@@ -136,7 +148,7 @@ export async function saveMarketAssumption(value: unknown): Promise<Row> {
 
 type StoredDeal = { deal: CanonicalDeal; version: number; sourceUpdatedAt: string | null };
 
-async function readStoredDeal(db: ReturnType<typeof createAdminClient>, listingId: string): Promise<StoredDeal | null> {
+export async function readStoredDeal(db: ReturnType<typeof createAdminClient>, listingId: string): Promise<StoredDeal | null> {
   const { data, error } = await db.from("deals").select("*").eq("listing_id", listingId).maybeSingle();
   if (error) throw error;
   if (!data) return null;
@@ -228,7 +240,7 @@ function toComp(row: Row): ResaleCompRecord | null {
   return { id, source: source as ResaleCompRecord["source"], externalListingId, canonicalUrl: text(row.canonical_url), title: text(row.title), description: text(row.description), city: text(row.city), district: text(row.district), street: text(row.street), address: text(row.address), latitude: nullableNumber(row.latitude), longitude: nullableNumber(row.longitude), price: nullableNumber(row.price), areaM2: nullableNumber(row.area_m2), pricePerM2: nullableNumber(row.price_per_m2), rooms: nullableNumber(row.rooms), floor: text(row.floor), floors: text(row.floors), buildingType: text(row.building_type), constructionYear: nullableNumber(row.construction_year), ownership: text(row.ownership), balcony: bool(row.balcony), elevator: bool(row.elevator), parking: bool(row.parking), listingCreatedAt: text(row.listing_created_at), firstSeenAt: text(row.first_seen_at) ?? lastSeenAt, lastSeenAt, active: row.active === true, sellerType: text(row.seller_type), fingerprint: text(row.fingerprint), classification: { isCandidate: true, renovationStatus, renovationConfidence, finishLevel: text(row.finish_level), evidence: [], outlierReason: text(row.outlier_reason), exclusionReason: null } };
 }
 
-function toDealRow(deal: CanonicalDeal): Row { return { id: deal.id, listing_id: deal.listingId, stage: deal.stage, facts_fingerprint: deal.factsFingerprint, facts: deal.facts, scout: deal.scout, verify: deal.verify, market: deal.market, underwriting: deal.underwriting, ceo: deal.ceo, playbook: deal.playbook, evidence_fabric: deal.evidenceFabric, information_requests: deal.informationRequests, analysis_level: deal.analysisLevel, created_at: deal.createdAt, updated_at: deal.updatedAt }; }
+export function toDealRow(deal: CanonicalDeal): Row { return { id: deal.id, listing_id: deal.listingId, stage: deal.stage, facts_fingerprint: deal.factsFingerprint, facts: deal.facts, scout: deal.scout, verify: deal.verify, market: deal.market, underwriting: deal.underwriting, ceo: deal.ceo, playbook: deal.playbook, evidence_fabric: deal.evidenceFabric, information_requests: deal.informationRequests, analysis_level: deal.analysisLevel, created_at: deal.createdAt, updated_at: deal.updatedAt }; }
 function toCanonicalDeal(row: Row): CanonicalDeal { return { id: text(row.id)!, listingId: text(row.listing_id)!, stage: text(row.stage)! as CanonicalDeal["stage"], factsFingerprint: text(row.facts_fingerprint)!, facts: object(row.facts) as CanonicalDeal["facts"], scout: object(row.scout) as CanonicalDeal["scout"], verify: object(row.verify) as CanonicalDeal["verify"], market: object(row.market) as CanonicalDeal["market"], underwriting: object(row.underwriting) as CanonicalDeal["underwriting"], ceo: object(row.ceo) as CanonicalDeal["ceo"], playbook: object(row.playbook) as CanonicalDeal["playbook"], evidenceFabric: Array.isArray(row.evidence_fabric) ? row.evidence_fabric as CanonicalDeal["evidenceFabric"] : [], informationRequests: Array.isArray(row.information_requests) ? row.information_requests as CanonicalDeal["informationRequests"] : [], analysisLevel: [0, 1, 2, 3].includes(number(row.analysis_level)) ? number(row.analysis_level) as CanonicalDeal["analysisLevel"] : 1, createdAt: text(row.created_at)!, updatedAt: text(row.updated_at)! }; }
 
 async function persistIntelligence(db: ReturnType<typeof createAdminClient>, deal: CanonicalDeal): Promise<void> {

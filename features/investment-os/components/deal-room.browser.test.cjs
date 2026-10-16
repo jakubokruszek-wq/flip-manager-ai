@@ -186,7 +186,7 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   assert.ok(mobileLayout.scrollWidth <= mobileLayout.width, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.recommendationTop != null && mobileLayout.recommendationTop < 844, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.maxBuyTop != null && mobileLayout.maxBuyTop < 844, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.profitTop != null && mobileLayout.profitTop < 844, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.roiTop != null && mobileLayout.roiTop < 844, JSON.stringify(mobileLayout));
   await page.getByRole("heading", { name: "Zespół analityczny" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(reviewDir, "10-mobile-directors-v2.png"), fullPage: false });
-  await page.getByRole("heading", { name: "Pytania do Ciebie" }).scrollIntoViewIfNeeded();
+  await page.getByRole("heading", { name: "Dyrektorzy pytają Ciebie" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(reviewDir, "11-mobile-questions-v2.png"), fullPage: false });
   await page.getByRole("tab", { name: "Negocjacje" }).click();
   await page.locator("#deal-panel").scrollIntoViewIfNeeded();

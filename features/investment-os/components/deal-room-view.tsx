@@ -5,11 +5,12 @@ import { ArrowLeft, ChevronRight, ExternalLink, Landmark, ShieldAlert, ShieldChe
 import { useMemo, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import type { CanonicalDeal, DealFactOverrides, DirectorOutput, InformationRequest } from "../types";
+import type { CanonicalDeal, DealFactOverrides, DirectorOutput } from "../types";
 import type { ValueProvenance } from "../../flip-finder/underwriting";
 import { DIRECTOR_DEPENDENCIES } from "../engine";
 import { buildDealBrain, type BrainDirectorId, type BrainProvenance, type BrainSnapshot } from "../brain";
 import { formatInvestmentText, formatKnownMoneyText, formatPercentDisplay, formatPLNDisplay, pln } from "./investment-ui";
+import { DirectorQuestions } from "./director-questions";
 import { OverridePanel } from "./override-panel";
 
 type RoomTab = "SUMMARY" | "MARKET" | "FINANCE" | "RENOVATION" | "RISKS" | "NEGOTIATION" | "AUDIT" | "NOTES";
@@ -27,7 +28,7 @@ const TABS: Array<{ id: RoomTab; label: string }> = [
 
 const DIRECTORS = ["SCOUT", "VERIFY", "MARKET", "RENOVATION", "UNDERWRITER", "RISK / LEGAL", "CFO", "ACQUISITION", "SALE", "CEO"] as const;
 
-export function DealRoomView({ deal, images = [], saving, onRefresh, onSave }: { deal: CanonicalDeal; images?: string[]; saving: boolean; onRefresh: () => void; onSave: (overrides: DealFactOverrides) => Promise<void> }) {
+export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onAnalyzed }: { deal: CanonicalDeal; images?: string[]; saving: boolean; onRefresh: () => void; onSave: (overrides: DealFactOverrides) => Promise<void>; onAnalyzed?: (deal: CanonicalDeal) => void }) {
   const [activeTab, setActiveTab] = useState<RoomTab>("SUMMARY");
   const [expandedDirector, setExpandedDirector] = useState<string | null>(null);
   const title = deal.facts.street.effectiveValue || deal.facts.district.effectiveValue || "Analizowana oferta";
@@ -65,7 +66,7 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave }: {
           <BiggestRisk brain={brain} deal={deal} />
           <NextAction brain={brain} />
         </div>
-        <div className="xl:hidden"><Questions deal={deal} /></div>
+        <DirectorQuestions deal={deal} onAnalyzed={onAnalyzed ?? (() => onRefresh())} />
         <DirectorCouncil directors={directorCards} expanded={expandedDirector} onToggle={setExpandedDirector} />
         <ScenarioAndTriggers deal={deal} />
         <DealTabs activeTab={activeTab} deal={deal} onChange={setActiveTab} />
@@ -73,7 +74,7 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave }: {
       </section>
       <aside className="order-1 min-w-0 space-y-4 xl:order-2 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
         <CeoRail deal={deal} />
-        <div className="hidden space-y-4 xl:block"><Timeline events={timeline} /><Questions deal={deal} /></div>
+        <div className="hidden space-y-4 xl:block"><Timeline events={timeline} /></div>
       </aside>
     </div>
   </main>;
@@ -210,7 +211,7 @@ function Timeline({ events }: { events: TimelineView }) { return <section data-e
 
 function TimelineItem({ event, index, total }: { event: TimelineEvent; index: number; total: number }) { return <li className="relative grid grid-cols-[14px_minmax(0,1fr)] gap-3 pb-4 last:pb-0"><span className="relative mt-1.5 size-2.5 rounded-full border border-gold bg-gold/20"><span className={`absolute left-1/2 top-2.5 h-[calc(100%+12px)] w-px -translate-x-1/2 bg-white/15 ${index === total - 1 ? "hidden" : ""}`} /></span><div><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{dateTime(event.at)} · {event.actor}</p><p className="mt-1 text-xs font-semibold">{event.title}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{event.detail}</p></div></li>; }
 
-function Questions({ deal }: { deal: CanonicalDeal }) { const questions = deal.informationRequests.filter((request) => request.status === "OPEN"); return <section data-user-questions aria-label="Pytania do Ciebie" className="rounded-[1.5rem] border border-amber-400/20 bg-[#1b1812] p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gold">Dane od Ciebie</p><h2 className="type-section-title mt-1">Pytania do Ciebie</h2></div>{questions.length ? <span className="rounded-full bg-red-400/10 px-2.5 py-1 text-[10px] font-bold text-red-200">{questions.length} otwarte</span> : null}</div>{questions.length ? <div className="mt-4 space-y-3">{questions.slice(0, 5).map((question) => <article className="rounded-xl border border-white/10 bg-black/15 p-3" key={question.id}><div className="flex items-center justify-between gap-2"><p className="text-[10px] font-bold uppercase tracking-wide text-gold">{priorityLabel(question.priority)}</p><span className="text-[10px] text-muted-foreground">{directorLabel(question.requestedBy)}</span></div><p className="mt-2 text-sm font-semibold leading-5">{polishGeneratedText(question.question) || "Wymagane jest potwierdzenie dodatkowych danych."}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Potwierdź: {polishGeneratedText(question.evidenceNeeded) || "wiarygodny dokument lub bezpośrednie źródło"}</p><p className="mt-2 text-[11px] leading-5 text-muted-foreground">Możliwy wpływ na decyzję: {question.decisionImpact.map(decisionImpactLabel).join(", ") || "do sprawdzenia"}</p></article>)}</div> : <p className="mt-4 text-sm leading-6 text-muted-foreground">Brak otwartych pytań w aktualnej analizie.</p>}{questions.length ? <p className="mt-4 border-t border-white/10 pt-3 text-[10px] leading-4 text-muted-foreground">Odpowiedzi wymagające trwałego dowodu zapisuje się w istniejącym panelu korekt ręcznych poniżej.</p> : null}</section>; }
+
 
 function HeroMetric({ label, value, detail, emphasis = false, positive = false, negative = false, className = "" }: { label: string; value: string; detail?: string; emphasis?: boolean; positive?: boolean; negative?: boolean; className?: string }) { return <article className={`min-w-0 rounded-xl border p-3 sm:p-4 ${emphasis ? "border-gold/45 bg-gold/[0.08]" : "border-white/10 bg-[#13181e]"} ${className}`}><p className="min-h-7 text-[10px] font-semibold leading-4 tracking-[0.04em] text-muted-foreground">{label}</p><p className={`type-financial-hero mt-1 ${emphasis ? "text-gold" : positive ? "text-emerald-300" : negative ? "text-red-300" : "text-foreground"}`}>{value}</p>{detail ? <p className="mt-1 text-xs text-muted-foreground">{detail}</p> : null}</article>; }
 function askingPricePerSqm(deal: CanonicalDeal): number | null { const supplied = deal.facts.askingPricePerM2.effectiveValue; if (supplied != null && Number.isFinite(supplied) && supplied > 0) return supplied; const price = deal.facts.askingPrice.effectiveValue; const area = deal.facts.areaM2.effectiveValue; return price != null && area != null && price > 0 && area > 0 ? price / area : null; }
@@ -234,7 +235,6 @@ function directorStatus(status: string): { label: string; className: string } { 
 function StageBadge({ stage }: { stage: CanonicalDeal["stage"] }) { const label = ({ DISCOVERED: "Nowa", VERIFYING: "Weryfikacja", VERIFIED: "Weryfikacja", MARKET_READY: "Analiza", UNDERWRITTEN: "Analiza", DECISION_READY: "Negocjacja", ACQUISITION: "Zakup", RENOVATION: "Remont", SALE: "Sprzedaż", CLOSED: "Zamknięta" } as Record<string, string>)[stage] ?? "Etap do sprawdzenia"; return <span className="rounded-full border border-gold/35 bg-gold/[0.08] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-gold">{label}</span>; }
 function ceoAction(value: string | undefined): string { return ({ KUP: "KUP", NEGOCJUJ: "NEGOCJUJ", "ZA DROGA": "ZA DROGA", "JEDŹ OBEJRZEĆ": "SPRAWDŹ", "HOLD / ZBIERZ DANE": "WSTRZYMAJ", ODRZUĆ: "ODRZUĆ" } as Record<string, string>)[value ?? ""] ?? "DO SPRAWDZENIA"; }
 function directorLabel(value: string): string { return ({ SCOUT: "Rozpoznanie", VERIFY: "Weryfikacja", MARKET: "Rynek", RENOVATION: "Remont", UNDERWRITER: "Analiza finansowa", "RISK / LEGAL": "Ryzyko i prawo", RISK: "Ryzyko", LEGAL: "Prawo", CFO: "Finanse", ACQUISITION: "Zakup", SALE: "Sprzedaż", CEO: "CEO" } as Record<string, string>)[value] ?? "Zespół analityczny"; }
-function priorityLabel(value: InformationRequest["priority"]): string { return ({ CRITICAL: "Krytyczne", HIGH: "Ważne", MEDIUM: "Do sprawdzenia", LOW: "Dodatkowe" } as Record<string, string>)[value] ?? "Do sprawdzenia"; }
 function sourceLabel(value: string | null): string { return value === "facebook" ? "Facebook" : value === "olx" ? "OLX" : value === "otodom" ? "Otodom" : value === "manual" ? "Ręcznie" : value ? sourceNameLabel(value) : "Źródło nieustalone"; }
 function sourceNameLabel(value: string | null | undefined): string { return ({ LISTING: "Ogłoszenie", DETERMINISTIC_UNDERWRITER: "Wyliczenie finansowe", RESALE_COMPS: "Porównania odsprzedaży", DEAL_OVERRIDE: "Korekta ręczna", facebook: "Facebook", FACEBOOK: "Facebook", olx: "OLX", OLX: "OLX", otodom: "Otodom", OTODOM: "Otodom", manual: "Wpis ręczny", MANUAL: "Wpis ręczny" } as Record<string, string>)[value ?? ""] ?? "Inne źródło"; }
 function marketSourceLabel(value: string): string { return ({ otodom: "Otodom", OTODOM: "Otodom", olx: "OLX", OLX: "OLX", facebook: "Facebook", FACEBOOK: "Facebook", TRANSACTION: "Dane transakcyjne", USER_ASSUMPTION: "Założenie użytkownika", RESALE_COMPS: "Baza porównań odsprzedaży", "Oferta porównawcza": "Oferta porównawcza" } as Record<string, string>)[value] ?? "Inne źródło"; }
@@ -267,7 +267,6 @@ function verificationLabel(value: string): string { return ({ VERIFIED: "potwier
 function evidenceTypeLabel(value: string | undefined): string { return ({ LISTING_OBSERVATION: "Obserwacja ogłoszenia", PRICE_OBSERVATION: "Obserwacja ceny", DOCUMENT_OBSERVATION: "Dokument", USER_INSPECTION: "Oględziny", MANUAL_INPUT: "Dane ręczne", AI_EXTRACTION: "Odczyt automatyczny", VISION_OBSERVATION: "Analiza obrazu", MARKET_COMPARABLE: "Porównywalna oferta", MARKET_TRANSACTION: "Dane transakcyjne", RENOVATION_QUOTE: "Kosztorys remontu", ACTUAL_OUTCOME: "Wynik rzeczywisty" } as Record<string, string>)[value ?? ""] ?? "Inny rodzaj dowodu"; }
 function localizeEvidenceLine(value: string): string { const [field, evidenceClass] = value.split(":"); if (!field || !evidenceClass) return polishGeneratedText(value) ?? "Zapisany dowód"; return `${factLabel(field)} · ${evidenceClassLabel(evidenceClass)}`; }
 function evidenceClassLabel(value: string): string { return ({ FACT: "fakt", ASSUMPTION: "założenie", ESTIMATE: "szacunek", PREDICTION: "prognoza", USER_OVERRIDE: "korekta użytkownika", UNKNOWN: "nie ustalono", EXTRACTED: "dane z ogłoszenia", DERIVED: "wartość wyliczona", USER_ASSUMPTION: "założenie użytkownika", MARKET_ASSUMPTION: "założenie rynkowe", MANUAL_OVERRIDE: "korekta ręczna" } as Record<string, string>)[value] ?? "zapisany dowód"; }
-function decisionImpactLabel(value: string): string { return ({ REJECT: "odrzucenie", HOLD: "wstrzymanie decyzji", NEGOTIATE: "negocjacje", BUY: "zakup" } as Record<string, string>)[value] ?? "dalszą ocenę"; }
 function localizeDecisionCondition(value: string): string { const price = value.match(/^Cena zakupu <= (.+) PLN$/); if (price) return `Cena zakupu nie wyższa niż ${formatAmountText(price[1])}`; const over = value.match(/^Cena > (.+) PLN$/); if (over) return `Cena powyżej ${formatAmountText(over[1])}`; const knownMoney = formatKnownMoneyText(value); if (knownMoney) return knownMoney; const gate = value.match(/^([A-Za-z_]+): (confirmed|requires evidence)$/i); if (gate) return localizeGateReason(value, gate[1], gate[2].toLowerCase() === "confirmed"); const localized = polishGeneratedText(value); if (localized !== null) return localized; return "Warunek wymaga sprawdzenia w szczegółach analizy."; }
 function formatAmountText(value: string): string { const amount = parseMoneyAmount(value); return amount == null ? "kwota do sprawdzenia" : formatPLNDisplay(amount); }
 function localizeGateReason(reason: string, fact: string, passed: boolean): string { const gate = reason.match(/^[A-Za-z_]+: (confirmed|requires evidence)$/i); if (gate) return `${factLabel(fact)}: ${passed ? "potwierdzone" : "wymaga dowodu"}`; return polishGeneratedText(reason) ?? `${factLabel(fact)}: ${passed ? "potwierdzone" : "wymaga dowodu"}`; }

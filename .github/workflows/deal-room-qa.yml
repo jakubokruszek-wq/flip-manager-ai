@@ -1,0 +1,61 @@
+name: Deal Room Q&A isolated validation
+on:
+  pull_request:
+    branches: [main]
+    paths: ['features/investment-os/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', '.github/workflows/deal-room-qa.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deal-room-qa-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+  DEAL_ROOM_QA_ENABLED: 'true'
+  NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:55999
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: isolated-only
+  SUPABASE_SERVICE_ROLE_KEY: isolated-only
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npx eslint features/investment-os 'app/api/flip-finder/listings/[id]/investment' features/flip-finder/underwriting.ts
+      - name: Unit and existing regression with coverage
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test-isolation=none --experimental-test-coverage --test features/investment-os/*.test.ts features/investment-os/brain/*.test.ts features/investment-os/server/*.test.ts features/investment-os/components/*.test.ts features/flip-finder/underwriting.test.ts
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Mobile question answer save recalculate reload
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --test features/investment-os/components/director-questions.browser.test.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deal-room-mobile-evidence
+          path: artifacts/deal-room-qa
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: deal_test
+          POSTGRES_PASSWORD: isolated-only
+          POSTGRES_DB: deal_room_test
+        ports: ['55438:5432']
+        options: --health-cmd='pg_isready -U deal_test -d deal_room_test' --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'psycopg[binary]==3.2.6'
+      - name: Actual PostgreSQL CAS concurrency ownership replay and rollback
+        run: python scripts/test-deal-room-postgres.py

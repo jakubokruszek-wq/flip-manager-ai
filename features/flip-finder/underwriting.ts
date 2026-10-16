@@ -97,6 +97,7 @@ export type UnderwritingInput = {
   galleryAvailable?: boolean;
   priceOverride?: number | null;
   resalePerM2Override?: number | null;
+  renovationTotalOverride?: number | null;
   renovationPerM2Override?: number | null;
   holdingMonthsOverride?: number | null;
   additionalCostsOverride?: number | null;
@@ -194,7 +195,8 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
   const additionalCostsCents = moneyCents(nonnegative(input.additionalCostsOverride) ?? 0);
   const finance = financeConfig(settings, holdingMonths);
   const resale = effectiveResale(input, settings);
-  const renovationBaseCents = area === null ? null : multiplyMoneyByQuantity(renovationPerM2Cents, area);
+  const totalOverride = nonnegative(input.renovationTotalOverride);
+  const renovationBaseCents = area === null ? null : totalOverride !== null ? moneyCents(totalOverride) : multiplyMoneyByQuantity(renovationPerM2Cents, area);
   const conservativeRenovationCents = renovationBaseCents === null ? null : multiplyByFraction(renovationBaseCents, BigInt(115), BigInt(100));
   const optimisticRenovationCents = renovationBaseCents === null ? null : multiplyByFraction(renovationBaseCents, BigInt(95), BigInt(100));
   const holdingCostsCents = multiplyMoneyByQuantity(finance.monthlyHoldingCost, holdingMonths);
@@ -363,7 +365,8 @@ export function calculateMaxPurchaseForThresholds(input: UnderwritingInput, sett
   const resalePerM2 = effectiveResale(input, settings).base;
   const mode = input.renovationMode ?? inferRenovationMode(input.condition);
   const perM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[mode];
-  const renovation = area === null ? null : multiplyMoneyByQuantity(moneyCents(perM2), area);
+  const totalOverride = nonnegative(input.renovationTotalOverride);
+  const renovation = area === null ? null : totalOverride !== null ? moneyCents(totalOverride) : multiplyMoneyByQuantity(moneyCents(perM2), area);
   const months = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
   const finance = financeConfig(settings, months);
   const holding = multiplyMoneyByQuantity(finance.monthlyHoldingCost, months);
@@ -379,7 +382,8 @@ export function validateMaxPurchaseBoundary(input: UnderwritingInput, settings: 
   const renovationMode = input.renovationMode ?? inferRenovationMode(input.condition);
   const perM2 = positive(input.renovationPerM2Override) ?? settings.renovationPerM2[renovationMode];
   if (area === null || resalePerM2 === null || maxPurchasePrice === null) return { status: "BLOCKED", checks: [{ code: "MAX_BUY_INPUTS_PRESENT", passed: false, detail: "Missing area, resale, renovation or max purchase price." }] };
-  const renovation = multiplyMoneyByQuantity(moneyCents(perM2), area);
+  const totalOverride = nonnegative(input.renovationTotalOverride);
+  const renovation = totalOverride !== null ? moneyCents(totalOverride) : multiplyMoneyByQuantity(moneyCents(perM2), area);
   const months = nonnegative(input.holdingMonthsOverride) ?? settings.holdingMonths;
   const finance = financeConfig(settings, months);
   const holding = multiplyMoneyByQuantity(finance.monthlyHoldingCost, months);

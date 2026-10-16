@@ -1,3 +1,4 @@
+import { assertDealRoomOwner, DealRoomNotFound } from "@/features/investment-os/server/deal-room-service";
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 
 import { getInvestmentDeal, getListingMedia, saveDealOverrides } from "@/features/investment-os/server/deal-service";
@@ -9,8 +10,10 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: Context): Promise<Response> {
   try {
-    await requireOperator();
+    const actor = await requireOperator();
+    await assertDealRoomOwner((await params).id, actor.id);
   } catch (error) {
+    if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     return operatorAuthorizationResponse(error);
   }
   try {
@@ -28,8 +31,10 @@ export async function GET(_request: Request, { params }: Context): Promise<Respo
 
 export async function PUT(request: Request, { params }: Context): Promise<Response> {
   try {
-    await requireOperator();
+    const actor = await requireOperator();
+    await assertDealRoomOwner((await params).id, actor.id);
   } catch (error) {
+    if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     return operatorAuthorizationResponse(error);
   }
   try {

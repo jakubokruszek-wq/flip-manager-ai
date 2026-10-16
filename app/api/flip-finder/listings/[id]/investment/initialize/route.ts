@@ -1,3 +1,4 @@
+import { assertDealRoomOwner, DealRoomNotFound } from "@/features/investment-os/server/deal-room-service";
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 
 import { initializeInvestmentDeal } from "@/features/investment-os/server/deal-service";
@@ -8,8 +9,10 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context): Promise<Response> {
   try {
-    await requireOperator();
+    const actor = await requireOperator();
+    await assertDealRoomOwner((await params).id, actor.id);
   } catch (error) {
+    if (error instanceof DealRoomNotFound) return Response.json({ code: "NOT_FOUND" }, { status: 404 });
     return operatorAuthorizationResponse(error);
   }
   try {

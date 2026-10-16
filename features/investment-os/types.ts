@@ -212,6 +212,7 @@ export type CanonicalDeal = {
 export type DealFactOverrides = Partial<Record<keyof DealFacts, string | number | null>> & {
   resalePerM2?: number | null;
   renovationPerM2?: number | null;
+  renovationTotal?: number | null;
   holdingMonths?: number | null;
   additionalCosts?: number | null;
 };

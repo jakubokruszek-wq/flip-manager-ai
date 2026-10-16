@@ -8,10 +8,10 @@ const read = (relativePath: string) => fs.readFileSync(path.join(root, relativeP
 
 test("Deal Room is a presentation over CanonicalDeal and does not add a second write path", () => {
   const view = read("features/investment-os/components/deal-room-view.tsx");
-  assert.match(view, /type \{ CanonicalDeal, DealFactOverrides, DirectorOutput, InformationRequest \}/);
+  assert.match(view, /type \{ CanonicalDeal, DealFactOverrides, DirectorOutput \}/);
   assert.match(view, /deal\.ceo\.result/);
   assert.match(view, /deal\.underwriting\.result/);
-  assert.match(view, /deal\.informationRequests/);
+  assert.match(view, /DirectorQuestions/);
   assert.match(view, /deal\.evidenceFabric/);
   assert.doesNotMatch(view, /fetch\(|\/api\//);
   assert.match(view, /Oczekuje na zapisane wyniki/);
