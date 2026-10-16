@@ -16,7 +16,7 @@ const numeric: Record<string, { min: number; max: number; unit: string }> = {
   askingPrice: { min: 1, max: 100_000_000, unit: "PLN" }, areaM2: { min: 1, max: 10_000, unit: "m²" },
   renovationBudget: { min: 0, max: 10_000_000, unit: "PLN łącznie, przed rezerwą" }, holdingMonths: { min: 1, max: 120, unit: "miesiące" },
 };
-export const ANSWER_LABELS: Record<string, string> = { negotiatedPrice: "Czy uzgodniona cena po negocjacji wynosi 260 tys. zł? Podaj kwotę zakupu.", askingPrice: "Jaka jest aktualna cena ofertowa w źródle?", renovationBudget: "Jaki jest budżet remontu przed rezerwą (PLN łącznie)?", holdingMonths: "Ile miesięcy potrwa projekt?" };
+export const ANSWER_LABELS: Record<string, string> = { negotiatedPrice: "Jaka jest uzgodniona cena zakupu po negocjacjach?", askingPrice: "Jaka jest aktualna cena ofertowa w źródle?", renovationBudget: "Jaki jest budżet remontu przed rezerwą (PLN łącznie)?", holdingMonths: "Ile miesięcy potrwa projekt?" };
 const narrative = new Set(["legalStatus", "ownership", "condition", "renovationScope", "financing", "marketEvidence", "riskReview", "identity", "city", "district", "street", "rooms", "buildingType", "economics"]);
 export function answerUnit(field: string): string { return numeric[field]?.unit ?? "opis / ustalenie"; }
 export function parseAnswerCommand(value: unknown): AnswerCommand {
@@ -102,6 +102,6 @@ export function preserveUnchangedDirectors(previous: CanonicalDeal, next: Canoni
 }
 export function roomQuestions(deal: CanonicalDeal, state: DealRoomState) {
   const questions = buildDealBrain(deal).questions.map((q) => ({ field: q.field, question: q.question, why: q.whyItMatters, evidence: q.evidenceNeeded, directors: q.requestingDirectors.join(", "), blocking: q.category === "BLOCKING" }));
-  for (const field of ["negotiatedPrice", "renovationBudget", "holdingMonths", "financing"]) if (!questions.some((q) => q.field === field)) questions.push({ field, question: ANSWER_LABELS[field] ?? "Jakie źródło kapitału i warunki finansowania potwierdzono?", why: "Zmiana założenia może zmienić wynik i warunki decyzji.", evidence: "Potwierdzenie sprzedającego, kosztorys lub warunki finansowania; deklaracja nie stanowi dowodu.", directors: field === "renovationBudget" ? "RENOVATION, UNDERWRITER, CEO" : "CFO, ACQUISITION, CEO", blocking: false });
+  for (const field of ["negotiatedPrice", "renovationBudget", "holdingMonths", "financing"]) if (!questions.some((q) => q.field === field)) questions.push({ field, question: ANSWER_LABELS[field] ?? "Jakie źródło kapitału i warunki finansowania potwierdzono?", why: field === "negotiatedPrice" ? `Cena ofertowa w źródle: ${deal.facts.askingPrice.sourceValue ?? "brak danych"} PLN. Kwota po negocjacjach pozostaje odrębnym założeniem zakupu.` : "Zmiana założenia może zmienić wynik i warunki decyzji.", evidence: "Potwierdzenie sprzedającego, kosztorys lub warunki finansowania; deklaracja nie stanowi dowodu.", directors: field === "renovationBudget" ? "RENOVATION, UNDERWRITER, CEO" : "CFO, ACQUISITION, CEO", blocking: false });
   return questions.filter((q) => !state.answers[q.field] || state.answers[q.field].status !== "RESOLVED" || state.answers[q.field].sourceFingerprint !== answerSourceFingerprint(deal, q.field));
 }
