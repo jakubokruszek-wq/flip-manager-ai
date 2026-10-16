@@ -37,7 +37,7 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
     let result: string | number | null = null;
     if (kind === "VALUE") {
       if (numeric[field]) {
-        if (typeof a.value !== "number" || !Number.isFinite(a.value) || a.value < numeric[field].min || a.value > numeric[field].max || (["rooms","renovationMonths","loanTermMonths","holdingMonths"].includes(field) && !Number.isInteger(a.value))) throw new DealRoomInputError(`Podaj poprawną wartość: ${answerUnit(field)}.`);
+        if (typeof a.value !== "number" || !Number.isFinite(a.value) || a.value < numeric[field].min || a.value > numeric[field].max || (["rooms","renovationMonths","loanTermMonths"].includes(field) && !Number.isInteger(a.value))) throw new DealRoomInputError(`Podaj poprawną wartość: ${answerUnit(field)}.`);
         result = a.value;
       } else {
         if (typeof a.value !== "string" || !a.value.trim() || a.value.length > 2000) throw new DealRoomInputError("Odpowiedź musi mieć od 1 do 2000 znaków.");
