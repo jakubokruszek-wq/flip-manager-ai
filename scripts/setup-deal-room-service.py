@@ -26,6 +26,9 @@ with fixture['psycopg'].connect(fixture['DSN'], autocommit=True) as c:
     c.execute('''insert into market_assumptions(city,district,building_type,area_min,area_max,rooms,resale_price_per_m2_low,resale_price_per_m2_base,resale_price_per_m2_high,confidence,provenance,effective_from)
       values ('Łódź','Górna','BLOCK',40,50,2,9500,10000,10500,85,'USER_ASSUMPTION',now())''')
     c.execute("create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$")
+    # Empty dependency only: the historical Radar migration references the queue.
+    # No OLX worker/function is executed by this test and no source implementation changes.
+    c.execute("create table olx_scan_jobs(id uuid primary key, source_scan_id uuid not null, search_filter_id uuid not null, scan_run_id uuid)")
     c.execute((root / 'supabase/migrations/20261008000000_create_price_radar.sql').read_text())
     c.execute("insert into price_radar_settings(owner_id,filters) values ('33333333-3333-4333-8333-333333333333', '{\"districts\":[\"Górna\"],\"market\":\"secondary\"}')")
     c.execute('''insert into price_radar_listings(owner_id,source,external_listing_id,original_url,normalized_url,title,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash)
