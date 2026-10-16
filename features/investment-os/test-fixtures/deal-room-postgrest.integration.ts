@@ -68,6 +68,15 @@ test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, r
   const refreshed=(await refresh.json()).deal;
   assert.equal(refreshed.underwriting.result.purchasePrice,310000,"stale negotiated answer is retained as history, not applied to changed source");
   assert.equal((await current()).answers.negotiatedPrice.value,260000,"no answer history lost");
+  const missingArea=await db.from("listings").update({area:null,updated_at:new Date(Date.now()+1500).toISOString()}).eq("id",id); assert.ifError(missingArea.error);
+  const incomplete=await initializeApi.POST(request({},"/initialize"),context); assert.equal(incomplete.status,200,await incomplete.clone().text());
+  assert.equal((await incomplete.json()).deal.underwriting.result,null);
+  const areaAnswer=command((await current()).version,"areaM2",45);
+  const repaired=await answersApi.POST(request(areaAnswer),context); assert.equal(repaired.status,200,await repaired.clone().text());
+  const repairedDeal=(await repaired.json()).deal;
+  assert.equal(repairedDeal.facts.areaM2.sourceValue,null);
+  assert.equal(repairedDeal.facts.areaM2.effectiveValue,45);
+  assert.ok(repairedDeal.underwriting.result,"answered area must reselect market assumptions and restore finance");
   const rejected=await db.from("listings").update({manual_decision:"REJECTED",updated_at:new Date(Date.now()+2000).toISOString()}).eq("id",id); assert.ifError(rejected.error);
   const rejection=await initializeApi.POST(request({},"/initialize"),context); assert.equal(rejection.status,200,await rejection.clone().text());
   const decisions=await db.from("ceo_decisions").select("user_facing_action").order("created_at",{ascending:false}).limit(1); assert.ifError(decisions.error);

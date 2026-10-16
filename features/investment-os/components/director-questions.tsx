@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { answerUnit, roomQuestions, type AnswerCommand, type AnswerInput, type DealRoomState } from "../deal-room-answers";
+import { answerSourceFingerprint, answerUnit, roomQuestions, type AnswerCommand, type AnswerInput, type DealRoomState } from "../deal-room-answers";
 import type { CanonicalDeal } from "../types";
 import { formatPLNDisplay } from "./investment-ui";
 
@@ -57,7 +57,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
     <h2 className="text-lg font-semibold">Dyrektorzy pytają Ciebie</h2>
     <p className="text-xs text-muted-foreground">Analizy regułowe Investment OS. PCC, notariusz, finansowanie i sprzedaż są scenariuszem z ustawień, a nie potwierdzonymi kosztami tej transakcji. Odpowiedź i link do dokumentu nie są automatycznym potwierdzeniem faktu prawnego ani ceny transakcyjnej. Nie wpisuj haseł, tokenów ani danych osób z dokumentów.</p>
     {disabled ? <p>Trwałe odpowiedzi nie są aktywne w tym środowisku.</p> : null}
-    {visible.map((q) => { const answer = draft[q.field] ?? room?.answers[q.field], unit = answerUnit(q.field), numeric = unit !== "opis / ustalenie"; return <fieldset key={q.field} disabled={saving || !room} className="min-w-0 space-y-2 rounded-xl border border-white/10 p-3" data-question-field={q.field}>
+    {visible.map((q) => { const answer = draft[q.field] ?? room?.answers[q.field], unit = answerUnit(q.field), numeric = unit !== "opis / ustalenie", stale = Boolean(room?.answers[q.field] && room.answers[q.field].sourceFingerprint !== answerSourceFingerprint(deal, q.field)); return <fieldset key={q.field} disabled={saving || !room} className="min-w-0 space-y-2 rounded-xl border border-white/10 p-3" data-question-field={q.field}>
       <legend className="break-words text-sm font-semibold">{q.question}</legend>
       <p className="text-xs">{q.directors} · {q.blocking ? "Pytanie blokujące" : "Założenie / dane do analizy"}</p>
       <p className="text-xs text-muted-foreground">{q.why} Potwierdzenie: {q.evidence}</p>
@@ -67,7 +67,8 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
         <label className="block text-xs">Podstawa<select aria-label={`Podstawa: ${q.field}`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={answer?.basis ?? "DECLARATION"} onChange={(e) => change(q.field, { basis: e.target.value as AnswerInput["basis"] })}><option value="DECLARATION">Moja deklaracja</option><option value="ASSUMPTION">Założenie do kalkulacji</option><option value="DOCUMENT_REFERENCE">Link do dokumentu — do weryfikacji</option></select></label>
         <label className="block text-xs">Link do dowodu (opcjonalny HTTPS, bez tokenów)<input aria-label={`Dokument: ${q.field}`} className="mt-1 min-h-11 w-full min-w-0 rounded border bg-background p-2" type="url" value={answer?.evidenceUrl ?? ""} onChange={(e) => change(q.field, { evidenceUrl: e.target.value || null })} /></label>
       </> : null}
-      {room?.answers[q.field] ? <p className="break-words text-xs">Stan: {room.answers[q.field].status === "RESOLVED" ? "Założenie przyjęte do obliczeń" : "Wymaga dowodu / dalszego ustalenia"} · {room.answers[q.field].savedAt}</p> : null}
+      {stale ? <p className="text-xs text-amber-300">Źródło zmieniło się. Poprzednia odpowiedź nie jest stosowana.<button type="button" className="ml-2 min-h-11 underline" onClick={() => change(q.field, {})}>Potwierdź ponownie</button></p> : null}
+      {room?.answers[q.field] ? <p className="break-words text-xs">Stan: {stale ? "Nieaktualna — wymaga potwierdzenia" : room.answers[q.field].status === "RESOLVED" ? "Założenie przyjęte do obliczeń" : "Wymaga dowodu / dalszego ustalenia"} · {room.answers[q.field].savedAt}</p> : null}
     </fieldset>; })}
     {!more && questions.length > 5 ? <button type="button" className="min-h-11 underline" onClick={() => setMore(true)}>Pozostałe pytania ({questions.length - 5})</button> : null}
     {room ? <button type="button" className="min-h-11 rounded-xl bg-gold px-4 font-semibold text-black disabled:opacity-50" disabled={saving || Object.keys(draft).length === 0} onClick={() => void save()}>{saving ? "Zapisuję i przeliczam…" : "Zapisz odpowiedzi i przelicz"}</button> : null}

@@ -72,11 +72,18 @@ export async function prepareInvestmentDeal(db: ReturnType<typeof createAdminCli
       const trackRecords = await loadDirectorTrackRecords(db);
       const now = new Date().toISOString();
       const buildInput = { overrideObservedAt: overrideObservedAt ?? text(overridesResult.data?.updated_at) ?? undefined, dealId, listing: listingInput, overrides: overrideValues ?? object(overridesResult.data?.values) as DealFactOverrides, market, settings, policy: settings.decisionPolicy, now, createdAt: existing?.deal.createdAt, directorTrackRecords: trackRecords };
-      let deal = buildCanonicalDeal(buildInput);
+      let resolvedInput = buildInput;
+      let deal = buildCanonicalDeal(resolvedInput);
       if (!overrideValues && existing && process.env.DEAL_ROOM_QA_ENABLED === "true") {
         const { data: workspace, error: workspaceError } = await db.from("deal_room_workspaces").select("state").eq("deal_id", dealId).maybeSingle();
         if (workspaceError) throw workspaceError;
-        if (workspace) { const state = workspace.state as DealRoomState; deal = buildCanonicalDeal({ ...buildInput, overrides: answerOverrides(deal, state.baselineOverrides, state.answers), overrideObservedAt: state.answers.resalePerM2?.kind === "VALUE" ? state.answers.resalePerM2.savedAt : state.baselineMarketObservedAt }); }
+        if (workspace) { const state = workspace.state as DealRoomState; resolvedInput = { ...buildInput, overrides: answerOverrides(deal, state.baselineOverrides, state.answers), overrideObservedAt: state.answers.resalePerM2?.kind === "VALUE" ? state.answers.resalePerM2.savedAt : state.baselineMarketObservedAt }; deal = buildCanonicalDeal(resolvedInput); }
+      }
+      // Reuse the same resolver, but select comps/assumptions for effective
+      // answered dimensions/location, not a stale raw listing with missing area.
+      const marketSubject = { ...listingInput, areaM2: deal.facts.areaM2.effectiveValue, rooms: deal.facts.rooms.effectiveValue, city: deal.facts.city.effectiveValue, district: deal.facts.district.effectiveValue, street: deal.facts.street.effectiveValue, buildingType: deal.facts.buildingType.effectiveValue, floor: deal.facts.floor.effectiveValue };
+      if (["areaM2", "rooms", "city", "district", "street", "buildingType", "floor"].some((field) => marketSubject[field as keyof DealListingInput] !== listingInput[field as keyof DealListingInput])) {
+        deal = buildCanonicalDeal({ ...resolvedInput, market: await resolveMarketEvidence(db, marketSubject) });
       }
       if (existing) deal = preserveUnchangedDirectors(existing.deal, deal);
       const settled = existing && [existing.deal.scout, existing.deal.verify, existing.deal.market, existing.deal.underwriting, existing.deal.ceo].every((director) => director.status === "COMPLETE" || director.status === "BLOCKED");
