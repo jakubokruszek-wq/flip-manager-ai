@@ -1,5 +1,6 @@
 -- REVIEW DRAFT ONLY. Apply solely to isolated PostgreSQL after the existing Investment OS migrations.
 -- No automatic deployment/migration workflow.
+alter table public.deals add column deal_room_owner_id uuid references auth.users(id);
 create table public.deal_room_workspaces (
   deal_id uuid primary key references public.deals(id) on delete cascade,
   owner_id uuid not null references auth.users(id),
@@ -41,6 +42,7 @@ begin
   end if;
   select * into v_deal from public.deals where id = (p_deal->>'id')::uuid for update;
   if not found then raise exception 'DEAL_ROOM_NOT_FOUND'; end if;
+  if v_deal.deal_room_owner_id is not null and v_deal.deal_room_owner_id <> p_owner_id then raise exception 'DEAL_ROOM_NOT_FOUND'; end if;
   select owner_id into v_owner from public.deal_room_workspaces where deal_id = v_deal.id;
   if v_owner is not null and v_owner <> p_owner_id then raise exception 'DEAL_ROOM_NOT_FOUND'; end if;
   select * into v_replay from public.deal_room_rounds where deal_id = v_deal.id and request_id = p_request_id;
@@ -55,6 +57,7 @@ begin
   if v_version is null then raise exception 'INVESTMENT_DEAL_VERSION_CONFLICT'; end if;
   if (p_response->'room'->>'version')::integer is distinct from v_version
     or p_response->'deal'->>'id' is distinct from v_deal.id::text then raise exception 'DEAL_ROOM_INVALID'; end if;
+  update public.deals set deal_room_owner_id = p_owner_id where id = v_deal.id;
   insert into public.deal_fact_overrides(deal_id, values, updated_at) values (v_deal.id, p_values, now())
     on conflict (deal_id) do update set values = excluded.values, updated_at = now();
   insert into public.deal_room_workspaces(deal_id, owner_id, state) values (v_deal.id, p_owner_id, p_state)

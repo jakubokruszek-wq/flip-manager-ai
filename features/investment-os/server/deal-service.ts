@@ -146,13 +146,13 @@ export async function saveMarketAssumption(value: unknown): Promise<Row> {
   return data as Row;
 }
 
-type StoredDeal = { deal: CanonicalDeal; version: number; sourceUpdatedAt: string | null };
+type StoredDeal = { deal: CanonicalDeal; version: number; sourceUpdatedAt: string | null; ownerId: string | null };
 
 export async function readStoredDeal(db: ReturnType<typeof createAdminClient>, listingId: string): Promise<StoredDeal | null> {
   const { data, error } = await db.from("deals").select("*").eq("listing_id", listingId).maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return { deal: toCanonicalDeal(data as Row), version: number(data.version), sourceUpdatedAt: text(data.source_updated_at) };
+  return { deal: toCanonicalDeal(data as Row), version: number(data.version), sourceUpdatedAt: text(data.source_updated_at), ownerId: text(data.deal_room_owner_id) };
 }
 
 async function markDealStaleCas(db: ReturnType<typeof createAdminClient>, dealId: string, expectedVersion: number, directors: string[]): Promise<void> {

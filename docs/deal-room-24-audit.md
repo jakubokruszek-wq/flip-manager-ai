@@ -92,10 +92,11 @@ dowodu i końcowe testy operatorów na zatwierdzonym staging. Nie deklarujemy,
 że te braki zostały rozwiązane samym zapisaniem notatki.
 
 Draft SQL: `supabase/drafts/deal-room-qa.sql`; nie instalować automatycznie.
-Wyłączenie flagi jest przełącznikiem funkcji, nie usuwa danych. Przed wyłączeniem
-w środowisku wielooperatorowym trzeba odciąć dostęp do już prywatnych analiz;
-stary globalny model dostępu nie chroni owner scope po usunięciu nowej bramki.
-Bezpieczny rollback: zatrzymać dostęp do Deal Room, zachować ledger, bez DROP.
+Wyłączenie flagi blokuje nowe odpowiedzi i nie usuwa danych. Owner guard działa
+niezależnie od flagi: owner jest także w opcjonalnej kolumnie deals, odczytywanej
+przez dotychczasowe select(*). Bez draftu kolumny brak i zachowanie pozostaje
+zgodne z globalnym modelem legacy. Nie cofać kodu owner guard po zapisaniu
+prywatnych rund bez odcięcia dostępu do Deal Room. Zachować ledger, bez DROP.
 
 Checkpoint finansowy: cena wynegocjowana jest odrębnym założeniem
 `negotiatedPrice`, przekazanym jako istniejący `priceOverride` underwritingu.

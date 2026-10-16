@@ -36,7 +36,15 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
       const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(command) });
       const body = await response.json();
       if (!response.ok || !body.deal || !body.room) { if (response.status < 500) pending.current = null; throw Error(body.message ?? "Nie udało się zapisać odpowiedzi. Odśwież analizę przy konflikcie wersji."); }
-      setRoom(body.room); setDraft({}); pending.current = null; onAnalyzed(body.deal);
+      // A replay can return an older immutable receipt. Render the current read
+      // model, not that historical response; retain request/draft if reads fail.
+      const [dealResponse, roomResponse] = await Promise.all([
+        fetch(path.replace(/\/answers$/, ""), { cache: "no-store" }),
+        fetch(path, { cache: "no-store" }),
+      ]);
+      const currentDeal = await dealResponse.json(), currentRoom = await roomResponse.json();
+      if (!dealResponse.ok || !roomResponse.ok || !currentDeal.deal || !currentRoom.room) throw Error("Odpowiedzi zapisane, ale nie udało się wczytać aktualnej analizy. Ponów zapis, aby odzyskać wynik.");
+      setRoom(currentRoom.room); setDraft({}); pending.current = null; onAnalyzed(currentDeal.deal);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Błąd połączenia. Ponów ten sam zapis."); }
     finally { setSaving(false); }
   };

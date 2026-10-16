@@ -12,6 +12,7 @@ export class DealRoomNotFound extends Error {}
 export async function readDealRoom(listingId: string, actorId: string): Promise<DealRoomState | null> {
   const db = createAdminClient(), stored = await readStoredDeal(db, listingId);
   if (!stored) return null;
+  if (stored.ownerId && stored.ownerId !== actorId) throw new DealRoomNotFound();
   const { data, error } = await db.from("deal_room_workspaces").select("owner_id,state").eq("deal_id", stored.deal.id).maybeSingle();
   if (error) throw error;
   if (data && data.owner_id !== actorId) throw new DealRoomNotFound();
@@ -21,7 +22,10 @@ export async function readDealRoom(listingId: string, actorId: string): Promise<
   return { answers: state?.answers ?? {}, baselineOverrides: state?.baselineOverrides ?? (overrides?.values ?? {}) as DealFactOverrides, rounds: state?.rounds ?? [], version: stored.version };
 }
 export async function assertDealRoomOwner(listingId: string, actorId: string): Promise<void> {
-  if (dealRoomEnabled()) await readDealRoom(listingId, actorId);
+  // Owner guard survives feature rollback. select(*) works on the unchanged schema:
+  // rows predating the optional draft simply have no owner column/value.
+  const stored = await readStoredDeal(createAdminClient(), listingId);
+  if (stored?.ownerId && stored.ownerId !== actorId) throw new DealRoomNotFound();
 }
 export async function saveDealRoomAnswers(listingId: string, actorId: string, raw: unknown) {
   const command = parseAnswerCommand(raw), db = createAdminClient();

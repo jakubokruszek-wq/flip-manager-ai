@@ -43,6 +43,7 @@ class DealRoomSql(unittest.TestCase):
         self.assertEqual(first, self.write(request))
         with psycopg.connect(DSN) as c:
             self.assertEqual(c.execute('select version from deals where id=%s',(self.deal,)).fetchone()[0],2)
+            self.assertEqual(str(c.execute('select deal_room_owner_id from deals where id=%s',(self.deal,)).fetchone()[0]),OWNER)
             self.assertEqual(c.execute('select count(*) from deal_room_rounds where deal_id=%s',(self.deal,)).fetchone()[0],1)
             self.assertEqual(c.execute('select state from deal_room_workspaces where deal_id=%s',(self.deal,)).fetchone()[0]['answers']['askingPrice']['value'],260000)
     def test_different_payload_same_id_conflicts(self):

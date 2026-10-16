@@ -36,7 +36,7 @@ export function parseAnswerCommand(value: unknown): AnswerCommand {
       } else {
         if (typeof a.value !== "string" || !a.value.trim() || a.value.length > 2000) throw new DealRoomInputError("Odpowiedź musi mieć od 1 do 2000 znaków.");
         result = a.value.trim();
-        if (/-----BEGIN .*PRIVATE KEY|\b(?:Bearer\s+|sk-proj-|sb_secret_)/i.test(result)) throw new DealRoomInputError("Nie zapisuj sekretów ani tokenów w odpowiedziach.");
+        if (/-----BEGIN .*PRIVATE KEY|\b(?:Bearer\s+|sk-proj-|sb_secret_|gh[pousr]_|(?:cookie|authorization|access_token|refresh_token)\s*[:=])/i.test(result)) throw new DealRoomInputError("Nie zapisuj sekretów ani tokenów w odpowiedziach.");
       }
     }
     let evidenceUrl: string | null = null;
