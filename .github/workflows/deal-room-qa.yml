@@ -2,7 +2,7 @@ name: Deal Room Q&A isolated validation
 on:
   pull_request:
     branches: [main]
-    paths: ['features/investment-os/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', '.github/workflows/deal-room-qa.yml']
+    paths: ['features/investment-os/**', 'features/flip-finder/underwriting.ts', 'app/api/flip-finder/listings/**/investment/**', 'supabase/drafts/deal-room-qa.sql', 'scripts/test-deal-room-postgres.py', 'scripts/setup-deal-room-service.py', '.github/workflows/deal-room-qa.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -61,3 +61,37 @@ jobs:
       - run: pip install 'psycopg[binary]==3.2.6'
       - name: Actual PostgreSQL CAS concurrency ownership replay and rollback
         run: python scripts/test-deal-room-postgres.py
+  service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: deal_test
+          POSTGRES_PASSWORD: isolated-only
+          POSTGRES_DB: deal_room_test
+        ports: ['55438:5432']
+        options: --health-cmd "pg_isready -U deal_test -d deal_room_test" --health-interval=5s --health-timeout=5s --health-retries=10
+      rest:
+        image: postgrest/postgrest:v12.2.12
+        env:
+          PGRST_DB_URI: postgres://deal_test:isolated-only@postgres:5432/deal_room_test
+          PGRST_DB_SCHEMAS: public
+          PGRST_DB_ANON_ROLE: anon
+          PGRST_JWT_SECRET: isolated-deal-room-postgrest-signing-key-only
+        ports: ['55439:3000']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --no-audit --no-fund
+      - run: pip install 'psycopg[binary]==3.2.6'
+      - run: python scripts/setup-deal-room-service.py
+      - name: Actual API handlers to existing Investment OS services to PostgREST to PostgreSQL
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test-isolation=none --test features/investment-os/test-fixtures/deal-room-postgrest.integration.ts

@@ -1,0 +1,75 @@
+import assert from "node:assert/strict";
+import { createHmac, randomUUID } from "node:crypto";
+import { mock, test } from "node:test";
+import { createClient } from "@supabase/supabase-js";
+if (process.env.GITHUB_ACTIONS !== "true") throw Error("GITHUB_ACTIONS_REQUIRED");
+const owner = "33333333-3333-4333-8333-333333333333", other = "55555555-5555-4555-8555-555555555555";
+let actor = owner, dropAfterCommit = false;
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const head = encode({ alg: "HS256", typ: "JWT" }), payload = encode({ role: "service_role", exp: Math.floor(Date.now()/1000)+3600 });
+const signature = createHmac("sha256", "isolated-deal-room-postgrest-signing-key-only").update(`${head}.${payload}`).digest("base64url");
+const db = createClient("http://127.0.0.1:55439", `${head}.${payload}.${signature}`, { auth: { persistSession: false }, global: { fetch: async (input, init) => {
+  const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
+  if (url.origin !== "http://127.0.0.1:55439") throw Error("EXTERNAL_REQUEST_FORBIDDEN");
+  url.pathname = url.pathname.replace(/^\/rest\/v1/, "");
+  const response = await fetch(url, init);
+  if (dropAfterCommit && url.pathname === "/rpc/commit_deal_room_round_cas" && response.ok) {
+    dropAfterCommit = false; await response.arrayBuffer();
+    return new Response(JSON.stringify({ message: "SYNTHETIC_RESPONSE_LOSS_AFTER_COMMIT" }), { status: 503 });
+  }
+  return response;
+} } });
+mock.module(new URL("../../../lib/supabase/admin.ts", import.meta.url).href, { namedExports: { createAdminClient: () => db } });
+mock.module(new URL("../../auth/operator.ts", import.meta.url).href, { namedExports: { requireOperator: async () => ({ id: actor, email: null }), operatorAuthorizationResponse: () => new Response(null, { status: 401 }) } });
+const answersApi = await import("../../../app/api/flip-finder/listings/[id]/investment/answers/route.ts");
+const dealApi = await import("../../../app/api/flip-finder/listings/[id]/investment/route.ts");
+const initializeApi = await import("../../../app/api/flip-finder/listings/[id]/investment/initialize/route.ts");
+const id = "22222222-2222-4222-8222-222222222222", context = { params: Promise.resolve({ id }) }, origin = `http://localhost/api/flip-finder/listings/${id}/investment`;
+function request(body: unknown, suffix="/answers") { return new Request(origin+suffix, { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost" }, body: JSON.stringify(body) }); }
+const command = (expectedVersion: number, field: string, value: number) => ({ requestId: randomUUID(), expectedVersion, answers: [{ field, kind: "VALUE", value, basis: "ASSUMPTION", evidenceUrl: null }] });
+async function current() { const response = await answersApi.GET(new Request(origin+"/answers"),context); assert.equal(response.status,200); return (await response.json()).room; }
+test("actual API/service/Supabase/PostgreSQL: initialize, answers, reanalysis, replay, response loss and owner isolation", async () => {
+  for (let i=0;i<40;i++) { const probe = await db.from("deals").select("id").limit(1); if (!probe.error) break; if (i===39) throw probe.error; await new Promise((r)=>setTimeout(r,250)); }
+  process.env.DEAL_ROOM_QA_ENABLED = "true";
+  const init = await initializeApi.POST(request({},"/initialize"),context);
+  assert.equal(init.status,200,await init.clone().text());
+  const initial = (await init.json()).deal, baseProfit=initial.underwriting.result.profitBase;
+  const first = command((await current()).version,"negotiatedPrice",260000);
+  const firstResponse = await answersApi.POST(request(first),context);
+  assert.equal(firstResponse.status,200,await firstResponse.clone().text());
+  const saved = await firstResponse.json();
+  assert.equal(saved.deal.facts.askingPrice.effectiveValue,300000);
+  assert.equal(saved.deal.underwriting.result.purchasePrice,260000);
+  assert.ok(saved.deal.underwriting.result.profitBase>baseProfit);
+  assert.deepEqual(await (await answersApi.POST(request(first),context)).json(),saved);
+  const quote = command(saved.room.version,"renovationBudget",100000);
+  dropAfterCommit=true;
+  assert.equal((await answersApi.POST(request(quote),context)).status,503);
+  const recovered = await answersApi.POST(request(quote),context);
+  assert.equal(recovered.status,200,await recovered.clone().text());
+  const after = await recovered.json();
+  assert.equal(after.deal.underwriting.result.renovationTotal,100000);
+  assert.ok(after.deal.underwriting.result.maxPurchasePrice<saved.deal.underwriting.result.maxPurchasePrice);
+  assert.notEqual(after.deal.ceo.result.action,"KUP");
+  const ledger=await db.from("deal_room_rounds").select("request_id"); assert.ifError(ledger.error); assert.equal(ledger.data?.length,2);
+  assert.equal((await current()).answers.negotiatedPrice.value,260000);
+  actor=other;
+  assert.equal((await answersApi.GET(new Request(origin+"/answers"),context)).status,404);
+  assert.equal((await dealApi.GET(new Request(origin),context)).status,404);
+  assert.equal((await initializeApi.POST(request({},"/initialize"),context)).status,404);
+  process.env.DEAL_ROOM_QA_ENABLED="false";
+  assert.equal((await dealApi.GET(new Request(origin),context)).status,404,"owner guard survives feature rollback");
+  actor=owner; process.env.DEAL_ROOM_QA_ENABLED="true";
+  assert.equal((await dealApi.PUT(new Request(origin,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({overrides:{}})}),context)).status,409);
+  const changed=await db.from("listings").update({price:310000,updated_at:new Date(Date.now()+1000).toISOString()}).eq("id",id); assert.ifError(changed.error);
+  const stale=command((await current()).version,"holdingMonths",5);
+  assert.equal((await answersApi.POST(request(stale),context)).status,409);
+  const refresh=await initializeApi.POST(request({},"/initialize"),context); assert.equal(refresh.status,200,await refresh.clone().text());
+  const refreshed=(await refresh.json()).deal;
+  assert.equal(refreshed.underwriting.result.purchasePrice,310000,"stale negotiated answer is retained as history, not applied to changed source");
+  assert.equal((await current()).answers.negotiatedPrice.value,260000,"no answer history lost");
+  const rejected=await db.from("listings").update({manual_decision:"REJECTED",updated_at:new Date(Date.now()+2000).toISOString()}).eq("id",id); assert.ifError(rejected.error);
+  const rejection=await initializeApi.POST(request({},"/initialize"),context); assert.equal(rejection.status,200,await rejection.clone().text());
+  const decisions=await db.from("ceo_decisions").select("user_facing_action").order("created_at",{ascending:false}).limit(1); assert.ifError(decisions.error);
+  assert.equal(decisions.data?.[0]?.user_facing_action,"ODRZUC","persisted CEO action must preserve a hard reject");
+});
