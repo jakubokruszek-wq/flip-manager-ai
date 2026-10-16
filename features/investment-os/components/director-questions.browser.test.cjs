@@ -163,7 +163,7 @@ test('mobile main Finder virtual TEST: dedicated API only, persisted answers and
  const {buildDealBrain}=await import('../brain/index.ts');
  const {parseAnswerCommand,mergeAnswers,answerOverrides}=await import('../deal-room-answers.ts');
  const owner='44444444-4444-4444-8444-444444444444',cases=testCases(owner),id=cases[0].id;
- let current=buildTestDeal(owner,id),room={version:1,answers:{},baselineOverrides:{},rounds:[]},normalInvestmentCalls=0;
+ let current=buildTestDeal(owner,id),room={version:1,answers:{},baselineOverrides:{},rounds:[]},normalInvestmentCalls=0;const paths=[],errors=[];
  const receipts=new Map(),root=path.resolve(__dirname,'../../..'),auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
  const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_TEST_OPERATOR_IDS:owner,DEAL_ROOM_QA_ENABLED:'false',DEAL_ROOM_CFO_ENABLED:'false',DEAL_ROOM_TAX_REVIEW_ENABLED:'false'};
  const nextBin=require.resolve('next/dist/bin/next');await ensureProductionBuild(nextBin,root,env);const port=await freePort(),base=`http://127.0.0.1:${port}`;
@@ -172,7 +172,7 @@ test('mobile main Finder virtual TEST: dedicated API only, persisted answers and
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage({viewport:{width:390,height:844}});await addOperatorSessionCookie(page.context(),base);
  await page.route('**/api/**',async route=>{
   const req=route.request(),url=new URL(req.url());let body={ok:true};
-  if(url.pathname.startsWith('/api/flip-finder/listings/'))normalInvestmentCalls++;
+  paths.push(req.method()+' '+url.pathname);if(url.pathname.startsWith('/api/flip-finder/listings/'))normalInvestmentCalls++;
   if(url.pathname==='/api/deal-room/test')body={cases};
   else if(url.pathname===`/api/deal-room/test/${id}/answers`){
    if(req.method()==='GET')body={enabled:true,room};
@@ -185,8 +185,11 @@ test('mobile main Finder virtual TEST: dedicated API only, persisted answers and
   else if(url.pathname===`/api/deal-room/test/${id}`)body={deal:current,media:[]};
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
  });
+ page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base+'/flip-finder');await page.getByRole('button',{name:'Przygotuj / wznów testy',exact:true}).click();await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).first().click();
  await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();await page.getByRole('button',{name:/Pozostałe pytania/}).click();await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('40000');await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+ for(let i=0;i<100&&room.version===1;i++)await page.waitForTimeout(50);
+ assert.equal(room.version,2,JSON.stringify({paths,errors,alerts:await page.getByRole('alert').allTextContents()}));
  await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();assert.equal(room.answers.renovationBudget.value,40000);
  await page.getByRole('button',{name:'Wczytaj / odśwież historię'}).click();await page.getByLabel('Historia analiz',{exact:true}).getByText(/Zmienione pola: renovationBudget/).waitFor();
  assert.notEqual(current.ceo.result.action,'KUP');assert.equal(current.underwriting.result.cfo.taxStatus,'UNKNOWN');assert.equal(normalInvestmentCalls,0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
