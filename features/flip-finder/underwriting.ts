@@ -240,7 +240,10 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
     ? maxBuyCents(area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, targetFinance, profitOnly)
     : null;
   const successBoundary = successPriceCents !== null ? scenarioCents(successPriceCents, area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, targetFinance) : null;
-  const successOpeningCents = successPriceCents === null ? null : multiplyByRate(successPriceCents, (10_000 - Number(finance.targetBuffer)) as BasisPoints);
+  // The indicative opening offer respects BOTH the profit-first boundary and
+  // the stricter canonical profit+margin+ROI limit. It never overrides CEO HOLD.
+  const negotiationCap = successPriceCents === null || maxPurchaseCents === null ? null : Math.min(Number(successPriceCents), Number(maxPurchaseCents)) as MoneyCents;
+  const successOpeningCents = negotiationCap === null || negotiationCap <= 0 ? null : multiplyByRate(negotiationCap, (10_000 - Number(finance.targetBuffer)) as BasisPoints);
   const targetPurchaseCents = maxPurchaseCents === null ? null : multiplyByRate(maxPurchaseCents, (10_000 - Number(finance.targetBuffer)) as BasisPoints);
   const discountNeededCents = sourcePriceCents !== null && targetPurchaseCents !== null ? (subtractMoney(sourcePriceCents, targetPurchaseCents) > 0 ? subtractMoney(sourcePriceCents, targetPurchaseCents) : moneyCents(0)) : null;
   const discountNeededPercent = discountNeededCents !== null && sourcePriceCents !== null ? ratioCents(discountNeededCents, sourcePriceCents) : null;
