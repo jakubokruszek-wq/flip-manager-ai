@@ -67,12 +67,20 @@ class WebViewCollectorBrowser(
     override fun open(url: String) = openPage(url, navigate = true)
     internal fun prepare(url: String) = openPage(url, navigate = false)
 
+    /** A separate, explicit operator action: load Facebook's login in the existing WebView.
+     *  Never follow an external login provider or open a second window. */
+    internal fun openLogin() {
+        val source = requireNotNull(pilotSource) { "PILOT_SOURCE_REQUIRED" }
+        check(webView != null) { "PILOT_SESSION_REQUIRED" }
+        openPage(source.manualLoginUrl(), navigate = true, manualLogin = true)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
-    private fun openPage(url: String, navigate: Boolean) {
+    private fun openPage(url: String, navigate: Boolean, manualLogin: Boolean = false) {
         gate.check()
         blockers().firstOrNull()?.let { throw IllegalStateException(it.message) }
         require(WebViewPolicy.navigation(url) == WebViewPolicy.Decision.ALLOW) { "Adres spoza Facebooka jest zablokowany" }
-        require(pilotSource == null || pilotSource.matchesPage(url)) { "PILOT_SOURCE_MISMATCH" }
+        require(pilotSource == null || pilotSource.matchesPage(url) || (manualLogin && url == pilotSource.manualLoginUrl())) { "PILOT_SOURCE_MISMATCH" }
         val view = webView ?: WebView(context).also { created ->
             created.settings.apply {
                 javaScriptEnabled = true
