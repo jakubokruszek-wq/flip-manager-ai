@@ -157,7 +157,7 @@ test('mobile real Deal Room CEO: Finder has no demo, canonical values, condition
  const {parseAnswerCommand,mergeAnswers,answerOverrides,affectedDirectors}=await import('../deal-room-answers.ts');
  const features={cfo:true,taxReview:false,taxArithmetic:false,privateTax:false,jdgTax:false};
  const input={...lodzDeal('UNCLEAR_RENOVATION'),features,overrides:{costScope:'BRUTTO',financingMode:'CASH',equity:800000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6,renovationTotal:40000}};
- const id=input.listing.id;let current=buildCanonicalDeal(input),room={version:1,answers:{},baselineOverrides:input.overrides,rounds:[]};const receipts=new Map()let conflictCount=0;
+ const id=input.listing.id;let current=buildCanonicalDeal(input),room={version:1,answers:{},baselineOverrides:input.overrides,rounds:[]};const receipts=new Map();let conflictCount=0;
  const root=path.resolve(__dirname,'../../..'),auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
  // Old deployment flags must never bring the removed demo back.
  const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_TEST_OPERATOR_IDS:'44444444-4444-4444-8444-444444444444'};
