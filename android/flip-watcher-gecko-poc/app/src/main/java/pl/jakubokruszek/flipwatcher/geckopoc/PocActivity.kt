@@ -171,22 +171,83 @@ class PocActivity : ComponentActivity() {
     private fun scan(scrolls: Int) {
         val current = channel ?: return
         if (scanning || preferences.getBoolean(KEY_ONE_SCAN_USED, false)) return
-        // One explicit operator-approved real-group scan in this isolated pilot.
-        // Persist the consumed permission BEFORE asking the extension to read posts.
-        if (!preferences.edit().putBoolean(KEY_ONE_SCAN_USED, true).commit()) {
-            output.text = "Nie można zapisać ograniczenia jednego skanu. Skan NIE został uruchomiony."
+        val started = Instant.now().toString()
+        // Record one-shot consent AND the pending attempt in a single durable commit.
+        // Never reset this permission merely because scanning failed.
+        val permitted = preferences.edit()
+            .putBoolean(KEY_ONE_SCAN_USED, true)
+            .putString(KEY_ATTEMPT_STAGE, "STARTED")
+            .putString(KEY_ATTEMPT_AT, started)
+            .putString(KEY_ATTEMPT_STATUS, "PENDING")
+            .putInt(KEY_ATTEMPT_POSTS, 0)
+            .putInt(KEY_ATTEMPT_REJECTED, 0)
+            .putString(KEY_ATTEMPT_ERROR, "")
+            .putString(KEY_ATTEMPT_SAVE_ERROR, "")
+            .commit()
+        if (!permitted) {
+            output.text = "STOP: nie udało się zapisać rozpoczęcia próby. Żądanie NIE zostało wysłane."
+            render()
+            return
+        }
+        // Fail closed if the initial local result journal cannot be written.
+        val journal = runCatching { store.append(StoredRun("GROUP_SCAN_ATTEMPT", started, started,
+            "STARTED", emptyList(), emptyList(), 0, mapOf("source" to PocPolicy.APPROVED_GROUP_ID, "scrolls" to scrolls.toString()))) }
+        if (journal.isFailure) {
+            val reason = journal.exceptionOrNull()?.javaClass?.simpleName ?: "UNKNOWN"
+            preferences.edit().putString(KEY_ATTEMPT_STAGE, "ABORTED")
+                .putString(KEY_ATTEMPT_STATUS, "NO_REQUEST_SENT")
+                .putString(KEY_ATTEMPT_ERROR, "START_WRITE_FAILED:$reason").commit()
+            output.text = "STOP: nie zapisano początku skanu ($reason). Żądanie NIE zostało wysłane. Limit pozostaje wykorzystany."
+            render()
             return
         }
         scanning = true
         render()
         lifecycleScope.launch {
-            val started = Instant.now().toString()
-            val report = current.scan(ScanRequest(nonce = UUID.randomUUID().toString(), scrolls = scrolls))
-            scanning = false
-            if (report.status.haltsAutomation) haltMessage = "STOP: ${report.status} — automat wstrzymany do decyzji operatora."
-            runCatching { store.append(PocResultStore.fromReport("GROUP_SCAN", started, Instant.now().toString(), report, mapOf("scrolls" to report.scrolls.toString()))) }
-            output.text = describe(report)
-            render()
+            try {
+                val report = current.scan(ScanRequest(nonce = UUID.randomUUID().toString(), scrolls = scrolls))
+                if (report.status.haltsAutomation) haltMessage = "STOP: ${report.status} — automat wstrzymany do decyzji operatora."
+                val notes = mapOf(
+                    "source" to PocPolicy.APPROVED_GROUP_ID,
+                    "scrolls" to report.scrolls.toString(),
+                    "visibleCards" to (report.diagnostics["visibleCards"] ?: 0).toString(),
+                    "cardsWithoutId" to (report.diagnostics["cardsWithoutId"] ?: 0).toString(),
+                    "ambiguousCards" to (report.diagnostics["ambiguousCards"] ?: 0).toString(),
+                    "foreignCards" to (report.diagnostics["foreignCards"] ?: 0).toString())
+                val saved = runCatching { store.append(PocResultStore.fromReport("GROUP_SCAN", started, Instant.now().toString(), report, notes)) }
+                val saveError = saved.exceptionOrNull()?.javaClass?.simpleName.orEmpty()
+                val persisted = preferences.edit()
+                    .putString(KEY_ATTEMPT_STAGE, "FINISHED")
+                    .putString(KEY_ATTEMPT_STATUS, report.status.name)
+                    .putInt(KEY_ATTEMPT_POSTS, report.posts.size)
+                    .putInt(KEY_ATTEMPT_REJECTED, report.rejectedByApp)
+                    .putString(KEY_ATTEMPT_ERROR, if (report.error.isNullOrBlank()) "" else "SCAN_RESPONSE_ERROR")
+                    .putString(KEY_ATTEMPT_SAVE_ERROR, if (saveError.isEmpty()) "" else "RESULT_WRITE_FAILED:$saveError")
+                    .commit()
+                output.text = describe(report) + when {
+                    !persisted -> "\nUWAGA: nie udało się zachować trwałego podsumowania próby."
+                    saveError.isNotEmpty() -> "\nUWAGA: błąd zapisu historii ($saveError); liczby zachowano osobno."
+                    else -> "\nWynik zapisany lokalnie — użyj „Wyniki”."
+                }
+            } catch (e: Exception) {
+                // Show only the exception class: no page text, credentials or URLs.
+                val reason = e.javaClass.simpleName.take(60)
+                val result = if (e is kotlinx.coroutines.CancellationException) "INTERRUPTED" else "EXCEPTION"
+                val saved = runCatching { store.append(StoredRun("GROUP_SCAN", started, Instant.now().toString(),
+                    result, emptyList(), emptyList(), 0, mapOf("errorClass" to reason))) }
+                preferences.edit()
+                    .putString(KEY_ATTEMPT_STAGE, "ABORTED")
+                    .putString(KEY_ATTEMPT_STATUS, result)
+                    .putString(KEY_ATTEMPT_ERROR, reason)
+                    .putString(KEY_ATTEMPT_SAVE_ERROR,
+                        if (saved.isSuccess) "" else "RESULT_WRITE_FAILED:${saved.exceptionOrNull()?.javaClass?.simpleName}")
+                    .commit()
+                output.text = "STOP: skan nieukończony ($result, $reason). Limit pozostaje wykorzystany."
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally {
+                scanning = false
+                render()
+            }
         }
     }
 
