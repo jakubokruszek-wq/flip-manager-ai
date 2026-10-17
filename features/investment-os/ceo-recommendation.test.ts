@@ -21,6 +21,7 @@ test("HOLD / NEGOTIATE / BUY / REJECT use the existing synthesis, not the profit
  const missing=structuredClone(buy);missing.ceo.result!.criticalGates.find(g=>g.fact==="legalStatus")!.passed=false;assert.notEqual(ceoRecommendation(missing).decision,"KUP");
  const empty=structuredClone(buy);empty.ceo.result!.criticalGates=[];assert.notEqual(ceoRecommendation(empty).decision,"KUP");
  const fail=structuredClone(buy);fail.underwriting.validation.status="FAIL";assert.notEqual(ceoRecommendation(fail).decision,"KUP");
+ const failedMarket=structuredClone(buy);failedMarket.market.validation.status="FAIL";assert.notEqual(ceoRecommendation(failedMarket).decision,"KUP");
  const rejected=buildCanonicalDeal({...lodzDeal(),listing:{...lodzDeal().listing,manualDecision:"REJECTED"}});assert.equal(ceoRecommendation(rejected).decision,"ODRZUĆ");assert.equal(ceoRecommendation(rejected).blockers[0].state,"UNSATISFIED");
 });
 test("missing/corrupt finance cannot resurrect stale CEO amounts or fabricate zero/negotiation",()=>{
