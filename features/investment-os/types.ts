@@ -221,6 +221,7 @@ export type DealFactOverrides = Partial<Record<keyof DealFacts, string | number 
   renovationTotal?: number | null;
   holdingMonths?: number | null;
   additionalCosts?: number | null;
+  targetProfitPLN?: number | null;
 };
 
 export type MarketEvidence = {
