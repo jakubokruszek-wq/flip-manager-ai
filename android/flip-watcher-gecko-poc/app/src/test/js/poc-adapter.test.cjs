@@ -8,7 +8,8 @@ require(path.resolve(__dirname, "../../main/extension/poc-adapter.js"));
 
 const core = globalThis.FlipFacebookCollectorCore;
 const adapter = globalThis.FlipGeckoPocAdapter;
-const GROUP = "402796264871862";
+const GROUP = "lodzsprzedazzakupwynajem";
+const OLD_NUMERIC_GROUP = "402796264871862";
 const input = { groupId: GROUP, maxPosts: 20 };
 const groupHref = `https://m.facebook.com/groups/${GROUP}/`;
 const postLink = id => `https://www.facebook.com/groups/${GROUP}/posts/${id}/`;
@@ -78,6 +79,8 @@ test("another group, another host or a lookalike host is WRONG_GROUP", () => {
   assert.equal(adapter.evaluate(page({ href: `https://m.facebook.com.evil.example/groups/${GROUP}/`, cards }), input, core).status, "WRONG_GROUP");
   assert.equal(adapter.evaluate(page({ href: `http://m.facebook.com/groups/${GROUP}/`, cards }), input, core).status, "WRONG_GROUP");
   assert.equal(adapter.evaluate(page({ href: `https://m.facebook.com/groups/${GROUP}/members/`, cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: `https://www.facebook.com/groups/${OLD_NUMERIC_GROUP}/`, cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: "https://www.facebook.com/groups/1350200629551011/", cards }), input, core).status, "WRONG_GROUP");
 });
 
 test("loopback pages are accepted only when the app asks for fixture mode", () => {
@@ -91,7 +94,7 @@ test("fails loudly without the collector core", () => {
   assert.throws(() => adapter.evaluate(page(), input, undefined), /COLLECTOR_CORE_MISSING/);
 });
 
-// ---- verified aliases (slug of the approved numeric group)
+// ---- hypothetical verified aliases (the approved source remains the standalone slug)
 const SLUG = "verifiedslugtest";
 const slugHref = `https://www.facebook.com/groups/${SLUG}/`;
 const slugLink = n => `https://www.facebook.com/groups/${SLUG}/posts/${n}/`;
@@ -102,7 +105,7 @@ test("a slug page is WRONG_GROUP unless the app sends it as a verified alias", (
   assert.equal(adapter.evaluate(page({ href: slugHref, cards }), input, core).status, "WRONG_GROUP");
   const result = adapter.evaluate(page({ href: slugHref, cards }), withAlias, core);
   assert.equal(result.status, "OK");
-  // Identity stays the canonical NUMERIC group, whatever form the link had.
+  // Identity stays the canonical independently approved group source.
   assert.deepEqual(result.posts, [{ postId: id(1), permalink: postLink(id(1)), idSource: "DOM_LINK" }]);
 });
 
@@ -143,11 +146,11 @@ test("the 20-post limit holds with aliases", () => {
 
 test("group identity reads only Facebook's app-link metadata as strong evidence", () => {
   const hits = adapter.groupIdentity({
-    metaTags: [{ property: "al:android:url", content: `fb://group/${GROUP}` }, { property: "al:ios:url", content: `fb://group/?id=${GROUP}` }, { property: "og:title", content: "fb://group/1111111111" }],
+    metaTags: [{ property: "al:android:url", content: `fb://group/${OLD_NUMERIC_GROUP}` }, { property: "al:ios:url", content: `fb://group/?id=${OLD_NUMERIC_GROUP}` }, { property: "og:title", content: "fb://group/1111111111" }],
     alternateLinks: ["android-app://com.facebook.katana/fb/group/2222222222"],
     scriptTexts: ['{"groupID":"3333333333","x":{"group_id":"3333333333"}}', '{"groupID":"4444444444"}'],
   });
-  assert.deepEqual(hits.filter(hit => hit.source.startsWith("al:")).map(hit => hit.id), [GROUP, GROUP]);
+  assert.deepEqual(hits.filter(hit => hit.source.startsWith("al:")).map(hit => hit.id), [OLD_NUMERIC_GROUP, OLD_NUMERIC_GROUP]);
   assert.ok(!hits.some(hit => hit.id === "1111111111"));
   assert.ok(hits.some(hit => hit.id === "3333333333" && hit.source === "json×2"));
 });
