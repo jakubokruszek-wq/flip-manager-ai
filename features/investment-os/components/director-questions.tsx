@@ -118,8 +118,14 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   const latest = room?.rounds.at(-1);
   const keys = new Set(questions.map((q) => q.field));
   const editing = Object.keys(draft).filter((field) => !keys.has(field));
-  const visible = (more ? questions : questions.slice(0, 5)).concat(editing.map((field) => ({ field, question: `Edytuj odpowiedź: ${field}`, directors: "CEO", why: "Nowa runda zachowa poprzednią odpowiedź w historii.", evidence: "Deklaracja nie jest automatycznie zweryfikowanym dowodem.", blocking: false })));
-  return <section data-user-questions aria-label="Dyrektorzy pytają Ciebie" className="min-w-0 space-y-4 rounded-2xl border border-gold/35 bg-gold/[0.025] p-4">
+  const visible = (more ? questions : questions.slice(0, 5))
+    .filter((question) => !(targetHost && question.field === "targetProfitPLN"))
+    .concat(editing.filter((field) => !(targetHost && field === "targetProfitPLN")).map((field) => ({ field, question: `Edytuj odpowiedź: ${field}`, directors: "CEO", why: "Nowa runda zachowa poprzednią odpowiedź w historii.", evidence: "Deklaracja nie jest automatycznie zweryfikowanym dowodem.", blocking: false })));
+  const targetAnswer = draft.targetProfitPLN ?? room?.answers.targetProfitPLN;
+  const targetValue = targetAnswer?.kind === "VALUE" ? targetAnswer.value ?? "" : deal.underwriting.result?.successPrice?.targetProfitPLN ?? "";
+  const targetDraftValue = draft.targetProfitPLN?.value;
+  const validTarget = typeof targetDraftValue === "number" && Number.isFinite(targetDraftValue) && targetDraftValue >= 0 && targetDraftValue <= 100_000_000;
+  return <><section data-user-questions aria-label="Dyrektorzy pytają Ciebie" className="min-w-0 space-y-4 rounded-2xl border border-gold/35 bg-gold/[0.025] p-4">
     <h2 className="text-lg font-bold text-gold">Dyrektorzy pytają Ciebie</h2>
     <p className="text-xs text-muted-foreground">Analizy regułowe Investment OS. PCC, notariusz, finansowanie i sprzedaż są scenariuszem z ustawień, a nie potwierdzonymi kosztami tej transakcji. Odpowiedź i link do dokumentu nie są automatycznym potwierdzeniem faktu prawnego ani ceny transakcyjnej. Nie wpisuj haseł, tokenów ani danych osób z dokumentów.</p>
     {disabled ? <p>Trwałe odpowiedzi nie są aktywne w tym środowisku.</p> : null}
@@ -141,5 +147,17 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
     {error ? <p role="alert" className="text-sm text-red-300">{error}</p> : null}
     {room && Object.keys(room.answers).length > 0 ? <details><summary className="min-h-11 cursor-pointer">Zapisane odpowiedzi — edycja i cofnięcie</summary>{Object.values(room.answers).map((a) => <article key={a.field} className="my-2 break-words rounded border p-2 text-xs"><strong>{a.field}</strong>: {a.value ?? (a.kind === "LATER" ? "Sprawdzę później" : a.kind === "WITHDRAW" ? "Cofnięto" : "Nie wiem")} · {a.basis} · {a.savedAt} · operator: {a.actorId}<button type="button" className="ml-2 min-h-11 underline" onClick={() => change(a.field, {})}>Edytuj</button><button type="button" className="ml-2 min-h-11 underline" onClick={() => change(a.field, { kind: "WITHDRAW", value: null })}>Cofnij</button></article>)}</details> : null}
     {latest ? <section aria-label="Rekomendacja przed i po odpowiedziach" className="space-y-2 border-t pt-3 text-sm"><h3 className="font-semibold">Co zmieniły odpowiedzi?</h3><p>Pola: {latest.changedFields.join(", ")}. Zależne dyrekcje: {latest.invalidated.join(", ") || "brak zmian finansowych"}.</p><p>CEO: {latest.before.ceo.decision} → {latest.after.ceo.decision} · rekomendacja warunkowa, do weryfikacji.</p><p>Zysk bazowy: {formatPLNDisplay(latest.before.financials?.profitBase ?? null)} → {formatPLNDisplay(latest.after.financials?.profitBase ?? null)}</p><p>Max Buy: {formatPLNDisplay(latest.before.financials?.maxPurchasePrice ?? null)} → {formatPLNDisplay(latest.after.financials?.maxPurchasePrice ?? null)}</p><p>{latest.after.ceo.reasoningSummary}</p><p>Runda zamknięta: {latest.after.questions.some((q) => q.category === "BLOCKING") ? "nie — pozostały pytania blokujące" : "brak otwartych pytań blokujących w projekcji; wymagane zatwierdzenie człowieka"}.</p><ol className="list-decimal pl-5">{[latest.after.ceo.nextBestAction.title, ...latest.after.ceo.conditionsToProceed].slice(0, 3).map((step, i) => <li key={i}>{step}</li>)}</ol></section> : null}
-  </section>;
+  </section>
+  {targetHost ? createPortal(
+    <fieldset id="deal-question-targetProfitPLN" tabIndex={-1} disabled={saving || !room || disabled} data-question-field="targetProfitPLN" className="min-w-0 space-y-3 rounded-xl border border-gold/40 bg-black/15 p-3">
+      <legend className="px-1 text-sm font-bold text-gold">Jaki zysk chcesz osiągnąć?</legend>
+      <label className="block text-xs font-semibold text-foreground">Docelowy zysk operacyjny przed podatkiem (zł)
+        <input aria-label="Odpowiedź: targetProfitPLN" type="number" inputMode="decimal" min="0" max="100000000" step="0.01" className="mt-2 min-h-11 w-full min-w-0 rounded-lg border border-gold/30 bg-background px-3 text-base font-bold tabular-nums text-foreground" value={targetValue} onChange={(event) => change("targetProfitPLN", { kind:"VALUE", value: event.target.value === "" ? null : Number(event.target.value), basis:"ASSUMPTION", evidenceUrl:null })}/>
+      </label>
+      <p className="text-xs leading-5 text-muted-foreground">Wpisz np. 40 000. System przeliczy cenę graniczną, cenę negocjacji i koszty tego mieszkania. To założenie, nie potwierdzony zysk netto.</p>
+      <button type="button" className="min-h-11 w-full rounded-xl bg-gold px-4 text-sm font-bold text-black disabled:opacity-50" disabled={!validTarget || saving || !room} onClick={() => void save("targetProfitPLN")}>{saving ? "Zapisuję i przeliczam…" : "Zapisz zysk i przelicz"}</button>
+      {savedNotice ? <p aria-live="polite" role="status" className="text-xs font-semibold text-emerald-300">{savedNotice}</p> : null}
+      {error ? <p role="alert" className="text-xs text-red-300">{error}</p> : null}
+    </fieldset>, targetHost
+  ) : null}</>;
 }
