@@ -19,6 +19,8 @@ data class GroupIdHit(val id: String, val source: String) {
 enum class GroupVerdict {
     /** The address is the approved numeric id itself. */
     APPROVED_NUMERIC,
+    /** A separately approved source whose exact key is a textual group slug. */
+    APPROVED_SOURCE,
     /** Facebook's own metadata names only the approved id AND Facebook (not a click) redirected the approved URL to this slug. */
     SAME_GROUP_EVIDENCE,
     /** Facebook's own metadata names a different group id. */
@@ -45,7 +47,8 @@ object GroupIdentity {
         reasons += if (strongIds.isEmpty()) "metadane Facebooka: brak numerycznego ID grupy" else "metadane Facebooka: ${strongIds.joinToString()}"
         reasons += if (redirect) "Facebook sam zmienił adres /groups/$approvedId/ na ten (przekierowanie bez kliknięcia)" else "brak serwerowego przekierowania z /groups/$approvedId/ na ten adres"
         val verdict = when {
-            segment == approvedId -> GroupVerdict.APPROVED_NUMERIC
+            segment == approvedId && approvedId.all { it.isDigit() } -> GroupVerdict.APPROVED_NUMERIC
+            segment == approvedId -> GroupVerdict.APPROVED_SOURCE
             strongIds.isNotEmpty() && approvedId !in strongIds -> GroupVerdict.DIFFERENT_GROUP
             strongIds == listOf(approvedId) && redirect -> GroupVerdict.SAME_GROUP_EVIDENCE
             else -> GroupVerdict.INSUFFICIENT
@@ -77,6 +80,7 @@ object GroupIdentity {
         append(
             when (assessment.verdict) {
                 GroupVerdict.APPROVED_NUMERIC -> "Wynik: zatwierdzona grupa (adres numeryczny)."
+                GroupVerdict.APPROVED_SOURCE -> "Wynik: osobne zatwierdzone źródło tekstowe; NIE potwierdza aliasu innej grupy."
                 GroupVerdict.SAME_GROUP_EVIDENCE -> "Wynik: DOWÓD ALIASU. Facebook wskazuje ten sam numer grupy i sam przekierował adres. Skan pozostaje zablokowany do czasu ręcznego zatwierdzenia aliasu w kolejnej wersji."
                 GroupVerdict.DIFFERENT_GROUP -> "Wynik: INNA GRUPA (${assessment.strongIds.joinToString()}). STOP pozostaje. Użyj „Wróć do grupy”."
                 GroupVerdict.INSUFFICIENT -> "Wynik: BRAK DOWODU. STOP pozostaje. Otwórz grupę przyciskiem „Otwórz grupę” (bez klikania w stronie) i powtórz diagnozę."
