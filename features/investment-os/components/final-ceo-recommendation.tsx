@@ -1,9 +1,10 @@
 "use client";
 import { ceoRecommendation, type CeoCondition } from "../ceo-recommendation";
 import type { CanonicalDeal } from "../types";
+import { DirectorQuestions } from "./director-questions";
 const money=(n:number|null)=>n===null?"NIEUSTALONE":new Intl.NumberFormat("pl-PL",{style:"currency",currency:"PLN",minimumFractionDigits:2,maximumFractionDigits:2}).format(n);
 const STATES={SATISFIED:"SPEŁNIONY",UNSATISFIED:"NIESPEŁNIONY",UNKNOWN:"NIEUSTALONY"};
-export function FinalCeoRecommendation({deal}:{deal:CanonicalDeal}){
+export function FinalCeoRecommendation({deal,onAnalyzed}:{deal:CanonicalDeal;onAnalyzed:(deal:CanonicalDeal)=>void}){
  const model=ceoRecommendation(deal),rest=model.blockers.slice(3),passed=model.conditions.filter(c=>c.state==="SATISFIED");
  const success = deal.underwriting.validation.status==="PASS" ? deal.underwriting.result?.successPrice ?? null : null;
  const asking=deal.facts.askingPrice.effectiveValue;
@@ -23,7 +24,7 @@ export function FinalCeoRecommendation({deal}:{deal:CanonicalDeal}){
    </dl>
    {success?.maxPurchasePrice!=null&&asking!=null?<p className="mt-3 text-sm font-semibold text-gold">Cena ofertowa: {money(asking)} · {asking>success.maxPurchasePrice?`Wymagana obniżka co najmniej ${money(asking-success.maxPurchasePrice)}`:"Cena nie przekracza granicy celu zysku"}</p>:null}
    {success?.maxPurchasePrice===null?<p className="mt-3 text-xs font-semibold text-amber-200">Nie ma wystarczających danych lub zakładany zysk jest nieosiągalny nawet przy zerowej cenie zakupu. Nie wpisujemy fikcyjnej kwoty.</p>:null}
-   <a className="mt-3 inline-flex min-h-11 items-center text-sm font-bold text-gold underline underline-offset-4" href="#deal-question-targetProfitPLN">Zmień docelowy zysk w pytaniach dyrektorów</a>
+   <DirectorQuestions deal={deal} onAnalyzed={onAnalyzed} scope="target" />
    {success?.costsAtBoundary?<details className="mt-2 border-t border-gold/20 pt-3 text-sm"><summary className="min-h-11 cursor-pointer font-semibold text-gold">Rozbicie kosztów przy cenie granicznej</summary><dl className="mt-3 grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
     {([["Zakup: PCC, notariusz i prowizja",success.costsAtBoundary.purchaseTransactionCosts],["Remont",success.costsAtBoundary.renovation],["Rezerwa remontowa",success.costsAtBoundary.contingency],["Utrzymanie i koszty stałe",success.costsAtBoundary.holding],["Dodatkowe koszty",success.costsAtBoundary.additional],["Koszt finansowania w modelu",success.costsAtBoundary.financing],["Koszty sprzedaży",success.costsAtBoundary.sales]] as Array<[string,number]>).map(([label,value])=><div className="flex justify-between gap-3 border-b border-white/10 py-2" key={label}><dt className="text-muted-foreground">{label}</dt><dd className="shrink-0 font-semibold tabular-nums">{money(value)}</dd></div>)}
    </dl><p className="mt-2 text-xs text-muted-foreground">Zysk przy granicy: {money(success.profitAtBoundary)}. Bufor do otwarcia negocjacji: {success.negotiationBufferPercent}%. Poziom otwarcia nie przekracza również wstępnego kanonicznego Max Buy.</p></details>:null}
