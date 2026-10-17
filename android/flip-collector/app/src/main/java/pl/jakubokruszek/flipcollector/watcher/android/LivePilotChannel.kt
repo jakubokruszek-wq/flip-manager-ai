@@ -40,7 +40,10 @@ class LivePilotChannel(private val context: Context, private val browser: WebVie
                             WebViewCompat.addWebMessageListener(view, "FlipPilot", setOf(source.origin)) { _, message, origin, mainFrame, _ ->
                                 if (!continuation.isActive) return@addWebMessageListener
                                 if (!LivePilotPolicy.trustedMessage(origin.toString(), mainFrame, view.url.orEmpty(), source)) {
-                                    stop("PILOT_ORIGIN_FRAME_REJECTED"); return@addWebMessageListener
+                                    // Only bundled/local fixture metadata may appear in test errors.
+                                    // Production errors never include a Facebook URL or identifier.
+                                    stop(if (browser.isLocalFixture()) "FIXTURE_CHANNEL:${origin}:$mainFrame:${view.url}" else "PILOT_ORIGIN_FRAME_REJECTED")
+                                    return@addWebMessageListener
                                 }
                                 try { continuation.resume(LivePilotPolicy.validate(requireNotNull(message.data), nonce, source)) }
                                 catch (error: Exception) { continuation.resumeWithException(error) }

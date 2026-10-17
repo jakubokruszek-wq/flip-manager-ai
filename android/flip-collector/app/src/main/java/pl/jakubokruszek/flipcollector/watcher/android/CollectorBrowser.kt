@@ -47,6 +47,7 @@ class WebViewCollectorBrowser(
     internal var onStop: ((String) -> Unit)? = null
     internal fun currentView(): WebView? = webView
     private var localFixture: String? = null
+    internal fun isLocalFixture() = localFixture != null
     /** Debug instrumentation only: all resources are blocked, including the initial document. */
     internal fun useLocalFixture(html: String) {
         check(pl.jakubokruszek.flipcollector.BuildConfig.DEBUG && webView == null)
@@ -96,7 +97,7 @@ class WebViewCollectorBrowser(
         }
         if (localFixture != null) {
             view.settings.javaScriptEnabled = false
-            view.loadDataWithBaseURL(url, requireNotNull(localFixture), "text/html", "UTF-8", null)
+            view.loadDataWithBaseURL(url, requireNotNull(localFixture), "text/html", "UTF-8", url)
         } else view.loadUrl(url)
     }
 
@@ -148,6 +149,8 @@ class WebViewCollectorBrowser(
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             if (localFixture != null) return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+            if (pilotSource != null && !pl.jakubokruszek.flipcollector.collector.LivePilotPolicy.allowResource(request.url.toString()))
+                return WebResourceResponse("text/plain", "utf-8", 204, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
             if (WebViewPolicy.resource(request.url.toString()) == WebViewPolicy.Decision.ALLOW) return null
             return WebResourceResponse("text/plain", "utf-8", 204, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
         }

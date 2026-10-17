@@ -33,8 +33,17 @@ object LivePilotPolicy {
     const val MAX_PAYLOAD_BYTES = 512 * 1024
     // Exact extension artifact; updating the core requires an explicit review of this pin.
     const val CORE_SHA256 = "32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b"
-    fun trustedMessage(origin: String, mainFrame: Boolean, page: String, source: LivePilotSource) =
-        mainFrame && origin == source.origin && source.matchesPage(page)
+    fun allowResource(url: String): Boolean = runCatching {
+        val uri = URI(url)
+        val host = uri.host.orEmpty().lowercase()
+        WebViewPolicy.resource(url) == WebViewPolicy.Decision.ALLOW && uri.userInfo == null && uri.port in setOf(-1, 443) &&
+            (!host.endsWith(".fbcdn.net") || host.startsWith("static."))
+    }.getOrDefault(false)
+    fun trustedMessage(origin: String, mainFrame: Boolean, page: String, source: LivePilotSource): Boolean = runCatching {
+        val uri = URI(origin)
+        mainFrame && uri.scheme == "https" && uri.host == URI(source.origin).host && uri.port in setOf(-1,443) &&
+            uri.userInfo == null && uri.rawPath.orEmpty() in setOf("", "/") && uri.rawQuery == null && uri.rawFragment == null && source.matchesPage(page)
+    }.getOrDefault(false)
 
     fun validate(raw: String, nonce: String, source: LivePilotSource): JSONObject {
         require(raw.toByteArray(Charsets.UTF_8).size <= MAX_PAYLOAD_BYTES) { "PILOT_PAYLOAD_TOO_LARGE" }

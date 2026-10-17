@@ -17,6 +17,9 @@ class LivePilotPolicyTest {
     }
     @Test fun exactOriginMainFrameAndPageAreAllRequired() {
         assertTrue(LivePilotPolicy.trustedMessage(source.origin,true,source.url,source))
+        assertTrue(LivePilotPolicy.trustedMessage(source.origin+":443",true,source.url,source))
+        assertFalse(LivePilotPolicy.trustedMessage(source.origin+":444",true,source.url,source))
+        assertFalse(LivePilotPolicy.trustedMessage(source.origin+"/path",true,source.url,source))
         assertFalse(LivePilotPolicy.trustedMessage(source.origin,false,source.url,source))
         assertFalse(LivePilotPolicy.trustedMessage("https://www.facebook.com.evil.test",true,source.url,source))
         assertFalse(LivePilotPolicy.trustedMessage(source.origin,true,"https://www.facebook.com/groups/another/",source))
@@ -104,5 +107,12 @@ class LivePilotPolicyTest {
             raw.getJSONObject("batch").getJSONArray("posts").getJSONObject(0).put(key,JSONObject.NULL)
             assertThrows(IllegalArgumentException::class.java) { LivePilotPolicy.validate(raw.toString(),"fixture-nonce",source) }
         }
+    }
+    @Test fun resourcePolicyBlocksExtensionlessMediaAndKeepsStaticScripts() {
+        assertTrue(LivePilotPolicy.allowResource("https://static.xx.fbcdn.net/rsrc.php/script.js"))
+        assertFalse(LivePilotPolicy.allowResource("https://scontent.xx.fbcdn.net/media?id=1"))
+        assertFalse(LivePilotPolicy.allowResource("https://video.xx.fbcdn.net/stream?id=1"))
+        assertFalse(LivePilotPolicy.allowResource("https://user@www.facebook.com/script"))
+        assertFalse(LivePilotPolicy.allowResource("https://www.facebook.com:444/script"))
     }
 }
