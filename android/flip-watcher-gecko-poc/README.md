@@ -87,6 +87,12 @@ Wersje 0.1.0 były podpisane losowym kluczem każdego serwera CI, dlatego **jedn
 - `./gradlew connectedDebugAndroidTest`: prawdziwy GeckoView na emulatorze. Tylko lokalne strony z `assets/fixtures/`; **żaden test nie otwiera Facebooka**.
 - CI: `.github/workflows/android-gecko-poc.yml`, czyli izolacja, testy core, kompilacja, APK z weryfikacją podpisu i rozszerzenia oraz testy na emulatorze Androida 16.
 
+## POC 0.1.3 — trwały dziennik próby i uczciwy status
+
+Jednorazowa zgoda jest utrwalana razem ze statusem STARTED PRZED wysłaniem żądania. Odmowa zapisu początku próby oznacza NO_REQUEST_SENT, bez wywołania rozszerzenia. Wynik i jego liczniki są zapisywane w lokalnym magazynie oraz podsumowaniu SharedPreferences; błąd zapisu jest jawnie wyświetlany. W "Wyniki" próby GROUP_SCAN są prezentowane przed rozbudowaną historią diagnoz. Po restarcie niedokończony STARTED pozostaje niepotwierdzony, a nie zaliczony jako sukces.
+
+**Ważne:** próba wykonana w 0.1.2 miała wyłącznie flagę zużytej zgody. Aktualizacja nie może odtworzyć jej wyniku; pokazuje "poprzednia próba — brak zapisanego statusu". Nie usuwa danych, nie resetuje zgody i nie uruchamia kolejnego skanu. Osobna zgoda będzie konieczna do następnej próby. APK 0.1.3 można zainstalować nad 0.1.2 z zachowaniem lokalnej sesji.
+
 ## POC 0.1.2 — osobno zatwierdzone źródło (jeden skan)
 
 Operator wyraźnie zatwierdził **wyłącznie** `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/` jako samodzielne źródło do JEDNEGO ręcznie uruchomionego testu maksymalnie 20 postów. Identyfikator `402796264871862` i wszelkie inne grupy pozostają niedozwolone; **nie dodano żadnego aliasu**. Kanoniczny link posta musi zawierać dokładnie ten zatwierdzony segment grupy i numeryczny identyfikator posta. Znane obce linki są odrzucane; nigdy nie dopasowujemy po podobnej nazwie grupy.
