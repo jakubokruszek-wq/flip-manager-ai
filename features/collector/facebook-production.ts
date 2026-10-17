@@ -39,14 +39,17 @@ export function resolveFacebookProductionSource(input: { id?: string | null; sou
 export function normalizeFacebookSourceUrl(value: string, type?: "GROUP" | "PROFILE"): { url: string; type: "GROUP" | "PROFILE"; sourceId: string } | null {
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:" || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase("en-US"))) return null;
+    if (url.protocol !== "https:" || url.username || url.password || url.port || !["facebook.com", "www.facebook.com", "m.facebook.com"].includes(url.hostname.toLocaleLowerCase("en-US"))) return null;
     const group = url.pathname.match(/^\/groups\/([^/?#]+)\/?$/i);
     if (group) {
       if (type && type !== "GROUP") return null;
       return { url: `https://www.facebook.com/groups/${group[1]}/`, type: "GROUP", sourceId: group[1] };
     }
     if (type && type !== "PROFILE") return null;
-    const profileId = url.searchParams.get("id") || url.pathname.match(/\/([0-9]{5,})\/?$/)?.[1] || url.pathname.match(/^\/([0-9]{5,})\/?$/)?.[1];
+    // An id query on /watch, /posts or another arbitrary path is not a profile.
+    const profileId = /^\/profile\.php\/?$/.test(url.pathname)
+      ? (url.searchParams.getAll("id").length === 1 ? url.searchParams.get("id") : null)
+      : url.pathname.match(/^\/(?:people\/[^/]+\/)?([0-9]{5,30})\/?$/)?.[1];
     if (!profileId || !/^\d{5,30}$/.test(profileId)) return null;
     return { url: `https://www.facebook.com/profile.php?id=${profileId}`, type: "PROFILE", sourceId: profileId };
   } catch {

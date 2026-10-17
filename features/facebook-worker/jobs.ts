@@ -14,6 +14,7 @@ import { aggregateFacebookVisionRun, summarizeFacebookVisionUsage } from "./open
 import { type FacebookAgeCacheHit, type FacebookCompletion, type FacebookCompletionResult, type FacebookFailureCode, type FacebookPostCacheHit, type FacebookWorkerJob } from "./types";
 import { FACEBOOK_PRODUCTION_SOURCE_ID } from "@/features/collector/facebook-production";
 import { normalizeFacebookSourceUrl } from "@/features/facebook-groups/group-url";
+import { facebookJobFilterSnapshot } from "./consumer-routing";
 import { resolveFacebookGroupDisplayName } from "@/features/facebook-groups/display-name";
 import { gallerySeedMediaFromCollectorBatches, gallerySeedMediaFromProvenance } from "./gallery-policy";
 
@@ -49,7 +50,8 @@ export class FacebookLeaseRenewalError extends Error {
   }
 }
 
-export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, requestedSourceId = FACEBOOK_PRODUCTION_SOURCE_ID): Promise<FacebookEnqueueResult> {
+export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, requestedSourceId = FACEBOOK_PRODUCTION_SOURCE_ID, consumerType: "BROWSER_EXTENSION" | "ANDROID_WEBVIEW" = "BROWSER_EXTENSION"): Promise<FacebookEnqueueResult> {
+  if (consumerType !== "BROWSER_EXTENSION" && consumerType !== "ANDROID_WEBVIEW") throw new Error("INVALID_CONSUMER_TYPE");
   const supabase = createFacebookWatcherAdminClient();
   // The database-backed watched_facebook_groups registry (enabled=true +
   // a normalizable canonical URL) is the ONLY runtime eligibility gate --
@@ -72,6 +74,7 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, r
       createdAt: String(group.created_at),
     }];
   }).filter((group) => group.sourceId?.toLocaleLowerCase("en-US") === requestedSourceId.toLocaleLowerCase("en-US"));
+  const filterSnapshot = facebookJobFilterSnapshot(filter, consumerType);
   const plans = planFacebookGroupJobs(filter.id, runId, watchedGroups);
   if (plans.length === 0) {
     // A caller may request one allowlisted source for a controlled sequential
@@ -79,15 +82,15 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, r
     if (requestedSourceId !== FACEBOOK_PRODUCTION_SOURCE_ID) return { jobs: [], failedGroups: [], reasonCode: "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED" };
     const terminal = await supabase.from("source_scans").insert({
       search_filter_id: filter.id, source: "facebook", status: "completed", scan_run_id: runId,
-      filter_snapshot: filter, finished_at: new Date().toISOString(), warnings: ["FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED"], error_message: null,
+      filter_snapshot: filterSnapshot, finished_at: new Date().toISOString(), warnings: ["FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED"], error_message: null,
     });
     if (terminal.error) throw new Error(`FACEBOOK_NO_ENABLED_GROUP; SOURCE_SCAN_CREATE_FAILED: ${terminal.error.message}`);
     return { jobs: [], failedGroups: [], reasonCode: "FACEBOOK_PRODUCTION_SOURCE_NOT_CONFIGURED" };
   }
   const result: FacebookEnqueueResult = { jobs: [], failedGroups: [], reasonCode: null };
   for (const plan of plans) {
-    const schedulerMarker = schedulerMarkerFromFilter(filter);
-    const scan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "pending", scan_run_id: runId, filter_snapshot: filter, ...(schedulerMarker ? { warnings: [schedulerWarning(schedulerMarker)] } : {}) }).select("id").single();
+    const schedulerMarker = consumerType === "BROWSER_EXTENSION" ? schedulerMarkerFromFilter(filter) : null;
+    const scan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "pending", scan_run_id: runId, filter_snapshot: filterSnapshot, ...(schedulerMarker ? { warnings: [schedulerWarning(schedulerMarker)] } : {}) }).select("id").single();
     if (scan.error || !scan.data?.id) {
       result.failedGroups.push({ groupId: plan.group.id, error: `FACEBOOK_SOURCE_SCAN_CREATE_FAILED: ${scan.error?.message ?? "missing id"}` });
       continue;
@@ -99,7 +102,7 @@ export async function enqueueFacebookJobs(filter: SearchFilter, runId: string, r
     const job = await supabase.from("facebook_scan_jobs").insert({
       scan_run_id: runId, source_scan_id: sourceScanId, search_filter_id: filter.id,
       group_snapshot: groupSnapshot, idempotency_key: plan.idempotencyKey,
-      consumer_type: "BROWSER_EXTENSION",
+      consumer_type: consumerType,
     }).select("id").single();
     if (job.error || !job.data?.id) {
       const message = `FACEBOOK_JOB_ENQUEUE_FAILED: ${job.error?.message ?? "missing id"}`;

@@ -1,0 +1,64 @@
+name: Facebook Finder full application schema
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+permissions:
+  contents: read
+jobs:
+  full-schema:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-facebook-android-tests') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FACEBOOK_ANDROID_QUEUE_ENABLED: "false"
+      FACEBOOK_ANDROID_INTEGRATION_ENABLED: "false"
+      NEXT_PUBLIC_SUPABASE_URL: https://offline.invalid
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: offline-test-placeholder
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: flip_test
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: flip_android_test
+        ports: ["55439:5432"]
+        options: >-
+          --health-cmd "pg_isready -U flip_test -d flip_android_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      postgrest:
+        image: postgrest/postgrest:v12.2.12
+        env:
+          PGRST_DB_URI: postgres://flip_test:isolated-ci-only@postgres:5432/flip_android_test
+          PGRST_DB_SCHEMAS: public
+          PGRST_DB_ANON_ROLE: anon
+          PGRST_JWT_SECRET: isolated-full-schema-postgrest-signing-key-only
+        ports: ["55442:3000"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: python -m pip install 'psycopg[binary]==3.2.6'
+      - name: Remote database identity and TLS configuration guard
+        run: python scripts/test-facebook-remote-config.py
+      - name: Persistent synthetic store restart and permissions
+        run: python scripts/test-facebook-remote-store.py
+      - name: Remote ingress auth and receipt replay (loopback, no deployment)
+        run: node --import ./scripts/test-alias-loader.mjs --test --test-isolation=none scripts/test-facebook-remote-api.ts
+      - name: Restore schema only and apply Android draft to disposable PostgreSQL
+        run: python scripts/setup-facebook-full-schema.py
+      - name: Wait for PostgREST schema reload
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:55442/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Actual Watcher to Finder import and security checks
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-transform-types --experimental-test-module-mocks --test --test-isolation=none features/collector/android/full-schema.integration.test.ts

@@ -1,0 +1,24 @@
+name: Facebook OFFLINE_TEST container validation
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+permissions:
+  contents: read
+jobs:
+  build-only:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-facebook-android-tests') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dedicated test image; no push or deployment
+        run: docker build -f infra/facebook-offline-test/Dockerfile -t flip-offline-test:ci .
+      - name: Image refuses to start without explicit test opt-in
+        run: |
+          set +e
+          output=$(docker run --rm flip-offline-test:ci 2>&1)
+          status=$?
+          set -e
+          test "$status" -ne 0
+          test "$output" = "REMOTE_TEST_DISABLED"

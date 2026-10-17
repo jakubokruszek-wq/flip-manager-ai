@@ -27,6 +27,7 @@ export async function readCollectorReadiness(now = Date.now(), deviceId?: string
     .from("collector_devices")
     .select("id,last_heartbeat_at,health_status,revoked_at")
     .is("revoked_at", null)
+    .eq("consumer_type", "BROWSER_EXTENSION")
     .not("last_heartbeat_at", "is", null)
     .order("last_heartbeat_at", { ascending: false })
     .limit(1);

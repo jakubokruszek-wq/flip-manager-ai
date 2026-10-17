@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   const body = await request.text();
   try {
-    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, markHealthy: true });
+    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, expectedConsumerType: "BROWSER_EXTENSION", markHealthy: true });
     const input = JSON.parse(body) as { jobId?: string; leaseToken?: string; status?: string; errorCode?: string | null; gallery?: { status?: string; expectedPostId?: string; sourceMediaCount?: number; candidates?: unknown[]; diagnostics?: unknown } };
     if (!input.jobId || !input.leaseToken || !["completed", "failed"].includes(String(input.status))) return Response.json({ ok: false, code: "INVALID_PAYLOAD" }, { status: 400 });
     const supabase = createFacebookWatcherAdminClient();
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
       return cors(Response.json({ ok: true, status: input.status, gallery: result }), request);
     }
     const now = new Date().toISOString();
-    const update = await supabase.from("facebook_scan_jobs").update({ status: input.status, finished_at: now, leased_until: null, heartbeat_at: now, error_code: input.status === "failed" ? String(input.errorCode || "COLLECTOR_FAILED").slice(0, 100) : null, error_message: input.status === "failed" ? String(input.errorCode || "Collector failed").slice(0, 1_000) : null }).eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", device.id).eq("status", "running").select("id").maybeSingle();
+    const update = await supabase.from("facebook_scan_jobs").update({ status: input.status, finished_at: now, leased_until: null, heartbeat_at: now, error_code: input.status === "failed" ? String(input.errorCode || "COLLECTOR_FAILED").slice(0, 100) : null, error_message: input.status === "failed" ? String(input.errorCode || "Collector failed").slice(0, 1_000) : null }).eq("id", input.jobId).eq("lease_token", input.leaseToken).eq("worker_id", device.id).eq("status", "running").eq("consumer_type", "BROWSER_EXTENSION").gt("leased_until", now).select("id").maybeSingle();
     if (update.error || !update.data) return Response.json({ ok: false, code: "COLLECTOR_JOB_LEASE_LOST" }, { status: 409 });
     await runFacebookSchedulerTick();
     return cors(Response.json({ ok: true, status: input.status }), request);

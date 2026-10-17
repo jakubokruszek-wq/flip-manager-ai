@@ -1,4 +1,6 @@
 import "server-only";
+import { androidDataOnlyImportActive, androidFinderOwnership } from "../collector/android/import-policy";
+import { persistAndroidFinderPost, type AndroidFinderWrite } from "../collector/android/finder-write";
 
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
 import { evaluateCanonicalListingDecision } from "@/features/flip-finder/filter-evaluation";
@@ -87,6 +89,7 @@ export type FacebookImportResult = {
   priceDrops: number;
   warnings: string[];
   persistenceDiagnostics?: FacebookPersistenceDiagnostics;
+  transactionalWrite?: { created: number; updated: number; duplicates: number };
   notProperty?: {
     realEstateLanguage: boolean;
     structuredFieldCount: number;
@@ -144,6 +147,11 @@ export async function importFacebookWatcher(input: FacebookListingInput, context
   const externalId = context?.postId ?? extracted.originalUrl?.match(/(?:posts|videos)\/(\d+)/)?.[1] ?? hash.slice(0, 32);
   const supabase = createFacebookWatcherAdminClient();
   const existing = await findExisting(supabase, extracted, sourceUrl, externalId, hash, context?.activeListingsCache);
+  // The legacy cross-source branch changes images, status and lifecycle on the
+  // matched portal listing. Android's data-only import must never mutate OLX
+  // (or another source). Keep the identity, but fence this ambiguous write.
+  if (androidDataOnlyImportActive() && existing && existing.source !== "facebook")
+    throw new Error("ANDROID_CROSS_SOURCE_RECONCILIATION_REQUIRED");
   const now = context?.checkedAt ?? new Date().toISOString();
   if (context) return importAutomatedFacebook({ supabase, normalized, extracted, context, sourceUrl, externalId, existing, now, buildingType: apartmentSafety?.buildingType ?? null, buildingEvidence });
   let listingId = existing?.id;
@@ -294,6 +302,22 @@ async function importAutomatedFacebook(input: {
   const safetyUnknown = apartmentUnknownFields(context.filter, buildingEvidence, effective.city);
   const decisionUnknownFields = [...new Set([...baseDecision.missingFields, ...safetyUnknown])];
   const decision = { ...baseDecision, unknownFields: decisionUnknownFields, missingFields: decisionUnknownFields, bucket: decisionBucket({ reasons: baseDecision.reasons, unknownFields: decisionUnknownFields }), matches: baseDecision.reasons.length === 0 && decisionUnknownFields.length === 0 };
+  const persistedPublishedAt = preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt);
+  const bindingSummary = facebookMediaBindingSummary(normalized, externalId);
+  const mediaProvenance = (normalized.mediaCandidates ?? []).map((candidate) => ({
+    mediaId: candidate.mediaId ?? null,
+    sourcePostId: candidate.expectedPostId,
+    storyRootPostId: candidate.storyRootPostId ?? null,
+    normalizedMediaUrl: candidate.url,
+    bindingMethod: candidate.bindingProvenance,
+    discoverySource: candidate.discoverySource ?? null,
+    bindingConfidence: candidate.bindingConfidence,
+    classification: candidate.classification,
+    classificationConfidence: candidate.classificationConfidence,
+  }));
+  const metadataValues = { source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: persistedPublishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, locationProvenance: locationResolution.provenance, buildingEvidence, confidence: effective.confidence, fieldConfidence: effective.fieldConfidence, fieldProvenance: facebookFieldProvenance(normalized, effective), sourceFacts: effective.sourceFacts, priceQuality, listingQuality: listingQuality.listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, authoritativeSourceText: normalized.postText ?? null, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED", mediaBinding: bindingSummary, mediaProvenance, imageExtractionVersion: 2, imageMirror: { ...imageMirror.stats, mode: dataFirstSearch ? "SEARCH_DATA_FIRST" : "FULL" }, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } };
+  const atomicOwner = androidFinderOwnership();
+  let transactionalWrite: AndroidFinderWrite | undefined;
   let listingId: string;
   let listingCreated = false;
   let listingUpdated = false;
@@ -301,7 +325,22 @@ async function importAutomatedFacebook(input: {
   let priceDrops = 0;
   const manualRejected = existingState.manualDecision === "REJECTED";
 
-  if (crossSourceMatch && existing) {
+  if (atomicOwner) {
+    const contentHash = canonicalFacebookContentFingerprint({ title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, location: locationText, imageUrls: imageMirror.images });
+    transactionalWrite = await persistAndroidFinderPost(supabase, atomicOwner, {
+      sourceScanId: context.sourceScanId, postId: context.postId, checkedAt: now, metadata: metadataValues,
+      listing: { source: "facebook", external_listing_id: canonicalExternalId, original_url: sourceUrl, normalized_url: sourceUrl,
+        title: effective.title, price: effective.price, area: effective.area, rooms: effective.rooms, floor: effective.floor === null ? null : String(effective.floor),
+        price_per_sqm: pricePerSqm, city: effective.city, district: effective.district, address: locationText, images: imageMirror.images,
+        building_type: effectiveBuildingType, ownership: effectiveOwnership, description: effective.description, content_hash: contentHash, flip_score: score },
+      decision: manualRejected ? { bucket: "REJECTED", reasons: ["manual_rejected"], missingFields: [] } : decision,
+    });
+    listingId = transactionalWrite.listingId;
+    listingCreated = transactionalWrite.created === 1;
+    listingUpdated = transactionalWrite.updated === 1;
+    matchCreated = transactionalWrite.matchCreated;
+    priceDrops = transactionalWrite.priceDrop;
+  } else if (crossSourceMatch && existing) {
     listingId = existing.id;
     const imagesUpdate = await supabase.from("listings").update({ images: imageMirror.images }).eq("id", listingId);
     if (imagesUpdate.error) throw new Error(`FACEBOOK_IMAGE_PERSIST_FAILED: ${imagesUpdate.error.message}`);
@@ -343,6 +382,9 @@ async function importAutomatedFacebook(input: {
     }
   }
 
+  if (atomicOwner && listingCreated && context.activeListingsCache) {
+    context.activeListingsCache.push({ id: listingId, source: "facebook", title: effective.title, description: effective.description, price: effective.price, area: effective.area, rooms: effective.rooms, city: effective.city, district: effective.district, address: locationText });
+  }
   if (shouldAutoEnrichFacebookImages({ bucket: manualRejected ? "REJECTED" : decision.bucket, manualRejected, mirroredImageCount: imageMirror.images.length })) {
     runAfterResponse(() => enqueueFacebookGalleryJob(listingId).catch((reason) => {
       console.warn("FACEBOOK_AUTO_GALLERY_ENQUEUE_DEFERRED", { listingId, bucket: decision.bucket, error: reason instanceof Error ? reason.message : "unknown" });
@@ -377,25 +419,12 @@ async function importAutomatedFacebook(input: {
     });
   }
 
-  const persistedPublishedAt = preserveFacebookPublishedAt(normalized.publishedAt, previousSource.publishedAt);
-  const bindingSummary = facebookMediaBindingSummary(normalized, externalId);
-  const mediaProvenance = (normalized.mediaCandidates ?? []).map((candidate) => ({
-    mediaId: candidate.mediaId ?? null,
-    sourcePostId: candidate.expectedPostId,
-    storyRootPostId: candidate.storyRootPostId ?? null,
-    normalizedMediaUrl: candidate.url,
-    bindingMethod: candidate.bindingProvenance,
-    discoverySource: candidate.discoverySource ?? null,
-    bindingConfidence: candidate.bindingConfidence,
-    classification: candidate.classification,
-    classificationConfidence: candidate.classificationConfidence,
-  }));
-  const metadata = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: sourceUrl, group_name: context.groupName, author_name: null, published_at: persistedPublishedAt, collected_at: now, metadata: { ...previousMetadata, source: "facebook_worker", groupId: context.groupId, groupName: context.groupName, postId: context.postId, importedAt: str(previousMetadata.importedAt) ?? now, checkedAt: now, firstImportedAt: str(previousMetadata.firstImportedAt) ?? existingState.firstSeenAt ?? now, neighborhood: effective.neighborhood, locationProvenance: locationResolution.provenance, buildingEvidence, confidence: effective.confidence, fieldConfidence: effective.fieldConfidence, fieldProvenance: facebookFieldProvenance(normalized, effective), sourceFacts: effective.sourceFacts, priceQuality, listingQuality: listingQuality.listingQuality, searchIntent, propertyType, availability, freshness, locationState, contentQuality, authoritativeSourceText: normalized.postText ?? null, listingIntent: effective.listingIntent, intentConfidence: effective.intentConfidence, intentSource: effective.intentSource, flags: effective.flags, sellerType: effective.sellerType, condition: effective.condition, opportunityScore: score, crossSourceMatch, discoverySource: normalized.discoverySource ?? "MAIN_FEED", searchQuery: normalized.searchQuery ?? null, searchQueries: normalized.searchQueries ?? [], foundInMainFeed: normalized.foundInMainFeed === true, firstSeenPhase: normalized.firstSeenPhase ?? "MAIN_FEED", mediaBinding: bindingSummary, mediaProvenance, imageExtractionVersion: 2, imageMirror: { ...imageMirror.stats, mode: dataFirstSearch ? "SEARCH_DATA_FIRST" : "FULL" }, imageWarnings: imageMirror.warnings, workflowStatus: workflowStatus(previousMetadata.workflowStatus) } }, { onConflict: "source,source_post_url" });
+  const metadata = atomicOwner ? { error: null } : await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, ...metadataValues }, { onConflict: "source,source_post_url" });
   if (metadata.error) throw new Error(`FACEBOOK_METADATA_PERSIST_FAILED: ${metadata.error.message}`);
-  await assertFacebookPersistenceComplete(supabase, listingId, context.filter.id, sourceUrl, decision);
+  if (!atomicOwner || existingState.lifecycleStatus !== "ARCHIVED") await assertFacebookPersistenceComplete(supabase, listingId, context.filter.id, sourceUrl, manualRejected ? { ...decision, bucket: "REJECTED", matches: false } : decision);
   console.info("FACEBOOK_MEDIA_BINDING_SUMMARY", { postId: externalId, ...bindingSummary, mirrored: imageMirror.images.length });
   console.info("FACEBOOK_PUBLICATION_DATE", { postId: externalId, source: normalized.publishedAt ? "FACEBOOK_CREATION_TIME" : previousSource.publishedAt ? "EXISTING_DATA" : "UNKNOWN", exact: Boolean(normalized.publishedAt), persisted: persistedPublishedAt });
-  await recordFacebookGroupImport(context.groupName, listingCreated, score >= 85 || effective.sellerType === "private" && effective.condition === "renovation");
+  if (!atomicOwner) await recordFacebookGroupImport(context.groupName, listingCreated, score >= 85 || effective.sellerType === "private" && effective.condition === "renovation");
   const relevanceAccepted = normalized.imageAssessments?.filter((assessment) => assessment.relevance === "PROPERTY_IMAGE" && assessment.confidence >= 0.8).length ?? effective.images.length;
   const persistenceDiagnostics = facebookImagePersistenceDiagnostics({
     listingId,
@@ -424,7 +453,7 @@ async function importAutomatedFacebook(input: {
     decisionReasons: manualRejected ? ["manual_rejected", ...decision.reasons] : decision.reasons,
     decisionUnknownFields: decision.unknownFields,
   });
-  return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics };
+  return { status: listingCreated ? "created" : "updated", listingId, extracted: effective, opportunityScore: score, listingCreated, listingUpdated, matched: transactionalWrite?.matched ?? decision.matches, matchCreated, imagesMirrored: imageMirror.stats.uploadedCount, priceDrops, warnings: [...imageMirror.warnings, ...facebookNoMatchWarnings(decision.matches, decision.reasons)], persistenceDiagnostics, ...(transactionalWrite ? { transactionalWrite: { created: transactionalWrite.created, updated: transactionalWrite.updated, duplicates: transactionalWrite.duplicates } } : {}) };
 }
 
 /**

@@ -1,0 +1,75 @@
+name: Facebook Android isolated validation
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+permissions:
+  contents: read
+concurrency:
+  group: facebook-android-validation-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  backend:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-facebook-android-tests') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      FACEBOOK_ANDROID_QUEUE_ENABLED: "false"
+      FACEBOOK_ANDROID_INTEGRATION_ENABLED: "false"
+      FACEBOOK_ANDROID_DIAGNOSTICS_ENABLED: "false"
+      NEXT_PUBLIC_SUPABASE_URL: https://offline.invalid
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: offline-test-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: ESLint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+      - name: Backend security and integration tests
+        if: ${{ !cancelled() }}
+        run: npm run test:facebook-android
+      - name: Gated pilot ingress scope, HMAC, receipts and additive plan
+        if: ${{ !cancelled() }}
+        run: |
+          node --test --test-isolation=none features/collector/android/live-pilot-ingress.test.ts
+          python scripts/test-facebook-live-pilot-plan.py
+      - name: Offline Android adapter and simulation
+        if: ${{ !cancelled() }}
+        run: npm run test:facebook-android-offline
+      - name: Existing Facebook regression
+        if: ${{ !cancelled() }}
+        run: npm run test:facebook-android-regression
+      - name: Full Next build without production credentials
+        if: ${{ !cancelled() }}
+        run: npm run build
+  postgres:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-facebook-android-tests') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: flip_test
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: flip_android_test
+        ports:
+          - 55439:5432
+        options: >-
+          --health-cmd "pg_isready -U flip_test -d flip_android_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install 'psycopg[binary]==3.2.6'
+      - name: Actual PostgreSQL draft and concurrency suite
+        run: python scripts/test-facebook-android-postgres.py

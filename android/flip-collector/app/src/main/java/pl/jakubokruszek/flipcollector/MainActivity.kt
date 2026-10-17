@@ -2,18 +2,28 @@ package pl.jakubokruszek.flipcollector
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,24 +34,49 @@ import androidx.lifecycle.lifecycleScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import com.google.android.gms.code.scanner.GmsBarcodeScanning
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import pl.jakubokruszek.flipcollector.watcher.android.WatcherRuntime
+import pl.jakubokruszek.flipcollector.ui.FlipColors
+import pl.jakubokruszek.flipcollector.ui.FlipTheme
+import pl.jakubokruszek.flipcollector.ui.ThemeController
+import pl.jakubokruszek.flipcollector.watcher.android.FacebookWatcherScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { CollectorHome(this@MainActivity) } }
+        // Re-register the periodic tick after an update or a cleared WorkManager state.
+        WatcherRuntime.applySchedule(this, WatcherRuntime.settings(this).schedule())
+        ThemeController.load(this)
+        setContent {
+            FlipTheme(activity = this) {
+                var screen by remember { mutableStateOf(Screen.HOME) }
+                when (screen) {
+                    Screen.HOME -> CollectorHome(this@MainActivity, onOpenWatcher = { screen = Screen.WATCHER })
+                    Screen.WATCHER -> {
+                        BackHandler { screen = Screen.HOME }
+                        FacebookWatcherScreen(this@MainActivity, onBack = { screen = Screen.HOME })
+                    }
+                }
+            }
+        }
     }
 }
 
-private fun CollectorHome(activity: ComponentActivity) {
+private enum class Screen { HOME, WATCHER }
+
+@Composable
+private fun CollectorHome(activity: ComponentActivity, onOpenWatcher: () -> Unit) {
     val context = activity.applicationContext
     val preferences = UploadRetryWorker.preferences(context)
     val tokenStore = remember { DeviceTokenStore(context) }
     val queue = remember { PendingImportStore(context) }
     var manualToken by remember { mutableStateOf("") }
+    var manualDeviceId by remember { mutableStateOf("") }
+    var paired by remember { mutableStateOf(tokenStore.token() != null) }
     var manualUrl by remember { mutableStateOf(preferences.getString(UploadRetryWorker.KEY_BASE_URL, BuildConfig.DEFAULT_FLIP_MANAGER_URL).orEmpty()) }
     var message by remember { mutableStateOf<String?>(null) }
     var connectedName by remember { mutableStateOf<String?>(null) }
@@ -51,8 +86,19 @@ private fun CollectorHome(activity: ComponentActivity) {
         activity.lifecycleScope.launch {
             message = withContext(Dispatchers.IO) {
                 runCatching {
-                    val current = CollectorApi(payload.apiUrl).currentDevice(payload.deviceToken)
-                    tokenStore.saveToken(payload.deviceToken)
+                    val current = if (BuildConfig.ANDROID_BACKEND_INTEGRATION_ENABLED) {
+                        pl.jakubokruszek.flipcollector.collector.SignedCollectorClient(
+                            pl.jakubokruszek.flipcollector.collector.CollectorCredentials(payload.apiUrl, payload.deviceId, payload.deviceToken),
+                            pl.jakubokruszek.flipcollector.collector.LiveCollectionGate(false, false),
+                            metadataEnabled = true,
+                        ).deviceStatus()
+                    } else {
+                        // Legacy manual-share import pairing is not proof of
+                        // HMAC/Android Watcher authorization. Watcher stays off.
+                        CollectorApi(payload.apiUrl).currentDevice(payload.deviceToken)
+                    }
+                    tokenStore.saveToken(payload.deviceToken, payload.deviceId)
+                    paired = true
                     preferences.edit().putString(UploadRetryWorker.KEY_BASE_URL, payload.apiUrl).apply()
                     connectedName = current.optString("deviceName", "Urządzenie")
                     "Połączono z Flip Managerem: $connectedName"
@@ -61,25 +107,27 @@ private fun CollectorHome(activity: ComponentActivity) {
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().background(FlipColors.Surface).windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Flip Collector", style = MaterialTheme.typography.headlineMedium)
         Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(if (tokenStore.token() == null) "Urządzenie nie jest sparowane" else "Urządzenie połączone")
+            Text(if (!paired) "Urządzenie nie jest sparowane" else "Urządzenie połączone")
             connectedName?.let { Text("Urządzenie: $it") }
             Text("Ostatni import: ${preferences.getString("last_import", null) ?: "brak"}")
             Text("Importy oczekujące: ${queue.all().size}")
         } }
-        if (tokenStore.token() == null) {
+        Button(onClick = onOpenWatcher, modifier = Modifier.fillMaxWidth()) { Text("Otwórz Facebook Watcher") }
+        if (!paired) {
             Text("Połącz z Flip Managerem", style = MaterialTheme.typography.titleMedium)
             Button(onClick = { scanner.startScan().addOnSuccessListener { barcode -> parsePairingPayload(barcode.rawValue.orEmpty())?.let(::connect) ?: run { message = "Kod QR parowania jest nieprawidłowy." } }.addOnFailureListener { message = "Nie udało się odczytać kodu QR." } }) { Text("Skanuj kod QR") }
             OutlinedTextField(manualUrl, { manualUrl = it }, label = { Text("Adres HTTPS Flip Managera") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(manualDeviceId, { manualDeviceId = it }, label = { Text("ID urządzenia (do podpisanych żądań)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             OutlinedTextField(manualToken, { manualToken = it }, label = { Text("Token urządzenia — awaryjnie") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            Button(enabled = manualUrl.startsWith("https://") && manualToken.isNotBlank(), onClick = { connect(PairingPayload(manualUrl, manualToken, "manual")) }) { Text("Połącz ręcznie") }
+            Button(enabled = manualUrl.startsWith("https://") && manualToken.isNotBlank(), onClick = { connect(PairingPayload(manualUrl.trimEnd('/'), manualToken.trim(), manualDeviceId.trim().ifBlank { DeviceTokenStore.MANUAL_DEVICE_ID })) }) { Text("Połącz ręcznie") }
         } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { WorkManager.getInstance(context).enqueueUniqueWork("flip-collector-upload", ExistingWorkPolicy.KEEP, OneTimeWorkRequestBuilder<UploadRetryWorker>().build()); message = "Uruchomiono synchronizację oczekujących importów." }) { Text("Wyślij oczekujące") }
-            Button(onClick = { tokenStore.clearToken(); connectedName = null; message = "Token usunięty z telefonu." }) { Text("Odłącz") }
+            Button(onClick = { tokenStore.clearToken(); paired = false; connectedName = null; message = "Token usunięty z telefonu." }) { Text("Odłącz") }
         }
-        Text("Samsung: Ustawienia → Aplikacje → Flip Collector → Bateria → Bez ograniczeń.")
-        message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+        Text("Samsung: Ustawienia → Aplikacje → Flip Collector → Bateria → Bez ograniczeń.", color = FlipColors.MutedForeground)
+        message?.let { Text(it, color = FlipColors.GoldText) }
     }
 }
