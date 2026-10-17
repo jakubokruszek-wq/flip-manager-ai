@@ -101,6 +101,8 @@ export type UnderwritingInput = {
   renovationPerM2Override?: number | null;
   holdingMonthsOverride?: number | null;
   additionalCostsOverride?: number | null;
+  /** Required operating profit in PLN for reverse purchase-price calculation (not a confirmed net profit). */
+  targetProfitPLNOverride?: number | null;
 };
 
 export type UnderwritingScenario = {
@@ -135,6 +137,24 @@ export type UnderwritingResult = {
   roiBase: number | null;
   maxPurchasePrice: number | null;
   targetPurchasePrice: number | null;
+  /** Reverse, profit-first purchase-price boundary, separate from canonical Max Buy and CFO. */
+  successPrice: {
+    targetProfitPLN: number;
+    resaleValue: number | null;
+    maxPurchasePrice: number | null;
+    negotiationOpeningPrice: number | null;
+    profitAtBoundary: number | null;
+    costsAtBoundary: {
+      purchaseTransactionCosts: number;
+      renovation: number;
+      contingency: number;
+      holding: number;
+      additional: number;
+      financing: number;
+      sales: number;
+    } | null;
+    negotiationBufferPercent: number;
+  };
   discountNeeded: number | null;
   discountNeededPercent: number | null;
   flipScore: number;
@@ -207,6 +227,23 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
   const conservativeCents = scenarioCents(purchasePriceCents, area, resale.low, conservativeRenovationCents, holdingCostsCents, additionalCostsCents, finance);
   const optimisticCents = scenarioCents(purchasePriceCents, area, resale.high, optimisticRenovationCents, holdingCostsCents, additionalCostsCents, finance);
   const maxPurchaseCents = maxBuyCents(area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, finance, ALL_MAX_PURCHASE_THRESHOLDS);
+  // Separate profit-first boundary: solve the SAME scenario costs and price-linked fees,
+  // but only enforce the investor's requested operating profit, not legacy ROI/margin gates.
+  // This is not an authority to BUY; CFO financing/tax and legal gates remain independent.
+  const rawProfitTarget = nonnegative(input.targetProfitPLNOverride);
+  const profitTarget = rawProfitTarget !== null && rawProfitTarget <= 100_000_000 ? rawProfitTarget : settings.minimumProfitPLN;
+  const targetFinance = { ...finance, minimumProfit: moneyCents(profitTarget) };
+  const profitOnly = { profit: true, margin: false, roi: false };
+  const canReachTarget = area !== null && resale.base !== null && renovationBaseCents !== null
+    && passesThresholds(scenarioCents(moneyCents(0), area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, targetFinance), targetFinance, profitOnly);
+  const successPriceCents = canReachTarget
+    ? maxBuyCents(area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, targetFinance, profitOnly)
+    : null;
+  const successBoundary = successPriceCents !== null ? scenarioCents(successPriceCents, area, resale.base, renovationBaseCents, holdingCostsCents, additionalCostsCents, targetFinance) : null;
+  // The indicative opening offer respects BOTH the profit-first boundary and
+  // the stricter canonical profit+margin+ROI limit. It never overrides CEO HOLD.
+  const negotiationCap = successPriceCents === null || maxPurchaseCents === null ? null : Math.min(Number(successPriceCents), Number(maxPurchaseCents)) as MoneyCents;
+  const successOpeningCents = negotiationCap === null || negotiationCap <= 0 ? null : multiplyByRate(negotiationCap, (10_000 - Number(finance.targetBuffer)) as BasisPoints);
   const targetPurchaseCents = maxPurchaseCents === null ? null : multiplyByRate(maxPurchaseCents, (10_000 - Number(finance.targetBuffer)) as BasisPoints);
   const discountNeededCents = sourcePriceCents !== null && targetPurchaseCents !== null ? (subtractMoney(sourcePriceCents, targetPurchaseCents) > 0 ? subtractMoney(sourcePriceCents, targetPurchaseCents) : moneyCents(0)) : null;
   const discountNeededPercent = discountNeededCents !== null && sourcePriceCents !== null ? ratioCents(discountNeededCents, sourcePriceCents) : null;
@@ -265,6 +302,23 @@ export function calculateUnderwriting(input: UnderwritingInput, settings: Underw
     roiBase,
     maxPurchasePrice,
     targetPurchasePrice,
+    successPrice: {
+      targetProfitPLN: profitTarget,
+      resaleValue: publicMoney(baseScenarioCents.resaleValue),
+      maxPurchasePrice: publicMoney(successPriceCents),
+      negotiationOpeningPrice: publicMoney(successOpeningCents),
+      profitAtBoundary: publicMoney(successBoundary?.profit ?? null),
+      costsAtBoundary: successBoundary && successBoundary.purchaseCosts !== null && successBoundary.renovationTotal !== null && successBoundary.contingency !== null && successBoundary.financingCosts !== null && successBoundary.salesCosts !== null ? {
+        purchaseTransactionCosts: moneyToPLN(successBoundary.purchaseCosts),
+        renovation: moneyToPLN(successBoundary.renovationTotal),
+        contingency: moneyToPLN(successBoundary.contingency),
+        holding: moneyToPLN(holdingCostsCents),
+        additional: moneyToPLN(additionalCostsCents),
+        financing: moneyToPLN(successBoundary.financingCosts),
+        sales: moneyToPLN(successBoundary.salesCosts),
+      } : null,
+      negotiationBufferPercent: settings.targetNegotiationBufferPercent,
+    },
     discountNeeded,
     discountNeededPercent,
     flipScore: scored.total,

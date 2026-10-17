@@ -115,3 +115,19 @@ test("a typed answer supplies missing room count to the existing dependent analy
   assert.ok(!after.verify.result?.missingCriticalFields.includes("rooms"));
   assert.notEqual(after.ceo.result?.action,"KUP");
 });
+
+test("investor target profit persists as a typed Q&A answer and changes the success boundary, not BUY", () => {
+  const base=lodzDeal();
+  const before=buildCanonicalDeal({...base,overrides:{...base.overrides,holdingMonths:5}});
+  assert.ok(roomQuestions(before,state()).some(q=>q.field==="targetProfitPLN"),"target is prompted in Deal Room");
+  const {after,merged,overrides}=apply([answer("targetProfitPLN",40_000)]);
+  assert.equal(overrides.targetProfitPLN,40_000);
+  assert.equal(merged.targetProfitPLN.status,"RESOLVED");
+  assert.equal(after.underwriting.result?.successPrice.targetProfitPLN,40_000);
+  assert.ok(after.underwriting.result!.successPrice.maxPurchasePrice!>before.underwriting.result!.successPrice.maxPurchasePrice!);
+  assert.equal(after.underwriting.result?.maxPurchasePrice,before.underwriting.result?.maxPurchasePrice,"profit-first target does not change old policy Max Buy");
+  assert.notEqual(after.ceo.result?.action,"KUP","target profit does not open legal gate");
+  assert.ok(!roomQuestions(after,{...state(),answers:merged}).some(q=>q.field==="targetProfitPLN"));
+  assert.deepEqual(affectedDirectors(["targetProfitPLN"]).includes("UNDERWRITER"),true);
+  for(const value of [-1,Infinity,100_000_001])assert.throws(()=>parseAnswerCommand({requestId,expectedVersion:1,answers:[answer("targetProfitPLN",value)]}));
+});

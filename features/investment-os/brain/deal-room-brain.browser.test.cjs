@@ -90,7 +90,8 @@ test("Deal Room Brain V1 renders CEO recommendation, one Next Best Action, real 
   // --- Director statuses visible for all ten mission directors ---
   await page.getByRole("heading", { name: "Zespół analityczny" }).scrollIntoViewIfNeeded();
   const directorLabels = ["Rozpoznanie", "Weryfikacja", "Rynek", "Remont", "Analiza finansowa", "Ryzyko i prawo", "Finanse", "Zakup", "Sprzedaż", "CEO"];
-  for (const label of directorLabels) assert.ok(await page.getByText(label, { exact: true }).first().isVisible(), `director card missing: ${label}`);
+  const council = page.locator('section[aria-labelledby="director-council-title"]');
+  for (const label of directorLabels) assert.ok(await council.getByRole("button", { name: new RegExp(label, "i") }).first().isVisible(), `director card missing: ${label}`);
   assert.equal(await page.getByText("WAITING", { exact: true }).count(), 0, "no director may render the raw internal WAITING status code");
 
   // --- Director detail works (a Brain-only director, not one already covered by the engine) ---

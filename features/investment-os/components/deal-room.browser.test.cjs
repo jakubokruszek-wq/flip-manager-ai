@@ -201,6 +201,16 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   for(const key of ['recommendationTop','maxBuyTop','profitTop'])assert.ok(mobileLayout[key]!=null&&mobileLayout[key]<844,JSON.stringify(mobileLayout));
   assert.equal(mobileLayout.cfoSeparate,true,"CFO limit/status must be separate from preliminary Max Buy");
   assert.ok(mobileLayout.profits.every(p=>p.amount&&p.nowrap&&p.fits),"profit amounts must remain on one visible line at 390px: "+JSON.stringify(mobileLayout.profits));
+  const successPanel=page.locator("[data-success-price]");
+  await successPanel.scrollIntoViewIfNeeded();
+  assert.ok(await successPanel.getByText("Cena powodzenia transakcji",{exact:true}).isVisible());
+  assert.ok(await successPanel.getByText("Twój cel zysku (przed podatkiem)",{exact:true}).isVisible());
+  assert.ok(await successPanel.getByText("Cena graniczna dla celu zysku",{exact:true}).isVisible());
+  assert.ok(await successPanel.getByText("Otwarcie negocjacji (warunkowo)",{exact:true}).isVisible());
+  assert.equal(await successPanel.getByRole("link",{name:/Zmień docelowy zysk/}).count(),1);
+  const successMobile=await page.evaluate(()=>({viewport:innerWidth,docWidth:document.documentElement.scrollWidth}));
+  assert.ok(successMobile.docWidth<=successMobile.viewport,"reverse calculator must not overflow on 390px: "+JSON.stringify(successMobile));
+
   await page.getByRole("heading", { name: "Zespół analityczny" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(reviewDir, "10-mobile-directors-v2.png"), fullPage: false });
   await page.getByRole("heading", { name: "Dyrektorzy pytają Ciebie" }).scrollIntoViewIfNeeded();

@@ -213,3 +213,57 @@ test("maximum supported separate purchase tax and commission rates stay within t
   });
   assert.equal(result.purchaseTransactionCosts, base.askingPrice! * 2 + DEFAULT_UNDERWRITING_SETTINGS.fixedPurchaseCosts);
 });
+
+test("profit-first success price meets an investor-defined absolute profit with exact price-linked fees", () => {
+  const settings = { ...DEFAULT_UNDERWRITING_SETTINGS, renovationPerM2: { ...DEFAULT_UNDERWRITING_SETTINGS.renovationPerM2, FULL: 2_000 } };
+  const input = { ...base, targetProfitPLNOverride: 50_000 };
+  const result = calculateUnderwriting(input, settings);
+  const success = result.successPrice;
+  assert.equal(success.resaleValue, 450_000);
+  assert.equal(success.targetProfitPLN, 50_000);
+  assert.ok(success.maxPurchasePrice !== null && success.maxPurchasePrice > 0);
+  const costs = success.costsAtBoundary!;
+  const sum = success.maxPurchasePrice! + costs.purchaseTransactionCosts + costs.renovation + costs.contingency + costs.holding + costs.additional + costs.financing + costs.sales;
+  assert.ok(Math.abs(success.resaleValue! - sum - success.profitAtBoundary!) < 0.011, "account for each transaction cost once");
+  assert.ok(success.profitAtBoundary! >= 50_000);
+  const atBoundary = calculateUnderwriting({ ...input, priceOverride: success.maxPurchasePrice }, settings);
+  const above = calculateUnderwriting({ ...input, priceOverride: Math.round((success.maxPurchasePrice! + .01) * 100) / 100 }, settings);
+  assert.ok(atBoundary.profitBase! >= 50_000, "target reached at the exact boundary");
+  assert.ok(above.profitBase! < 50_000, "one extra grosz fails the investor's profit target");
+  assert.ok(success.negotiationOpeningPrice! < success.maxPurchasePrice!);
+  assert.ok(success.negotiationOpeningPrice! <= result.maxPurchasePrice!, "opening respects existing canonical gate");
+});
+
+test("raising the investor profit target lowers success price without overriding the canonical BUY gates", () => {
+  const low = calculateUnderwriting({ ...base, targetProfitPLNOverride: 30_000 });
+  const high = calculateUnderwriting({ ...base, targetProfitPLNOverride: 70_000 });
+  assert.ok(low.successPrice.maxPurchasePrice! > high.successPrice.maxPurchasePrice!);
+  assert.equal(low.maxPurchasePrice, high.maxPurchasePrice, "existing risk/ROI/margin limit is independent");
+  assert.equal(low.decision, high.decision);
+  assert.equal(low.successPrice.targetProfitPLN, 30_000);
+  assert.equal(high.successPrice.targetProfitPLN, 70_000);
+});
+
+test("unreachable target and absent resale leave no fabricated success price or opening quote", () => {
+  const impossible = calculateUnderwriting({ ...base, targetProfitPLNOverride: 100_000_000 });
+  assert.equal(impossible.successPrice.maxPurchasePrice, null);
+  assert.equal(impossible.successPrice.negotiationOpeningPrice, null);
+  const noExit = calculateUnderwriting({ ...base, resalePerM2: undefined }, { ...DEFAULT_UNDERWRITING_SETTINGS, marketResalePerM2: { low: 0, base: 0, high: 0 } });
+  assert.equal(noExit.successPrice.maxPurchasePrice, null);
+  assert.equal(noExit.successPrice.resaleValue, null);
+  assert.equal(noExit.successPrice.negotiationOpeningPrice, null);
+});
+
+test("target-profit price dynamically recalculates PCC, commission and purchase-dependent financing", () => {
+  const input = { ...base, targetProfitPLNOverride: 40_000, additionalCostsOverride: 3_500 };
+  const costly = { ...DEFAULT_UNDERWRITING_SETTINGS, financingEnabled: true, purchaseCommissionPercent: 2, purchaseTaxPercent: 2, financingAnnualRatePercent: 10, financingLoanPercent: 70 };
+  const cheap = { ...costly, financingEnabled: false, purchaseCommissionPercent: 0, purchaseTaxPercent: 0 };
+  const costlyResult = calculateUnderwriting(input, costly);
+  const cheapResult = calculateUnderwriting(input, cheap);
+  assert.ok(costlyResult.successPrice.maxPurchasePrice! < cheapResult.successPrice.maxPurchasePrice!);
+  const quote = costlyResult.successPrice;
+  const at = calculateUnderwriting({ ...input, priceOverride: quote.maxPurchasePrice }, costly);
+  assert.ok(at.profitBase! >= input.targetProfitPLNOverride);
+  assert.ok(quote.costsAtBoundary!.purchaseTransactionCosts > 3_500);
+  assert.ok(quote.costsAtBoundary!.financing > 0);
+});
