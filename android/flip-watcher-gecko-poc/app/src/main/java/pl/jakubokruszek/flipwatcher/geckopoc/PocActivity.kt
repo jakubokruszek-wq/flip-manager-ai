@@ -1,0 +1,419 @@
+package pl.jakubokruszek.flipwatcher.geckopoc
+
+import android.Manifest
+import android.app.AlarmManager
+import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.StorageController
+import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebRequestError
+import java.time.Instant
+import java.util.UUID
+
+/**
+ * Flip Watcher — Gecko POC. One screen: an explicit-consent GeckoView session
+ * limited to the approved test group, manual login on Facebook's own page,
+ * page diagnostics, a single operator-started scan and the local screen-off
+ * test. Nothing runs on its own and nothing is uploaded.
+ */
+class PocActivity : ComponentActivity() {
+    private lateinit var geckoView: GeckoView
+    private lateinit var banner: TextView
+    private lateinit var diagnostics: TextView
+    private lateinit var output: TextView
+    private val buttons = mutableMapOf<String, Button>()
+
+    private var session: GeckoSession? = null
+    private var channel: CollectorChannel? = null
+    private var extension: WebExtension? = null
+    private var extensionError: String? = null
+
+    private var url: String? = null
+    private var kind = PageKind.BLANK
+    private var progress = 0
+    private var title: String? = null
+    private var userAgent: String? = null
+    private var lastLoadError: String? = null
+    private var blockedNavigations = 0
+    private var lastBlockedHost: String? = null
+    private var probe: PageProbe? = null
+    private var loginRequested = false
+    private var scanning = false
+    private var haltMessage: String? = null
+
+    private val preferences by lazy { getSharedPreferences("gecko_poc", MODE_PRIVATE) }
+    private val store by lazy { ScreenOffTest.store(this) }
+
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { scheduleScreenOffTest() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(buildLayout())
+        lifecycleScope.launch {
+            extension = runCatching { GeckoHost.collectorExtension(this@PocActivity) }
+                .onFailure { extensionError = it.javaClass.simpleName + ": " + (it.message ?: "").take(80) }
+                .getOrNull()
+            render()
+        }
+        render()
+    }
+
+    override fun onDestroy() {
+        closeSession()
+        super.onDestroy()
+    }
+
+    // ---- session
+
+    private fun askConsentAndOpen() {
+        if (preferences.getBoolean(KEY_CONSENT, false)) { openSession(); return }
+        AlertDialog.Builder(this)
+            .setTitle("Zgoda na sesję Facebooka")
+            .setMessage(
+                "Otworzy się zwykła przeglądarka (silnik Firefox/GeckoView) tylko dla zatwierdzonej grupy testowej.\n\n" +
+                    "• Logujesz się sam na oficjalnej stronie Facebooka; aplikacja nie czyta haseł ani pól formularzy.\n" +
+                    "• Sesja (ciasteczka) zostaje wyłącznie w tej aplikacji na telefonie; możesz ją usunąć przyciskiem „Wyloguj i usuń dane”.\n" +
+                    "• Nic nie jest wysyłane do Flip Managera; skan uruchamiasz ręcznie i zapisuje tylko identyfikatory postów lokalnie.\n" +
+                    "• Przy CAPTCHA, checkpoincie lub utracie dostępu automat staje.",
+            )
+            .setPositiveButton("Zgadzam się") { _, _ -> preferences.edit().putBoolean(KEY_CONSENT, true).apply(); openSession() }
+            .setNegativeButton("Anuluj", null)
+            .show()
+    }
+
+    private fun openSession() {
+        if (session != null) return
+        val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
+        // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
+        val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
+        val newChannel = CollectorChannel(newSession, fixtureMode = false) { value -> probe = value; render() }
+        newChannel.attach(ext)
+        newSession.progressDelegate = progressDelegate
+        newSession.contentDelegate = contentDelegate
+        newSession.navigationDelegate = navigationDelegate
+        newSession.open(GeckoHost.runtime(this))
+        geckoView.setSession(newSession)
+        session = newSession
+        channel = newChannel
+        haltMessage = null
+        lifecycleScope.launch { userAgent = runCatching { newSession.userAgent.await() }.getOrNull(); render() }
+        load(PocPolicy.APPROVED_GROUP_URL, login = false)
+    }
+
+    private fun closeSession() {
+        channel?.close()
+        channel = null
+        session?.let { current ->
+            runCatching { geckoView.releaseSession() }
+            runCatching { current.close() }
+        }
+        session = null
+        url = null
+        kind = PageKind.BLANK
+        probe = null
+        progress = 0
+        scanning = false
+        loginRequested = false
+        if (::banner.isInitialized) render()
+    }
+
+    private fun load(target: String, login: Boolean) {
+        val current = session ?: return
+        loginRequested = login
+        haltMessage = null
+        current.loadUri(target)
+    }
+
+    private fun clearSessionData() {
+        AlertDialog.Builder(this)
+            .setTitle("Wylogować i usunąć dane sesji?")
+            .setMessage("Usunie ciasteczka, pamięć stron i pamięć podręczną tej aplikacji. Konto na Facebooku nie jest zmieniane.")
+            .setPositiveButton("Usuń") { _, _ ->
+                closeSession()
+                lifecycleScope.launch {
+                    val ok = runCatching { GeckoHost.runtime(this@PocActivity).storageController.clearData(StorageController.ClearFlags.ALL).await() }.isSuccess
+                    output.text = if (ok) "Dane sesji usunięte." else "Nie udało się usunąć danych sesji."
+                }
+            }
+            .setNegativeButton("Anuluj", null)
+            .show()
+    }
+
+    // ---- scan
+
+    private fun scan(scrolls: Int) {
+        val current = channel ?: return
+        if (scanning) return
+        scanning = true
+        render()
+        lifecycleScope.launch {
+            val started = Instant.now().toString()
+            val report = current.scan(ScanRequest(nonce = UUID.randomUUID().toString(), scrolls = scrolls))
+            scanning = false
+            if (report.status.haltsAutomation) haltMessage = "STOP: ${report.status} — automat wstrzymany do decyzji operatora."
+            runCatching { store.append(PocResultStore.fromReport("GROUP_SCAN", started, Instant.now().toString(), report, mapOf("scrolls" to report.scrolls.toString()))) }
+            output.text = describe(report)
+            render()
+        }
+    }
+
+    private fun describe(report: ScanReport): String = buildString {
+        appendLine("Skan: ${report.status}  •  postów: ${report.posts.size}  •  odrzucone przez aplikację: ${report.rejectedByApp}  •  przewinięcia: ${report.scrolls}")
+        report.error?.let { appendLine("Błąd: $it") }
+        if (report.diagnostics.isNotEmpty()) appendLine("Kolektor: " + report.diagnostics.entries.joinToString { "${it.key}=${it.value}" })
+        report.posts.forEachIndexed { index, post -> appendLine("${index + 1}. ${post.postId}  [${post.idSource}]  ${post.permalink}") }
+    }
+
+    private fun showResults() {
+        val runs = store.runs()
+        output.text = if (runs.isEmpty()) "Brak zapisanych wyników." else runs.take(10).joinToString("\n\n") { run ->
+            "${run.kind} ${run.status} • ${run.postIds.size} postów • odrzucone ${run.rejectedByApp}\n${run.startedAt} → ${run.finishedAt}" +
+                (if (run.notes.isNotEmpty()) "\n" + run.notes.entries.joinToString { "${it.key}=${it.value}" } else "")
+        }
+    }
+
+    // ---- stage C: local screen-off test
+
+    private fun startScreenOffTest() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        scheduleScreenOffTest()
+    }
+
+    private fun scheduleScreenOffTest() {
+        val alarms = getSystemService(AlarmManager::class.java)
+        if (Build.VERSION.SDK_INT >= 31 && !alarms.canScheduleExactAlarms()) {
+            AlertDialog.Builder(this)
+                .setTitle("Dokładny alarm")
+                .setMessage("Bez zgody „Alarmy i przypomnienia” Android może opóźnić test i odmówić startu usługi z tła (to też zostanie zapisane jako wynik). Otworzyć ustawienia?")
+                .setPositiveButton("Ustawienia") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
+                }
+                .setNegativeButton("Mimo to (niedokładny)") { _, _ -> confirmScheduled(ScreenOffTest.schedule(this, TEST_DELAY_MS)) }
+                .show()
+            return
+        }
+        confirmScheduled(ScreenOffTest.schedule(this, TEST_DELAY_MS))
+    }
+
+    private fun confirmScheduled(scheduled: ScreenOffTest.Scheduled) {
+        output.text = "Test zaplanowany za ${TEST_DELAY_MS / 60_000} min (${if (scheduled.exact) "alarm dokładny" else "alarm niedokładny"}).\n" +
+            "Podłącz ładowarkę, wygaś ekran i nie odblokowuj telefonu. Wynik pojawi się w powiadomieniu i w „Wyniki”.\n" +
+            "Test otwiera tylko lokalną stronę testową — nie Facebooka."
+    }
+
+    private fun runScreenOffTestNow() {
+        startForegroundService(Intent(this, ScreenOffTestService::class.java).putExtra(ScreenOffTestService.EXTRA_TRIGGER, "manual"))
+        output.text = "Test lokalnego HTML uruchomiony teraz (porównanie z ekranem włączonym). Wynik w powiadomieniu i w „Wyniki”."
+    }
+
+    // ---- GeckoView delegates
+
+    private val progressDelegate = object : GeckoSession.ProgressDelegate {
+        override fun onPageStart(session: GeckoSession, url: String) {
+            onUrl(url)
+            lastLoadError = null
+        }
+
+        override fun onPageStop(session: GeckoSession, success: Boolean) {
+            render()
+            val current = channel ?: return
+            lifecycleScope.launch { current.probe()?.let { probe = it; render() } }
+        }
+
+        override fun onProgressChange(session: GeckoSession, progress: Int) {
+            this@PocActivity.progress = progress
+            render()
+        }
+    }
+
+    private val contentDelegate = object : GeckoSession.ContentDelegate {
+        override fun onTitleChange(session: GeckoSession, title: String?) {
+            this@PocActivity.title = title?.take(120)
+            render()
+        }
+
+        override fun onCrash(session: GeckoSession) = lostEngine("Proces strony uległ awarii")
+        override fun onKill(session: GeckoSession) = lostEngine("System zamknął proces strony")
+    }
+
+    private val navigationDelegate = object : GeckoSession.NavigationDelegate {
+        override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
+            onUrl(url)
+        }
+
+        override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+            if (!PocPolicy.allowNavigation(request.uri)) {
+                blockedNavigations++
+                lastBlockedHost = runCatching { Uri.parse(request.uri).host }.getOrNull()
+                render()
+                return GeckoResult.fromValue(AllowOrDeny.DENY)
+            }
+            if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW) {
+                // No pop-up windows: an allowed link opens in this session.
+                session.loadUri(request.uri)
+                return GeckoResult.fromValue(AllowOrDeny.DENY)
+            }
+            return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+        }
+
+        override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
+            lastLoadError = "kategoria ${error.category}, kod ${error.code} (${PocPolicy.sanitize(uri)})"
+            render()
+            return null
+        }
+    }
+
+    private fun onUrl(value: String?) {
+        url = value
+        kind = PocPolicy.classify(value)
+        if (kind == PageKind.APPROVED_GROUP) loginRequested = false
+        render()
+    }
+
+    private fun lostEngine(reason: String) {
+        haltMessage = "STOP: $reason. Sesja zamknięta; otwórz ją ponownie."
+        closeSession()
+    }
+
+    // ---- UI
+
+    private fun render() {
+        if (!::banner.isInitialized) return
+        val open = session != null
+        val stop = haltMessage ?: if (open) PocPolicy.stopMessage(kind, loginRequested) else null
+        banner.text = when {
+            stop != null -> stop
+            !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
+            loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
+            scanning -> "Trwa skan (max ${PocPolicy.MAX_POSTS} postów, ${PocPolicy.SCAN_TIMEOUT_MS / 1000} s)…"
+            kind == PageKind.APPROVED_GROUP -> "Zatwierdzona grupa otwarta. Możesz uruchomić jeden skan."
+            else -> "Sesja otwarta (${kind.name})."
+        }
+        banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
+
+        val canScan = open && !scanning && stop == null && PocPolicy.canScan(kind) && channel?.isConnected == true
+        buttons["open"]?.text = if (open) "Zamknij sesję" else "Otwórz sesję"
+        listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
+        listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
+
+        val p = probe
+        diagnostics.text = buildString {
+            appendLine("Silnik: GeckoView ${org.mozilla.geckoview.BuildConfig.MOZ_APP_VERSION} • rozszerzenie: ${if (extension != null) "zainstalowane" else extensionError ?: "instalacja…"}")
+            appendLine("User-Agent: ${userAgent ?: "—"}")
+            appendLine("UA zawiera „; wv”: ${userAgent?.contains("; wv") ?: "—"} • nadpisany: nie")
+            appendLine("Adres: ${PocPolicy.sanitize(url)} • typ: $kind • ładowanie: $progress%")
+            appendLine("Tytuł: ${title ?: "—"}")
+            appendLine("Port rozszerzenia: ${if (channel?.isConnected == true) "połączony" else "brak"} • odrzucone porty: ${channel?.untrustedPorts ?: 0}")
+            if (p != null) appendLine("DOM (${p.host}${p.path}): elementy ${p.elements}, formularze ${p.forms}, pola ${p.inputs}, hasła ${p.passwordInputs}, posty ${p.articles}, iframe ${p.iframes}, stan ${p.readyState}")
+            appendLine("Błąd ładowania: ${lastLoadError ?: "brak"}")
+            append("Zablokowane przejścia: $blockedNavigations${lastBlockedHost?.let { " (ostatnie: $it)" } ?: ""}")
+        }
+    }
+
+    private fun buildLayout(): View {
+        val dp = resources.displayMetrics.density
+        fun button(key: String, label: String, onClick: () -> Unit) = Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 13f
+            setOnClickListener { onClick() }
+            buttons[key] = this
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        fun row(vararg views: View) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            views.forEach(::addView)
+        }
+        banner = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt())
+        }
+        geckoView = GeckoView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        diagnostics = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 10.5f
+            setTextColor(Color.parseColor("#1B1B1F"))
+            setTextIsSelectable(true)
+        }
+        output = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 10.5f
+            setTextColor(Color.parseColor("#1B1B1F"))
+            setTextIsSelectable(true)
+        }
+        val info = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (190 * dp).toInt())
+            setPadding((8 * dp).toInt(), (4 * dp).toInt(), (8 * dp).toInt(), (4 * dp).toInt())
+            addView(LinearLayout(this@PocActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(diagnostics)
+                addView(output)
+            })
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#FAFAFC"))
+            addView(banner)
+            addView(row(
+                button("open", "Otwórz sesję") { if (session == null) askConsentAndOpen() else closeSession() },
+                button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
+                button("login", "Zaloguj się") { load(PocPolicy.LOGIN_URL, login = true) },
+                button("back", "Wróć do grupy") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
+            ))
+            addView(geckoView)
+            addView(row(
+                button("scan", "Skanuj widoczne") { scan(scrolls = 0) },
+                button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
+                button("results", "Wyniki") { showResults() },
+            ))
+            addView(row(
+                button("test10", "Test ekranu za 10 min") { startScreenOffTest() },
+                button("testNow", "Test teraz") { runScreenOffTestNow() },
+                button("clear", "Wyloguj i usuń dane") { clearSessionData() },
+            ))
+            addView(info)
+        }
+        // Edge-to-edge (targetSdk 35+): keep the UI clear of the status/navigation bars and the keyboard.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        return root
+    }
+
+    companion object {
+        private const val KEY_CONSENT = "facebook_session_consent"
+        private const val TEST_DELAY_MS = 10 * 60 * 1000L
+    }
+}

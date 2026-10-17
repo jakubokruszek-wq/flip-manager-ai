@@ -1,0 +1,154 @@
+name: Android Flip Watcher Gecko POC
+
+# GeckoView proof of concept (android/flip-watcher-gecko-poc). Free GitHub-hosted
+# runners, no secrets. Every test uses LOCAL fixture pages on 127.0.0.1; no job
+# opens Facebook or logs into any account.
+
+on:
+  push:
+    paths:
+      - "android/flip-watcher-gecko-poc/**"
+      - "extensions/facebook-collector/collector-core.js"
+      - ".github/workflows/android-gecko-poc.yml"
+  pull_request:
+    paths:
+      - "android/flip-watcher-gecko-poc/**"
+      - "extensions/facebook-collector/collector-core.js"
+      - ".github/workflows/android-gecko-poc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-gecko-poc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Isolation, collector-core and adapter tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Isolation guard (only POC files changed, no backend, core unchanged)
+        run: |
+          git fetch --no-tags origin main
+          bash android/flip-watcher-gecko-poc/scripts/isolation-check.sh origin/main
+      - name: Existing collector-core tests (the parser the POC reuses)
+        run: node --test extensions/facebook-collector/collector-core.test.cjs
+      - name: POC adapter tests over collector-core.js
+        run: node --test android/flip-watcher-gecko-poc/app/src/test/js/poc-adapter.test.cjs
+
+  build:
+    name: Compile, unit tests, APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: android/flip-watcher-gecko-poc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Resolved GeckoView version
+        run: ./gradlew --no-daemon -q :app:dependencies --configuration debugRuntimeClasspath | grep -m1 "org.mozilla.geckoview:geckoview" | tee geckoview-version.txt
+
+      - name: Compile (Kotlin, app and instrumented tests)
+        run: ./gradlew --no-daemon --stacktrace compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=${{ github.run_number }}
+
+      - name: JVM unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest -PGECKO_POC_VERSION_CODE=${{ github.run_number }}
+
+      - name: Assemble debug APKs
+        run: ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=${{ github.run_number }}
+
+      - name: Verify APK identity, signature and bundled extension
+        run: |
+          set -euo pipefail
+          tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          for apk in app/build/outputs/apk/debug/*.apk; do
+            echo "== $apk ($(du -h "$apk" | cut -f1))"
+            "$tools/aapt2" dump badging "$apk" > badging.txt
+            head -3 badging.txt
+            grep -q "package: name='pl.jakubokruszek.flipwatcher.geckopoc'" badging.txt
+            "$tools/apksigner" verify --print-certs "$apk" | head -3
+            unzip -l "$apk" | grep -E "assets/ext/flip_poc/(manifest.json|collector-core.js|poc-adapter.js|poc-content.js)" | wc -l | grep -qx 4
+            unzip -p "$apk" assets/ext/flip_poc/collector-core.js | sha256sum | grep -q "^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b "
+            sha256sum "$apk"
+          done
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gecko-poc-unit-reports-${{ github.run_number }}
+          path: android/flip-watcher-gecko-poc/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Samsung APK (arm64-v8a)
+        uses: actions/upload-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-${{ github.run_number }}
+          path: |
+            android/flip-watcher-gecko-poc/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+            android/flip-watcher-gecko-poc/geckoview-version.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  instrumented:
+    name: GeckoView instrumented tests (Android 16 emulator, local HTML)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Instrumented tests on API 36
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: android/flip-watcher-gecko-poc
+          script: |
+            adb logcat -c || true
+            ./gradlew --no-daemon connectedDebugAndroidTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            adb logcat -d -s GeckoPocTest:I > logcat-tests.txt || true
+
+      - name: Measurements from the run
+        if: always()
+        run: cat android/flip-watcher-gecko-poc/logcat-tests.txt 2>/dev/null | tail -40 || true
+
+      - name: Upload instrumented test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gecko-poc-instrumented-reports-${{ github.run_number }}
+          path: |
+            android/flip-watcher-gecko-poc/app/build/reports/androidTests/
+            android/flip-watcher-gecko-poc/logcat-tests.txt
+          if-no-files-found: ignore
+          retention-days: 14

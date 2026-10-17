@@ -1,0 +1,115 @@
+import java.security.MessageDigest
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+// GeckoView follows Firefox: a new stable major every 4 weeks. The exact
+// version is pinned here; CI prints the resolved one (see the workflow).
+val geckoviewVersion = providers.gradleProperty("GECKOVIEW_VERSION").orElse("+").get()
+
+/**
+ * Builds the built-in WebExtension into generated assets: the POC's own
+ * manifest/adapter/content script plus the UNCHANGED collector-core.js of the
+ * Chrome extension. The build fails if collector-core.js no longer matches the
+ * reviewed hash, so a parser change is never shipped to the phone unnoticed.
+ */
+abstract class BundleCollectorExtension : DefaultTask() {
+    @get:InputDirectory abstract val extensionSources: DirectoryProperty
+    @get:InputFile abstract val collectorCore: RegularFileProperty
+    @get:Input abstract val expectedCoreSha256: Property<String>
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun bundle() {
+        val core = collectorCore.get().asFile
+        val actual = MessageDigest.getInstance("SHA-256").digest(core.readBytes()).joinToString("") { "%02x".format(it) }
+        check(actual == expectedCoreSha256.get()) {
+            "collector-core.js changed (sha256 $actual); review it and update COLLECTOR_CORE_SHA256"
+        }
+        val target = outputDir.get().asFile.resolve("ext/flip_poc")
+        target.deleteRecursively()
+        target.mkdirs()
+        extensionSources.get().asFile.listFiles()!!.filter { it.isFile }.forEach { it.copyTo(target.resolve(it.name)) }
+        core.copyTo(target.resolve("collector-core.js"))
+    }
+}
+
+val collectorCoreSha256 = "32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b"
+
+android {
+    namespace = "pl.jakubokruszek.flipwatcher.geckopoc"
+    compileSdk = 36
+
+    defaultConfig {
+        // Separate package: installs beside Flip Collector / Watcher, shares nothing with them.
+        applicationId = "pl.jakubokruszek.flipwatcher.geckopoc"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("1").get().toInt()
+        versionName = "0.1.0-gecko-poc"
+        buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
+        // No backend in this POC: there is no API URL, token or upload code at all.
+        buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    splits {
+        abi {
+            // arm64 for the Samsung, x86_64 for the CI emulator; one universal APK would be ~3x larger.
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = false
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val bundle = tasks.register<BundleCollectorExtension>("bundle${variant.name.replaceFirstChar { it.uppercase() }}CollectorExtension") {
+            extensionSources.set(layout.projectDirectory.dir("src/main/extension"))
+            collectorCore.set(rootProject.layout.projectDirectory.file("../../extensions/facebook-collector/collector-core.js"))
+            expectedCoreSha256.set(collectorCoreSha256)
+            outputDir.set(layout.buildDirectory.dir("generated/collectorExtension/${variant.name}"))
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(bundle, BundleCollectorExtension::outputDir)
+    }
+}
+
+dependencies {
+    implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    testImplementation("junit:junit:4.13.2")
+    // Android's org.json is a stub on the JVM; tests use the real library.
+    testImplementation("org.json:json:20240303")
+
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+}
