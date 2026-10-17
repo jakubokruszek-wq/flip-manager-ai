@@ -1,4 +1,5 @@
 import "server-only";
+import { androidDataOnlyImportActive } from "../collector/android/import-policy";
 
 import { analyzeFacebookImages } from "./analyze-facebook-images";
 import { extractFacebookProperty, resolveFacebookPrice } from "./extract-facebook-property";
@@ -8,7 +9,7 @@ import { resolveFacebookListingIntent } from "./facebook-intent";
 
 export async function extractFacebookListing(input: FacebookListingInput): Promise<FacebookProperty> {
   const base = await extractFacebookProperty(input);
-  if (!input.images?.length || !needsVision(base)) return base;
+  if (androidDataOnlyImportActive() || !input.images?.length || !needsVision(base)) return base;
 
   const vision = await analyzeFacebookImages(input.images, input.postText);
   if (!vision) return base;

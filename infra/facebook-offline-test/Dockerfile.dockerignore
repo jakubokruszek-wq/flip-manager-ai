@@ -1,0 +1,15 @@
+**/.env*
+**/__pycache__
+**/*.pyc
+**/*.log
+**/*.zip
+**/*.bundle
+**/*.pack
+**/*cookies*
+**/*session*.json
+.git
+node_modules
+android
+.next
+workers
+downloads

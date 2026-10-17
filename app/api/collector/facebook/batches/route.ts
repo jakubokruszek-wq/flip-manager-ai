@@ -7,7 +7,7 @@ const PATHNAME = "/api/collector/facebook/batches";
 export async function POST(request: Request) {
   const body = await request.text();
   try {
-    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body });
+    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, expectedConsumerType: "BROWSER_EXTENSION" });
     const batch = normalizeFacebookCollectorBatch(JSON.parse(body));
     const result = await processFacebookCollectorBatch(device.id, batch);
     return cors(Response.json(result, { status: result.status === "duplicate" ? 200 : 202 }), request);

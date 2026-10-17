@@ -15,6 +15,19 @@ const deviceToken = "collector-device-token-with-enough-entropy";
 const body = JSON.stringify({ batchId: "batch-1" });
 const pathname = "/api/collector/facebook/batches";
 
+test("Android claim HMAC matches the Kotlin lowercase-method vector", () => {
+  const auth = createCollectorAuthHeaders({
+    deviceId: "dev-1",
+    deviceToken: "test-device-token-not-a-secret-0123456789",
+    method: "post",
+    pathname: "/api/collector/android/jobs/claim",
+    body: "{}",
+    now: 1760000000000,
+    nonce: "nonce-0123456789abcdef",
+  });
+  assert.equal(auth.signature, "f756826fa0408fe1f0a32c5656d7547ceca40848f9b796793ed4590a273d2195");
+});
+
 function requestHeaders(now: number, nonce = "nonce_1234567890") {
   const auth = createCollectorAuthHeaders({ deviceId, deviceToken, method: "POST", pathname, body, now, nonce });
   return new Headers({

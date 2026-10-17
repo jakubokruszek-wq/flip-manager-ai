@@ -7,7 +7,7 @@ const PATHNAME = "/api/collector/jobs/heartbeat";
 export async function POST(request: Request) {
   const body = await request.text();
   try {
-    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, markHealthy: true });
+    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, expectedConsumerType: "BROWSER_EXTENSION", markHealthy: true });
     const input = JSON.parse(body) as { jobId?: string; leaseToken?: string };
     if (!input.jobId || !input.leaseToken) return cors(Response.json({ ok: false, code: "INVALID_PAYLOAD" }, { status: 400 }), request);
     const leasedUntil = await renewFacebookExtensionJobLease({ jobId: input.jobId, leaseToken: input.leaseToken, workerId: device.id });

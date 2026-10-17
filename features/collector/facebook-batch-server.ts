@@ -1,4 +1,7 @@
 import "server-only";
+import { androidFinderOwnership } from "./android/import-policy";
+
+import { buildFacebookBatchQuality, type FacebookBatchQuality } from "./android/quality";
 
 import { createHash } from "node:crypto";
 
@@ -30,12 +33,14 @@ export type CollectorBatchResult = {
   persistenceDiagnostics?: FacebookPersistenceDiagnostics[];
   /** Deterministic scan accounting (see scan-accounting.ts) for this batch's raw captured posts. Absent on batches recorded before this feature — callers must degrade gracefully, never fabricate it. */
   accounting?: FacebookScanAccounting;
+  quality?: FacebookBatchQuality;
+  writeAccounting?: { version: 1; basis: "TRANSACTIONAL"; created: number; updated: number; duplicates: number };
   accountingError?: "FACEBOOK_ACCOUNTING_INVARIANT_FAILED";
   /** Sanitized per-post detail for FACEBOOK_FILTER_RECONCILE_FAILED outcomes only (see post-flow.ts). Never changes accounting; purely diagnostic. */
   reconciliationDiagnostics?: FacebookReconciliationFailureDiagnostic[];
 };
 
-export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch): Promise<CollectorBatchResult> {
+export async function processFacebookCollectorBatch(deviceId: string, batch: FacebookCollectorBatch, context?: { sourceScanId: string; qualityReport?: boolean }): Promise<CollectorBatchResult> {
   // The database-backed watched_facebook_groups registry is the single
   // canonical eligibility source, matching the scheduler that enqueued this
   // batch's job in the first place -- an imported group's collected results
@@ -44,14 +49,21 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
   // opt-in (enabled=true) the scheduler itself already requires.
   if (!(await isEnabledWatchedFacebookSource({ sourceId: batch.sourceId, type: batch.sourceType, url: batch.sourceUrl }))) throw new Error("COLLECTOR_SOURCE_NOT_IN_PRODUCTION_ALLOWLIST");
   const supabase = createAdminClient();
-  const existing = await supabase.from("collector_scan_batches").select("status,result").eq("device_id", deviceId).eq("batch_id", batch.batchId).maybeSingle();
+  const atomicOwner = androidFinderOwnership();
+  const existing = await supabase.from("collector_scan_batches").select("id,status,result,scan_id,source_id,source_url").eq("device_id", deviceId).eq("batch_id", batch.batchId).maybeSingle();
   if (existing.error) throw new Error(`COLLECTOR_BATCH_LOOKUP_FAILED: ${existing.error.message}`);
-  if (existing.data && typeof existing.data === "object" && existing.data.status !== "failed") {
+  if (atomicOwner && (atomicOwner.deviceId !== deviceId || atomicOwner.completionId !== batch.batchId || atomicOwner.sourceScanId !== context?.sourceScanId)) throw new Error("ANDROID_FINDER_BATCH_CONTEXT_INVALID");
+  if (atomicOwner && existing.data && (existing.data.scan_id !== batch.scanId || existing.data.source_id !== batch.sourceId || existing.data.source_url !== batch.sourceUrl)) throw new Error("ANDROID_FINDER_BATCH_BINDING_INVALID");
+  if (atomicOwner && existing.data && ["completed","degraded","failed"].includes(existing.data.status)) {
+    if (!isAtomicCheckpoint(existing.data.result, batch, atomicOwner.sourceScanId)) throw new Error("ANDROID_FINDER_CHECKPOINT_INVALID");
+    return existing.data.result;
+  }
+  if (!atomicOwner && existing.data && typeof existing.data === "object" && existing.data.status !== "failed") {
     const previous = record(existing.data.result);
     return previous ? { ...previous, status: "duplicate" } as CollectorBatchResult : emptyResult(batch, "duplicate");
   }
 
-  const inserted = await supabase.from("collector_scan_batches").insert({
+  const inserted = atomicOwner && existing.data ? { data: { id: String(existing.data.id) }, error: null } : await supabase.from("collector_scan_batches").insert({
     device_id: deviceId,
     scan_id: batch.scanId,
     batch_id: batch.batchId,
@@ -66,6 +78,11 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     payload: batchForStorage(batch),
   }).select("id").single();
   if (inserted.error) {
+    if (inserted.error.code === "23505" && atomicOwner) {
+      // A simultaneous exact completion may have inserted its processing row.
+      // Retry through the same bound context; post receipts serialize writes.
+      throw new Error("ANDROID_FINDER_BATCH_CREATE_RACE_RETRY");
+    }
     if (inserted.error.code === "23505") {
       const duplicate = await supabase.from("collector_scan_batches").select("result").eq("device_id", deviceId).eq("batch_id", batch.batchId).maybeSingle();
       const previous = record(duplicate.data?.result);
@@ -78,16 +95,18 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
   if (batch.health.status === "FAILED") return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), "COLLECTOR_DISCOVERY_FAILED");
 
   try {
-    const existingScan = await supabase.from("source_scans")
+    let scanQuery = supabase.from("source_scans")
       .select("id,search_filter_id,filter_snapshot,status,warnings")
       .eq("scan_run_id", batch.scanId)
       .eq("source", "facebook")
       .in("status", ["pending", "running"])
       .order("started_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    if (context) scanQuery = scanQuery.eq("id", context.sourceScanId);
+    const existingScan = await scanQuery.maybeSingle();
     if (existingScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_LOOKUP_FAILED: ${existingScan.error.message}`);
     const existingScanRow = record(existingScan.data);
+    if (context && !existingScanRow) throw new Error("COLLECTOR_CLAIMED_SOURCE_SCAN_NOT_RUNNING");
     const targets: Array<{ filter: SearchFilter; sourceScanId: string | null; existingWarnings: string[] }> = existingScanRow
       ? [{ filter: filterFromSnapshot(existingScanRow.filter_snapshot, String(existingScanRow.search_filter_id)), sourceScanId: String(existingScanRow.id), existingWarnings: stringArray(existingScanRow.warnings) }]
       : (await getActiveSearchFiltersForSource("facebook")).map((filter) => ({ filter, sourceScanId: null, existingWarnings: [] }));
@@ -97,6 +116,10 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     const historicalIdentityConflicts = findHistoricalCollectorIdentityConflicts(batch, (history.data ?? []).map((row) => row.payload));
     const sourceScanIds: string[] = [];
     let processed = 0; let listingsCreated = 0; let listingsUpdated = 0; let skipped = 0; let errors = 0;
+    const transactionalWrites: { created: number; updated: number; duplicates: number }[] = [];
+    let unverifiedWrites = false;
+    const transactionalPostIds: string[] = [];
+    const atomicFailure: { failed: boolean; error?: unknown } = { failed: false };
     const persistenceDiagnostics: FacebookPersistenceDiagnostics[] = [];
     const eligibilityCheckedAt = Date.now();
     const posts = collectorPostsForProcessing(batch, eligibilityCheckedAt, historicalIdentityConflicts);
@@ -135,12 +158,25 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
         const sourceScan = await supabase.from("source_scans").insert({ search_filter_id: filter.id, source: "facebook", status: "running", scan_run_id: batch.scanId, filter_snapshot: filter, diagnostics: [{ collectorBatchId: batch.batchId, discoveryHealth: batch.health.status }] }).select("id").single();
         if (sourceScan.error || !sourceScan.data?.id) throw new Error(`COLLECTOR_SOURCE_SCAN_CREATE_FAILED: ${sourceScan.error?.message ?? "missing id"}`);
         sourceScanId = String(sourceScan.data.id);
-      } else {
+      } else if (!atomicOwner) {
         const sourceScan = await supabase.from("source_scans").update({ status: "running", error_message: null, diagnostics: [{ collectorBatchId: batch.batchId, discoveryHealth: batch.health.status }] }).eq("id", sourceScanId).in("status", ["pending", "running"]);
         if (sourceScan.error) throw new Error(`COLLECTOR_SOURCE_SCAN_START_FAILED: ${sourceScan.error.message}`);
       }
       sourceScanIds.push(sourceScanId);
-      const summary = await processFacebookPostBatch(posts, (post) => importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: post.imageUrls, mediaCandidates: post.mediaCandidates, discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, activeListingsCache, ...COLLECTOR_IMAGE_IMPORT_OPTIONS }), { jobId: `collector:${batch.batchId}`, sourceScanId });
+      const summary = await processFacebookPostBatch(posts, async (post) => {
+        try {
+        const imported = await importFacebookWatcher({ url: post.permalink ?? undefined, postText: post.authoritativePostText ?? post.text, authorName: post.postId ? authors.get(post.postId) ?? undefined : undefined, groupName: batch.sourceId, publishedAt: post.publishedAt ?? undefined, images: post.imageUrls, mediaCandidates: post.mediaCandidates, discoverySource: post.discoverySource, searchQuery: post.searchQuery, searchQueries: post.searchQueries, foundInMainFeed: post.foundInMainFeed, firstSeenPhase: post.firstSeenPhase }, { filter, sourceScanId, groupId: batch.sourceId, groupName: batch.sourceId, groupUrl: batch.sourceUrl, postId: post.postId, checkedAt: batch.collectedAt, activeListingsCache, ...COLLECTOR_IMAGE_IMPORT_OPTIONS });
+        if (imported.status !== "skipped") {
+          if (imported.transactionalWrite) { transactionalWrites.push(imported.transactionalWrite); if (post.postId) transactionalPostIds.push(post.postId); }
+          else unverifiedWrites = true;
+        }
+        return imported;
+        } catch (error) {
+          if (atomicOwner && !(error instanceof Error && error.message === "ANDROID_CROSS_SOURCE_RECONCILIATION_REQUIRED")) { atomicFailure.failed = true; atomicFailure.error = error; }
+          throw error;
+        }
+      }, { jobId: `collector:${batch.batchId}`, sourceScanId });
+      if (atomicFailure.failed) throw atomicFailure.error;
       processed = Math.max(processed, summary.postsProcessed);
       listingsCreated += summary.listingsCreated;
       listingsUpdated += summary.listingsUpdated;
@@ -151,7 +187,7 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
       allReconciliationDiagnostics.push(...summary.reconciliationDiagnostics);
       const sourceStatus = batch.health.status === "DEGRADED" || summary.errors > 0 || unverifiedIdentityCount > 0 ? "partial" : "completed";
       const identityWarnings = unverifiedIdentityCount > 0 ? [`FACEBOOK_IDENTITY_UNVERIFIED:${unverifiedIdentityCount}`, ...[...historicalIdentityConflicts].slice(0, 20).map((postId) => `FACEBOOK_IDENTITY_HISTORY_CONFLICT:${postId}`)] : [];
-      const sourceUpdate = await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...target.existingWarnings, ...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100), error_message: null }).eq("id", sourceScanId);
+      const sourceUpdate = atomicOwner ? { error: null } : await supabase.from("source_scans").update({ status: sourceStatus, finished_at: new Date().toISOString(), scanned_count: batch.posts.length, matched_count: summary.matched, listings_found: summary.listingsCreated + summary.listingsUpdated, listings_created: summary.listingsCreated, new_count: summary.listingsCreated, listings_updated: summary.listingsUpdated, price_drop_count: summary.priceDrops, warnings: [...target.existingWarnings, ...batch.health.reasons, ...identityWarnings, ...summary.warnings].slice(0, 100), error_message: null }).eq("id", sourceScanId);
       if (sourceUpdate.error) throw new Error(`COLLECTOR_SOURCE_SCAN_FINISH_FAILED: ${sourceUpdate.error.message}`);
     }
     const status = batch.health.status === "DEGRADED" || errors > 0 || unverifiedIdentityCount > 0 ? "degraded" : "completed";
@@ -168,18 +204,36 @@ export async function processFacebookCollectorBatch(deviceId: string, batch: Fac
     });
     const accounting = aggregateFacebookScanAccounting(uniqueOutcomes, batch.posts.length);
     const accountingValidation = validateFacebookScanAccounting(accounting);
+    const quality = context?.qualityReport === true ? buildFacebookBatchQuality(batch, uniqueOutcomes, historicalIdentityConflicts) : undefined;
     const mergedReconciliationDiagnostics = mergeReconciliationDiagnostics(allReconciliationDiagnostics);
     const reconciliationDiagnostics = mergedReconciliationDiagnostics.length ? mergedReconciliationDiagnostics : undefined;
     if (!accountingValidation.ok) {
-      return finishBatch(supabase, deviceId, batchRowId, batch, { status: "degraded", batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors: errors + 1, sourceScanIds, health: batch.health, persistenceDiagnostics, accountingError: accountingValidation.errorCode ?? undefined, reconciliationDiagnostics }, accountingValidation.errorCode ?? undefined);
+      return finishBatch(supabase, deviceId, batchRowId, batch, { status: "degraded", batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors: errors + 1, sourceScanIds, health: batch.health, persistenceDiagnostics, accountingError: accountingValidation.errorCode ?? undefined, reconciliationDiagnostics }, accountingValidation.errorCode ?? undefined, transactionalPostIds);
     }
-    return finishBatch(supabase, deviceId, batchRowId, batch, { status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting, reconciliationDiagnostics });
+    const writeAccounting = androidFinderOwnership() && targets.length === 1 && !unverifiedWrites && errors === 0 ? {
+      version: 1 as const, basis: "TRANSACTIONAL" as const,
+      created: transactionalWrites.reduce((n,row)=>n+row.created,0),
+      updated: transactionalWrites.reduce((n,row)=>n+row.updated,0),
+      duplicates: transactionalWrites.reduce((n,row)=>n+row.duplicates,0),
+    } : undefined;
+    if (writeAccounting) skipped = batch.posts.length - writeAccounting.created - writeAccounting.updated - writeAccounting.duplicates;
+    return finishBatch(supabase, deviceId, batchRowId, batch, { ...(writeAccounting ? { writeAccounting } : {}), status, batchId: batch.batchId, captured: batch.posts.length, processed, listingsCreated, listingsUpdated, skipped, errors, sourceScanIds, health: batch.health, persistenceDiagnostics, accounting, ...(quality ? { quality } : {}), reconciliationDiagnostics }, undefined, transactionalPostIds);
   } catch (error) {
+    if (atomicOwner) throw error;
     return finishBatch(supabase, deviceId, batchRowId, batch, emptyResult(batch, "failed"), safeMessage(error));
   }
 }
 
-async function finishBatch(supabase: ReturnType<typeof createAdminClient>, deviceId: string, rowId: string, batch: FacebookCollectorBatch, result: CollectorBatchResult, errorMessage?: string): Promise<CollectorBatchResult> {
+async function finishBatch(supabase: ReturnType<typeof createAdminClient>, deviceId: string, rowId: string, batch: FacebookCollectorBatch, result: CollectorBatchResult, errorMessage?: string, writtenPostIds: string[] = []): Promise<CollectorBatchResult> {
+  const owner = androidFinderOwnership();
+  if (owner) {
+    const saved = await supabase.rpc("checkpoint_android_facebook_finder_batch", {
+      p_job_id: owner.jobId, p_device_id: owner.deviceId, p_lease_token: owner.leaseToken, p_completion_id: owner.completionId, p_payload_hash: owner.payloadHash,
+      p_batch_row_id: rowId, p_written_post_ids: writtenPostIds, p_result: result,
+    });
+    if (saved.error || !isAtomicCheckpoint(saved.data, batch, owner.sourceScanId)) throw new Error("ANDROID_FINDER_CHECKPOINT_FAILED");
+    return saved.data;
+  }
   const now = new Date().toISOString();
   const update = await supabase.from("collector_scan_batches").update({ status: result.status === "duplicate" ? "completed" : result.status, result, error_message: errorMessage ?? null, finished_at: now }).eq("id", rowId);
   if (update.error) throw new Error(`COLLECTOR_BATCH_FINISH_FAILED: ${update.error.message}`);
@@ -201,3 +255,17 @@ function filterFromSnapshot(value: unknown, expectedId: string): SearchFilter {
 }
 function safeMessage(value: unknown): string { return value instanceof Error ? value.message.slice(0, 500) : "COLLECTOR_BATCH_FAILED"; }
 function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
+
+/** Only the dedicated service-role checkpoint RPC writes these records. Validate
+ * binding and required counters before trusting a persisted JSON checkpoint. */
+function isAtomicCheckpoint(value: unknown, batch: FacebookCollectorBatch, sourceScanId: string): value is CollectorBatchResult {
+  const row=record(value),health=record(row?.health),writes=record(row?.writeAccounting);
+  if (!row || !["completed","degraded","failed"].includes(String(row.status)) || row.batchId!==batch.batchId ||
+      row.captured!==batch.posts.length || !Array.isArray(row.sourceScanIds) || row.sourceScanIds.length!==1 || row.sourceScanIds[0]!==sourceScanId ||
+      !health || health.status!==batch.health.status || !writes || writes.version!==1 || writes.basis!=="TRANSACTIONAL") return false;
+  const keys=["captured","processed","listingsCreated","listingsUpdated","skipped","errors"];
+  if(!keys.every(key=>typeof row[key]==="number" && Number.isSafeInteger(row[key]) && (row[key] as number)>=0))return false;
+  if(![writes.created,writes.updated,writes.duplicates].every(n=>typeof n==="number" && Number.isSafeInteger(n) && n>=0))return false;
+  return writes.created===row.listingsCreated && writes.updated===row.listingsUpdated &&
+    (writes.created as number)+(writes.updated as number)+(writes.duplicates as number)+(row.skipped as number)===row.captured;
+}
