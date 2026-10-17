@@ -176,7 +176,10 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   currentMedia = ["https://cdn.example.test/broken.jpg"];
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("[data-deal-room]").waitFor({ state: "visible" });
-  await page.waitForTimeout(500);
+  // The CEO-first layout puts lazy images below the fold. Trigger the actual
+  // image request, then await its error-driven removal instead of a fixed delay.
+  await page.locator("[data-deal-gallery]").scrollIntoViewIfNeeded();
+  await page.locator("[data-deal-gallery]").waitFor({ state: "detached" });
   assert.equal(await page.locator("[data-deal-gallery]").count(), 0, "a broken/missing image never breaks the Deal Room; the gallery hides itself once nothing renders");
   assert.ok(await page.getByText("Maks. cena zakupu", { exact: true }).first().isVisible(), "the rest of the Deal Room keeps rendering when an image fails");
   currentMedia = [];
