@@ -92,11 +92,14 @@ class ScanProtocolTest {
         assertTrue(!probe.toString().contains("secret"))
     }
 
-    @Test fun `alias-form permalinks never pass the app check`() {
-        val slugPost = post("1000000000001", "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1000000000001/")
-        val report = ScanProtocol.parseScanResult(reply("OK", slugPost, post("1000000000002")), request.copy(aliases = listOf("lodzsprzedazzakupwynajem")))
+    @Test fun `the independently approved slug accepts only its exact canonical permalinks`() {
+        val oldGroupPost = post("1000000000001", "https://www.facebook.com/groups/402796264871862/posts/1000000000001/")
+        val otherGroupPost = post("1000000000003", "https://www.facebook.com/groups/1350200629551011/posts/1000000000003/")
+        val validPost = post("1000000000002")
+        val report = ScanProtocol.parseScanResult(reply("OK", oldGroupPost, validPost, otherGroupPost), request)
         assertEquals(listOf("1000000000002"), report.posts.map { it.postId })
-        assertEquals(1, report.rejectedByApp)
+        assertEquals(2, report.rejectedByApp)
+        assertEquals("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1000000000002/", report.posts.single().permalink)
     }
 
     @Test fun `request carries only the given verified aliases`() {
