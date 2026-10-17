@@ -13,7 +13,7 @@ const META:Record<string,{what:string;why:string;evidence:string;directors:Brain
  economics:{what:"Zwaliduj pełną ekonomikę projektu",why:"Kwoty muszą pochodzić z kompletnego kanonicznego underwritingu.",evidence:"Potwierdzone dane wejściowe i poprawna walidacja analizy.",directors:["UNDERWRITER","CFO"]},
  riskReview:{what:"Rozstrzygnij istotne konflikty i ryzyka",why:"Dodatni zysk nie usuwa sprzecznych danych ani blokad prawnych.",evidence:"Rozstrzygnięcie konfliktu w dokumentach lub przegląd specjalisty.",directors:["VERIFY","RISK_LEGAL"]},
  financing:{what:"Potwierdź kapitał, finansowanie i podatki",why:"Dodatnia marża nie zapewnia gotówki na zakup i remont ani zysku po podatku.",evidence:"Harmonogram finansowania, rezerwa, warunki kredytu/inwestora i kwalifikacja podatkowa.",directors:["CFO","UNDERWRITER"]},
- askingPrice:{what:"Potwierdź cenę zakupu mieszczącą się w Max Buy",why:"Cena ponad zwalidowanym limitem narusza wymagania inwestycji.",evidence:"Aktualna, udokumentowana cena uzgodniona ze sprzedającym.",directors:["ACQUISITION","UNDERWRITER"]},
+ askingPrice:{what:"Potwierdź aktualną cenę ofertową",why:"Aktualna cena źródłowa jest potrzebna do wiarygodnej oceny negocjacji.",evidence:"Aktualna, udokumentowana cena uzgodniona ze sprzedającym.",directors:["ACQUISITION","UNDERWRITER"]},
 };
 const known=(value:unknown):number|null=>typeof value==="number"&&Number.isFinite(value)?value:null;
 /** Read projection only: no calculator, model, persistence, tax mutation or independent decision. */
@@ -33,6 +33,8 @@ export function ceoRecommendation(deal:CanonicalDeal){
   if(!gate.passed&&((gate.fact==="riskReview"&&(deal.verify.result?.conflicts.length??0)>0)||(gate.fact==="financing"&&(cfo?.selected?.fundingGap??0)>0)||(gate.fact==="askingPrice"&&maxBuy!==null&&(deal.facts.askingPrice.effectiveValue??0)>maxBuy)))state="UNSATISFIED";
   return {id:`gate:${gate.fact}`,field:gate.fact,what:question?.question??fallback.what,why:question?.whyItMatters??fallback.why,directors:question?.requestingDirectors??fallback.directors,evidence:question?.evidenceNeeded??fallback.evidence,state,questionField:question?.field??null};
  });
+ const price=valid?known(u?.purchasePrice):null;
+ conditions.push({id:"canonical-price-limit",field:"purchasePriceLimit",what:"Uzgodnij cenę zakupu nieprzekraczającą kanonicznego Max Buy",why:"Sam dokument z ceną nie oznacza, że cena spełnia istniejący limit inwestycyjny.",directors:["ACQUISITION","UNDERWRITER","CFO"],evidence:"Udokumentowana cena uzgodniona ze sprzedającym; ponowna walidacja istniejącego underwritingu.",state:price===null||maxBuy===null?"UNKNOWN":price<=maxBuy?"SATISFIED":"UNSATISFIED",questionField:"negotiatedPrice"});
  for(const q of pending.filter(q=>q.category==="BLOCKING"))if(!conditions.some(c=>c.questionField===q.field||c.field===q.field))conditions.push(questionCondition(q));
  if(decision==="ODRZUĆ")conditions.unshift({id:"hard-reject",field:"rejection",what:"Zachowaj odrzucenie oferty",why:"Twarde lub ręczne odrzucenie pozostaje nadrzędne; scoring i odpowiedź nie mogą go automatycznie cofnąć.",directors:["VERIFY","RISK_LEGAL","CEO"],evidence:"Odrębna, udokumentowana decyzja człowieka — bez automatycznej reaktywacji.",state:"UNSATISFIED",questionField:null});
  const rank={BLOCKER:0,MATERIAL:1,WATCH:2,INFO:3};

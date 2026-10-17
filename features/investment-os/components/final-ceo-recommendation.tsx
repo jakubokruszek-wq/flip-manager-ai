@@ -1,3 +1,4 @@
+"use client";
 import { ceoRecommendation, type CeoCondition } from "../ceo-recommendation";
 import type { CanonicalDeal } from "../types";
 const money=(n:number|null)=>n===null?"NIEUSTALONE":new Intl.NumberFormat("pl-PL",{style:"currency",currency:"PLN",minimumFractionDigits:2,maximumFractionDigits:2}).format(n);
@@ -15,4 +16,4 @@ export function FinalCeoRecommendation({deal}:{deal:CanonicalDeal}){
  </section>;
 }
 function Metric({label,value}:{label:string;value:string}){return <div className="min-w-0 rounded-xl border border-white/10 bg-black/15 p-3"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-2 break-words text-base font-semibold tabular-nums text-gold">{value}</dd></div>;}
-function Condition({condition:c}:{condition:CeoCondition}){return <li className="rounded-xl border border-gold/20 p-3 text-sm"><p className="text-xs font-semibold text-gold">{STATES[c.state]} · {c.directors.join(", ")}</p><h4 className="mt-2 font-semibold">{c.what}</h4><p className="mt-2 text-muted-foreground">Dlaczego: {c.why}</p><p className="mt-2">Potrzebny dowód / informacja: {c.evidence}</p>{c.questionField?<a className="mt-2 inline-flex min-h-11 items-center text-gold underline" href={`#deal-question-${encodeURIComponent(c.questionField)}`}>Przejdź do pytania dyrektora</a>:null}</li>;}
+function Condition({condition:c}:{condition:CeoCondition}){return <li className="rounded-xl border border-gold/20 p-3 text-sm"><p className="text-xs font-semibold text-gold">{STATES[c.state]} · {c.directors.join(", ")}</p><h4 className="mt-2 font-semibold">{c.what}</h4><p className="mt-2 text-muted-foreground">Dlaczego: {c.why}</p><p className="mt-2">Potrzebny dowód / informacja: {c.evidence}</p>{c.questionField?<a className="mt-2 inline-flex min-h-11 items-center text-gold underline" href={`#deal-question-${encodeURIComponent(c.questionField)}`} onClick={event=>{if(window.location.hash===event.currentTarget.hash)window.dispatchEvent(new HashChangeEvent("hashchange"));}}>Przejdź do pytania dyrektora</a>:null}</li>;}

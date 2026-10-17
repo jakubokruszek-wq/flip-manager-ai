@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { buildCanonicalDeal } from "./engine";
 import { lodzDeal } from "./test-fixtures/lodz-deals";
 import { ceoRecommendation } from "./ceo-recommendation";
-import { buildDealBrain } from "./brain";
+import { roomQuestions } from "./deal-room-answers";
 function fixture(){return buildCanonicalDeal({...lodzDeal(),features:{cfo:false,taxReview:false,taxArithmetic:false,privateTax:false,jdgTax:false}});}
 test("CEO is a canonical read: exact amounts incl cents, all three scenarios, no independent arithmetic or tax net",()=>{
  const d=fixture(),u=d.underwriting.result!;u.maxPurchasePrice=123456.78;u.profitLow=11001.11;u.profitBase=22002.22;u.profitHigh=33003.33;
  d.ceo.result!.maxPurchasePrice=999999;const m=ceoRecommendation(d);
  assert.equal(m.maxBuy,123456.78);assert.deepEqual(m.profits,{conservative:11001.11,base:22002.22,optimistic:33003.33});assert.ok(m.risks.length<=5);assert.equal(m.humanApprovalRequired,true);
- for(const c of m.conditions){assert.ok(c.what&&c.why&&c.evidence&&c.directors.length);if(c.questionField)assert.ok(buildDealBrain(d).questions.some(q=>q.field===c.questionField));}
+ for(const c of m.conditions){assert.ok(c.what&&c.why&&c.evidence&&c.directors.length);if(c.questionField)assert.ok(roomQuestions(d,{version:0,answers:{},baselineOverrides:{},rounds:[]}).some(q=>q.field===c.questionField));}
  assert.equal(m.conditions.find(c=>c.field==="legalStatus")?.state,"UNKNOWN");
 });
 test("HOLD / NEGOTIATE / BUY / REJECT use the existing synthesis, not the profit sign",()=>{

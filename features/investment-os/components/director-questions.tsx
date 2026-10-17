@@ -22,14 +22,17 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
     return () => { active = false; };
   }, [path, deal.updatedAt]);
   useEffect(() => {
-    const focusQuestion=()=>{
+    const focusQuestion=(event?:Event)=>{
       const match=window.location.hash.match(/^#deal-question-([A-Za-z0-9_]+)$/);if(!match)return;
       const field=match[1],available=roomQuestions(deal,room??{version:0,answers:{},baselineOverrides:{},rounds:[]});
-      if(!available.some(q=>q.field===field))return;
+      if(!available.some(q=>q.field===field)){
+        if(event?.type!=="hashchange"||!room?.answers[field])return;
+        pending.current=null;setDraft(old=>({...old,[field]:room.answers[field]}));
+      }
       setMore(true);
       window.setTimeout(()=>{const target=document.getElementById(`deal-question-${field}`);target?.focus();target?.scrollIntoView({block:"start",behavior:"smooth"});},0);
     };
-    window.addEventListener("hashchange",focusQuestion);const timer=window.setTimeout(focusQuestion,0);
+    window.addEventListener("hashchange",focusQuestion);const timer=window.setTimeout(()=>focusQuestion(),0);
     return ()=>{window.clearTimeout(timer);window.removeEventListener("hashchange",focusQuestion);};
   },[deal,room]);
   const change = (field: string, patch: Partial<AnswerInput>) => {
