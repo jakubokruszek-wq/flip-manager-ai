@@ -98,6 +98,10 @@ class WebViewCollectorBrowser(
     internal var onStop: ((String) -> Unit)? = null
     /** Status codes only, never URLs, query strings, credentials, cookies or page text. */
     internal var onDiagnostic: ((String) -> Unit)? = null
+    /** On-screen only: number of DOM elements, never text, values, URL or cookies. */
+    internal var onLoginDomDiagnostic: ((String) -> Unit)? = null
+    private var lastBlockedNavigation: String = "NONE"
+    internal fun navigationBlocker(): String = lastBlockedNavigation
     internal fun currentView(): WebView? = webView
     private var localFixture: String? = null
     internal fun isLocalFixture() = localFixture != null
@@ -131,7 +135,7 @@ class WebViewCollectorBrowser(
         blockers().firstOrNull()?.let { throw IllegalStateException(it.message) }
         require(WebViewPolicy.navigation(url) == WebViewPolicy.Decision.ALLOW) { "Adres spoza Facebooka jest zablokowany" }
         require(pilotSource == null || pilotSource.matchesPage(url) || (manualLogin && url == pilotSource.manualLoginUrl())) { "PILOT_SOURCE_MISMATCH" }
-        if (navigate) manualLoginInProgress = manualLogin
+        if (navigate) { manualLoginInProgress = manualLogin; lastBlockedNavigation = "NONE" }
         val view = webView ?: WebView(context).also { created ->
             created.settings.apply {
                 javaScriptEnabled = true
@@ -203,6 +207,31 @@ class WebViewCollectorBrowser(
             val kind = diagnosticPageKind(url)
             onDiagnostic?.invoke(mainFrameError ?: ("PAGE_FINISHED_$kind" + "_PROGRESS_" + view.progress))
             onPageReady?.invoke(view, url)
+            if (manualLoginInProgress && pilotSource != null && !pilotSource.matchesPage(url)) {
+                // A blank login page can be a redirect or an empty DOM. Inspect only
+                // bounded element COUNTS after hydration; never inspect values/text.
+                view.postDelayed({
+                    if (view !== webView || !manualLoginInProgress) return@postDelayed
+                    val script = """(function(){
+                      try {
+                        var d=document,b=d.body;
+                        var f=Math.min(d.forms.length,999);
+                        var p=Math.min(d.querySelectorAll('input[type=password]').length,999);
+                        var i=Math.min(d.querySelectorAll('input').length,999);
+                        var e=Math.min(d.querySelectorAll('*').length,9999);
+                        return 'FORMS_'+f+'_PASSWORD_'+p+'_INPUTS_'+i+'_ELEMENTS_'+e;
+                      } catch(ex) {return 'DOM_UNAVAILABLE';}
+                    })()""".trimIndent()
+                    view.evaluateJavascript(script) { raw ->
+                        if (view !== webView) return@evaluateJavascript
+                        val value = raw.removeSurrounding("\"")
+                        if (value == "DOM_UNAVAILABLE" ||
+                            Regex("^FORMS_[0-9]{1,3}_PASSWORD_[0-9]{1,3}_INPUTS_[0-9]{1,3}_ELEMENTS_[0-9]{1,4}$").matches(value)) {
+                            onLoginDomDiagnostic?.invoke(value)
+                        }
+                    }
+                }, 1000)
+            }
         }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
@@ -241,10 +270,12 @@ class WebViewCollectorBrowser(
                     else -> "PILOT_REDIRECT_BLOCKED"
                 }
                 onDiagnostic?.invoke("NAVIGATION_$code")
+                if (code == "PILOT_REDIRECT_BLOCKED") lastBlockedNavigation = "FACEBOOK_OTHER_PATH"
                 onStop?.invoke(code)
                 return code == "PILOT_REDIRECT_BLOCKED"
             }
             onDiagnostic?.invoke("NAVIGATION_BLOCKED")
+            lastBlockedNavigation = "EXTERNAL_OR_UNTRUSTED"
             onStop?.invoke("PILOT_REDIRECT_BLOCKED")
             onBlockedNavigation(url.take(200))
             return true
