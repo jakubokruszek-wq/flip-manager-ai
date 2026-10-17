@@ -91,4 +91,27 @@ class ScanProtocolTest {
         assertEquals(1, probe.passwordInputs)
         assertTrue(!probe.toString().contains("secret"))
     }
+
+    @Test fun `alias-form permalinks never pass the app check`() {
+        val slugPost = post("1000000000001", "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/1000000000001/")
+        val report = ScanProtocol.parseScanResult(reply("OK", slugPost, post("1000000000002")), request.copy(aliases = listOf("lodzsprzedazzakupwynajem")))
+        assertEquals(listOf("1000000000002"), report.posts.map { it.postId })
+        assertEquals(1, report.rejectedByApp)
+    }
+
+    @Test fun `request carries only the given verified aliases`() {
+        assertEquals(0, ScanRequest(nonce = "a").toJson().getJSONArray("aliases").length())
+        assertEquals("s", ScanRequest(nonce = "a", aliases = listOf("s")).toJson().getJSONArray("aliases").getString(0))
+    }
+
+    @Test fun `group probe keeps only numeric ids and a safe segment`() {
+        val json = JSONObject().put("group", JSONObject().put("segment", "lodzsprzedazzakupwynajem").put("ids", JSONArray()
+            .put(JSONObject().put("id", group).put("source", "al:android:url"))
+            .put(JSONObject().put("id", "abc").put("source", "al:ios:url"))))
+        val (segment, hits) = ScanProtocol.parseGroupProbe(json)!!
+        assertEquals("lodzsprzedazzakupwynajem", segment)
+        assertEquals(listOf(GroupIdHit(group, "al:android:url")), hits)
+        val bad = ScanProtocol.parseGroupProbe(JSONObject().put("group", JSONObject().put("segment", "../x")))!!
+        assertEquals(null, bad.first)
+    }
 }

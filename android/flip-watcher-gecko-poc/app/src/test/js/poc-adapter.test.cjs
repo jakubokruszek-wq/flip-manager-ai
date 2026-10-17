@@ -90,3 +90,64 @@ test("loopback pages are accepted only when the app asks for fixture mode", () =
 test("fails loudly without the collector core", () => {
   assert.throws(() => adapter.evaluate(page(), input, undefined), /COLLECTOR_CORE_MISSING/);
 });
+
+// ---- verified aliases (slug of the approved numeric group)
+const SLUG = "verifiedslugtest";
+const slugHref = `https://www.facebook.com/groups/${SLUG}/`;
+const slugLink = n => `https://www.facebook.com/groups/${SLUG}/posts/${n}/`;
+const withAlias = { groupId: GROUP, maxPosts: 20, aliases: [SLUG] };
+
+test("a slug page is WRONG_GROUP unless the app sends it as a verified alias", () => {
+  const cards = [{ hrefs: [slugLink(id(1))] }];
+  assert.equal(adapter.evaluate(page({ href: slugHref, cards }), input, core).status, "WRONG_GROUP");
+  const result = adapter.evaluate(page({ href: slugHref, cards }), withAlias, core);
+  assert.equal(result.status, "OK");
+  // Identity stays the canonical NUMERIC group, whatever form the link had.
+  assert.deepEqual(result.posts, [{ postId: id(1), permalink: postLink(id(1)), idSource: "DOM_LINK" }]);
+});
+
+test("an alias never opens other groups: foreign slug, foreign numeric, unverified alias", () => {
+  const cards = [
+    { hrefs: [slugLink(id(1))] },
+    { hrefs: ["https://www.facebook.com/groups/innagrupa/posts/1000000000099/"] },
+    { hrefs: ["https://www.facebook.com/groups/999999999999/posts/1000000000098/"] },
+    { hrefs: [slugLink(id(2)), "https://www.facebook.com/groups/innagrupa/posts/1000000000097/"] },
+  ];
+  const result = adapter.evaluate(page({ href: slugHref, cards }), withAlias, core);
+  assert.deepEqual(result.posts.map(post => post.postId), [id(1)]);
+  assert.equal(result.diagnostics.foreignCards, 2);
+  assert.equal(result.diagnostics.ambiguousCards, 1);
+  assert.equal(adapter.evaluate(page({ href: "https://www.facebook.com/groups/innagrupa/", cards }), withAlias, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: slugHref, cards }), { ...withAlias, aliases: ["../x", 5, null] }, core).status, "WRONG_GROUP");
+});
+
+test("slug and numeric forms of the same post are one post; invalid permalinks are dropped", () => {
+  const story = JSON.stringify({ __typename: "Story", post_id: id(3), permalink_url: slugLink(id(3)), message: { text: "Sprzedam" }, actor: { name: "A" } });
+  const result = adapter.evaluate(page({
+    href: slugHref,
+    cards: [{ hrefs: [slugLink(id(1))] }, { hrefs: [postLink(id(1))] }, { hrefs: [`https://www.facebook.com/groups/${SLUG}/posts/abc/`] }, { hrefs: [`https://www.facebook.com/groups/${SLUG}/posts/123/`] }],
+    structured: [story],
+  }), withAlias, core);
+  assert.deepEqual(result.posts.map(post => post.postId).sort(), [id(1), id(3)]);
+  result.posts.forEach(post => assert.equal(post.permalink, postLink(post.postId)));
+  assert.equal(result.diagnostics.duplicatesDropped, 1);
+  assert.equal(result.diagnostics.cardsWithoutId, 2);
+});
+
+test("the 20-post limit holds with aliases", () => {
+  const cards = Array.from({ length: 30 }, (_, i) => ({ hrefs: [i % 2 ? slugLink(id(i)) : postLink(id(i))] }));
+  const result = adapter.evaluate(page({ href: slugHref, cards }), { ...withAlias, maxPosts: 99 }, core);
+  assert.equal(result.posts.length, 20);
+  assert.equal(new Set(result.posts.map(post => post.postId)).size, 20);
+});
+
+test("group identity reads only Facebook's app-link metadata as strong evidence", () => {
+  const hits = adapter.groupIdentity({
+    metaTags: [{ property: "al:android:url", content: `fb://group/${GROUP}` }, { property: "al:ios:url", content: `fb://group/?id=${GROUP}` }, { property: "og:title", content: "fb://group/1111111111" }],
+    alternateLinks: ["android-app://com.facebook.katana/fb/group/2222222222"],
+    scriptTexts: ['{"groupID":"3333333333","x":{"group_id":"3333333333"}}', '{"groupID":"4444444444"}'],
+  });
+  assert.deepEqual(hits.filter(hit => hit.source.startsWith("al:")).map(hit => hit.id), [GROUP, GROUP]);
+  assert.ok(!hits.some(hit => hit.id === "1111111111"));
+  assert.ok(hits.some(hit => hit.id === "3333333333" && hit.source === "json×2"));
+});

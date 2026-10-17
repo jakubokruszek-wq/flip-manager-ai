@@ -64,6 +64,8 @@ class PocActivity : ComponentActivity() {
     private var loginRequested = false
     private var scanning = false
     private var haltMessage: String? = null
+    /** Last top-level navigations (sanitized), the evidence for "Diagnoza grupy". */
+    private val navTrace = ArrayDeque<NavStep>()
 
     private val preferences by lazy { getSharedPreferences("gecko_poc", MODE_PRIVATE) }
     private val store by lazy { ScreenOffTest.store(this) }
@@ -120,6 +122,7 @@ class PocActivity : ComponentActivity() {
         session = newSession
         channel = newChannel
         haltMessage = null
+        navTrace.clear()
         lifecycleScope.launch { userAgent = runCatching { newSession.userAgent.await() }.getOrNull(); render() }
         load(PocPolicy.APPROVED_GROUP_URL, login = false)
     }
@@ -196,6 +199,44 @@ class PocActivity : ComponentActivity() {
         }
     }
 
+    // ---- group identity (diagnosis only: never unlocks scanning)
+
+    private fun recordStep(step: NavStep) {
+        navTrace.addLast(step)
+        while (navTrace.size > 15) navTrace.removeFirst()
+    }
+
+    private fun diagnoseGroup() {
+        val current = channel ?: run { output.text = "Najpierw otwórz sesję."; return }
+        lifecycleScope.launch {
+            val started = Instant.now().toString()
+            val probe = current.groupProbe()
+            val segment = probe?.first ?: PocPolicy.groupSegment(url)
+            val hits = probe?.second.orEmpty()
+            val assessment = GroupIdentity.assess(PocPolicy.APPROVED_GROUP_ID, segment, hits, navTrace.toList())
+            output.text = buildString {
+                appendLine(GroupIdentity.describe(assessment))
+                if (probe == null) appendLine("(strona nie odpowiedziała — rozszerzenie niepołączone)")
+                appendLine()
+                appendLine("ID z metadanych/JSON strony: " + if (hits.isEmpty()) "brak" else hits.joinToString { "${it.id} [${it.source}]" })
+                appendLine("Łańcuch nawigacji (najnowsze na dole):")
+                navTrace.forEach { step ->
+                    val kind = when { step.isRedirect -> "przekierowanie"; step.viaHistory -> "zmiana adresu w stronie"; else -> "ładowanie" }
+                    appendLine("• ${step.url}  [$kind${if (step.hasUserGesture) ", kliknięcie" else ""}]")
+                }
+            }
+            runCatching {
+                store.append(StoredRun("GROUP_DIAGNOSIS", started, Instant.now().toString(), assessment.verdict.name, emptyList(), emptyList(), 0, mapOf(
+                    "segment" to (segment ?: "?"),
+                    "strongIds" to assessment.strongIds.joinToString(),
+                    "allIds" to hits.joinToString { "${it.id}:${it.source}" },
+                    "facebookRedirect" to assessment.serverRedirect.toString(),
+                    "trace" to navTrace.joinToString(" > ") { (if (it.isRedirect) "R:" else if (it.viaHistory) "H:" else "L:") + (if (it.hasUserGesture) "click:" else "") + it.url },
+                )))
+            }
+        }
+    }
+
     // ---- stage C: local screen-off test
 
     private fun startScreenOffTest() {
@@ -265,10 +306,12 @@ class PocActivity : ComponentActivity() {
 
     private val navigationDelegate = object : GeckoSession.NavigationDelegate {
         override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
+            recordStep(NavStep(PocPolicy.sanitize(url), isRedirect = false, hasUserGesture = hasUserGesture, viaHistory = true))
             onUrl(url)
         }
 
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+            recordStep(NavStep(PocPolicy.sanitize(request.uri), request.isRedirect, request.hasUserGesture))
             if (!PocPolicy.allowNavigation(request.uri)) {
                 blockedNavigations++
                 lastBlockedHost = runCatching { Uri.parse(request.uri).host }.getOrNull()
@@ -394,6 +437,7 @@ class PocActivity : ComponentActivity() {
             addView(row(
                 button("scan", "Skanuj widoczne") { scan(scrolls = 0) },
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
+                button("diagnose", "Diagnoza grupy") { diagnoseGroup() },
                 button("results", "Wyniki") { showResults() },
             ))
             addView(row(

@@ -47,11 +47,24 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("1").get().toInt()
-        versionName = "0.1.0-gecko-poc"
+        versionName = "0.1.1-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // No backend in this POC: there is no API URL, token or upload code at all.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        // A fixed, PUBLIC debug key committed with the POC (not a secret, never used for
+        // a store release): every CI build is signed alike, so a new APK installs as an
+        // UPDATE over the previous one and keeps the Facebook session. Without it each
+        // CI runner generated its own debug key and updates were refused.
+        getByName("debug") {
+            storeFile = file("gecko-poc-debug.keystore")
+            storePassword = "android"
+            keyAlias = "geckopocdebug"
+            keyPassword = "android"
+        }
     }
 
     splits {

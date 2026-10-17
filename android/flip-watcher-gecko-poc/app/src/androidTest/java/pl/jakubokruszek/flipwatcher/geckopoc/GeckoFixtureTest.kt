@@ -111,6 +111,45 @@ class GeckoFixtureTest {
         assertTrue(report.posts.size >= 5)
     }
 
+    @Test fun aliasPageIsStoppedWithoutAVerifiedAlias() {
+        val report = runBlocking { withTimeout(120_000) { scanner.run("/groups/fixturegroupalias/", "feed-alias") } }.report
+        assertEquals(ScanStatus.WRONG_GROUP, report.status)
+        assertTrue(report.posts.isEmpty())
+    }
+
+    @Test fun verifiedAliasReadsOnlyThisGroupWithNumericIdentity() {
+        val report = runBlocking { withTimeout(120_000) { scanner.run("/groups/fixturegroupalias/", "feed-alias", aliases = listOf("fixturegroupalias")) } }.report
+        assertEquals(ScanStatus.OK, report.status)
+        val ids = (1..5).filter { it != 4 }.map { (540_000_000_000_000L + it).toString() }.toSet()
+        assertEquals(ids, report.posts.map { it.postId }.toSet())
+        report.posts.forEach { assertEquals(ScanProtocol.canonicalPermalink(FIXTURE_GROUP_ID, it.postId), it.permalink) }
+        assertEquals(2, report.diagnostics["foreignCards"])
+        assertEquals(1, report.diagnostics["ambiguousCards"])
+        assertEquals(0, report.rejectedByApp)
+    }
+
+    @Test fun groupProbeReportsFacebookMetadataIds() = runBlocking {
+        withTimeout(120_000) {
+            withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel = CollectorChannel(session, fixtureMode = true)
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    session.open(GeckoHost.runtime(context))
+                    session.setActive(true)
+                    session.loadUri(server.url("/groups/fixturegroupalias/", "feed-alias"))
+                    assertTrue(channel.awaitPort(30_000))
+                    val (segment, hits) = channel.groupProbe()!!
+                    assertEquals("fixturegroupalias", segment)
+                    assertEquals(listOf(FIXTURE_GROUP_ID), hits.filter { it.strong }.map { it.id }.distinct())
+                } finally {
+                    channel.close(); session.close(); server.close()
+                }
+            }
+        }
+    }
+
     @Test fun pageChangeDuringScanStopsIt() = runBlocking {
         withTimeout(120_000) {
             withContext(Dispatchers.Main) {

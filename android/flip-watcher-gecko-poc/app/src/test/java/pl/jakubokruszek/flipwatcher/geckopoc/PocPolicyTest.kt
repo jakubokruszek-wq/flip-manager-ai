@@ -79,4 +79,28 @@ class PocPolicyTest {
         assertTrue(PocPolicy.LOGIN_URL.startsWith("https://www.facebook.com/login/?next="))
         assertTrue(PocPolicy.LOGIN_URL.contains(group))
     }
+
+    @Test fun `the reported slug is not an approved alias in this build`() {
+        // Unverified on purpose; see PocPolicy.VERIFIED_ALIASES.
+        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/"))
+        assertTrue(PocPolicy.aliasesFor(group).isEmpty())
+        assertTrue(ScanRequest(nonce = "n").aliases.isEmpty())
+    }
+
+    @Test fun `a verified alias unlocks exactly that slug and nothing else`() {
+        val aliases = mapOf("verifiedslug" to group, "othergroupslug" to "999999999")
+        assertEquals(PageKind.APPROVED_GROUP, PocPolicy.classify("https://www.facebook.com/groups/verifiedslug/", aliases = aliases))
+        assertEquals(PageKind.APPROVED_GROUP, PocPolicy.classify("https://m.facebook.com/groups/verifiedslug", aliases = aliases))
+        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/othergroupslug/", aliases = aliases))
+        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/verifiedslug2/", aliases = aliases))
+        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/verifiedslug/members/", aliases = aliases))
+        assertEquals(PageKind.BLOCKED, PocPolicy.classify("https://evil.example/groups/verifiedslug/", aliases = aliases))
+        assertEquals(listOf("verifiedslug"), PocPolicy.aliasesFor(group, aliases))
+    }
+
+    @Test fun `group segment is exact`() {
+        assertEquals("abc", PocPolicy.groupSegment("https://www.facebook.com/groups/abc/"))
+        assertEquals(null, PocPolicy.groupSegment("https://www.facebook.com/groups/abc/posts/1/"))
+        assertEquals(null, PocPolicy.groupSegment("https://www.facebook.com/home.php"))
+    }
 }

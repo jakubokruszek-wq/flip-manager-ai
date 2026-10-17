@@ -31,6 +31,18 @@
     };
   }
 
+  // Facebook's own identifiers of the shown group, for the "Diagnoza grupy" check (no posts, no text).
+  function groupProbe() {
+    const doc = scope.document;
+    const segment = (scope.location.pathname.match(/^\/groups\/([^/]+)\/?$/) || [])[1] || null;
+    const ids = adapter.groupIdentity({
+      metaTags: Array.from(doc.querySelectorAll('meta[property^="al:"]')).slice(0, 40).map(meta => ({ property: meta.getAttribute("property"), content: meta.getAttribute("content") })),
+      alternateLinks: Array.from(doc.querySelectorAll('link[rel="alternate"][href]')).slice(0, 40).map(link => link.getAttribute("href")),
+      scriptTexts: Array.from(doc.querySelectorAll('script[type="application/json"]')).slice(0, 100).map(script => script.textContent || ""),
+    });
+    return { host: scope.location.hostname, segment, ids };
+  }
+
   function topLevelCards() {
     const all = Array.from(scope.document.querySelectorAll('[role="article"],article'));
     return all.filter(card => !card.parentElement || !card.parentElement.closest('[role="article"],article'));
@@ -62,7 +74,7 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function scan(request) {
-    const input = { groupId: request.groupId, maxPosts: request.maxPosts, allowLoopback: request.allowLoopback === true };
+    const input = { groupId: request.groupId, aliases: Array.isArray(request.aliases) ? request.aliases : [], maxPosts: request.maxPosts, allowLoopback: request.allowLoopback === true };
     const startHref = scope.location.href;
     const scrolls = Math.max(0, Math.min(5, Math.floor(Number(request.scrolls) || 0)));
     const pauseMs = Math.max(200, Math.min(4000, Math.floor(Number(request.scrollPauseMs) || 1500)));
@@ -85,6 +97,10 @@
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
     if (message.type === "probe") {
       port.postMessage({ type: "probeResult", nonce: message.nonce, probe: probe() });
+      return;
+    }
+    if (message.type === "groupProbe") {
+      port.postMessage({ type: "groupProbeResult", nonce: message.nonce, group: groupProbe() });
       return;
     }
     if (message.type !== "scan") return;

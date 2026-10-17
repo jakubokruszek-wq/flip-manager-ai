@@ -22,6 +22,20 @@ object PocPolicy {
     const val EXTENSION_ID = "flip-gecko-poc@flip-manager.local"
     const val EXTENSION_LOCATION = "resource://android/assets/ext/flip_poc/"
 
+    /**
+     * Text addresses (vanity slugs) CONFIRMED to be the same group as a numeric id:
+     * slug -> numeric id. Empty on purpose: "lodzsprzedazzakupwynajem" is NOT
+     * confirmed as 402796264871862 (the repository lists them as two separate
+     * sources, and a collector-core test ties the slug to another numeric id).
+     * An entry is added only after on-device evidence (see GroupIdentity) and
+     * the operator's approval; never by matching names or pictures.
+     */
+    val VERIFIED_ALIASES: Map<String, String> = emptyMap()
+
+    /** Slugs verified for [groupId]. */
+    fun aliasesFor(groupId: String, aliases: Map<String, String> = VERIFIED_ALIASES): List<String> =
+        aliases.filterValues { it == groupId }.keys.sorted()
+
     /** The official login page; after login Facebook returns to the approved group. */
     val LOGIN_URL: String = "https://www.facebook.com/login/?next=" + URLEncoder.encode(APPROVED_GROUP_URL, "UTF-8")
 
@@ -32,7 +46,13 @@ object PocPolicy {
         return value in FACEBOOK_HOSTS || value.endsWith(".facebook.com")
     }
 
-    fun classify(url: String?, fixtureMode: Boolean = false): PageKind {
+    /** The group segment of a /groups/<id-or-slug>/ path, or null. */
+    fun groupSegment(url: String?): String? {
+        val path = runCatching { URI(url ?: return null).rawPath }.getOrNull() ?: return null
+        return Regex("^/groups/([^/]+)/?$").find(path)?.groupValues?.get(1)
+    }
+
+    fun classify(url: String?, fixtureMode: Boolean = false, aliases: Map<String, String> = VERIFIED_ALIASES): PageKind {
         if (url.isNullOrBlank() || url == "about:blank") return PageKind.BLANK
         val uri = runCatching { URI(url) }.getOrNull() ?: return PageKind.BLOCKED
         val host = uri.host?.lowercase()
@@ -44,6 +64,8 @@ object PocPolicy {
             Regex("captcha", RegexOption.IGNORE_CASE).containsMatchIn(path) -> PageKind.CAPTCHA
             Regex("^/(login|recover)", RegexOption.IGNORE_CASE).containsMatchIn(path) -> PageKind.LOGIN
             path.trimEnd('/') == "/groups/$APPROVED_GROUP_ID" -> PageKind.APPROVED_GROUP
+            // Only an exact, verified alias of the approved group; never any /groups/ path.
+            groupSegment(url)?.let { aliases[it] == APPROVED_GROUP_ID } == true -> PageKind.APPROVED_GROUP
             path.startsWith("/groups/") -> PageKind.OTHER_GROUP
             else -> PageKind.FACEBOOK_OTHER
         }
@@ -83,7 +105,7 @@ object PocPolicy {
         PageKind.CHECKPOINT -> "STOP: Facebook prosi o weryfikację (checkpoint). Automat wstrzymany. Możesz dokończyć ją ręcznie albo zamknąć sesję."
         PageKind.CAPTCHA -> "STOP: Facebook wyświetla CAPTCHA. Automat wstrzymany; nic nie jest rozwiązywane automatycznie."
         PageKind.LOGIN -> if (loginRequested) null else "STOP: wymagane logowanie. Użyj „Zaloguj się”."
-        PageKind.OTHER_GROUP -> "STOP: to nie jest zatwierdzona grupa. Użyj „Wróć do grupy”."
+        PageKind.OTHER_GROUP -> "STOP: ten adres grupy nie jest zatwierdzony (inna grupa albo niezweryfikowany alias). Użyj „Diagnoza grupy” albo „Wróć do grupy”."
         PageKind.BLOCKED -> "STOP: adres spoza Facebooka został zablokowany."
         else -> null
     }

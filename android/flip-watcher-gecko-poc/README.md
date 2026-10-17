@@ -39,7 +39,7 @@ Test robisz Ty, na własnym koncie. Aplikacja niczego nie klika i nie wypełnia 
    - aplikacja wyświetli czerwony **STOP**, a skan zostanie zablokowany;
    - weryfikację możesz dokończyć ręcznie albo stuknąć „Zamknij sesję”;
    - nic nie jest rozwiązywane automatycznie.
-5. Stuknij **„Wróć do grupy”**. Banner powinien pokazać „Zatwierdzona grupa otwarta”, a w GeckoView powinny być widoczne posty.
+5. Stuknij **„Wróć do grupy”**. Jeśli zamiast tego pojawi się STOP `OTHER_GROUP`, stuknij **„Diagnoza grupy”** (sekcja niżej) i przyślij wynik. Banner powinien pokazać „Zatwierdzona grupa otwarta”, a w GeckoView powinny być widoczne posty.
    - ✅ **GO A**: zalogowałeś się i widzisz posty grupy.
 6. Stuknij **„Skanuj widoczne”**. Odczytywany jest tylko ekran, bez przewijania, maksymalnie 20 postów w 45 s. Wynik pokazuje status, liczbę postów i listę `ID [źródło] link`.
    - Opcjonalnie: **„Skanuj + przewiń 3×”** (3 spokojne przewinięcia co 1,5 s).
@@ -49,6 +49,36 @@ Test robisz Ty, na własnym koncie. Aplikacja niczego nie klika i nie wypełnia 
 9. Na koniec stuknij **„Zamknij sesję”** albo **„Wyloguj i usuń dane”**, który usuwa cookies i dane stron tej aplikacji.
 
 Jeśli w kroku 3 formularz **nie** pojawi się także w GeckoView, przyślij zrzut diagnostyki. Zgodnie z kryterium nie rozwijamy wtedy automatyzacji bez ponownej oceny.
+
+## Adres tekstowy grupy (OTHER_GROUP)
+
+Na Samsungu GeckoView pokazał `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/` zamiast `…/groups/402796264871862/`. **Ten alias nie jest potwierdzony**, więc skan pozostaje zablokowany (STOP `OTHER_GROUP`):
+- w repozytorium obie formy są **dwoma oddzielnymi zatwierdzonymi źródłami** (`extensions/facebook-collector/background.js`, lista źródeł w PR #44);
+- test `collector-core.test.cjs` wiąże ten slug z **innym** numerem: `1350200629551011`;
+- mapowanie historyczne w PR #44 opisuje `402796264871862` jako „Nieznana grupa”;
+- z serwera CI nie da się otworzyć Facebooka, więc nie było jak potwierdzić powiązania z zewnątrz.
+
+Mechanizm aliasu jest gotowy, ale wyłączony: `PocPolicy.VERIFIED_ALIASES` jest pusta. Alias dopuszcza dokładnie jeden slug dla jednego numeru, nigdy dowolną ścieżkę `/groups/`. Tożsamość postów zawsze pozostaje numeryczna, a karty z linkiem do innej grupy są odrzucane.
+
+**„Diagnoza grupy”** zbiera na telefonie dowód, który podaje sam Facebook:
+- numer grupy z metadanych app-link strony (`al:android:url`, `al:ios:url`);
+- łańcuch przejść: czy Facebook sam, bez kliknięcia, zmienił adres numeryczny na tekstowy.
+
+Możliwe wyniki:
+
+| Wynik | Znaczenie | Co dalej |
+|---|---|---|
+| `DOWÓD ALIASU` | Oba warunki spełnione | Przyślij wynik. Alias zostanie dodany ręcznie w kolejnej wersji, po Twojej zgodzie. |
+| `INNA GRUPA` | Facebook podaje inny numer | STOP zostaje; trzeba wrócić do grupy albo zatwierdzić nowe źródło. |
+| `BRAK DOWODU` | Za mało danych | STOP zostaje. |
+
+Nazwa, tytuł i zdjęcie grupy nigdy nie są dowodem. Wynik diagnozy zapisuje się też w „Wyniki”.
+
+## Podpis i aktualizacje
+
+Od wersji 0.1.1 APK jest podpisywany stałym, **publicznym** kluczem testowym `app/gecko-poc-debug.keystore` (to nie jest sekret i nie służy do wydań w sklepie). Certyfikat SHA-256: `878b11e6…548fb370a`; CI sprawdza go przy każdym buildzie. Każda następna wersja instaluje się więc jako aktualizacja.
+
+Wersje 0.1.0 były podpisane losowym kluczem każdego serwera CI, dlatego **jednorazowo** trzeba odinstalować 0.1.0 przed instalacją 0.1.1. Odinstalowanie usuwa też sesję Facebooka tej aplikacji, więc potrzebne będzie ponowne logowanie.
 
 ## Testy
 

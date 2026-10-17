@@ -40,6 +40,8 @@ class HeadlessFixtureScan(private val context: Context) {
         surface: SurfaceMode = SurfaceMode.NONE,
         attach: ((GeckoSession) -> Unit)? = null,
         detach: (() -> Unit)? = null,
+        /** Test-only verified aliases of the fixture group; the app itself uses PocPolicy.VERIFIED_ALIASES. */
+        aliases: List<String> = emptyList(),
     ): Result = withContext(Dispatchers.Main) {
         val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
         // Not private mode: built-in extensions are not enabled in private browsing by default.
@@ -60,7 +62,7 @@ class HeadlessFixtureScan(private val context: Context) {
             session.loadUri(server.url(path, fixture))
             val connected = channel.awaitPort(portTimeoutMs)
             val report = if (!connected) ScanProtocol.failure(ScanStatus.NOT_READY, "Rozszerzenie nie połączyło się w ${portTimeoutMs / 1000} s")
-            else channel.scan(ScanRequest(nonce = UUID.randomUUID().toString(), groupId = FIXTURE_GROUP_ID, scrolls = scrolls, scrollPauseMs = scrollPauseMs, allowLoopback = true))
+            else channel.scan(ScanRequest(nonce = UUID.randomUUID().toString(), groupId = FIXTURE_GROUP_ID, scrolls = scrolls, scrollPauseMs = scrollPauseMs, allowLoopback = true, aliases = aliases))
             Result(report, connected, userAgent)
         } finally {
             channel.close()

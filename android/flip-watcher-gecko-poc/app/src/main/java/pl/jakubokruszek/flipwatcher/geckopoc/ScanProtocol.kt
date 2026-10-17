@@ -46,6 +46,8 @@ data class ScanRequest(
     val scrolls: Int = 0,
     val scrollPauseMs: Int = 1500,
     val allowLoopback: Boolean = false,
+    /** Verified slugs of [groupId] only (PocPolicy.VERIFIED_ALIASES); empty unless confirmed. */
+    val aliases: List<String> = PocPolicy.aliasesFor(groupId),
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("type", "scan")
@@ -55,6 +57,7 @@ data class ScanRequest(
         .put("scrolls", scrolls.coerceIn(0, 5))
         .put("scrollPauseMs", scrollPauseMs)
         .put("allowLoopback", allowLoopback)
+        .put("aliases", JSONArray(aliases.take(5)))
 }
 
 /**
@@ -67,6 +70,21 @@ object ScanProtocol {
     private val POST_ID = Regex("^\\d{5,30}$")
 
     fun probeRequest(nonce: String): JSONObject = JSONObject().put("type", "probe").put("nonce", nonce)
+
+    fun groupProbeRequest(nonce: String): JSONObject = JSONObject().put("type", "groupProbe").put("nonce", nonce)
+
+    /** Group segment of the shown page and the numeric ids Facebook published for it. */
+    fun parseGroupProbe(json: JSONObject?): Pair<String?, List<GroupIdHit>>? {
+        val group = json?.optJSONObject("group") ?: return null
+        val ids = group.optJSONArray("ids") ?: JSONArray()
+        val hits = (0 until minOf(ids.length(), 50)).mapNotNull { index ->
+            val item = ids.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optString("id")
+            if (POST_ID.matches(id)) GroupIdHit(id, item.optString("source").take(30)) else null
+        }
+        val segment = group.optString("segment").takeIf { it.isNotBlank() && Regex("^[A-Za-z0-9._-]{1,100}$").matches(it) }
+        return segment to hits
+    }
 
     fun canonicalPermalink(groupId: String, postId: String) = "https://www.facebook.com/groups/$groupId/posts/$postId/"
 

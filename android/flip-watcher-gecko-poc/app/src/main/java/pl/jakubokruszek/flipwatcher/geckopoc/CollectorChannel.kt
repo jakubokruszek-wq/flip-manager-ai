@@ -36,7 +36,7 @@ class CollectorChannel(
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "probeResult", "scanResult" -> {
+                "probeResult", "scanResult", "groupProbeResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -80,6 +80,12 @@ class CollectorChannel(
         val nonce = UUID.randomUUID().toString()
         val reply = request(nonce, ScanProtocol.probeRequest(nonce), timeoutMs) ?: return null
         return ScanProtocol.parseProbe(reply.optJSONObject("probe"))
+    }
+
+    /** Facebook's own identifiers of the shown group (for GroupIdentity); null when the page did not answer. */
+    suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {
+        val nonce = UUID.randomUUID().toString()
+        return ScanProtocol.parseGroupProbe(request(nonce, ScanProtocol.groupProbeRequest(nonce), timeoutMs))
     }
 
     suspend fun scan(request: ScanRequest, timeoutMs: Long = PocPolicy.SCAN_TIMEOUT_MS): ScanReport {
