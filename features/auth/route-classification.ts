@@ -66,10 +66,6 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
     ["POST", "/api/facebook-watcher/orphans", /^\/api\/facebook-watcher\/orphans$/],
   ]),
   ...routes("HUMAN_OPERATOR", [
-    ["POST", "/api/deal-room/test", /^\/api\/deal-room\/test$/],
-    ["PUT", "/api/deal-room/test/[id]", /^\/api\/deal-room\/test\/[^/]+$/],
-    ["POST", "/api/deal-room/test/[id]/initialize", /^\/api\/deal-room\/test\/[^/]+\/initialize$/],
-    ["POST", "/api/deal-room/test/[id]/answers", /^\/api\/deal-room\/test\/[^/]+\/answers$/],
     ["POST", "/api/flip-finder/listings/[id]/investment/answers", /^\/api\/flip-finder\/listings\/[^/]+\/investment\/answers$/],
     ["PATCH", "/api/alerts/[id]", /^\/api\/alerts\/[^/]+$/],
     ["POST", "/api/facebook-watcher/groups", /^\/api\/facebook-watcher\/groups$/],

@@ -1,1 +1,1 @@
-export { lodzDeal } from "../synthetic-deals";
+export { lodzDeal } from "./retired-demo/synthetic-deals";

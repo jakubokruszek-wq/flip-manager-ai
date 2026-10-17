@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTestDeal } from "./test-engine";
-import { testCases } from "./test-mode";
+import { buildTestDeal } from "./test-fixtures/retired-demo/test-engine";
+import { testCases } from "./test-fixtures/retired-demo/test-mode";
 import { buildDealBrain,BRAIN_DIRECTORS } from "./brain";
 import { buildCanonicalDeal } from "./engine";
-import { lodzDeal } from "./synthetic-deals";
-import { dealFeatures,TEST_DEAL_FEATURES } from "./feature-context";
+import { lodzDeal } from "./test-fixtures/retired-demo/synthetic-deals";
+import { dealFeatures } from "./feature-context";
+import { TEST_DEAL_FEATURES } from "./test-fixtures/retired-demo/test-features";
 import { parseAnswerCommand,mergeAnswers,answerOverrides } from "./deal-room-answers";
 const owner="33333333-3333-4333-8333-333333333333";
 test("virtual cases reuse all ten directors, synthetic indicative fallback, CFO/tax Q&A without activating real flags or BUY",()=>{

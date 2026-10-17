@@ -44,13 +44,6 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
     else body={ok:true};
     return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
   });
-  await page.goto(base+'/flip-finder');
-  await page.getByRole('heading',{name:'Deal Room 2.0 · TEST',exact:true}).waitFor();
-  await page.getByRole('button',{name:'Przygotuj / wznów testy',exact:true}).click();
-  await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).first().waitFor();
-  assert.equal(await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).count(),3);
-  assert.match(await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).first().getAttribute('href'),/^\/deals\/deadbeef-/);
-  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'test Finder stays within mobile viewport');
   await page.goto(base+`/deals/${input.listing.id}`);
   await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
   const before=current.underwriting.result.profitBase;
@@ -156,42 +149,43 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/mobile-after.png'),fullPage:true});
 });
 
-test('mobile main Finder virtual TEST: dedicated API only, persisted answers and history with real-deal features OFF',{timeout:180000},async(t)=>{
- const {buildTestDeal}=await import('../test-engine.ts');
- const {testCases}=await import('../test-mode.ts');
- const {TEST_DEAL_FEATURES}=await import('../feature-context.ts');
+test('mobile real Deal Room CEO: Finder has no demo, canonical values, condition-to-Q&A and persisted reanalysis',{timeout:180000},async(t)=>{
+ const {lodzDeal}=await import('../test-fixtures/lodz-deals.ts');
+ const {buildCanonicalDeal}=await import('../engine.ts');
+ const {ceoRecommendation}=await import('../ceo-recommendation.ts');
  const {buildDealBrain}=await import('../brain/index.ts');
  const {parseAnswerCommand,mergeAnswers,answerOverrides,affectedDirectors}=await import('../deal-room-answers.ts');
- const owner='44444444-4444-4444-8444-444444444444',cases=testCases(owner),id=cases[0].id;
- let current=buildTestDeal(owner,id),room={version:1,answers:{},baselineOverrides:{},rounds:[]},normalInvestmentCalls=0;const paths=[],errors=[];
- const receipts=new Map(),root=path.resolve(__dirname,'../../..'),auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
- const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_TEST_OPERATOR_IDS:owner,DEAL_ROOM_QA_ENABLED:'false',DEAL_ROOM_CFO_ENABLED:'false',DEAL_ROOM_TAX_REVIEW_ENABLED:'false'};
+ const features={cfo:true,taxReview:false,taxArithmetic:false,privateTax:false,jdgTax:false};
+ const input={...lodzDeal('UNCLEAR_RENOVATION'),features,overrides:{costScope:'BRUTTO',financingMode:'CASH',equity:800000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6,renovationTotal:40000}};
+ const id=input.listing.id;let current=buildCanonicalDeal(input),room={version:1,answers:{},baselineOverrides:input.overrides,rounds:[]};const receipts=new Map();
+ const root=path.resolve(__dirname,'../../..'),auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
+ // Old deployment flags must never bring the removed demo back.
+ const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_TEST_OPERATOR_IDS:'44444444-4444-4444-8444-444444444444'};
  const nextBin=require.resolve('next/dist/bin/next');await ensureProductionBuild(nextBin,root,env);const port=await freePort(),base=`http://127.0.0.1:${port}`;
  const server=spawn(process.execPath,[nextBin,'start','--hostname','127.0.0.1','--port',String(port)],{cwd:root,env,stdio:'ignore'});t.after(()=>server.kill());
  for(let i=0;i<120;i++){try{if((await fetch(base+'/login')).ok)break;}catch{}await new Promise(r=>setTimeout(r,250));}
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage({viewport:{width:390,height:844}});await addOperatorSessionCookie(page.context(),base);
- await page.route('**/api/**',async route=>{
+ await page.route('**/api/flip-finder/**',async route=>{
   const req=route.request(),url=new URL(req.url());let body={ok:true};
-  paths.push(req.method()+' '+url.pathname);if(url.pathname.startsWith('/api/flip-finder/listings/'))normalInvestmentCalls++;
-  if(url.pathname==='/api/deal-room/test')body={cases};
-  else if(url.pathname===`/api/deal-room/test/${id}/answers`){
+  if(url.pathname.endsWith('/investment/answers')){
    if(req.method()==='GET')body={enabled:true,room};
-   else{
-    const cmd=parseAnswerCommand(req.postDataJSON(),TEST_DEAL_FEATURES);
-    if(receipts.has(cmd.requestId))body=receipts.get(cmd.requestId);
-    else{assert.equal(cmd.expectedVersion,room.version);const before=current,answers=mergeAnswers(current,room,cmd,owner,new Date().toISOString(),TEST_DEAL_FEATURES);current=buildTestDeal(owner,id,answerOverrides(current,{},answers));room={...room,version:room.version+1,answers,rounds:[{requestId:cmd.requestId,savedAt:new Date().toISOString(),actorId:owner,changedFields:cmd.answers.map(a=>a.field),invalidated:affectedDirectors(cmd.answers.map(a=>a.field)),before:buildDealBrain(before),after:buildDealBrain(current)}]};body={deal:current,room};receipts.set(cmd.requestId,body);}
-   }
-  }else if(url.pathname===`/api/deal-room/test/${id}/history`)body={rounds:room.rounds.map(r=>({requestId:r.requestId,createdAt:r.savedAt,changedFields:r.changedFields,beforeProfit:r.before.financials?.profitBase,afterProfit:r.after.financials?.profitBase,recommendation:r.after.ceo.reasoningSummary})),nextBefore:null};
-  else if(url.pathname===`/api/deal-room/test/${id}`)body={deal:current,media:[]};
+   else{const cmd=parseAnswerCommand(req.postDataJSON(),features);if(receipts.has(cmd.requestId))body=receipts.get(cmd.requestId);else{assert.equal(cmd.expectedVersion,room.version);const before=current,answers=mergeAnswers(current,room,cmd,'44444444-4444-4444-8444-444444444444',input.now,features);current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,answers)});room={...room,version:room.version+1,answers,rounds:[{requestId:cmd.requestId,savedAt:input.now,actorId:'synthetic-ci-only',changedFields:cmd.answers.map(a=>a.field),invalidated:affectedDirectors(cmd.answers.map(a=>a.field)),before:buildDealBrain(before),after:buildDealBrain(current)}]};body={deal:current,room};receipts.set(cmd.requestId,body);}}
+  }else if(url.pathname.endsWith('/investment/history'))body={rounds:room.rounds.map(r=>({requestId:r.requestId,createdAt:r.savedAt,changedFields:r.changedFields,beforeProfit:r.before.financials?.profitBase,afterProfit:r.after.financials?.profitBase,recommendation:r.after.ceo.reasoningSummary})),nextBefore:null};
+  else if(url.pathname.endsWith('/investment'))body={deal:current,media:[]};
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
  });
- page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base+'/flip-finder');await page.getByRole('button',{name:'Przygotuj / wznów testy',exact:true}).click();await page.getByRole('link',{name:'Otwórz Deal Room TEST',exact:true}).first().click();
- await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();await page.getByRole('button',{name:/Pozostałe pytania/}).click();await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('40000');await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
- for(let i=0;i<100&&room.version===1;i++)await page.waitForTimeout(50);
- assert.equal(room.version,2,JSON.stringify({paths,errors,alerts:await page.getByRole('alert').allTextContents()}));
- await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();await page.reload();await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();assert.equal(room.answers.renovationBudget.value,40000);
- await page.getByRole('button',{name:'Wczytaj / odśwież historię'}).click();await page.getByLabel('Historia analiz',{exact:true}).getByText(/Zmienione pola: renovationBudget/).waitFor();
- assert.notEqual(current.ceo.result.action,'KUP');assert.equal(current.underwriting.result.cfo.taxStatus,'UNKNOWN');assert.equal(normalInvestmentCalls,0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/virtual-test-main-finder.png'),fullPage:true});
+ await page.goto(base+'/flip-finder');assert.equal(await page.getByRole('button',{name:'Przygotuj / wznów testy',exact:true}).count(),0);assert.equal(await page.getByText('Deal Room 2.0 · TEST',{exact:true}).count(),0);
+ assert.equal((await page.request.get(base+'/api/deal-room/test')).status(),404);assert.equal((await page.request.get(base+'/deals/deadbeef-0000-4000-8000-000000000000')).status(),404);
+ fs.mkdirSync(path.join(root,'artifacts/deal-room-qa'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/finder-without-demo.png'),fullPage:true});
+ await page.goto(base+`/deals/${id}`);await page.getByRole('heading',{name:'Końcowa rekomendacja CEO',exact:true}).waitFor();
+ const panel=page.locator('[data-final-ceo]');assert.equal(await panel.locator('[data-ceo-decision]').innerText(),'HOLD');
+ const original=ceoRecommendation(current),fmt=n=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN',minimumFractionDigits:2,maximumFractionDigits:2}).format(n);
+ assert.ok(original.maxBuy!==null);assert.ok((await panel.innerText()).includes(fmt(original.maxBuy)));assert.ok((await panel.innerText()).includes('przed podatkiem'));
+ const link=panel.locator('a[href^="#deal-question-"]').first();const target=await link.getAttribute('href');await link.click();await page.locator(target).waitFor();
+ await page.waitForFunction(id=>document.activeElement?.id===id,target.slice(1));
+ const more=page.getByRole('button',{name:/Pozostałe pytania/});if(await more.count())await more.click();await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('100000');await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+ await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();assert.ok(ceoRecommendation(current).profits.base<original.profits.base);assert.equal(current.underwriting.result.cfo.netProfit,null);assert.notEqual(current.ceo.result.action,'KUP');
+ await page.reload();await page.getByRole('heading',{name:'Końcowa rekomendacja CEO',exact:true}).waitFor();assert.equal(room.answers.renovationBudget.value,100000);await page.getByRole('button',{name:'Wczytaj / odśwież historię'}).click();await page.getByLabel('Historia analiz',{exact:true}).getByText(/Zmienione pola: renovationBudget/).waitFor();
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/ceo-mobile-390.png'),fullPage:true});await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/ceo-mobile-top-390.png')});
 });

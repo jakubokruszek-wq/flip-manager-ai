@@ -1,5 +1,6 @@
 "use client";
 
+import { FinalCeoRecommendation } from "./final-ceo-recommendation";
 import { AnalysisHistory } from "./analysis-history";
 import { CfoPanel } from "./cfo-panel";
 import Link from "next/link";
@@ -58,25 +59,27 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onA
       </div>
     </header>
 
-    <DealGallery images={images} />
+    <FinalCeoRecommendation deal={deal} />
 
     <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="order-2 min-w-0 space-y-5 xl:order-1">
-        <ExecutiveHero deal={deal} />
+        <div className="hidden space-y-5 xl:block"><ExecutiveHero deal={deal} />
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <BuyGate deal={deal} />
           <Completeness deal={deal} />
           <BiggestRisk brain={brain} deal={deal} />
           <NextAction brain={brain} />
         </div>
+        </div>
         <DirectorQuestions deal={deal} onAnalyzed={onAnalyzed ?? (() => onRefresh())} />
+        <DealGallery images={images} />
         <AnalysisHistory key={deal.listingId} listingId={deal.listingId} />
         <DirectorCouncil directors={directorCards} expanded={expandedDirector} onToggle={setExpandedDirector} />
         <ScenarioAndTriggers deal={deal} />
         <DealTabs activeTab={activeTab} deal={deal} onChange={setActiveTab} />
         <OverridePanel deal={deal} disabled={saving} onSave={onSave} />
       </section>
-      <aside className="order-1 min-w-0 space-y-4 xl:order-2 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+      <aside className="hidden min-w-0 space-y-4 xl:order-2 xl:block xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
         <CeoRail deal={deal} />
         <div className="hidden space-y-4 xl:block"><Timeline events={timeline} /></div>
       </aside>

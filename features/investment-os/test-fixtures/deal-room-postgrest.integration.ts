@@ -207,12 +207,12 @@ test("three isolated Finder listings: high profit, thin margin, hard reject; ful
 
 
 test("virtual TEST API/DB: no production tables, all owner/flag gates, dedicated persistence CAS/replay and missing migration",async()=>{
- const api=await import("../../../app/api/deal-room/test/route");
- const deal=await import("../../../app/api/deal-room/test/[id]/route");
- const answers=await import("../../../app/api/deal-room/test/[id]/answers/route");
- const history=await import("../../../app/api/deal-room/test/[id]/history/route");
- const initialize=await import("../../../app/api/deal-room/test/[id]/initialize/route");
- const {testCases}=await import("../test-mode");
+ const api=await import("./retired-demo/test-route-harness");
+ const deal=(await import("./retired-demo/test-route-harness")).deal;
+ const answers=(await import("./retired-demo/test-route-harness")).answers;
+ const history=(await import("./retired-demo/test-route-harness")).history;
+ const initialize=(await import("./retired-demo/test-route-harness")).initialize;
+ const {testCases}=await import("./retired-demo/test-mode");
  const {BRAIN_DIRECTORS,buildDealBrain}=await import("../brain");
  const keys=["DEAL_ROOM_TEST_ENABLED","DEAL_ROOM_TEST_STORAGE_VERSION","DEAL_ROOM_TEST_OPERATOR_IDS","VERCEL_ENV","DEAL_ROOM_QA_ENABLED"];
  const old=keys.map(k=>process.env[k]);

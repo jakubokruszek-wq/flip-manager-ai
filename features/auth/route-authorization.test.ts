@@ -33,12 +33,8 @@ test("every mutation route has an explicit authentication class", () => {
   assert.deepEqual(unclassified.map((route) => `${route.method} ${route.pathname}`), []);
 });
 
-test("every human mutation route uses the shared operator guard or the reviewed TEST gateway", () => {
-  const gateway=fs.readFileSync(path.join(root,"features/investment-os/server/test-mode-api.ts"),"utf8");
-  const guard=gateway.indexOf("actor=await requireOperator()"),allowlist=gateway.indexOf("if(!testModeAllowed(actor.id)"),db=gateway.indexOf('if(action==="catalog")');
-  assert.ok(guard>=0&&allowlist>guard&&db>allowlist,"TEST gateway authenticates and authorizes before any storage or computation");
-  const delegated=(route:typeof mutationRoutes[number])=>route.pathname.startsWith("/api/deal-room/test") && route.source.includes('from "@/features/investment-os/server/test-mode-api"') && route.source.includes("testModeApi(request,") && !/createAdminClient|createFacebookWatcherAdminClient/.test(route.source);
-  const unguarded = mutationRoutes.filter((route) => classifyMutationRoute(route.method, route.pathname) === "HUMAN_OPERATOR" && !route.source.includes("requireOperator") && !delegated(route));
+test("every human mutation route directly calls the shared operator guard", () => {
+  const unguarded = mutationRoutes.filter((route) => classifyMutationRoute(route.method, route.pathname) === "HUMAN_OPERATOR" && !route.source.includes("requireOperator"));
   assert.deepEqual(unguarded.map((route) => `${route.method} ${route.pathname}`), []);
 });
 

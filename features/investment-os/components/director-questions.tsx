@@ -21,6 +21,17 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
     }).catch(() => { if (active) setError("Nie udało się wczytać odpowiedzi. Odśwież stronę."); });
     return () => { active = false; };
   }, [path, deal.updatedAt]);
+  useEffect(() => {
+    const focusQuestion=()=>{
+      const match=window.location.hash.match(/^#deal-question-([A-Za-z0-9_]+)$/);if(!match)return;
+      const field=match[1],available=roomQuestions(deal,room??{version:0,answers:{},baselineOverrides:{},rounds:[]});
+      if(!available.some(q=>q.field===field))return;
+      setMore(true);
+      window.setTimeout(()=>{const target=document.getElementById(`deal-question-${field}`);target?.focus();target?.scrollIntoView({block:"start",behavior:"smooth"});},0);
+    };
+    window.addEventListener("hashchange",focusQuestion);const timer=window.setTimeout(focusQuestion,0);
+    return ()=>{window.clearTimeout(timer);window.removeEventListener("hashchange",focusQuestion);};
+  },[deal,room]);
   const change = (field: string, patch: Partial<AnswerInput>) => {
     pending.current = null;
     setDraft((current) => {
@@ -58,7 +69,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
     <h2 className="text-lg font-bold text-gold">Dyrektorzy pytają Ciebie</h2>
     <p className="text-xs text-muted-foreground">Analizy regułowe Investment OS. PCC, notariusz, finansowanie i sprzedaż są scenariuszem z ustawień, a nie potwierdzonymi kosztami tej transakcji. Odpowiedź i link do dokumentu nie są automatycznym potwierdzeniem faktu prawnego ani ceny transakcyjnej. Nie wpisuj haseł, tokenów ani danych osób z dokumentów.</p>
     {disabled ? <p>Trwałe odpowiedzi nie są aktywne w tym środowisku.</p> : null}
-    {visible.map((q) => { const answer = draft[q.field] ?? room?.answers[q.field], unit = answerUnit(q.field), numeric = unit !== "opis / ustalenie", stale = Boolean(room?.answers[q.field] && room.answers[q.field].sourceFingerprint !== answerSourceFingerprint(deal, q.field)); return <fieldset key={q.field} disabled={saving || !room} className="min-w-0 space-y-2 rounded-xl border border-gold/40 bg-gold/[0.05] p-3 shadow-[inset_3px_0_0_rgba(214,179,90,0.55)]" data-question-field={q.field}>
+    {visible.map((q) => { const answer = draft[q.field] ?? room?.answers[q.field], unit = answerUnit(q.field), numeric = unit !== "opis / ustalenie", stale = Boolean(room?.answers[q.field] && room.answers[q.field].sourceFingerprint !== answerSourceFingerprint(deal, q.field)); return <fieldset id={`deal-question-${q.field}`} tabIndex={-1} key={q.field} disabled={saving || !room} className="min-w-0 space-y-2 rounded-xl border border-gold/40 bg-gold/[0.05] p-3 shadow-[inset_3px_0_0_rgba(214,179,90,0.55)]" data-question-field={q.field}>
       <legend className="max-w-full break-words px-1 text-base font-bold leading-snug text-gold">{q.question}</legend>
       <p className="text-xs font-semibold text-gold/90">{q.directors} · {q.blocking ? "Pytanie blokujące" : "Założenie / dane do analizy"}</p>
       <p className="text-xs text-muted-foreground">{q.why} Potwierdzenie: {q.evidence}</p>
