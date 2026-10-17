@@ -43,14 +43,14 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onA
 
   return <main className="mx-auto w-full max-w-[1720px] space-y-4 px-3 pb-10 pt-3 sm:px-6 lg:px-8" data-deal-room>
     {error ? <p role="alert" className="rounded border border-red-400/30 p-3 text-sm text-red-300">{error}</p> : null}
-    <header className="border-b border-white/10 pb-4">
+    <header className="border-b border-white/10 pb-2 sm:pb-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link className="inline-flex min-h-9 items-center gap-2 rounded-lg px-1 text-xs font-semibold text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-gold" href="/flip-finder"><ArrowLeft className="size-3.5" />Flip Finder <span className="text-white/25">/</span> Oferta <span className="text-white/25">/</span> <span className="text-gold">Pokój transakcji</span></Link>
         <div className="flex flex-wrap gap-2"><StageBadge stage={deal.stage} /><Button className="min-h-9" onClick={onRefresh} size="sm" type="button" variant="outline">Odśwież analizę</Button></div>
       </div>
-      <div className="mt-4 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+      <div className="mt-2 flex flex-col gap-2 sm:mt-4 sm:gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-          <div aria-hidden className="grid size-[68px] shrink-0 place-items-center rounded-xl border border-gold/25 bg-[radial-gradient(circle_at_30%_20%,rgba(214,179,90,.16),transparent_54%),#13181e] text-gold shadow-[0_14px_32px_-26px_rgba(214,179,90,.95)] sm:size-[86px]"><Landmark className="size-6 sm:size-7" /></div>
+          <div aria-hidden className="grid size-12 shrink-0 place-items-center rounded-xl border border-gold/25 bg-[radial-gradient(circle_at_30%_20%,rgba(214,179,90,.16),transparent_54%),#13181e] text-gold shadow-[0_14px_32px_-26px_rgba(214,179,90,.95)] sm:size-[86px]"><Landmark className="size-6 sm:size-7" /></div>
           <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gold">{sourceLabel(deal.facts.source.effectiveValue)}</p><h1 className="type-page-title mt-1 break-words">{title}</h1><p className="mt-1 text-xs text-muted-foreground sm:text-sm">{location || "Lokalizacja nieustalona"} <span className="px-1.5 text-white/30">|</span> {factsSummary(deal)}</p></div>
         </div>
         <div className="flex flex-wrap gap-2 xl:justify-end">
