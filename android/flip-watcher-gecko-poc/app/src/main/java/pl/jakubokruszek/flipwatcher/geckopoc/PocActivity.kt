@@ -258,11 +258,39 @@ class PocActivity : ComponentActivity() {
         report.posts.forEachIndexed { index, post -> appendLine("${index + 1}. ${post.postId}  [${post.idSource}]  ${post.permalink}") }
     }
 
+    private fun scanAttemptSummary(): String = ScanAttemptJournal.summary(
+        consumed = preferences.getBoolean(KEY_ONE_SCAN_USED, false),
+        stage = preferences.getString(KEY_ATTEMPT_STAGE, null),
+        status = preferences.getString(KEY_ATTEMPT_STATUS, null),
+        posts = preferences.getInt(KEY_ATTEMPT_POSTS, 0),
+        rejected = preferences.getInt(KEY_ATTEMPT_REJECTED, 0),
+        startedAt = preferences.getString(KEY_ATTEMPT_AT, null),
+        error = preferences.getString(KEY_ATTEMPT_ERROR, null),
+        saveError = preferences.getString(KEY_ATTEMPT_SAVE_ERROR, null),
+    )
+
     private fun showResults() {
         val runs = store.runs()
-        output.text = if (runs.isEmpty()) "Brak zapisanych wyników." else runs.take(10).joinToString("\n\n") { run ->
-            "${run.kind} ${run.status} • ${run.postIds.size} postów • odrzucone ${run.rejectedByApp}\n${run.startedAt} → ${run.finishedAt}" +
-                (if (run.notes.isNotEmpty()) "\n" + run.notes.entries.joinToString { "${it.key}=${it.value}" } else "")
+        // Prioritize the real scan outcome above verbose older group diagnoses.
+        val scans = runs.filter { it.kind.startsWith("GROUP_SCAN") }
+        val other = runs.filterNot { it.kind.startsWith("GROUP_SCAN") }
+        output.text = buildString {
+            appendLine(scanAttemptSummary())
+            appendLine()
+            if (scans.isEmpty()) appendLine("Brak zapisanego GROUP_SCAN. Sam limit jednorazowy NIE potwierdza odczytu postów.")
+            else {
+                appendLine("HISTORIA PRÓB SKANOWANIA:")
+                scans.take(5).forEach { run ->
+                    appendLine("${run.kind}: ${run.status} • ${run.postIds.size} postów • odrzucone ${run.rejectedByApp}")
+                    appendLine("${run.startedAt} → ${run.finishedAt}")
+                    if (run.notes.isNotEmpty()) appendLine(run.notes.entries.joinToString { "${it.key}=${it.value}" })
+                    appendLine()
+                }
+            }
+            if (other.isNotEmpty()) {
+                appendLine("INNE DIAGNOZY:")
+                other.take(3).forEach { run -> appendLine("${run.kind}: ${run.status} • ${run.startedAt}") }
+            }
         }
     }
 
@@ -437,6 +465,8 @@ class PocActivity : ComponentActivity() {
 
         val p = probe
         diagnostics.text = buildString {
+            appendLine("PRÓBA SKANU: " + scanAttemptSummary())
+            appendLine()
             appendLine("Silnik: GeckoView ${org.mozilla.geckoview.BuildConfig.MOZ_APP_VERSION} • rozszerzenie: ${if (extension != null) "zainstalowane" else extensionError ?: "instalacja…"}")
             appendLine("User-Agent: ${userAgent ?: "—"}")
             appendLine("UA zawiera „; wv”: ${userAgent?.contains("; wv") ?: "—"} • nadpisany: nie")
@@ -528,6 +558,13 @@ class PocActivity : ComponentActivity() {
     companion object {
         private const val KEY_CONSENT = "facebook_session_consent"
         private const val KEY_ONE_SCAN_USED = "manual_slug_scan_one_shot_20261017"
+        private const val KEY_ATTEMPT_STAGE = "one_shot_attempt_stage"
+        private const val KEY_ATTEMPT_AT = "one_shot_attempt_started_at"
+        private const val KEY_ATTEMPT_STATUS = "one_shot_attempt_status"
+        private const val KEY_ATTEMPT_POSTS = "one_shot_attempt_post_count"
+        private const val KEY_ATTEMPT_REJECTED = "one_shot_attempt_rejected_count"
+        private const val KEY_ATTEMPT_ERROR = "one_shot_attempt_error_class"
+        private const val KEY_ATTEMPT_SAVE_ERROR = "one_shot_attempt_store_error"
         private const val TEST_DELAY_MS = 10 * 60 * 1000L
     }
 }
