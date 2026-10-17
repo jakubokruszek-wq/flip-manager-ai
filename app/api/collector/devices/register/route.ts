@@ -23,7 +23,8 @@ export async function POST(request: Request) {
 
     const deviceName = requiredText(body.deviceName, "Nazwa urządzenia");
     const installationId = requiredText(body.installationId, "Identyfikator instalacji");
-    const device = await registerCollectorDevice({ deviceName, installationId });
+    if (body.consumerType !== undefined && body.consumerType !== "BROWSER_EXTENSION" && body.consumerType !== "ANDROID_WEBVIEW") throw new CollectorAuthError(400, "Nieprawidłowy konsument.");
+    const device = await registerCollectorDevice({ deviceName, installationId, consumerType: body.consumerType as "BROWSER_EXTENSION" | "ANDROID_WEBVIEW" | undefined });
 
     return Response.json(
       { deviceId: device.deviceId, deviceToken: device.token },

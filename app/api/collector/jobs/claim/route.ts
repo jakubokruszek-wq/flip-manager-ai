@@ -8,7 +8,7 @@ const PATHNAME = "/api/collector/jobs/claim";
 export async function POST(request: Request) {
   const body = await request.text();
   try {
-    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, markHealthy: true });
+    const { device } = await authenticateSignedCollectorRequest({ request, pathname: PATHNAME, body, expectedConsumerType: "BROWSER_EXTENSION", markHealthy: true });
     if (process.env.FACEBOOK_COLLECTOR_QUEUE_ENABLED !== "true") return cors(Response.json({ ok: true, job: null, code: "NO_PENDING_JOB" }), request);
     let job = await claimFacebookJob(device.id, "BROWSER_EXTENSION");
     let scheduler = null;

@@ -1,0 +1,171 @@
+package pl.jakubokruszek.flipcollector.watcher.android
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Build
+import android.os.Looper
+import android.os.PowerManager
+import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebStorage
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import pl.jakubokruszek.flipcollector.collector.LiveCollectionGate
+import pl.jakubokruszek.flipcollector.collector.WebViewPolicy
+import pl.jakubokruszek.flipcollector.collector.LivePilotSource
+import java.io.ByteArrayInputStream
+
+/**
+ * Session browser. LivePilotChannel connects this same WebView to the pinned
+ * extension core. Both production and pilot gates default to closed.
+ */
+interface CollectorBrowser {
+    fun open(url: String)
+    fun close()
+}
+
+/** Why a live session cannot start now; checked before any WebView exists. */
+enum class BrowserBlocker(val message: String) {
+    GATE_CLOSED("Zbieranie na żywo jest wyłączone."),
+    NOT_MAIN_THREAD("WebView wymaga wątku głównego."),
+    SCREEN_OFF("Ekran jest wygaszony — WebView może zostać wstrzymany; skan na żywo wymaga włączonego ekranu do czasu testów fizycznych."),
+}
+
+class WebViewCollectorBrowser(
+    private val context: Context,
+    private val gate: LiveCollectionGate,
+    private val onRendererGone: (crashed: Boolean) -> Unit = {},
+    private val onBlockedNavigation: (String) -> Unit = {},
+    private val pilotSource: LivePilotSource? = null,
+    private val onViewCreated: (WebView) -> Unit = {},
+) : CollectorBrowser {
+    private var webView: WebView? = null
+    internal var onPageReady: ((WebView, String) -> Unit)? = null
+    internal var onStop: ((String) -> Unit)? = null
+    internal fun currentView(): WebView? = webView
+    private var localFixture: String? = null
+    /** Debug instrumentation only: all resources are blocked, including the initial document. */
+    internal fun useLocalFixture(html: String) {
+        check(pl.jakubokruszek.flipcollector.BuildConfig.DEBUG && webView == null)
+        require(html.length <= 2 * 1024 * 1024)
+        localFixture = html
+    }
+
+    fun blockers(): List<BrowserBlocker> = buildList {
+        if (!gate.open) add(BrowserBlocker.GATE_CLOSED)
+        if (Looper.myLooper() != Looper.getMainLooper()) add(BrowserBlocker.NOT_MAIN_THREAD)
+        if (context.getSystemService(PowerManager::class.java)?.isInteractive != true) add(BrowserBlocker.SCREEN_OFF)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun open(url: String) {
+        gate.check()
+        blockers().firstOrNull()?.let { throw IllegalStateException(it.message) }
+        require(WebViewPolicy.navigation(url) == WebViewPolicy.Decision.ALLOW) { "Adres spoza Facebooka jest zablokowany" }
+        require(pilotSource == null || pilotSource.matchesPage(url)) { "PILOT_SOURCE_MISMATCH" }
+        val view = webView ?: WebView(context).also { created ->
+            created.settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                // Use the platform WebView identity; no UA spoofing.
+                loadsImagesAutomatically = false
+                blockNetworkImage = true
+                allowFileAccess = false
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                setGeolocationEnabled(false)
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                mediaPlaybackRequiresUserGesture = true
+                cacheMode = WebSettings.LOAD_DEFAULT
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
+                if (localFixture != null) blockNetworkLoads = true
+            }
+            CookieManager.getInstance().apply {
+                // First-party cookies hold the Facebook session; allowed only
+                // because the gate (which includes the user's consent) is open.
+                setAcceptCookie(true)
+                setAcceptThirdPartyCookies(created, false)
+            }
+            created.webViewClient = PolicyWebViewClient()
+            webView = created
+            onViewCreated(created)
+        }
+        if (localFixture != null) {
+            view.settings.javaScriptEnabled = false
+            view.loadDataWithBaseURL(url, requireNotNull(localFixture), "text/html", "UTF-8", null)
+        } else view.loadUrl(url)
+    }
+
+    override fun close() {
+        webView?.apply {
+            stopLoading()
+            loadUrl("about:blank")
+            removeAllViews()
+            destroy()
+        }
+        webView = null
+    }
+
+    private inner class PolicyWebViewClient : WebViewClient() {
+        override fun onPageFinished(view: WebView, url: String) { onPageReady?.invoke(view, url) }
+
+        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+            if (request.isForMainFrame) onStop?.invoke(if (response.statusCode == 403) "HTTP_403" else "HTTP_ERROR")
+        }
+
+        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+            if (request.isForMainFrame) onStop?.invoke("WEBVIEW_NETWORK_ERROR")
+        }
+
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val url = request.url.toString()
+            if (WebViewPolicy.navigation(url) == WebViewPolicy.Decision.ALLOW) {
+                if (!request.isForMainFrame || pilotSource == null || pilotSource.matchesPage(url)) return false
+                // Session UI may show Facebook's own login/challenge pages, but
+                // collecting stops immediately; never follow another group/post.
+                val path = request.url.path.orEmpty()
+                val code = when {
+                    path.contains("checkpoint") -> "CHECKPOINT"
+                    path.contains("captcha") -> "CAPTCHA"
+                    path.contains("login") || path.contains("recover") -> "LOGIN_REQUIRED"
+                    else -> "PILOT_REDIRECT_BLOCKED"
+                }
+                onStop?.invoke(code)
+                return code == "PILOT_REDIRECT_BLOCKED"
+            }
+            onStop?.invoke("PILOT_REDIRECT_BLOCKED")
+            onBlockedNavigation(url.take(200))
+            return true
+        }
+
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            if (localFixture != null) return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+            if (WebViewPolicy.resource(request.url.toString()) == WebViewPolicy.Decision.ALLOW) return null
+            return WebResourceResponse("text/plain", "utf-8", 204, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+        }
+
+        /** The renderer died (OOM kill while backgrounded, or crash): drop this WebView, never touch it again. */
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            if (view === webView) {
+                webView = null
+                view.destroy()
+            }
+            onRendererGone(detail.didCrash())
+            onStop?.invoke("RENDERER_GONE")
+            return true
+        }
+    }
+
+    companion object {
+        /** "Usuń sesję Facebooka": cookies and web storage of every WebView in the app. */
+        fun clearSession(onDone: () -> Unit = {}) {
+            WebStorage.getInstance().deleteAllData()
+            CookieManager.getInstance().removeAllCookies { CookieManager.getInstance().flush(); onDone() }
+        }
+    }
+}
+

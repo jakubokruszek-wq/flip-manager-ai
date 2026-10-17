@@ -10,13 +10,16 @@ export type CollectorDevice = { id: string; deviceName: string; lastUsedAt: stri
 export async function registerCollectorDevice(input: {
   deviceName: string;
   installationId: string;
+  consumerType?: "BROWSER_EXTENSION" | "ANDROID_WEBVIEW";
 }): Promise<{ deviceId: string; token: string }> {
+  if (input.consumerType !== undefined && !["BROWSER_EXTENSION", "ANDROID_WEBVIEW"].includes(input.consumerType)) throw new CollectorAuthError(400, "Nieprawidłowy konsument.");
   const token = randomBytes(32).toString("base64url");
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("collector_devices")
     .insert({
       device_name: input.deviceName,
+      consumer_type: input.consumerType ?? "BROWSER_EXTENSION",
       installation_id: input.installationId,
       token_hash: sha256(token),
     })

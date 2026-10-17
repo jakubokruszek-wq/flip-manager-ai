@@ -1,0 +1,62 @@
+name: Facebook LIVE pilot preparation (no Facebook access)
+on:
+  pull_request:
+    paths:
+      - 'android/flip-collector/**'
+      - 'extensions/facebook-collector/**'
+      - '.github/workflows/facebook-live-pilot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pilot43-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  pilot-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Local DOM adapter and artifact pin
+        run: node --test --test-isolation=none extensions/facebook-collector/android-live-pilot.test.cjs
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile, full JVM suite and separate safe-off pilot APK
+        working-directory: android/flip-collector
+        run: ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin testDebugUnitTest assembleDebug -PFLIP_PILOT_APK=true -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}
+      - name: Verify package, flags, core and signing certificate
+        run: |
+          set -euo pipefail
+          apk=android/flip-collector/app/build/outputs/apk/debug/app-debug.apk
+          tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$tools/aapt2" dump badging "$apk" > apk-identity.txt
+          grep -q "package: name='pl.jakubokruszek.flipcollector.integration.pilot43'" apk-identity.txt
+          config=android/flip-collector/app/build/generated/source/buildConfig/debug/pl/jakubokruszek/flipcollector/BuildConfig.java
+          grep -q 'LIVE_COLLECTION_ENABLED = false' "$config"
+          grep -q 'LIVE_PILOT_ENABLED = false' "$config"
+          grep -q 'ANDROID_BACKEND_INTEGRATION_ENABLED = false' "$config"
+          "$tools/apksigner" verify --print-certs "$apk" > apk-signature.txt
+          sha256sum "$apk" > apk-sha256.txt
+          cat apk-identity.txt apk-sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flip-watcher-pilot43-safe-off-${{ github.sha }}
+          path: |
+            android/flip-collector/app/build/outputs/apk/debug/app-debug.apk
+            apk-identity.txt
+            apk-signature.txt
+            apk-sha256.txt
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pilot43-jvm-reports-${{ github.sha }}
+          path: android/flip-collector/app/build/test-results/
+          if-no-files-found: ignore

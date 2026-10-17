@@ -1,3 +1,4 @@
+import { androidDataOnlyImportActive } from "../collector/android/import-policy.ts";
 import { after } from "next/server";
 
 /**
@@ -8,6 +9,9 @@ import { after } from "next/server";
  * test importing this module directly), where after() throws synchronously.
  */
 export function runAfterResponse(task: () => Promise<unknown>): void {
+  // Android source imports must not enqueue gallery scans or photo AI. All
+  // currently registered tasks here are optional enrichment, not core writes.
+  if (androidDataOnlyImportActive()) return;
   try {
     after(task);
   } catch {
