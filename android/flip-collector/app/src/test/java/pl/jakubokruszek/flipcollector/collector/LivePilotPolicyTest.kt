@@ -31,6 +31,16 @@ class LivePilotPolicyTest {
         assertEquals(WebViewPolicy.Decision.ALLOW, WebViewPolicy.navigation(url))
         assertFalse(source.matchesPage(url))
         assertTrue(url.startsWith("https://m.facebook.com/login/"))
+        assertTrue(source.isMobileLoginLanding("https://m.facebook.com/"))
+        assertTrue(source.isMobileLoginLanding("https://m.facebook.com/?utm_source=browser"))
+        assertFalse(source.matchesPage("https://m.facebook.com/?utm_source=browser"))
+        assertFalse(LivePilotPolicy.trustedMessage(source.origin, true, "https://m.facebook.com/", source))
+        for (other in listOf(
+            "http://m.facebook.com/", "https://m.facebook.com.evil.test/",
+            "https://m.facebook.com/groups/other/", "https://m.facebook.com:444/",
+            "https://www.facebook.com/", "https://user@m.facebook.com/",
+            "https://m.facebook.com/#fragment"
+        )) assertFalse("unexpected login-landing permission: $other", source.isMobileLoginLanding(other))
         assertFalse(WebViewPolicy.navigation("https://m.facebook.com.evil.example/login/") == WebViewPolicy.Decision.ALLOW)
         assertFalse(LivePilotPolicy.trustedMessage(source.origin, true, url, source))
         assertFalse(WebViewPolicy.navigation("https://www.facebook.com.evil.example/login/") == WebViewPolicy.Decision.ALLOW)
