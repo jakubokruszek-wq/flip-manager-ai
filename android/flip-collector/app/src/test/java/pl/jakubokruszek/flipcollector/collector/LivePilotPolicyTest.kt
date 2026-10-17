@@ -25,6 +25,14 @@ class LivePilotPolicyTest {
         assertFalse(LivePilotPolicy.trustedMessage(source.origin,true,"https://www.facebook.com/groups/another/",source))
         assertFalse(source.matchesPage(source.url+"?redirect=1"))
     }
+    @Test fun explicitLoginUsesSameFacebookOriginAndNeverBecomesAnApprovedScanPage() {
+        val url = source.manualLoginUrl()
+        assertEquals("https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fgroups%2Ftest-group%2F", url)
+        assertEquals(WebViewPolicy.Decision.ALLOW, WebViewPolicy.navigation(url))
+        assertFalse(source.matchesPage(url))
+        assertFalse(LivePilotPolicy.trustedMessage(source.origin, true, url, source))
+        assertFalse(WebViewPolicy.navigation("https://www.facebook.com.evil.example/login/") == WebViewPolicy.Decision.ALLOW)
+    }
     @Test fun sourceRejectsProfilesRedirectsCredentialsAndPorts() {
         for (url in listOf("https://www.facebook.com/profile.php?id=test-group", "https://www.facebook.com:444/groups/test-group/", "https://a@www.facebook.com/groups/test-group/", source.url+"posts/1/")) {
             assertThrows(IllegalArgumentException::class.java) { LivePilotSource(source.remoteId,source.sourceId,url) }
