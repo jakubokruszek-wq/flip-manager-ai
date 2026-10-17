@@ -8,6 +8,7 @@ import { formatPLNDisplay } from "./investment-ui";
 export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; onAnalyzed: (deal: CanonicalDeal) => void }) {
   const [room, setRoom] = useState<DealRoomState | null>(null), [draft, setDraft] = useState<Record<string, AnswerInput>>({});
   const [error, setError] = useState<string | null>(null), [saving, setSaving] = useState(false), [more, setMore] = useState(false), [disabled, setDisabled] = useState(false);
+  const [conflict, setConflict] = useState(false), [reloading, setReloading] = useState(false);
   const pending = useRef<AnswerCommand | null>(null);
   const path = `${investmentPath(deal.listingId)}/answers`;
   useEffect(() => {
@@ -42,15 +43,43 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
       return { ...current, [field]: { ...base, ...patch } };
     });
   };
+  // A 409 only requires a new read, never a blind retry or page reload.
+  // Keep every unsaved answer in memory until the operator reviews the latest deal.
+  const reloadLatest = async () => {
+    if (saving || reloading) return;
+    setReloading(true);
+    try {
+      const [dealResponse, roomResponse] = await Promise.all([
+        fetch(path.replace(/\/answers$/, ""), { cache: "no-store" }),
+        fetch(path, { cache: "no-store" }),
+      ]);
+      const currentDeal = await dealResponse.json(), currentRoom = await roomResponse.json();
+      if (!dealResponse.ok || !roomResponse.ok || !currentDeal.deal || !currentRoom.room) throw Error("Nie udało się pobrać najnowszej analizy. Spróbuj ponownie.");
+      pending.current = null;
+      setRoom(currentRoom.room);
+      onAnalyzed(currentDeal.deal);
+      setConflict(false);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Nie udało się pobrać najnowszej analizy.");
+    } finally {
+      setReloading(false);
+    }
+  };
   const save = async () => {
     if (!room || saving) return;
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); setConflict(false);
     const command = pending.current ?? { requestId: crypto.randomUUID(), expectedVersion: room.version, answers: Object.values(draft) };
     pending.current = command;
     try {
       const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(command) });
       const body = await response.json();
-      if (!response.ok || !body.deal || !body.room) { if (response.status < 500) pending.current = null; throw Error(body.message ?? "Nie udało się zapisać odpowiedzi. Odśwież analizę przy konflikcie wersji."); }
+      if (response.status === 409 && body.code === "INVESTMENT_DEAL_VERSION_CONFLICT") {
+        pending.current = null;
+        setConflict(true);
+        throw Error("W bazie jest nowsza wersja analizy. Pobierz ją bez opuszczania formularza — Twoje wpisane odpowiedzi pozostaną tutaj.");
+      }
+      if (!response.ok || !body.deal || !body.room) { if (response.status < 500) pending.current = null; throw Error(body.message ?? "Nie udało się zapisać odpowiedzi."); }
       // A replay can return an older immutable receipt. Render the current read
       // model, not that historical response; retain request/draft if reads fail.
       const [dealResponse, roomResponse] = await Promise.all([
@@ -86,7 +115,12 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
       {room?.answers[q.field] ? <p className="break-words text-xs">Stan: {stale ? "Nieaktualna — wymaga potwierdzenia" : room.answers[q.field].status === "RESOLVED" ? "Założenie przyjęte do obliczeń" : "Wymaga dowodu / dalszego ustalenia"} · {room.answers[q.field].savedAt}</p> : null}
     </fieldset>; })}
     {!more && questions.length > 5 ? <button type="button" className="min-h-11 font-semibold text-gold underline underline-offset-4" onClick={() => setMore(true)}>Pozostałe pytania ({questions.length - 5})</button> : null}
-    {room ? <button type="button" className="min-h-11 rounded-xl bg-gold px-4 font-semibold text-black disabled:opacity-50" disabled={saving || Object.keys(draft).length === 0} onClick={() => void save()}>{saving ? "Zapisuję i przeliczam…" : "Zapisz odpowiedzi i przelicz"}</button> : null}
+    {conflict ? <div role="status" data-deal-version-conflict className="space-y-2 rounded-xl border border-amber-400/40 bg-amber-400/5 p-3 text-sm">
+      <p className="font-semibold text-gold">Analiza została zmieniona w bazie.</p>
+      <p className="text-muted-foreground">Pobierz aktualną wersję bez przeładowania strony. Wpisane odpowiedzi pozostaną w formularzu. Po sprawdzeniu możesz zapisać je ponownie — nic nie zostanie wysłane automatycznie.</p>
+      <button type="button" className="min-h-11 rounded-xl border border-gold/50 px-4 font-semibold text-gold disabled:opacity-50" disabled={saving || reloading} onClick={() => void reloadLatest()} data-reload-conflict>{reloading ? "Pobieram aktualną wersję…" : "Pobierz aktualną analizę (zachowaj odpowiedzi)"}</button>
+    </div> : null}
+    {room ? <button type="button" className="min-h-11 rounded-xl bg-gold px-4 font-semibold text-black disabled:opacity-50" disabled={saving || reloading || conflict || Object.keys(draft).length === 0} onClick={() => void save()}>{saving ? "Zapisuję i przeliczam…" : "Zapisz odpowiedzi i przelicz"}</button> : null}
     {error ? <p role="alert" className="text-sm text-red-300">{error}</p> : null}
     {room && Object.keys(room.answers).length > 0 ? <details><summary className="min-h-11 cursor-pointer">Zapisane odpowiedzi — edycja i cofnięcie</summary>{Object.values(room.answers).map((a) => <article key={a.field} className="my-2 break-words rounded border p-2 text-xs"><strong>{a.field}</strong>: {a.value ?? (a.kind === "LATER" ? "Sprawdzę później" : a.kind === "WITHDRAW" ? "Cofnięto" : "Nie wiem")} · {a.basis} · {a.savedAt} · operator: {a.actorId}<button type="button" className="ml-2 min-h-11 underline" onClick={() => change(a.field, {})}>Edytuj</button><button type="button" className="ml-2 min-h-11 underline" onClick={() => change(a.field, { kind: "WITHDRAW", value: null })}>Cofnij</button></article>)}</details> : null}
     {latest ? <section aria-label="Rekomendacja przed i po odpowiedziach" className="space-y-2 border-t pt-3 text-sm"><h3 className="font-semibold">Co zmieniły odpowiedzi?</h3><p>Pola: {latest.changedFields.join(", ")}. Zależne dyrekcje: {latest.invalidated.join(", ") || "brak zmian finansowych"}.</p><p>CEO: {latest.before.ceo.decision} → {latest.after.ceo.decision} · rekomendacja warunkowa, do weryfikacji.</p><p>Zysk bazowy: {formatPLNDisplay(latest.before.financials?.profitBase ?? null)} → {formatPLNDisplay(latest.after.financials?.profitBase ?? null)}</p><p>Max Buy: {formatPLNDisplay(latest.before.financials?.maxPurchasePrice ?? null)} → {formatPLNDisplay(latest.after.financials?.maxPurchasePrice ?? null)}</p><p>{latest.after.ceo.reasoningSummary}</p><p>Runda zamknięta: {latest.after.questions.some((q) => q.category === "BLOCKING") ? "nie — pozostały pytania blokujące" : "brak otwartych pytań blokujących w projekcji; wymagane zatwierdzenie człowieka"}.</p><ol className="list-decimal pl-5">{[latest.after.ceo.nextBestAction.title, ...latest.after.ceo.conditionsToProceed].slice(0, 3).map((step, i) => <li key={i}>{step}</li>)}</ol></section> : null}
