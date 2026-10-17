@@ -109,11 +109,13 @@ class ScanProtocolTest {
 
     @Test fun `group probe keeps only numeric ids and a safe segment`() {
         val json = JSONObject().put("group", JSONObject().put("segment", "lodzsprzedazzakupwynajem").put("ids", JSONArray()
-            .put(JSONObject().put("id", group).put("source", "al:android:url"))
+            .put(JSONObject().put("id", "402796264871862").put("source", "al:android:url"))
+            .put(JSONObject().put("id", group).put("source", "json"))
             .put(JSONObject().put("id", "abc").put("source", "al:ios:url"))))
         val (segment, hits) = ScanProtocol.parseGroupProbe(json)!!
         assertEquals("lodzsprzedazzakupwynajem", segment)
-        assertEquals(listOf(GroupIdHit(group, "al:android:url")), hits)
+        // The POC source has a textual key, but verified metadata IDs remain numeric only.
+        assertEquals(listOf(GroupIdHit("402796264871862", "al:android:url")), hits)
         val bad = ScanProtocol.parseGroupProbe(JSONObject().put("group", JSONObject().put("segment", "../x")))!!
         assertEquals(null, bad.first)
     }
