@@ -14,7 +14,8 @@ enum class PageKind { APPROVED_GROUP, OTHER_GROUP, LOGIN, CHECKPOINT, CAPTCHA, F
  * on every verification page. Pure Kotlin, so the JVM tests cover all of it.
  */
 object PocPolicy {
-    const val APPROVED_GROUP_ID = "402796264871862"
+    /** Separate operator-approved test group identified by its exact public slug; NOT an alias of 402796264871862. */
+    const val APPROVED_GROUP_ID = "lodzsprzedazzakupwynajem"
     const val APPROVED_GROUP_URL = "https://www.facebook.com/groups/$APPROVED_GROUP_ID/"
     const val MAX_POSTS = 20
     const val SCAN_TIMEOUT_MS = 45_000L
@@ -23,16 +24,14 @@ object PocPolicy {
     const val EXTENSION_LOCATION = "resource://android/assets/ext/flip_poc/"
 
     /**
-     * Text addresses (vanity slugs) CONFIRMED to be the same group as a numeric id:
-     * slug -> numeric id. Empty on purpose: "lodzsprzedazzakupwynajem" is NOT
-     * confirmed as 402796264871862 (the repository lists them as two separate
-     * sources, and a collector-core test ties the slug to another numeric id).
-     * An entry is added only after on-device evidence (see GroupIdentity) and
-     * the operator's approval; never by matching names or pictures.
+     * Additional verified aliases: slug -> independently approved source key.
+     * Intentionally EMPTY. The standalone source "lodzsprzedazzakupwynajem"
+     * is approved by its exact URL, NOT as an alias of numeric group 402796264871862.
+     * Never infer equality of source identities from similar names or redirects.
      */
     val VERIFIED_ALIASES: Map<String, String> = emptyMap()
 
-    /** Slugs verified for [groupId]. */
+    /** Other slugs independently verified to resolve to [groupId]; none in the current POC. */
     fun aliasesFor(groupId: String, aliases: Map<String, String> = VERIFIED_ALIASES): List<String> =
         aliases.filterValues { it == groupId }.keys.sorted()
 
