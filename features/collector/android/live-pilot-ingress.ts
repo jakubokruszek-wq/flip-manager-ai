@@ -57,7 +57,12 @@ export function livePilotStore(store: AndroidJobStore, pilot: LivePilotIngress):
     loadJob: async id => { const job = await store.loadJob(id); return job ? scoped(job) : null; },
     rpc: async (name, args) => {
       if (args.p_device_id !== pilot.deviceId) throw new AndroidJobError(403, "PILOT_DEVICE_FORBIDDEN");
-      if (name !== "claim_android_facebook_scan_job") return store.rpc(name, args);
+      if (name !== "claim_android_facebook_scan_job") {
+        const job = typeof args.p_job_id === "string" ? await store.loadJob(args.p_job_id) : null;
+        if (!job) throw new AndroidJobError(409, "ANDROID_JOB_LEASE_LOST");
+        scoped(job); // Heartbeat is a direct RPC too; it must not renew another group.
+        return store.rpc(name, args);
+      }
       if (args.p_source_ids !== undefined && (!Array.isArray(args.p_source_ids) || args.p_source_ids.length !== 1 || args.p_source_ids[0] !== pilot.sourceRegistryId))
         throw new AndroidJobError(403, "PILOT_SOURCE_FORBIDDEN");
       const result = await store.rpc(name, { ...args, p_source_ids: [pilot.sourceRegistryId] });

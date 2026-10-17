@@ -48,6 +48,7 @@ test("source restriction intersects SQL grants and cannot claim another group",a
   assert.ok((await store.rpc("claim_android_facebook_scan_job",{p_device_id:config.deviceId})).data);
   base.jobs[0].group_snapshot=jobRow().group_snapshot;
   await assert.rejects(store.loadJob(base.jobs[0].id),/FORBIDDEN/);
+  await assert.rejects(async()=>await store.rpc("renew_android_facebook_scan_job",{p_device_id:config.deviceId,p_job_id:base.jobs[0].id,p_lease_token:base.jobs[0].lease_token}),/FORBIDDEN/);
 });
 test("signed LIVE fixture completion replays one receipt; wrong key/nonce never imports",async()=>{
   const base=new MockAndroidStore([row()]);const nonces=new Set<string>();let imports=0;

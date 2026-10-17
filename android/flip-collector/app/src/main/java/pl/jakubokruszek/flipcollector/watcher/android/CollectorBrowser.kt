@@ -44,7 +44,8 @@ class WebViewCollectorBrowser(
 ) : CollectorBrowser {
     private var webView: WebView? = null
     private var finishedUrl: String? = null
-    internal fun documentReady() = pilotSource?.matchesPage(finishedUrl.orEmpty()) == true
+    internal fun documentReady() = pilotSource?.matchesPage(finishedUrl.orEmpty()) == true &&
+        pilotSource.matchesPage(webView?.url.orEmpty()) && webView?.progress == 100
     internal var onPageReady: ((WebView, String) -> Unit)? = null
     internal var onStop: ((String) -> Unit)? = null
     internal fun currentView(): WebView? = webView
@@ -120,6 +121,7 @@ class WebViewCollectorBrowser(
     }
 
     private inner class PolicyWebViewClient : WebViewClient() {
+        override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) { finishedUrl = null }
         override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
             handler.cancel()
             onStop?.invoke("TLS_ERROR")

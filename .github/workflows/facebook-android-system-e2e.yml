@@ -7,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: facebook-android-system-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   isolated-system:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-facebook-android-tests') }}
