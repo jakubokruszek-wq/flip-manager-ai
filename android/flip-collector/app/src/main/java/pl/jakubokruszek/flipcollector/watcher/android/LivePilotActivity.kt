@@ -40,18 +40,20 @@ private fun PilotScreen(activity: LivePilotActivity) {
     var task by remember { mutableStateOf<Job?>(null) }
     var used by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var webViewStatus by remember { mutableStateOf("NOT_OPENED") }
     fun close() {
         task?.cancel()
         host.removeAllViews()
         browser?.close()
         browser = null
         scanConsent = false
+        webViewStatus = "SESSION_CLOSED"
     }
     fun newBrowser(): WebViewCollectorBrowser {
         check(LivePilotRuntime.available() && sessionConsent)
         val source = LivePilotRuntime.profile(activity).source
         return WebViewCollectorBrowser(activity, LiveCollectionGate(true, true), pilotSource = source,
-            onViewCreated = { host.removeAllViews(); host.addView(it) })
+            onViewCreated = { host.removeAllViews(); host.addView(it) }).also { it.onDiagnostic = { status -> webViewStatus = status } }
     }
     DisposableEffect(activity) {
         val observer = LifecycleEventObserver { _, event ->
@@ -104,6 +106,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
             }.getOrElse { "Nie udało się wrócić do grupy. STOP i zgłoś błąd." }
         }) { Text("Wróć do zatwierdzonej grupy") }
         AndroidView(factory = { host }, modifier = Modifier.fillMaxWidth().height(if (browser != null) 420.dp else 1.dp))
+        Text("Diagnostyka WebView (bez adresów i danych logowania): $webViewStatus")
         Row {
             Checkbox(scanConsent, { scanConsent = it })
             Text("Zatwierdzam jeden skan powyższej grupy (maks. 20 postów) do izolowanego API.")
