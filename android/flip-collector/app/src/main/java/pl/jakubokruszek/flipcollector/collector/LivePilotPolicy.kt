@@ -18,6 +18,17 @@ data class LivePilotSource(val remoteId: String, val sourceId: String, val url: 
      * No UA spoofing, credential interception, third-party cookies, or implicit scan permission. */
     fun manualLoginUrl(): String = "https://m.facebook.com/login/?next=" +
         java.net.URLEncoder.encode(url, "UTF-8")
+    /** Facebook's official mobile sign-in sometimes redirects from /login/ to
+     * m.facebook.com/ (the form seen in Chrome). This is navigation only;
+     * the scan/channel still require the exact approved www group page. */
+    fun isMobileLoginLanding(value: String): Boolean = runCatching {
+        val uri = URI(value)
+        WebViewPolicy.navigation(value) == WebViewPolicy.Decision.ALLOW &&
+            uri.scheme == "https" && uri.host == "m.facebook.com" &&
+            uri.userInfo == null && uri.port in setOf(-1, 443) &&
+            uri.rawPath.orEmpty() in setOf("", "/") && uri.rawFragment == null &&
+            (uri.rawQuery?.length ?: 0) <= 512
+    }.getOrDefault(false)
     fun matchesPage(value: String): Boolean = runCatching {
         val uri = URI(value)
         WebViewPolicy.navigation(value) == WebViewPolicy.Decision.ALLOW &&
