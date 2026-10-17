@@ -64,7 +64,10 @@ jobs:
         run: ./gradlew --no-daemon -q :app:dependencies --configuration debugRuntimeClasspath | grep -m1 "org.mozilla.geckoview:geckoview" | tee geckoview-version.txt
 
       - name: Compile (Kotlin, app and instrumented tests)
-        run: ./gradlew --no-daemon --stacktrace compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=${{ github.run_number }}
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=${{ github.run_number }} 2>&1 | tee compile.log || {
+            echo "::group::Compiler errors"; grep -E "^e: |What went wrong|^> " -A3 compile.log | head -80; echo "::endgroup::"; exit 1; }
 
       - name: JVM unit tests
         run: ./gradlew --no-daemon testDebugUnitTest -PGECKO_POC_VERSION_CODE=${{ github.run_number }}
