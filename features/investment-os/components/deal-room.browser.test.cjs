@@ -207,7 +207,8 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   assert.ok(await successPanel.getByText("Twój cel zysku (przed podatkiem)",{exact:true}).isVisible());
   assert.ok(await successPanel.getByText("Cena graniczna dla celu zysku",{exact:true}).isVisible());
   assert.ok(await successPanel.getByText("Otwarcie negocjacji (warunkowo)",{exact:true}).isVisible());
-  assert.equal(await successPanel.getByRole("link",{name:/Zmień docelowy zysk/}).count(),1);
+  assert.equal(await successPanel.getByLabel("Docelowy zysk operacyjny PLN").count(),1);
+  assert.equal(await successPanel.getByRole("button",{name:"Zapisz i przelicz"}).count(),1);
   const successMobile=await page.evaluate(()=>({viewport:innerWidth,docWidth:document.documentElement.scrollWidth}));
   assert.ok(successMobile.docWidth<=successMobile.viewport,"reverse calculator must not overflow on 390px: "+JSON.stringify(successMobile));
 

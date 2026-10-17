@@ -59,7 +59,7 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onA
       </div>
     </header>
 
-    <FinalCeoRecommendation deal={deal} />
+    <FinalCeoRecommendation deal={deal} onAnalyzed={onAnalyzed ?? (() => onRefresh())} />
 
     <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="order-2 min-w-0 space-y-5 xl:order-1">
@@ -71,7 +71,7 @@ export function DealRoomView({ deal, images = [], saving, onRefresh, onSave, onA
           <NextAction brain={brain} />
         </div>
         </div>
-        <DirectorQuestions deal={deal} onAnalyzed={onAnalyzed ?? (() => onRefresh())} />
+        <DirectorQuestions deal={deal} onAnalyzed={onAnalyzed ?? (() => onRefresh())} scope="other" />
         <DealGallery images={images} />
         <AnalysisHistory key={deal.listingId} listingId={deal.listingId} />
         <DirectorCouncil directors={directorCards} expanded={expandedDirector} onToggle={setExpandedDirector} />

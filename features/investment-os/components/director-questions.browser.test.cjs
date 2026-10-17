@@ -30,6 +30,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
       if(req.method()==='GET')body={enabled:true,room};
       else {
         const cmd=parseAnswerCommand(req.postDataJSON());
+        if(cmd.expectedVersion!==room.version)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({code:'INVESTMENT_DEAL_VERSION_CONFLICT',message:'Analiza zmieniła się.'})});
         if(receipts.has(cmd.requestId)) body=receipts.get(cmd.requestId);
         else {
           assert.equal(cmd.expectedVersion,room.version);
@@ -46,6 +47,32 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   });
   await page.goto(base+`/deals/${input.listing.id}`);
   await page.getByRole('heading',{name:'Dyrektorzy pytają Ciebie'}).waitFor();
+  // The investor-target question is directly beside the success-price figures.
+  const targetPanel=page.locator('[data-success-price]');
+  const targetEditor=targetPanel.locator('[data-success-target-editor]');
+  const targetInput=targetEditor.getByLabel('Docelowy zysk operacyjny PLN');
+  await targetInput.waitFor({state:'visible'});
+  assert.equal(await page.locator('[data-user-questions] [data-question-field="targetProfitPLN"]').count(),0,'no duplicate target question far below the calculator');
+  const oldTarget=current.underwriting.result.successPrice.targetProfitPLN;
+  const oldBoundary=current.underwriting.result.successPrice.maxPurchasePrice;
+  assert.ok(oldTarget!==60000);
+  await targetInput.fill('60000');
+  room={...room,version:room.version+1}; // concurrent saved analysis version, no other target change
+  await targetEditor.getByRole('button',{name:'Zapisz i przelicz'}).click();
+  await targetEditor.getByRole('alert').getByText(/kwota została zachowana/).waitFor();
+  assert.equal(await targetInput.inputValue(),'60000',"CAS conflict must not lose the entered profit target");
+  await targetEditor.getByRole('button',{name:'Zapisz i przelicz'}).click();
+  await targetEditor.getByText(/Zapisano — analiza CEO i cena powodzenia/).waitFor();
+  await page.waitForFunction(()=>document.querySelector('[data-success-price]')?.textContent?.includes('60 000')||document.querySelector('[data-success-price]')?.textContent?.includes('60 000'));
+  assert.equal(room.answers.targetProfitPLN.value,60000);
+  assert.equal(current.underwriting.result.successPrice.targetProfitPLN,60000);
+  assert.notEqual(current.underwriting.result.successPrice.maxPurchasePrice,oldBoundary);
+  assert.equal(await targetInput.inputValue(),'60000','saved investor goal is immediately reflected without page reload');
+  await page.reload();
+  await targetPanel.waitFor();
+  await page.waitForFunction(()=>document.querySelector('#deal-success-target-input')?.value==='60000');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  // The other Q&A form must pick up the newer version before its own writes.
   const before=current.underwriting.result.profitBase;
   const more=page.getByRole('button',{name:/Pozostałe pytania/});if(await more.count())await more.click();
   await page.getByLabel('Odpowiedź: negotiatedPrice',{exact:true}).fill('260000');
