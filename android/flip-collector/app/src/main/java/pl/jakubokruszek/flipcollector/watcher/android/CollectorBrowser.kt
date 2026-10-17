@@ -46,6 +46,7 @@ class WebViewCollectorBrowser(
     private var finishedUrl: String? = null
     private val blockedResources = java.util.concurrent.atomic.AtomicInteger(0)
     private var mainFrameError: String? = null
+    private var manualLoginInProgress = false
     internal fun blockedResourceCount(): Int = blockedResources.get()
     internal fun documentReady() = pilotSource?.matchesPage(finishedUrl.orEmpty()) == true &&
         pilotSource.matchesPage(webView?.url.orEmpty()) && webView?.progress == 100
@@ -86,6 +87,7 @@ class WebViewCollectorBrowser(
         blockers().firstOrNull()?.let { throw IllegalStateException(it.message) }
         require(WebViewPolicy.navigation(url) == WebViewPolicy.Decision.ALLOW) { "Adres spoza Facebooka jest zablokowany" }
         require(pilotSource == null || pilotSource.matchesPage(url) || (manualLogin && url == pilotSource.manualLoginUrl())) { "PILOT_SOURCE_MISMATCH" }
+        if (navigate) manualLoginInProgress = manualLogin
         val view = webView ?: WebView(context).also { created ->
             created.settings.apply {
                 javaScriptEnabled = true
@@ -131,6 +133,7 @@ class WebViewCollectorBrowser(
         }
         webView = null
         finishedUrl = null
+        manualLoginInProgress = false
     }
 
     private inner class PolicyWebViewClient : WebViewClient() {
@@ -182,6 +185,12 @@ class WebViewCollectorBrowser(
             val url = request.url.toString()
             if (WebViewPolicy.navigation(url) == WebViewPolicy.Decision.ALLOW) {
                 if (!request.isForMainFrame || pilotSource == null || pilotSource.matchesPage(url)) return false
+                if (manualLoginInProgress && pilotSource.isMobileLoginLanding(url)) {
+                    // Only first-party mobile sign-in, only during explicit user login.
+                    // Even a successful landing never enables the collector on this page.
+                    onDiagnostic?.invoke("LOGIN_MOBILE_LANDING")
+                    return false
+                }
                 // Session UI may show Facebook's own login/challenge pages, but
                 // collecting stops immediately; never follow another group/post.
                 val path = request.url.path.orEmpty()
