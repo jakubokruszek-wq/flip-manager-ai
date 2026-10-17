@@ -129,23 +129,29 @@ class ScreenOffTestService : Service() {
             .apply { acquire(MAX_RUN_MS) }
         val trigger = intent?.getStringExtra(EXTRA_TRIGGER) ?: "manual"
         scope.launch {
-            val started = Instant.now().toString()
-            val before = ScreenOffTest.deviceState(this@ScreenOffTestService)
-            val result = runCatching {
-                HeadlessFixtureScan(this@ScreenOffTestService).run("/groups/$FIXTURE_GROUP_ID/", "lazy-feed", scrolls = 4, scrollPauseMs = 1500)
+            // Both render modes back to back, so one test answers both questions:
+            // does a session with no surface keep loading, and does an off-screen surface help?
+            val lines = mutableListOf<String>()
+            for (mode in SurfaceMode.entries) {
+                val started = Instant.now().toString()
+                val before = ScreenOffTest.deviceState(this@ScreenOffTestService)
+                val result = runCatching {
+                    HeadlessFixtureScan(this@ScreenOffTestService).run("/groups/$FIXTURE_GROUP_ID/", "lazy-feed", scrolls = 4, scrollPauseMs = 1500, surface = mode)
+                }
+                val after = ScreenOffTest.deviceState(this@ScreenOffTestService)
+                val report = result.getOrNull()?.report ?: ScanProtocol.failure(ScanStatus.COLLECTOR_ERROR, result.exceptionOrNull()?.javaClass?.simpleName)
+                val notes = before.mapKeys { "start.${it.key}" } + after.mapKeys { "end.${it.key}" } + mapOf(
+                    "trigger" to trigger,
+                    "surface" to mode.name,
+                    "scrolls" to report.scrolls.toString(),
+                    "expectedIfLazyLoadWorks" to "≥10 (5 bez doładowania)",
+                ) + (report.error?.let { mapOf("error" to it) } ?: emptyMap())
+                ScreenOffTest.store(this@ScreenOffTestService).append(PocResultStore.fromReport("SCREEN_OFF_TEST", started, Instant.now().toString(), report, notes))
+                lines += "${mode.name}: ${report.status}, postów ${report.posts.size}"
+                if (mode == SurfaceMode.NONE) lines += "Start: ekran ${if (before["screenOn"] == "true") "włączony" else "wygaszony"}, blokada ${before["locked"]}, Doze ${before["doze"]}."
             }
-            val after = ScreenOffTest.deviceState(this@ScreenOffTestService)
-            val report = result.getOrNull()?.report ?: ScanProtocol.failure(ScanStatus.COLLECTOR_ERROR, result.exceptionOrNull()?.javaClass?.simpleName)
-            val notes = before.mapKeys { "start.${it.key}" } + after.mapKeys { "end.${it.key}" } + mapOf(
-                "trigger" to trigger,
-                "scrolls" to report.scrolls.toString(),
-                "expectedIfLazyLoadWorks" to "≥10 (5 bez doładowania)",
-            ) + (report.error?.let { mapOf("error" to it) } ?: emptyMap())
-            ScreenOffTest.store(this@ScreenOffTestService).append(PocResultStore.fromReport("SCREEN_OFF_TEST", started, Instant.now().toString(), report, notes))
-            val summary = "Status ${report.status}, postów ${report.posts.size}, przewinięć ${report.scrolls}. " +
-                "Start: ekran ${if (before["screenOn"] == "true") "włączony" else "wygaszony"}, blokada ${before["locked"]}, Doze ${before["doze"]}."
             getSystemService(NotificationManager::class.java)
-                .notify(ScreenOffTest.RESULT_NOTIFICATION_ID, ScreenOffTest.notification(this@ScreenOffTestService, "Test ekranu: wynik", summary))
+                .notify(ScreenOffTest.RESULT_NOTIFICATION_ID, ScreenOffTest.notification(this@ScreenOffTestService, "Test ekranu: wynik", lines.joinToString("\n")))
             stopSelf()
         }
         return START_NOT_STICKY

@@ -2,6 +2,7 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 
 import android.content.Context
 import android.util.Log
+import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.Dispatchers
@@ -76,11 +77,36 @@ class GeckoFixtureTest {
         assertTrue(wrong.posts.isEmpty())
     }
 
-    @Test fun lazyFeedWithoutViewIsMeasured() {
-        // Not an assertion on lazy loading: it records whether a session with no
+    @Test fun lazyFeedLoadsMoreInAVisibleView() {
+        // Control: proves the fixture and the scroll logic work when the page is on screen.
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            val report = runBlocking {
+                withTimeout(120_000) {
+                    scanner.run(groupPath, "lazy-feed", scrolls = 4, scrollPauseMs = 800,
+                        attach = { session -> host!!.geckoView.setSession(session) },
+                        detach = { host!!.geckoView.releaseSession() })
+                }
+            }.report
+            Log.i("GeckoPocTest", "LAZY_FEED_VISIBLE status=${report.status} posts=${report.posts.size} scrolls=${report.scrolls}")
+            assertEquals(ScanStatus.OK, report.status)
+            assertTrue("visible view loaded only ${report.posts.size}", report.posts.size >= 10)
+        }
+    }
+
+    @Test fun lazyFeedWithoutAnySurfaceIsMeasured() {
+        // Not an assertion on lazy loading: records whether a session with no
         // surface keeps loading the feed (the stage C question) for the report.
         val report = scan(groupPath, "lazy-feed", scrolls = 4).report
         Log.i("GeckoPocTest", "LAZY_FEED_HEADLESS status=${report.status} posts=${report.posts.size} scrolls=${report.scrolls}")
+        assertEquals(ScanStatus.OK, report.status)
+        assertTrue(report.posts.size >= 5)
+    }
+
+    @Test fun lazyFeedWithOffscreenSurfaceIsMeasured() {
+        val report = runBlocking { withTimeout(120_000) { scanner.run(groupPath, "lazy-feed", scrolls = 4, scrollPauseMs = 800, surface = SurfaceMode.OFFSCREEN) } }.report
+        Log.i("GeckoPocTest", "LAZY_FEED_OFFSCREEN status=${report.status} posts=${report.posts.size} scrolls=${report.scrolls}")
         assertEquals(ScanStatus.OK, report.status)
         assertTrue(report.posts.size >= 5)
     }
