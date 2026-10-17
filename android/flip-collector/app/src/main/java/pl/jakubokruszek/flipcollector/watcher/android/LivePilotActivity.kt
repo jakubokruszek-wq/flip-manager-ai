@@ -89,6 +89,20 @@ private fun PilotScreen(activity: LivePilotActivity) {
                 message = "Sesja otwarta. Login wykonujesz samodzielnie; checkpoint/CAPTCHA oznacza STOP."
             }.onFailure { close(); message = "Nie można otworzyć sesji; sprawdź profil i ekran" }
         }) { Text("Otwórz sesję za zgodą") }
+        // Facebook's public group header may use a popup link. Navigate explicitly
+        // to Facebook's own HTTPS login page in this SAME WebView on user action.
+        OutlinedButton(enabled = browser != null && sessionConsent && task?.isActive != true, onClick = {
+            message = runCatching {
+                requireNotNull(browser).openLogin()
+                "Logowanie otwarte w Watcherze. Wpisuj dane wyłącznie na facebook.com; przy checkpoint/CAPTCHA zatrzymaj próbę."
+            }.getOrElse { "Nie można otworzyć strony logowania. STOP i zgłoś błąd." }
+        }) { Text("Zaloguj się na Facebooku w Watcherze") }
+        OutlinedButton(enabled = browser != null && sessionConsent && task?.isActive != true, onClick = {
+            message = runCatching {
+                requireNotNull(browser).open(LivePilotRuntime.profile(activity).source.url)
+                "Powrót do zatwierdzonej grupy. Skan dostępny tylko na jej stronie."
+            }.getOrElse { "Nie udało się wrócić do grupy. STOP i zgłoś błąd." }
+        }) { Text("Wróć do zatwierdzonej grupy") }
         AndroidView(factory = { host }, modifier = Modifier.fillMaxWidth().height(if (browser != null) 420.dp else 1.dp))
         Row {
             Checkbox(scanConsent, { scanConsent = it })
