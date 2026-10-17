@@ -18,7 +18,7 @@ class LivePilotWebViewTest {
         val browser = WebViewCollectorBrowser(context, LiveCollectionGate(true,true), pilotSource = source)
         browser.useLocalFixture(html)
         try {
-            browser.open(source.url)
+            browser.prepare(source.url)
             LivePilotChannel(context,browser).collect(source)
         } finally { browser.close() }
     }

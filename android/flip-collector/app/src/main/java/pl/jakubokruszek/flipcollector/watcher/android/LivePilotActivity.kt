@@ -94,7 +94,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
             Checkbox(scanConsent, { scanConsent = it })
             Text("Zatwierdzam jeden skan powyższej grupy (maks. 20 postów) do izolowanego API.")
         }
-        Button(enabled = browser != null && scanConsent && !used && task?.isActive != true && !snapshot.optBoolean("pending") && !snapshot.optBoolean("active"), onClick = {
+        Button(enabled = browser?.documentReady() == true && scanConsent && !used && task?.isActive != true && !snapshot.optBoolean("pending") && !snapshot.optBoolean("active"), onClick = {
             used = true
             task = scope.launch {
                 try { LivePilotRuntime.run(activity, requireNotNull(browser), sessionConsent && scanConsent); message = "Przebieg zakończony; sprawdź receipt" }

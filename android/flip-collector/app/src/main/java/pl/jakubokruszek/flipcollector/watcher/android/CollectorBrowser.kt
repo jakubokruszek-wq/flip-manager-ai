@@ -43,6 +43,8 @@ class WebViewCollectorBrowser(
     private val onViewCreated: (WebView) -> Unit = {},
 ) : CollectorBrowser {
     private var webView: WebView? = null
+    private var finishedUrl: String? = null
+    internal fun documentReady() = pilotSource?.matchesPage(finishedUrl.orEmpty()) == true
     internal var onPageReady: ((WebView, String) -> Unit)? = null
     internal var onStop: ((String) -> Unit)? = null
     internal fun currentView(): WebView? = webView
@@ -61,8 +63,11 @@ class WebViewCollectorBrowser(
         if (context.getSystemService(PowerManager::class.java)?.isInteractive != true) add(BrowserBlocker.SCREEN_OFF)
     }
 
+    override fun open(url: String) = openPage(url, navigate = true)
+    internal fun prepare(url: String) = openPage(url, navigate = false)
+
     @SuppressLint("SetJavaScriptEnabled")
-    override fun open(url: String) {
+    private fun openPage(url: String, navigate: Boolean) {
         gate.check()
         blockers().firstOrNull()?.let { throw IllegalStateException(it.message) }
         require(WebViewPolicy.navigation(url) == WebViewPolicy.Decision.ALLOW) { "Adres spoza Facebooka jest zablokowany" }
@@ -95,6 +100,8 @@ class WebViewCollectorBrowser(
             webView = created
             onViewCreated(created)
         }
+        if (!navigate) return
+        finishedUrl = null
         if (localFixture != null) {
             view.settings.javaScriptEnabled = false
             view.loadDataWithBaseURL(url, requireNotNull(localFixture), "text/html", "UTF-8", url)
@@ -109,6 +116,7 @@ class WebViewCollectorBrowser(
             destroy()
         }
         webView = null
+        finishedUrl = null
     }
 
     private inner class PolicyWebViewClient : WebViewClient() {
@@ -116,7 +124,7 @@ class WebViewCollectorBrowser(
             handler.cancel()
             onStop?.invoke("TLS_ERROR")
         }
-        override fun onPageFinished(view: WebView, url: String) { onPageReady?.invoke(view, url) }
+        override fun onPageFinished(view: WebView, url: String) { finishedUrl = url; onPageReady?.invoke(view, url) }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
             if (request.isForMainFrame) onStop?.invoke(if (response.statusCode == 403) "HTTP_403" else "HTTP_ERROR")

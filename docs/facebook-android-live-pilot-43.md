@@ -69,12 +69,17 @@ Bez kolejnej zgody zatrzymać się tutaj. Domyślne flagi
 Warunek przed dopuszczeniem: dedykowane, zatwierdzone HTTPS API bez zapisu do
 produkcyjnego Findera, jedna grupa GROUP oraz grant dla osobnego urządzenia,
 krótkotrwały profil i jawne zatwierdzenie konkretnej grupy i sesji.
-Istniejący Render OFFLINE_TEST przyjmuje **wyłącznie OFFLINE_TEST** i nie jest
-gotowym endpointem LIVE. Nie zmieniać jego trybu, bazy, źródeł ani historii.
+Obecnie wdrożony Render OFFLINE_TEST przyjmuje **wyłącznie OFFLINE_TEST**.
+Ta gałąź przygotowuje addytywny, domyślnie wyłączony odbiornik pilota w tym samym
+testowym procesie i bazie. Wdrożenie oraz konfiguracja wymagają osobnej zgody.
+Odbiornik rozdziela urządzenia i klucze HMAC, wymusza jedną grupę/20 postów,
+przechowuje dowody i wyekstrahowane cenę/metraż/dzielnicę w prywatnym testowym
+checkpointcie oraz wykorzystuje istniejącą transakcję/receipt. Nie importuje
+serwera Findera. OFFLINE_TEST nadal odrzuca LIVE i zachowuje własne dane.
 Nie podawać do pilota produkcyjnego originu, tokenu ani konfiguracji filtrów.
 Obecna implementacja klienta używa istniejącego kontraktu LIVE; wydanie buildu
-z flagą true wymaga wcześniej zweryfikowanego izolowanego odbiornika tego
-kontraktu i oddzielnej zgody na jego konfigurację/wdrożenie. Sam adres inny
+z flagą true wymaga wcześniej zatwierdzonego wdrożenia przygotowanego odbiornika
+tego kontraktu i oddzielnej zgody na jego konfigurację/wdrożenie. Sam adres inny
 niż produkcyjny nie dowodzi izolacji bazy — operator musi to zweryfikować.
 
 Po spełnieniu warunków można osobno zatwierdzić build DEBUG z
@@ -108,6 +113,40 @@ mieszkań/ceny/metrażu/dzielnicy, receipt i izolowane dane. Powtórzyć jedynie
 potwierdzenie po utracie Wi-Fi/odpowiedzi; liczba rekordów nie może wzrosnąć.
 Przycisk STOP i Home mają zatrzymać WebView, zachowując pending completion.
 Każdy challenge/403 lub utrata lease: STOP i diagnoza bez ponownego skanu.
+
+## Przygotowany odbiornik na istniejącej darmowej infrastrukturze
+
+Nie wykonano poniższych działań zdalnych. Nowy kod jest ograniczony do
+`scripts/facebook-android-test-api.ts`; trasy produkcyjnego Next nie importują
+konfiguracji pilota. Domyślnie `FLIP_LIVE_PILOT_ENABLED` jest wyłączone.
+Po osobnej zgodzie należy wdrożyć kod do dedykowanego Render Free, zachowując
+wszystkie obecne parametry OFFLINE_TEST. Do nowej ścieżki potrzebne są:
+
+- `FLIP_LIVE_PILOT_ENABLED=true` (wyłącznie testowy serwer);
+- `FLIP_LIVE_PILOT_DEVICE_ID`: nowy UUID, różny od OFFLINE_TEST;
+- `FLIP_LIVE_PILOT_SIGNING_KEY`: sha256 nowego prywatnego tokenu, inny niż OFFLINE;
+- `FLIP_LIVE_PILOT_SOURCE_REGISTRY_ID`: nowy UUID grantu jednej grupy;
+- `FLIP_LIVE_PILOT_FACEBOOK_GROUP_ID`: zatwierdzona rzeczywista grupa GROUP;
+- `FLIP_LIVE_PILOT_EXPIRES_AT`: timestamp ms, najwyżej godzina i nie dłużej niż
+  zatwierdzenie istniejącego testowego serwera.
+
+Bez sekretów Supabase/service_role/OpenAI ani produkcyjnych flag. Dotychczasowy
+klucz i urządzenie OFFLINE_TEST pozostają bez zmian. Nowy generator
+`scripts/prepare-facebook-live-pilot.py --help` **tylko drukuje** SQL do przeglądu,
+bez połączenia z bazą. Po osobnej zgodzie SQL sprawdza marker projektu i testowy
+schemat, następnie dopisuje nowe urządzenie/grupę/grant oraz jeden job z
+`max_attempts=1`. Nie aktualizuje, nie kasuje i nie resetuje wcześniejszych
+wierszy, outboxów ani potwierdzeń. Powtórne wykonanie z tymi samymi ID jest
+odrzucane, a transakcja nie zmienia danych. Nie uruchamiać tego w produkcji.
+
+Wygaśnięcie zatwierdzenia może wymagać odnowienia terminu serwera/profilu przy
+zachowaniu tego samego klucza/urządzenia/źródła, aby odebrać pending receipt.
+Journal dopuszcza takie odnowienie; nie dopuszcza zamiany tożsamości w trakcie
+odzyskiwania. Dowody zawierają dane postów i pozostają prywatne w chronionym
+RLS testowym checkpointcie. Eksport telefonu ich nie ujawnia. Nie ma
+automatycznego czyszczenia dowodów. Docelowe dopasowanie do ustawień produkcyjnego
+Findera nie jest wykonywane: testowe wiersze mają status REVIEW, a kontrole
+intencji, ceny, metrażu i lokalizacji używają istniejącej ekstrakcji.
 
 ## Osobny test ekranu wygaszonego — etap B
 

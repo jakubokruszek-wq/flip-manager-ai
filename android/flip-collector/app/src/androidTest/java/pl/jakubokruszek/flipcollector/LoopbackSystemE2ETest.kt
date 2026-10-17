@@ -147,7 +147,7 @@ class LoopbackSystemE2ETest {
                     val browser = pl.jakubokruszek.flipcollector.watcher.android.WebViewCollectorBrowser(context,LiveCollectionGate(true,true),pilotSource = bound)
                     browser.useLocalFixture(html)
                     try {
-                        browser.open(bound.url)
+                        browser.prepare(bound.url)
                         pl.jakubokruszek.flipcollector.watcher.android.LivePilotChannel(context,browser).collect(bound).also(pilotState::captured)
                     } finally { browser.close() }
                 }

@@ -66,6 +66,7 @@ export async function completeAndroidJob(input: {
   atomicOfflineImportReplay?: boolean;
   /** Server-only capability: every Finder post has an atomic durable receipt. */
   atomicFinderImportReplay?: boolean;
+  atomicPilotImportReplay?: boolean;
   processBatch: (deviceId: string, batch: FacebookCollectorBatch, context: AndroidBatchContext) => Promise<{ status: string }>;
 }): Promise<AndroidReceipt> {
   const { jobId, leaseToken } = androidLeaseInput(input.value);
@@ -103,7 +104,8 @@ export async function completeAndroidJob(input: {
       deviceId: input.deviceId, batchId: completionId, runId: job.scan_run_id,
       sourceScanId: job.source_scan_id, sourceId: batch.sourceId, sourceUrl: batch.sourceUrl,
     }) : null;
-    if (!saved && batch && (input.atomicFinderImportReplay === true || (input.atomicOfflineImportReplay === true && input.expectedDataMode === "OFFLINE_TEST"))) {
+    if (!saved && batch && (input.atomicFinderImportReplay === true || (input.atomicOfflineImportReplay === true && input.expectedDataMode === "OFFLINE_TEST") ||
+        (input.atomicPilotImportReplay === true && input.expectedDataMode === "LIVE"))) {
       // Capabilities come only from trusted server wiring, never request JSON.
       // Finder's reservation wrapper refuses pre-existing legacy reservations;
       // each post has an atomic receipt and finalization freezes the batch.

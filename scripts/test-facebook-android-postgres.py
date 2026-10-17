@@ -29,6 +29,32 @@ COMPLETION = UUID("00000000-0000-4000-8000-000000000006")
 HASH = "a" * 64
 
 class AndroidPostgres(unittest.TestCase):
+    def test_pilot_seed_is_additive_and_preserves_offline_rows_and_receipts(self):
+        import importlib.util
+        from facebook_android_fixture_store import create_fixture_tables, persist_fixture_import
+        from psycopg.rows import dict_row
+        spec = importlib.util.spec_from_file_location("pilot_plan", ROOT/"scripts/prepare-facebook-live-pilot.py")
+        plan = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plan)
+        self.db.execute("alter table facebook_scan_jobs add column scan_run_id uuid")
+        self.db.execute("create table offline_test_environment(id integer primary key,project_ref text,groups jsonb)")
+        self.db.execute("insert into offline_test_environment values(1,'abcdefghijklmnopqrst','[\"existing-offline-group\"]')")
+        create_fixture_tables(self.db)
+        self.db.row_factory = dict_row
+        persist_fixture_import(self.db, self.fixture_import_body())
+        original_job = self.db.execute("select to_jsonb(j) as row from facebook_scan_jobs j where id=%s",(JOB,)).fetchone()["row"]
+        original_receipt = self.db.execute("select result from test_completed_batches").fetchone()["result"]
+        sql = plan.prepare("abcdefghijklmnopqrst","aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","1234567890",2000,now=1000)
+        self.db.execute(sql)
+        self.assertEqual(self.db.execute("select to_jsonb(j) as row from facebook_scan_jobs j where id=%s",(JOB,)).fetchone()["row"],original_job)
+        self.assertEqual(self.db.execute("select result from test_completed_batches").fetchone()["result"],original_receipt)
+        self.assertEqual(self.db.execute("select groups from offline_test_environment").fetchone()["groups"],["existing-offline-group"])
+        self.assertEqual(self.db.execute("select count(*) n from test_listings").fetchone()["n"],1)
+        self.assertEqual(self.db.execute("select max_attempts from facebook_scan_jobs where worker_id is null and group_snapshot->0->>'sourceId'='1234567890'").fetchone()["max_attempts"],1)
+        with self.assertRaises(psycopg.errors.UniqueViolation): self.db.execute(sql)
+        self.db.execute("rollback")
+        self.assertEqual(self.db.execute("select count(*) n from test_completed_batches").fetchone()["n"],1)
+
     def test_scoped_claim_empty_unrelated_and_selected_source(self):
         source=self.db.execute("select watched_group_id from collector_android_source_grants where device_id=%s",(DEVICE,)).fetchone()[0]
         self.assertIsNone(self.db.execute("select id from claim_android_facebook_scan_job(%s,180,%s)",(DEVICE,[])).fetchone())

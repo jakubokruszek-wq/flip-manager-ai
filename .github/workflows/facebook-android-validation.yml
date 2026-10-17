@@ -35,6 +35,11 @@ jobs:
       - name: Backend security and integration tests
         if: ${{ !cancelled() }}
         run: npm run test:facebook-android
+      - name: Gated pilot ingress scope, HMAC, receipts and additive plan
+        if: ${{ !cancelled() }}
+        run: |
+          node --test --test-isolation=none features/collector/android/live-pilot-ingress.test.ts
+          python scripts/test-facebook-live-pilot-plan.py
       - name: Offline Android adapter and simulation
         if: ${{ !cancelled() }}
         run: npm run test:facebook-android-offline
