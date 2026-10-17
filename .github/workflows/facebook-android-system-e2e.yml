@@ -76,7 +76,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: android/flip-collector
-          script: ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.isolatedApiOrigin=https://10.0.2.2:55441
+          script: |
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.isolatedApiOrigin=https://10.0.2.2:55441
+            bash ../../scripts/test-facebook-pilot-process-recovery.sh
       - name: Verify side-by-side APK identity and flag
         run: |
           set -euo pipefail
@@ -102,6 +104,7 @@ jobs:
             android/flip-collector/app/build/reports/tests/
             android/flip-collector/app/build/reports/androidTests/
             android/flip-collector/app/build/outputs/androidTest-results/
+            android/flip-collector/app/build/reports/pilot-process/
           if-no-files-found: ignore
           retention-days: 7
       - name: Stop isolated fixture processes

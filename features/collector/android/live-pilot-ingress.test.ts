@@ -43,7 +43,7 @@ test("receiver enforces max twenty, source and no Vision before reserving comple
 });
 test("source restriction intersects SQL grants and cannot claim another group",async()=>{
   const base=new MockAndroidStore([row()]);const store=livePilotStore(base,config);
-  await assert.rejects(store.rpc("claim_android_facebook_scan_job",{p_device_id:config.deviceId,p_source_ids:["other"]}),/FORBIDDEN/);
+  await assert.rejects(async()=>await store.rpc("claim_android_facebook_scan_job",{p_device_id:config.deviceId,p_source_ids:["other"]}),/FORBIDDEN/);
   assert.equal(base.calls.length,0);
   assert.ok((await store.rpc("claim_android_facebook_scan_job",{p_device_id:config.deviceId})).data);
   base.jobs[0].group_snapshot=jobRow().group_snapshot;

@@ -124,11 +124,12 @@ class LoopbackSystemE2ETest {
         val pilotSource = sources.single { it.name == "Offline source 0" }
         val pilotDisk = EncryptedAutomationStorage(context, CollectorSigner.sha256Hex("PILOT_E2E_ONLY".toByteArray()))
         val pilotState = LivePilotJournal(pilotDisk)
+        class PilotResponseLost : IOException("fixture response lost after receipt")
         var lostPilotResponse = true
         val pilotFlaky = object : AndroidQueueClient by signed {
             override fun sendCompletion(pending: PendingCompletion): JSONObject {
                 val response = signed.sendCompletion(pending)
-                if (lostPilotResponse) { lostPilotResponse = false; throw IOException("fixture response lost") }
+                if (lostPilotResponse) { lostPilotResponse = false; throw PilotResponseLost() }
                 return response
             }
         }
@@ -153,7 +154,7 @@ class LoopbackSystemE2ETest {
                 }
             }
             fail("Expected lost pilot response")
-        } catch (_: IOException) { /* durable completion must survive */ }
+        } catch (_: PilotResponseLost) { /* durable completion must survive */ }
         val pilotPending = requireNotNull(LivePilotJournal(pilotDisk).load())
         assertEquals(beforePilot.getInt("listings"),stats().getInt("listings"))
         assertEquals(beforePilot.getInt("completedBatches")+1,stats().getInt("completedBatches"))
