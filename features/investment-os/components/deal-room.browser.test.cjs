@@ -156,7 +156,10 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   await page.locator("[data-deal-room]").waitFor({ state: "visible" });
   assert.ok(await page.getByText("Oczekuje na wynik", { exact: true }).count() > 0);
   assert.ok(await page.getByText("Decyzja pojawi się po zapisaniu wyniku analizy.", { exact: true }).isVisible());
-  assert.doesNotMatch(await page.locator("body").innerText(), /\b(?:NEGOTIATE|BUY|REJECT|MAX BUY|EXPECTED PROFIT|NEXT BEST ACTION|COMPLETE|BLOCKED)\b/);
+  // BUY is intentional explanatory copy in the requested transition heading,
+  // never a raw decision/status in this incomplete-CEO fixture.
+  const emptyStateText = (await page.locator("body").innerText()).replace("Co musi się wydarzyć, żeby HOLD zmienił się na BUY?", "");
+  assert.doesNotMatch(emptyStateText, /\b(?:NEGOTIATE|BUY|REJECT|MAX BUY|EXPECTED PROFIT|NEXT BEST ACTION|COMPLETE|BLOCKED)\b/);
   await page.screenshot({ path: path.join(reviewDir, "06-deal-room-empty-state.png"), fullPage: true });
   currentDeal = deal;
 
