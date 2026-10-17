@@ -12,7 +12,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   const pending = useRef<AnswerCommand | null>(null);
   const [targetHost, setTargetHost] = useState<HTMLElement | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
-  useEffect(() => { setTargetHost(document.getElementById("success-price-target-slot")); }, [deal.listingId]);
+  useEffect(() => { const timer = window.setTimeout(() => setTargetHost(document.getElementById("success-price-target-slot")), 0); return () => window.clearTimeout(timer); }, [deal.listingId]);
   const path = `${investmentPath(deal.listingId)}/answers`;
   useEffect(() => {
     let active = true;
