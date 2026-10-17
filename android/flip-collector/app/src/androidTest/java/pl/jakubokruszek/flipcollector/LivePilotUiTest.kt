@@ -12,6 +12,11 @@ class LivePilotUiTest {
         screen.onNodeWithText("Otwórz sesję za zgodą").performScrollTo().assertIsNotEnabled()
         screen.onNodeWithText("Skanuj raz — maks. 20").performScrollTo().assertIsNotEnabled()
     }
+    @Test fun pilotShowsOnlySanitizedWebViewStatus() {
+        screen.onNodeWithText("Diagnostyka WebView (bez adresów i danych logowania): NOT_OPENED")
+            .performScrollTo().assertExists()
+    }
+
     @Test fun stopIsVisibleAndReportsOperatorRequest() {
         screen.onNodeWithText("STOP", substring = false).performScrollTo().performClick()
         screen.onNodeWithText("STOP na żądanie operatora").performScrollTo().assertIsDisplayed()
