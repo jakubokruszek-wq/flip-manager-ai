@@ -37,14 +37,22 @@ class LivePilotJournal(private val disk: AtomicAutomationStorage) : CompletionSt
         val row = read(); action(row); disk.write(row.toString())
     }
     fun configure(raw: String) = change { row ->
-        check(!row.has("pending") && !row.has("active")) { "PILOT_UNSETTLED" }
+        if (row.has("pending") || row.has("active")) {
+            // An expired one-hour approval may be renewed for recovery, but
+            // credentials/source/origin cannot be replaced under an old body.
+            val old = JSONObject(row.getString("profile"))
+            val next = JSONObject(raw)
+            check(listOf("origin", "deviceId", "deviceToken", "purpose", "dataMode").all { old.getString(it) == next.getString(it) } &&
+                listOf("id", "sourceId", "url").all { old.getJSONObject("source").getString(it) == next.getJSONObject("source").getString(it) }) { "PILOT_UNSETTLED" }
+        }
         row.put("profile", raw)
     }
     fun profile(): String? = synchronized(lock) { read().optString("profile").ifBlank { null } }
     fun claimed(job: ClaimedJob) = change { row ->
         check(!row.has("active")) { "PILOT_RECOVERY_REQUIRED" }
         row.put("active", JSONObject().put("id",job.id).put("leaseToken",job.leaseToken).put("runId",job.runId).put("group",job.group))
-        row.put("startedAt", System.currentTimeMillis()).put("heartbeat", 0).put("visible", 0).put("verified", 0).put("stop", "")
+        row.remove("finishedAt")
+        row.put("startedAt", System.currentTimeMillis()).put("heartbeat", System.currentTimeMillis()).put("visible", 0).put("verified", 0).put("stop", "")
     }
     fun active(): ClaimedJob? = synchronized(lock) { read().optJSONObject("active")?.let {
         ClaimedJob(it.getString("id"), it.getString("leaseToken"), it.getString("runId"), "SOURCE_SCAN", it.getJSONObject("group"))

@@ -64,8 +64,10 @@ class LivePilotChannel(private val context: Context, private val browser: WebVie
         } finally {
             browser.onPageReady = null
             browser.onStop = null
-            WebViewCompat.removeWebMessageListener(view, "FlipPilot")
-            view.stopLoading()
+            if (browser.currentView() === view) {
+                WebViewCompat.removeWebMessageListener(view, "FlipPilot")
+                view.stopLoading()
+            }
         }
     }
 }

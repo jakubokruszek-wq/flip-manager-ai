@@ -45,4 +45,30 @@ class LivePilotWebViewTest {
         try { collect("<html><body>Empty</body></html>"); fail("expected STOP") }
         catch (error: IllegalStateException) { assertEquals("NO_VERIFIED_POSTS",error.message) }
     }
+    @Test fun screenOffStillBlocksBrowserBeforeCreatingWebView() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val power = context.getSystemService(android.os.PowerManager::class.java)
+        fun key(code: Int) {
+            instrumentation.uiAutomation.executeShellCommand("input keyevent $code").use { descriptor ->
+                android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readBytes() }
+            }
+        }
+        try {
+            key(223) // Emulator-only KEYCODE_SLEEP; no wake lock or changed policy.
+            repeat(30) { if (!power.isInteractive) return@repeat; delay(100) }
+            assertFalse(power.isInteractive)
+            withContext(Dispatchers.Main) {
+                val browser=WebViewCollectorBrowser(context,LiveCollectionGate(true,true),pilotSource=source)
+                browser.useLocalFixture("<html></html>")
+                assertTrue(browser.blockers().contains(BrowserBlocker.SCREEN_OFF))
+                try { browser.open(source.url); fail("SCREEN_OFF must reject start") }
+                catch (_: IllegalStateException) { assertNull(browser.currentView()) }
+                finally { browser.close() }
+            }
+        } finally {
+            key(224) // Restore emulator state; proves nothing about Samsung LIVE.
+            repeat(30) { if (power.isInteractive) return@repeat; delay(100) }
+        }
+    }
 }

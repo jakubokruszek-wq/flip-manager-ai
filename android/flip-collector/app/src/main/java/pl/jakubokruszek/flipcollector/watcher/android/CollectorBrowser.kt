@@ -111,6 +111,10 @@ class WebViewCollectorBrowser(
     }
 
     private inner class PolicyWebViewClient : WebViewClient() {
+        override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
+            handler.cancel()
+            onStop?.invoke("TLS_ERROR")
+        }
         override fun onPageFinished(view: WebView, url: String) { onPageReady?.invoke(view, url) }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {

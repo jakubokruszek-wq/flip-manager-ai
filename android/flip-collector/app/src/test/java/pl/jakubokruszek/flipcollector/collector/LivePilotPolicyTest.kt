@@ -78,9 +78,31 @@ class LivePilotPolicyTest {
     }
     @Test fun journalNeverReconfiguresOverPendingOrOfflineData() {
         val disk=Disk();val state=LivePilotJournal(disk)
+        state.configure("{\"origin\":\"https://test.invalid\",\"deviceId\":\"device\",\"deviceToken\":\"secret\",\"purpose\":\"LIVE_PILOT\",\"dataMode\":\"LIVE\",\"source\":{\"id\":\"id\",\"sourceId\":\"group\",\"url\":\"url\"}}")
         state.claimed(ClaimedJob("job","lease","run","SOURCE_SCAN",JSONObject()))
-        assertThrows(IllegalStateException::class.java) { state.configure("new profile") }
+        val replacement=JSONObject(requireNotNull(state.profile())).put("deviceToken","other")
+        assertThrows(IllegalStateException::class.java) { state.configure(replacement.toString()) }
         disk.bytes="{\"mode\":\"OFFLINE_TEST\"}"
         assertThrows(IllegalStateException::class.java) { state.diagnostics() }
+    }
+    @Test fun profileRequiresExplicitTestOriginSourceAndShortApproval() {
+        val now=1000L
+        val raw=JSONObject().put("version",1).put("purpose","LIVE_PILOT").put("dataMode","LIVE").put("maxPosts",20)
+            .put("origin","https://test.invalid").put("deviceId",source.remoteId).put("deviceToken","x".repeat(43)).put("expiresAt",now+1000)
+            .put("source",JSONObject().put("id",source.remoteId).put("sourceId",source.sourceId).put("url",source.url))
+        assertEquals(source,LivePilotProfile.parse(raw.toString(),"https://test.invalid",now).source)
+        assertThrows(IllegalArgumentException::class.java) { LivePilotProfile.parse(raw.toString(),"",now) }
+        assertThrows(IllegalArgumentException::class.java) { LivePilotProfile.parse(raw.toString(),"https://other.invalid",now) }
+        raw.put("expiresAt",now-1)
+        assertThrows(IllegalArgumentException::class.java) { LivePilotProfile.parse(raw.toString(),"https://test.invalid",now) }
+        raw.put("expiresAt",now+3600_001)
+        assertThrows(IllegalArgumentException::class.java) { LivePilotProfile.parse(raw.toString(),"https://test.invalid",now) }
+    }
+    @Test fun exactPostNeedsNonNullAuthorAndText() {
+        for (key in listOf("author","text")) {
+            val raw=envelope()
+            raw.getJSONObject("batch").getJSONArray("posts").getJSONObject(0).put(key,JSONObject.NULL)
+            assertThrows(IllegalArgumentException::class.java) { LivePilotPolicy.validate(raw.toString(),"fixture-nonce",source) }
+        }
     }
 }

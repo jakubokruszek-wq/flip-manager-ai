@@ -66,7 +66,8 @@ object LivePilotPolicy {
             if (confidence == "UNVERIFIED") require(media.length() == 0)
             else {
                 exact++
-                require(post.optString("author").isNotBlank() && post.optString("text").isNotBlank())
+                require(!post.isNull("author") && !post.isNull("text") && post.optString("author").isNotBlank() && post.optString("text").isNotBlank())
+                require(post.getString("author").length <= 1000 && post.getString("text").length <= 20_000)
             }
             for (j in 0 until media.length()) {
                 val item = media.getJSONObject(j)

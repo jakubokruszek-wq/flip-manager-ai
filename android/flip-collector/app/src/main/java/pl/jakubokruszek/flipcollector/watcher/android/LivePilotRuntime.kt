@@ -11,7 +11,8 @@ object LivePilotRuntime {
     private val running = java.util.concurrent.atomic.AtomicBoolean(false)
     fun journal(context: Context) = LivePilotJournal(EncryptedAutomationStorage(context,
         CollectorSigner.sha256Hex("LIVE_PILOT_43_SEPARATE_JOURNAL".toByteArray())))
-    fun available() = BuildConfig.DEBUG && BuildConfig.LIVE_PILOT_ENABLED && BuildConfig.LIVE_PILOT_ORIGIN.isNotEmpty()
+    fun available() = BuildConfig.DEBUG && BuildConfig.LIVE_PILOT_ENABLED && BuildConfig.LIVE_PILOT_ORIGIN.isNotEmpty() &&
+        !BuildConfig.LIVE_COLLECTION_ENABLED && !BuildConfig.ANDROID_BACKEND_INTEGRATION_ENABLED
     fun profile(context: Context) = LivePilotProfile.parse(requireNotNull(journal(context).profile()), BuildConfig.LIVE_PILOT_ORIGIN)
     fun configure(context: Context, raw: String) {
         check(available() && !running.get())
@@ -40,13 +41,14 @@ object LivePilotRuntime {
             }
             check(state.active() == null && state.load() == null) { "PILOT_RECOVERY_REQUIRED" }
             check(browser.blockers().isEmpty()) { "SCREEN_OFF" }
-            AndroidQueueSession(client, outbox, enabled = true).runOne(listOf(profile.source.remoteId),
+            val receipt = AndroidQueueSession(client, outbox, enabled = true).runOne(listOf(profile.source.remoteId),
                 onClaim = { state.claimed(it); profile.source.checkJob(it) },
                 onReceipt = state::acknowledge, onHeartbeat = state::heartbeat) { job ->
                 profile.source.checkJob(job)
                 check(System.currentTimeMillis() < profile.expiresAt) { "PILOT_PROFILE_EXPIRED" }
                 LivePilotChannel(context, browser).collect(profile.source).also(state::captured)
             }
+            if (receipt == null) state.stop("NO_PENDING_JOB")
         } catch (cancelled: CancellationException) {
             state.stop(if (cancelled is TimeoutCancellationException) "PILOT_TIMEOUT" else "PILOT_CANCELLED")
             throw cancelled
@@ -58,5 +60,5 @@ object LivePilotRuntime {
     }
     private val STOP_CODES = setOf("SCREEN_OFF", "LOGIN_REQUIRED", "CHECKPOINT", "CAPTCHA", "GROUP_UNAVAILABLE", "NO_VERIFIED_POSTS",
         "PILOT_REDIRECT_BLOCKED", "PILOT_ORIGIN_FRAME_REJECTED", "HTTP_403", "HTTP_ERROR", "WEBVIEW_NETWORK_ERROR", "RENDERER_GONE",
-        "LOGIN_OR_GROUP_UNAVAILABLE", "PILOT_RECOVERY_REQUIRED", "ANDROID_JOB_LEASE_LOST", "PILOT_PROFILE_EXPIRED", "PILOT_SOURCE_JOB_MISMATCH")
+        "LOGIN_OR_GROUP_UNAVAILABLE", "PILOT_RECOVERY_REQUIRED", "ANDROID_JOB_LEASE_LOST", "PILOT_PROFILE_EXPIRED", "PILOT_SOURCE_JOB_MISMATCH", "TLS_ERROR")
 }

@@ -2,7 +2,7 @@ name: Facebook Android isolated validation
 on:
   workflow_dispatch:
   pull_request:
-    types: [labeled]
+    types: [opened, synchronize, reopened, labeled]
 permissions:
   contents: read
 concurrency:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   backend:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-facebook-android-tests' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-facebook-android-tests') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -45,7 +45,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: npm run build
   postgres:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-facebook-android-tests' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-facebook-android-tests') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
