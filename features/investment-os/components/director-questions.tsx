@@ -20,7 +20,7 @@ export function DirectorQuestions({ deal, onAnalyzed, scope = "other" }: { deal:
       setRoom(body.room);
     }).catch(() => { if (active) setError("Nie udało się wczytać odpowiedzi. Odśwież stronę."); });
     return () => { active = false; };
-  }, [path, deal.updatedAt]);
+  }, [path, deal]);
   useEffect(() => {
     const focusQuestion=(event?:Event)=>{
       const match=window.location.hash.match(/^#deal-question-([A-Za-z0-9_]+)$/);if(!match)return;
