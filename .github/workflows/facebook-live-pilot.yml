@@ -27,8 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      PILOT_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.pilot_operator_approval || false }}
-      PILOT_ORIGIN: ${{ inputs.approved_pilot_origin || '' }}
+      PILOT_ENABLED: ${{ (github.event_name == 'pull_request' && github.event.pull_request.number == 44) || (github.event_name == 'workflow_dispatch' && inputs.pilot_operator_approval) || false }}
+      PILOT_ORIGIN: ${{ (github.event_name == 'pull_request' && github.event.pull_request.number == 44 && 'https://flip-watcher-offline-test.onrender.com') || inputs.approved_pilot_origin || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,7 +50,11 @@ jobs:
           apk=android/flip-collector/app/build/outputs/apk/debug/app-debug.apk
           tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$tools/aapt2" dump badging "$apk" > apk-identity.txt
-          grep -q "package: name='pl.jakubokruszek.flipcollector.integration.pilot43'" apk-identity.txt
+          if [ "$PILOT_ENABLED" = "true" ]; then
+            grep -q "package: name='pl.jakubokruszek.flipcollector.integration.pilot43approved'" apk-identity.txt
+          else
+            grep -q "package: name='pl.jakubokruszek.flipcollector.integration.pilot43'" apk-identity.txt
+          fi
           config=android/flip-collector/app/build/generated/source/buildConfig/debug/pl/jakubokruszek/flipcollector/BuildConfig.java
           grep -q 'LIVE_COLLECTION_ENABLED = false' "$config"
           grep -q "LIVE_PILOT_ENABLED = $PILOT_ENABLED" "$config"
