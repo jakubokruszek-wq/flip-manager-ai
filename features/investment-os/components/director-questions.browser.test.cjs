@@ -30,6 +30,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
       if(req.method()==='GET')body={enabled:true,room};
       else {
         const cmd=parseAnswerCommand(req.postDataJSON());
+        if(cmd.expectedVersion!==room.version)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({code:'INVESTMENT_DEAL_VERSION_CONFLICT',message:'Analiza zmieniła się.'})});
         if(receipts.has(cmd.requestId)) body=receipts.get(cmd.requestId);
         else {
           assert.equal(cmd.expectedVersion,room.version);
@@ -56,6 +57,10 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   const oldBoundary=current.underwriting.result.successPrice.maxPurchasePrice;
   assert.ok(oldTarget!==60000);
   await targetInput.fill('60000');
+  room={...room,version:room.version+1}; // concurrent saved analysis version, no other target change
+  await targetEditor.getByRole('button',{name:'Zapisz i przelicz'}).click();
+  await targetEditor.getByRole('alert').getByText(/kwota została zachowana/).waitFor();
+  assert.equal(await targetInput.inputValue(),'60000','CAS conflict must not lose the user's entered target');
   await targetEditor.getByRole('button',{name:'Zapisz i przelicz'}).click();
   await targetEditor.getByText(/Zapisano — analiza CEO i cena powodzenia/).waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-success-price]')?.textContent?.includes('60 000')||document.querySelector('[data-success-price]')?.textContent?.includes('60 000'));
