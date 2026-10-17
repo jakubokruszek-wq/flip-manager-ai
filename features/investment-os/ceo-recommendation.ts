@@ -20,10 +20,14 @@ const known=(value:unknown):number|null=>typeof value==="number"&&Number.isFinit
 export function ceoRecommendation(deal:CanonicalDeal){
  const brain=buildDealBrain(deal),u=deal.underwriting.result,cfo=u?.cfo;
  const valid=deal.underwriting.validation.status==="PASS"&&u!==null;
- const maxBuy=valid?known(cfo?cfo.selected?.maxBuy:u?.maxPurchasePrice):null;
+ // The canonical operating limit is useful even when CFO financing is incomplete.
+ // Keep the financing-adjusted CFO limit separate; neither limit grants BUY approval.
+ const maxBuy=valid?known(u?.maxPurchasePrice):null;
+ const cfoStatus=!cfo?"NOT_AVAILABLE":!cfo.selected?"NO_SELECTION":cfo.selected.status==="MODELLED"?"MODELLED":"NEEDS_DATA";
+ const cfoMaxBuy=cfoStatus==="MODELLED"?known(cfo?.selected?.maxBuy):null;
  const decision=({BUY:"KUP",NEGOTIATE:"NEGOCJUJ",VERIFY:"HOLD",WAIT:"HOLD",REJECT:"ODRZUĆ"} as const)[brain.ceo.decision];
  const opening=known(deal.ceo.result?.openingOffer);
- const negotiation=decision==="NEGOCJUJ"&&valid&&maxBuy!==null&&opening!==null&&opening>0&&opening<=maxBuy?opening:null;
+ const negotiation=decision==="NEGOCJUJ"&&valid&&(!cfo||cfoStatus==="MODELLED")&&maxBuy!==null&&opening!==null&&opening>0&&opening<=maxBuy&&(cfoMaxBuy===null||opening<=cfoMaxBuy)?opening:null;
  const pending=[...brain.questions];
  for(const field of cfo?.missing??[])if(CFO_LABELS[field]&&!pending.some(q=>q.field===field))pending.push({id:`cfo:${field}`,field,question:CFO_LABELS[field],whyItMatters:META.financing.why,evidenceNeeded:META.financing.evidence,requestingDirectors:["CFO","UNDERWRITER"],category:"BLOCKING",priority:"CRITICAL",affectedDecision:["HOLD","BUY"],affectedMetrics:["Płynność"],valueOfInformation:null});
  const conditions:CeoCondition[]=(deal.ceo.result?.criticalGates??[]).map(gate=>{
@@ -39,6 +43,6 @@ export function ceoRecommendation(deal:CanonicalDeal){
  if(decision==="ODRZUĆ")conditions.unshift({id:"hard-reject",field:"rejection",what:"Zachowaj odrzucenie oferty",why:"Twarde lub ręczne odrzucenie pozostaje nadrzędne; scoring i odpowiedź nie mogą go automatycznie cofnąć.",directors:["VERIFY","RISK_LEGAL","CEO"],evidence:"Odrębna, udokumentowana decyzja człowieka — bez automatycznej reaktywacji.",state:"UNSATISFIED",questionField:null});
  const rank={BLOCKER:0,MATERIAL:1,WATCH:2,INFO:3};
  const risks=[...new Map([...brain.conflicts,...Object.values(brain.directors).flatMap(d=>d.risks)].map(r=>[r.id,r])).values()].sort((a,b)=>rank[a.severity]-rank[b.severity]).slice(0,5);
- return {decision,maxBuy,negotiation,profits:{conservative:valid?known(u?.profitLow):null,base:valid?known(u?.profitBase):null,optimistic:valid?known(u?.profitHigh):null},beforeFinancing:Boolean(cfo),conditions,blockers:conditions.filter(c=>c.state!=="SATISFIED"),risks,next:brain.ceo.nextBestAction,reason:brain.ceo.reasoningSummary,humanApprovalRequired:true as const};
+ return {decision,maxBuy,cfoMaxBuy,cfoStatus,cfoMissingCount:cfo?.missing.length??0,negotiation,profits:{conservative:valid?known(u?.profitLow):null,base:valid?known(u?.profitBase):null,optimistic:valid?known(u?.profitHigh):null},beforeFinancing:Boolean(cfo),conditions,blockers:conditions.filter(c=>c.state!=="SATISFIED"),risks,next:brain.ceo.nextBestAction,reason:brain.ceo.reasoningSummary,humanApprovalRequired:true as const};
 }
 function questionCondition(q:BrainQuestion):CeoCondition{return {id:`question:${q.field}`,field:q.field,what:q.question,why:q.whyItMatters,directors:q.requestingDirectors,evidence:q.evidenceNeeded,state:"UNKNOWN",questionField:q.field};}
