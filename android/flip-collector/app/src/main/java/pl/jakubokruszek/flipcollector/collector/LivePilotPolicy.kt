@@ -16,7 +16,7 @@ data class LivePilotSource(val remoteId: String, val sourceId: String, val url: 
     val origin: String get() = "https://${URI(url).host}"
     /** A first-party Facebook login in the SAME WebView; no pop-ups, injected clicks or credential interception. */
     fun manualLoginUrl(): String = "https://www.facebook.com/login/?next=" +
-        java.net.URLEncoder.encode(url, java.nio.charset.StandardCharsets.UTF_8)
+        java.net.URLEncoder.encode(url, "UTF-8")
     fun matchesPage(value: String): Boolean = runCatching {
         val uri = URI(value)
         WebViewPolicy.navigation(value) == WebViewPolicy.Decision.ALLOW &&
