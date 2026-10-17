@@ -75,8 +75,9 @@ class HeadlessFixtureScan(private val context: Context) {
     /** A phone-sized invisible render target; frames are dropped as soon as they arrive. */
     private class OffscreenSurface(private val session: GeckoSession, width: Int = 1080, height: Int = 2340) {
         private val thread = HandlerThread("gecko-poc-offscreen").apply { start() }
-        private val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2).apply {
-            setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(thread.looper))
+        // Gecko's compositor produces RGBX_8888 buffers; a mismatched reader format throws on acquire.
+        private val reader = ImageReader.newInstance(width, height, PixelFormat.RGBX_8888, 2).apply {
+            setOnImageAvailableListener({ reader -> runCatching { reader.acquireLatestImage()?.close() } }, Handler(thread.looper))
         }
         private val display: GeckoDisplay = session.acquireDisplay().apply {
             surfaceChanged(GeckoDisplay.SurfaceInfo.Builder(reader.surface).size(width, height).build())
