@@ -1,6 +1,7 @@
 "use client";
 import { investmentPath } from "../test-identity";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { answerSourceFingerprint, answerUnit, roomQuestions, type AnswerCommand, type AnswerInput, type DealRoomState } from "../deal-room-answers";
 import type { CanonicalDeal } from "../types";
 import { formatPLNDisplay } from "./investment-ui";
@@ -9,6 +10,9 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   const [room, setRoom] = useState<DealRoomState | null>(null), [draft, setDraft] = useState<Record<string, AnswerInput>>({});
   const [error, setError] = useState<string | null>(null), [saving, setSaving] = useState(false), [more, setMore] = useState(false), [disabled, setDisabled] = useState(false);
   const pending = useRef<AnswerCommand | null>(null);
+  const [targetHost, setTargetHost] = useState<HTMLElement | null>(null);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  useEffect(() => { setTargetHost(document.getElementById("success-price-target-slot")); }, [deal.listingId]);
   const path = `${investmentPath(deal.listingId)}/answers`;
   useEffect(() => {
     let active = true;
@@ -17,7 +21,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
       if (!active) return;
       if (response.ok && body.enabled === false) { setDisabled(true); return; }
       if (!response.ok || !body.room) throw Error("Nie udało się wczytać zapisanych odpowiedzi.");
-      setRoom(body.room);
+      setRoom((previous) => previous && previous.version > body.room.version ? previous : body.room);
     }).catch(() => { if (active) setError("Nie udało się wczytać odpowiedzi. Odśwież stronę."); });
     return () => { active = false; };
   }, [path, deal.updatedAt]);
@@ -37,31 +41,78 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   },[deal,room]);
   const change = (field: string, patch: Partial<AnswerInput>) => {
     pending.current = null;
+    setSavedNotice(null);
     setDraft((current) => {
       const base: AnswerInput = current[field] ?? room?.answers[field] ?? { field, kind: "VALUE", value: null, basis: "DECLARATION", evidenceUrl: null };
       return { ...current, [field]: { ...base, ...patch } };
     });
   };
-  const save = async () => {
+  const save = async (onlyField?: string) => {
     if (!room || saving) return;
-    setSaving(true); setError(null);
-    const command = pending.current ?? { requestId: crypto.randomUUID(), expectedVersion: room.version, answers: Object.values(draft) };
+    const answers = onlyField ? [draft[onlyField]].filter((entry): entry is AnswerInput => Boolean(entry)) : Object.values(draft);
+    if (!answers.length) return;
+    setSaving(true); setError(null); setSavedNotice(null);
+    let command: AnswerCommand = pending.current && JSON.stringify(pending.current.answers) === JSON.stringify(answers)
+      ? pending.current : { requestId: crypto.randomUUID(), expectedVersion: room.version, answers };
     pending.current = command;
-    try {
-      const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(command) });
-      const body = await response.json();
-      if (!response.ok || !body.deal || !body.room) { if (response.status < 500) pending.current = null; throw Error(body.message ?? "Nie udało się zapisać odpowiedzi. Odśwież analizę przy konflikcie wersji."); }
-      // A replay can return an older immutable receipt. Render the current read
-      // model, not that historical response; retain request/draft if reads fail.
+
+    const readCurrent = async () => {
       const [dealResponse, roomResponse] = await Promise.all([
         fetch(path.replace(/\/answers$/, ""), { cache: "no-store" }),
         fetch(path, { cache: "no-store" }),
       ]);
       const currentDeal = await dealResponse.json(), currentRoom = await roomResponse.json();
-      if (!dealResponse.ok || !roomResponse.ok || !currentDeal.deal || !currentRoom.room) throw Error("Odpowiedzi zapisane, ale nie udało się wczytać aktualnej analizy. Ponów zapis, aby odzyskać wynik.");
-      setRoom(currentRoom.room); setDraft({}); pending.current = null; onAnalyzed(currentDeal.deal);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Błąd połączenia. Ponów ten sam zapis."); }
-    finally { setSaving(false); }
+      if (!dealResponse.ok || !roomResponse.ok || !currentDeal.deal || !currentRoom.room) throw Error("Nie udało się pobrać bieżącej analizy. Szkic zachowano.");
+      return { deal: currentDeal.deal as CanonicalDeal, room: currentRoom.room as DealRoomState };
+    };
+    const post = async (value: AnswerCommand) => {
+      const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
+      const body = await response.json();
+      return { response, body };
+    };
+
+    try {
+      let { response, body } = await post(command);
+      if (response.status === 409) {
+        // A stale version is common after a separate refresh. Rebase only when
+        // the facts and every edited field are unchanged; never overwrite a
+        // concurrent answer or resubmit against a changed listing.
+        const latest = await readCurrent();
+        const safe = latest.deal.listingId === deal.listingId
+          && latest.deal.factsFingerprint === deal.factsFingerprint
+          && command.answers.every((answer) =>
+            JSON.stringify(room.answers[answer.field] ?? null) === JSON.stringify(latest.room.answers[answer.field] ?? null));
+        setRoom(latest.room);
+        onAnalyzed(latest.deal);
+        if (!safe) {
+          pending.current = null;
+          throw Error("Analiza lub odpowiedź zmieniła się w międzyczasie. Wczytałem aktualne dane i zachowałem Twój szkic — sprawdź go przed zapisem.");
+        }
+        command = { ...command, requestId: crypto.randomUUID(), expectedVersion: latest.room.version };
+        pending.current = command;
+        ({ response, body } = await post(command));
+      }
+      if (!response.ok || !body.deal || !body.room) {
+        if (response.status < 500) pending.current = null;
+        throw Error(body.message ?? "Nie udało się zapisać odpowiedzi. Szkic zachowano.");
+      }
+      // Display the latest canonical server read, not a possibly replayed
+      // immutable POST receipt. React updates CEO amounts without a reload.
+      const latest = await readCurrent();
+      setRoom(latest.room);
+      setDraft((previous) => {
+        const next = { ...previous };
+        for (const answer of command.answers) {
+          if (JSON.stringify(next[answer.field]) === JSON.stringify(answer)) delete next[answer.field];
+        }
+        return next;
+      });
+      pending.current = null;
+      onAnalyzed(latest.deal);
+      setSavedNotice("Zapisano — cena powodzenia i analiza zostały automatycznie przeliczone.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Błąd połączenia. Szkic zachowano.");
+    } finally { setSaving(false); }
   };
   const questions = roomQuestions(deal, room ?? { version: 0, answers: {}, baselineOverrides: {}, rounds: [] });
   const latest = room?.rounds.at(-1);
