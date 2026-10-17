@@ -157,7 +157,7 @@ test('mobile real Deal Room CEO: Finder has no demo, canonical values, condition
  const {parseAnswerCommand,mergeAnswers,answerOverrides,affectedDirectors}=await import('../deal-room-answers.ts');
  const features={cfo:true,taxReview:false,taxArithmetic:false,privateTax:false,jdgTax:false};
  const input={...lodzDeal('UNCLEAR_RENOVATION'),features,overrides:{costScope:'BRUTTO',financingMode:'CASH',equity:800000,liquidityReserve:30000,deposit:20000,renovationMonths:3,equipment:0,holdingMonths:6,renovationTotal:40000}};
- const id=input.listing.id;let current=buildCanonicalDeal(input),room={version:1,answers:{},baselineOverrides:input.overrides,rounds:[]};const receipts=new Map();
+ const id=input.listing.id;let current=buildCanonicalDeal(input),room={version:1,answers:{},baselineOverrides:input.overrides,rounds:[]};const receipts=new Map();let conflictCount=0;
  const root=path.resolve(__dirname,'../../..'),auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
  // Old deployment flags must never bring the removed demo back.
  const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_TEST_OPERATOR_IDS:'44444444-4444-4444-8444-444444444444'};
@@ -169,7 +169,7 @@ test('mobile real Deal Room CEO: Finder has no demo, canonical values, condition
   const req=route.request(),url=new URL(req.url());let body={ok:true};
   if(url.pathname.endsWith('/investment/answers')){
    if(req.method()==='GET')body={enabled:true,room};
-   else{const cmd=parseAnswerCommand(req.postDataJSON(),features);if(receipts.has(cmd.requestId))body=receipts.get(cmd.requestId);else{assert.equal(cmd.expectedVersion,room.version);const before=current,answers=mergeAnswers(current,room,cmd,'44444444-4444-4444-8444-444444444444',input.now,features);current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,answers)});room={...room,version:room.version+1,answers,rounds:[{requestId:cmd.requestId,savedAt:input.now,actorId:'synthetic-ci-only',changedFields:cmd.answers.map(a=>a.field),invalidated:affectedDirectors(cmd.answers.map(a=>a.field)),before:buildDealBrain(before),after:buildDealBrain(current)}]};body={deal:current,room};receipts.set(cmd.requestId,body);}}
+   else{const cmd=parseAnswerCommand(req.postDataJSON(),features);if(receipts.has(cmd.requestId))body=receipts.get(cmd.requestId);else{if(cmd.expectedVersion!==room.version){conflictCount++;return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({code:'INVESTMENT_DEAL_VERSION_CONFLICT',message:'Analiza zmieniła się. Odśwież ją przed zapisem; szkic zachowano.'})});}const before=current,answers=mergeAnswers(current,room,cmd,'44444444-4444-4444-8444-444444444444',input.now,features);current=buildCanonicalDeal({...input,overrides:answerOverrides(current,room.baselineOverrides,answers)});room={...room,version:room.version+1,answers,rounds:[{requestId:cmd.requestId,savedAt:input.now,actorId:'synthetic-ci-only',changedFields:cmd.answers.map(a=>a.field),invalidated:affectedDirectors(cmd.answers.map(a=>a.field)),before:buildDealBrain(before),after:buildDealBrain(current)}]};body={deal:current,room};receipts.set(cmd.requestId,body);}}
   }else if(url.pathname.endsWith('/investment/history'))body={rounds:room.rounds.map(r=>({requestId:r.requestId,createdAt:r.savedAt,changedFields:r.changedFields,beforeProfit:r.before.financials?.profitBase,afterProfit:r.after.financials?.profitBase,recommendation:r.after.ceo.reasoningSummary})),nextBefore:null};
   else if(url.pathname.endsWith('/investment'))body={deal:current,media:[]};
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
@@ -186,6 +186,20 @@ test('mobile real Deal Room CEO: Finder has no demo, canonical values, condition
  const more=page.getByRole('button',{name:/Pozostałe pytania/});if(await more.count())await more.click();await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('100000');await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
  await page.getByRole('heading',{name:'Co zmieniły odpowiedzi?'}).waitFor();assert.ok(ceoRecommendation(current).profits.base<original.profits.base);assert.equal(current.underwriting.result.cfo.netProfit,null);assert.notEqual(current.ceo.result.action,'KUP');
  await page.reload();await page.getByRole('heading',{name:'Końcowa rekomendacja CEO',exact:true}).waitFor();assert.equal(room.answers.renovationBudget.value,100000);await page.getByRole('button',{name:'Wczytaj / odśwież historię'}).click();await page.getByLabel('Historia analiz',{exact:true}).getByText(/Zmienione pola: renovationBudget/).waitFor();
- assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ // A version-only CAS conflict safely retries and the nearby editor updates CEO in-place.
+ const successPanel=panel.locator('[data-success-price]');
+ await successPanel.locator('[data-question-field="targetProfitPLN"]').waitFor();
+ assert.equal(await page.locator('[data-user-questions] [data-question-field="targetProfitPLN"]').count(),0);
+ const oldLimit=current.underwriting.result.successPrice.maxPurchasePrice;
+ room={...room,version:room.version+1}; // simulate an external refresh without editing this answer
+ await successPanel.getByLabel('Odpowiedź: targetProfitPLN',{exact:true}).fill('70000');
+ await successPanel.getByRole('button',{name:'Zapisz zysk i przelicz'}).click();
+ await successPanel.getByText(/Zapisano — cena powodzenia/).waitFor();
+ assert.equal(conflictCount,1,"first POST used stale CAS version");
+ assert.equal(room.answers.targetProfitPLN.value,70000);
+ assert.notEqual(current.underwriting.result.successPrice.maxPurchasePrice,oldLimit);
+ await page.waitForFunction(price=>document.querySelector('[data-success-price]')?.textContent?.includes(price),fmt(current.underwriting.result.successPrice.maxPurchasePrice));
+ assert.equal(await page.getByLabel('Odpowiedź: targetProfitPLN',{exact:true}).inputValue(),'70000');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/ceo-mobile-390.png'),fullPage:true});await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(root,'artifacts/deal-room-qa/ceo-mobile-top-390.png')});
 });

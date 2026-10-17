@@ -1,6 +1,7 @@
 "use client";
 import { investmentPath } from "../test-identity";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { answerSourceFingerprint, answerUnit, roomQuestions, type AnswerCommand, type AnswerInput, type DealRoomState } from "../deal-room-answers";
 import type { CanonicalDeal } from "../types";
 import { formatPLNDisplay } from "./investment-ui";
@@ -9,6 +10,9 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   const [room, setRoom] = useState<DealRoomState | null>(null), [draft, setDraft] = useState<Record<string, AnswerInput>>({});
   const [error, setError] = useState<string | null>(null), [saving, setSaving] = useState(false), [more, setMore] = useState(false), [disabled, setDisabled] = useState(false);
   const pending = useRef<AnswerCommand | null>(null);
+  const [targetHost, setTargetHost] = useState<HTMLElement | null>(null);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  useEffect(() => { const timer = window.setTimeout(() => setTargetHost(document.getElementById("success-price-target-slot")), 0); return () => window.clearTimeout(timer); }, [deal.listingId]);
   const path = `${investmentPath(deal.listingId)}/answers`;
   useEffect(() => {
     let active = true;
@@ -17,7 +21,7 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
       if (!active) return;
       if (response.ok && body.enabled === false) { setDisabled(true); return; }
       if (!response.ok || !body.room) throw Error("Nie udało się wczytać zapisanych odpowiedzi.");
-      setRoom(body.room);
+      setRoom((previous) => previous && previous.version > body.room.version ? previous : body.room);
     }).catch(() => { if (active) setError("Nie udało się wczytać odpowiedzi. Odśwież stronę."); });
     return () => { active = false; };
   }, [path, deal.updatedAt]);
@@ -37,38 +41,91 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
   },[deal,room]);
   const change = (field: string, patch: Partial<AnswerInput>) => {
     pending.current = null;
+    setSavedNotice(null);
     setDraft((current) => {
       const base: AnswerInput = current[field] ?? room?.answers[field] ?? { field, kind: "VALUE", value: null, basis: "DECLARATION", evidenceUrl: null };
       return { ...current, [field]: { ...base, ...patch } };
     });
   };
-  const save = async () => {
+  const save = async (onlyField?: string) => {
     if (!room || saving) return;
-    setSaving(true); setError(null);
-    const command = pending.current ?? { requestId: crypto.randomUUID(), expectedVersion: room.version, answers: Object.values(draft) };
+    const answers = onlyField ? [draft[onlyField]].filter((entry): entry is AnswerInput => Boolean(entry)) : Object.values(draft);
+    if (!answers.length) return;
+    setSaving(true); setError(null); setSavedNotice(null);
+    let command: AnswerCommand = pending.current && JSON.stringify(pending.current.answers) === JSON.stringify(answers)
+      ? pending.current : { requestId: crypto.randomUUID(), expectedVersion: room.version, answers };
     pending.current = command;
-    try {
-      const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(command) });
-      const body = await response.json();
-      if (!response.ok || !body.deal || !body.room) { if (response.status < 500) pending.current = null; throw Error(body.message ?? "Nie udało się zapisać odpowiedzi. Odśwież analizę przy konflikcie wersji."); }
-      // A replay can return an older immutable receipt. Render the current read
-      // model, not that historical response; retain request/draft if reads fail.
+
+    const readCurrent = async () => {
       const [dealResponse, roomResponse] = await Promise.all([
         fetch(path.replace(/\/answers$/, ""), { cache: "no-store" }),
         fetch(path, { cache: "no-store" }),
       ]);
       const currentDeal = await dealResponse.json(), currentRoom = await roomResponse.json();
-      if (!dealResponse.ok || !roomResponse.ok || !currentDeal.deal || !currentRoom.room) throw Error("Odpowiedzi zapisane, ale nie udało się wczytać aktualnej analizy. Ponów zapis, aby odzyskać wynik.");
-      setRoom(currentRoom.room); setDraft({}); pending.current = null; onAnalyzed(currentDeal.deal);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Błąd połączenia. Ponów ten sam zapis."); }
-    finally { setSaving(false); }
+      if (!dealResponse.ok || !roomResponse.ok || !currentDeal.deal || !currentRoom.room) throw Error("Nie udało się pobrać bieżącej analizy. Szkic zachowano.");
+      return { deal: currentDeal.deal as CanonicalDeal, room: currentRoom.room as DealRoomState };
+    };
+    const post = async (value: AnswerCommand) => {
+      const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
+      const body = await response.json();
+      return { response, body };
+    };
+
+    try {
+      let { response, body } = await post(command);
+      if (response.status === 409) {
+        // A stale version is common after a separate refresh. Rebase only when
+        // the facts and every edited field are unchanged; never overwrite a
+        // concurrent answer or resubmit against a changed listing.
+        const latest = await readCurrent();
+        const safe = latest.deal.listingId === deal.listingId
+          && latest.deal.factsFingerprint === deal.factsFingerprint
+          && command.answers.every((answer) =>
+            JSON.stringify(room.answers[answer.field] ?? null) === JSON.stringify(latest.room.answers[answer.field] ?? null));
+        setRoom(latest.room);
+        onAnalyzed(latest.deal);
+        if (!safe) {
+          pending.current = null;
+          throw Error("Analiza lub odpowiedź zmieniła się w międzyczasie. Wczytałem aktualne dane i zachowałem Twój szkic — sprawdź go przed zapisem.");
+        }
+        command = { ...command, requestId: crypto.randomUUID(), expectedVersion: latest.room.version };
+        pending.current = command;
+        ({ response, body } = await post(command));
+      }
+      if (!response.ok || !body.deal || !body.room) {
+        if (response.status < 500) pending.current = null;
+        throw Error(body.message ?? "Nie udało się zapisać odpowiedzi. Szkic zachowano.");
+      }
+      // Display the latest canonical server read, not a possibly replayed
+      // immutable POST receipt. React updates CEO amounts without a reload.
+      const latest = await readCurrent();
+      setRoom(latest.room);
+      setDraft((previous) => {
+        const next = { ...previous };
+        for (const answer of command.answers) {
+          if (JSON.stringify(next[answer.field]) === JSON.stringify(answer)) delete next[answer.field];
+        }
+        return next;
+      });
+      pending.current = null;
+      onAnalyzed(latest.deal);
+      setSavedNotice("Zapisano — cena powodzenia i analiza zostały automatycznie przeliczone.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Błąd połączenia. Szkic zachowano.");
+    } finally { setSaving(false); }
   };
   const questions = roomQuestions(deal, room ?? { version: 0, answers: {}, baselineOverrides: {}, rounds: [] });
   const latest = room?.rounds.at(-1);
   const keys = new Set(questions.map((q) => q.field));
   const editing = Object.keys(draft).filter((field) => !keys.has(field));
-  const visible = (more ? questions : questions.slice(0, 5)).concat(editing.map((field) => ({ field, question: `Edytuj odpowiedź: ${field}`, directors: "CEO", why: "Nowa runda zachowa poprzednią odpowiedź w historii.", evidence: "Deklaracja nie jest automatycznie zweryfikowanym dowodem.", blocking: false })));
-  return <section data-user-questions aria-label="Dyrektorzy pytają Ciebie" className="min-w-0 space-y-4 rounded-2xl border border-gold/35 bg-gold/[0.025] p-4">
+  const visible = (more ? questions : questions.slice(0, 5))
+    .filter((question) => !(targetHost && question.field === "targetProfitPLN"))
+    .concat(editing.filter((field) => !(targetHost && field === "targetProfitPLN")).map((field) => ({ field, question: `Edytuj odpowiedź: ${field}`, directors: "CEO", why: "Nowa runda zachowa poprzednią odpowiedź w historii.", evidence: "Deklaracja nie jest automatycznie zweryfikowanym dowodem.", blocking: false })));
+  const targetAnswer = draft.targetProfitPLN ?? room?.answers.targetProfitPLN;
+  const targetValue = targetAnswer?.kind === "VALUE" ? targetAnswer.value ?? "" : deal.underwriting.result?.successPrice?.targetProfitPLN ?? "";
+  const targetDraftValue = draft.targetProfitPLN?.value;
+  const validTarget = typeof targetDraftValue === "number" && Number.isFinite(targetDraftValue) && targetDraftValue >= 0 && targetDraftValue <= 100_000_000;
+  return <><section data-user-questions aria-label="Dyrektorzy pytają Ciebie" className="min-w-0 space-y-4 rounded-2xl border border-gold/35 bg-gold/[0.025] p-4">
     <h2 className="text-lg font-bold text-gold">Dyrektorzy pytają Ciebie</h2>
     <p className="text-xs text-muted-foreground">Analizy regułowe Investment OS. PCC, notariusz, finansowanie i sprzedaż są scenariuszem z ustawień, a nie potwierdzonymi kosztami tej transakcji. Odpowiedź i link do dokumentu nie są automatycznym potwierdzeniem faktu prawnego ani ceny transakcyjnej. Nie wpisuj haseł, tokenów ani danych osób z dokumentów.</p>
     {disabled ? <p>Trwałe odpowiedzi nie są aktywne w tym środowisku.</p> : null}
@@ -90,5 +147,17 @@ export function DirectorQuestions({ deal, onAnalyzed }: { deal: CanonicalDeal; o
     {error ? <p role="alert" className="text-sm text-red-300">{error}</p> : null}
     {room && Object.keys(room.answers).length > 0 ? <details><summary className="min-h-11 cursor-pointer">Zapisane odpowiedzi — edycja i cofnięcie</summary>{Object.values(room.answers).map((a) => <article key={a.field} className="my-2 break-words rounded border p-2 text-xs"><strong>{a.field}</strong>: {a.value ?? (a.kind === "LATER" ? "Sprawdzę później" : a.kind === "WITHDRAW" ? "Cofnięto" : "Nie wiem")} · {a.basis} · {a.savedAt} · operator: {a.actorId}<button type="button" className="ml-2 min-h-11 underline" onClick={() => change(a.field, {})}>Edytuj</button><button type="button" className="ml-2 min-h-11 underline" onClick={() => change(a.field, { kind: "WITHDRAW", value: null })}>Cofnij</button></article>)}</details> : null}
     {latest ? <section aria-label="Rekomendacja przed i po odpowiedziach" className="space-y-2 border-t pt-3 text-sm"><h3 className="font-semibold">Co zmieniły odpowiedzi?</h3><p>Pola: {latest.changedFields.join(", ")}. Zależne dyrekcje: {latest.invalidated.join(", ") || "brak zmian finansowych"}.</p><p>CEO: {latest.before.ceo.decision} → {latest.after.ceo.decision} · rekomendacja warunkowa, do weryfikacji.</p><p>Zysk bazowy: {formatPLNDisplay(latest.before.financials?.profitBase ?? null)} → {formatPLNDisplay(latest.after.financials?.profitBase ?? null)}</p><p>Max Buy: {formatPLNDisplay(latest.before.financials?.maxPurchasePrice ?? null)} → {formatPLNDisplay(latest.after.financials?.maxPurchasePrice ?? null)}</p><p>{latest.after.ceo.reasoningSummary}</p><p>Runda zamknięta: {latest.after.questions.some((q) => q.category === "BLOCKING") ? "nie — pozostały pytania blokujące" : "brak otwartych pytań blokujących w projekcji; wymagane zatwierdzenie człowieka"}.</p><ol className="list-decimal pl-5">{[latest.after.ceo.nextBestAction.title, ...latest.after.ceo.conditionsToProceed].slice(0, 3).map((step, i) => <li key={i}>{step}</li>)}</ol></section> : null}
-  </section>;
+  </section>
+  {targetHost ? createPortal(
+    <fieldset id="deal-question-targetProfitPLN" tabIndex={-1} disabled={saving || !room || disabled} data-question-field="targetProfitPLN" className="min-w-0 space-y-3 rounded-xl border border-gold/40 bg-black/15 p-3">
+      <legend className="px-1 text-sm font-bold text-gold">Jaki zysk chcesz osiągnąć?</legend>
+      <label className="block text-xs font-semibold text-foreground">Docelowy zysk operacyjny przed podatkiem (zł)
+        <input aria-label="Odpowiedź: targetProfitPLN" type="number" inputMode="decimal" min="0" max="100000000" step="0.01" className="mt-2 min-h-11 w-full min-w-0 rounded-lg border border-gold/30 bg-background px-3 text-base font-bold tabular-nums text-foreground" value={targetValue} onChange={(event) => change("targetProfitPLN", { kind:"VALUE", value: event.target.value === "" ? null : Number(event.target.value), basis:"ASSUMPTION", evidenceUrl:null })}/>
+      </label>
+      <p className="text-xs leading-5 text-muted-foreground">Wpisz np. 40 000. System przeliczy cenę graniczną, cenę negocjacji i koszty tego mieszkania. To założenie, nie potwierdzony zysk netto.</p>
+      <button type="button" className="min-h-11 w-full rounded-xl bg-gold px-4 text-sm font-bold text-black disabled:opacity-50" disabled={!validTarget || saving || !room} onClick={() => void save("targetProfitPLN")}>{saving ? "Zapisuję i przeliczam…" : "Zapisz zysk i przelicz"}</button>
+      {savedNotice ? <p aria-live="polite" role="status" className="text-xs font-semibold text-emerald-300">{savedNotice}</p> : null}
+      {error ? <p role="alert" className="text-xs text-red-300">{error}</p> : null}
+    </fieldset>, targetHost
+  ) : null}</>;
 }
