@@ -27,7 +27,7 @@ class CollectorApi(private val baseUrl: String) {
             .build()
 
         return client.newCall(request).execute().use { response ->
-            val body = response.body.string()
+            val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException(message(body, "Nie udało się sparować urządzenia."))
             JSONObject(body).getString("deviceToken")
         }
@@ -59,7 +59,7 @@ class CollectorApi(private val baseUrl: String) {
             .build()
 
         client.newCall(request).execute().use { response ->
-            val body = response.body.string()
+            val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException(message(body, "Nie udało się wysłać importu."))
         }
     }
@@ -79,7 +79,7 @@ class CollectorApi(private val baseUrl: String) {
     fun currentDevice(token: String): JSONObject {
         val request = Request.Builder().url(endpoint("/api/collector/devices/current")).header("Authorization", "Bearer $token").get().build()
         return client.newCall(request).execute().use { response ->
-            val body = response.body.string()
+            val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException(message(body, "Nie udało się połączyć z Flip Managerem."))
             JSONObject(body)
         }

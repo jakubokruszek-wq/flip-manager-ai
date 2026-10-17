@@ -5,7 +5,13 @@ import android.os.Bundle
 import android.util.Patterns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,6 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,14 +41,16 @@ class ShareReceiverActivity : ComponentActivity() {
         val sharedText = intent.takeIf { it.action == Intent.ACTION_SEND }
             ?.getStringExtra(Intent.EXTRA_TEXT)
             .orEmpty()
+        pl.jakubokruszek.flipcollector.ui.ThemeController.load(this)
         setContent {
-            MaterialTheme {
+            pl.jakubokruszek.flipcollector.ui.FlipTheme(activity = this) {
                 ShareImportForm(this@ShareReceiverActivity, sharedText)
             }
         }
     }
 }
 
+@Composable
 private fun ShareImportForm(activity: ComponentActivity, sharedText: String) {
     val context = activity.applicationContext
     val tokenStore = remember { DeviceTokenStore(context) }
@@ -58,7 +67,7 @@ private fun ShareImportForm(activity: ComponentActivity, sharedText: String) {
     var sending by remember { mutableStateOf(false) }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
+        modifier = Modifier.fillMaxSize().background(pl.jakubokruszek.flipcollector.ui.FlipColors.Surface).windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Dodaj ofertę z Facebooka", style = MaterialTheme.typography.headlineSmall)
@@ -100,7 +109,7 @@ private fun ShareImportForm(activity: ComponentActivity, sharedText: String) {
                                 UploadRetryWorker.preferences(context)
                                     .edit().putString("last_import", java.time.Instant.now().toString()).apply()
                                 "Oferta została wysłana do Flip Managera."
-                            }.getOrElse { error ->
+                            }.getOrElse {
                                 queue.enqueue(draft)
                                 WorkManager.getInstance(context).enqueueUniqueWork(
                                     "flip-collector-upload",

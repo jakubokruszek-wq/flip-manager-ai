@@ -1,0 +1,78 @@
+name: Android Flip Collector APK
+
+# Builds the debug APK of android/flip-collector on GitHub-hosted runners
+# (free for this public repository). The debug build has the applicationId
+# suffix ".debug", so it installs beside a production install instead of
+# replacing it. No secrets are used: the APK carries no token or URL secret.
+
+on:
+  push:
+    paths:
+      - "android/flip-collector/**"
+      - ".github/workflows/android-collector-apk.yml"
+  pull_request:
+    paths:
+      - "android/flip-collector/**"
+      - ".github/workflows/android-collector-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-collector-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android/flip-collector
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Validates gradle-wrapper.jar against Gradle's published checksums and caches dependencies.
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Compile (Kotlin + Compose)
+        run: ./gradlew --no-daemon --stacktrace compileDebugKotlin compileDebugAndroidTestKotlin -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}
+
+      - name: Assemble debug APK
+        run: ./gradlew --no-daemon assembleDebug -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}
+
+      - name: Verify APK identity
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$apk"
+          aapt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2"
+          "$aapt" dump badging "$apk" | tee badging.txt | head -5
+          grep -q "package: name='pl.jakubokruszek.flipcollector.debug'" badging.txt
+          sha256sum "$apk"
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flip-collector-test-reports-${{ github.run_number }}
+          path: android/flip-collector/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: flip-collector-debug-${{ github.run_number }}-${{ github.sha }}
+          path: android/flip-collector/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
