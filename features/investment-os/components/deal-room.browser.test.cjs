@@ -207,7 +207,10 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   assert.ok(await successPanel.getByText("Twój cel zysku (przed podatkiem)",{exact:true}).isVisible());
   assert.ok(await successPanel.getByText("Cena graniczna dla celu zysku",{exact:true}).isVisible());
   assert.ok(await successPanel.getByText("Otwarcie negocjacji (warunkowo)",{exact:true}).isVisible());
-  assert.equal(await successPanel.getByRole("link",{name:/Zmień docelowy zysk/}).count(),1);
+  await successPanel.locator('[data-question-field="targetProfitPLN"]').waitFor({state:"visible"});
+  assert.equal(await successPanel.getByLabel("Odpowiedź: targetProfitPLN").count(),1,"the editor is inside the reverse calculator");
+  assert.equal(await successPanel.getByRole("button",{name:"Zapisz zysk i przelicz"}).count(),1);
+  assert.equal(await page.locator('[data-user-questions] [data-question-field="targetProfitPLN"]').count(),0,"the profit field is not duplicated far below");
   const successMobile=await page.evaluate(()=>({viewport:innerWidth,docWidth:document.documentElement.scrollWidth}));
   assert.ok(successMobile.docWidth<=successMobile.viewport,"reverse calculator must not overflow on 390px: "+JSON.stringify(successMobile));
 
