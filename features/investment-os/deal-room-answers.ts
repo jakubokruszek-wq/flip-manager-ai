@@ -85,7 +85,7 @@ export function answerSourceFingerprint(deal: CanonicalDeal, field: string): str
   return fingerprint({ field, source: fact ? { value: fact.sourceValue, evidence: fact.sourceEvidenceIds } : field === "renovationBudget" ? { area: deal.facts.areaM2.sourceValue, condition: deal.facts.condition.sourceValue } : { source: deal.facts.sourceUrl.sourceValue } });
 }
 export function affectedDirectors(fields: string[]): BrainDirectorId[] {
-  const aliases: Record<string, string> = { renovationBudget: "renovationAssumption", holdingMonths: "transactionCosts", renovationScope: "renovationAssumption", negotiatedPrice: "askingPrice", resalePerM2: "marketEvidence", additionalCosts: "transactionCosts", targetProfitPLN: "economics" };
+  const aliases: Record<string, string> = { renovationBudget: "renovationAssumption", holdingMonths: "transactionCosts", renovationScope: "renovationAssumption", negotiatedPrice: "askingPrice", resalePerM2: "marketEvidence", additionalCosts: "transactionCosts", targetProfitPLN: "transactionCosts" };
   const changed = fields.map((field) => (field in CFO_LABELS || field in TAX_LABELS) ? "financing" : aliases[field] ?? field), result = new Set<BrainDirectorId>();
   for (const node of DEAL_BRAIN_DEPENDENCIES) if (node.dependsOnFields.some((field) => changed.includes(field)) || node.dependsOnDirectors.some((id) => result.has(id))) result.add(node.director);
   return [...result];
