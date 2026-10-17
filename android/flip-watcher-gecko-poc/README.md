@@ -76,7 +76,7 @@ Nazwa, tytuł i zdjęcie grupy nigdy nie są dowodem. Wynik diagnozy zapisuje si
 
 ## Podpis i aktualizacje
 
-Od wersji 0.1.1 APK jest podpisywany stałym, **publicznym** kluczem testowym `app/gecko-poc-debug.keystore` (to nie jest sekret i nie służy do wydań w sklepie). Certyfikat SHA-256: `878b11e6…548fb370a`; CI sprawdza go przy każdym buildzie. Każda następna wersja instaluje się więc jako aktualizacja.
+Od wersji 0.1.1 APK jest podpisywany stałym, **publicznym** kluczem testowym `app/gecko-poc-debug.keystore` (to nie jest sekret i nie służy do wydań w sklepie). Certyfikat SHA-256: `878b11e677eb4a62883b0b8709fa19c969926708053a01d47f01b0548fb370a2`; CI sprawdza go przy każdym buildzie. Każda następna wersja instaluje się więc jako aktualizacja.
 
 Wersje 0.1.0 były podpisane losowym kluczem każdego serwera CI, dlatego **jednorazowo** trzeba odinstalować 0.1.0 przed instalacją 0.1.1. Odinstalowanie usuwa też sesję Facebooka tej aplikacji, więc potrzebne będzie ponowne logowanie.
 

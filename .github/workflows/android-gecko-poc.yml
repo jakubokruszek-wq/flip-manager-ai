@@ -84,9 +84,10 @@ jobs:
             "$tools/aapt2" dump badging "$apk" > badging.txt
             head -3 badging.txt
             grep -q "package: name='pl.jakubokruszek.flipwatcher.geckopoc'" badging.txt
-            "$tools/apksigner" verify --print-certs "$apk" | tee certs.txt | head -3
+            "$tools/apksigner" verify --print-certs "$apk" > certs.txt
+            head -3 certs.txt
             # Same key on every build, so the APK installs as an update of the previous one.
-            grep -q "certificate SHA-256 digest: 878b11e677eb4a62883b0b8709fa19c9699267080053a01d47f01b0548fb370a" certs.txt
+            grep -q "certificate SHA-256 digest: 878b11e677eb4a62883b0b8709fa19c969926708053a01d47f01b0548fb370a2" certs.txt
             unzip -l "$apk" | grep -E "assets/ext/flip_poc/(manifest.json|collector-core.js|poc-adapter.js|poc-content.js)" | wc -l | grep -qx 4
             unzip -p "$apk" assets/ext/flip_poc/collector-core.js | sha256sum | grep -q "^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b "
             sha256sum "$apk"
