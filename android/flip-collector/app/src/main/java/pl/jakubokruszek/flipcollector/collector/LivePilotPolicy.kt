@@ -14,8 +14,9 @@ data class LivePilotSource(val remoteId: String, val sourceId: String, val url: 
         require(uri.rawPath == "/groups/$sourceId/" && uri.rawQuery == null && uri.rawFragment == null)
     }
     val origin: String get() = "https://${URI(url).host}"
-    /** A first-party Facebook login in the SAME WebView; no pop-ups, injected clicks or credential interception. */
-    fun manualLoginUrl(): String = "https://www.facebook.com/login/?next=" +
+    /** First-party mobile login observed in Chrome on Samsung. Same WebView and approved return URL.
+     * No UA spoofing, credential interception, third-party cookies, or implicit scan permission. */
+    fun manualLoginUrl(): String = "https://m.facebook.com/login/?next=" +
         java.net.URLEncoder.encode(url, "UTF-8")
     fun matchesPage(value: String): Boolean = runCatching {
         val uri = URI(value)
