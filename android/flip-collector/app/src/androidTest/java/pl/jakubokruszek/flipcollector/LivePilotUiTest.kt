@@ -17,6 +17,8 @@ class LivePilotUiTest {
             .performScrollTo().assertExists()
         screen.onNodeWithText("Zablokowane zasoby strony: 0").performScrollTo().assertExists()
         screen.onNodeWithText("Podział blokad: brak").performScrollTo().assertExists()
+        screen.onNodeWithText("Blokada przekierowania: NONE").performScrollTo().assertExists()
+        screen.onNodeWithText("Diagnostyka formularza (wyłącznie liczby pól): NOT_CHECKED").performScrollTo().assertExists()
     }
 
     @Test fun stopIsVisibleAndReportsOperatorRequest() {
