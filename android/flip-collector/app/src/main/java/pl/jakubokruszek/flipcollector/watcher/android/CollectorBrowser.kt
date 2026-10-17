@@ -45,9 +45,53 @@ class WebViewCollectorBrowser(
     private var webView: WebView? = null
     private var finishedUrl: String? = null
     private val blockedResources = java.util.concurrent.atomic.AtomicInteger(0)
+    private val blockedMedia = java.util.concurrent.atomic.AtomicInteger(0)
+    private val blockedScripts = java.util.concurrent.atomic.AtomicInteger(0)
+    private val blockedStyles = java.util.concurrent.atomic.AtomicInteger(0)
+    private val blockedMainFrame = java.util.concurrent.atomic.AtomicInteger(0)
     private var mainFrameError: String? = null
     private var manualLoginInProgress = false
     internal fun blockedResourceCount(): Int = blockedResources.get()
+    internal fun blockedResourceSummary(): String =
+        "media=${blockedMedia.get()} · skrypty=${blockedScripts.get()} · style=${blockedStyles.get()} · strona=${blockedMainFrame.get()} · inne=${blockedResources.get() - blockedMedia.get() - blockedScripts.get() - blockedStyles.get() - blockedMainFrame.get()}"
+
+    /** Only static categories; never capture URL paths, query, credentials or cookies. */
+    internal fun diagnosticPageKind(url: String): String {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return "UNKNOWN"
+        val host = when (uri.host?.lowercase()) {
+            "www.facebook.com" -> "WWW"
+            "m.facebook.com" -> "MOBILE"
+            "facebook.com" -> "ROOT"
+            else -> "EXTERNAL"
+        }
+        val path = uri.path.orEmpty()
+        val section = when {
+            pilotSource?.matchesPage(url) == true -> "APPROVED_GROUP"
+            pilotSource?.isMobileLoginLanding(url) == true -> "LOGIN_LANDING"
+            path.startsWith("/login") -> "LOGIN"
+            path.startsWith("/checkpoint") -> "CHECKPOINT"
+            path.startsWith("/groups/") -> "OTHER_GROUP"
+            path in setOf("", "/") -> "HOME"
+            else -> "OTHER"
+        }
+        return "${host}_${section}"
+    }
+
+    private fun countBlocked(request: WebResourceRequest) {
+        blockedResources.incrementAndGet()
+        if (request.isForMainFrame) { blockedMainFrame.incrementAndGet(); return }
+        val uri = runCatching { java.net.URI(request.url.toString()) }.getOrNull()
+        val host = uri?.host.orEmpty().lowercase()
+        val path = uri?.path.orEmpty().lowercase()
+        val accept = request.requestHeaders.entries.firstOrNull { it.key.equals("Accept", true) }?.value.orEmpty().lowercase()
+        when {
+            host.endsWith(".fbcdn.net") && !host.startsWith("static.") ||
+                path.matches(Regex(".*\\.(?:jpe?g|png|gif|webp|avif|heic|mp4|webm|m4v)$")) ||
+                accept.contains("image/") || accept.contains("video/") -> blockedMedia.incrementAndGet()
+            path.endsWith(".js") || accept.contains("javascript") -> blockedScripts.incrementAndGet()
+            path.endsWith(".css") || accept.contains("text/css") -> blockedStyles.incrementAndGet()
+        }
+    }
     internal fun documentReady() = pilotSource?.matchesPage(finishedUrl.orEmpty()) == true &&
         pilotSource.matchesPage(webView?.url.orEmpty()) && webView?.progress == 100
     internal var onPageReady: ((WebView, String) -> Unit)? = null
@@ -141,12 +185,11 @@ class WebViewCollectorBrowser(
             finishedUrl = null
             mainFrameError = null
             blockedResources.set(0)
-            val kind = when {
-                pilotSource?.matchesPage(url) == true -> "GROUP"
-                pilotSource?.isMobileLoginLanding(url) == true -> "MOBILE_LOGIN"
-                runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
-                else -> "OTHER"
-            }
+            blockedMedia.set(0)
+            blockedScripts.set(0)
+            blockedStyles.set(0)
+            blockedMainFrame.set(0)
+            val kind = diagnosticPageKind(url)
             onDiagnostic?.invoke("PAGE_STARTED_$kind")
         }
         override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
@@ -157,12 +200,7 @@ class WebViewCollectorBrowser(
         }
         override fun onPageFinished(view: WebView, url: String) {
             finishedUrl = url
-            val kind = when {
-                pilotSource?.matchesPage(url) == true -> "GROUP"
-                pilotSource?.isMobileLoginLanding(url) == true -> "MOBILE_LOGIN"
-                runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
-                else -> "OTHER"
-            }
+            val kind = diagnosticPageKind(url)
             onDiagnostic?.invoke(mainFrameError ?: ("PAGE_FINISHED_$kind" + "_PROGRESS_" + view.progress))
             onPageReady?.invoke(view, url)
         }
@@ -219,7 +257,7 @@ class WebViewCollectorBrowser(
             } else WebViewPolicy.resource(request.url.toString()) == WebViewPolicy.Decision.ALLOW
             if (allowed) return null
             // A counter only: no login URL, path, query, headers or request body is recorded.
-            blockedResources.incrementAndGet()
+            countBlocked(request)
             return WebResourceResponse("text/plain", "utf-8", 204, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
         }
 
