@@ -41,6 +41,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
     var used by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var webViewStatus by remember { mutableStateOf("NOT_OPENED") }
+    var blockedCount by remember { mutableIntStateOf(0) }
     fun close() {
         task?.cancel()
         host.removeAllViews()
@@ -48,6 +49,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
         browser = null
         scanConsent = false
         webViewStatus = "SESSION_CLOSED"
+        blockedCount = 0
     }
     fun newBrowser(): WebViewCollectorBrowser {
         check(LivePilotRuntime.available() && sessionConsent)
@@ -65,7 +67,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
         activity.lifecycle.addObserver(observer)
         onDispose { activity.lifecycle.removeObserver(observer); close() }
     }
-    LaunchedEffect(Unit) { while (isActive) { snapshot = state.diagnostics(); delay(1000) } }
+    LaunchedEffect(Unit) { while (isActive) { snapshot = state.diagnostics(); blockedCount = browser?.blockedResourceCount() ?: 0; delay(1000) } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Test LIVE — 1 grupa", style = MaterialTheme.typography.headlineSmall)
         Text("LIVE PILOT · maks. 20 postów · ekran włączony · bez Vision i galerii")
@@ -107,6 +109,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
         }) { Text("Wróć do zatwierdzonej grupy") }
         AndroidView(factory = { host }, modifier = Modifier.fillMaxWidth().height(if (browser != null) 420.dp else 1.dp))
         Text("Diagnostyka WebView (bez adresów i danych logowania): $webViewStatus")
+        Text("Zablokowane zasoby strony: $blockedCount")
         Row {
             Checkbox(scanConsent, { scanConsent = it })
             Text("Zatwierdzam jeden skan powyższej grupy (maks. 20 postów) do izolowanego API.")
