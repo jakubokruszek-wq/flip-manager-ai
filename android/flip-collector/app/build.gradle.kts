@@ -36,6 +36,7 @@ android {
         buildConfigField("boolean", "ANDROID_BACKEND_INTEGRATION_ENABLED", "false")
         val pilotEnabled = providers.gradleProperty("FLIP_LIVE_PILOT_ENABLED").orElse("false").get()
         require(pilotEnabled in setOf("true", "false"))
+        require(pilotEnabled != "true" || providers.gradleProperty("FLIP_PILOT_APK").orElse("false").get() == "true") { "LIVE pilot requires its separate APK identity" }
         buildConfigField("boolean", "LIVE_PILOT_ENABLED", pilotEnabled)
         val pilotOrigin = providers.gradleProperty("FLIP_LIVE_PILOT_ORIGIN").orElse("").get()
         require(pilotOrigin.isEmpty() || Regex("https://[A-Za-z0-9.-]+").matches(pilotOrigin))

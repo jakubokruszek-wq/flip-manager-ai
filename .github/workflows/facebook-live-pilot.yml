@@ -6,6 +6,17 @@ on:
       - 'extensions/facebook-collector/**'
       - '.github/workflows/facebook-live-pilot.yml'
   workflow_dispatch:
+    inputs:
+      approved_pilot_origin:
+        description: Separately approved dedicated HTTPS test API (never production)
+        required: false
+        default: ''
+        type: string
+      pilot_operator_approval:
+        description: Separate approval to build the manual pilot (does not log in or scan)
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -15,6 +26,9 @@ jobs:
   pilot-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PILOT_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.pilot_operator_approval || false }}
+      PILOT_ORIGIN: ${{ inputs.approved_pilot_origin || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,7 +43,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Compile, full JVM suite and separate safe-off pilot APK
         working-directory: android/flip-collector
-        run: ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin testDebugUnitTest assembleDebug -PFLIP_PILOT_APK=true -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }}
+        run: ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin testDebugUnitTest assembleDebug -PFLIP_PILOT_APK=true -PFLIP_COLLECTOR_VERSION_CODE=${{ github.run_number }} "-PFLIP_LIVE_PILOT_ENABLED=$PILOT_ENABLED" "-PFLIP_LIVE_PILOT_ORIGIN=$PILOT_ORIGIN"
       - name: Verify package, flags, core and signing certificate
         run: |
           set -euo pipefail
@@ -39,14 +53,14 @@ jobs:
           grep -q "package: name='pl.jakubokruszek.flipcollector.integration.pilot43'" apk-identity.txt
           config=android/flip-collector/app/build/generated/source/buildConfig/debug/pl/jakubokruszek/flipcollector/BuildConfig.java
           grep -q 'LIVE_COLLECTION_ENABLED = false' "$config"
-          grep -q 'LIVE_PILOT_ENABLED = false' "$config"
+          grep -q "LIVE_PILOT_ENABLED = $PILOT_ENABLED" "$config"
           grep -q 'ANDROID_BACKEND_INTEGRATION_ENABLED = false' "$config"
           "$tools/apksigner" verify --print-certs "$apk" > apk-signature.txt
           sha256sum "$apk" > apk-sha256.txt
           cat apk-identity.txt apk-sha256.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: flip-watcher-pilot43-safe-off-${{ github.sha }}
+          name: flip-watcher-pilot43-${{ env.PILOT_ENABLED == 'true' && 'approved-manual' || 'safe-off' }}-${{ github.sha }}
           path: |
             android/flip-collector/app/build/outputs/apk/debug/app-debug.apk
             apk-identity.txt

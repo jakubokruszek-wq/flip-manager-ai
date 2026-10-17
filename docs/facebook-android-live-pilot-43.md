@@ -85,7 +85,12 @@ niż produkcyjny nie dowodzi izolacji bazy — operator musi to zweryfikować.
 Po spełnieniu warunków można osobno zatwierdzić build DEBUG z
 `-PFLIP_PILOT_APK=true -PFLIP_LIVE_PILOT_ENABLED=true`
 `-PFLIP_LIVE_PILOT_ORIGIN=https://zatwierdzony-testowy-origin`.
-Nigdy nie ustawiać produkcyjnego LIVE ani integracji Findera.
+Nigdy nie ustawiać produkcyjnego LIVE ani integracji Findera. Workflow pilota
+ma również ręczne pola `approved_pilot_origin` i `pilot_operator_approval=false`
+domyślnie; po osobnej zgodzie mogą zbudować zatwierdzony wariant bez komputera
+operatora. Sam build nie loguje się do FB i nie uruchamia skanu. GitHub może
+wymagać obecności workflow na domyślnej gałęzi — nie scalać PR w tym celu bez
+osobnej zgody; przygotowanie zatwierdzonego buildu pozostaje osobnym krokiem.
 Profil (przekazać prywatnie, nie w PR/logach):
 
 ```json
@@ -169,6 +174,10 @@ Nowy JS adapter: lokalne fixture, pin core, limit/deduplikacja, challenge/STOP,
 brak fikcyjnej oferty i cudzych zdjęć. JVM: origin/frame/source/nonce/payload,
 media, limit, journal po restarcie i idempotentne receipts. Android 16:
 rzeczywisty WebView/WebMessage na lokalnym HTML z wyłączoną siecią.
+Systemowy workflow ma także dwie osobne fazy instrumentation rozdzielone
+`am force-stop`: porównuje PID, odczytuje zaszyfrowany outbox w nowym procesie
+i potwierdza brak nowych wierszy po replay. Fazy używają lokalnych fixture i
+nie stanowią dowodu zachowania fizycznego Samsunga.
 Istniejące CI: cały Kotlin/JVM, Android16, HMAC/API/PostgreSQL/outbox/replay,
 TypeScript/ESLint/Next build, regresja Facebooka i pełny test schematu Findera.
 Wyniki bieżącego commitu należy odczytywać z Checks Draft PR; historycznych
