@@ -33,7 +33,17 @@ Jak czytać wynik:
 - **5 postów** oznacza, że doładowanie przy wygaszonym ekranie nie działa (wariant headless odpada; trzeba szukać innej drogi).
 - **≥ 10 postów** oznacza, że doładowanie działa.
 
-To samo pomiar wykonuje test instrumentalny na emulatorze (`lazyFeedWithoutViewIsMeasured`), który zapisuje liczbę w logu. Emulator to jednak nie Samsung.
+### Pierwszy pomiar: emulator Android 16 w CI (nie Samsung)
+
+Ta sama strona, 4 przewinięcia:
+
+| Tryb sesji | Postów | Wniosek |
+|---|---|---|
+| Widoczny GeckoView (kontrola) | 15 | Strona testowa i logika przewijania działają |
+| **Bez powierzchni** (`SurfaceMode.NONE`) | **5** | Bez powierzchni lista się nie doładowuje; sam FGS nie wystarczy |
+| **Powierzchnia poza ekranem** (`SurfaceMode.OFFSCREEN`, oficjalne `GeckoDisplay` + niewidoczny bufor `ImageReader`) | **10** | Doładowanie działa, choć wolniej niż na ekranie |
+
+Wynik z emulatora wskazuje kierunek, ale nie jest dowodem dla Samsunga z wygaszonym i zablokowanym ekranem. Dlatego test na telefonie (sekcja 3) wykonuje **oba tryby** po kolei i zapisuje każdy jako osobny rekord (`surface=NONE` / `surface=OFFSCREEN`).
 
 ## 3. Test na telefonie (tylko lokalny HTML)
 
@@ -54,12 +64,12 @@ To samo pomiar wykonuje test instrumentalny na emulatorze (`lazyFeedWithoutViewI
    - `OK` z 5 postami: brak doładowania;
    - `OK` z ≥ 10 postami: działa.
 
-**GO C**: przy `start.screenOn=false` i `start.locked=true` status `OK` z ≥ 10 postami, w 3 z 3 prób. Dopiero wtedy można rozmawiać o nocnym teście LIVE (osobna zgoda).
+**GO C**: przy `start.screenOn=false` i `start.locked=true` status `OK` z ≥ 10 postami (w praktyce dla `surface=OFFSCREEN`), w 3 z 3 prób. Dopiero wtedy można rozmawiać o nocnym teście LIVE (osobna zgoda).
 
 ## 4. Jeżeli GO C się nie powiedzie
 
 Kolejne opcje, każda wymaga osobnej oceny i testu:
-- (a) Sesja z powierzchnią poza ekranem (`GeckoDisplay` na `SurfaceTexture`), czyli dalej bez obchodzenia zabezpieczeń [H/T].
+- (a) Jeśli `OFFSCREEN` działa na ekranie, a nie działa po wygaszeniu, sprawdzić, czy Gecko wstrzymuje kompozytor przy blokadzie ekranu [T].
 - (b) Skan przy włączonym, przyciemnionym ekranie na ładowarce, np. w trybie stacji dokującej. Prosty, ale zużywa ekran.
 - (c) Ograniczenie się do skanu bez przewijania, częściej i z mniejszą liczbą postów.
 
