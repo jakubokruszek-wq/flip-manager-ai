@@ -110,6 +110,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
         AndroidView(factory = { host }, modifier = Modifier.fillMaxWidth().height(if (browser != null) 420.dp else 1.dp))
         Text("Diagnostyka WebView (bez adresów i danych logowania): $webViewStatus")
         Text("Zablokowane zasoby strony: $blockedCount")
+        Text("Podział blokad: ${browser?.blockedResourceSummary() ?: "brak"}")
         Row {
             Checkbox(scanConsent, { scanConsent = it })
             Text("Zatwierdzam jeden skan powyższej grupy (maks. 20 postów) do izolowanego API.")
