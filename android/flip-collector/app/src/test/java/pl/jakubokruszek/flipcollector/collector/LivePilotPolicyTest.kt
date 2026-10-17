@@ -27,9 +27,11 @@ class LivePilotPolicyTest {
     }
     @Test fun explicitLoginUsesSameFacebookOriginAndNeverBecomesAnApprovedScanPage() {
         val url = source.manualLoginUrl()
-        assertEquals("https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fgroups%2Ftest-group%2F", url)
+        assertEquals("https://m.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fgroups%2Ftest-group%2F", url)
         assertEquals(WebViewPolicy.Decision.ALLOW, WebViewPolicy.navigation(url))
         assertFalse(source.matchesPage(url))
+        assertTrue(url.startsWith("https://m.facebook.com/login/"))
+        assertFalse(WebViewPolicy.navigation("https://m.facebook.com.evil.example/login/") == WebViewPolicy.Decision.ALLOW)
         assertFalse(LivePilotPolicy.trustedMessage(source.origin, true, url, source))
         assertFalse(WebViewPolicy.navigation("https://www.facebook.com.evil.example/login/") == WebViewPolicy.Decision.ALLOW)
     }
