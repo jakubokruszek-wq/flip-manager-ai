@@ -80,9 +80,13 @@ class PocPolicyTest {
         assertTrue(PocPolicy.LOGIN_URL.contains(group))
     }
 
-    @Test fun `the reported slug is not an approved alias in this build`() {
-        // Unverified on purpose; see PocPolicy.VERIFIED_ALIASES.
-        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/"))
+    @Test fun `the separately approved group is an exact slug not an alias of the old numeric group`() {
+        assertEquals("lodzsprzedazzakupwynajem", group)
+        assertEquals(PageKind.APPROVED_GROUP, PocPolicy.classify("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/"))
+        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/402796264871862/"))
+        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/1350200629551011/"))
+        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/100000000001/"))
+        assertTrue(PocPolicy.VERIFIED_ALIASES.isEmpty())
         assertTrue(PocPolicy.aliasesFor(group).isEmpty())
         assertTrue(ScanRequest(nonce = "n").aliases.isEmpty())
     }
