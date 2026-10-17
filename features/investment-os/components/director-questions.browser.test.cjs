@@ -60,7 +60,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   room={...room,version:room.version+1}; // concurrent saved analysis version, no other target change
   await targetEditor.getByRole('button',{name:'Zapisz i przelicz'}).click();
   await targetEditor.getByRole('alert').getByText(/kwota została zachowana/).waitFor();
-  assert.equal(await targetInput.inputValue(),'60000','CAS conflict must not lose the user's entered target');
+  assert.equal(await targetInput.inputValue(),'60000',"CAS conflict must not lose the entered profit target");
   await targetEditor.getByRole('button',{name:'Zapisz i przelicz'}).click();
   await targetEditor.getByText(/Zapisano — analiza CEO i cena powodzenia/).waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-success-price]')?.textContent?.includes('60 000')||document.querySelector('[data-success-price]')?.textContent?.includes('60 000'));
