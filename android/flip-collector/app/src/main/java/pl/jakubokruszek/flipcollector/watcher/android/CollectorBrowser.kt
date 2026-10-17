@@ -48,6 +48,8 @@ class WebViewCollectorBrowser(
         pilotSource.matchesPage(webView?.url.orEmpty()) && webView?.progress == 100
     internal var onPageReady: ((WebView, String) -> Unit)? = null
     internal var onStop: ((String) -> Unit)? = null
+    /** Status codes only, never URLs, query strings, credentials, cookies or page text. */
+    internal var onDiagnostic: ((String) -> Unit)? = null
     internal fun currentView(): WebView? = webView
     private var localFixture: String? = null
     internal fun isLocalFixture() = localFixture != null
@@ -129,19 +131,43 @@ class WebViewCollectorBrowser(
     }
 
     private inner class PolicyWebViewClient : WebViewClient() {
-        override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) { finishedUrl = null }
+        override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+            finishedUrl = null
+            val kind = when {
+                pilotSource?.matchesPage(url) == true -> "GROUP"
+                runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
+                else -> "OTHER"
+            }
+            onDiagnostic?.invoke("PAGE_STARTED_$kind")
+        }
         override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
             handler.cancel()
+            onDiagnostic?.invoke("TLS_ERROR")
             onStop?.invoke("TLS_ERROR")
         }
-        override fun onPageFinished(view: WebView, url: String) { finishedUrl = url; onPageReady?.invoke(view, url) }
+        override fun onPageFinished(view: WebView, url: String) {
+            finishedUrl = url
+            val kind = when {
+                pilotSource?.matchesPage(url) == true -> "GROUP"
+                runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
+                else -> "OTHER"
+            }
+            onDiagnostic?.invoke("PAGE_FINISHED_$kind" + "_PROGRESS_" + view.progress)
+            onPageReady?.invoke(view, url)
+        }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-            if (request.isForMainFrame) onStop?.invoke(if (response.statusCode == 403) "HTTP_403" else "HTTP_ERROR")
+            if (request.isForMainFrame) {
+                onDiagnostic?.invoke("MAIN_FRAME_HTTP_" + response.statusCode)
+                onStop?.invoke(if (response.statusCode == 403) "HTTP_403" else "HTTP_ERROR")
+            }
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
-            if (request.isForMainFrame) onStop?.invoke("WEBVIEW_NETWORK_ERROR")
+            if (request.isForMainFrame) {
+                onDiagnostic?.invoke("MAIN_FRAME_NETWORK_" + error.errorCode)
+                onStop?.invoke("WEBVIEW_NETWORK_ERROR")
+            }
         }
 
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -157,9 +183,11 @@ class WebViewCollectorBrowser(
                     path.contains("login") || path.contains("recover") -> "LOGIN_REQUIRED"
                     else -> "PILOT_REDIRECT_BLOCKED"
                 }
+                onDiagnostic?.invoke("NAVIGATION_$code")
                 onStop?.invoke(code)
                 return code == "PILOT_REDIRECT_BLOCKED"
             }
+            onDiagnostic?.invoke("NAVIGATION_BLOCKED")
             onStop?.invoke("PILOT_REDIRECT_BLOCKED")
             onBlockedNavigation(url.take(200))
             return true
@@ -179,6 +207,7 @@ class WebViewCollectorBrowser(
                 webView = null
                 view.destroy()
             }
+            onDiagnostic?.invoke("RENDERER_GONE")
             onRendererGone(detail.didCrash())
             onStop?.invoke("RENDERER_GONE")
             return true
