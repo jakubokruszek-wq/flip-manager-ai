@@ -16,6 +16,7 @@ class LivePilotUiTest {
         screen.onNodeWithText("Diagnostyka WebView (bez adresów i danych logowania): NOT_OPENED")
             .performScrollTo().assertExists()
         screen.onNodeWithText("Zablokowane zasoby strony: 0").performScrollTo().assertExists()
+        screen.onNodeWithText("Podział blokad: brak").performScrollTo().assertExists()
     }
 
     @Test fun stopIsVisibleAndReportsOperatorRequest() {
