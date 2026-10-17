@@ -2,12 +2,11 @@ import java.security.MessageDigest
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
-// GeckoView follows Firefox: a new stable major every 4 weeks. The exact
-// version is pinned here; CI prints the resolved one (see the workflow).
-val geckoviewVersion = providers.gradleProperty("GECKOVIEW_VERSION").orElse("+").get()
+// GeckoView follows Firefox: a new stable major every 4 weeks. Pinned to the
+// stable release resolved on 2026-10-17; override with -PGECKOVIEW_VERSION.
+val geckoviewVersion = providers.gradleProperty("GECKOVIEW_VERSION").orElse("158.0.20261007201254").get()
 
 /**
  * Builds the built-in WebExtension into generated assets: the POC's own
@@ -40,7 +39,7 @@ val collectorCoreSha256 = "32c98525cfac6b580b93b4847140d4872ee4119b2698178632223
 
 android {
     namespace = "pl.jakubokruszek.flipwatcher.geckopoc"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         // Separate package: installs beside Flip Collector / Watcher, shares nothing with them.
@@ -76,12 +75,6 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = false
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

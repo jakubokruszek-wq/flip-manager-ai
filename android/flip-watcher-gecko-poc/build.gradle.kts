@@ -1,4 +1,5 @@
 plugins {
-    id("com.android.application") version "8.11.1" apply false
-    id("org.jetbrains.kotlin.android") version "2.2.0" apply false
+    // AGP 9 compiles Kotlin itself (built-in Kotlin); no separate kotlin-android plugin.
+    // 9.1.1 is the first AGP that supports compileSdk 37, which GeckoView 158 requires.
+    id("com.android.application") version "9.1.1" apply false
 }
