@@ -64,7 +64,7 @@ function decide(input: { deal: CanonicalDeal; hardReject: boolean; openGateCount
   if (input.hardReject) return "REJECT";
   if (input.upstreamStale) return "VERIFY";
   if (canonical?.action === "NEGOCJUJ" && input.deal.underwriting.result?.maxPurchasePrice != null) return "NEGOTIATE";
-  if (canonical?.action === "KUP" && input.openGateCount === 0 && input.blockers.length === 0 && input.deal.ceo.status === "COMPLETE" && input.deal.ceo.validation.status === "PASS") return "BUY";
+  if (canonical?.action === "KUP" && ((canonical.criticalGates?.length??0)>0) && input.deal.market.validation.status==="PASS" && input.deal.market.status==="COMPLETE" && input.deal.verify.status==="COMPLETE" && input.deal.underwriting.status==="COMPLETE" && input.deal.underwriting.validation.status==="PASS" && input.deal.verify.validation.status==="PASS" && input.deal.market.result?.indicative!==true && input.openGateCount === 0 && input.blockers.length === 0 && input.deal.ceo.status === "COMPLETE" && input.deal.ceo.validation.status === "PASS") return "BUY";
   if (input.openGateCount > 0 || input.blockers.length > 0 || input.deal.verify.status !== "COMPLETE" || input.deal.market.status !== "COMPLETE") return "VERIFY";
   if (canonical?.action === "JEDŹ OBEJRZEĆ") return "VERIFY";
   return "WAIT";

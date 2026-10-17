@@ -1,13 +1,13 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { testCases, testModeAllowed } from "../test-mode";
-import { buildTestDeal } from "../test-engine";
-import { TEST_DEAL_FEATURES } from "../feature-context";
-import { buildDealBrain } from "../brain";
-import { affectedDirectors, answerOverrides, mergeAnswers, parseAnswerCommand, type DealRoomState } from "../deal-room-answers";
-import type { CanonicalDeal } from "../types";
-import { InvestmentDealVersionConflict } from "./deal-cas";
+import { testCases, testModeAllowed } from "./test-mode";
+import { buildTestDeal } from "./test-engine";
+import { TEST_DEAL_FEATURES } from "./test-features";
+import { buildDealBrain } from "../../brain";
+import { affectedDirectors, answerOverrides, mergeAnswers, parseAnswerCommand, type DealRoomState } from "../../deal-room-answers";
+import type { CanonicalDeal } from "../../types";
+import { InvestmentDealVersionConflict } from "../../server/deal-cas";
 type TestRow={case_id:string;version:number;deal:CanonicalDeal;state:Omit<DealRoomState,"version">};
 export class TestUnavailable extends Error {}
 export class TestNotFound extends Error {}

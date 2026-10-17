@@ -1,6 +1,6 @@
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 import { dealRoomEnabled, DealRoomNotFound, readDealRoomHistory } from "@/features/investment-os/server/deal-room-service";
-import { testListingAllowed } from "@/features/investment-os/test-mode";
+import { testListingAllowed } from "@/features/investment-os/test-identity";
 export async function GET(request: Request,{params}:{params:Promise<{id:string}>}) {
  let actor;try{actor=await requireOperator();}catch(error){return operatorAuthorizationResponse(error);}
  const {id}=await params;

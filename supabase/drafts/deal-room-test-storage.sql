@@ -1,3 +1,4 @@
+-- RETIRED APPLICATION FEATURE: kept for CI security regressions only. Do not install or reactivate in production.
 -- REVIEW ONLY v1. No production execution authorized. Independent of deal-room-qa.sql.
 -- No references, writes, triggers or reads to real listings/deals/comparables/queues.
 begin;

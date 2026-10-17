@@ -1,5 +1,7 @@
 # PR35 — TEST in the existing Flip Manager / existing Supabase
 
+> RETIRED: user-facing TEST is removed by the CEO release. Historical isolation audit only; do not execute activation/installation steps below. Follow docs/deal-room-ceo-release.md for flag-off/export/approved cleanup.
+
 Supersedes the separate-database TEST plan in the first PR35 revision. Architecture approved by user comment6218932937, not deployment approval. No activation, production DDL, data write, merge or paid service authorized/executed.
 
 ## Isolation correction

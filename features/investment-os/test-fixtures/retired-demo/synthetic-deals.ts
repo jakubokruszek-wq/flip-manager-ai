@@ -1,5 +1,5 @@
-import { DEFAULT_UNDERWRITING_SETTINGS } from "../flip-finder/underwriting.ts";
-import type { BuildDealInput } from "./types.ts";
+import { DEFAULT_UNDERWRITING_SETTINGS } from "../../../flip-finder/underwriting.ts";
+import type { BuildDealInput } from "../../types.ts";
 export function lodzDeal(caseName: "MISSING_KW" | "UNCLEAR_RENOVATION" | "EXPENSIVE_AREA_CONFLICT" = "MISSING_KW"): BuildDealInput {
   const now = "2026-10-15T12:00:00.000Z";
   return { dealId: "11111111-1111-4111-8111-111111111111", now, overrides: {}, settings: DEFAULT_UNDERWRITING_SETTINGS,

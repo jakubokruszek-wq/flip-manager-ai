@@ -1,4 +1,4 @@
-import { testListingAllowed } from "@/features/investment-os/test-mode";
+import { testListingAllowed } from "@/features/investment-os/test-identity";
 import { assertDealRoomOwner, dealRoomEnabled, readDealRoom, DealRoomNotFound } from "@/features/investment-os/server/deal-room-service";
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
 

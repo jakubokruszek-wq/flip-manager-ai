@@ -1,9 +1,9 @@
 import { lodzDeal } from "./synthetic-deals";
-import { buildCanonicalDeal } from "./engine";
-import { TEST_DEAL_FEATURES } from "./feature-context";
-import { markIndicative } from "./market-fallback";
+import { buildCanonicalDeal } from "../../engine";
+import { TEST_DEAL_FEATURES } from "./test-features";
+import { markIndicative } from "../../market-fallback";
 import { testCases } from "./test-mode";
-import type { DealFactOverrides } from "./types";
+import type { DealFactOverrides } from "../../types";
 /** Virtual listing + comparables ONLY. No real data resolver, settings, Radar, source or network calls. */
 export function buildTestDeal(actorId:string,id:string,overrides:DealFactOverrides={},now="2026-10-15T12:00:00.000Z") {
  const item=testCases(actorId).find(c=>c.id===id);if(!item)throw Error("TEST_NOT_FOUND");

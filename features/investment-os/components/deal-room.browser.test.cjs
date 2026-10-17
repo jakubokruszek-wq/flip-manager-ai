@@ -156,7 +156,10 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   await page.locator("[data-deal-room]").waitFor({ state: "visible" });
   assert.ok(await page.getByText("Oczekuje na wynik", { exact: true }).count() > 0);
   assert.ok(await page.getByText("Decyzja pojawi się po zapisaniu wyniku analizy.", { exact: true }).isVisible());
-  assert.doesNotMatch(await page.locator("body").innerText(), /\b(?:NEGOTIATE|BUY|REJECT|MAX BUY|EXPECTED PROFIT|NEXT BEST ACTION|COMPLETE|BLOCKED)\b/);
+  // BUY is intentional explanatory copy in the requested transition heading,
+  // never a raw decision/status in this incomplete-CEO fixture.
+  const emptyStateText = (await page.locator("body").innerText()).replace("Co musi się wydarzyć, żeby HOLD zmienił się na BUY?", "");
+  assert.doesNotMatch(emptyStateText, /\b(?:NEGOTIATE|BUY|REJECT|MAX BUY|EXPECTED PROFIT|NEXT BEST ACTION|COMPLETE|BLOCKED)\b/);
   await page.screenshot({ path: path.join(reviewDir, "06-deal-room-empty-state.png"), fullPage: true });
   currentDeal = deal;
 
@@ -173,7 +176,10 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   currentMedia = ["https://cdn.example.test/broken.jpg"];
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("[data-deal-room]").waitFor({ state: "visible" });
-  await page.waitForTimeout(500);
+  // The CEO-first layout puts lazy images below the fold. Trigger the actual
+  // image request, then await its error-driven removal instead of a fixed delay.
+  await page.locator("[data-deal-gallery]").scrollIntoViewIfNeeded();
+  await page.locator("[data-deal-gallery]").waitFor({ state: "detached" });
   assert.equal(await page.locator("[data-deal-gallery]").count(), 0, "a broken/missing image never breaks the Deal Room; the gallery hides itself once nothing renders");
   assert.ok(await page.getByText("Maks. cena zakupu", { exact: true }).first().isVisible(), "the rest of the Deal Room keeps rendering when an image fails");
   currentMedia = [];
@@ -182,8 +188,8 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   await page.locator("[data-deal-room]").waitFor({ state: "visible" });
   await page.getByRole("tab", { name: "Podsumowanie" }).click(); await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: path.join(reviewDir, "08-mobile-deal-room-v3.png"), fullPage: false });
-  const mobileLayout = await page.evaluate(() => { const topFor = (label) => [...document.querySelectorAll("p")].find((node) => node.textContent?.trim() === label)?.parentElement?.getBoundingClientRect().top; return { width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth, recommendationTop: topFor("Rekomendacja systemu"), maxBuyTop: topFor("Maks. cena zakupu"), profitTop: topFor("Oczekiwany zysk"), roiTop: topFor("Zwrot z inwestycji (ROI)") }; });
-  assert.ok(mobileLayout.scrollWidth <= mobileLayout.width, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.recommendationTop != null && mobileLayout.recommendationTop < 844, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.maxBuyTop != null && mobileLayout.maxBuyTop < 844, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.profitTop != null && mobileLayout.profitTop < 844, JSON.stringify(mobileLayout)); assert.ok(mobileLayout.roiTop != null && mobileLayout.roiTop < 844, JSON.stringify(mobileLayout));
+  const mobileLayout = await page.evaluate(() => { const panel=document.querySelector('[data-final-ceo]');const metric=label=>[...panel.querySelectorAll('dt')].find(el=>el.textContent===label)?.getBoundingClientRect().top;return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,recommendationTop:panel.querySelector('h2').getBoundingClientRect().top,maxBuyTop:metric('Maksymalna cena zakupu (Max Buy)'),profitTop:metric('Bazowy')};});
+  assert.ok(mobileLayout.scrollWidth<=mobileLayout.width,JSON.stringify(mobileLayout));for(const key of ['recommendationTop','maxBuyTop','profitTop'])assert.ok(mobileLayout[key]!=null&&mobileLayout[key]<844,JSON.stringify(mobileLayout));
   await page.getByRole("heading", { name: "Zespół analityczny" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(reviewDir, "10-mobile-directors-v2.png"), fullPage: false });
   await page.getByRole("heading", { name: "Dyrektorzy pytają Ciebie" }).scrollIntoViewIfNeeded();

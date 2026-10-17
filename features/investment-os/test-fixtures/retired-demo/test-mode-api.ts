@@ -1,8 +1,8 @@
 import "server-only";
 import { operatorAuthorizationResponse, requireOperator } from "@/features/auth/operator";
-import { testCases, testModeAllowed } from "../test-mode";
-import { DealRoomInputError } from "../deal-room-answers";
-import { isInvestmentDealVersionConflict } from "./deal-cas";
+import { testCases, testModeAllowed } from "./test-mode";
+import { DealRoomInputError } from "../../deal-room-answers";
+import { isInvestmentDealVersionConflict } from "../../server/deal-cas";
 import { prepareTestCases, readTestCase, readTestHistory, saveTestAnswers, testDatabase, TestNotFound } from "./test-mode-service";
 const headers={"Cache-Control":"private, no-store"};
 export async function testModeApi(request:Request,action:"catalog"|"deal"|"initialize"|"answers"|"history",id?:string):Promise<Response>{

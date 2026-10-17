@@ -1,3 +1,4 @@
-/** Routing only, never authorization. Shared with the browser; no server configuration. */
+/** Legacy synthetic IDs are permanently excluded from real Deal Room routes. No TEST activation flags. */
 export const isTestListingId=(id:string)=>id.toLowerCase().startsWith("deadbeef-");
-export const investmentPath=(id:string)=>isTestListingId(id)?`/api/deal-room/test/${encodeURIComponent(id)}`:`/api/flip-finder/listings/${encodeURIComponent(id)}/investment`;
+export function testListingAllowed(id:string,actorId:string):boolean {void actorId;return !isTestListingId(id);}
+export const investmentPath=(id:string)=>`/api/flip-finder/listings/${encodeURIComponent(id)}/investment`;
