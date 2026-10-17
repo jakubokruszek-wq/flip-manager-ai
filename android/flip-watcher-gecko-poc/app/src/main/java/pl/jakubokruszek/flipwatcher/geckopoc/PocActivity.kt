@@ -170,7 +170,13 @@ class PocActivity : ComponentActivity() {
 
     private fun scan(scrolls: Int) {
         val current = channel ?: return
-        if (scanning) return
+        if (scanning || preferences.getBoolean(KEY_ONE_SCAN_USED, false)) return
+        // One explicit operator-approved real-group scan in this isolated pilot.
+        // Persist the consumed permission BEFORE asking the extension to read posts.
+        if (!preferences.edit().putBoolean(KEY_ONE_SCAN_USED, true).commit()) {
+            output.text = "Nie można zapisać ograniczenia jednego skanu. Skan NIE został uruchomiony."
+            return
+        }
         scanning = true
         render()
         lifecycleScope.launch {
@@ -356,12 +362,14 @@ class PocActivity : ComponentActivity() {
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
             scanning -> "Trwa skan (max ${PocPolicy.MAX_POSTS} postów, ${PocPolicy.SCAN_TIMEOUT_MS / 1000} s)…"
+            kind == PageKind.APPROVED_GROUP && preferences.getBoolean(KEY_ONE_SCAN_USED, false) ->
+                "Zatwierdzona grupa otwarta. Limit jednego skanu testowego wykorzystany; wyniki dostępne lokalnie."
             kind == PageKind.APPROVED_GROUP -> "Zatwierdzona grupa otwarta. Możesz uruchomić jeden skan."
             else -> "Sesja otwarta (${kind.name})."
         }
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
-        val canScan = open && !scanning && stop == null && PocPolicy.canScan(kind) && channel?.isConnected == true
+        val canScan = open && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
         buttons["open"]?.text = if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
@@ -458,6 +466,7 @@ class PocActivity : ComponentActivity() {
 
     companion object {
         private const val KEY_CONSENT = "facebook_session_consent"
+        private const val KEY_ONE_SCAN_USED = "manual_slug_scan_one_shot_20261017"
         private const val TEST_DELAY_MS = 10 * 60 * 1000L
     }
 }
