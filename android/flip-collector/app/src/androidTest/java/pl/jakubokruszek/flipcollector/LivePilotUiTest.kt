@@ -15,6 +15,7 @@ class LivePilotUiTest {
     @Test fun pilotShowsOnlySanitizedWebViewStatus() {
         screen.onNodeWithText("Diagnostyka WebView (bez adresów i danych logowania): NOT_OPENED")
             .performScrollTo().assertExists()
+        screen.onNodeWithText("Zablokowane zasoby strony: 0").performScrollTo().assertExists()
     }
 
     @Test fun stopIsVisibleAndReportsOperatorRequest() {
