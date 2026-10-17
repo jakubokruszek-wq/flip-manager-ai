@@ -42,6 +42,8 @@ private fun PilotScreen(activity: LivePilotActivity) {
     var message by remember { mutableStateOf("") }
     var webViewStatus by remember { mutableStateOf("NOT_OPENED") }
     var blockedCount by remember { mutableIntStateOf(0) }
+    var loginDom by remember { mutableStateOf("NOT_CHECKED") }
+    var navigationBlock by remember { mutableStateOf("NONE") }
     fun close() {
         task?.cancel()
         host.removeAllViews()
@@ -50,12 +52,17 @@ private fun PilotScreen(activity: LivePilotActivity) {
         scanConsent = false
         webViewStatus = "SESSION_CLOSED"
         blockedCount = 0
+        loginDom = "NOT_CHECKED"
+        navigationBlock = "NONE"
     }
     fun newBrowser(): WebViewCollectorBrowser {
         check(LivePilotRuntime.available() && sessionConsent)
         val source = LivePilotRuntime.profile(activity).source
         return WebViewCollectorBrowser(activity, LiveCollectionGate(true, true), pilotSource = source,
-            onViewCreated = { host.removeAllViews(); host.addView(it) }).also { it.onDiagnostic = { status -> webViewStatus = status } }
+            onViewCreated = { host.removeAllViews(); host.addView(it) }).also {
+                it.onDiagnostic = { status -> webViewStatus = status }
+                it.onLoginDomDiagnostic = { status -> loginDom = status }
+            }
     }
     DisposableEffect(activity) {
         val observer = LifecycleEventObserver { _, event ->
@@ -67,7 +74,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
         activity.lifecycle.addObserver(observer)
         onDispose { activity.lifecycle.removeObserver(observer); close() }
     }
-    LaunchedEffect(Unit) { while (isActive) { snapshot = state.diagnostics(); blockedCount = browser?.blockedResourceCount() ?: 0; delay(1000) } }
+    LaunchedEffect(Unit) { while (isActive) { snapshot = state.diagnostics(); blockedCount = browser?.blockedResourceCount() ?: 0; navigationBlock = browser?.navigationBlocker() ?: "NONE"; delay(1000) } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Test LIVE — 1 grupa", style = MaterialTheme.typography.headlineSmall)
         Text("LIVE PILOT · maks. 20 postów · ekran włączony · bez Vision i galerii")
@@ -97,6 +104,7 @@ private fun PilotScreen(activity: LivePilotActivity) {
         // to Facebook's own HTTPS login page in this SAME WebView on user action.
         OutlinedButton(enabled = browser != null && sessionConsent && task?.isActive != true, onClick = {
             message = runCatching {
+                loginDom = "CHECKING"
                 requireNotNull(browser).openLogin()
                 "Logowanie otwarte w Watcherze. Wpisuj dane wyłącznie na facebook.com; przy checkpoint/CAPTCHA zatrzymaj próbę."
             }.getOrElse { "Nie można otworzyć strony logowania. STOP i zgłoś błąd." }
@@ -111,6 +119,8 @@ private fun PilotScreen(activity: LivePilotActivity) {
         Text("Diagnostyka WebView (bez adresów i danych logowania): $webViewStatus")
         Text("Zablokowane zasoby strony: $blockedCount")
         Text("Podział blokad: ${browser?.blockedResourceSummary() ?: "brak"}")
+        Text("Blokada przekierowania: $navigationBlock")
+        Text("Diagnostyka formularza (wyłącznie liczby pól): $loginDom")
         Row {
             Checkbox(scanConsent, { scanConsent = it })
             Text("Zatwierdzam jeden skan powyższej grupy (maks. 20 postów) do izolowanego API.")
