@@ -117,7 +117,8 @@ test("a typed answer supplies missing room count to the existing dependent analy
 });
 
 test("investor target profit persists as a typed Q&A answer and changes the success boundary, not BUY", () => {
-  const before=buildCanonicalDeal(lodzDeal());
+  const base=lodzDeal();
+  const before=buildCanonicalDeal({...base,overrides:{...base.overrides,holdingMonths:5}});
   assert.ok(roomQuestions(before,state()).some(q=>q.field==="targetProfitPLN"),"target is prompted in Deal Room");
   const {after,merged,overrides}=apply([answer("targetProfitPLN",40_000)]);
   assert.equal(overrides.targetProfitPLN,40_000);
