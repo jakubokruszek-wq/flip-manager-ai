@@ -188,8 +188,19 @@ test("Premium Deal Room renders the reviewed local fixture and its executive pre
   await page.locator("[data-deal-room]").waitFor({ state: "visible" });
   await page.getByRole("tab", { name: "Podsumowanie" }).click(); await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: path.join(reviewDir, "08-mobile-deal-room-v3.png"), fullPage: false });
-  const mobileLayout = await page.evaluate(() => { const panel=document.querySelector('[data-final-ceo]');const metric=label=>[...panel.querySelectorAll('dt')].find(el=>el.textContent===label)?.getBoundingClientRect().top;return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,recommendationTop:panel.querySelector('h2').getBoundingClientRect().top,maxBuyTop:metric('Maksymalna cena zakupu (Max Buy)'),profitTop:metric('Bazowy')};});
-  assert.ok(mobileLayout.scrollWidth<=mobileLayout.width,JSON.stringify(mobileLayout));for(const key of ['recommendationTop','maxBuyTop','profitTop'])assert.ok(mobileLayout[key]!=null&&mobileLayout[key]<844,JSON.stringify(mobileLayout));
+  const mobileLayout = await page.evaluate(() => {
+    const panel=document.querySelector('[data-final-ceo]');
+    const metric=label=>[...panel.querySelectorAll('dt')].find(el=>el.textContent===label);
+    const profits=['Ostrożny','Bazowy','Optymistyczny'].map(label=>{
+      const amount=metric(label)?.nextElementSibling;
+      return {label,amount:amount?.textContent,nowrap:amount?getComputedStyle(amount).whiteSpace==='nowrap':false,fits:amount?amount.scrollWidth<=amount.clientWidth+1:false};
+    });
+    return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,recommendationTop:panel.querySelector('h2').getBoundingClientRect().top,maxBuyTop:metric('Max Buy — wstępny (bez finansowania)')?.getBoundingClientRect().top,profitTop:metric('Bazowy')?.getBoundingClientRect().top,cfoSeparate:!!panel.querySelector('[data-ceo-cfo-limit]'),profits};
+  });
+  assert.ok(mobileLayout.scrollWidth<=mobileLayout.width,JSON.stringify(mobileLayout));
+  for(const key of ['recommendationTop','maxBuyTop','profitTop'])assert.ok(mobileLayout[key]!=null&&mobileLayout[key]<844,JSON.stringify(mobileLayout));
+  assert.equal(mobileLayout.cfoSeparate,true,"CFO limit/status must be separate from preliminary Max Buy");
+  assert.ok(mobileLayout.profits.every(p=>p.amount&&p.nowrap&&p.fits),"profit amounts must remain on one visible line at 390px: "+JSON.stringify(mobileLayout.profits));
   await page.getByRole("heading", { name: "Zespół analityczny" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(reviewDir, "10-mobile-directors-v2.png"), fullPage: false });
   await page.getByRole("heading", { name: "Dyrektorzy pytają Ciebie" }).scrollIntoViewIfNeeded();
