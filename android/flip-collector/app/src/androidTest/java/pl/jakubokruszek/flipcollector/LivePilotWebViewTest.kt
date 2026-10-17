@@ -37,6 +37,20 @@ class LivePilotWebViewTest {
         assertFalse(BuildConfig.LIVE_COLLECTION_ENABLED)
         assertFalse(BuildConfig.LIVE_PILOT_ENABLED)
     }
+    @Test fun loginDiagnosticsClassifyOnlyPublicHostsAndSections() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val browser = WebViewCollectorBrowser(context, LiveCollectionGate(true, true), pilotSource = source)
+            try {
+                assertEquals("WWW_APPROVED_GROUP", browser.diagnosticPageKind(source.url))
+                assertEquals("MOBILE_LOGIN", browser.diagnosticPageKind("https://m.facebook.com/login/?next=masked"))
+                assertEquals("MOBILE_LOGIN_LANDING", browser.diagnosticPageKind("https://m.facebook.com/?utm_source=redacted"))
+                assertEquals("WWW_OTHER", browser.diagnosticPageKind("https://www.facebook.com/unrecognized-path/?sensitive=unexposed"))
+                assertEquals("EXTERNAL_OTHER", browser.diagnosticPageKind("https://other.example/private-path?secret=hidden"))
+                assertEquals(0, browser.blockedResourceCount())
+            } finally { browser.close() }
+        }
+    }
     @Test fun loginStopsWithoutAnyCompletionBatch() = runBlocking {
         try { collect("<html><body><form><input type='password'></form></body></html>"); fail("expected STOP") }
         catch (error: IllegalStateException) { assertEquals("LOGIN_REQUIRED",error.message) }
