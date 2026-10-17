@@ -53,7 +53,7 @@ android {
             // .integration APK: GitHub-hosted runners have fresh debug signing keys.
             val remoteOfflineBuild = providers.gradleProperty("FLIP_OFFLINE_TEST_ORIGIN").orElse("").get().isNotEmpty()
             val pilotApk = providers.gradleProperty("FLIP_PILOT_APK").orElse("false").get() == "true"
-            applicationIdSuffix = if (pilotApk) (if (providers.gradleProperty("FLIP_LIVE_PILOT_ENABLED").orElse("false").get() == "true") ".integration.pilot43mobilefix" else ".integration.pilot43") else if (remoteOfflineBuild) ".remote2" else ".integration"
+            applicationIdSuffix = if (pilotApk) (if (providers.gradleProperty("FLIP_LIVE_PILOT_ENABLED").orElse("false").get() == "true") ".integration.pilot43diagnostic" else ".integration.pilot43") else if (remoteOfflineBuild) ".remote2" else ".integration"
             versionNameSuffix = "-debug"
             resValue("string", "app_name", if (pilotApk) "Flip Watcher · pilot 43" else if (remoteOfflineBuild) "Flip Collector (remote test 0.7.1)" else "Flip Collector (offline integration)")
         }
