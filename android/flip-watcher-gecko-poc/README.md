@@ -1,7 +1,7 @@
 # Flip Watcher — Gecko POC
 
 Osobny prototyp Androida, który odpowiada na jedno pytanie:
-**czy przeglądarka GeckoView (silnik Firefoksa) w naszej aplikacji pozwala normalnie zalogować się do Facebooka i odczytać posty grupy `402796264871862`?**
+**czy GeckoView potrafi odczytać posty osobno zatwierdzonej grupy `lodzsprzedazzakupwynajem` po ręcznym zalogowaniu?** Pierwotna grupa `402796264871862` nie jest traktowana jako alias tej grupy.
 
 Osobny pakiet `pl.jakubokruszek.flipwatcher.geckopoc`, więc instaluje się **obok** dotychczasowego Watchera/Collectora, niczego z nim nie dzieli i nie nadpisuje.
 
@@ -86,3 +86,11 @@ Wersje 0.1.0 były podpisane losowym kluczem każdego serwera CI, dlatego **jedn
 - `./gradlew testDebugUnitTest`: zasady, protokół, magazyn, serwer fixture (JVM).
 - `./gradlew connectedDebugAndroidTest`: prawdziwy GeckoView na emulatorze. Tylko lokalne strony z `assets/fixtures/`; **żaden test nie otwiera Facebooka**.
 - CI: `.github/workflows/android-gecko-poc.yml`, czyli izolacja, testy core, kompilacja, APK z weryfikacją podpisu i rozszerzenia oraz testy na emulatorze Androida 16.
+
+## POC 0.1.2 — osobno zatwierdzone źródło (jeden skan)
+
+Operator wyraźnie zatwierdził **wyłącznie** `https://www.facebook.com/groups/lodzsprzedazzakupwynajem/` jako samodzielne źródło do JEDNEGO ręcznie uruchomionego testu maksymalnie 20 postów. Identyfikator `402796264871862` i wszelkie inne grupy pozostają niedozwolone; **nie dodano żadnego aliasu**. Kanoniczny link posta musi zawierać dokładnie ten zatwierdzony segment grupy i numeryczny identyfikator posta. Znane obce linki są odrzucane; nigdy nie dopasowujemy po podobnej nazwie grupy.
+
+Kliknięcie `Skanuj widoczne` lub `Skanuj + przewiń 3×` **zużywa jedną zgodę przed uruchomieniem**. Stan pozostaje zachowany między restartami i aktualizacjami; ponowny test wymaga osobnego zatwierdzenia i nowej wersji. Nie wykonuj automatycznego skanowania, testu nocnego na Facebooku ani transferu do Findera. Wyniki pozostają wyłącznie w prywatnej pamięci aplikacji. Pole `Diagnoza grupy` może służyć do kontroli, ale nie nadaje żadnych dodatkowych uprawnień.
+
+**Instalacja 0.1.2:** ZIP z najnowszego przebiegu CI PR #45, rozpakowanie `app-arm64-v8a-debug.apk`, instalacja jako **aktualizacja** 0.1.1 (ten sam certyfikat testowy); nie odinstalowuj działającego Gecko POC, aby zachować sesję. Po wejściu na dokładny adres grupy zaczekaj na `Zatwierdzona grupa otwarta`, a dopiero potem uruchom jeden skan.
