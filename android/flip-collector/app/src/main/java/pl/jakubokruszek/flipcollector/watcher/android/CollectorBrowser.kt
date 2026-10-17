@@ -44,6 +44,9 @@ class WebViewCollectorBrowser(
 ) : CollectorBrowser {
     private var webView: WebView? = null
     private var finishedUrl: String? = null
+    private val blockedResources = java.util.concurrent.atomic.AtomicInteger(0)
+    private var mainFrameError: String? = null
+    internal fun blockedResourceCount(): Int = blockedResources.get()
     internal fun documentReady() = pilotSource?.matchesPage(finishedUrl.orEmpty()) == true &&
         pilotSource.matchesPage(webView?.url.orEmpty()) && webView?.progress == 100
     internal var onPageReady: ((WebView, String) -> Unit)? = null
@@ -133,6 +136,8 @@ class WebViewCollectorBrowser(
     private inner class PolicyWebViewClient : WebViewClient() {
         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
             finishedUrl = null
+            mainFrameError = null
+            blockedResources.set(0)
             val kind = when {
                 pilotSource?.matchesPage(url) == true -> "GROUP"
                 runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
@@ -142,6 +147,7 @@ class WebViewCollectorBrowser(
         }
         override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
             handler.cancel()
+            mainFrameError = "TLS_ERROR"
             onDiagnostic?.invoke("TLS_ERROR")
             onStop?.invoke("TLS_ERROR")
         }
@@ -152,20 +158,22 @@ class WebViewCollectorBrowser(
                 runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
                 else -> "OTHER"
             }
-            onDiagnostic?.invoke("PAGE_FINISHED_$kind" + "_PROGRESS_" + view.progress)
+            onDiagnostic?.invoke(mainFrameError ?: ("PAGE_FINISHED_$kind" + "_PROGRESS_" + view.progress))
             onPageReady?.invoke(view, url)
         }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
             if (request.isForMainFrame) {
-                onDiagnostic?.invoke("MAIN_FRAME_HTTP_" + response.statusCode)
+                mainFrameError = "MAIN_FRAME_HTTP_" + response.statusCode
+                onDiagnostic?.invoke(requireNotNull(mainFrameError))
                 onStop?.invoke(if (response.statusCode == 403) "HTTP_403" else "HTTP_ERROR")
             }
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
             if (request.isForMainFrame) {
-                onDiagnostic?.invoke("MAIN_FRAME_NETWORK_" + error.errorCode)
+                mainFrameError = "MAIN_FRAME_NETWORK_" + error.errorCode
+                onDiagnostic?.invoke(requireNotNull(mainFrameError))
                 onStop?.invoke("WEBVIEW_NETWORK_ERROR")
             }
         }
@@ -195,9 +203,12 @@ class WebViewCollectorBrowser(
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             if (localFixture != null) return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-            if (pilotSource != null && !pl.jakubokruszek.flipcollector.collector.LivePilotPolicy.allowResource(request.url.toString()))
-                return WebResourceResponse("text/plain", "utf-8", 204, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
-            if (WebViewPolicy.resource(request.url.toString()) == WebViewPolicy.Decision.ALLOW) return null
+            val allowed = if (pilotSource != null) {
+                pl.jakubokruszek.flipcollector.collector.LivePilotPolicy.allowResource(request.url.toString())
+            } else WebViewPolicy.resource(request.url.toString()) == WebViewPolicy.Decision.ALLOW
+            if (allowed) return null
+            // A counter only: no login URL, path, query, headers or request body is recorded.
+            blockedResources.incrementAndGet()
             return WebResourceResponse("text/plain", "utf-8", 204, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
         }
 
