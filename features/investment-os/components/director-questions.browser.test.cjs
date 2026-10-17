@@ -14,7 +14,7 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   const {buildDealBrain}=await import('../brain/index.ts');
   const {mergeAnswers,answerOverrides,parseAnswerCommand,affectedDirectors}=await import('../deal-room-answers.ts');
   const input=lodzDeal("UNCLEAR_RENOVATION"); let current=buildCanonicalDeal(input);
-  let room={version:1,answers:{},baselineOverrides:{},rounds:[]}; const receipts=new Map();
+  let room={version:1,answers:{},baselineOverrides:{},rounds:[]}; const receipts=new Map(); let conflictNext=false, answerPostCount=0;
   const root=path.resolve(__dirname,'../../..'), auth=await startFakeSupabaseAuthServer();t.after(()=>auth.server.close());
   const env={...process.env,NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'isolated-ui-only',SUPABASE_SERVICE_ROLE_KEY:'isolated-ui-only',DEAL_ROOM_TEST_ENABLED:'true',DEAL_ROOM_TEST_STORAGE_VERSION:'1',DEAL_ROOM_QA_ENABLED:'true',DEAL_ROOM_TEST_OPERATOR_IDS:'44444444-4444-4444-8444-444444444444',DEAL_ROOM_TEST_DATABASE_ORIGIN:auth.url};
   const nextBin=require.resolve('next/dist/bin/next'); await ensureProductionBuild(nextBin,root,env);
@@ -29,6 +29,8 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
     if(url.pathname.endsWith('/investment/answers')){
       if(req.method()==='GET')body={enabled:true,room};
       else {
+        answerPostCount++;
+        if(conflictNext){conflictNext=false;room={...room,version:room.version+1};return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({code:'INVESTMENT_DEAL_VERSION_CONFLICT',message:'Analiza zmieniła się. Odśwież ją przed zapisem; szkic zachowano.'})});}
         const cmd=parseAnswerCommand(req.postDataJSON());
         if(receipts.has(cmd.requestId)) body=receipts.get(cmd.requestId);
         else {
@@ -60,6 +62,16 @@ test('mobile: answer 260k, save, reanalyze, reload, renovation 100k, legal remai
   assert.ok(current.underwriting.result.renovationTotal<100000, "fixture starts below the new 100k quote");
   const moreAgain=page.getByRole('button',{name:/Pozostałe pytania/});if(await moreAgain.count())await moreAgain.click();
   await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).fill('100000');
+  conflictNext=true;
+  await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
+  await page.locator('[data-deal-version-conflict]').waitFor({state:'visible'});
+  assert.equal(await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).inputValue(),'100000','draft survives version conflict');
+  assert.equal(await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).isDisabled(),true,'cannot submit until latest version is read');
+  const attemptsBeforeRefresh=answerPostCount;
+  await page.getByRole('button',{name:/Pobierz aktualną analizę/}).click();
+  await page.locator('[data-deal-version-conflict]').waitFor({state:'detached'});
+  assert.equal(await page.getByLabel('Odpowiedź: renovationBudget',{exact:true}).inputValue(),'100000','draft survives live read model refresh');
+  assert.equal(answerPostCount,attemptsBeforeRefresh,'no blind automatic POST after conflict');
   await page.getByRole('button',{name:'Zapisz odpowiedzi i przelicz'}).click();
   await page.waitForFunction(()=>document.querySelector('[aria-label="Rekomendacja przed i po odpowiedziach"]')?.textContent.includes('renovationBudget'));
   assert.equal(current.underwriting.result.renovationTotal,100000);assert.ok(current.underwriting.result.maxPurchasePrice<max);assert.notEqual(current.ceo.result.action,'KUP');
