@@ -143,6 +143,7 @@ class WebViewCollectorBrowser(
             blockedResources.set(0)
             val kind = when {
                 pilotSource?.matchesPage(url) == true -> "GROUP"
+                pilotSource?.isMobileLoginLanding(url) == true -> "MOBILE_LOGIN"
                 runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
                 else -> "OTHER"
             }
@@ -158,6 +159,7 @@ class WebViewCollectorBrowser(
             finishedUrl = url
             val kind = when {
                 pilotSource?.matchesPage(url) == true -> "GROUP"
+                pilotSource?.isMobileLoginLanding(url) == true -> "MOBILE_LOGIN"
                 runCatching { java.net.URI(url).path.orEmpty().startsWith("/login") }.getOrDefault(false) -> "LOGIN"
                 else -> "OTHER"
             }
