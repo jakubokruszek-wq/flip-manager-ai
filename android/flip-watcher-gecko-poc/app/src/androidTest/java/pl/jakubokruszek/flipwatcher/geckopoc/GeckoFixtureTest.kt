@@ -57,8 +57,8 @@ class GeckoFixtureTest {
         assertEquals(1, report.diagnostics["ambiguousCards"])
         assertEquals(1, report.diagnostics["foreignCards"])
         assertEquals(1, report.diagnostics["cardsWithoutId"])
-        // Post ...010 arrives twice: page script and the page's own HTML seen by the network layer.
-        assertEquals(2, report.diagnostics["duplicatesDropped"])
+        // One duplicate only (DOM card): 0.2.2 no longer reads the page HTML from the network.
+        assertEquals(1, report.diagnostics["duplicatesDropped"])
     }
 
     @Test fun capsAtTwentyPosts() {

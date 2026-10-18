@@ -259,7 +259,9 @@ test("structure verdict separates context, ids, unbound keys, missing data and m
   // Network ids no longer count: response bodies are not read.
   assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netExactIds: 3, netKeyPostId: 9, mComponents: 4 }), "NO_POST_IDS_IN_PAGE_DATA");
   assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, scriptKeyPostId: 4 }), "ID_KEYS_WITHOUT_EXACT_BINDING");
-  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 0, mComponents: 9 }), "NETWORK_NOT_OBSERVED_YET");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netWindowSec: 20, netReqTotal: 0, mComponents: 9 }), "NETWORK_NOT_OBSERVED_YET");
+  // A zero-length window observed nothing by design; it is not "network not observed".
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netWindowSec: 0, netReqTotal: 0, mComponents: 9 }), "NO_POST_IDS_IN_PAGE_DATA");
   assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 3 }), "NO_POST_MARKUP");
   assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 3, mComponents: 40, images: 12 }), "NO_POST_IDS_IN_PAGE_DATA");
   assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 150 }).virtualized, 1);
@@ -270,7 +272,7 @@ test("content arriving over the network with no id in DOM or scripts is FEED_DAT
   const v = c => adapter.structureVerdict({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, mComponents: 3996, images: 400, ...c }).code;
   assert.equal(v({ netReqTotal: 30, mutAddedTotal: 5000 }), "FEED_DATA_NOT_CAPTURED");
   assert.equal(v({ netReqTotal: 30, mutAddedTotal: 20 }), "NO_POST_IDS_IN_PAGE_DATA");
-  assert.equal(v({ netReqTotal: 0, mutAddedTotal: 5000 }), "NETWORK_NOT_OBSERVED_YET");
+  assert.equal(v({ netReqTotal: 0, netWindowSec: 20, mutAddedTotal: 5000 }), "NETWORK_NOT_OBSERVED_YET");
   assert.equal(v({ netCountingActive: 0, netReqTotal: 0, mutAddedTotal: 5000 }), "NO_POST_IDS_IN_PAGE_DATA");
 });
 

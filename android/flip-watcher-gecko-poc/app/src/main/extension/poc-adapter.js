@@ -153,7 +153,7 @@
     if (n("ctxPointsSampled") > 0 && n("ctxPointsInDocument") * 2 < n("ctxPointsSampled")) code = "WRONG_DOCUMENT_OR_CONTEXT";
     else if (exact.DOM + exact.SCRIPT + exact.NETWORK > 0) code = "EXACT_IDS_AVAILABLE";
     else if (keys > 0) code = "ID_KEYS_WITHOUT_EXACT_BINDING";
-    else if (n("netCountingActive") === 1 && n("netReqTotal") === 0) code = "NETWORK_NOT_OBSERVED_YET";
+    else if (n("netCountingActive") === 1 && n("netWindowSec") > 0 && n("netReqTotal") === 0) code = "NETWORK_NOT_OBSERVED_YET";
     // Content kept arriving over the network during the window while neither the
     // DOM nor page scripts carry an id: the ids (if any) are only in response
     // bodies, which this POC deliberately does not read.
