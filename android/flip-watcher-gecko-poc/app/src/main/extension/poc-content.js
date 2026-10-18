@@ -71,6 +71,31 @@
     };
   }
 
+  // A one-off read-only DOM refresh. No page text, links, post IDs, image
+  // content or credentials are sent to Android. Do not turn these candidates
+  // into posts; only the separately authorized scan may do that.
+  function domDiagnosis(groupId) {
+    const doc = scope.document;
+    const all = Array.from(doc.querySelectorAll("a[href]")).slice(0, 600);
+    const wrappers = new Set();
+    for (const a of all) {
+      const parent = a.closest('[role="article"],article,[data-pagelet],[data-testid]');
+      if (parent) wrappers.add(parent);
+    }
+    return adapter.inspectDomLinks({
+      href: scope.location.href,
+      hasCaptcha: Boolean(doc.querySelector('iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"]')),
+      hasPasswordInput: Boolean(doc.querySelector('input[type="password"]')),
+      hasLoginForm: Boolean(doc.querySelector('form[action*="login"]')),
+      anchors: all.map(a => a.href),
+      roleArticles: doc.querySelectorAll('[role="article"]').length,
+      nativeArticles: doc.querySelectorAll("article").length,
+      roleFeeds: doc.querySelectorAll('[role="feed"]').length,
+      candidateWrappers: wrappers.size,
+      structuredScripts: doc.querySelectorAll('script[type="application/json"],script[type="application/ld+json"]').length,
+    }, { groupId, aliases: [], maxPosts: 20 }, core);
+  }
+
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function scan(request) {
@@ -97,6 +122,13 @@
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
     if (message.type === "probe") {
       port.postMessage({ type: "probeResult", nonce: message.nonce, probe: probe() });
+      return;
+    }
+    if (message.type === "domDiagnosis") {
+      // The native caller must explicitly supply the one approved source.
+      // This path never invokes scan(), snapshot() or post extraction.
+      const result = domDiagnosis(message.groupId);
+      port.postMessage({ type: "domDiagnosisResult", nonce: message.nonce, probe: probe(), ...result });
       return;
     }
     if (message.type === "groupProbe") {
