@@ -150,6 +150,78 @@ class GeckoFixtureTest {
         }
     }
 
+    /** Opens a local fixture in a real GeckoSession with the extension and runs [block] on its channel. */
+    private fun <T> withFixture(path: String, fixture: String, settleMs: Long = 1_500, block: suspend (FixturePage) -> T): T = runBlocking {
+        withTimeout(120_000) {
+            withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel = CollectorChannel(session, fixtureMode = true)
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    session.open(GeckoHost.runtime(context))
+                    session.setActive(true)
+                    session.loadUri(server.url(path, fixture))
+                    assertTrue("extension port", channel.awaitPort(30_000))
+                    delay(settleMs) // lets the page's own XHR (network layer) finish
+                    block(FixturePage(channel, session, server))
+                } finally {
+                    channel.close(); session.close(); server.close()
+                }
+            }
+        }
+    }
+
+    private class FixturePage(val channel: CollectorChannel, val session: GeckoSession, val server: LoopbackFixtureServer)
+
+    private fun scanRequest() = ScanRequest(nonce = UUID.randomUUID().toString(), groupId = FIXTURE_GROUP_ID, allowLoopback = true)
+
+    @Test fun divOnlyMobileFeedYieldsExactIdsFromPageDataAndNetwork() {
+        val report = withFixture(groupPath, "mobile-div-feed") { it.channel.scan(scanRequest()) }
+        Log.i("GeckoPocTest", "MOBILE_DIV_FEED status=${report.status} posts=${report.posts.map { "${it.postId}:${it.idSource}" }} diag=${report.diagnostics}")
+        assertEquals(ScanStatus.OK, report.status)
+        assertEquals(setOf("550000000000001", "550000000000002", "550000000000003", "550000000000004"), report.posts.map { it.postId }.toSet())
+        assertEquals(setOf("STRUCTURED", "NETWORK"), report.posts.map { it.idSource }.toSet())
+        report.posts.forEach { assertEquals(ScanProtocol.canonicalPermalink(FIXTURE_GROUP_ID, it.postId), it.permalink) }
+        assertEquals(0, report.rejectedByApp)
+    }
+
+    @Test fun structureDiagnosisFindsExactIdsOnDivOnlyFeed() {
+        val d = withFixture(groupPath, "mobile-div-feed") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
+        Log.i("GeckoPocTest", "STRUCTURE_DIV_FEED verdict=${d.verdict} ${d.counts.filterValues { it != 0 }} names=${d.attributeNames}")
+        assertEquals("GROUP_OK", d.status)
+        assertEquals("EXACT_IDS_AVAILABLE", d.verdict)
+        assertEquals(0, d.counts["anchors"])
+        assertEquals(0, d.counts["roleArticles"])
+        assertTrue(d.counts["mComponents"]!! > 0)
+        assertEquals(2, d.counts["scriptExactIds"])
+        assertEquals(1, d.counts["netFilterAvailable"])
+        assertEquals(2, d.counts["netExactIds"])
+        assertTrue(d.counts["ctxPointsInDocument"]!! >= 0)
+        assertTrue(d.counts["mutAddedTotal"]!! >= 2)
+    }
+
+    @Test fun structureDiagnosisSeparatesNoIdsFromUnboundIds() {
+        val none = withFixture(groupPath, "mobile-div-noids") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
+        assertEquals("NO_POST_IDS_IN_PAGE_DATA", none.verdict)
+        val unbound = withFixture(groupPath, "mobile-div-unbound") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
+        assertEquals("ID_KEYS_WITHOUT_EXACT_BINDING", unbound.verdict)
+        assertEquals(ScanStatus.NO_POSTS, withFixture(groupPath, "mobile-div-unbound") { it.channel.scan(scanRequest()) }.status)
+    }
+
+    @Test fun networkEvidenceIsDroppedOnANewPageLoad() {
+        // Same session: ids captured on the first page must not leak into the next document.
+        val d = withFixture(groupPath, "mobile-div-feed") { page ->
+            assertEquals(2, page.channel.structureDiagnosis(FIXTURE_GROUP_ID)!!.counts["netExactIds"])
+            page.session.loadUri(page.server.url(groupPath, "mobile-div-noids"))
+            delay(2_500) // the old page's port closes and the new page connects its own
+            assertTrue(page.channel.awaitPort(30_000))
+            page.channel.structureDiagnosis(FIXTURE_GROUP_ID)!!
+        }
+        assertEquals(0, d.counts["netExactIds"])
+        assertEquals("NO_POST_IDS_IN_PAGE_DATA", d.verdict)
+    }
+
     @Test fun pageChangeDuringScanStopsIt() = runBlocking {
         withTimeout(120_000) {
             withContext(Dispatchers.Main) {

@@ -300,43 +300,29 @@ class PocActivity : ComponentActivity() {
         if (scanning || inspectingDom) return
         val current = channel ?: run { output.text = "Otwórz sesję."; return }
         if (kind != PageKind.APPROVED_GROUP || !current.isConnected) {
-            output.text = "Diagnoza DOM dostępna tylko na zatwierdzonej grupie z połączonym rozszerzeniem."
+            output.text = "Diagnoza postów dostępna tylko na zatwierdzonej grupie z połączonym rozszerzeniem."
             return
         }
         inspectingDom = true
         render()
         lifecycleScope.launch {
+            val started = Instant.now().toString()
             try {
-                val result = current.domDiagnosis()
+                val result = current.structureDiagnosis()
                 if (result == null) {
-                    output.text = "Sprawdź DOM: brak odpowiedzi z rozszerzenia (8 s). Skan NIE został uruchomiony."
+                    output.text = "Diagnoza postów: brak odpowiedzi z rozszerzenia (20 s). Skan NIE został uruchomiony."
                 } else {
-                    result.probe?.let { probe = it }
-                    output.text = buildString {
-                        appendLine("SPRAWDŹ DOM — status: ${result.status}")
-                        appendLine("Tylko liczby. Nie uruchomiono skanu, nie zapisano postów, limit zgody bez zmian.")
-                        if (result.status == "GROUP_OK") {
-                            val v = result.counts
-                            appendLine("Karty [role=article]: ${v["roleArticles"] ?: 0} • <article>: ${v["nativeArticles"] ?: 0}")
-                            appendLine("Kontenery [role=feed]: ${v["roleFeeds"] ?: 0}")
-                            appendLine("Linki HTML (do 600): ${v["anchorsSeen"] ?: 0}")
-                            appendLine("Linki do postów tej grupy: ${v["exactGroupLinks"] ?: 0}")
-                            appendLine("Unikalne, numeryczne ID w linkach: ${v["exactGroupIds"] ?: 0}")
-                            appendLine("Linki do postów obcych grup: ${v["foreignGroupLinks"] ?: 0}")
-                            appendLine("Linki do zdjęć: ${v["photoLinks"] ?: 0}")
-                            appendLine("Strukturalne kontenery linków: ${v["candidateWrappers"] ?: 0}")
-                            appendLine("Skrypty danych JSON: ${v["structuredScripts"] ?: 0}")
-                            appendLine("Ramki iframe: ${v["iframeCount"] ?: 0} • odczytywalne: ${v["iframeReadable"] ?: 0} • niedostępne: ${v["iframeInaccessible"] ?: 0}")
-                            appendLine("Linki wewnątrz odczytywalnych ramek: ${v["iframeAnchors"] ?: 0} • karty: ${v["iframeArticles"] ?: 0}")
-                            appendLine("Otwarte Shadow DOM: ${v["openShadowRoots"] ?: 0} • linki: ${v["openShadowAnchors"] ?: 0} • karty: ${v["openShadowArticles"] ?: 0}")
-                            appendLine()
-                            appendLine("Liczba elementów nie jest liczbą potwierdzonych postów. Brak ID ≠ brak ogłoszeń.")
-                        } else appendLine("Nie odczytujemy grupy przy innym stanie strony.")
+                    output.text = StructureReport.describe(result)
+                    // Counters only, so the operator can copy the result from "Wyniki".
+                    runCatching {
+                        store.append(StoredRun("STRUCTURE_DIAGNOSIS", started, Instant.now().toString(), result.verdict ?: result.status,
+                            emptyList(), emptyList(), 0, result.counts.filterValues { it != 0 }.mapValues { it.value.toString() } +
+                                ("attributeNames" to result.attributeNames.joinToString { "${it.first}×${it.second}" })))
                     }
                 }
             } catch (e: Exception) {
-                output.text = "Sprawdź DOM: błąd ${e.javaClass.simpleName}. Bez skanu."
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                output.text = "Diagnoza postów: błąd ${e.javaClass.simpleName}. Bez skanu."
             } finally {
                 inspectingDom = false
                 render()
@@ -590,7 +576,7 @@ class PocActivity : ComponentActivity() {
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
             ))
             addView(row(
-                button("dom", "Sprawdź DOM") { inspectDom() },
+                button("dom", "Diagnoza postów") { inspectDom() },
                 button("diagnose", "Diagnoza grupy") { diagnoseGroup() },
                 button("results", "Wyniki") { showResults() },
             ))

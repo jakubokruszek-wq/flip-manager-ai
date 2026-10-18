@@ -28,6 +28,9 @@ data class PageProbe(
     val iframes: Int,
 )
 
+/** Count-only structure report (see poc-content.js structureDiagnosis); no text, value or id. */
+data class StructureDiagnosis(val status: String, val verdict: String?, val counts: Map<String, Int>, val attributeNames: List<Pair<String, Int>>)
+
 /** A manual, count-only DOM read; no post identifiers or links are transferred. */
 data class DomDiagnosis(val status: String, val counts: Map<String, Int>, val probe: PageProbe?)
 
@@ -79,6 +82,47 @@ object ScanProtocol {
     fun domDiagnosisRequest(nonce: String): JSONObject = JSONObject()
         .put("type", "domDiagnosis").put("nonce", nonce)
         .put("groupId", PocPolicy.APPROVED_GROUP_ID)
+
+    fun structureDiagnosisRequest(nonce: String, groupId: String = PocPolicy.APPROVED_GROUP_ID, allowLoopback: Boolean = false): JSONObject = JSONObject()
+        .put("type", "structureDiagnosis").put("nonce", nonce)
+        .put("groupId", groupId).put("allowLoopback", allowLoopback)
+
+    /** Every counter the structure report may carry; anything else is dropped. */
+    val STRUCTURE_FIELDS = listOf(
+        "ctxPointsSampled", "ctxPointsInDocument", "ctxSameDocumentAsLoad", "ctxVisible", "ctxElements",
+        "ctxScrollHeightPx", "ctxViewportHeightPx", "ctxSecondsSinceLoad",
+        "roleArticles", "nativeArticles", "roleFeeds", "mComponents", "mContainers", "dataTypeContainers",
+        "trackingIds", "actionIds", "focusables", "dataFt", "dataStore", "dataSigil", "roleButtons", "tabIndexed",
+        "images", "largeImages",
+        "anchors", "anchorGroupPostLinks", "anchorForeignPostLinks", "attrPostLikeValues", "attrGroupPostLinks",
+        "mutAddedTotal", "mutRemovedTotal", "mutAdded10s", "mutRemoved10s", "virtualizationSuspected",
+        "domExactIds", "inlineScripts", "inlineScriptKb", "scriptKeyPostId", "scriptKeyTopLevel", "scriptKeyStoryFbid",
+        "scriptGroupPermalinks", "scriptExactIds",
+        "netAnswered", "netFilterAvailable", "netResponses", "netHeld", "netKb", "netTruncated", "netErrors",
+        "netKeyPostId", "netKeyTopLevel", "netKeyStoryFbid", "netGroupPermalinks", "netExactIds",
+    )
+
+    val STRUCTURE_VERDICTS = setOf(
+        "WRONG_DOCUMENT_OR_CONTEXT", "EXACT_IDS_AVAILABLE", "ID_KEYS_WITHOUT_EXACT_BINDING",
+        "NETWORK_NOT_OBSERVED_YET", "NO_POST_MARKUP", "NO_POST_IDS_IN_PAGE_DATA",
+    )
+
+    fun parseStructureDiagnosis(message: Any?, nonce: String): StructureDiagnosis? {
+        val json = asJson(message) ?: return null
+        if (json.optString("type") != "structureDiagnosisResult" || json.optString("nonce") != nonce) return null
+        val status = json.optString("status")
+        if (status !in setOf("GROUP_OK", "WRONG_GROUP", "LOGIN_REQUIRED", "CHECKPOINT", "CAPTCHA", "GROUP_UNAVAILABLE", "DIAGNOSIS_ERROR")) return null
+        val values = json.optJSONObject("counters") ?: JSONObject()
+        val counts = STRUCTURE_FIELDS.associateWith { name -> values.optInt(name, 0).coerceIn(0, 999_999) }
+        val verdict = json.optString("verdict").takeIf { it in STRUCTURE_VERDICTS }
+        val names = json.optJSONArray("attributeNames") ?: JSONArray()
+        val attributeNames = (0 until minOf(names.length(), 15)).mapNotNull { index ->
+            val item = names.optJSONObject(index) ?: return@mapNotNull null
+            val name = item.optString("name")
+            if (Regex("^[a-z][a-z0-9-]{0,40}$").matches(name)) name to item.optInt("count").coerceIn(0, 99_999) else null
+        }
+        return StructureDiagnosis(status, verdict, counts, attributeNames)
+    }
 
     private val DOM_COUNT_FIELDS = listOf(
         "anchorsSeen", "exactGroupLinks", "exactGroupIds", "foreignGroupLinks",

@@ -39,7 +39,7 @@
   function evaluate(snapshot, input, core) {
     if (!core) throw Error("COLLECTOR_CORE_MISSING");
     const maxPosts = Math.max(1, Math.min(MAX_POSTS_LIMIT, Math.floor(Number(input && input.maxPosts) || MAX_POSTS_LIMIT)));
-    const diagnostics = { visibleCards: 0, structuredScripts: 0, structuredRecords: 0, cardsWithoutId: 0, ambiguousCards: 0, foreignCards: 0, duplicatesDropped: 0, overLimitDropped: 0 };
+    const diagnostics = { visibleCards: 0, structuredScripts: 0, structuredRecords: 0, networkRecords: 0, cardsWithoutId: 0, ambiguousCards: 0, foreignCards: 0, duplicatesDropped: 0, overLimitDropped: 0 };
     const state = classify(snapshot, input);
     if (state !== "GROUP_OK") return { status: state, posts: [], diagnostics };
 
@@ -48,17 +48,23 @@
     const canonical = postId => `https://www.facebook.com/groups/${groupId}/posts/${postId}/`;
     const records = [];
 
-    // Structured (hydration) payloads: identity comes only from the core, run
-    // once per accepted id with allowGroupRedirect=false (no foreign groups).
-    for (const text of (snapshot.structured || []).slice(0, 100)) {
-      if (typeof text !== "string" || text.length > 2_000_000) continue;
-      diagnostics.structuredScripts++;
-      for (const id of accepted) {
-        const source = { sourceType: "GROUP", sourceId: id, sourceUrl: `https://www.facebook.com/groups/${id}/`, allowGroupRedirect: false };
-        const found = core.extractStructuredRecordsFromText(text, "HYDRATION", source, 0) || [];
-        diagnostics.structuredRecords += found.length;
-        for (const record of found) records.push({ postId: record.postId, permalink: canonical(record.postId), sourceId: groupId, sourceType: "GROUP", idSource: "STRUCTURED" });
-      }
+    // Page data (JSON and plain inline scripts): identity comes only from the
+    // core, which binds a story id to a permalink of an accepted group.
+    const structuredTexts = (snapshot.structured || []).filter(text => typeof text === "string").slice(0, 120);
+    diagnostics.structuredScripts = structuredTexts.length;
+    for (const record of exactStructuredIds(structuredTexts, accepted, core, "HYDRATION")) {
+      diagnostics.structuredRecords++;
+      records.push({ ...record, sourceId: groupId, sourceType: "GROUP", idSource: "STRUCTURED" });
+    }
+
+    // Network layer: records the background already bound with the core. They
+    // are re-validated here; anything not an exact accepted-group link is dropped.
+    for (const record of (Array.isArray(snapshot.networkRecords) ? snapshot.networkRecords : []).slice(0, 500)) {
+      const postId = record && typeof record.postId === "string" ? record.postId : "";
+      const link = record && typeof record.permalink === "string" ? core.parsePostLink(record.permalink) : null;
+      if (!/^\d{5,30}$/.test(postId) || !link || link.sourceType !== "GROUP" || link.postId !== postId || !accepted.includes(link.sourceId)) continue;
+      diagnostics.networkRecords++;
+      records.push({ postId, permalink: canonical(postId), sourceId: groupId, sourceType: "GROUP", idSource: "NETWORK" });
     }
 
     // Top-level cards: a card counts only with exactly one post id among its
@@ -87,11 +93,69 @@
       const link = core.parsePostLink(post.permalink, { sourceType: "GROUP", sourceId: groupId, allowGroupRedirect: false });
       if (!link || link.postId !== post.postId || link.sourceId !== groupId || !/^\d{5,30}$/.test(post.postId)) continue;
       const layers = records.filter(record => record.postId === post.postId).map(record => record.idSource);
-      posts.push({ postId: post.postId, permalink: link.permalink, idSource: layers.includes("STRUCTURED") ? "STRUCTURED" : "DOM_LINK" });
+      posts.push({ postId: post.postId, permalink: link.permalink, idSource: ["STRUCTURED", "NETWORK", "DOM_LINK"].find(layer => layers.includes(layer)) });
     }
     diagnostics.overLimitDropped = Math.max(0, posts.length - maxPosts);
     const limited = posts.slice(0, maxPosts);
     return { status: limited.length ? "OK" : "NO_POSTS", posts: limited, diagnostics };
+  }
+
+  // Exact ids from Facebook data texts (page scripts or network bodies): the
+  // core accepts a story only with its own permalink in the same node, for an
+  // accepted group, with allowGroupRedirect=false. Canonical identity is the
+  // approved group (accepted[0]). Never guesses from a bare number.
+  function exactStructuredIds(texts, accepted, core, layer) {
+    const ids = new Map();
+    if (!core || !Array.isArray(accepted) || !accepted.length) return [];
+    for (const text of (texts || []).slice(0, 120)) {
+      if (typeof text !== "string" || !text) continue;
+      for (const id of accepted) {
+        const source = { sourceType: "GROUP", sourceId: id, sourceUrl: `https://www.facebook.com/groups/${id}/`, allowGroupRedirect: false };
+        let found = [];
+        try { found = core.extractStructuredRecordsFromText(text, layer, source, 0) || []; } catch { found = []; }
+        for (const record of found) {
+          if (/^\d{5,30}$/.test(record.postId) && !ids.has(record.postId)) ids.set(record.postId, { postId: record.postId, permalink: `https://www.facebook.com/groups/${accepted[0]}/posts/${record.postId}/` });
+        }
+      }
+    }
+    return [...ids.values()];
+  }
+
+  // How often id-carrying keys and permalinks of an accepted group appear in
+  // the texts, escaped or not. Counts only; no value is returned.
+  function countIdKeys(texts, accepted) {
+    const escaped = (accepted || []).map(id => String(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const groupLink = escaped ? new RegExp(`groups(?:\\\\?/)(?:${escaped})(?:\\\\?/)(?:posts|permalink)(?:\\\\?/)\\d{5,30}`, "g") : null;
+    const counts = { postId: 0, topLevel: 0, storyFbid: 0, groupPermalinks: 0 };
+    const count = (text, re) => { let n = 0; for (const _ of text.matchAll(re)) { if (++n >= 99999) break; } return n; };
+    for (const raw of (texts || []).slice(0, 120)) {
+      if (typeof raw !== "string") continue;
+      const text = raw.slice(0, 4_000_000);
+      counts.postId += count(text, /\\?"post_id\\?"\s*:/g);
+      counts.topLevel += count(text, /top_level_post_id/g);
+      counts.storyFbid += count(text, /story_fbid/g);
+      if (groupLink) counts.groupPermalinks += count(text, groupLink);
+    }
+    for (const key of Object.keys(counts)) counts[key] = Math.min(99999, counts[key]);
+    return counts;
+  }
+
+  // One verdict from the structure counters, most basic cause first. Codes are
+  // a fixed list the app whitelists.
+  function structureVerdict(c) {
+    const n = key => Math.max(0, Number(c && c[key]) || 0);
+    const exact = { DOM: n("domExactIds"), SCRIPT: n("scriptExactIds"), NETWORK: n("netExactIds") };
+    const keys = n("scriptKeyPostId") + n("scriptKeyTopLevel") + n("scriptKeyStoryFbid") + n("scriptGroupPermalinks") + n("netKeyPostId") + n("netKeyTopLevel") + n("netKeyStoryFbid") + n("netGroupPermalinks");
+    const markup = n("roleArticles") + n("nativeArticles") + n("mComponents") + n("trackingIds") + n("dataFt");
+    const virtualized = n("mutAdded10s") >= 50 && n("mutRemoved10s") * 2 >= n("mutAdded10s") ? 1 : 0;
+    let code;
+    if (n("ctxPointsSampled") > 0 && n("ctxPointsInDocument") * 2 < n("ctxPointsSampled")) code = "WRONG_DOCUMENT_OR_CONTEXT";
+    else if (exact.DOM + exact.SCRIPT + exact.NETWORK > 0) code = "EXACT_IDS_AVAILABLE";
+    else if (keys > 0) code = "ID_KEYS_WITHOUT_EXACT_BINDING";
+    else if (n("netFilterAvailable") === 1 && n("netResponses") === 0) code = "NETWORK_NOT_OBSERVED_YET";
+    else if (markup === 0 && n("images") === 0) code = "NO_POST_MARKUP";
+    else code = "NO_POST_IDS_IN_PAGE_DATA";
+    return { code, virtualized, exactDom: exact.DOM, exactScript: exact.SCRIPT, exactNetwork: exact.NETWORK };
   }
 
   // Count-only, read-only inspection for the current mobile Facebook DOM.
@@ -179,5 +243,5 @@
   function isGroupId(value) { return typeof value === "string" && /^[A-Za-z0-9._-]{1,100}$/.test(value); }
   function safeUrl(value) { try { return new URL(value); } catch { return null; } }
 
-  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, MAX_POSTS_LIMIT };
+  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, exactStructuredIds, countIdKeys, structureVerdict, MAX_POSTS_LIMIT };
 })(globalThis);

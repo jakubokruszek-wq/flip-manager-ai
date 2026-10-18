@@ -199,3 +199,67 @@ test("count-only diagnostics fail closed on another group or login", () => {
   assert.equal(login.status, "LOGIN_REQUIRED");
   assert.equal(login.counters.anchorsSeen, 0);
 });
+
+// ---- mobile Facebook: div-only posts, ids only in page data / network bodies
+const fs = require("node:fs");
+const fixtures = path.resolve(__dirname, "../../main/assets/fixtures");
+const FIX = "1234567890123";
+const inlineScripts = name => [...fs.readFileSync(path.join(fixtures, name), "utf8").matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+
+test("page scripts of a div-only feed give exact ids; comment, share, photo and unbound story are rejected", () => {
+  const records = adapter.exactStructuredIds(inlineScripts("mobile-div-feed.html"), [FIX], core, "HYDRATION");
+  assert.deepEqual(records.map(r => r.postId).sort(), ["550000000000001", "550000000000002"]);
+  records.forEach(r => assert.equal(r.permalink, `https://www.facebook.com/groups/${FIX}/posts/${r.postId}/`));
+});
+
+test("network bodies give exact ids only for the accepted group, any FB host or permalink form", () => {
+  const body = fs.readFileSync(path.join(fixtures, "mobile-net-data.html"), "utf8");
+  assert.deepEqual(adapter.exactStructuredIds([body], [FIX], core, "NETWORK").map(r => r.postId).sort(), ["550000000000003", "550000000000004"]);
+  assert.deepEqual(adapter.exactStructuredIds([body], ["innagrupa"], core, "NETWORK").map(r => r.postId), ["560000000000002"]);
+  assert.deepEqual(adapter.exactStructuredIds([body], ["someothergroup"], core, "NETWORK"), []);
+});
+
+test("a story id without its own permalink is never accepted (no invented permalinks)", () => {
+  assert.deepEqual(adapter.exactStructuredIds(inlineScripts("mobile-div-unbound.html"), [FIX], core, "HYDRATION"), []);
+  assert.deepEqual(adapter.exactStructuredIds(['{"__typename":"Story","post_id":"1000000000001","url":"https://www.facebook.com/photo/?fbid=1000000000001"}'], [GROUP], core, "HYDRATION"), []);
+});
+
+test("evaluate merges DOM, page-data and network layers, dedups and caps at 20", () => {
+  const net = Array.from({ length: 25 }, (_, i) => ({ postId: id(i), permalink: postLink(id(i)) }));
+  const story = JSON.stringify({ __typename: "Story", post_id: id(0), url: postLink(id(0)) });
+  const result = adapter.evaluate(page({ cards: [{ hrefs: [postLink(id(1))] }], structured: [story], networkRecords: net }), input, core);
+  assert.equal(result.posts.length, 20);
+  assert.equal(new Set(result.posts.map(p => p.postId)).size, 20);
+  assert.equal(result.posts.find(p => p.postId === id(0)).idSource, "STRUCTURED");
+  assert.equal(result.posts.find(p => p.postId === id(1)).idSource, "NETWORK");
+});
+
+test("network records are re-validated: foreign group, bad id, mismatched or photo permalink are dropped", () => {
+  const result = adapter.evaluate(page({ networkRecords: [
+    { postId: id(1), permalink: postLink(id(1)) },
+    { postId: id(2), permalink: `https://www.facebook.com/groups/999999999999/posts/${id(2)}/` },
+    { postId: "abc", permalink: postLink("abc") },
+    { postId: id(3), permalink: postLink(id(4)) },
+    { postId: id(5), permalink: `https://www.facebook.com/photo/?fbid=${id(5)}` },
+    "garbage", null,
+  ] }), input, core);
+  assert.deepEqual(result.posts.map(p => p.postId), [id(1)]);
+  assert.equal(result.diagnostics.networkRecords, 1);
+});
+
+test("id keys are counted escaped and unescaped, never their values", () => {
+  const counts = adapter.countIdKeys(['{"post_id":"1"}', 'x\\"post_id\\":2 groups\\/' + GROUP + '\\/posts\\/123456789 story_fbid top_level_post_id'], [GROUP]);
+  assert.deepEqual(counts, { postId: 2, topLevel: 1, storyFbid: 1, groupPermalinks: 1 });
+});
+
+test("structure verdict separates context, ids, unbound keys, missing data and markup", () => {
+  const v = c => adapter.structureVerdict(c).code;
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 1, netExactIds: 3 }), "WRONG_DOCUMENT_OR_CONTEXT");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netExactIds: 3 }), "EXACT_IDS_AVAILABLE");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, scriptKeyPostId: 4 }), "ID_KEYS_WITHOUT_EXACT_BINDING");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, netResponses: 0, mComponents: 9 }), "NETWORK_NOT_OBSERVED_YET");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, netResponses: 3 }), "NO_POST_MARKUP");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, netResponses: 3, mComponents: 40, images: 12 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 150 }).virtualized, 1);
+  assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 10 }).virtualized, 0);
+});

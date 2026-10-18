@@ -14,8 +14,16 @@ outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-geck
 if [ -n "$outside" ]; then echo "FAIL: files outside the POC were changed:"; echo "$outside"; exit 1; fi
 
 src="$poc/app/src/main"
-if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|/api/|fetch\(|XMLHttpRequest|sendBeacon|WebSocket" "$src" --include='*.kt' --include='*.js' --include='*.json'; then
+if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|/api/|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json'; then
   echo "FAIL: network client or backend reference in POC sources"; exit 1
+fi
+# Case-sensitive: the webRequest type name "xmlhttprequest" is a filter, not a client.
+if grep -R -n -E "XMLHttpRequest|sendBeacon|WebSocket" "$src" --include='*.kt' --include='*.js' --include='*.json'; then
+  echo "FAIL: network client in POC sources"; exit 1
+fi
+# The network layer must never hand a response body to the app or another context.
+if grep -n -E "connectNative|sendNativeMessage|postMessage" "$src/extension/poc-background.js"; then
+  echo "FAIL: background script talks to the app directly"; exit 1
 fi
 if grep -R -n -E "OFFLINE_TEST|LIVE_COLLECTION_ENABLED\s*=\s*true|BUY_ENABLED" "$poc/app"; then
   echo "FAIL: POC references production switches"; exit 1

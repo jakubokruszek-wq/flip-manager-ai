@@ -36,7 +36,7 @@ class CollectorChannel(
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult" -> {
+                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -88,6 +88,13 @@ class CollectorChannel(
         val nonce = UUID.randomUUID().toString()
         return ScanProtocol.parseDomDiagnosis(
             request(nonce, ScanProtocol.domDiagnosisRequest(nonce), timeoutMs), nonce)
+    }
+
+    /** Count-only structure report of the shown group page. Never a scan; uses no scan permission. */
+    suspend fun structureDiagnosis(groupId: String = PocPolicy.APPROVED_GROUP_ID, timeoutMs: Long = 20_000): StructureDiagnosis? {
+        val nonce = UUID.randomUUID().toString()
+        return ScanProtocol.parseStructureDiagnosis(
+            request(nonce, ScanProtocol.structureDiagnosisRequest(nonce, groupId, allowLoopback = fixtureMode), timeoutMs), nonce)
     }
 
     suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {
