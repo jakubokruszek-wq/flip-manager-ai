@@ -57,7 +57,8 @@ class GeckoFixtureTest {
         assertEquals(1, report.diagnostics["ambiguousCards"])
         assertEquals(1, report.diagnostics["foreignCards"])
         assertEquals(1, report.diagnostics["cardsWithoutId"])
-        assertEquals(1, report.diagnostics["duplicatesDropped"])
+        // Post ...010 arrives twice: page script and the page's own HTML seen by the network layer.
+        assertEquals(2, report.diagnostics["duplicatesDropped"])
     }
 
     @Test fun capsAtTwentyPosts() {
@@ -196,8 +197,9 @@ class GeckoFixtureTest {
         assertTrue(d.counts["mComponents"]!! > 0)
         assertEquals(2, d.counts["scriptExactIds"])
         assertEquals(1, d.counts["netFilterAvailable"])
-        assertEquals(2, d.counts["netExactIds"])
-        assertTrue(d.counts["ctxPointsInDocument"]!! >= 0)
+        // The network layer also sees the page HTML itself (posts 1-2) plus the XHR body (posts 3-4).
+        assertEquals(4, d.counts["netExactIds"])
+        assertEquals(0, d.counts["ctxPointsSampled"]) // headless: no viewport to sample
         assertTrue(d.counts["mutAddedTotal"]!! >= 2)
     }
 
@@ -212,7 +214,7 @@ class GeckoFixtureTest {
     @Test fun networkEvidenceIsDroppedOnANewPageLoad() {
         // Same session: ids captured on the first page must not leak into the next document.
         val d = withFixture(groupPath, "mobile-div-feed") { page ->
-            assertEquals(2, page.channel.structureDiagnosis(FIXTURE_GROUP_ID)!!.counts["netExactIds"])
+            assertEquals(4, page.channel.structureDiagnosis(FIXTURE_GROUP_ID)!!.counts["netExactIds"])
             page.session.loadUri(page.server.url(groupPath, "mobile-div-noids"))
             delay(2_500) // the old page's port closes and the new page connects its own
             assertTrue(page.channel.awaitPort(30_000))

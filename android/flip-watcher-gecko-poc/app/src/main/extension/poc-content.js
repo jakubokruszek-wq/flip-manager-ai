@@ -188,7 +188,10 @@
     const counters = {};
 
     // Context: is the rendered screen this document?
-    const points = [[0.5, 0.3], [0.5, 0.5], [0.5, 0.7], [0.25, 0.5], [0.75, 0.5]];
+    // Sampled only with a real viewport: a session with no surface (headless
+    // test, screen off) has none, and "no element at a point" proves nothing.
+    const hasViewport = (scope.innerWidth || 0) > 0 && (scope.innerHeight || 0) > 0 && doc.visibilityState === "visible";
+    const points = hasViewport ? [[0.5, 0.3], [0.5, 0.5], [0.5, 0.7], [0.25, 0.5], [0.75, 0.5]] : [];
     counters.ctxPointsSampled = points.length;
     counters.ctxPointsInDocument = points.filter(([x, y]) => {
       const element = doc.elementFromPoint((scope.innerWidth || 1) * x, (scope.innerHeight || 1) * y);
