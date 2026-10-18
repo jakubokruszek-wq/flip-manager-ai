@@ -87,6 +87,14 @@ Wersje 0.1.0 były podpisane losowym kluczem każdego serwera CI, dlatego **jedn
 - `./gradlew connectedDebugAndroidTest`: prawdziwy GeckoView na emulatorze. Tylko lokalne strony z `assets/fixtures/`; **żaden test nie otwiera Facebooka**.
 - CI: `.github/workflows/android-gecko-poc.yml`, czyli izolacja, testy core, kompilacja, APK z weryfikacją podpisu i rozszerzenia oraz testy na emulatorze Androida 16.
 
+## POC 0.1.5 — diagnostyka ramek i otwartego Shadow DOM
+
+Wersja 0.1.4 potwierdziła na fizycznym Samsungu, że pomimo widocznych ogłoszeń na zatwierdzonej grupie `lodzsprzedazzakupwynajem` dokument główny widziany przez rozszerzenie zawiera tylko **5 linków**, **0 kart article**, **0 identyfikatorów postów**, **0 skryptów JSON**. Nie można z tego wyciągać wniosku, że grupa nie zawiera postów.
+
+Ręczny przycisk `Sprawdź DOM` dodatkowo pokazuje liczby ramek `iframe`, ramek dostępnych dla skryptu i ramek niedostępnych, liczby linków i artykułów wewnątrz dostępnych ramek oraz liczby otwartych korzeni Shadow DOM i ich linków/kart. Te dodatkowe liczniki **nie przesyłają URL, tekstów, ID ani zawartości strony** i nie służą do tworzenia postów. Nie zmieniono `all_frames: false`, nie włączono skanowania ramek ani obejść ograniczeń origin.
+
+Zainstaluj APK 0.1.5 jako aktualizację 0.1.4, otwórz zatwierdzoną grupę, przewiń do kilku ogłoszeń, naciśnij `Sprawdź DOM` i prześlij dolny raport. **Nie resetuj jednorazowej zgody i nie uruchamiaj skanu.** Pełny kolektor poprawiamy dopiero po ustaleniu, gdzie jest struktura postów.
+
 ## POC 0.1.4 — diagnostyka mobilnego DOM bez zużywania skanu
 
 Dodano przycisk **Sprawdź DOM**. Na aktualnej, dokładnie zatwierdzonej grupie przycisk ręcznie odświeża stan DOM w GeckoView i raportuje jedynie zagregowane liczby: elementy `[role=article]` / `article`, kontenery `role=feed`, linki HTML, linki do postów zatwierdzonego źródła, unikalne numeryczne identyfikatory wynikające z tych linków, obce linki grup, odnośniki do zdjęć oraz kontenery strukturalne. Żadne adresy, identyfikatory, treści, hasła ani cookies nie opuszczają rozszerzenia w ramach tej funkcji. Dane te nie są zapisywane do historii ofert ani wysyłane do serwera.
