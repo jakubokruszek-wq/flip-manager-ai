@@ -63,6 +63,7 @@ class PocActivity : ComponentActivity() {
     private var probe: PageProbe? = null
     private var loginRequested = false
     private var scanning = false
+    private var inspectingDom = false
     private var haltMessage: String? = null
     /** Last top-level navigations (sanitized), the evidence for "Diagnoza grupy". */
     private val navTrace = ArrayDeque<NavStep>()
@@ -294,6 +295,52 @@ class PocActivity : ComponentActivity() {
         }
     }
 
+    // ---- current-page diagnostics: no post scan, permission or upload
+    private fun inspectDom() {
+        if (scanning || inspectingDom) return
+        val current = channel ?: run { output.text = "Otwórz sesję."; return }
+        if (kind != PageKind.APPROVED_GROUP || !current.isConnected) {
+            output.text = "Diagnoza DOM dostępna tylko na zatwierdzonej grupie z połączonym rozszerzeniem."
+            return
+        }
+        inspectingDom = true
+        render()
+        lifecycleScope.launch {
+            try {
+                val result = current.domDiagnosis()
+                if (result == null) {
+                    output.text = "Sprawdź DOM: brak odpowiedzi z rozszerzenia (8 s). Skan NIE został uruchomiony."
+                } else {
+                    result.probe?.let { probe = it }
+                    output.text = buildString {
+                        appendLine("SPRAWDŹ DOM — status: ${result.status}")
+                        appendLine("Tylko liczby. Nie uruchomiono skanu, nie zapisano postów, limit zgody bez zmian.")
+                        if (result.status == "GROUP_OK") {
+                            val v = result.counts
+                            appendLine("Karty [role=article]: ${v["roleArticles"] ?: 0} • <article>: ${v["nativeArticles"] ?: 0}")
+                            appendLine("Kontenery [role=feed]: ${v["roleFeeds"] ?: 0}")
+                            appendLine("Linki HTML (do 600): ${v["anchorsSeen"] ?: 0}")
+                            appendLine("Linki do postów tej grupy: ${v["exactGroupLinks"] ?: 0}")
+                            appendLine("Unikalne, numeryczne ID w linkach: ${v["exactGroupIds"] ?: 0}")
+                            appendLine("Linki do postów obcych grup: ${v["foreignGroupLinks"] ?: 0}")
+                            appendLine("Linki do zdjęć: ${v["photoLinks"] ?: 0}")
+                            appendLine("Strukturalne kontenery linków: ${v["candidateWrappers"] ?: 0}")
+                            appendLine("Skrypty danych JSON: ${v["structuredScripts"] ?: 0}")
+                            appendLine()
+                            appendLine("Liczba elementów nie jest liczbą potwierdzonych postów. Brak ID ≠ brak ogłoszeń.")
+                        } else appendLine("Nie odczytujemy grupy przy innym stanie strony.")
+                    }
+                }
+            } catch (e: Exception) {
+                output.text = "Sprawdź DOM: błąd ${e.javaClass.simpleName}. Bez skanu."
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally {
+                inspectingDom = false
+                render()
+            }
+        }
+    }
+
     // ---- group identity (diagnosis only: never unlocks scanning)
 
     private fun recordStep(step: NavStep) {
@@ -462,6 +509,8 @@ class PocActivity : ComponentActivity() {
         buttons["open"]?.text = if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
+        buttons["dom"]?.isEnabled = open && !scanning && !inspectingDom &&
+            kind == PageKind.APPROVED_GROUP && channel?.isConnected == true
 
         val p = probe
         diagnostics.text = buildString {
@@ -536,6 +585,9 @@ class PocActivity : ComponentActivity() {
             addView(row(
                 button("scan", "Skanuj widoczne") { scan(scrolls = 0) },
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
+            ))
+            addView(row(
+                button("dom", "Sprawdź DOM") { inspectDom() },
                 button("diagnose", "Diagnoza grupy") { diagnoseGroup() },
                 button("results", "Wyniki") { showResults() },
             ))
