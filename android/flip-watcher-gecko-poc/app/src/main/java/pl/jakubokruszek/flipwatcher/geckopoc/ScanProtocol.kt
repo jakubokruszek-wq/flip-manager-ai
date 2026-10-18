@@ -28,6 +28,9 @@ data class PageProbe(
     val iframes: Int,
 )
 
+/** A manual, count-only DOM read; no post identifiers or links are transferred. */
+data class DomDiagnosis(val status: String, val counts: Map<String, Int>, val probe: PageProbe?)
+
 data class ScanReport(
     val status: ScanStatus,
     val posts: List<FoundPost>,
@@ -72,6 +75,28 @@ object ScanProtocol {
     fun probeRequest(nonce: String): JSONObject = JSONObject().put("type", "probe").put("nonce", nonce)
 
     fun groupProbeRequest(nonce: String): JSONObject = JSONObject().put("type", "groupProbe").put("nonce", nonce)
+
+    fun domDiagnosisRequest(nonce: String): JSONObject = JSONObject()
+        .put("type", "domDiagnosis").put("nonce", nonce)
+        .put("groupId", PocPolicy.APPROVED_GROUP_ID)
+
+    private val DOM_COUNT_FIELDS = listOf(
+        "anchorsSeen", "exactGroupLinks", "exactGroupIds", "foreignGroupLinks",
+        "photoLinks", "otherLinks", "roleArticles", "nativeArticles", "roleFeeds",
+        "candidateWrappers", "structuredScripts"
+    )
+
+    fun parseDomDiagnosis(message: Any?, nonce: String): DomDiagnosis? {
+        val json = asJson(message) ?: return null
+        if (json.optString("type") != "domDiagnosisResult" || json.optString("nonce") != nonce) return null
+        val status = json.optString("status")
+        if (status !in setOf("GROUP_OK", "WRONG_GROUP", "LOGIN_REQUIRED", "CHECKPOINT",
+                "CAPTCHA", "GROUP_UNAVAILABLE", "NOT_READY")) return null
+        val values = json.optJSONObject("counters") ?: return null
+        val counts = DOM_COUNT_FIELDS.associateWith { name -> values.optInt(name, 0).coerceIn(0, 9999) }
+        return DomDiagnosis(status, counts, parseProbe(json.optJSONObject("probe")))
+    }
+
 
     /** Group segment of the shown page and the numeric ids Facebook published for it. */
     fun parseGroupProbe(json: JSONObject?): Pair<String?, List<GroupIdHit>>? {
