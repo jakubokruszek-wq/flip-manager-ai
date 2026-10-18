@@ -177,18 +177,28 @@ class GeckoFixtureTest {
 
     private fun scanRequest() = ScanRequest(nonce = UUID.randomUUID().toString(), groupId = FIXTURE_GROUP_ID, allowLoopback = true)
 
-    @Test fun divOnlyMobileFeedYieldsExactIdsFromPageDataAndNetwork() {
+    @Test fun divOnlyMobileFeedYieldsExactIdsFromPageDataOnly() {
         val report = withFixture(groupPath, "mobile-div-feed") { it.channel.scan(scanRequest()) }
         Log.i("GeckoPocTest", "MOBILE_DIV_FEED status=${report.status} posts=${report.posts.map { "${it.postId}:${it.idSource}" }} diag=${report.diagnostics}")
         assertEquals(ScanStatus.OK, report.status)
-        assertEquals(setOf("550000000000001", "550000000000002", "550000000000003", "550000000000004"), report.posts.map { it.postId }.toSet())
-        assertEquals(setOf("STRUCTURED", "NETWORK"), report.posts.map { it.idSource }.toSet())
+        // Ids 3 and 4 exist only in an XHR response body, which 0.2.2 never reads.
+        assertEquals(setOf("550000000000001", "550000000000002"), report.posts.map { it.postId }.toSet())
+        assertEquals(setOf("STRUCTURED"), report.posts.map { it.idSource }.toSet())
+        assertEquals(0, report.diagnostics["networkRecords"])
         report.posts.forEach { assertEquals(ScanProtocol.canonicalPermalink(FIXTURE_GROUP_ID, it.postId), it.permalink) }
-        assertEquals(0, report.rejectedByApp)
     }
 
-    @Test fun structureDiagnosisFindsExactIdsOnDivOnlyFeed() {
-        val d = withFixture(groupPath, "mobile-div-feed") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
+    @Test fun responseBodiesAreNeverReadEvenWhenTheyHoldIds() {
+        // The only id of this page is in an external script response.
+        val report = withFixture(groupPath, "mobile-div-script") { it.channel.scan(scanRequest()) }
+        assertEquals(ScanStatus.NO_POSTS, report.status)
+        val d = withFixture(groupPath, "mobile-div-script") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID, windowMs = 0) }!!
+        assertEquals(0, d.counts["netBodyCapture"])
+        assertEquals(listOf("data-image-id" to 1), d.numericAttributes)
+    }
+
+    @Test fun structureDiagnosisFindsPageDataIdsOnDivOnlyFeed() {
+        val d = withFixture(groupPath, "mobile-div-feed") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID, windowMs = 0) }!!
         Log.i("GeckoPocTest", "STRUCTURE_DIV_FEED verdict=${d.verdict} ${d.counts.filterValues { it != 0 }} names=${d.attributeNames}")
         assertEquals("GROUP_OK", d.status)
         assertEquals("EXACT_IDS_AVAILABLE", d.verdict)
@@ -196,46 +206,56 @@ class GeckoFixtureTest {
         assertEquals(0, d.counts["roleArticles"])
         assertTrue(d.counts["mComponents"]!! > 0)
         assertEquals(2, d.counts["scriptExactIds"])
-        assertEquals(1, d.counts["netFilterAvailable"])
-        // The network layer also sees the page HTML itself (posts 1-2) plus the XHR body (posts 3-4).
-        assertEquals(4, d.counts["netExactIds"])
+        assertEquals(0, d.counts["netBodyCapture"])
         assertEquals(0, d.counts["ctxPointsSampled"]) // headless: no viewport to sample
         assertTrue(d.counts["mutAddedTotal"]!! >= 2)
     }
 
     @Test fun structureDiagnosisSeparatesNoIdsFromUnboundIds() {
-        val none = withFixture(groupPath, "mobile-div-noids") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
+        val none = withFixture(groupPath, "mobile-div-noids") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID, windowMs = 0) }!!
         assertEquals("NO_POST_IDS_IN_PAGE_DATA", none.verdict)
-        val unbound = withFixture(groupPath, "mobile-div-unbound") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
+        val unbound = withFixture(groupPath, "mobile-div-unbound") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID, windowMs = 0) }!!
         assertEquals("ID_KEYS_WITHOUT_EXACT_BINDING", unbound.verdict)
         assertEquals(ScanStatus.NO_POSTS, withFixture(groupPath, "mobile-div-unbound") { it.channel.scan(scanRequest()) }.status)
     }
 
-    @Test fun scriptResponsesAndTrafficAreCounted() {
-        val d = withFixture(groupPath, "mobile-div-script") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
-        Log.i("GeckoPocTest", "STRUCTURE_SCRIPT verdict=${d.verdict} ${d.counts.filterValues { it != 0 }} paths=${d.requestPaths} numeric=${d.numericAttributes}")
-        assertEquals("EXACT_IDS_AVAILABLE", d.verdict)
-        assertTrue(d.counts["netReqScript"]!! >= 1)
-        assertTrue(d.counts["netReqMainFrame"]!! >= 1)
-        assertEquals(1, d.counts["netExactIds"])
-        assertTrue(d.requestPaths.any { it.first == "/data" })
-        assertEquals(listOf("data-image-id" to 1), d.numericAttributes)
-        val report = withFixture(groupPath, "mobile-div-script") { it.channel.scan(scanRequest()) }
-        assertEquals(listOf("550000000000006"), report.posts.map { it.postId })
-        assertEquals("NETWORK", report.posts.single().idSource)
+    @Test fun trafficIsCountedOnlyInsideTheArmedWindowForThisTab() {
+        val (first, second) = withFixture(groupPath, "mobile-div-poll", settleMs = 500) { page ->
+            val a = page.channel.structureDiagnosis(FIXTURE_GROUP_ID, windowMs = 2_000)!!
+            delay(3_000) // polling continues while nothing is armed
+            val b = page.channel.structureDiagnosis(FIXTURE_GROUP_ID, windowMs = 2_000)!!
+            a to b
+        }
+        Log.i("GeckoPocTest", "TRAFFIC_WINDOW first=${first.counts.filterKeys { it.startsWith("net") }.filterValues { it != 0 }} paths=${first.requestPaths} second=${second.counts["netTabXhr"]}")
+        for (d in listOf(first, second)) {
+            assertEquals(1, d.counts["netArmed"])
+            assertEquals(1, d.counts["netCountingActive"])
+            assertEquals(0, d.counts["netBodyCapture"])
+            assertEquals(2, d.counts["netWindowSec"])
+            // ~4 polls per 2 s window; the 3 s unarmed pause must not add ~6 more.
+            assertTrue("xhr ${d.counts["netTabXhr"]}", d.counts["netTabXhr"]!! in 2..6)
+            assertEquals(0, d.counts["netTabMainFrame"])
+            assertTrue(d.requestPaths.all { it.first == "/data" })
+        }
     }
 
-    @Test fun networkEvidenceIsDroppedOnANewPageLoad() {
-        // Same session: ids captured on the first page must not leak into the next document.
-        val d = withFixture(groupPath, "mobile-div-feed") { page ->
-            assertEquals(4, page.channel.structureDiagnosis(FIXTURE_GROUP_ID)!!.counts["netExactIds"])
-            page.session.loadUri(page.server.url(groupPath, "mobile-div-noids"))
-            delay(2_500) // the old page's port closes and the new page connects its own
-            assertTrue(page.channel.awaitPort(30_000))
-            page.channel.structureDiagnosis(FIXTURE_GROUP_ID)!!
+    @Test fun anotherTabsTrafficIsNotCounted() {
+        val d = withFixture(groupPath, "mobile-div-noids", settleMs = 500) { page ->
+            // A second session (another tab) keeps polling while this tab is armed.
+            val other = GeckoSession(GeckoSessionSettings.Builder().build())
+            other.open(GeckoHost.runtime(context))
+            other.setActive(true)
+            other.loadUri(page.server.url(groupPath, "mobile-div-poll"))
+            try {
+                delay(1_000)
+                page.channel.structureDiagnosis(FIXTURE_GROUP_ID, windowMs = 2_000)!!
+            } finally {
+                other.close()
+            }
         }
-        assertEquals(0, d.counts["netExactIds"])
-        assertEquals("NO_POST_IDS_IN_PAGE_DATA", d.verdict)
+        assertEquals(1, d.counts["netArmed"])
+        assertEquals(0, d.counts["netReqWithTab"])
+        assertEquals(0, d.counts["netTabXhr"])
     }
 
     @Test fun pageChangeDuringScanStopsIt() = runBlocking {

@@ -144,21 +144,90 @@
   // a fixed list the app whitelists.
   function structureVerdict(c) {
     const n = key => Math.max(0, Number(c && c[key]) || 0);
-    const exact = { DOM: n("domExactIds"), SCRIPT: n("scriptExactIds"), NETWORK: n("netExactIds") };
-    const keys = n("scriptKeyPostId") + n("scriptKeyTopLevel") + n("scriptKeyStoryFbid") + n("scriptGroupPermalinks") + n("netKeyPostId") + n("netKeyTopLevel") + n("netKeyStoryFbid") + n("netGroupPermalinks");
+    // Network bodies are never read (0.2.2): exact ids can come only from the DOM and page scripts.
+    const exact = { DOM: n("domExactIds"), SCRIPT: n("scriptExactIds"), NETWORK: 0 };
+    const keys = n("scriptKeyPostId") + n("scriptKeyTopLevel") + n("scriptKeyStoryFbid") + n("scriptGroupPermalinks");
     const markup = n("roleArticles") + n("nativeArticles") + n("mComponents") + n("trackingIds") + n("dataFt");
     const virtualized = n("mutAdded10s") >= 50 && n("mutRemoved10s") * 2 >= n("mutAdded10s") ? 1 : 0;
     let code;
     if (n("ctxPointsSampled") > 0 && n("ctxPointsInDocument") * 2 < n("ctxPointsSampled")) code = "WRONG_DOCUMENT_OR_CONTEXT";
     else if (exact.DOM + exact.SCRIPT + exact.NETWORK > 0) code = "EXACT_IDS_AVAILABLE";
     else if (keys > 0) code = "ID_KEYS_WITHOUT_EXACT_BINDING";
-    else if (n("netFilterAvailable") === 1 && n("netResponses") === 0) code = "NETWORK_NOT_OBSERVED_YET";
-    // The page grew a lot while (almost) no Facebook response was read: the
-    // feed data travels where the network layer does not look yet.
-    else if (n("netFilterAvailable") === 1 && n("netResponses") <= 3 && n("mutAddedTotal") >= 200) code = "FEED_DATA_NOT_CAPTURED";
+    else if (n("netCountingActive") === 1 && n("netReqTotal") === 0) code = "NETWORK_NOT_OBSERVED_YET";
+    // Content kept arriving over the network during the window while neither the
+    // DOM nor page scripts carry an id: the ids (if any) are only in response
+    // bodies, which this POC deliberately does not read.
+    else if (n("netCountingActive") === 1 && n("netReqTotal") > 0 && n("mutAdded10s") + n("mutAddedTotal") >= 200) code = "FEED_DATA_NOT_CAPTURED";
     else if (markup === 0 && n("images") === 0) code = "NO_POST_MARKUP";
     else code = "NO_POST_IDS_IN_PAGE_DATA";
     return { code, virtualized, exactDom: exact.DOM, exactScript: exact.SCRIPT, exactNetwork: exact.NETWORK };
+  }
+
+  // ---- network traffic counter (aggregate numbers only, never content)
+  //
+  // Counts requests to Facebook hosts during ONE explicitly armed window, for
+  // ONE tab showing the approved group. Nothing is counted while unarmed.
+  // Requests of the armed tab are split by resource type; requests with no
+  // tab (service worker / browser) are counted separately by type and are
+  // never attributed to the group. No URL, query, header or body is kept:
+  // only a fixed set of type counters and allowlisted first path segments.
+  const TRAFFIC_TYPES = ["main_frame", "sub_frame", "xmlhttprequest", "script", "websocket", "image", "media", "ping", "beacon", "other"];
+  const TRAFFIC_TYPE_KEYS = { main_frame: "MainFrame", sub_frame: "SubFrame", xmlhttprequest: "Xhr", script: "Script", websocket: "Websocket", image: "Image", media: "Media", ping: "Ping", beacon: "Beacon", other: "Other" };
+  const PATH_ALLOWLIST = new Set(["api", "ajax", "async", "groups", "bz", "rsrc.php", "security", "sw", "login", "checkpoint", "video", "photo", "stories", "dialog", "plugins", "tr", "ufi", "ds", "data"]);
+  const MAX_TRAFFIC_WINDOW_MS = 30_000;
+
+  function trafficPathSegment(url) {
+    let segment = "";
+    try { segment = (new URL(url).pathname.split("/")[1] || "").toLowerCase(); } catch { return "(inne)"; }
+    return PATH_ALLOWLIST.has(segment) ? "/" + segment : "(inne)";
+  }
+
+  function createTrafficCounter(now = () => Date.now()) {
+    let scope = null;
+    const empty = () => ({ tab: new Map(), noTab: new Map(), paths: new Map(), withTab: 0, noTabTotal: 0 });
+    let counts = empty();
+    return {
+      arm(tabId, windowMs) {
+        if (!Number.isInteger(tabId) || tabId < 0) return false;
+        const ms = Math.max(0, Math.min(MAX_TRAFFIC_WINDOW_MS, Math.floor(Number(windowMs) || 0)));
+        scope = { tabId, until: now() + ms + 2_000 };
+        counts = empty();
+        return true;
+      },
+      isArmed() { return Boolean(scope) && now() <= scope.until; },
+      armedTab() { return this.isArmed() ? scope.tabId : null; },
+      record(details) {
+        if (!this.isArmed() || !details || !TRAFFIC_TYPES.includes(details.type)) return false;
+        if (details.tabId === scope.tabId) {
+          // A new top-level document in the armed tab ends the scope at once.
+          if (details.type === "main_frame") { this.disarm(); return false; }
+          counts.withTab++;
+          counts.tab.set(details.type, (counts.tab.get(details.type) || 0) + 1);
+          const segment = trafficPathSegment(details.url);
+          counts.paths.set(segment, (counts.paths.get(segment) || 0) + 1);
+          return true;
+        }
+        if (details.tabId === -1) {
+          counts.noTabTotal++;
+          counts.noTab.set(details.type, (counts.noTab.get(details.type) || 0) + 1);
+          return true;
+        }
+        return false; // other tabs are never counted
+      },
+      // Read once, by the armed tab only; then the scope and counts are cleared.
+      read(tabId) {
+        if (!scope || tabId !== scope.tabId) return null;
+        const out = { netCountingActive: 1, netBodyCapture: 0, netReqTotal: counts.withTab + counts.noTabTotal, netReqWithTab: counts.withTab, netReqNoTab: counts.noTabTotal };
+        for (const type of TRAFFIC_TYPES) {
+          out["netTab" + TRAFFIC_TYPE_KEYS[type]] = Math.min(999_999, counts.tab.get(type) || 0);
+          out["netNoTab" + TRAFFIC_TYPE_KEYS[type]] = Math.min(999_999, counts.noTab.get(type) || 0);
+        }
+        const requestPaths = [...counts.paths.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([name, count]) => ({ name, count }));
+        this.disarm();
+        return { counts: out, requestPaths };
+      },
+      disarm() { scope = null; counts = empty(); },
+    };
   }
 
   // Count-only, read-only inspection for the current mobile Facebook DOM.
@@ -246,5 +315,5 @@
   function isGroupId(value) { return typeof value === "string" && /^[A-Za-z0-9._-]{1,100}$/.test(value); }
   function safeUrl(value) { try { return new URL(value); } catch { return null; } }
 
-  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, exactStructuredIds, countIdKeys, structureVerdict, MAX_POSTS_LIMIT };
+  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, exactStructuredIds, countIdKeys, structureVerdict, createTrafficCounter, trafficPathSegment, MAX_POSTS_LIMIT };
 })(globalThis);

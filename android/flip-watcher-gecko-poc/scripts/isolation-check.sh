@@ -21,6 +21,13 @@ fi
 if grep -R -n -E "XMLHttpRequest|sendBeacon|WebSocket" "$src" --include='*.kt' --include='*.js' --include='*.json'; then
   echo "FAIL: network client in POC sources"; exit 1
 fi
+# 0.2.2: response bodies are never read; the background only counts request events.
+if grep -n -E "filterResponseData\(|\[\"blocking\"\]|TextDecoder" "$src/extension/poc-background.js"; then
+  echo "FAIL: background script can read or block responses"; exit 1
+fi
+if grep -n "webRequestBlocking" "$src/extension/manifest.json"; then
+  echo "FAIL: webRequestBlocking permission present"; exit 1
+fi
 # The network layer must never hand a response body to the app or another context.
 if grep -n -E "connectNative|sendNativeMessage|postMessage" "$src/extension/poc-background.js"; then
   echo "FAIL: background script talks to the app directly"; exit 1

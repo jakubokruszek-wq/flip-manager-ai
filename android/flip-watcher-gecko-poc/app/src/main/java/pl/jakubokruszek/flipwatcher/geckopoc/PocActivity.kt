@@ -305,12 +305,14 @@ class PocActivity : ComponentActivity() {
         }
         inspectingDom = true
         render()
+        output.text = "Diagnoza postów: okno ${ScanProtocol.DIAGNOSIS_WINDOW_MS / 1000} s — przewijaj teraz powoli posty grupy.\n" +
+            "Liczone są tylko zdarzenia żądań tej karty; treść odpowiedzi nie jest czytana. Bez skanu."
         lifecycleScope.launch {
             val started = Instant.now().toString()
             try {
                 val result = current.structureDiagnosis()
                 if (result == null) {
-                    output.text = "Diagnoza postów: brak odpowiedzi z rozszerzenia (20 s). Skan NIE został uruchomiony."
+                    output.text = "Diagnoza postów: brak odpowiedzi z rozszerzenia. Skan NIE został uruchomiony."
                 } else {
                     output.text = StructureReport.describe(result)
                     // Counters only, so the operator can copy the result from "Wyniki".

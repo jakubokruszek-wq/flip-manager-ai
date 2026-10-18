@@ -52,9 +52,10 @@
     return texts;
   }
 
-  function networkEvidence(accepted, withRecords) {
+  // Count-only network window (see poc-background.js); never response content.
+  function trafficMessage(message) {
     try {
-      return browser.runtime.sendMessage({ type: "networkEvidence", accepted, withRecords }).catch(() => null);
+      return browser.runtime.sendMessage(message).catch(() => null);
     } catch {
       return Promise.resolve(null);
     }
@@ -177,13 +178,20 @@
   // wrong document/context, no post markup, no permalinks, dynamic loading /
   // virtualization, and whether any layer carries an exact post id. Only
   // numbers and attribute NAMES leave the page; never text, values or ids.
-  async function structureDiagnosis(groupId, allowLoopback) {
+  async function structureDiagnosis(groupId, allowLoopback, windowMs) {
     const doc = scope.document;
     const input = { groupId, aliases: [], maxPosts: 20, allowLoopback: allowLoopback === true };
-    const page = snapshot();
-    const state = adapter.classify(page, input);
+    const state = adapter.classify(snapshot(), input);
     if (state !== "GROUP_OK") return { status: state, counters: {}, attributeNames: [] };
     const accepted = [groupId];
+    // Count requests only now, for this tab, during the window the operator
+    // started (they scroll meanwhile); the scope is cleared when it is read.
+    const wait = Math.max(0, Math.min(30_000, Math.floor(Number(windowMs) || 0)));
+    const armed = await trafficMessage({ type: "armTraffic", accepted, windowMs: wait });
+    await sleep(wait);
+    const traffic = await trafficMessage({ type: "readTraffic", accepted });
+    if (adapter.classify(snapshot(), input) !== "GROUP_OK") return { status: "WRONG_GROUP", counters: {}, attributeNames: [] };
+    const page = snapshot();
     const n = selector => Math.min(99999, doc.querySelectorAll(selector).length);
     const counters = {};
 
@@ -282,10 +290,10 @@
     counters.scriptKeyStoryFbid = keys.storyFbid;
     counters.scriptGroupPermalinks = keys.groupPermalinks;
     counters.scriptExactIds = adapter.exactStructuredIds(texts, accepted, core, "HYDRATION").length;
-    const network = await networkEvidence(accepted, false);
-    Object.assign(counters, (network && network.counts) || { netFilterAvailable: 0 });
-    const requestPaths = network && Array.isArray(network.requestPaths) ? network.requestPaths : [];
-    counters.netAnswered = network ? 1 : 0;
+    Object.assign(counters, (traffic && traffic.counts) || { netCountingActive: 0, netBodyCapture: 0 });
+    counters.netArmed = armed && armed.armed === 1 ? 1 : 0;
+    counters.netWindowSec = Math.round(wait / 1000);
+    const requestPaths = traffic && Array.isArray(traffic.requestPaths) ? traffic.requestPaths : [];
 
     const verdict = adapter.structureVerdict(counters);
     counters.virtualizationSuspected = verdict.virtualized;
@@ -310,11 +318,9 @@
     if (scope.location.href !== startHref && adapter.classify(snapshot(), input) !== "GROUP_OK") {
       return { status: "NAVIGATED_AWAY", posts: [], diagnostics: {}, scrolls: scrolled };
     }
-    const accepted = [input.groupId, ...input.aliases];
-    const network = await networkEvidence(accepted, true);
-    const page = snapshot();
-    page.networkRecords = network && Array.isArray(network.records) ? network.records : [];
-    const result = adapter.evaluate(page, input, core);
+    // Ids only from what the page itself holds (DOM links, page scripts);
+    // network response bodies are not read.
+    const result = adapter.evaluate(snapshot(), input, core);
     return { ...result, scrolls: scrolled };
   }
 
@@ -334,7 +340,7 @@
     if (message.type === "structureDiagnosis") {
       // Count-only: never calls scan() and never consumes the one-shot scan permission.
       let result;
-      try { result = await structureDiagnosis(message.groupId, message.allowLoopback === true); }
+      try { result = await structureDiagnosis(message.groupId, message.allowLoopback === true, message.windowMs); }
       catch (error) { result = { status: "DIAGNOSIS_ERROR", counters: {}, attributeNames: [] }; }
       port.postMessage({ type: "structureDiagnosisResult", nonce: message.nonce, ...result });
       return;

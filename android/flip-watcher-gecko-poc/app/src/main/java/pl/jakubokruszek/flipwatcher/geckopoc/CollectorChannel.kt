@@ -91,10 +91,10 @@ class CollectorChannel(
     }
 
     /** Count-only structure report of the shown group page. Never a scan; uses no scan permission. */
-    suspend fun structureDiagnosis(groupId: String = PocPolicy.APPROVED_GROUP_ID, timeoutMs: Long = 20_000): StructureDiagnosis? {
+    suspend fun structureDiagnosis(groupId: String = PocPolicy.APPROVED_GROUP_ID, windowMs: Int = ScanProtocol.DIAGNOSIS_WINDOW_MS): StructureDiagnosis? {
         val nonce = UUID.randomUUID().toString()
         return ScanProtocol.parseStructureDiagnosis(
-            request(nonce, ScanProtocol.structureDiagnosisRequest(nonce, groupId, allowLoopback = fixtureMode), timeoutMs), nonce)
+            request(nonce, ScanProtocol.structureDiagnosisRequest(nonce, groupId, allowLoopback = fixtureMode, windowMs = windowMs), windowMs + 20_000L), nonce)
     }
 
     suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {

@@ -254,19 +254,113 @@ test("id keys are counted escaped and unescaped, never their values", () => {
 
 test("structure verdict separates context, ids, unbound keys, missing data and markup", () => {
   const v = c => adapter.structureVerdict(c).code;
-  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 1, netExactIds: 3 }), "WRONG_DOCUMENT_OR_CONTEXT");
-  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netExactIds: 3 }), "EXACT_IDS_AVAILABLE");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 1, scriptExactIds: 3 }), "WRONG_DOCUMENT_OR_CONTEXT");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, scriptExactIds: 3 }), "EXACT_IDS_AVAILABLE");
+  // Network ids no longer count: response bodies are not read.
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netExactIds: 3, netKeyPostId: 9, mComponents: 4 }), "NO_POST_IDS_IN_PAGE_DATA");
   assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, scriptKeyPostId: 4 }), "ID_KEYS_WITHOUT_EXACT_BINDING");
-  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, netResponses: 0, mComponents: 9 }), "NETWORK_NOT_OBSERVED_YET");
-  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, netResponses: 3 }), "NO_POST_MARKUP");
-  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, netResponses: 3, mComponents: 40, images: 12 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 0, mComponents: 9 }), "NETWORK_NOT_OBSERVED_YET");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 3 }), "NO_POST_MARKUP");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 3, mComponents: 40, images: 12 }), "NO_POST_IDS_IN_PAGE_DATA");
   assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 150 }).virtualized, 1);
   assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 10 }).virtualized, 0);
 });
 
-test("a page that grew while almost no response was read is FEED_DATA_NOT_CAPTURED", () => {
-  const v = c => adapter.structureVerdict({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, mComponents: 3996, images: 400, ...c }).code;
-  assert.equal(v({ netResponses: 1, mutAddedTotal: 5000 }), "FEED_DATA_NOT_CAPTURED");
-  assert.equal(v({ netResponses: 40, mutAddedTotal: 5000 }), "NO_POST_IDS_IN_PAGE_DATA");
-  assert.equal(v({ netResponses: 1, mutAddedTotal: 20 }), "NO_POST_IDS_IN_PAGE_DATA");
+test("content arriving over the network with no id in DOM or scripts is FEED_DATA_NOT_CAPTURED", () => {
+  const v = c => adapter.structureVerdict({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, mComponents: 3996, images: 400, ...c }).code;
+  assert.equal(v({ netReqTotal: 30, mutAddedTotal: 5000 }), "FEED_DATA_NOT_CAPTURED");
+  assert.equal(v({ netReqTotal: 30, mutAddedTotal: 20 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(v({ netReqTotal: 0, mutAddedTotal: 5000 }), "NETWORK_NOT_OBSERVED_YET");
+  assert.equal(v({ netCountingActive: 0, netReqTotal: 0, mutAddedTotal: 5000 }), "NO_POST_IDS_IN_PAGE_DATA");
+});
+
+// ---- 0.2.2 count-only traffic counter: scope, isolation, no content
+const ARMED_TAB = 7;
+const req = (type, tabId = ARMED_TAB, url = "https://www.facebook.com/api/graphql/?doc_id=1&token=SECRET") => ({ type, tabId, url, requestId: "r", requestBody: { formData: { password: ["x"] } } });
+
+test("nothing is counted before the window is armed", () => {
+  const counter = adapter.createTrafficCounter();
+  assert.equal(counter.record(req("xmlhttprequest")), false);
+  assert.equal(counter.read(ARMED_TAB), null);
+});
+
+test("armed tab requests are split by type; other tabs are never counted", () => {
+  const counter = adapter.createTrafficCounter();
+  assert.equal(counter.arm(ARMED_TAB, 20_000), true);
+  counter.record(req("xmlhttprequest"));
+  counter.record(req("xmlhttprequest"));
+  counter.record(req("script", ARMED_TAB, "https://www.facebook.com/rsrc.php/x.js"));
+  counter.record(req("xmlhttprequest", 99));
+  counter.record(req("image", 3));
+  const { counts, requestPaths } = counter.read(ARMED_TAB);
+  assert.equal(counts.netReqWithTab, 3);
+  assert.equal(counts.netTabXhr, 2);
+  assert.equal(counts.netTabScript, 1);
+  assert.equal(counts.netReqTotal, 3);
+  assert.equal(counts.netBodyCapture, 0);
+  assert.deepEqual(requestPaths, [{ name: "/api", count: 2 }, { name: "/rsrc.php", count: 1 }]);
+});
+
+test("service-worker requests (no tab) are counted apart and never as the group's", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("xmlhttprequest", -1));
+  counter.record(req("other", -1));
+  const { counts, requestPaths } = counter.read(ARMED_TAB);
+  assert.equal(counts.netReqNoTab, 2);
+  assert.equal(counts.netNoTabXhr, 1);
+  assert.equal(counts.netNoTabOther, 1);
+  assert.equal(counts.netReqWithTab, 0);
+  assert.equal(counts.netTabXhr, 0);
+  assert.deepEqual(requestPaths, []);
+});
+
+test("only the armed tab can read, reading clears, and a new document ends the scope", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("xmlhttprequest"));
+  assert.equal(counter.read(99), null);
+  assert.equal(counter.read(ARMED_TAB).counts.netReqWithTab, 1);
+  assert.equal(counter.read(ARMED_TAB), null);
+  assert.equal(counter.isArmed(), false);
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("main_frame"));
+  assert.equal(counter.isArmed(), false);
+  assert.equal(counter.record(req("xmlhttprequest")), false);
+});
+
+test("the window expires and cannot be armed for a tab-less sender or longer than 30 s", () => {
+  let now = 0;
+  const counter = adapter.createTrafficCounter(() => now);
+  assert.equal(counter.arm(-1, 5_000), false);
+  assert.equal(counter.arm(undefined, 5_000), false);
+  counter.arm(ARMED_TAB, 999_999);
+  // Clamped to 30 s (+2 s grace for late events): armed until 32 000 ms.
+  now = 32_000;
+  assert.equal(counter.isArmed(), true);
+  now = 32_001;
+  assert.equal(counter.isArmed(), false);
+  assert.equal(counter.record(req("xmlhttprequest")), false);
+});
+
+test("counter output holds only fixed numeric keys and allowlisted path segments, never URL, query or body", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("xmlhttprequest", ARMED_TAB, "https://www.facebook.com/messages/t/123456789?token=SECRET"));
+  counter.record(req("xmlhttprequest", ARMED_TAB, "https://www.facebook.com/groups/other/posts/1/"));
+  const out = counter.read(ARMED_TAB);
+  const text = JSON.stringify(out);
+  for (const leak of ["SECRET", "token", "messages", "123456789", "password", "doc_id", "other/posts"]) assert.ok(!text.includes(leak), leak);
+  Object.values(out.counts).forEach(value => assert.equal(typeof value, "number"));
+  assert.deepEqual(out.requestPaths.map(p => p.name).sort(), ["(inne)", "/groups"]);
+});
+
+test("the extension can no longer read response bodies (static guard)", () => {
+  const extension = path.resolve(__dirname, "../../main/extension");
+  const background = fs.readFileSync(path.join(extension, "poc-background.js"), "utf8").replace(/\/\/.*$/gm, "");
+  const manifest = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"), "utf8"));
+  assert.ok(!background.includes("filterResponseData("));
+  assert.ok(!/\["blocking"\]/.test(background));
+  assert.ok(!manifest.permissions.includes("webRequestBlocking"));
+  assert.ok(!/networkEvidence|remember\(|TextDecoder/.test(background));
 });

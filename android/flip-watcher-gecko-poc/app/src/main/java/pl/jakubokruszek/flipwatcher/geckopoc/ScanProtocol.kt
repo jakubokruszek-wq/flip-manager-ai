@@ -92,9 +92,13 @@ object ScanProtocol {
         .put("type", "domDiagnosis").put("nonce", nonce)
         .put("groupId", PocPolicy.APPROVED_GROUP_ID)
 
-    fun structureDiagnosisRequest(nonce: String, groupId: String = PocPolicy.APPROVED_GROUP_ID, allowLoopback: Boolean = false): JSONObject = JSONObject()
+    /** Length of the count-only network window the operator scrolls through. */
+    const val DIAGNOSIS_WINDOW_MS = 20_000
+
+    fun structureDiagnosisRequest(nonce: String, groupId: String = PocPolicy.APPROVED_GROUP_ID, allowLoopback: Boolean = false, windowMs: Int = DIAGNOSIS_WINDOW_MS): JSONObject = JSONObject()
         .put("type", "structureDiagnosis").put("nonce", nonce)
         .put("groupId", groupId).put("allowLoopback", allowLoopback)
+        .put("windowMs", windowMs.coerceIn(0, 30_000))
 
     /** Every counter the structure report may carry; anything else is dropped. */
     val STRUCTURE_FIELDS = listOf(
@@ -107,10 +111,11 @@ object ScanProtocol {
         "mutAddedTotal", "mutRemovedTotal", "mutAdded10s", "mutRemoved10s", "virtualizationSuspected",
         "domExactIds", "inlineScripts", "inlineScriptKb", "scriptKeyPostId", "scriptKeyTopLevel", "scriptKeyStoryFbid",
         "scriptGroupPermalinks", "scriptExactIds",
-        "netAnswered", "netFilterAvailable", "netResponses", "netHeld", "netKb", "netTruncated", "netErrors",
-        "netKeyPostId", "netKeyTopLevel", "netKeyStoryFbid", "netGroupPermalinks", "netExactIds",
-        "netReqTotal", "netReqWithTab", "netReqNoTab", "netReqMainFrame", "netReqSubFrame", "netReqXhr", "netReqScript",
-        "netReqWebsocket", "netReqImage", "netReqMedia", "netReqPing", "netReqBeacon", "netReqOther", "swControlled",
+        "netArmed", "netCountingActive", "netBodyCapture", "netWindowSec",
+        "netReqTotal", "netReqWithTab", "netReqNoTab",
+        "netTabMainFrame", "netTabSubFrame", "netTabXhr", "netTabScript", "netTabWebsocket", "netTabImage", "netTabMedia", "netTabPing", "netTabBeacon", "netTabOther",
+        "netNoTabMainFrame", "netNoTabSubFrame", "netNoTabXhr", "netNoTabScript", "netNoTabWebsocket", "netNoTabImage", "netNoTabMedia", "netNoTabPing", "netNoTabBeacon", "netNoTabOther",
+        "swControlled",
     )
 
     val STRUCTURE_VERDICTS = setOf(

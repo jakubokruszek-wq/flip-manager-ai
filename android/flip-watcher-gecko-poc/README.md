@@ -117,6 +117,23 @@ Wynik to jeden z kodów: `EXACT_IDS_AVAILABLE`, `ID_KEYS_WITHOUT_EXACT_BINDING`,
 
 Testy CI używają lokalnych stron wzorowanych na mobilnym Facebooku (`mobile-div-*`). **Nie są dowodem działania na prawdziwym Facebooku**: to rozstrzyga dopiero diagnoza na Samsungu.
 
+## 0.2.2: koniec odczytu treści odpowiedzi (minimalizacja danych)
+
+Recenzja w PR #45 słusznie wskazała, że 0.2.0 i 0.2.1 kopiowały do pamięci rozszerzenia pełne treści odpowiedzi z całego facebook.com: logowania, strony głównej, innych grup, a także żądań bez karty. Działo się to od startu aplikacji, nie tylko podczas diagnozy.
+
+W 0.2.2 jest to niemożliwe z założenia:
+- Usunięte zostały `filterResponseData`, `TextDecoder`, bufor odpowiedzi oraz uprawnienie `webRequestBlocking`. Rozszerzenie nie może już czytać ani zatrzymywać treści odpowiedzi; pilnują tego `scripts/isolation-check.sh` i test statyczny.
+- `onBeforeRequest` tylko **liczy zdarzenia** i robi to wyłącznie w oknie uzbrojonym przyciskiem „Diagnoza postów” (domyślnie 20 s, maksymalnie 30 s).
+- Uzbroić okno może tylko karta, której strona to zatwierdzona grupa.
+- Liczniki są czyszczone po odczycie, po upływie okna albo po nowym dokumencie w tej karcie.
+- Żądania tej karty liczone są według typu (linia 6a).
+- Żądania bez karty (service worker, przeglądarka) liczone są **osobno** i nigdy nie są przypisywane do grupy (druga linia 6a).
+- Inne karty nie są liczone.
+- Z adresu zostaje tylko pierwszy człon ścieżki z listy dozwolonych (np. `/api`, `/ajax`), inne trafiają do „(inne)”. Nie zostaje URL, parametry, nagłówki, cookies ani treść.
+- Skan i diagnoza biorą ID posta wyłącznie z tego, co strona już zawiera: linków w DOM i skryptów strony.
+
+Jeśli Facebook podaje ID tylko w treści odpowiedzi, diagnoza pokaże `FEED_DATA_NOT_CAPTURED` (NO_GO dla tej metody). Dalszy krok wymaga wtedy osobnej decyzji operatora, a nie cichego rozszerzania nasłuchu.
+
 ## Testy
 
 - `node --test app/src/test/js/poc-adapter.test.cjs`: adapter nad niezmienionym `collector-core.js`.
