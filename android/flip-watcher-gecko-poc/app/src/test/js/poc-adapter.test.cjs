@@ -161,6 +161,9 @@ test("count-only mobile DOM diagnosis finds group links even without article wra
     href: groupHref,
     roleArticles: 0, nativeArticles: 0, roleFeeds: 1,
     candidateWrappers: 2, structuredScripts: 3,
+    iframeCount: 2, iframeReadable: 1, iframeInaccessible: 1,
+    iframeAnchors: 17, iframeArticles: 5,
+    openShadowRoots: 1, openShadowAnchors: 8, openShadowArticles: 3,
     anchors: [
       postLink(id(1)), postLink(id(1)), postLink(id(2)),
       "https://www.facebook.com/groups/402796264871862/posts/1000000000004/",
@@ -176,6 +179,12 @@ test("count-only mobile DOM diagnosis finds group links even without article wra
   assert.equal(result.counters.photoLinks, 1);
   assert.equal(result.counters.anchorsSeen, 6);
   assert.equal(result.counters.roleFeeds, 1);
+  assert.equal(result.counters.iframeCount, 2);
+  assert.equal(result.counters.iframeReadable, 1);
+  assert.equal(result.counters.iframeInaccessible, 1);
+  assert.equal(result.counters.iframeAnchors, 17);
+  assert.equal(result.counters.openShadowRoots, 1);
+  assert.equal(result.counters.openShadowAnchors, 8);
   assert.ok(!JSON.stringify(result).includes(id(1)));
   assert.ok(!JSON.stringify(result).includes("https://"));
 });
