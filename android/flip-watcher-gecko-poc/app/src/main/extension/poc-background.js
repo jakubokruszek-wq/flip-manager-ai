@@ -20,11 +20,25 @@
     return (facebook || fixture) && Boolean(segment) && accepted.includes(segment);
   }
 
+  const WATCHED = { urls: ["https://*.facebook.com/*", "https://facebook.com/*", "https://*.fbcdn.net/*", "http://127.0.0.1/*"] };
+  const onBefore = details => {
+    // Not armed: the event is dropped without looking at it.
+    if (counter.isArmed()) counter.record(details);
+  };
+  const onCompleted = details => {
+    if (counter.isArmed()) counter.complete(details);
+  };
+  const api = { webRequest: false, listener: false, onCompleted: false };
   if (scope.browser && browser.webRequest) {
-    browser.webRequest.onBeforeRequest.addListener(details => {
-      // Not armed: the event is dropped without looking at it.
-      if (counter.isArmed()) counter.record(details);
-    }, { urls: ["https://*.facebook.com/*", "https://facebook.com/*", "http://127.0.0.1/*"] });
+    api.webRequest = true;
+    try {
+      browser.webRequest.onBeforeRequest.addListener(onBefore, WATCHED);
+      api.listener = browser.webRequest.onBeforeRequest.hasListener(onBefore);
+    } catch { api.listener = false; }
+    try {
+      browser.webRequest.onCompleted.addListener(onCompleted, WATCHED);
+      api.onCompleted = browser.webRequest.onCompleted.hasListener(onCompleted);
+    } catch { api.onCompleted = false; }
   }
 
   browser.runtime.onMessage.addListener((message, sender) => {
@@ -35,8 +49,8 @@
       return Promise.resolve({ armed: ok ? 1 : 0 });
     }
     if (message.type === "readTraffic") {
-      const result = sender && sender.tab ? counter.read(sender.tab.id) : null;
-      return Promise.resolve(result || { counts: { netCountingActive: 0, netBodyCapture: 0 }, requestPaths: [] });
+      const result = sender && sender.tab ? counter.read(sender.tab.id, api) : null;
+      return Promise.resolve(result || { counts: { netCountingActive: 0, netBodyCapture: 0, apiWebRequest: api.webRequest ? 1 : 0, apiListener: api.listener ? 1 : 0, apiOnCompleted: api.onCompleted ? 1 : 0 }, requestPaths: [] });
     }
     return undefined;
   });

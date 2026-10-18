@@ -116,7 +116,28 @@ object ScanProtocol {
         "netTabMainFrame", "netTabSubFrame", "netTabXhr", "netTabScript", "netTabWebsocket", "netTabImage", "netTabMedia", "netTabPing", "netTabBeacon", "netTabOther",
         "netNoTabMainFrame", "netNoTabSubFrame", "netNoTabXhr", "netNoTabScript", "netNoTabWebsocket", "netNoTabImage", "netNoTabMedia", "netNoTabPing", "netNoTabBeacon", "netNoTabOther",
         "swControlled",
+        "netFbcdnTab", "netFbcdnNoTab", "netOtherTabTotal", "netCompletedTab", "netFromCacheTab",
+        "apiWebRequest", "apiListener", "apiOnCompleted",
+        "mutWindowAdded", "mutWindowRemoved", "mutAfterAdded", "mutAfterRemoved",
     )
+
+    // ---- control test of the network listener (local loopback page only)
+
+    val CONTROL_FIELDS = listOf(
+        "controlTab", "controlNoTab", "controlOtherTab", "netArmed", "netCountingActive", "backgroundAnswered",
+        "netReqWithTab", "netTabXhr", "netOtherTabTotal", "apiWebRequest", "apiListener", "apiOnCompleted", "netBodyCapture",
+    )
+
+    fun networkControlRequest(nonce: String, groupId: String = FIXTURE_GROUP_ID, windowMs: Int = 3_000): JSONObject = JSONObject()
+        .put("type", "networkControl").put("nonce", nonce).put("groupId", groupId).put("windowMs", windowMs.coerceIn(500, 10_000))
+
+    /** Counters of the control test; null when the reply is not a valid control result. */
+    fun parseNetworkControl(message: Any?, nonce: String): Map<String, Int>? {
+        val json = asJson(message) ?: return null
+        if (json.optString("type") != "networkControlResult" || json.optString("nonce") != nonce || json.optString("status") != "DONE") return null
+        val values = json.optJSONObject("counts") ?: return null
+        return CONTROL_FIELDS.associateWith { name -> values.optInt(name, 0).coerceIn(0, 999_999) }
+    }
 
     val STRUCTURE_VERDICTS = setOf(
         "WRONG_DOCUMENT_OR_CONTEXT", "EXACT_IDS_AVAILABLE", "ID_KEYS_WITHOUT_EXACT_BINDING",

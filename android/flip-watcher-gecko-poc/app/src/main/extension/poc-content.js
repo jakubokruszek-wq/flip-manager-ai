@@ -187,9 +187,14 @@
     // Count requests only now, for this tab, during the window the operator
     // started (they scroll meanwhile); the scope is cleared when it is read.
     const wait = Math.max(0, Math.min(30_000, Math.floor(Number(windowMs) || 0)));
+    const before = { added: mutations.added, removed: mutations.removed };
     const armed = await trafficMessage({ type: "armTraffic", accepted, windowMs: wait });
     await sleep(wait);
     const traffic = await trafficMessage({ type: "readTraffic", accepted });
+    const during = { added: mutations.added - before.added, removed: mutations.removed - before.removed };
+    // DOM changes in the 2 s after the window: does the page keep changing without new requests?
+    await sleep(wait > 0 ? 2_000 : 0);
+    const after = { added: mutations.added - before.added - during.added, removed: mutations.removed - before.removed - during.removed };
     if (adapter.classify(snapshot(), input) !== "GROUP_OK") return { status: "WRONG_GROUP", counters: {}, attributeNames: [] };
     const page = snapshot();
     const n = selector => Math.min(99999, doc.querySelectorAll(selector).length);
@@ -292,6 +297,10 @@
     counters.scriptExactIds = adapter.exactStructuredIds(texts, accepted, core, "HYDRATION").length;
     Object.assign(counters, (traffic && traffic.counts) || { netCountingActive: 0, netBodyCapture: 0 });
     counters.netArmed = armed && armed.armed === 1 ? 1 : 0;
+    counters.mutWindowAdded = Math.min(999999, during.added);
+    counters.mutWindowRemoved = Math.min(999999, during.removed);
+    counters.mutAfterAdded = Math.min(999999, after.added);
+    counters.mutAfterRemoved = Math.min(999999, after.removed);
     counters.netWindowSec = Math.round(wait / 1000);
     const requestPaths = traffic && Array.isArray(traffic.requestPaths) ? traffic.requestPaths : [];
 
@@ -335,6 +344,21 @@
       // This path never invokes scan(), snapshot() or post extraction.
       const result = domDiagnosis(message.groupId);
       port.postMessage({ type: "domDiagnosisResult", nonce: message.nonce, probe: probe(), ...result });
+      return;
+    }
+    if (message.type === "networkControl") {
+      // Control test of the listener: only on the POC's own loopback page, never on Facebook.
+      if (scope.location.protocol !== "http:" || scope.location.hostname !== "127.0.0.1" ||
+          adapter.classify(snapshot(), { groupId: message.groupId, aliases: [], maxPosts: 1, allowLoopback: true }) !== "GROUP_OK") {
+        port.postMessage({ type: "networkControlResult", nonce: message.nonce, status: "NOT_CONTROL_PAGE", counts: {} });
+        return;
+      }
+      const wait = Math.max(500, Math.min(10_000, Math.floor(Number(message.windowMs) || 3_000)));
+      const armed = await trafficMessage({ type: "armTraffic", accepted: [message.groupId], windowMs: wait });
+      await sleep(wait);
+      const traffic = await trafficMessage({ type: "readTraffic", accepted: [message.groupId] });
+      const counts = { ...((traffic && traffic.counts) || {}), netArmed: armed && armed.armed === 1 ? 1 : 0, backgroundAnswered: traffic ? 1 : 0 };
+      port.postMessage({ type: "networkControlResult", nonce: message.nonce, status: "DONE", verdict: adapter.controlVerdict(traffic ? counts : null), counts });
       return;
     }
     if (message.type === "structureDiagnosis") {

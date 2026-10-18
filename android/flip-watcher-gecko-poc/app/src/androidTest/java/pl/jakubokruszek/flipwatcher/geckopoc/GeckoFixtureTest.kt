@@ -258,6 +258,37 @@ class GeckoFixtureTest {
         assertEquals(0, d.counts["netTabXhr"])
     }
 
+    private fun control(fixture: String = "network-control", other: String? = null) =
+        runBlocking { withTimeout(90_000) { NetworkControlRunner(context).run(fixture, windowMs = 3_000, otherTabFixture = other) } }
+
+    @Test fun networkControlSeesPageRequestsOfTheArmedTab() {
+        val result = control()
+        Log.i("GeckoPocTest", "NETWORK_CONTROL ok=${result.status} ${result.counts.filterValues { it != 0 }}")
+        assertEquals(ControlStatus.LISTENER_OK, result.status)
+        assertTrue(result.counts["controlTab"]!! >= 2)
+        assertEquals(0, result.counts["controlOtherTab"])
+        assertEquals(1, result.counts["apiWebRequest"])
+        assertEquals(1, result.counts["apiListener"])
+        assertEquals(0, result.counts["netBodyCapture"])
+        assertEquals(0, result.counts["netReqWithTab"]) // control hits never count as page data
+    }
+
+    @Test fun networkControlArmedWithZeroRequestsIsNotObserved() {
+        val result = control(fixture = "mobile-div-noids")
+        assertEquals(ControlStatus.LISTENER_NOT_OBSERVED, result.status)
+        assertEquals(1, result.counts["netArmed"])
+        assertEquals(1, result.counts["backgroundAnswered"])
+        assertEquals(0, result.counts["controlTab"])
+    }
+
+    @Test fun networkControlRequestsFromAnotherTabAreWrongTab() {
+        val result = control(fixture = "mobile-div-noids", other = "network-control")
+        Log.i("GeckoPocTest", "NETWORK_CONTROL wrongTab=${result.status} ${result.counts.filterValues { it != 0 }}")
+        assertEquals(ControlStatus.WRONG_TAB, result.status)
+        assertEquals(0, result.counts["controlTab"])
+        assertTrue(result.counts["controlOtherTab"]!! >= 1)
+    }
+
     @Test fun pageChangeDuringScanStopsIt() = runBlocking {
         withTimeout(120_000) {
             withContext(Dispatchers.Main) {

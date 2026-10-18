@@ -173,7 +173,7 @@
   // only a fixed set of type counters and allowlisted first path segments.
   const TRAFFIC_TYPES = ["main_frame", "sub_frame", "xmlhttprequest", "script", "websocket", "image", "media", "ping", "beacon", "other"];
   const TRAFFIC_TYPE_KEYS = { main_frame: "MainFrame", sub_frame: "SubFrame", xmlhttprequest: "Xhr", script: "Script", websocket: "Websocket", image: "Image", media: "Media", ping: "Ping", beacon: "Beacon", other: "Other" };
-  const PATH_ALLOWLIST = new Set(["api", "ajax", "async", "groups", "bz", "rsrc.php", "security", "sw", "login", "checkpoint", "video", "photo", "stories", "dialog", "plugins", "tr", "ufi", "ds", "data"]);
+  const PATH_ALLOWLIST = new Set(["flip-control", "api", "ajax", "async", "groups", "bz", "rsrc.php", "security", "sw", "login", "checkpoint", "video", "photo", "stories", "dialog", "plugins", "tr", "ufi", "ds", "data"]);
   const MAX_TRAFFIC_WINDOW_MS = 30_000;
 
   function trafficPathSegment(url) {
@@ -182,9 +182,27 @@
     return PATH_ALLOWLIST.has(segment) ? "/" + segment : "(inne)";
   }
 
+  // Host class of a request, never the host name itself: Facebook pages/APIs,
+  // Facebook's media CDN (post images), the POC's own control endpoint on
+  // 127.0.0.1, other loopback fixture pages, or nothing (ignored).
+  const CONTROL_PATH = "/flip-control";
+  function trafficHostClass(url) {
+    let parsed;
+    try { parsed = new URL(url); } catch { return null; }
+    const host = parsed.hostname.toLowerCase();
+    if (parsed.protocol === "https:" && (host === "facebook.com" || host.endsWith(".facebook.com"))) return "facebook";
+    if (parsed.protocol === "https:" && host.endsWith(".fbcdn.net")) return "fbcdn";
+    if (parsed.protocol === "http:" && host === "127.0.0.1") return parsed.pathname.startsWith(CONTROL_PATH) ? "control" : "loopback";
+    return null;
+  }
+
   function createTrafficCounter(now = () => Date.now()) {
     let scope = null;
-    const empty = () => ({ tab: new Map(), noTab: new Map(), paths: new Map(), withTab: 0, noTabTotal: 0 });
+    const empty = () => ({
+      tab: new Map(), noTab: new Map(), paths: new Map(), withTab: 0, noTabTotal: 0,
+      fbcdnTab: 0, fbcdnNoTab: 0, otherTab: 0, completedTab: 0, fromCacheTab: 0,
+      controlTab: 0, controlNoTab: 0, controlOtherTab: 0,
+    });
     let counts = empty();
     return {
       arm(tabId, windowMs) {
@@ -197,30 +215,59 @@
       isArmed() { return Boolean(scope) && now() <= scope.until; },
       armedTab() { return this.isArmed() ? scope.tabId : null; },
       record(details) {
-        if (!this.isArmed() || !details || !TRAFFIC_TYPES.includes(details.type)) return false;
+        if (!this.isArmed() || !details) return false;
+        const hostClass = trafficHostClass(details.url);
+        if (!hostClass) return false;
+        // Unknown resource types (imageset, font, speculative…) are counted as "other", not dropped.
+        const type = TRAFFIC_TYPES.includes(details.type) ? details.type : "other";
+        if (hostClass === "control") {
+          if (details.tabId === scope.tabId) counts.controlTab++;
+          else if (details.tabId === -1) counts.controlNoTab++;
+          else counts.controlOtherTab++;
+          return true;
+        }
         if (details.tabId === scope.tabId) {
           // A new top-level document in the armed tab ends the scope at once.
-          if (details.type === "main_frame") { this.disarm(); return false; }
+          if (type === "main_frame") { this.disarm(); return false; }
+          if (hostClass === "fbcdn") { counts.fbcdnTab++; return true; }
           counts.withTab++;
-          counts.tab.set(details.type, (counts.tab.get(details.type) || 0) + 1);
+          counts.tab.set(type, (counts.tab.get(type) || 0) + 1);
           const segment = trafficPathSegment(details.url);
           counts.paths.set(segment, (counts.paths.get(segment) || 0) + 1);
           return true;
         }
         if (details.tabId === -1) {
+          if (hostClass === "fbcdn") { counts.fbcdnNoTab++; return true; }
           counts.noTabTotal++;
-          counts.noTab.set(details.type, (counts.noTab.get(details.type) || 0) + 1);
+          counts.noTab.set(type, (counts.noTab.get(type) || 0) + 1);
           return true;
         }
-        return false; // other tabs are never counted
+        // Another tab: one total only (no type, path or host), to detect tab-id mismatch.
+        counts.otherTab++;
+        return false;
+      },
+      // onCompleted of the armed tab: whether the response came from the cache.
+      complete(details) {
+        if (!this.isArmed() || !details || details.tabId !== scope.tabId || !trafficHostClass(details.url)) return false;
+        counts.completedTab++;
+        if (details.fromCache === true) counts.fromCacheTab++;
+        return true;
       },
       // Read once, by the armed tab only; then the scope and counts are cleared.
-      read(tabId) {
+      read(tabId, api = {}) {
         if (!scope || tabId !== scope.tabId) return null;
-        const out = { netCountingActive: 1, netBodyCapture: 0, netReqTotal: counts.withTab + counts.noTabTotal, netReqWithTab: counts.withTab, netReqNoTab: counts.noTabTotal };
+        const cap = value => Math.min(999_999, value || 0);
+        const out = {
+          netCountingActive: 1, netBodyCapture: 0,
+          netReqTotal: cap(counts.withTab + counts.noTabTotal), netReqWithTab: cap(counts.withTab), netReqNoTab: cap(counts.noTabTotal),
+          netFbcdnTab: cap(counts.fbcdnTab), netFbcdnNoTab: cap(counts.fbcdnNoTab), netOtherTabTotal: cap(counts.otherTab),
+          netCompletedTab: cap(counts.completedTab), netFromCacheTab: cap(counts.fromCacheTab),
+          controlTab: cap(counts.controlTab), controlNoTab: cap(counts.controlNoTab), controlOtherTab: cap(counts.controlOtherTab),
+          apiWebRequest: api.webRequest ? 1 : 0, apiListener: api.listener ? 1 : 0, apiOnCompleted: api.onCompleted ? 1 : 0,
+        };
         for (const type of TRAFFIC_TYPES) {
-          out["netTab" + TRAFFIC_TYPE_KEYS[type]] = Math.min(999_999, counts.tab.get(type) || 0);
-          out["netNoTab" + TRAFFIC_TYPE_KEYS[type]] = Math.min(999_999, counts.noTab.get(type) || 0);
+          out["netTab" + TRAFFIC_TYPE_KEYS[type]] = cap(counts.tab.get(type));
+          out["netNoTab" + TRAFFIC_TYPE_KEYS[type]] = cap(counts.noTab.get(type));
         }
         const requestPaths = [...counts.paths.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([name, count]) => ({ name, count }));
         this.disarm();
@@ -228,6 +275,15 @@
       },
       disarm() { scope = null; counts = empty(); },
     };
+  }
+
+  // Control-test result from its counters (or null when the extension never answered).
+  function controlVerdict(counts) {
+    if (!counts) return "TIMEOUT";
+    const n = key => Math.max(0, Number(counts[key]) || 0);
+    if (n("controlTab") >= 2) return "LISTENER_OK";
+    if (n("controlOtherTab") + n("controlNoTab") > 0) return "WRONG_TAB";
+    return "LISTENER_NOT_OBSERVED";
   }
 
   // Count-only, read-only inspection for the current mobile Facebook DOM.
@@ -315,5 +371,5 @@
   function isGroupId(value) { return typeof value === "string" && /^[A-Za-z0-9._-]{1,100}$/.test(value); }
   function safeUrl(value) { try { return new URL(value); } catch { return null; } }
 
-  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, exactStructuredIds, countIdKeys, structureVerdict, createTrafficCounter, trafficPathSegment, MAX_POSTS_LIMIT };
+  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, exactStructuredIds, countIdKeys, structureVerdict, createTrafficCounter, trafficPathSegment, trafficHostClass, controlVerdict, MAX_POSTS_LIMIT };
 })(globalThis);

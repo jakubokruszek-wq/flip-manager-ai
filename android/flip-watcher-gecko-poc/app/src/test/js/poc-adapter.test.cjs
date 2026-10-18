@@ -366,3 +366,75 @@ test("the extension can no longer read response bodies (static guard)", () => {
   assert.ok(!manifest.permissions.includes("webRequestBlocking"));
   assert.ok(!/networkEvidence|remember\(|TextDecoder/.test(background));
 });
+
+// ---- 0.2.3 listener control test and channel analysis (counts only)
+test("host classes: Facebook, its media CDN, the POC control endpoint, loopback; everything else ignored", () => {
+  assert.equal(adapter.trafficHostClass("https://www.facebook.com/api/graphql/"), "facebook");
+  assert.equal(adapter.trafficHostClass("https://scontent-waw2-1.xx.fbcdn.net/v/t39/1.jpg?token=x"), "fbcdn");
+  assert.equal(adapter.trafficHostClass("http://127.0.0.1:4321/flip-control?fixture=network-control-ping"), "control");
+  assert.equal(adapter.trafficHostClass("http://127.0.0.1:4321/groups/1/"), "loopback");
+  assert.equal(adapter.trafficHostClass("https://www.facebook.com.evil.example/"), null);
+  assert.equal(adapter.trafficHostClass("http://www.facebook.com/"), null);
+  assert.equal(adapter.trafficHostClass("https://example.com/flip-control"), null);
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  assert.equal(counter.record(req("xmlhttprequest", ARMED_TAB, "https://example.com/api")), false);
+  assert.equal(counter.read(ARMED_TAB).counts.netReqTotal, 0);
+});
+
+test("unknown resource types are counted as other instead of being dropped", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  counter.record(req("imageset"));
+  counter.record(req("speculative"));
+  counter.record(req("font", -1));
+  const { counts } = counter.read(ARMED_TAB);
+  assert.equal(counts.netTabOther, 2);
+  assert.equal(counts.netNoTabOther, 1);
+});
+
+test("fbcdn media of the armed tab is counted apart from data requests; other tabs only as one total", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  counter.record(req("image", ARMED_TAB, "https://scontent.xx.fbcdn.net/a.jpg"));
+  counter.record(req("image", -1, "https://scontent.xx.fbcdn.net/b.jpg"));
+  counter.record(req("xmlhttprequest", 42));
+  counter.record(req("image", 42, "https://scontent.xx.fbcdn.net/c.jpg"));
+  const { counts, requestPaths } = counter.read(ARMED_TAB);
+  assert.equal(counts.netFbcdnTab, 1);
+  assert.equal(counts.netFbcdnNoTab, 1);
+  assert.equal(counts.netOtherTabTotal, 2);
+  assert.equal(counts.netReqWithTab, 0);
+  assert.deepEqual(requestPaths, []);
+});
+
+test("onCompleted counts completed and cache-served responses of the armed tab only", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  assert.equal(counter.complete({ tabId: ARMED_TAB, url: "https://scontent.xx.fbcdn.net/a.jpg", fromCache: true }), true);
+  assert.equal(counter.complete({ tabId: ARMED_TAB, url: "https://www.facebook.com/api/", fromCache: false }), true);
+  assert.equal(counter.complete({ tabId: 3, url: "https://www.facebook.com/api/", fromCache: true }), false);
+  const { counts } = counter.read(ARMED_TAB, { webRequest: true, listener: true, onCompleted: true });
+  assert.equal(counts.netCompletedTab, 2);
+  assert.equal(counts.netFromCacheTab, 1);
+  assert.equal(counts.apiListener, 1);
+});
+
+test("control requests are classified by tab and yield LISTENER_OK / WRONG_TAB / LISTENER_NOT_OBSERVED / TIMEOUT", () => {
+  const run = records => {
+    const counter = adapter.createTrafficCounter();
+    counter.arm(ARMED_TAB, 3_000);
+    records.forEach(r => counter.record(r));
+    return counter.read(ARMED_TAB).counts;
+  };
+  const control = tabId => req("xmlhttprequest", tabId, "http://127.0.0.1:5555/flip-control?fixture=network-control-ping&t=1");
+  const ok = run([control(ARMED_TAB), control(ARMED_TAB), control(ARMED_TAB)]);
+  assert.equal(ok.controlTab, 3);
+  assert.equal(adapter.controlVerdict(ok), "LISTENER_OK");
+  assert.equal(adapter.controlVerdict(run([control(9), control(9)])), "WRONG_TAB");
+  assert.equal(adapter.controlVerdict(run([control(-1)])), "WRONG_TAB");
+  assert.equal(adapter.controlVerdict(run([])), "LISTENER_NOT_OBSERVED");
+  assert.equal(adapter.controlVerdict(null), "TIMEOUT");
+  // Control hits never pollute the Facebook counters.
+  assert.equal(ok.netReqWithTab, 0);
+});

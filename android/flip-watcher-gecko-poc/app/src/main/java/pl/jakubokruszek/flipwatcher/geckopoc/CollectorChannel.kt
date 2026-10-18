@@ -36,7 +36,7 @@ class CollectorChannel(
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult" -> {
+                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -95,6 +95,12 @@ class CollectorChannel(
         val nonce = UUID.randomUUID().toString()
         return ScanProtocol.parseStructureDiagnosis(
             request(nonce, ScanProtocol.structureDiagnosisRequest(nonce, groupId, allowLoopback = fixtureMode, windowMs = windowMs), windowMs + 20_000L), nonce)
+    }
+
+    /** Listener control test on a loopback page; counters only. */
+    suspend fun networkControl(windowMs: Int = 3_000): Map<String, Int>? {
+        val nonce = UUID.randomUUID().toString()
+        return ScanProtocol.parseNetworkControl(request(nonce, ScanProtocol.networkControlRequest(nonce, windowMs = windowMs), windowMs + 15_000L), nonce)
     }
 
     suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {

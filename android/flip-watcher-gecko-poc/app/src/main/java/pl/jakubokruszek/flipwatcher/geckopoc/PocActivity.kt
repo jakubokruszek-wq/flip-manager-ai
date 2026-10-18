@@ -70,6 +70,9 @@ class PocActivity : ComponentActivity() {
 
     private val preferences by lazy { getSharedPreferences("gecko_poc", MODE_PRIVATE) }
     private val store by lazy { ScreenOffTest.store(this) }
+    /** Last device measurements, combined into the GO / CONDITIONAL GO / NO-GO verdict. */
+    private var lastControl: ControlStatus? = null
+    private var lastStructure: StructureDiagnosis? = null
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { scheduleScreenOffTest() }
 
@@ -314,7 +317,8 @@ class PocActivity : ComponentActivity() {
                 if (result == null) {
                     output.text = "Diagnoza postów: brak odpowiedzi z rozszerzenia. Skan NIE został uruchomiony."
                 } else {
-                    output.text = StructureReport.describe(result)
+                    lastStructure = result
+                    output.text = StructureReport.describe(result) + "\n\n" + verdictText()
                     // Counters only, so the operator can copy the result from "Wyniki".
                     runCatching {
                         store.append(StoredRun("STRUCTURE_DIAGNOSIS", started, Instant.now().toString(), result.verdict ?: result.status,
@@ -332,6 +336,39 @@ class PocActivity : ComponentActivity() {
                 render()
             }
         }
+    }
+
+    // ---- listener control test (local page, own session, no Facebook)
+    private fun runNetworkControl() {
+        if (scanning || inspectingDom) return
+        inspectingDom = true
+        render()
+        output.text = "Test sieci GeckoView: lokalna strona 127.0.0.1 w osobnej sesji (ok. 5 s). Bez Facebooka."
+        lifecycleScope.launch {
+            val started = Instant.now().toString()
+            try {
+                val result = NetworkControlRunner(this@PocActivity).run()
+                lastControl = result.status
+                output.text = NetworkControl.describe(result) + "\n\n" + verdictText()
+                runCatching {
+                    store.append(StoredRun("NETWORK_CONTROL", started, Instant.now().toString(), result.status.name,
+                        emptyList(), emptyList(), 0, result.counts.filterValues { it != 0 }.mapValues { it.value.toString() }))
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                lastControl = ControlStatus.TIMEOUT
+                output.text = "Test sieci GeckoView: błąd ${e.javaClass.simpleName} → TIMEOUT."
+            } finally {
+                inspectingDom = false
+                render()
+            }
+        }
+    }
+
+    private fun verdictText(): String {
+        val verdict = ArchitectureVerdict.decide(lastControl, lastStructure)
+        return "WERDYKT ARCHITEKTURY: ${verdict.decision} — ${verdict.reason}" +
+            if (verdict.decision == ArchitectureDecision.NO_GO) "\n" + ArchitectureVerdict.ALTERNATIVES else ""
     }
 
     // ---- group identity (diagnosis only: never unlocks scanning)
@@ -585,6 +622,7 @@ class PocActivity : ComponentActivity() {
                 button("results", "Wyniki") { showResults() },
             ))
             addView(row(
+                button("netControl", "Test sieci GeckoView") { runNetworkControl() },
                 button("test10", "Test ekranu za 10 min") { startScreenOffTest() },
                 button("testNow", "Test teraz") { runScreenOffTestNow() },
                 button("clear", "Wyloguj i usuń dane") { clearSessionData() },

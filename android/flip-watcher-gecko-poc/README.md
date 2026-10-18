@@ -134,6 +134,43 @@ W 0.2.2 jest to niemożliwe z założenia:
 
 Jeśli Facebook podaje ID tylko w treści odpowiedzi, diagnoza pokaże `FEED_DATA_NOT_CAPTURED` (NO_GO dla tej metody). Dalszy krok wymaga wtedy osobnej decyzji operatora, a nie cichego rozszerzania nasłuchu.
 
+## 0.2.3: test kontrolny nasłuchu i werdykt architektury
+
+Samsung (0.2.2): 7353 elementy, 41 112 px, `data-mcomponent` 4523, zmiany DOM +527/−697 (ostatnie 10 s +97/−140, czyli recykling węzłów), a w 20-sekundowym oknie **0 zdarzeń sieciowych**. Zero nie dowodzi awarii, dopóki nie przejdzie pozytywny test kontrolny.
+
+**Słabości 0.2.2 wykryte w kodzie:**
+1. Licznik pomijał nieznane typy żądań Firefoksa (`imageset`, `font`, `speculative`…). Teraz liczone są jako „inne”.
+2. Obrazy postów pochodzą z `*.fbcdn.net`, poza zakresem nasłuchu. Teraz liczone są osobno, bez nazw hostów. Na żywej karcie grupy pokazują, czy nasłuch w ogóle widzi tę kartę.
+
+**„Test sieci GeckoView”:**
+- działa w osobnej sesji, na lokalnej stronie POC pod `127.0.0.1`; bez logowania i bez Facebooka;
+- strona co 300 ms wysyła żądanie na znacznik `/flip-control`, a licznik jest uzbrojony przez 3 s;
+- tło liczy te żądania osobno dla: tej karty, innej karty i bez karty;
+- Android dostaje same liczby.
+
+| Wynik | Znaczenie |
+|---|---|
+| `LISTENER_OK` | Nasłuch widzi żądania strony z właściwym `tabId`, a liczniki docierają do Androida. Nie dowodzi niczego o ruchu Facebooka. |
+| `LISTENER_NOT_OBSERVED` | Licznik był uzbrojony, ale żądań nie zobaczył. Nasłuch w tym GeckoView jest niewiarygodny. |
+| `WRONG_TAB` | Żądania widoczne, ale z innym `tabId`. Pomiar karty Facebooka byłby zaniżony do zera. |
+| `TIMEOUT` | Rozszerzenie lub tło nie odpowiedziało. |
+
+**„Diagnoza postów”** dodatkowo pokazuje:
+- stan API (webRequest, nasłuch, `onCompleted`);
+- liczbę odpowiedzi zakończonych w karcie i podanych z pamięci podręcznej (`fromCache`);
+- obrazy fbcdn tej karty i bez karty;
+- łączną liczbę zdarzeń z innych kart (bez typu, ścieżki i hosta), żeby wykryć niezgodność `tabId`;
+- zmiany DOM w trakcie okna i w 2 s po nim.
+
+**Werdykt architektury** łączy oba pomiary:
+- **GO**: dokładne ID w DOM lub skryptach strony.
+- **NO-GO** w dwóch przypadkach:
+  - nasłuch nie działa;
+  - Facebook doładowuje dane, ale ID są tylko w treści odpowiedzi, której nie czytamy.
+- **CONDITIONAL GO**: nasłuch działa, ale w oknie nie było żądań danych (lista już pobrana albo z pamięci podręcznej) lub `tabId` się różni. Potrzebny jeden dodatkowy pomiar.
+
+Atrybuty `data-image-id`, `data-video-id`, numery komentarzy i inne długie liczby nigdy nie dają GO.
+
 ## Testy
 
 - `node --test app/src/test/js/poc-adapter.test.cjs`: adapter nad niezmienionym `collector-core.js`.
