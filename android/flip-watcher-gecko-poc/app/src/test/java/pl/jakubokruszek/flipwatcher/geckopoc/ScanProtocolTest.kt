@@ -119,4 +119,38 @@ class ScanProtocolTest {
         val bad = ScanProtocol.parseGroupProbe(JSONObject().put("group", JSONObject().put("segment", "../x")))!!
         assertEquals(null, bad.first)
     }
+
+    @Test fun `DOM diagnosis requires exact type nonce and status and returns only counters`() {
+        val nonce = "proof-1"
+        val result = JSONObject()
+            .put("type", "domDiagnosisResult")
+            .put("nonce", nonce)
+            .put("status", "GROUP_OK")
+            .put("counters", JSONObject()
+                .put("roleArticles", 0)
+                .put("anchorsSeen", 16)
+                .put("exactGroupLinks", 3)
+                .put("exactGroupIds", 2)
+                .put("foreignGroupLinks", 2)
+                .put("unknownField", "should-not-surface"))
+        val parsed = ScanProtocol.parseDomDiagnosis(result, nonce)!!
+        assertEquals("GROUP_OK", parsed.status)
+        assertEquals(0, parsed.counts["roleArticles"])
+        assertEquals(2, parsed.counts["exactGroupIds"])
+        assertEquals(2, parsed.counts["foreignGroupLinks"])
+        assertTrue("unknownField" !in parsed.counts)
+        assertNull(ScanProtocol.parseDomDiagnosis(result, "different-nonce"))
+        assertNull(ScanProtocol.parseDomDiagnosis(result.put("status", "DONT_KNOW"), nonce))
+        assertNull(ScanProtocol.parseDomDiagnosis(result.put("status", "GROUP_OK").put("type", "scanResult"), nonce))
+    }
+
+    @Test fun `DOM diagnosis request targets only the independently approved source`() {
+        val request = ScanProtocol.domDiagnosisRequest("inspect-1")
+        assertEquals("domDiagnosis", request.getString("type"))
+        assertEquals("inspect-1", request.getString("nonce"))
+        assertEquals(PocPolicy.APPROVED_GROUP_ID, request.getString("groupId"))
+        assertTrue(!request.has("scrolls"))
+        assertTrue(!request.has("maxPosts"))
+    }
+
 }
