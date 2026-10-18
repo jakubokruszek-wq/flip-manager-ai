@@ -36,7 +36,7 @@ class CollectorChannel(
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "probeResult", "scanResult", "groupProbeResult" -> {
+                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -83,6 +83,13 @@ class CollectorChannel(
     }
 
     /** Facebook's own identifiers of the shown group (for GroupIdentity); null when the page did not answer. */
+    /** Manually refreshed count-only diagnostics. This does not authorize a scan. */
+    suspend fun domDiagnosis(timeoutMs: Long = 8_000): DomDiagnosis? {
+        val nonce = UUID.randomUUID().toString()
+        return ScanProtocol.parseDomDiagnosis(
+            request(nonce, ScanProtocol.domDiagnosisRequest(nonce), timeoutMs), nonce)
+    }
+
     suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {
         val nonce = UUID.randomUUID().toString()
         return ScanProtocol.parseGroupProbe(request(nonce, ScanProtocol.groupProbeRequest(nonce), timeoutMs))
