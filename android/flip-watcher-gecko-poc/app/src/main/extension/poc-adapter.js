@@ -130,7 +130,8 @@
         counters.otherLinks++;
         continue;
       }
-      if (/^\\/photo(?:\\.php)?(?:\\/|$)/i.test(url.pathname)) counters.photoLinks++;
+      if (url.pathname === "/photo" || url.pathname.startsWith("/photo/") ||
+          url.pathname === "/photo.php" || url.pathname.startsWith("/photo.php/")) counters.photoLinks++;
       const parsed = core.parsePostLink(value);
       if (!parsed || parsed.sourceType !== "GROUP") { counters.otherLinks++; continue; }
       if (!accepted.includes(parsed.sourceId)) { counters.foreignGroupLinks++; continue; }
