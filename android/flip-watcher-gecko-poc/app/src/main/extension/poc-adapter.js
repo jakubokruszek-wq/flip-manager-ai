@@ -102,7 +102,10 @@
       anchorsSeen: 0, exactGroupLinks: 0, exactGroupIds: 0,
       foreignGroupLinks: 0, photoLinks: 0, otherLinks: 0,
       roleArticles: 0, nativeArticles: 0, roleFeeds: 0,
-      candidateWrappers: 0, structuredScripts: 0
+      candidateWrappers: 0, structuredScripts: 0,
+      iframeCount: 0, iframeReadable: 0, iframeInaccessible: 0,
+      iframeAnchors: 0, iframeArticles: 0,
+      openShadowRoots: 0, openShadowAnchors: 0, openShadowArticles: 0
     };
     const state = classify({ href: snapshot && snapshot.href,
       hasCaptcha: snapshot && snapshot.hasCaptcha,
@@ -120,7 +123,15 @@
       nativeArticles: Math.min(9999, Math.max(0, Number(snapshot.nativeArticles) || 0)),
       roleFeeds: Math.min(9999, Math.max(0, Number(snapshot.roleFeeds) || 0)),
       candidateWrappers: Math.min(9999, Math.max(0, Number(snapshot.candidateWrappers) || 0)),
-      structuredScripts: Math.min(9999, Math.max(0, Number(snapshot.structuredScripts) || 0))
+      structuredScripts: Math.min(9999, Math.max(0, Number(snapshot.structuredScripts) || 0)),
+      iframeCount: Math.min(9999, Math.max(0, Number(snapshot.iframeCount) || 0)),
+      iframeReadable: Math.min(9999, Math.max(0, Number(snapshot.iframeReadable) || 0)),
+      iframeInaccessible: Math.min(9999, Math.max(0, Number(snapshot.iframeInaccessible) || 0)),
+      iframeAnchors: Math.min(9999, Math.max(0, Number(snapshot.iframeAnchors) || 0)),
+      iframeArticles: Math.min(9999, Math.max(0, Number(snapshot.iframeArticles) || 0)),
+      openShadowRoots: Math.min(9999, Math.max(0, Number(snapshot.openShadowRoots) || 0)),
+      openShadowAnchors: Math.min(9999, Math.max(0, Number(snapshot.openShadowAnchors) || 0)),
+      openShadowArticles: Math.min(9999, Math.max(0, Number(snapshot.openShadowArticles) || 0))
     };
     const accepted = acceptedIds(input);
     for (const value of anchors) {
