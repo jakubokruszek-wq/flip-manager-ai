@@ -154,3 +154,39 @@ test("group identity reads only Facebook's app-link metadata as strong evidence"
   assert.ok(!hits.some(hit => hit.id === "1111111111"));
   assert.ok(hits.some(hit => hit.id === "3333333333" && hit.source === "json×2"));
 });
+
+
+test("count-only mobile DOM diagnosis finds group links even without article wrappers", () => {
+  const result = adapter.inspectDomLinks({
+    href: groupHref,
+    roleArticles: 0, nativeArticles: 0, roleFeeds: 1,
+    candidateWrappers: 2, structuredScripts: 3,
+    anchors: [
+      postLink(id(1)), postLink(id(1)), postLink(id(2)),
+      "https://www.facebook.com/groups/402796264871862/posts/1000000000004/",
+      "https://www.facebook.com/photo/?fbid=1000000000005",
+      "https://www.facebook.com/",
+    ],
+  }, input, core);
+  assert.equal(result.status, "GROUP_OK");
+  assert.equal(result.counters.roleArticles, 0);
+  assert.equal(result.counters.exactGroupLinks, 3);
+  assert.equal(result.counters.exactGroupIds, 2);
+  assert.equal(result.counters.foreignGroupLinks, 1);
+  assert.equal(result.counters.photoLinks, 1);
+  assert.equal(result.counters.anchorsSeen, 6);
+  assert.equal(result.counters.roleFeeds, 1);
+  assert.ok(!JSON.stringify(result).includes(id(1)));
+  assert.ok(!JSON.stringify(result).includes("https://"));
+});
+
+test("count-only diagnostics fail closed on another group or login", () => {
+  const sample = { href: "https://m.facebook.com/groups/402796264871862/",
+    anchors: [postLink(id(1))], roleArticles: 10 };
+  const other = adapter.inspectDomLinks(sample, input, core);
+  assert.equal(other.status, "WRONG_GROUP");
+  assert.equal(other.counters.exactGroupLinks, 0);
+  const login = adapter.inspectDomLinks({ ...sample, href: "https://m.facebook.com/login/" }, input, core);
+  assert.equal(login.status, "LOGIN_REQUIRED");
+  assert.equal(login.counters.anchorsSeen, 0);
+});
