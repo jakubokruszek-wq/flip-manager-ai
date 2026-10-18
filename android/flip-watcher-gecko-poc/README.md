@@ -87,6 +87,14 @@ Wersje 0.1.0 były podpisane losowym kluczem każdego serwera CI, dlatego **jedn
 - `./gradlew connectedDebugAndroidTest`: prawdziwy GeckoView na emulatorze. Tylko lokalne strony z `assets/fixtures/`; **żaden test nie otwiera Facebooka**.
 - CI: `.github/workflows/android-gecko-poc.yml`, czyli izolacja, testy core, kompilacja, APK z weryfikacją podpisu i rozszerzenia oraz testy na emulatorze Androida 16.
 
+## POC 0.1.4 — diagnostyka mobilnego DOM bez zużywania skanu
+
+Dodano przycisk **Sprawdź DOM**. Na aktualnej, dokładnie zatwierdzonej grupie przycisk ręcznie odświeża stan DOM w GeckoView i raportuje jedynie zagregowane liczby: elementy `[role=article]` / `article`, kontenery `role=feed`, linki HTML, linki do postów zatwierdzonego źródła, unikalne numeryczne identyfikatory wynikające z tych linków, obce linki grup, odnośniki do zdjęć oraz kontenery strukturalne. Żadne adresy, identyfikatory, treści, hasła ani cookies nie opuszczają rozszerzenia w ramach tej funkcji. Dane te nie są zapisywane do historii ofert ani wysyłane do serwera.
+
+Przycisk nie wywołuje `scan()`, nie przewija strony, nie resetuje jednorazowego limitu i nie przyznaje zgody na następny skan. Diagnostyka działa tylko na `lodzsprzedazzakupwynajem`. Zero oznacza brak **potwierdzonej struktury w DOM**, a nie brak postów na stronie. Na wcześniejszym fizycznym Samsungu wizualnie były posty, a selektory `article` / `[role=article]` pokazywały zero; potrzebne są nowe pomiary przed modyfikacją ekstrakcji.
+
+**Instalacja:** APK 0.1.4 jako aktualizacja istniejącego Gecko POC; nie odinstalowuj i nie czyść danych. Otwórz zatwierdzoną grupę, przewiń do widocznych postów i dotknij `Sprawdź DOM`. Prześlij wyłącznie liczby z dolnego panelu. Niczego nie skanuj.
+
 ## POC 0.1.3 — trwały dziennik próby i uczciwy status
 
 Jednorazowa zgoda jest utrwalana razem ze statusem STARTED PRZED wysłaniem żądania. Odmowa zapisu początku próby oznacza NO_REQUEST_SENT, bez wywołania rozszerzenia. Wynik i jego liczniki są zapisywane w lokalnym magazynie oraz podsumowaniu SharedPreferences; błąd zapisu jest jawnie wyświetlany. W "Wyniki" próby GROUP_SCAN są prezentowane przed rozbudowaną historią diagnoz. Po restarcie niedokończony STARTED pozostaje niepotwierdzony, a nie zaliczony jako sukces.
