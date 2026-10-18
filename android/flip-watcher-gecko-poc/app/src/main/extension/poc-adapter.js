@@ -94,6 +94,53 @@
     return { status: limited.length ? "OK" : "NO_POSTS", posts: limited, diagnostics };
   }
 
+  // Count-only, read-only inspection for the current mobile Facebook DOM.
+  // This NEVER produces a post record, canonical link, guessed ID, or a scan
+  // request; it cannot consume a one-shot scan permission.
+  function inspectDomLinks(snapshot, input, core) {
+    const zero = {
+      anchorsSeen: 0, exactGroupLinks: 0, exactGroupIds: 0,
+      foreignGroupLinks: 0, photoLinks: 0, otherLinks: 0,
+      roleArticles: 0, nativeArticles: 0, roleFeeds: 0,
+      candidateWrappers: 0, structuredScripts: 0
+    };
+    const state = classify({ href: snapshot && snapshot.href,
+      hasCaptcha: snapshot && snapshot.hasCaptcha,
+      hasPasswordInput: snapshot && snapshot.hasPasswordInput,
+      hasLoginForm: snapshot && snapshot.hasLoginForm,
+      bodyTextSample: "" }, input);
+    if (state !== "GROUP_OK" || !core || typeof core.parsePostLink !== "function") {
+      return { status: state === "GROUP_OK" ? "NOT_READY" : state, counters: zero };
+    }
+    const anchors = (Array.isArray(snapshot.anchors) ? snapshot.anchors : []).slice(0, 600);
+    const ids = new Set();
+    const counters = { ...zero,
+      anchorsSeen: anchors.length,
+      roleArticles: Math.min(9999, Math.max(0, Number(snapshot.roleArticles) || 0)),
+      nativeArticles: Math.min(9999, Math.max(0, Number(snapshot.nativeArticles) || 0)),
+      roleFeeds: Math.min(9999, Math.max(0, Number(snapshot.roleFeeds) || 0)),
+      candidateWrappers: Math.min(9999, Math.max(0, Number(snapshot.candidateWrappers) || 0)),
+      structuredScripts: Math.min(9999, Math.max(0, Number(snapshot.structuredScripts) || 0))
+    };
+    const accepted = acceptedIds(input);
+    for (const value of anchors) {
+      if (typeof value !== "string" || value.length > 2048) continue;
+      const url = safeUrl(value);
+      if (!url || !FACEBOOK_HOSTS.includes(url.hostname.toLowerCase()) || url.protocol !== "https:") {
+        counters.otherLinks++;
+        continue;
+      }
+      if (/^\\/photo(?:\\.php)?(?:\\/|$)/i.test(url.pathname)) counters.photoLinks++;
+      const parsed = core.parsePostLink(value);
+      if (!parsed || parsed.sourceType !== "GROUP") { counters.otherLinks++; continue; }
+      if (!accepted.includes(parsed.sourceId)) { counters.foreignGroupLinks++; continue; }
+      counters.exactGroupLinks++;
+      ids.add(parsed.postId);
+    }
+    counters.exactGroupIds = ids.size;
+    return { status: "GROUP_OK", counters };
+  }
+
   // Numeric group ids Facebook itself publishes for the shown page: app-link
   // metadata ("strong") and page JSON ("weak", feeds also mention other groups).
   function groupIdentity(meta) {
@@ -120,5 +167,5 @@
   function isGroupId(value) { return typeof value === "string" && /^[A-Za-z0-9._-]{1,100}$/.test(value); }
   function safeUrl(value) { try { return new URL(value); } catch { return null; } }
 
-  scope.FlipGeckoPocAdapter = { classify, evaluate, groupIdentity, MAX_POSTS_LIMIT };
+  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, MAX_POSTS_LIMIT };
 })(globalThis);
