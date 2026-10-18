@@ -71,6 +71,39 @@
     };
   }
 
+  // Count-only topology of the visible document. Same-origin iframe / open
+  // shadow observations are used strictly as DIAGNOSTICS, never as post sources.
+  // Cross-origin or closed trees remain inaccessible; no bypass is attempted.
+  function domTopology(doc) {
+    const result = {
+      iframeCount: 0, iframeReadable: 0, iframeInaccessible: 0,
+      iframeAnchors: 0, iframeArticles: 0,
+      openShadowRoots: 0, openShadowAnchors: 0, openShadowArticles: 0
+    };
+    const frames = Array.from(doc.querySelectorAll("iframe")).slice(0, 30);
+    result.iframeCount = frames.length;
+    for (const frame of frames) {
+      try {
+        const inner = frame.contentDocument;
+        // Never recurse into nested frames. No URLs or text are read.
+        if (!inner) { result.iframeInaccessible++; continue; }
+        result.iframeReadable++;
+        result.iframeAnchors += Math.min(600, inner.querySelectorAll("a[href]").length);
+        result.iframeArticles += Math.min(600, inner.querySelectorAll('article,[role="article"]').length);
+      } catch {
+        result.iframeInaccessible++;
+      }
+    }
+    for (const element of Array.from(doc.querySelectorAll("*")).slice(0, 5000)) {
+      const root = element.shadowRoot;
+      if (!root || result.openShadowRoots >= 30) continue;
+      result.openShadowRoots++;
+      result.openShadowAnchors += Math.min(600, root.querySelectorAll("a[href]").length);
+      result.openShadowArticles += Math.min(600, root.querySelectorAll('article,[role="article"]').length);
+    }
+    return result;
+  }
+
   // A one-off read-only DOM refresh. No page text, links, post IDs, image
   // content or credentials are sent to Android. Do not turn these candidates
   // into posts; only the separately authorized scan may do that.
@@ -93,6 +126,7 @@
       roleFeeds: doc.querySelectorAll('[role="feed"]').length,
       candidateWrappers: wrappers.size,
       structuredScripts: doc.querySelectorAll('script[type="application/json"],script[type="application/ld+json"]').length,
+      ...domTopology(doc),
     }, { groupId, aliases: [], maxPosts: 20 }, core);
   }
 
