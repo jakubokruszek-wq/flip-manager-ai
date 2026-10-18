@@ -317,7 +317,9 @@ class PocActivity : ComponentActivity() {
                     runCatching {
                         store.append(StoredRun("STRUCTURE_DIAGNOSIS", started, Instant.now().toString(), result.verdict ?: result.status,
                             emptyList(), emptyList(), 0, result.counts.filterValues { it != 0 }.mapValues { it.value.toString() } +
-                                ("attributeNames" to result.attributeNames.joinToString { "${it.first}×${it.second}" })))
+                                ("attributeNames" to result.attributeNames.joinToString { "${it.first}×${it.second}" }) +
+                                ("numericAttributes" to result.numericAttributes.joinToString { "${it.first}×${it.second}" }) +
+                                ("requestPaths" to result.requestPaths.joinToString { "${it.first}×${it.second}" })))
                     }
                 }
             } catch (e: Exception) {

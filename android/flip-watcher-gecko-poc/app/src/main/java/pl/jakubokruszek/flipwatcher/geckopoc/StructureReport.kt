@@ -18,9 +18,12 @@ object StructureReport {
         appendLine("3) Permalinki: linki <a> ${c("anchors")} • do postów tej grupy ${c("anchorGroupPostLinks")} • obcych ${c("anchorForeignPostLinks")} • adresy postów w innych atrybutach ${c("attrPostLikeValues")} (tej grupy ${c("attrGroupPostLinks")})")
         appendLine("4) Zmiany DOM: od startu +${c("mutAddedTotal")}/−${c("mutRemovedTotal")} • ostatnie 10 s +${c("mutAdded10s")}/−${c("mutRemoved10s")} • wirtualizacja: ${if (c("virtualizationSuspected") == 1) "PRAWDOPODOBNA" else "nie widać"}")
         appendLine("5) Dane strony: skrypty ${c("inlineScripts")} (${c("inlineScriptKb")} KB) • post_id ${c("scriptKeyPostId")} • top_level_post_id ${c("scriptKeyTopLevel")} • story_fbid ${c("scriptKeyStoryFbid")} • permalinki grupy ${c("scriptGroupPermalinks")} • DOKŁADNE ID ${c("scriptExactIds")}")
-        appendLine("6) Sieć: nasłuch ${if (c("netFilterAvailable") == 1) "aktywny" else "NIEDOSTĘPNY"} • odpowiedzi ${c("netResponses")} • zatrzymane ${c("netHeld")} (${c("netKb")} KB) • post_id ${c("netKeyPostId")} • top_level_post_id ${c("netKeyTopLevel")} • story_fbid ${c("netKeyStoryFbid")} • permalinki grupy ${c("netGroupPermalinks")} • DOKŁADNE ID ${c("netExactIds")}")
+        appendLine("6) Sieć: nasłuch ${if (c("netFilterAvailable") == 1) "aktywny" else "NIEDOSTĘPNY"} • odczytane odpowiedzi ${c("netResponses")} • błędy ${c("netErrors")} • ucięte ${c("netTruncated")} • zatrzymane ${c("netHeld")} (${c("netKb")} KB) • post_id ${c("netKeyPostId")} • top_level_post_id ${c("netKeyTopLevel")} • story_fbid ${c("netKeyStoryFbid")} • permalinki grupy ${c("netGroupPermalinks")} • DOKŁADNE ID ${c("netExactIds")}")
+        appendLine("6a) Ruch do Facebooka: żądań ${c("netReqTotal")} (z karty ${c("netReqWithTab")}, bez karty/service worker ${c("netReqNoTab")}) • strona ${c("netReqMainFrame")} • ramki ${c("netReqSubFrame")} • XHR/fetch ${c("netReqXhr")} • skrypty ${c("netReqScript")} • websocket ${c("netReqWebsocket")} • obrazy ${c("netReqImage")} • ping/beacon ${c("netReqPing") + c("netReqBeacon")} • inne ${c("netReqOther")} • service worker steruje stroną: ${yes(c("swControlled"))}")
+        if (d.requestPaths.isNotEmpty()) appendLine("6b) Ścieżki żądań: " + d.requestPaths.joinToString { "${it.first}×${it.second}" })
         appendLine("7) Dokładne ID postów: linki ${c("domExactIds")} • dane strony ${c("scriptExactIds")} • sieć ${c("netExactIds")}")
         if (d.attributeNames.isNotEmpty()) appendLine("Najczęstsze atrybuty: " + d.attributeNames.joinToString { "${it.first}×${it.second}" })
+        appendLine("Atrybuty z długimi numerami: " + if (d.numericAttributes.isEmpty()) "brak" else d.numericAttributes.joinToString { "${it.first}×${it.second}" })
         appendLine()
         append(
             when (d.verdict) {
@@ -28,6 +31,7 @@ object StructureReport {
                 "EXACT_IDS_AVAILABLE" -> "Wniosek: są dokładne ID postów tej grupy (potwierdzone permalinkiem w tych samych danych). Skan może je odczytać."
                 "ID_KEYS_WITHOUT_EXACT_BINDING" -> "Wniosek: dane zawierają klucze ID, ale bez permalinku tej grupy w tym samym węźle. Nie przyjmujemy ich (brak dowodu tożsamości)."
                 "NETWORK_NOT_OBSERVED_YET" -> "Wniosek: nasłuch działa, ale nie zarejestrował jeszcze odpowiedzi. Przewiń kilka postów i powtórz."
+                "FEED_DATA_NOT_CAPTURED" -> "Wniosek: strona doładowała dużo treści, a nasłuch odczytał prawie żadnej odpowiedzi. Dane postów płyną kanałem, którego jeszcze nie czytamy — zobacz 6a/6b."
                 "NO_POST_MARKUP" -> "Wniosek: brak jakichkolwiek znaczników postów w dokumencie."
                 "NO_POST_IDS_IN_PAGE_DATA" -> "Wniosek: posty są w DOM, ale ani linki, ani dane strony, ani sieć nie niosą ID posta."
                 else -> "Wniosek: brak."

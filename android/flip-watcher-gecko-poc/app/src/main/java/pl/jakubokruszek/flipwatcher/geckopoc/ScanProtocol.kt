@@ -29,7 +29,16 @@ data class PageProbe(
 )
 
 /** Count-only structure report (see poc-content.js structureDiagnosis); no text, value or id. */
-data class StructureDiagnosis(val status: String, val verdict: String?, val counts: Map<String, Int>, val attributeNames: List<Pair<String, Int>>)
+data class StructureDiagnosis(
+    val status: String,
+    val verdict: String?,
+    val counts: Map<String, Int>,
+    val attributeNames: List<Pair<String, Int>>,
+    /** Per attribute name: how many of its values are long (fbid-like) numbers. */
+    val numericAttributes: List<Pair<String, Int>> = emptyList(),
+    /** First path segment of Facebook requests ("/api", "/ajax"…) with counts. */
+    val requestPaths: List<Pair<String, Int>> = emptyList(),
+)
 
 /** A manual, count-only DOM read; no post identifiers or links are transferred. */
 data class DomDiagnosis(val status: String, val counts: Map<String, Int>, val probe: PageProbe?)
@@ -100,11 +109,13 @@ object ScanProtocol {
         "scriptGroupPermalinks", "scriptExactIds",
         "netAnswered", "netFilterAvailable", "netResponses", "netHeld", "netKb", "netTruncated", "netErrors",
         "netKeyPostId", "netKeyTopLevel", "netKeyStoryFbid", "netGroupPermalinks", "netExactIds",
+        "netReqTotal", "netReqWithTab", "netReqNoTab", "netReqMainFrame", "netReqSubFrame", "netReqXhr", "netReqScript",
+        "netReqWebsocket", "netReqImage", "netReqMedia", "netReqPing", "netReqBeacon", "netReqOther", "swControlled",
     )
 
     val STRUCTURE_VERDICTS = setOf(
         "WRONG_DOCUMENT_OR_CONTEXT", "EXACT_IDS_AVAILABLE", "ID_KEYS_WITHOUT_EXACT_BINDING",
-        "NETWORK_NOT_OBSERVED_YET", "NO_POST_MARKUP", "NO_POST_IDS_IN_PAGE_DATA",
+        "NETWORK_NOT_OBSERVED_YET", "FEED_DATA_NOT_CAPTURED", "NO_POST_MARKUP", "NO_POST_IDS_IN_PAGE_DATA",
     )
 
     fun parseStructureDiagnosis(message: Any?, nonce: String): StructureDiagnosis? {
@@ -115,13 +126,23 @@ object ScanProtocol {
         val values = json.optJSONObject("counters") ?: JSONObject()
         val counts = STRUCTURE_FIELDS.associateWith { name -> values.optInt(name, 0).coerceIn(0, 999_999) }
         val verdict = json.optString("verdict").takeIf { it in STRUCTURE_VERDICTS }
-        val names = json.optJSONArray("attributeNames") ?: JSONArray()
-        val attributeNames = (0 until minOf(names.length(), 15)).mapNotNull { index ->
-            val item = names.optJSONObject(index) ?: return@mapNotNull null
+        val attributeNames = namedCounts(json.optJSONArray("attributeNames"), 15, ATTRIBUTE_NAME)
+        val numericAttributes = namedCounts(json.optJSONArray("numericAttributes"), 10, ATTRIBUTE_NAME)
+        val requestPaths = namedCounts(json.optJSONArray("requestPaths"), 12, REQUEST_PATH)
+        return StructureDiagnosis(status, verdict, counts, attributeNames, numericAttributes, requestPaths)
+    }
+
+    private val ATTRIBUTE_NAME = Regex("^[a-z][a-z0-9-]{0,40}$")
+    private val REQUEST_PATH = Regex("^/(?:[A-Za-z0-9_.-]{0,24}|\\(inne\\))$")
+
+    /** {name, count} pairs whose name matches [pattern]; anything else (values, URLs) is dropped. */
+    private fun namedCounts(array: JSONArray?, limit: Int, pattern: Regex): List<Pair<String, Int>> {
+        if (array == null) return emptyList()
+        return (0 until minOf(array.length(), limit)).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
             val name = item.optString("name")
-            if (Regex("^[a-z][a-z0-9-]{0,40}$").matches(name)) name to item.optInt("count").coerceIn(0, 99_999) else null
+            if (pattern.matches(name)) name to item.optInt("count").coerceIn(0, 99_999) else null
         }
-        return StructureDiagnosis(status, verdict, counts, attributeNames)
     }
 
     private val DOM_COUNT_FIELDS = listOf(

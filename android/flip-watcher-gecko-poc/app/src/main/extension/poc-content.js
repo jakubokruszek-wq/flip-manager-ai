@@ -237,9 +237,14 @@
     let attrPost = 0;
     let attrPostAccepted = 0;
     const names = new Map();
+    const numericValues = new Map();
     for (const element of Array.from(doc.querySelectorAll("*")).slice(0, 20000)) {
       for (const attribute of Array.from(element.attributes)) {
-        if (/^(data-|aria-|role$|tabindex$)/.test(attribute.name)) names.set(attribute.name, (names.get(attribute.name) || 0) + 1);
+        if (/^(data-|aria-|role$|tabindex$)/.test(attribute.name)) {
+          names.set(attribute.name, (names.get(attribute.name) || 0) + 1);
+          // Shape only: how many values of this attribute are long numbers (fbid-like).
+          if (/^\d{10,30}$/.test(attribute.value)) numericValues.set(attribute.name, (numericValues.get(attribute.name) || 0) + 1);
+        }
         if (attribute.name === "href" && element.tagName === "A") continue;
         const value = attribute.value;
         if (!value || value.length > 4000 || !/\/posts\/|\/permalink\/|story_fbid/.test(value)) continue;
@@ -252,7 +257,11 @@
     counters.attrPostLikeValues = Math.min(99999, attrPost);
     counters.attrGroupPostLinks = Math.min(99999, attrPostAccepted);
     const attributeNames = [...names.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)
+      .filter(([name]) => /^[a-z][a-z0-9-]{0,40}$/.test(name)).map(([name, count]) => ({ name, count: Math.min(99999, count), numeric: Math.min(99999, numericValues.get(name) || 0) }));
+    // Attributes that hold long numbers at all (even if rare), names and counts only.
+    const numericAttributes = [...numericValues.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
       .filter(([name]) => /^[a-z][a-z0-9-]{0,40}$/.test(name)).map(([name, count]) => ({ name, count: Math.min(99999, count) }));
+    try { counters.swControlled = scope.navigator.serviceWorker && scope.navigator.serviceWorker.controller ? 1 : 0; } catch { counters.swControlled = 0; }
 
     // Dynamic loading / virtualization.
     counters.mutAddedTotal = Math.min(999999, mutations.added);
@@ -275,11 +284,12 @@
     counters.scriptExactIds = adapter.exactStructuredIds(texts, accepted, core, "HYDRATION").length;
     const network = await networkEvidence(accepted, false);
     Object.assign(counters, (network && network.counts) || { netFilterAvailable: 0 });
+    const requestPaths = network && Array.isArray(network.requestPaths) ? network.requestPaths : [];
     counters.netAnswered = network ? 1 : 0;
 
     const verdict = adapter.structureVerdict(counters);
     counters.virtualizationSuspected = verdict.virtualized;
-    return { status: "GROUP_OK", verdict: verdict.code, counters, attributeNames };
+    return { status: "GROUP_OK", verdict: verdict.code, counters, attributeNames, numericAttributes, requestPaths };
   }
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

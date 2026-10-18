@@ -59,4 +59,20 @@ class StructureDiagnosisTest {
         val stop = StructureReport.describe(ScanProtocol.parseStructureDiagnosis(reply(status = "CHECKPOINT"), "n")!!)
         assertFalse(stop.contains("Dokument:"))
     }
+
+    @Test fun `request paths and numeric attributes keep only names and counts`() {
+        val json = reply().put("requestPaths", JSONArray()
+            .put(JSONObject().put("name", "/api").put("count", 40))
+            .put(JSONObject().put("name", "/(inne)").put("count", 2))
+            .put(JSONObject().put("name", "/api/graphql/?doc_id=1&token=x").put("count", 9)))
+            .put("numericAttributes", JSONArray()
+                .put(JSONObject().put("name", "data-image-id").put("count", 390))
+                .put(JSONObject().put("name", "1234567890123").put("count", 1)))
+        val d = ScanProtocol.parseStructureDiagnosis(json, "n")!!
+        assertEquals(listOf("/api" to 40, "/(inne)" to 2), d.requestPaths)
+        assertEquals(listOf("data-image-id" to 390), d.numericAttributes)
+        val text = StructureReport.describe(d)
+        assertTrue(text.contains("/api×40"))
+        assertTrue(text.contains("data-image-id×390"))
+    }
 }

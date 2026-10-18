@@ -18,6 +18,12 @@
   // document: a new top-level page load drops what the tab held before.
   const held = new Map();
   const stats = { responses: 0, truncated: 0, errors: 0, filterAvailable: 0 };
+  // Where Facebook's traffic actually flows (counts only): every request to a
+  // Facebook host, by resource type, by whether it belongs to a tab (a request
+  // with tabId -1 comes from a service worker or the browser itself), and by
+  // the first path segment ("/api", "/ajax"…). No URL, query or body is kept.
+  const traffic = { total: 0, withTab: 0, noTab: 0, types: new Map(), paths: new Map() };
+  const NO_TAB = -1;
 
   function heldFor(tabId) {
     const now = Date.now();
@@ -32,6 +38,18 @@
     items.push({ at: Date.now(), text });
     let total = items.reduce((sum, item) => sum + item.text.length, 0);
     while (items.length > MAX_HELD || total > MAX_HELD_CHARS) total -= items.shift().text.length;
+  }
+
+  if (scope.browser && browser.webRequest) {
+    browser.webRequest.onBeforeRequest.addListener(details => {
+      traffic.total++;
+      if (details.tabId >= 0) traffic.withTab++; else traffic.noTab++;
+      traffic.types.set(details.type, (traffic.types.get(details.type) || 0) + 1);
+      let segment = "?";
+      try { segment = "/" + (new URL(details.url).pathname.split("/")[1] || ""); } catch { /* counted as "?" */ }
+      if (!/^\/[a-z0-9_.-]{0,24}$/i.test(segment)) segment = "/(inne)";
+      if (traffic.paths.size < 60 || traffic.paths.has(segment)) traffic.paths.set(segment, (traffic.paths.get(segment) || 0) + 1);
+    }, { urls: ["https://*.facebook.com/*", "https://facebook.com/*", "http://127.0.0.1/*"] });
   }
 
   if (scope.browser && browser.webRequest && typeof browser.webRequest.filterResponseData === "function") {
@@ -59,12 +77,16 @@
       filter.onerror = () => { stats.errors++; };
     }, {
       urls: ["https://www.facebook.com/*", "https://m.facebook.com/*", "https://web.facebook.com/*", "http://127.0.0.1/*"],
-      types: ["main_frame", "xmlhttprequest"],
+      // Data may arrive as XHR/fetch, as a script response, as a sub-document or
+      // from a service worker ("other", tabId -1); all are read, none is altered.
+      types: ["main_frame", "sub_frame", "xmlhttprequest", "script", "other"],
     }, ["blocking"]);
   }
 
   function evidence(tabId, accepted, withRecords) {
-    const items = heldFor(tabId);
+    // Requests without a tab (service worker) cannot be tied to a tab; they are
+    // included, and collector-core still accepts only the approved group.
+    const items = heldFor(tabId).concat(tabId === NO_TAB ? [] : heldFor(NO_TAB));
     const counts = { netFilterAvailable: stats.filterAvailable, netResponses: stats.responses, netHeld: items.length, netKb: 0, netTruncated: stats.truncated, netErrors: stats.errors };
     const keys = FlipGeckoPocAdapter.countIdKeys(items.map(item => item.text), accepted);
     counts.netKb = Math.round(items.reduce((sum, item) => sum + item.text.length, 0) / 1024);
@@ -74,7 +96,12 @@
     counts.netGroupPermalinks = keys.groupPermalinks;
     const records = FlipGeckoPocAdapter.exactStructuredIds(items.map(item => item.text), accepted, core, "NETWORK");
     counts.netExactIds = records.length;
-    return withRecords ? { counts, records } : { counts };
+    counts.netReqTotal = traffic.total;
+    counts.netReqWithTab = traffic.withTab;
+    counts.netReqNoTab = traffic.noTab;
+    for (const [type, key] of [["main_frame", "netReqMainFrame"], ["sub_frame", "netReqSubFrame"], ["xmlhttprequest", "netReqXhr"], ["script", "netReqScript"], ["websocket", "netReqWebsocket"], ["image", "netReqImage"], ["media", "netReqMedia"], ["ping", "netReqPing"], ["beacon", "netReqBeacon"], ["other", "netReqOther"]]) counts[key] = traffic.types.get(type) || 0;
+    const requestPaths = [...traffic.paths.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([name, count]) => ({ name, count }));
+    return withRecords ? { counts, records, requestPaths } : { counts, requestPaths };
   }
 
   browser.runtime.onMessage.addListener((message, sender) => {

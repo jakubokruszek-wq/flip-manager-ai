@@ -153,6 +153,9 @@
     else if (exact.DOM + exact.SCRIPT + exact.NETWORK > 0) code = "EXACT_IDS_AVAILABLE";
     else if (keys > 0) code = "ID_KEYS_WITHOUT_EXACT_BINDING";
     else if (n("netFilterAvailable") === 1 && n("netResponses") === 0) code = "NETWORK_NOT_OBSERVED_YET";
+    // The page grew a lot while (almost) no Facebook response was read: the
+    // feed data travels where the network layer does not look yet.
+    else if (n("netFilterAvailable") === 1 && n("netResponses") <= 3 && n("mutAddedTotal") >= 200) code = "FEED_DATA_NOT_CAPTURED";
     else if (markup === 0 && n("images") === 0) code = "NO_POST_MARKUP";
     else code = "NO_POST_IDS_IN_PAGE_DATA";
     return { code, virtualized, exactDom: exact.DOM, exactScript: exact.SCRIPT, exactNetwork: exact.NETWORK };

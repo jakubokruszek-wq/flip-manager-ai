@@ -263,3 +263,10 @@ test("structure verdict separates context, ids, unbound keys, missing data and m
   assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 150 }).virtualized, 1);
   assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 10 }).virtualized, 0);
 });
+
+test("a page that grew while almost no response was read is FEED_DATA_NOT_CAPTURED", () => {
+  const v = c => adapter.structureVerdict({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netFilterAvailable: 1, mComponents: 3996, images: 400, ...c }).code;
+  assert.equal(v({ netResponses: 1, mutAddedTotal: 5000 }), "FEED_DATA_NOT_CAPTURED");
+  assert.equal(v({ netResponses: 40, mutAddedTotal: 5000 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(v({ netResponses: 1, mutAddedTotal: 20 }), "NO_POST_IDS_IN_PAGE_DATA");
+});

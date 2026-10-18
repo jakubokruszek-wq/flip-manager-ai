@@ -211,6 +211,20 @@ class GeckoFixtureTest {
         assertEquals(ScanStatus.NO_POSTS, withFixture(groupPath, "mobile-div-unbound") { it.channel.scan(scanRequest()) }.status)
     }
 
+    @Test fun scriptResponsesAndTrafficAreCounted() {
+        val d = withFixture(groupPath, "mobile-div-script") { it.channel.structureDiagnosis(FIXTURE_GROUP_ID) }!!
+        Log.i("GeckoPocTest", "STRUCTURE_SCRIPT verdict=${d.verdict} ${d.counts.filterValues { it != 0 }} paths=${d.requestPaths} numeric=${d.numericAttributes}")
+        assertEquals("EXACT_IDS_AVAILABLE", d.verdict)
+        assertTrue(d.counts["netReqScript"]!! >= 1)
+        assertTrue(d.counts["netReqMainFrame"]!! >= 1)
+        assertEquals(1, d.counts["netExactIds"])
+        assertTrue(d.requestPaths.any { it.first == "/data" })
+        assertEquals(listOf("data-image-id" to 1), d.numericAttributes)
+        val report = withFixture(groupPath, "mobile-div-script") { it.channel.scan(scanRequest()) }
+        assertEquals(listOf("550000000000006"), report.posts.map { it.postId })
+        assertEquals("NETWORK", report.posts.single().idSource)
+    }
+
     @Test fun networkEvidenceIsDroppedOnANewPageLoad() {
         // Same session: ids captured on the first page must not leak into the next document.
         val d = withFixture(groupPath, "mobile-div-feed") { page ->
