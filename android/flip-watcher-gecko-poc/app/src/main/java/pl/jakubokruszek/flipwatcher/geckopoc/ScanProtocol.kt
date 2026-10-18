@@ -83,7 +83,9 @@ object ScanProtocol {
     private val DOM_COUNT_FIELDS = listOf(
         "anchorsSeen", "exactGroupLinks", "exactGroupIds", "foreignGroupLinks",
         "photoLinks", "otherLinks", "roleArticles", "nativeArticles", "roleFeeds",
-        "candidateWrappers", "structuredScripts"
+        "candidateWrappers", "structuredScripts",
+        "iframeCount", "iframeReadable", "iframeInaccessible", "iframeAnchors",
+        "iframeArticles", "openShadowRoots", "openShadowAnchors", "openShadowArticles"
     )
 
     fun parseDomDiagnosis(message: Any?, nonce: String): DomDiagnosis? {
