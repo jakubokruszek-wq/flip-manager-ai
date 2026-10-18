@@ -36,7 +36,7 @@ class CollectorChannel(
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult" -> {
+                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -101,6 +101,13 @@ class CollectorChannel(
     suspend fun networkControl(windowMs: Int = 3_000): Map<String, Int>? {
         val nonce = UUID.randomUUID().toString()
         return ScanProtocol.parseNetworkControl(request(nonce, ScanProtocol.networkControlRequest(nonce, windowMs = windowMs), windowMs + 15_000L), nonce)
+    }
+
+    /** DOM counts of the page after a load measurement (no text, ids or values). */
+    suspend fun loadDomStats(groupId: String, allowLoopback: Boolean, timeoutMs: Long = 8_000): Map<String, Int>? {
+        val nonce = UUID.randomUUID().toString()
+        val message = JSONObject().put("type", "loadDomStats").put("nonce", nonce).put("groupId", groupId).put("allowLoopback", allowLoopback)
+        return LoadMeasurement.parseDomStats(request(nonce, message, timeoutMs), nonce)
     }
 
     suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {

@@ -289,6 +289,96 @@ class GeckoFixtureTest {
         assertTrue(result.counts["controlOtherTab"]!! >= 1)
     }
 
+    /** One load measurement in a fresh session, the way the app runs it (armed before loadUri). */
+    private fun measureLoad(fixture: String, path: String = groupPath, windowMs: Int = 4_000, otherTab: String? = null, aliveForMs: Long? = null): LoadResult = runBlocking {
+        withTimeout(90_000) {
+            withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel = CollectorChannel(session, fixtureMode = true)
+                val other = otherTab?.let { GeckoSession(GeckoSessionSettings.Builder().build()) }
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    session.open(GeckoHost.runtime(context))
+                    session.setActive(true)
+                    other?.let { it.open(GeckoHost.runtime(context)); it.setActive(true); it.loadUri(server.url(groupPath, otherTab!!)) }
+                    val started = System.currentTimeMillis()
+                    LoadMeasurementRunner(GeckoHost.background).run(
+                        session, channel, server.url(path, fixture), FIXTURE_GROUP_ID, windowMs, allowLoopback = true,
+                        sessionAlive = { aliveForMs == null || System.currentTimeMillis() - started < aliveForMs },
+                    )
+                } finally {
+                    channel.close(); runCatching { other?.close() }; session.close(); server.close()
+                }
+            }
+        }
+    }
+
+    @Test fun loadMeasurementCountsTheWholeApprovedGroupLoad() {
+        val r = measureLoad("load-group")
+        Log.i("GeckoPocTest", "LOAD_GROUP status=${r.status} reason=${r.reason} ${r.counts.filterValues { it != 0 }} dom=${r.dom} paths=${r.requestPaths}")
+        assertEquals(LoadStatus.PASS, r.status)
+        assertTrue(r.armedBeforeNavigation)
+        assertEquals(1, r.counts["loadBound"])
+        assertEquals(1, r.counts["loadMainFrames"])
+        assertEquals(1, r.counts["loadPageMainFrame"])
+        assertEquals(1, r.counts["loadDocCompleted"])
+        assertEquals(2, r.counts["loadPageXhr"])
+        assertEquals(1, r.counts["loadPageScript"])
+        assertEquals(1, r.counts["loadPageImage"])
+        assertEquals(0, r.counts["loadBodyCapture"])
+        assertEquals(1, r.dom!!["domGroupOk"])
+        assertEquals(LoadMeasurement.apiRequests(r.counts), 2)
+    }
+
+    @Test fun loadMeasurementFreezesOnLoginCheckpointCaptchaAndOtherGroup() {
+        for ((fixture, reason) in listOf("load-to-login" to "LOGIN", "load-to-checkpoint" to "CHECKPOINT", "load-to-captcha" to "CAPTCHA", "load-to-other-group" to "OTHER_GROUP")) {
+            val r = measureLoad(fixture, windowMs = 3_000)
+            assertEquals(fixture, LoadStatus.FAIL, r.status)
+            assertEquals(fixture, reason, r.reason)
+            assertEquals(fixture, 1, r.counts["loadMainFrames"]) // only the approved document, nothing after it
+        }
+    }
+
+    @Test fun loadMeasurementIgnoresAnotherTab() {
+        val r = measureLoad("load-group", otherTab = "network-control")
+        assertEquals(LoadStatus.PASS, r.status)
+        assertEquals(2, r.counts["loadPageXhr"]) // the other tab polls, but only this tab's 2 fetches count
+        assertTrue(r.counts["loadOtherTab"]!! >= 1)
+    }
+
+    @Test fun loadMeasurementNeverBindsToANonApprovedPage() {
+        val r = measureLoad("other", path = "/groups/999999999999/", windowMs = 3_000)
+        assertEquals(LoadStatus.FAIL, r.status)
+        assertEquals("MAIN_FRAME_NOT_SEEN", r.reason)
+        assertEquals(0, r.counts["loadPageXhr"])
+    }
+
+    @Test fun loadMeasurementSessionClosedThenCleanNextRun() {
+        val closed = measureLoad("load-group", windowMs = 4_000, aliveForMs = 1_000)
+        assertEquals(LoadStatus.FAIL, closed.status)
+        assertEquals("SESSION_CLOSED", closed.reason)
+        // The aborted measurement left nothing behind: the next one starts from zero.
+        val next = measureLoad("load-group")
+        assertEquals(LoadStatus.PASS, next.status)
+        assertEquals(2, next.counts["loadPageXhr"])
+        assertEquals(1, next.counts["loadMainFrames"])
+    }
+
+    @Test fun loadMeasurementIsReadOnceAndCleared() = runBlocking {
+        withTimeout(30_000) {
+            withContext(Dispatchers.Main) {
+                GeckoHost.collectorExtension(context)
+                val background = GeckoHost.background
+                assertTrue(background.awaitPort(10_000))
+                val nonce = UUID.randomUUID().toString()
+                assertTrue(LoadMeasurement.parseArmed(background.request(LoadMeasurement.armRequest(nonce, FIXTURE_GROUP_ID, 2_000)), nonce))
+                assertTrue(LoadMeasurement.parseRead(background.request(LoadMeasurement.readRequest(nonce)), nonce) != null)
+                assertEquals(null, LoadMeasurement.parseRead(background.request(LoadMeasurement.readRequest(nonce)), nonce))
+            }
+        }
+    }
+
     @Test fun pageChangeDuringScanStopsIt() = runBlocking {
         withTimeout(120_000) {
             withContext(Dispatchers.Main) {

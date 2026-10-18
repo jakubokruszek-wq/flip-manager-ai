@@ -28,9 +28,10 @@ fi
 if grep -n "webRequestBlocking" "$src/extension/manifest.json"; then
   echo "FAIL: webRequestBlocking permission present"; exit 1
 fi
-# The network layer must never hand a response body to the app or another context.
-if grep -n -E "connectNative|sendNativeMessage|postMessage" "$src/extension/poc-background.js"; then
-  echo "FAIL: background script talks to the app directly"; exit 1
+# The background talks to the app (0.2.4 load measurement) only through its
+# counters: it must not touch documents, storage or cookies.
+if grep -n -E "document\.|cookies|localStorage|browser\.storage|getAll\(" "$src/extension/poc-background.js" | grep -v -E "^[0-9]+:[[:space:]]*//"; then
+  echo "FAIL: background script reaches page content, cookies or storage"; exit 1
 fi
 if grep -R -n -E "OFFLINE_TEST|LIVE_COLLECTION_ENABLED\s*=\s*true|BUY_ENABLED" "$poc/app"; then
   echo "FAIL: POC references production switches"; exit 1

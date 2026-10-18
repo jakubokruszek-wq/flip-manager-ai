@@ -438,3 +438,138 @@ test("control requests are classified by tab and yield LISTENER_OK / WRONG_TAB /
   // Control hits never pollute the Facebook counters.
   assert.equal(ok.netReqWithTab, 0);
 });
+
+// ---- 0.2.4 measurement of one approved group page load
+const LOAD_GROUP = "lodzsprzedazzakupwynajem";
+const LOAD_TAB = 11;
+const groupUrl = `https://www.facebook.com/groups/${LOAD_GROUP}/`;
+const ev = (type, url = "https://www.facebook.com/api/graphql/?doc_id=9&fb_dtsg=SECRET", tabId = LOAD_TAB) => ({ type, url, tabId });
+const armedLoad = (clock = { t: 0 }) => {
+  const counter = adapter.createLoadCounter(() => clock.t);
+  assert.equal(counter.arm("nonce-aaaa-1111", [LOAD_GROUP], 25_000), true);
+  return counter;
+};
+
+test("load: nothing is counted before arming; arming happens before the first main_frame", () => {
+  const counter = adapter.createLoadCounter();
+  assert.equal(counter.record(ev("main_frame", groupUrl)), false);
+  assert.equal(counter.read("nonce-aaaa-1111"), null);
+  const armed = armedLoad();
+  assert.equal(armed.record(ev("main_frame", groupUrl)), true);
+  assert.equal(armed.boundTab(), LOAD_TAB);
+});
+
+test("load: the approved group load counts document, XHR/fetch, scripts and images; API vs all separated", () => {
+  const counter = armedLoad();
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest"));
+  counter.record(ev("xmlhttprequest", "https://www.facebook.com/ajax/bz"));
+  counter.record(ev("script", "https://www.facebook.com/rsrc.php/v3/x.js"));
+  counter.record(ev("image", "https://scontent.xx.fbcdn.net/a.jpg"));
+  counter.record(ev("image", "https://scontent.xx.fbcdn.net/b.jpg"));
+  counter.complete({ type: "main_frame", url: groupUrl, tabId: LOAD_TAB, fromCache: false });
+  counter.complete({ type: "image", url: "https://scontent.xx.fbcdn.net/a.jpg", tabId: LOAD_TAB, fromCache: true });
+  const { counts, stopReason, requestPaths } = counter.read("nonce-aaaa-1111");
+  assert.equal(stopReason, null);
+  assert.equal(counts.loadBound, 1);
+  assert.equal(counts.loadMainFrames, 1);
+  assert.equal(counts.loadDocCompleted, 1);
+  assert.equal(counts.loadPageTotal, 4);
+  assert.equal(counts.loadPageXhr, 2);
+  assert.equal(counts.loadPageScript, 1);
+  assert.equal(counts.loadFbcdnTotal, 2);
+  assert.equal(counts.loadFbcdnImage, 2);
+  assert.equal(counts.loadCompleted, 2);
+  assert.equal(counts.loadFromCache, 1);
+  assert.equal(counts.loadBodyCapture, 0);
+  assert.deepEqual(requestPaths.map(p => p.name).sort(), ["/ajax", "/api", "/groups", "/rsrc.php"]);
+  assert.ok(!JSON.stringify(counts).includes("SECRET") && !JSON.stringify(requestPaths).includes("SECRET"));
+});
+
+test("load: redirects to login, checkpoint or CAPTCHA freeze the measurement with that reason", () => {
+  for (const [url, reason] of [
+    ["https://www.facebook.com/login/?next=x", "LOGIN"],
+    ["https://m.facebook.com/checkpoint/1501092823525282/", "CHECKPOINT"],
+    ["https://www.facebook.com/two_step_verification/two_factor/", "CHECKPOINT"],
+    ["https://www.facebook.com/captcha/", "CAPTCHA"],
+  ]) {
+    const counter = armedLoad();
+    counter.record(ev("main_frame", groupUrl));
+    counter.record(ev("main_frame", url));
+    assert.equal(counter.record(ev("xmlhttprequest")), false, reason);
+    const out = counter.read("nonce-aaaa-1111");
+    assert.equal(out.stopReason, reason);
+    assert.equal(out.counts.loadPageXhr, 0);
+  }
+});
+
+test("load: navigation to another group, another host or another Facebook page freezes; it never binds there", () => {
+  for (const [url, reason] of [
+    ["https://www.facebook.com/groups/innagrupa/", "OTHER_GROUP"],
+    ["https://example.com/", "OTHER_HOST"],
+    ["https://www.facebook.com/messages/", "OTHER_PAGE"],
+  ]) {
+    const counter = armedLoad();
+    counter.record(ev("main_frame", groupUrl));
+    counter.record(ev("main_frame", url));
+    assert.equal(counter.read("nonce-aaaa-1111").stopReason, reason);
+  }
+  const unbound = armedLoad();
+  assert.equal(unbound.record(ev("main_frame", "https://www.facebook.com/groups/innagrupa/")), false);
+  assert.equal(unbound.record(ev("xmlhttprequest")), false);
+  assert.equal(unbound.read("nonce-aaaa-1111").counts.loadBound, 0);
+});
+
+test("load: other tabs give one total only and can never bind or add to the group's counts", () => {
+  const counter = armedLoad();
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest", undefined, 99));
+  counter.record(ev("main_frame", groupUrl, 99));
+  const { counts } = counter.read("nonce-aaaa-1111");
+  assert.equal(counts.loadOtherTab, 2);
+  assert.equal(counts.loadPageXhr, 0);
+  assert.equal(counts.loadMainFrames, 1);
+});
+
+test("load: requests without a tab are counted apart and never attributed", () => {
+  const counter = armedLoad();
+  assert.equal(counter.record(ev("main_frame", groupUrl, -1)), false); // cannot bind
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest", undefined, -1));
+  counter.record(ev("image", "https://scontent.xx.fbcdn.net/a.jpg", -1));
+  const { counts } = counter.read("nonce-aaaa-1111");
+  assert.equal(counts.loadNoTab, 1);
+  assert.equal(counts.loadNoTabFbcdn, 1);
+  assert.equal(counts.loadPageXhr, 0);
+  assert.equal(counts.loadFbcdnTotal, 0);
+});
+
+test("load: binding is only possible shortly after arming and counting stops when the window ends", () => {
+  const clock = { t: 0 };
+  const late = armedLoad(clock);
+  clock.t = 10_001;
+  assert.equal(late.record(ev("main_frame", groupUrl)), false);
+  const clock2 = { t: 0 };
+  const counter = armedLoad(clock2);
+  counter.record(ev("main_frame", groupUrl));
+  clock2.t = 27_001; // 25 s + 2 s grace
+  assert.equal(counter.isArmed(), false);
+  assert.equal(counter.record(ev("xmlhttprequest")), false);
+});
+
+test("load: no mixing between measurements, read once, abort clears, invalid arming refused", () => {
+  const counter = armedLoad();
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest"));
+  assert.equal(counter.arm("nonce-bbbb-2222", [LOAD_GROUP], 25_000), true);
+  assert.equal(counter.read("nonce-aaaa-1111"), null);
+  const second = counter.read("nonce-bbbb-2222");
+  assert.equal(second.counts.loadPageXhr, 0);
+  assert.equal(second.counts.loadBound, 0);
+  assert.equal(counter.read("nonce-bbbb-2222"), null);
+  counter.arm("nonce-cccc-3333", [LOAD_GROUP], 25_000);
+  assert.equal(counter.abort("nonce-cccc-3333"), true);
+  assert.equal(counter.read("nonce-cccc-3333"), null);
+  assert.equal(counter.arm("x", [LOAD_GROUP], 25_000), false);
+  assert.equal(counter.arm("nonce-dddd-4444", ["../evil"], 25_000), false);
+});

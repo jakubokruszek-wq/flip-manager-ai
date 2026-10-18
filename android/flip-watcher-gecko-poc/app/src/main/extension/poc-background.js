@@ -7,6 +7,8 @@
   // FlipGeckoPocAdapter.createTrafficCounter for what is counted.
   const adapter = scope.FlipGeckoPocAdapter;
   const counter = adapter.createTrafficCounter();
+  // 0.2.4: page-load measurement, armed by the app before navigation.
+  const loadCounter = adapter.createLoadCounter();
 
   // Arming requires a real tab whose top-level page is the approved group.
   function senderOnApprovedGroup(sender, accepted) {
@@ -24,9 +26,11 @@
   const onBefore = details => {
     // Not armed: the event is dropped without looking at it.
     if (counter.isArmed()) counter.record(details);
+    if (loadCounter.isArmed()) loadCounter.record(details);
   };
   const onCompleted = details => {
     if (counter.isArmed()) counter.complete(details);
+    if (loadCounter.isArmed()) loadCounter.complete(details);
   };
   const api = { webRequest: false, listener: false, onCompleted: false };
   if (scope.browser && browser.webRequest) {
@@ -54,4 +58,35 @@
     }
     return undefined;
   });
+
+  // App <-> background port (official GeckoView native messaging). The app
+  // arms the load measurement here BEFORE calling loadUri, because no page
+  // script exists yet at that moment. Replies carry counts only.
+  let appPort = null;
+  function connectApp() {
+    try {
+      appPort = browser.runtime.connectNative("flipPoc");
+    } catch {
+      appPort = null;
+      return;
+    }
+    appPort.onMessage.addListener(message => {
+      if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
+      const reply = value => { try { appPort.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
+      if (message.type === "armLoad") {
+        reply({ type: "armLoadResult", armed: loadCounter.arm(message.nonce, message.accepted, message.windowMs) ? 1 : 0, listener: api.listener ? 1 : 0 });
+      } else if (message.type === "readLoad") {
+        const result = loadCounter.read(message.nonce);
+        reply({ type: "readLoadResult", found: result ? 1 : 0, ...(result || { counts: {}, stopReason: null, requestPaths: [] }) });
+      } else if (message.type === "abortLoad") {
+        reply({ type: "abortLoadResult", aborted: loadCounter.abort(message.nonce) ? 1 : 0 });
+      }
+    });
+    appPort.onDisconnect.addListener(() => {
+      // App or runtime went away: drop any pending measurement.
+      loadCounter.abort();
+      appPort = null;
+    });
+  }
+  connectApp();
 })(globalThis);

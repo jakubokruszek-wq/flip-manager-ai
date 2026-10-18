@@ -73,6 +73,7 @@ class PocActivity : ComponentActivity() {
     /** Last device measurements, combined into the GO / CONDITIONAL GO / NO-GO verdict. */
     private var lastControl: ControlStatus? = null
     private var lastStructure: StructureDiagnosis? = null
+    private var measuringLoad = false
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { scheduleScreenOffTest() }
 
@@ -332,6 +333,47 @@ class PocActivity : ComponentActivity() {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 output.text = "Diagnoza postów: błąd ${e.javaClass.simpleName}. Bez skanu."
             } finally {
+                inspectingDom = false
+                render()
+            }
+        }
+    }
+
+    // ---- one measured load of the approved group (counts only, armed before loadUri)
+    private fun measureGroupOpening() {
+        if (measuringLoad || scanning || inspectingDom) return
+        val current = session ?: run { output.text = "Otwórz sesję."; return }
+        val currentChannel = channel ?: return
+        measuringLoad = true
+        inspectingDom = true
+        loginRequested = false
+        haltMessage = null
+        render()
+        output.text = "Zmierz otwarcie grupy: nasłuch uzbrojony PRZED otwarciem, okno ${LoadMeasurement.WINDOW_MS / 1000} s. Nie dotykaj ekranu.\n" +
+            "Liczone są tylko zdarzenia sieci tej karty; treść odpowiedzi nie jest czytana. Bez skanu."
+        lifecycleScope.launch {
+            val started = Instant.now().toString()
+            try {
+                GeckoHost.collectorExtension(this@PocActivity)
+                val result = LoadMeasurementRunner(GeckoHost.background).run(
+                    session = current,
+                    channel = currentChannel,
+                    url = PocPolicy.APPROVED_GROUP_URL,
+                    groupId = PocPolicy.APPROVED_GROUP_ID,
+                    sessionAlive = { session === current },
+                )
+                output.text = LoadMeasurement.describe(result)
+                runCatching {
+                    store.append(StoredRun("GROUP_LOAD_MEASUREMENT", started, Instant.now().toString(),
+                        result.status.name + (result.reason?.let { ":$it" } ?: ""), emptyList(), emptyList(), 0,
+                        (result.counts + result.dom.orEmpty()).filterValues { it != 0 }.mapValues { it.value.toString() } +
+                            ("requestPaths" to result.requestPaths.joinToString { "${it.first}×${it.second}" })))
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                output.text = "Zmierz otwarcie grupy: błąd ${e.javaClass.simpleName}. Pomiar przerwany i wyczyszczony."
+            } finally {
+                measuringLoad = false
                 inspectingDom = false
                 render()
             }
@@ -623,6 +665,9 @@ class PocActivity : ComponentActivity() {
             ))
             addView(row(
                 button("netControl", "Test sieci GeckoView") { runNetworkControl() },
+                button("loadMeasure", "Zmierz otwarcie grupy") { measureGroupOpening() },
+            ))
+            addView(row(
                 button("test10", "Test ekranu za 10 min") { startScreenOffTest() },
                 button("testNow", "Test teraz") { runScreenOffTestNow() },
                 button("clear", "Wyloguj i usuń dane") { clearSessionData() },

@@ -346,6 +346,26 @@
       port.postMessage({ type: "domDiagnosisResult", nonce: message.nonce, probe: probe(), ...result });
       return;
     }
+    if (message.type === "loadDomStats") {
+      // After a page-load measurement: counts of this document only (no text, ids or values).
+      const input = { groupId: message.groupId, aliases: [], maxPosts: 20, allowLoopback: message.allowLoopback === true };
+      const page = snapshot();
+      const groupOk = adapter.classify(page, input) === "GROUP_OK";
+      const texts = groupOk ? pageDataTexts() : [];
+      const keys = adapter.countIdKeys(texts, [message.groupId]);
+      port.postMessage({ type: "loadDomStatsResult", nonce: message.nonce, counts: {
+        domGroupOk: groupOk ? 1 : 0,
+        domElements: Math.min(999999, scope.document.getElementsByTagName("*").length),
+        domMutAdded: Math.min(999999, mutations.added),
+        domMutRemoved: Math.min(999999, mutations.removed),
+        domSecondsSinceLoad: Math.min(99999, Math.round((Date.now() - loadedAt) / 1000)),
+        domMComponents: Math.min(999999, scope.document.querySelectorAll("[data-mcomponent]").length),
+        domExactIds: groupOk ? adapter.evaluate({ ...page, structured: [], networkRecords: [] }, input, core).posts.length : 0,
+        scriptExactIds: groupOk ? adapter.exactStructuredIds(texts, [message.groupId], core, "HYDRATION").length : 0,
+        scriptIdKeys: keys.postId + keys.topLevel + keys.storyFbid + keys.groupPermalinks,
+      } });
+      return;
+    }
     if (message.type === "networkControl") {
       // Control test of the listener: only on the POC's own loopback page, never on Facebook.
       if (scope.location.protocol !== "http:" || scope.location.hostname !== "127.0.0.1" ||

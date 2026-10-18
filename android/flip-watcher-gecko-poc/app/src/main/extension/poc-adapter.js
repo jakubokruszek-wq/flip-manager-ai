@@ -277,6 +277,116 @@
     };
   }
 
+  // ---- 0.2.4: measurement of ONE approved group page load, from before navigation
+  //
+  // Armed by the app (not by a page) BEFORE loadUri. The first main_frame
+  // request to the approved group (Facebook host or, in tests, loopback)
+  // within BIND_MS binds the measurement to that tab. From then on only that
+  // tab is counted, by host class and type; tab-less requests are counted
+  // apart and never attributed; other tabs give one total. A later top-level
+  // navigation of the bound tab to login, checkpoint/CAPTCHA, another group
+  // or another host FREEZES the counters with that reason: the measurement
+  // never extends to any other page. Counts only; no URL, query, header or body.
+  const LOAD_BIND_MS = 10_000;
+  const LOAD_MAX_WINDOW_MS = 30_000;
+  const LOAD_STOPS = ["LOGIN", "CHECKPOINT", "CAPTCHA", "OTHER_GROUP", "OTHER_HOST", "OTHER_PAGE"];
+
+  function loadTarget(url, accepted) {
+    let parsed;
+    try { parsed = new URL(url); } catch { return "OTHER_HOST"; }
+    const hostClass = trafficHostClass(url);
+    if (hostClass !== "facebook" && hostClass !== "loopback") return "OTHER_HOST";
+    const path = parsed.pathname;
+    if (/checkpoint|two_step_verification/i.test(path)) return "CHECKPOINT";
+    if (/captcha/i.test(path)) return "CAPTCHA";
+    if (/^\/(login|recover)/i.test(path)) return "LOGIN";
+    const group = (path.match(/^\/groups\/([^/]+)\/?$/) || [])[1];
+    if (group) return accepted.includes(group) ? "APPROVED" : "OTHER_GROUP";
+    return "OTHER_PAGE";
+  }
+
+  function createLoadCounter(now = () => Date.now()) {
+    let m = null;
+    const fresh = (nonce, accepted, windowMs) => ({
+      nonce, accepted, armedAt: now(), windowMs, tabId: null, stop: null,
+      mainFrames: 0, docCompleted: 0,
+      page: new Map(), pageTotal: 0, fbcdn: new Map(), fbcdnTotal: 0, noTab: 0, noTabFbcdn: 0, otherTab: 0,
+      completed: 0, fromCache: 0, paths: new Map(),
+    });
+    const live = () => m && now() <= m.armedAt + m.windowMs + 2_000;
+    const bump = (map, key) => map.set(key, (map.get(key) || 0) + 1);
+    return {
+      arm(nonce, accepted, windowMs) {
+        const ids = (Array.isArray(accepted) ? accepted : []).filter(id => typeof id === "string" && /^[A-Za-z0-9._-]{1,100}$/.test(id)).slice(0, 6);
+        if (typeof nonce !== "string" || !/^[A-Za-z0-9-]{8,64}$/.test(nonce) || !ids.length) return false;
+        const ms = Math.max(1_000, Math.min(LOAD_MAX_WINDOW_MS, Math.floor(Number(windowMs) || 0)));
+        m = fresh(nonce, ids, ms);
+        return true;
+      },
+      isArmed() { return Boolean(live()); },
+      boundTab() { return m ? m.tabId : null; },
+      record(details) {
+        if (!live() || !details) return false;
+        const hostClass = trafficHostClass(details.url);
+        // Leaving for a non-watched host still freezes the bound tab (when the event is delivered).
+        if (!hostClass && m.tabId !== null && details.tabId === m.tabId && details.type === "main_frame" && !m.stop) { m.stop = "OTHER_HOST"; return false; }
+        if (!hostClass || hostClass === "control") return false;
+        const type = TRAFFIC_TYPES.includes(details.type) ? details.type : "other";
+        if (m.tabId === null) {
+          // Bind only to the first main_frame of the approved group, shortly after arming.
+          if (type !== "main_frame" || details.tabId < 0 || now() - m.armedAt > LOAD_BIND_MS) return false;
+          if (loadTarget(details.url, m.accepted) !== "APPROVED") return false;
+          m.tabId = details.tabId;
+        } else if (details.tabId !== m.tabId) {
+          if (details.tabId === -1) { if (hostClass === "fbcdn") m.noTabFbcdn++; else m.noTab++; return true; }
+          m.otherTab++;
+          return false;
+        }
+        if (m.stop) return false; // frozen: nothing after leaving the approved page
+        if (type === "main_frame") {
+          const target = loadTarget(details.url, m.accepted);
+          if (target !== "APPROVED") { m.stop = target; return false; }
+          m.mainFrames++;
+        }
+        if (hostClass === "fbcdn") { m.fbcdnTotal++; bump(m.fbcdn, type); return true; }
+        m.pageTotal++;
+        bump(m.page, type);
+        bump(m.paths, trafficPathSegment(details.url));
+        return true;
+      },
+      complete(details) {
+        if (!live() || !details || m.tabId === null || details.tabId !== m.tabId || m.stop) return false;
+        const hostClass = trafficHostClass(details.url);
+        if (!hostClass || hostClass === "control") return false;
+        m.completed++;
+        if (details.fromCache === true) m.fromCache++;
+        if (details.type === "main_frame" && loadTarget(details.url, m.accepted) === "APPROVED") m.docCompleted = 1;
+        return true;
+      },
+      // Read once with the arming nonce; the measurement is cleared afterwards.
+      read(nonce) {
+        if (!m || nonce !== m.nonce) return null;
+        const cap = value => Math.min(999_999, value || 0);
+        const out = {
+          loadArmed: 1, loadBound: m.tabId === null ? 0 : 1, loadMainFrames: cap(m.mainFrames), loadDocCompleted: m.docCompleted,
+          loadWindowSec: Math.round(m.windowMs / 1000), loadBodyCapture: 0,
+          loadPageTotal: cap(m.pageTotal), loadFbcdnTotal: cap(m.fbcdnTotal),
+          loadNoTab: cap(m.noTab), loadNoTabFbcdn: cap(m.noTabFbcdn), loadOtherTab: cap(m.otherTab),
+          loadCompleted: cap(m.completed), loadFromCache: cap(m.fromCache),
+        };
+        for (const type of TRAFFIC_TYPES) {
+          out["loadPage" + TRAFFIC_TYPE_KEYS[type]] = cap(m.page.get(type));
+          out["loadFbcdn" + TRAFFIC_TYPE_KEYS[type]] = cap(m.fbcdn.get(type));
+        }
+        const stopReason = m.stop;
+        const requestPaths = [...m.paths.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([name, count]) => ({ name, count }));
+        m = null;
+        return { counts: out, stopReason, requestPaths };
+      },
+      abort(nonce) { if (m && (nonce === undefined || nonce === m.nonce)) { m = null; return true; } return false; },
+    };
+  }
+
   // Control-test result from its counters (or null when the extension never answered).
   function controlVerdict(counts) {
     if (!counts) return "TIMEOUT";
@@ -371,5 +481,5 @@
   function isGroupId(value) { return typeof value === "string" && /^[A-Za-z0-9._-]{1,100}$/.test(value); }
   function safeUrl(value) { try { return new URL(value); } catch { return null; } }
 
-  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, exactStructuredIds, countIdKeys, structureVerdict, createTrafficCounter, trafficPathSegment, trafficHostClass, controlVerdict, MAX_POSTS_LIMIT };
+  scope.FlipGeckoPocAdapter = { classify, evaluate, inspectDomLinks, groupIdentity, exactStructuredIds, countIdKeys, structureVerdict, createTrafficCounter, trafficPathSegment, trafficHostClass, controlVerdict, createLoadCounter, loadTarget, LOAD_STOPS, MAX_POSTS_LIMIT };
 })(globalThis);

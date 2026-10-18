@@ -171,6 +171,42 @@ Samsung (0.2.2): 7353 elementy, 41 112 px, `data-mcomponent` 4523, zmiany DOM +5
 
 Atrybuty `data-image-id`, `data-video-id`, numery komentarzy i inne długie liczby nigdy nie dają GO.
 
+## 0.2.4: „Zmierz otwarcie grupy” (pomiar od pierwszego `main_frame`)
+
+**Samsung 0.2.3:** test kontrolny dał `LISTENER_OK` (10 żądań z właściwej karty, 0 z innych kart, 0 bez karty). Na prawdziwej grupie, w oknie przewijania, było 0 żądań do facebook.com, 102 obrazy z fbcdn i 6 odpowiedzi z pamięci podręcznej. Nasłuch więc działa, a wcześniejszy pomiar zaczynał się po załadowaniu strony.
+
+**Architektura:**
+- Przed `loadUri` w karcie może nie być żadnego skryptu rozszerzenia, więc uzbraja **aplikacja**, przez stały port do skryptu tła (`connectNative`, `BackgroundChannel`).
+- Kolejność: `armLoad`, potem `loadUri(zatwierdzona grupa)`, okno 25 s (maks. 30 s), na koniec `readLoad`, który zwraca liczby jeden raz i czyści pomiar.
+- Tło wiąże pomiar z kartą przy **pierwszym** `main_frame` zatwierdzonej grupy w ciągu 10 s od uzbrojenia. Inna strona nigdy nie wiąże pomiaru.
+- Następny `main_frame` tej karty prowadzący do logowania, checkpointu, CAPTCHA, innej grupy, innej strony Facebooka lub innej domeny **zamraża** liczniki z tym powodem. Nic po opuszczeniu zatwierdzonej strony nie jest liczone.
+- Licznik okna przewijania (0.2.2/0.2.3) działa bez zmian obok nowego.
+
+**Rozdział liczników:**
+- facebook.com według typu, osobno żądania API/danych (XHR/fetch, websocket, ramki, inne);
+- fbcdn.net według typu;
+- żądania bez karty osobno, nieprzypisane do grupy;
+- inne karty jako jedna liczba;
+- odpowiedzi zakończone i z pamięci podręcznej;
+- zakończenie dokumentu grupy;
+- po oknie: liczby DOM nowej strony.
+
+Brak treści, nagłówków, cookies i pełnych adresów; ścieżki tylko jako pierwszy człon z listy dozwolonych.
+
+**Odporność:**
+- przekierowanie do logowania, checkpoint lub CAPTCHA, inna grupa lub domena: zamrożenie i `FAIL` z podanym powodem;
+- zamknięcie sesji: `SESSION_CLOSED` i przerwanie pomiaru;
+- brak portu tła: `BACKGROUND_NOT_CONNECTED`;
+- brak odpowiedzi: `READ_TIMEOUT`;
+- brak zatwierdzonego `main_frame`: `MAIN_FRAME_NOT_SEEN`;
+- wielokrotne naciśnięcie: zablokowane do końca pomiaru;
+- rozłączenie aplikacji: tło czyści pomiar.
+
+**Status:**
+- `PASS`: uzbrojono przed nawigacją, `main_frame` grupy zarejestrowany, dokument załadowany, strona potwierdzona;
+- `PARTIAL`: dokument niezakończony albo brak liczb DOM;
+- `FAIL`: każdy z powodów wyżej.
+
 ## Testy
 
 - `node --test app/src/test/js/poc-adapter.test.cjs`: adapter nad niezmienionym `collector-core.js`.

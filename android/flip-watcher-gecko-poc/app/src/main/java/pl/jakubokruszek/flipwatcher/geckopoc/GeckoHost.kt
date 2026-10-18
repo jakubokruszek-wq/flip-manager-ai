@@ -17,6 +17,8 @@ import kotlin.coroutines.resumeWithException
 object GeckoHost {
     @Volatile private var runtime: GeckoRuntime? = null
     @Volatile private var extension: WebExtension? = null
+    /** Port to the extension's background script (page-load measurement). */
+    val background = BackgroundChannel()
 
     fun runtime(context: Context): GeckoRuntime = runtime ?: synchronized(this) {
         runtime ?: GeckoRuntime.create(
@@ -38,6 +40,7 @@ object GeckoHost {
             .ensureBuiltIn(PocPolicy.EXTENSION_LOCATION, PocPolicy.EXTENSION_ID)
             .await() ?: error("Rozszerzenie nie zostało zainstalowane")
         extension = installed
+        background.attach(installed)
         return installed
     }
 }
