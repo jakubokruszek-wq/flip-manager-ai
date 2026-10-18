@@ -80,6 +80,43 @@ Od wersji 0.1.1 APK jest podpisywany stałym, **publicznym** kluczem testowym `a
 
 Wersje 0.1.0 były podpisane losowym kluczem każdego serwera CI, dlatego **jednorazowo** trzeba odinstalować 0.1.0 przed instalacją 0.1.1. Odinstalowanie usuwa też sesję Facebooka tej aplikacji, więc potrzebne będzie ponowne logowanie.
 
+## NO_POSTS na Samsungu: przyczyna i poprawka (0.2.0)
+
+**Co pokazała diagnostyka 0.1.5:**
+- grupa `GROUP_OK`;
+- `[role=article]` 0, `<article>` 0, `[role=feed]` 0;
+- 5 linków `<a>`, 0 permalinków;
+- 0 skryptów `application/json`, 0 iframe, 0 Shadow DOM;
+- a posty są widoczne.
+
+**Przyczyna (z kodu).** Adapter 0.1.x szukał ID posta tylko w trzech miejscach: w linkach `<a href>` wewnątrz `[role=article]/<article>` oraz w `script[type="application/json"]`. Mobilny Facebook pokazany w GeckoView żadnego z nich nie używa. Posty to drzewa `div`, a przejście do posta obsługuje JavaScript, nie link. Dlatego skan zwracał `NO_POSTS`, mimo że posty są na ekranie.
+
+Inne hipotezy wykluczone:
+- **Inny dokument:** skrypt czyta `document` na żywo przy każdym zapytaniu i nie trzyma starych referencji.
+- **Iframe i Shadow DOM:** oba 0.
+- **Inne drzewo DOM w rozszerzeniu:** Firefox daje rozszerzeniom ten sam DOM (Xray), ukrywa tylko obiekty JavaScript strony.
+
+**Poprawka.** Dokładne ID są teraz brane przez niezmieniony `collector-core.js` z danych, które Facebook sam dostarcza tej sesji:
+1. ze **zwykłych skryptów inline** strony, nie tylko `application/json`;
+2. z **odpowiedzi sieciowych sesji** (`webRequest.filterResponseData`), tak jak `network-hook.js` w produkcyjnym rozszerzeniu Chrome:
+   - odpowiedź trafia do strony bez zmian;
+   - kopia zostaje wyłącznie w pamięci rozszerzenia, osobno dla każdej karty i bieżącego dokumentu, maksymalnie 20 min;
+   - na zewnątrz wychodzą tylko ID i kanoniczne permalinki, które core powiązał z grupą.
+
+ID jest przyjmowane tylko wtedy, gdy ten sam węzeł danych zawiera **permalink tej grupy**. Komentarze, udostępnienia z innych grup, `fbid` zdjęć i ID bez permalinku są odrzucane. Walidacja w aplikacji, limit 20 i deduplikacja bez zmian.
+
+**„Diagnoza postów”** (dawne „Sprawdź DOM”) tylko liczy i nie zużywa zgody na skan. Rozróżnia:
+1. dokument i kontekst (czy punkty ekranu należą do czytanego dokumentu);
+2. znaczniki (`article`, `data-mcomponent`, `data-tracking-duration-id`, obrazy…) oraz 15 najczęstszych NAZW atrybutów;
+3. permalinki w `<a>` i w innych atrybutach;
+4. zmiany DOM (MutationObserver) i podejrzenie wirtualizacji listy;
+5. klucze ID i **dokładne ID** w danych strony;
+6. to samo w sieci.
+
+Wynik to jeden z kodów: `EXACT_IDS_AVAILABLE`, `ID_KEYS_WITHOUT_EXACT_BINDING`, `NO_POST_IDS_IN_PAGE_DATA`, `NETWORK_NOT_OBSERVED_YET`, `NO_POST_MARKUP`, `WRONG_DOCUMENT_OR_CONTEXT`.
+
+Testy CI używają lokalnych stron wzorowanych na mobilnym Facebooku (`mobile-div-*`). **Nie są dowodem działania na prawdziwym Facebooku**: to rozstrzyga dopiero diagnoza na Samsungu.
+
 ## Testy
 
 - `node --test app/src/test/js/poc-adapter.test.cjs`: adapter nad niezmienionym `collector-core.js`.
