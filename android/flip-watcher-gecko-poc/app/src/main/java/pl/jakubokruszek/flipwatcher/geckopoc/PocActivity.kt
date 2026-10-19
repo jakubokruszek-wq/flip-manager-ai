@@ -63,6 +63,9 @@ class PocActivity : ComponentActivity() {
     private var probe: PageProbe? = null
     private var loginRequested = false
     private var scanning = false
+    private var visibleEpoch = 0L
+    private var visibleBusy = false
+    private var visibleDialog: AlertDialog? = null
     private var inspectingDom = false
     private var haltMessage: String? = null
     /** Last top-level navigations (sanitized), the evidence for "Diagnoza grupy". */
@@ -94,6 +97,41 @@ class PocActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    override fun onPause() {
+        stopVisiblePosts()
+        super.onPause()
+    }
+
+    private fun stopVisiblePosts() {
+        visibleEpoch++
+        visibleBusy = false
+        visibleDialog?.dismiss()
+        visibleDialog = null
+        if (::output.isInitialized) output.text = ""
+    }
+
+    private fun checkVisiblePosts() {
+        if (visibleBusy || scanning || inspectingDom || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val current = channel ?: return
+        val epoch = visibleEpoch
+        val approvedUrl = url
+        visibleDialog = AlertDialog.Builder(this)
+            .setTitle("Nowa zgoda: widoczne posty")
+            .setMessage("Jednorazowo przeanalizować wyrenderowany DOM tej grupy? Maksymalnie 20 widocznych kandydatów. Tylko lokalne liczniki: linki, dokładne ID, cena, metraż, pokoje, dzielnica i zdjęcia. Pola są heurystyczne. Bez zapisu treści, bez sieciowych odpowiedzi, bez skanu i kolektora. Zgoda wygasa po tej próbie.")
+            .setNegativeButton("Anuluj", null)
+            .setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch != visibleEpoch || current !== channel || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
+                visibleBusy = true
+                lifecycleScope.launch {
+                    val report = runCatching { current.visiblePosts(consent = true) }.getOrNull()
+                    if (epoch == visibleEpoch && current === channel && approvedUrl == url && kind == PageKind.APPROVED_GROUP) {
+                        output.text = report ?: "STOP: brak poprawnego kontekstu lub przerwana diagnostyka."
+                        visibleBusy = false
+                    }
+                }
+            }.show()
+    }
+
     // ---- session
 
     private fun askConsentAndOpen() {
@@ -117,7 +155,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -133,6 +171,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun closeSession() {
+        stopVisiblePosts()
         channel?.close()
         channel = null
         session?.let { current ->
@@ -548,6 +587,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun onUrl(value: String?) {
+        stopVisiblePosts()
         url = value
         kind = PocPolicy.classify(value)
         if (kind == PageKind.APPROVED_GROUP) loginRequested = false
@@ -658,6 +698,7 @@ class PocActivity : ComponentActivity() {
                 button("scan", "Skanuj widoczne") { scan(scrolls = 0) },
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
             ))
+            addView(row(button("visiblePosts", "Sprawdź widoczne posty") { checkVisiblePosts() }))
             addView(row(
                 button("dom", "Diagnoza postów") { inspectDom() },
                 button("diagnose", "Diagnoza grupy") { diagnoseGroup() },

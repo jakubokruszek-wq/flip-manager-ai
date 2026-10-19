@@ -18,6 +18,7 @@ import java.util.UUID
 class CollectorChannel(
     private val session: GeckoSession,
     private val fixtureMode: Boolean = false,
+    private val onVisibleStop: () -> Unit = {},
     private val onProbe: (PageProbe) -> Unit = {},
 ) {
     private var port: WebExtension.Port? = null
@@ -35,8 +36,9 @@ class CollectorChannel(
             if (port !== this@CollectorChannel.port) return
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
+                "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -45,6 +47,7 @@ class CollectorChannel(
 
         override fun onDisconnect(port: WebExtension.Port) {
             if (port !== this@CollectorChannel.port) return
+            onVisibleStop()
             this@CollectorChannel.port = null
             portReady = CompletableDeferred()
             // The page went away: every waiting request ends now.
@@ -108,6 +111,16 @@ class CollectorChannel(
         val nonce = UUID.randomUUID().toString()
         val message = JSONObject().put("type", "loadDomStats").put("nonce", nonce).put("groupId", groupId).put("allowLoopback", allowLoopback)
         return LoadMeasurement.parseDomStats(request(nonce, message, timeoutMs), nonce)
+    }
+
+    /** One fresh explicit consent, no scan authorization, count-only result. */
+    suspend fun visiblePosts(consent: Boolean, groupId: String = PocPolicy.APPROVED_GROUP_ID): String? {
+        if (!consent) return null
+        val nonce = UUID.randomUUID().toString()
+        val reply = request(nonce, JSONObject().put("type", "visiblePosts").put("nonce", nonce)
+            .put("consent", true).put("groupId", groupId)
+            .put("allowLoopback", fixtureMode), 8_000) ?: return null
+        return VisiblePostsProtocol.report(reply, nonce)
     }
 
     suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {

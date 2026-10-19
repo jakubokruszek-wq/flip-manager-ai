@@ -422,4 +422,37 @@ class GeckoFixtureTest {
             }
         }
     }
+    @Test fun visiblePostsUsesFreshConsentAndStopsOnPageChange() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                var stopped = false
+                val channel = CollectorChannel(session, fixtureMode = true, onVisibleStop = { stopped = true })
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    session.open(GeckoHost.runtime(context))
+                    host!!.geckoView.setSession(session)
+                    session.setActive(true)
+                    session.loadUri(server.url(groupPath, "visible-posts"))
+                    assertTrue(channel.awaitPort(30_000))
+                    delay(1_000)
+                    assertEquals(null, channel.visiblePosts(false, FIXTURE_GROUP_ID))
+                    val report = channel.visiblePosts(true, FIXTURE_GROUP_ID)
+                    assertTrue("report=$report", report?.contains("confirmedIds: 1") == true)
+                    assertTrue(report?.contains("priceCandidates: 1") == true)
+                    assertFalse(report.orEmpty().contains("450 000"))
+                    session.loadUri(server.url("/login/", "login"))
+                    delay(2_000)
+                    assertTrue(stopped)
+                    assertEquals(null, channel.visiblePosts(true, FIXTURE_GROUP_ID))
+                } finally {
+                    channel.close(); host!!.geckoView.releaseSession(); session.close(); server.close()
+                }
+            } } }
+        }
+    }
+
 }

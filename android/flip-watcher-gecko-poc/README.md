@@ -1,3 +1,7 @@
+# Wersja 0.2.5
+
+Nowa lokalna funkcja „Sprawdź widoczne posty”: [instrukcja i ograniczenia](docs/poc-025.md). Wymaga osobnej, nowej zgody na każdą próbę.
+
 # Flip Watcher — Gecko POC
 
 Osobny prototyp Androida, który odpowiada na jedno pytanie:

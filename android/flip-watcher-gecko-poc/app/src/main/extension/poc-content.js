@@ -14,6 +14,7 @@
     return;
   }
   let scanning = false;
+  let stopVisibleWatch = null;
 
   // Dynamic-loading / virtualization evidence: element nodes added and
   // removed since this content script started, plus a 10-second window.
@@ -335,6 +336,15 @@
 
   port.onMessage.addListener(async message => {
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
+    if (message.type === "visiblePosts") {
+      if (stopVisibleWatch) stopVisibleWatch();
+      const result = scope.FlipVisiblePosts.read(scope, message);
+      port.postMessage({type:"visiblePostsResult", nonce:message.nonce, ...result});
+      if (result.status === "GROUP_OK") stopVisibleWatch = scope.FlipVisiblePosts.watch(scope, message, () => {
+        try { port.postMessage({type:"visiblePostsStop"}); } catch { /* closed */ }
+      });
+      return;
+    }
     if (message.type === "probe") {
       port.postMessage({ type: "probeResult", nonce: message.nonce, probe: probe() });
       return;
