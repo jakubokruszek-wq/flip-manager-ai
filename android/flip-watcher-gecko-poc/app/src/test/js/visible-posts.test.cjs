@@ -86,3 +86,32 @@ test("foreign story.php source cannot hide behind the desktop profile classifica
  const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);
  assert.equal(out.ancestorForeignContainers,1);assert.equal(out.ancestorWithExactId,0);
 });
+function attrNode(values={},children=[], options={}) {
+ return {querySelectorAll(){return children},matches(selector){return !!options.interactive && selector==='a,button,[role="button"],[tabindex]'},closest(){return !!options.form},hasAttribute(name){return name in values},getAttribute(name){assert.ok(["href","data-href","data-url","data-uri","data-permalink","data-story-url","data-navigation-url"].includes(name),"forbidden attribute read: "+name);return values[name]??null}};
+}
+test("exact URL in data-href is a local hint, not a confirmed post",()=>{
+ const n=attrNode({"data-href":href+"posts/123456789/","data-action-id":"987654321","data-store":"private","onclick":"private"},[],{interactive:true});
+ const p=v.attributeProbe(groupId,()=>true,{});p.inspect(n);p.inspect(n);const out=p.counts();
+ assert.equal(out.attrNodes,1);assert.equal(out.attrExactUrls,1);assert.equal(out.attrExactIdHints,1);assert.equal(out.attrActionMarkers,1);assert.equal(out.attrStoreMarkers,1);
+ assert.ok(!JSON.stringify(out).includes("123456789"));assert.ok(!JSON.stringify(out).includes("private"));
+});
+test("attribute parser never infers IDs from actions, JSON or javascript",()=>{
+ for(const value of ["123456789","javascript:open('"+href+"posts/123456789/')",JSON.stringify({url:href+"posts/123456789/"}),"https://evil.com/groups/"+groupId+"/posts/123456789/","https://www.facebook.com/photo.php?fbid=123456789"]){
+ const p=v.attributeProbe(groupId,()=>true,{});p.inspect(attrNode({"data-url":value}));assert.equal(p.counts().attrExactIdHints,0);
+ }
+});
+test("ambiguous or foreign attributes do not confirm identity",()=>{
+ for(const other of [href+"posts/987654321/",href.replace(groupId,"othergroup")+"posts/987654321/"]){
+ const p=v.attributeProbe(groupId,()=>true,{});p.inspect(attrNode({"data-href":href+"posts/123456789/","data-url":other}));assert.equal(p.counts().attrExactIdHints,0);assert.ok(p.counts().attrAmbiguousNodes+p.counts().attrForeignUrls>0);
+ }
+});
+test("attribute budget, oversize values and deduplication are bounded",()=>{
+ const children=Array.from({length:250},()=>attrNode({"data-url":"x".repeat(3000)}));const p=v.attributeProbe(groupId,()=>true,{});p.inspect(attrNode({},children));const out=p.counts();assert.equal(out.attrNodes,200);assert.equal(out.attrNodeLimit,1);assert.equal(out.attrOversizeValues,199);assert.equal(out.attrExactIdHints,0);
+});
+test("hidden/form/feed/root attributes are not read",()=>{
+ const trap=attrNode();trap.getAttribute=()=>{throw Error("forbidden node read")};
+ const hidden=v.attributeProbe(groupId,()=>false,{});hidden.inspect(trap);assert.equal(hidden.counts().attrNodes,0);
+ const form=v.attributeProbe(groupId,()=>true,{});trap.closest=()=>true;form.inspect(trap);assert.equal(form.counts().attrNodes,0);
+ const body=v.attributeProbe(groupId,()=>true,{body:trap});body.inspect(trap);assert.equal(body.counts().attrNodes,0);
+ const feed=v.attributeProbe(groupId,()=>true,{});trap.matches=()=>true;feed.inspect(trap);assert.equal(feed.counts().attrNodes,0);
+});

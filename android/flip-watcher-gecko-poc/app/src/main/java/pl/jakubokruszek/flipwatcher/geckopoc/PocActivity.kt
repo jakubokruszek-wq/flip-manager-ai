@@ -117,7 +117,7 @@ class PocActivity : ComponentActivity() {
         val approvedUrl = url
         visibleDialog = AlertDialog.Builder(this)
             .setTitle("Nowa zgoda: widoczne posty")
-            .setMessage("Jednorazowo przeanalizować wyrenderowany DOM tej grupy? Maksymalnie 20 widocznych kandydatów i do 6 poziomów otaczających kontenerów. Wspólny feed nie jest przypisywany do posta. Tylko lokalne liczniki: linki, dokładne ID, cena, metraż, pokoje, dzielnica i zdjęcia. Pola są heurystyczne. Bez zapisu treści, bez sieciowych odpowiedzi, bez skanu i kolektora. Zgoda wygasa po tej próbie.")
+            .setMessage("Jednorazowo przeanalizować wyrenderowany DOM tej grupy? Maksymalnie 20 widocznych kandydatów i do 6 poziomów otaczających kontenerów. Sprawdzane są też jawne atrybuty adresów przy tych blokach, maksymalnie 200 elementów. Bez odczytu kodu kliknięć i ukrytych danych akcji. Wspólny feed nie jest przypisywany do posta. Tylko lokalne liczniki: linki, dokładne ID, cena, metraż, pokoje, dzielnica i zdjęcia. Pola są heurystyczne. Bez zapisu treści, bez sieciowych odpowiedzi, bez skanu i kolektora. Zgoda wygasa po tej próbie.")
             .setNegativeButton("Anuluj", null)
             .setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
                 if (epoch != visibleEpoch || current !== channel || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton

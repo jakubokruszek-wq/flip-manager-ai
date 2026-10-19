@@ -1,3 +1,7 @@
+# Wersja 0.2.8
+
+[Jawne adresy w atrybutach DOM — instrukcja i ograniczenia](docs/poc-028.md). Nowa jednorazowa zgoda, wyłącznie lokalne liczniki; bez payloadów akcji i bez skanu.
+
 # Wersja 0.2.7
 
 [Diagnostyka kontenerów wokół tekstu — instrukcja i znaczenie liczników](docs/poc-027.md). Osobna jednorazowa zgoda, bez skanu i bez zapisu treści.

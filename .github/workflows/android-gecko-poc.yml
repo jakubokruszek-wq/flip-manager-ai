@@ -66,14 +66,14 @@ jobs:
       - name: Compile (Kotlin, app and instrumented tests)
         run: |
           set -o pipefail
-          ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=$((500 + ${{ github.run_number }})) 2>&1 | tee compile.log || {
+          ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=$((700 + ${{ github.run_number }})) 2>&1 | tee compile.log || {
             echo "::group::Compiler errors"; grep -E "^e: |What went wrong|^> " -A3 compile.log | head -80; echo "::endgroup::"; exit 1; }
 
       - name: JVM unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest -PGECKO_POC_VERSION_CODE=$((500 + ${{ github.run_number }}))
+        run: ./gradlew --no-daemon testDebugUnitTest -PGECKO_POC_VERSION_CODE=$((700 + ${{ github.run_number }}))
 
       - name: Assemble debug APKs
-        run: ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=$((500 + ${{ github.run_number }}))
+        run: ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=$((700 + ${{ github.run_number }}))
 
       - name: Verify APK identity, signature and bundled extension
         run: |

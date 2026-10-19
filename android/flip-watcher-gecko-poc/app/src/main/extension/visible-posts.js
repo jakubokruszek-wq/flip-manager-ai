@@ -1,7 +1,7 @@
 /* Local, one-shot rendered-DOM diagnosis. No storage, network or collector. */
 (function(root) {
   "use strict";
-  const keys = ["candidates", "semanticCandidates", "heuristicCandidates", "links", "confirmedIds", "permalinks", "priceCandidates", "areaCandidates", "roomCandidates", "districtCandidates", "photoCandidates", "visibleTextBlocks", "desktopMessageBlocks", "mobileTextBlocks", "fallbackTextBlocks", "ambiguousCards", "ancestorContainers", "ancestorWithLinks", "ancestorWithExactId", "ancestorWithPhotos", "ancestorWithPrice", "ancestorWithArea", "ancestorSharedContainers", "ancestorAmbiguousContainers", "ancestorForeignContainers", "ancestorExactAndPhoto", "ancestorFeedStops", "ancestorDepthStops", "ancestorMaxDepth"];
+  const keys = ["candidates", "semanticCandidates", "heuristicCandidates", "links", "confirmedIds", "permalinks", "priceCandidates", "areaCandidates", "roomCandidates", "districtCandidates", "photoCandidates", "visibleTextBlocks", "desktopMessageBlocks", "mobileTextBlocks", "fallbackTextBlocks", "ambiguousCards", "ancestorContainers", "ancestorWithLinks", "ancestorWithExactId", "ancestorWithPhotos", "ancestorWithPrice", "ancestorWithArea", "ancestorSharedContainers", "ancestorAmbiguousContainers", "ancestorForeignContainers", "ancestorExactAndPhoto", "ancestorFeedStops", "ancestorDepthStops", "ancestorMaxDepth", "attrNodes", "attrInteractiveNodes", "attrActionMarkers", "attrStoreMarkers", "attrValues", "attrHrefValues", "attrDataUrlValues", "attrExactUrls", "attrExactIdHints", "attrForeignUrls", "attrAmbiguousNodes", "attrRejectedValues", "attrOversizeValues", "attrNodeLimit"];
   function context(href, group, fixture) {
     try {
       const u = new URL(href);
@@ -47,9 +47,48 @@
     counts.confirmedIds = ids.size;
     return {status:"GROUP_OK", counts};
   }
+  // Only explicit URL-bearing attributes. Never read onclick, data-store,
+  // data-action-id, arbitrary datasets, scripts, form values or network bodies.
+  function attributeProbe(groupId, visible, doc) {
+    const out = Object.fromEntries(["attrNodes", "attrInteractiveNodes", "attrActionMarkers", "attrStoreMarkers", "attrValues", "attrHrefValues", "attrDataUrlValues", "attrExactUrls", "attrExactIdHints", "attrForeignUrls", "attrAmbiguousNodes", "attrRejectedValues", "attrOversizeValues", "attrNodeLimit"].map(k=>[k,0]));
+    const attrs = ["href","data-href","data-url","data-uri","data-permalink","data-story-url","data-navigation-url"];
+    const selector = 'a,button,[role="button"],[tabindex],[data-href],[data-url],[data-uri],[data-permalink],[data-story-url],[data-navigation-url],[data-action-id],[data-sigil],[data-store]';
+    const seen = new Set(), hints = new Set();
+    function inspect(rootNode) {
+      if (!rootNode || typeof rootNode.querySelectorAll !== "function") return;
+      if (rootNode === doc.body || rootNode === doc.documentElement || rootNode.matches?.('main,nav,[role="feed"],[role="main"],[role="navigation"],[data-pagelet*="Feed"],[data-pagelet*="feed"]')) return;
+      for (const node of [rootNode,...Array.from(rootNode.querySelectorAll(selector)).slice(0,200)]) {
+        if (seen.has(node) || !visible(node) || typeof node.getAttribute !== "function" || node.closest?.('form,input,textarea,select,script,style,noscript,[role="comment"],[data-testid*="comment"]')) continue;
+        if (seen.size >= 200) {out.attrNodeLimit=1;return;}
+        seen.add(node);out.attrNodes++;
+        if (node.matches?.('a,button,[role="button"],[tabindex]')) out.attrInteractiveNodes++;
+        // Presence only, not values; these numeric/action markers are NOT post IDs.
+        if (node.hasAttribute?.("data-action-id") || node.hasAttribute?.("data-sigil")) out.attrActionMarkers++;
+        if (node.hasAttribute?.("data-store")) out.attrStoreMarkers++;
+        const nodeIds = new Set();let foreign=false;
+        for (const name of attrs) {
+          const raw = node.getAttribute(name);
+          if (typeof raw !== "string" || !raw.trim()) continue;
+          out.attrValues++;out[name==="href"?"attrHrefValues":"attrDataUrlValues"]++;
+          if (raw.length > 2048) {out.attrOversizeValues++;continue;}
+          const value=raw.trim();
+          const id=exact(value,groupId);
+          if (id) {out.attrExactUrls++;nodeIds.add(id);continue;}
+          // Whole URLs only: no substring extraction, JS execution, decoding of
+          // arbitrary action payloads, JSON parsing or numerical-id inference.
+          if (/^(https?:\/\/|\/(?!\/))/.test(value) && root.FlipFacebookCollectorCore?.parsePostLink(value)) {
+            foreign=true;out.attrForeignUrls++;
+          } else out.attrRejectedValues++;
+        }
+        if (nodeIds.size>1) out.attrAmbiguousNodes++;
+        else if (nodeIds.size===1 && !foreign) hints.add([...nodeIds][0]);
+      }
+    }
+    return {inspect, counts:()=>({...out,attrExactIdHints:hints.size})};
+  }
   // Count ancestor evidence separately. These are NOT confirmed post records.
   // Shared containers are observed but never promoted or used to infer ownership.
-  function ancestors(seeds, universe, doc, groupId, visible) {
+  function ancestors(seeds, universe, doc, groupId, visible, inspectAttributes = () => {}) {
     const names = ["ancestorContainers", "ancestorWithLinks", "ancestorWithExactId", "ancestorWithPhotos", "ancestorWithPrice", "ancestorWithArea", "ancestorSharedContainers", "ancestorAmbiguousContainers", "ancestorForeignContainers", "ancestorExactAndPhoto", "ancestorFeedStops", "ancestorDepthStops", "ancestorMaxDepth"];
     const out = Object.fromEntries(names.map(k => [k,0]));
     const visited = new Set();
@@ -72,6 +111,7 @@
           if (ids.size > 1) out.ancestorAmbiguousContainers++;
           if (foreign) out.ancestorForeignContainers++;
           if (!shared && ids.size <= 1 && !foreign) {
+            inspectAttributes(node);
             if (anchors.length) out.ancestorWithLinks++;
             if (ids.size === 1) out.ancestorWithExactId++;
             if (photos) out.ancestorWithPhotos++;
@@ -126,7 +166,11 @@
     const universe = [...new Set([...cards,...desktop,...mobile,...fallback])].slice(0,2000);
     cards = [...new Set(cards)].filter(el => !cards.some(other => other !== el && el.contains(other))).slice(0,20);
     const result = analyze({consent:true, href:win.location.href, groupId:request.groupId, fixture:request.allowLoopback, visible:true, blocked:blocked(), cards:cards.slice(0,20).map(el => ({semantic:semantic(el), text:el.innerText, hrefs:Array.from(el.querySelectorAll('a[href]')).filter(visible).map(a=>a.href), photos:Array.from(el.querySelectorAll('img')).filter(visible).length}))});
-    if (result.counts) Object.assign(result.counts, ancestors(cards,universe,doc,request.groupId,visible));
+    const attrs = attributeProbe(request.groupId,visible,doc);
+    if (result.counts) {
+      cards.forEach(attrs.inspect);
+      Object.assign(result.counts, ancestors(cards,universe,doc,request.groupId,visible,attrs.inspect), attrs.counts());
+    }
     if (blocked() || !context(win.location.href, request.groupId, request.allowLoopback) || doc.visibilityState !== "visible" || !(win.innerWidth > 0 && win.innerHeight > 0)) return {status:"STOP"};
     if (result.counts) Object.assign(result.counts, {
       visibleTextBlocks: Math.min(2000, desktop.length + mobile.length + fallback.length),
@@ -151,7 +195,7 @@
     check();
     return () => finish(false);
   }
-  const api = {context, exact, analyze, read, watch, keys, ancestors};
+  const api = {context, exact, analyze, read, watch, keys, ancestors, attributeProbe};
   if (typeof module !== "undefined") module.exports = api;
   else root.FlipVisiblePosts = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
