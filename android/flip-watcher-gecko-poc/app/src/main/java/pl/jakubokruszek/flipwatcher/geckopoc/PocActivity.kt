@@ -65,6 +65,7 @@ class PocActivity : ComponentActivity() {
     private var scanning = false
     private var visibleEpoch = 0L
     private var visibleBusy = false
+    private var responseBusy = false
     private var visibleDialog: AlertDialog? = null
     private var inspectingDom = false
     private var haltMessage: String? = null
@@ -103,6 +104,8 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun stopVisiblePosts() {
+        GeckoHost.background.abortResponses()
+        responseBusy = false
         visibleEpoch++
         visibleBusy = false
         visibleDialog?.dismiss()
@@ -111,7 +114,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun checkVisiblePosts() {
-        if (visibleBusy || scanning || inspectingDom || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        if (visibleBusy || responseBusy || scanning || inspectingDom || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
         val current = channel ?: return
         val epoch = visibleEpoch
         val approvedUrl = url
@@ -127,6 +130,31 @@ class PocActivity : ComponentActivity() {
                     if (epoch == visibleEpoch && current === channel && approvedUrl == url && kind == PageKind.APPROVED_GROUP) {
                         output.text = report ?: "STOP: brak poprawnego kontekstu lub przerwana diagnostyka."
                         visibleBusy = false
+                    }
+                }
+            }.show()
+    }
+
+    private fun checkResponses() {
+        if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val current = channel ?: return
+        val epoch = visibleEpoch
+        val approvedUrl = url
+        visibleDialog = AlertDialog.Builder(this)
+            .setTitle("Nowa zgoda: treść odpowiedzi sieciowych")
+            .setMessage("Przez 15 sekund analizować lokalnie odpowiedzi danych tej zatwierdzonej grupy? Do 8 odpowiedzi, 512 KiB na odpowiedź i 2 MiB łącznie, maksymalnie 20 dokładnych ID. Tylko pamięć i liczniki: bez zapisu surowych odpowiedzi, tekstów, ID, cookies i tokenów; bez uploadu, skanu, galerii i kolektora. Strona otrzyma niezmienione bajty. Możesz ręcznie przewinąć grupę. Zmiana strony, LOGIN/CAPTCHA/CHECKPOINT i wygaszenie przerywają próbę. To osobna zgoda, niezależna od DOM i starego skanu.")
+            .setNegativeButton("Anuluj", null)
+            .setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch != visibleEpoch || current !== channel || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
+                responseBusy = true
+                output.text = "Diagnostyka odpowiedzi: 15 sekund. Możesz ręcznie przewinąć zatwierdzoną grupę."
+                render()
+                lifecycleScope.launch {
+                    val report = runCatching { current.responseDiagnosis(consent = true) }.getOrNull()
+                    if (epoch == visibleEpoch && current === channel && approvedUrl == url && kind == PageKind.APPROVED_GROUP) {
+                        output.text = report ?: "STOP: przerwana diagnostyka odpowiedzi."
+                        responseBusy = false
+                        render()
                     }
                 }
             }.show()
@@ -564,6 +592,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+            if (responseBusy) stopVisiblePosts()
             recordStep(NavStep(PocPolicy.sanitize(request.uri), request.isRedirect, request.hasUserGesture))
             if (!PocPolicy.allowNavigation(request.uri)) {
                 blockedNavigations++
@@ -617,11 +646,12 @@ class PocActivity : ComponentActivity() {
         }
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
-        val canScan = open && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
+        val canScan = open && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
         buttons["open"]?.text = if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
-        buttons["dom"]?.isEnabled = open && !scanning && !inspectingDom &&
+        buttons["responses"]?.isEnabled = open && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
+        buttons["dom"]?.isEnabled = open && !responseBusy && !scanning && !inspectingDom &&
             kind == PageKind.APPROVED_GROUP && channel?.isConnected == true
 
         val p = probe
@@ -698,6 +728,7 @@ class PocActivity : ComponentActivity() {
                 button("scan", "Skanuj widoczne") { scan(scrolls = 0) },
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
             ))
+            addView(row(button("responses", "Sprawdź dane sieciowe") { checkResponses() }))
             addView(row(button("visiblePosts", "Sprawdź widoczne posty") { checkVisiblePosts() }))
             addView(row(
                 button("dom", "Diagnoza postów") { inspectDom() },

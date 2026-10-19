@@ -73,7 +73,10 @@
     appPort.onMessage.addListener(message => {
       if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
       const reply = value => { try { appPort.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
-      if (message.type === "armLoad") {
+      if (message.type === "abortResponse") {
+        scope.FlipResponseDiagnosis?.abort();
+        reply({type:"abortResponseResult"});
+      } else if (message.type === "armLoad") {
         reply({ type: "armLoadResult", armed: loadCounter.arm(message.nonce, message.accepted, message.windowMs) ? 1 : 0, listener: api.listener ? 1 : 0 });
       } else if (message.type === "readLoad") {
         const result = loadCounter.read(message.nonce);
@@ -85,6 +88,7 @@
     appPort.onDisconnect.addListener(() => {
       // App or runtime went away: drop any pending measurement.
       loadCounter.abort();
+      scope.FlipResponseDiagnosis?.abort();
       appPort = null;
     });
   }

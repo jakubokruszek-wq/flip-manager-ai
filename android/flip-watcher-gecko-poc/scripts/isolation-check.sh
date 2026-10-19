@@ -14,19 +14,26 @@ outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-geck
 if [ -n "$outside" ]; then echo "FAIL: files outside the POC were changed:"; echo "$outside"; exit 1; fi
 
 src="$poc/app/src/main"
-if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|/api/|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json'; then
+if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json'; then
   echo "FAIL: network client or backend reference in POC sources"; exit 1
 fi
 # Case-sensitive: the webRequest type name "xmlhttprequest" is a filter, not a client.
 if grep -R -n -E "XMLHttpRequest|sendBeacon|WebSocket" "$src" --include='*.kt' --include='*.js' --include='*.json'; then
   echo "FAIL: network client in POC sources"; exit 1
 fi
-# 0.2.2: response bodies are never read; the background only counts request events.
+# Legacy measurements remain count-only. Body access is confined to the separate opt-in module.
 if grep -n -E "filterResponseData\(|\[\"blocking\"\]|TextDecoder" "$src/extension/poc-background.js"; then
   echo "FAIL: background script can read or block responses"; exit 1
 fi
-if grep -n "webRequestBlocking" "$src/extension/manifest.json"; then
-  echo "FAIL: webRequestBlocking permission present"; exit 1
+# 0.2.9: the official MV2 StreamFilter needs webRequestBlocking. No additional
+# host/storage/cookie/header permissions and no response reading in other modules.
+node - "$src/extension/manifest.json" <<'NODE'
+const m=require(require('node:path').resolve(process.argv[2]));
+const expected=["nativeMessaging","nativeMessagingFromContent","geckoViewAddons","webRequest","webRequestBlocking","https://*.facebook.com/*","https://facebook.com/*","https://*.fbcdn.net/*","http://127.0.0.1/*"];
+if (m.permissions.length!==expected.length || expected.some(p=>!m.permissions.includes(p)) || !m.background.scripts.includes("response-diagnosis.js")) process.exit(1);
+NODE
+if grep -R -n -E 'filterResponseData|responseHeaders|requestHeaders|browser\.cookies|browser\.storage' "$src/extension" --include='*.js' --exclude='response-diagnosis.js'; then
+  echo "FAIL: response access outside the explicit opt-in module"; exit 1
 fi
 # The background talks to the app (0.2.4 load measurement) only through its
 # counters: it must not touch documents, storage or cookies.

@@ -38,7 +38,7 @@ class CollectorChannel(
             when (json.optString("type")) {
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -121,6 +121,15 @@ class CollectorChannel(
             .put("consent", true).put("groupId", groupId)
             .put("allowLoopback", fixtureMode), 8_000) ?: return null
         return VisiblePostsProtocol.report(reply, nonce)
+    }
+
+    suspend fun responseDiagnosis(consent: Boolean, groupId: String = PocPolicy.APPROVED_GROUP_ID, windowMs: Int = 15_000): String? {
+        if (!consent) return null
+        val nonce = UUID.randomUUID().toString()
+        val reply = request(nonce, JSONObject().put("type", "responseDiagnosis").put("nonce", nonce)
+            .put("consent", true).put("groupId", groupId).put("allowLoopback", fixtureMode)
+            .put("windowMs", windowMs.coerceIn(500, 15_000)), windowMs.coerceIn(500, 15_000) + 8_000L) ?: return null
+        return ResponseProtocol.report(reply, nonce)
     }
 
     suspend fun groupProbe(timeoutMs: Long = 10_000): Pair<String?, List<GroupIdHit>>? {

@@ -1,3 +1,7 @@
+# Aktualizacja 0.2.9
+
+Osobna diagnostyka odpowiedzi sieciowych po nowej zgodzie operatora; [zakres i instrukcja](docs/poc-029.md). Nie uruchamia kolektora ani LIVE. Wcześniejsze sekcje opisują historię poprzednich wersji.
+
 # Wersja 0.2.8
 
 [Jawne adresy w atrybutach DOM — instrukcja i ograniczenia](docs/poc-028.md). Nowa jednorazowa zgoda, wyłącznie lokalne liczniki; bez payloadów akcji i bez skanu.

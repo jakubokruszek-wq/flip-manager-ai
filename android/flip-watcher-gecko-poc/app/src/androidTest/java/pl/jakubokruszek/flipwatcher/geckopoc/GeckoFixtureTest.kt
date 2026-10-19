@@ -494,4 +494,38 @@ class GeckoFixtureTest {
         }
     }
 
+    @Test fun optInResponseStreamReusesDesktopParserWithoutChangingPageBytes() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel = CollectorChannel(session, fixtureMode = true)
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    session.open(GeckoHost.runtime(context)); host!!.geckoView.setSession(session); session.setActive(true)
+                    session.loadUri(server.url(groupPath, "response-window"))
+                    assertTrue(channel.awaitPort(30_000)); delay(1_000)
+                    assertNull(channel.responseDiagnosis(false, FIXTURE_GROUP_ID, 2_000))
+                    val report = channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 2_000)
+                    Log.i("GeckoPocTest", "RESPONSE_STREAM $report")
+                    assertTrue("report=$report", report?.contains("responseApiAvailable: 1") == true)
+                    assertTrue("report=$report", report?.contains("responseExactIds: 1") == true)
+                    assertTrue(report?.contains("responsePriceSignals: 1") == true)
+                    assertTrue(report?.contains("responseAreaSignals: 1") == true)
+                    assertFalse(report.orEmpty().contains("PRIVATE")); assertFalse(report.orEmpty().contains("550000000000003"))
+                    // The page creates an article ONLY after receiving the original UTF8 body.
+                    assertEquals(1, channel.probe()!!.articles)
+                    val again = channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 2_000)
+                    assertTrue("again=$again", again?.contains("responseExactIds: 1") == true)
+                    launch { delay(500); session.loadUri(server.url("/login/", "login")) }
+                    val stopped = channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 2_000)
+                    assertTrue("stopped=$stopped", stopped == null || !stopped.contains("responseExactIds: 1"))
+                    assertNull(channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 500))
+                } finally { channel.close(); host!!.geckoView.releaseSession(); session.close(); server.close() }
+            } } }
+        }
+    }
+
 }

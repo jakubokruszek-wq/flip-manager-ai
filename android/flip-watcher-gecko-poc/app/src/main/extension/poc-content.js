@@ -334,8 +334,44 @@
     return { ...result, scrolls: scrolled };
   }
 
+  function responsePageSafe(request) {
+    const doc=scope.document;
+    return scope.FlipVisiblePosts.context(scope.location.href,request.groupId,request.allowLoopback) && doc.visibilityState==="visible" && scope.innerWidth>0 && scope.innerHeight>0 &&
+      !doc.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[data-testid*="checkpoint"]') &&
+      !/checkpoint|captcha|zaloguj się|log in|log into facebook|content isn.t available|group is private|join group to see|ta zawartość jest niedostępna|ta treść jest niedostępna|dołącz do grupy, aby/i.test((doc.title||"")+" "+((doc.body&&doc.body.innerText)||"").slice(0,4000));
+  }
+  async function responseDiagnosis(request) {
+    const stopped=()=>({status:"STOP",counts:{}});
+    if(request.consent!==true || !responsePageSafe(request))return stopped();
+    const message={nonce:request.nonce,groupId:request.groupId,fixture:request.allowLoopback===true,consent:true,windowMs:Math.max(500,Math.min(15000,Number(request.windowMs)||15000))};
+    let stopWatch=null,invalid=false;
+    const abort=()=>{if(invalid)return;invalid=true;void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
+    try {
+      const armed=await browser.runtime.sendMessage({type:"armResponse",...message});
+      if(armed?.status!=="ARMED")return armed||stopped();
+      stopWatch=scope.FlipVisiblePosts.watch(scope,request,abort);
+      if(!responsePageSafe(request)){abort();return stopped();}
+      await sleep(message.windowMs);
+      if(invalid || !responsePageSafe(request)){abort();return stopped();}
+      return await browser.runtime.sendMessage({type:"readResponse",...message})||stopped();
+    } catch {return stopped();}
+    finally {
+      if(stopWatch)stopWatch();
+      void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});
+    }
+  }
+  port.onDisconnect.addListener(()=>{void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
+  let activeResponseNonce="";
   port.onMessage.addListener(async message => {
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
+    if (message.type === "responseDiagnosis") {
+      if(activeResponseNonce)return;
+      activeResponseNonce=message.nonce;
+      const result=await responseDiagnosis(message);
+      activeResponseNonce="";
+      try{port.postMessage({type:"responseDiagnosisResult",nonce:message.nonce,...result});}catch{}
+      return;
+    }
     if (message.type === "visiblePosts") {
       if (stopVisibleWatch) stopVisibleWatch();
       const result = scope.FlipVisiblePosts.read(scope, message);

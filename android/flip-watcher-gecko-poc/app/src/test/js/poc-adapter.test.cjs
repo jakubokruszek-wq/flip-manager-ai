@@ -357,13 +357,18 @@ test("counter output holds only fixed numeric keys and allowlisted path segments
   assert.deepEqual(out.requestPaths.map(p => p.name).sort(), ["(inne)", "/groups"]);
 });
 
-test("the extension can no longer read response bodies (static guard)", () => {
+test("legacy measurements stay count-only; response API confined to explicit opt-in module", () => {
   const extension = path.resolve(__dirname, "../../main/extension");
   const background = fs.readFileSync(path.join(extension, "poc-background.js"), "utf8").replace(/\/\/.*$/gm, "");
   const manifest = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"), "utf8"));
   assert.ok(!background.includes("filterResponseData("));
   assert.ok(!/\["blocking"\]/.test(background));
-  assert.ok(!manifest.permissions.includes("webRequestBlocking"));
+  assert.ok(manifest.permissions.includes("webRequestBlocking"));
+  assert.ok(manifest.background.scripts.includes("response-diagnosis.js"));
+  const response = fs.readFileSync(path.join(extension, "response-diagnosis.js"), "utf8");
+  assert.ok(response.includes("m?.consent===true"));
+  assert.ok(response.includes("filter.write(e.data)"));
+  assert.ok(!/requestBody|requestHeaders|responseHeaders|browser\.cookies|browser\.storage|fetch\(|XMLHttpRequest/.test(response));
   assert.ok(!/networkEvidence|remember\(|TextDecoder/.test(background));
 });
 

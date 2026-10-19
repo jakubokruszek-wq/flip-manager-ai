@@ -1,0 +1,3 @@
+<!doctype html><meta charset="utf-8"><title>Local response fixture</title><body><div>Local response diagnostic</div><script>
+setInterval(async()=>{try {const r=await fetch('/ajax/feed/?fixture=response-data');const text=await r.text();const data=JSON.parse(text.replace(/^for \(;;\);/,''));if(data.node.post_id==='550000000000003' && data.node.message.text==='PRIVATE żółć 450 000 zł 54 m²' && !document.querySelector('article')){document.body.appendChild(document.createElement('article'));}}catch{}},350);
+</script></body>
