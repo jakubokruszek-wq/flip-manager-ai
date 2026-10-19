@@ -344,26 +344,31 @@
     const stopped=()=>({status:"STOP",counts:{}});
     if(request.consent!==true || !responsePageSafe(request))return stopped();
     const message={nonce:request.nonce,groupId:request.groupId,fixture:request.allowLoopback===true,consent:true,windowMs:Math.max(500,Math.min(15000,Number(request.windowMs)||15000))};
-    let stopWatch=null,invalid=false;
-    const abort=()=>{if(invalid)return;invalid=true;void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
+    let stopWatch=null,invalid=false,wake;
+    const cancelled=new Promise(resolve=>{wake=resolve;});
+    const abort=()=>{if(invalid)return;invalid=true;wake();void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
+    activeResponseAbort=abort;
     try {
       const armed=await browser.runtime.sendMessage({type:"armResponse",...message});
       if(armed?.status!=="ARMED")return armed||stopped();
       stopWatch=scope.FlipVisiblePosts.watch(scope,request,abort);
-      if(!responsePageSafe(request)){abort();return stopped();}
-      await sleep(message.windowMs);
+      if(invalid || !responsePageSafe(request)){abort();return stopped();}
+      await Promise.race([sleep(message.windowMs),cancelled]);
       if(invalid || !responsePageSafe(request)){abort();return stopped();}
       return await browser.runtime.sendMessage({type:"readResponse",...message})||stopped();
     } catch {return stopped();}
     finally {
+      if(activeResponseAbort===abort)activeResponseAbort=null;
       if(stopWatch)stopWatch();
       void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});
     }
   }
-  port.onDisconnect.addListener(()=>{void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
+  let activeResponseAbort=null;
+  port.onDisconnect.addListener(()=>{if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
   let activeResponseNonce="";
   port.onMessage.addListener(async message => {
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
+    if(message.type==="abortResponseDiagnosis"){if(activeResponseAbort)activeResponseAbort();return;}
     if (message.type === "responseDiagnosis") {
       if(activeResponseNonce)return;
       activeResponseNonce=message.nonce;

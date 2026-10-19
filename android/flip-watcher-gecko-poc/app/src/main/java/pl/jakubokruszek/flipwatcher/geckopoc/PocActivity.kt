@@ -104,6 +104,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun stopVisiblePosts() {
+        channel?.abortResponseDiagnosis()
         GeckoHost.background.abortResponses()
         responseBusy = false
         visibleEpoch++

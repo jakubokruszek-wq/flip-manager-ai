@@ -113,6 +113,10 @@ class CollectorChannel(
         return LoadMeasurement.parseDomStats(request(nonce, message, timeoutMs), nonce)
     }
 
+    fun abortResponseDiagnosis() {
+        runCatching { port?.postMessage(JSONObject().put("type", "abortResponseDiagnosis").put("nonce", UUID.randomUUID().toString())) }
+    }
+
     /** One fresh explicit consent, no scan authorization, count-only result. */
     suspend fun visiblePosts(consent: Boolean, groupId: String = PocPolicy.APPROVED_GROUP_ID): String? {
         if (!consent) return null

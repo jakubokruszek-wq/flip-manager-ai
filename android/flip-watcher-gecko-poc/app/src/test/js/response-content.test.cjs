@@ -1,0 +1,15 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+function harness(){
+ let handler,disconnect,watchAbort,disposed=0;const messages=[],runtime=[],timers=[];
+ const doc={title:'Group',visibilityState:'visible',body:{innerText:''},documentElement:{},forms:[],getElementsByTagName:()=>[],querySelector:()=>null,querySelectorAll:()=>[]};
+ const port={postMessage:m=>messages.push(m),onMessage:{addListener(fn){handler=fn;}},onDisconnect:{addListener(fn){disconnect=fn;}}};
+ const scope={URL,Date,Promise,document:doc,location:{href:'https://www.facebook.com/groups/group/',hostname:'www.facebook.com',pathname:'/groups/group/'},innerWidth:400,innerHeight:600,MutationObserver:class {observe(){}},FlipGeckoPocAdapter:{},FlipFacebookCollectorCore:{},FlipVisiblePosts:{context:()=>true,watch(w,r,abort){watchAbort=abort;return()=>disposed++;}},setTimeout(fn,ms){timers.push({fn,ms});},browser:{runtime:{connectNative:()=>port,async sendMessage(m){runtime.push(m);return {status:m.type==='armResponse'?'ARMED':'OK',counts:{}};}}}};
+ vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../main/extension/poc-content.js'),'utf8'),scope);
+ return {doc,scope,messages,runtime,timers,send:m=>handler(m),disconnect:()=>disconnect(),abort:()=>watchAbort(),disposed:()=>disposed};
+}
+const request={type:'responseDiagnosis',nonce:'fresh-consent',consent:true,groupId:'group',windowMs:15000};
+const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
+test('content layer refuses absent consent before arming or reading',async()=>{const h=harness();await h.send({...request,consent:false});assert.equal(h.runtime.length,0);assert.equal(h.messages.at(-1).status,'STOP');});
+test('native stop cancels the window immediately and permits a fresh attempt',async()=>{const h=harness();const pending=h.send(request);await flush();assert(h.runtime.some(m=>m.type==='armResponse'));await h.send({type:'abortResponseDiagnosis',nonce:'native-stop'});await pending;assert.equal(h.messages.at(-1).status,'STOP');assert.equal(h.disposed(),1);assert(!h.runtime.some(m=>m.type==='readResponse'));const again=h.send({...request,nonce:'new-consent'});await flush();h.abort();await again;assert.equal(h.runtime.filter(m=>m.type==='armResponse').length,2);});
+test('page watcher and port disconnect cancel instead of waiting fifteen seconds',async()=>{for(const action of ['abort','disconnect']){const h=harness();const p=h.send(request);await flush();h[action]();await p;assert.equal(h.messages.at(-1).status,'STOP');assert(h.runtime.some(m=>m.type==='stopResponse'));assert.equal(h.disposed(),1);}});
+test('context disappearing while arm is in flight stops and cleans the armed session',async()=>{const h=harness();const p=h.send(request);h.doc.visibilityState='hidden';await p;assert.equal(h.messages.at(-1).status,'STOP');assert(h.runtime.some(m=>m.type==='stopResponse'));assert(!h.runtime.some(m=>m.type==='readResponse'));});
