@@ -543,11 +543,12 @@ class GeckoFixtureTest {
                 val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
                 val session = GeckoSession(GeckoSessionSettings.Builder().build())
                 val channel = CollectorChannel(session, fixtureMode = true)
-                val background = BackgroundChannel()
+                val background = GeckoHost.background
                 try {
                     val extension = GeckoHost.collectorExtension(context)
-                    background.attach(extension); channel.attach(extension)
+                    channel.attach(extension)
                     session.open(GeckoHost.runtime(context)); host!!.geckoView.setSession(session); session.setActive(true)
+                    assertTrue("existing background port", background.awaitPort(10_000))
                     val target = server.url(groupPath, "response-load")
                     session.loadUri(target)
                     assertTrue(channel.awaitPort(30_000)); delay(1_000)
