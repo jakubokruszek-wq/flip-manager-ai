@@ -368,7 +368,7 @@ class PocActivity : ComponentActivity() {
 
     // ---- current-page diagnostics: no post scan, permission or upload
     private fun inspectDom() {
-        if (scanning || inspectingDom) return
+        if (responseBusy || scanning || inspectingDom) return
         val current = channel ?: run { output.text = "Otwórz sesję."; return }
         if (kind != PageKind.APPROVED_GROUP || !current.isConnected) {
             output.text = "Diagnoza postów dostępna tylko na zatwierdzonej grupie z połączonym rozszerzeniem."
@@ -408,7 +408,7 @@ class PocActivity : ComponentActivity() {
 
     // ---- one measured load of the approved group (counts only, armed before loadUri)
     private fun measureGroupOpening() {
-        if (measuringLoad || scanning || inspectingDom) return
+        if (responseBusy || measuringLoad || scanning || inspectingDom) return
         val current = session ?: run { output.text = "Otwórz sesję."; return }
         val currentChannel = channel ?: return
         measuringLoad = true
@@ -449,7 +449,7 @@ class PocActivity : ComponentActivity() {
 
     // ---- listener control test (local page, own session, no Facebook)
     private fun runNetworkControl() {
-        if (scanning || inspectingDom) return
+        if (responseBusy || scanning || inspectingDom) return
         inspectingDom = true
         render()
         output.text = "Test sieci GeckoView: lokalna strona 127.0.0.1 w osobnej sesji (ok. 5 s). Bez Facebooka."
@@ -638,6 +638,7 @@ class PocActivity : ComponentActivity() {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
+            responseBusy -> "Trwa lokalna diagnostyka odpowiedzi (15 s). Ręcznie przewiń grupę."
             scanning -> "Trwa skan (max ${PocPolicy.MAX_POSTS} postów, ${PocPolicy.SCAN_TIMEOUT_MS / 1000} s)…"
             kind == PageKind.APPROVED_GROUP && preferences.getBoolean(KEY_ONE_SCAN_USED, false) ->
                 "Zatwierdzona grupa otwarta. Limit jednego skanu testowego wykorzystany; wyniki dostępne lokalnie."

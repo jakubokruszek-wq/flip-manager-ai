@@ -22,7 +22,7 @@
       if(current) return {status:"BUSY",counts:fresh()};
       const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),closed:false,expired:false};
       s.counts.responseArmed=1;current=s;
-      s.timer=timers.setTimeout(()=>{if(current!==s)return;for(const stream of s.streams.values())discard(stream);s.streams.clear();s.expired=true;},Math.max(500,Math.min(15000,Number(m.windowMs)||15000)));
+      s.timer=timers.setTimeout(()=>{if(current!==s)return;for(const stream of s.streams.values())discard(stream);s.streams.clear();s.ids.clear();s.expired=true;},Math.max(500,Math.min(15000,Number(m.windowMs)||15000)));
       return {status:"ARMED",counts:{...s.counts}};
     }
     function read(m,sender) {
