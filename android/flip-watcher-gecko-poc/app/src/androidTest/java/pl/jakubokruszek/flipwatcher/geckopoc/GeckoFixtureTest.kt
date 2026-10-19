@@ -297,18 +297,28 @@ class GeckoFixtureTest {
                 val session = GeckoSession(GeckoSessionSettings.Builder().build())
                 val channel = CollectorChannel(session, fixtureMode = true)
                 val other = otherTab?.let { GeckoSession(GeckoSessionSettings.Builder().build()) }
+                val otherChannel = other?.let { CollectorChannel(it, fixtureMode = true) }
                 try {
                     channel.attach(GeckoHost.collectorExtension(context))
                     session.open(GeckoHost.runtime(context))
                     session.setActive(true)
-                    other?.let { it.open(GeckoHost.runtime(context)); it.setActive(true); it.loadUri(server.url(groupPath, otherTab!!)) }
+                    other?.let {
+                        otherChannel!!.attach(GeckoHost.collectorExtension(context))
+                        it.open(GeckoHost.runtime(context)); it.setActive(true)
+                        it.loadUri(server.url(groupPath, otherTab!!))
+                        // Complete the noise tab navigation BEFORE arming the next-main-frame
+                        // measurement. Its polling continues throughout the measured window.
+                        // Otherwise this tab may win the race and become the measured tab.
+                        assertTrue(otherChannel.awaitPort(30_000))
+                        assertTrue(otherChannel.probe() != null)
+                    }
                     val started = System.currentTimeMillis()
                     LoadMeasurementRunner(GeckoHost.background).run(
                         session, channel, server.url(path, fixture), FIXTURE_GROUP_ID, windowMs, allowLoopback = true,
                         sessionAlive = { aliveForMs == null || System.currentTimeMillis() - started < aliveForMs },
                     )
                 } finally {
-                    channel.close(); runCatching { other?.close() }; session.close(); server.close()
+                    channel.close(); otherChannel?.close(); runCatching { other?.close() }; session.close(); server.close()
                 }
             }
         }
