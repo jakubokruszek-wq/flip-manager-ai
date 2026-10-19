@@ -384,19 +384,41 @@
       void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});
     }
   }
-  let activeLoadAbort=null,disposeLoadWatch=null;
-  function clearLoadWatch(){if(disposeLoadWatch)disposeLoadWatch();disposeLoadWatch=null;activeLoadAbort=null;}
+  let activeLoadAbort=null,disposeLoadWatch=null,disposeLoadRun=null;
+  function clearLoadWatch(){if(disposeLoadRun)disposeLoadRun();disposeLoadRun=null;if(disposeLoadWatch)disposeLoadWatch();disposeLoadWatch=null;activeLoadAbort=null;}
   async function adoptResponseLoad(){
     const info=await browser.runtime.sendMessage({type:"responseLoadContext"});
     if(!info?.active)return;
-    const request={groupId:info.groupId,allowLoopback:info.fixture===true};let stopped=false;
-    const abort=()=>{if(stopped)return;stopped=true;void browser.runtime.sendMessage({type:"stopResponse",nonce:info.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
+    const request={groupId:info.groupId,allowLoopback:info.fixture===true};let stopped=false,wake;
+    const deadline=scope.performance.now()+Math.max(0,Math.min(25000,Number(info.remainingMs)||0));
+    const cancelled=new Promise(resolve=>{wake=resolve;});
+    disposeLoadRun=()=>{stopped=true;wake();};
+    const abort=()=>{if(stopped)return;stopped=true;wake();void browser.runtime.sendMessage({type:"stopResponse",nonce:info.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
     activeLoadAbort=abort;
     if(!responsePageSafe(request)){abort();return;}
     disposeLoadWatch=scope.FlipVisiblePosts.watch(scope,request,abort);
     if(stopped || !responsePageSafe(request)){abort();return;}
     const confirmed=await browser.runtime.sendMessage({type:"confirmResponseLoad",nonce:info.nonce,safe:true});
-    if(!confirmed?.confirmed)abort();
+    if(!confirmed?.confirmed){abort();return;}
+    if(info.autoScrollConsent!==true)return;
+    // Both a local monotonic deadline and a fresh bound-background check BEFORE each step.
+    // Reload time consumes the same 25-second budget; no timer can renew consent.
+    for(let i=0;i<5;i++) {
+      const pause=i===0?1000:2000;
+      if(deadline-scope.performance.now()<=pause)return;
+      await Promise.race([sleep(pause),cancelled]);
+      if(stopped)return;
+      if(!responsePageSafe(request)){abort();return;}
+      if(scope.performance.now()>=deadline)return;
+      const active=await browser.runtime.sendMessage({type:"responseLoadContext"});
+      if(stopped)return;
+      if(!responsePageSafe(request)){abort();return;}
+      if(!active?.active || active.nonce!==info.nonce || active.autoScrollConsent!==true || active.remainingMs<=0 || scope.performance.now()>=deadline)return;
+      const before=scope.scrollY;
+      scope.scrollBy({left:0,top:Math.max(400,Math.min(900,Math.round(scope.innerHeight*0.9))),behavior:"instant"});
+      const ack=await browser.runtime.sendMessage({type:"recordResponseLoadScroll",nonce:info.nonce,step:i+1,moved:scope.scrollY!==before});
+      if(!ack?.recorded)return;
+    }
   }
   let activeResponseAbort=null;
   port.onDisconnect.addListener(()=>{if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
@@ -409,7 +431,7 @@
         port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:"STOP"});return;
       }
       if(stopVisibleWatch)stopVisibleWatch();stopVisibleWatch=null;clearLoadWatch();
-      const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
+      const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,autoScrollConsent:message.autoScrollConsent===true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
       port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:armed?.status||"STOP"});return;
     }
     if (message.type === "responseDiagnosis") {

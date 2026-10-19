@@ -18,6 +18,8 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoSessionSettings
 import java.util.UUID
 
@@ -564,6 +566,66 @@ class GeckoFixtureTest {
                     assertTrue("stopped=$stopped", stopped==null || stopped.contains("• STOP"))
                     assertFalse(stopped.orEmpty().contains("responseExactIds: 1"))
                 } finally { background.abortResponses(); channel.close(); host!!.geckoView.releaseSession(); session.close(); server.close() }
+            } } }
+        }
+    }
+
+    @Test fun combinedInitialLoadAndScrollUsesNativeNavigationGateAndFreshConsent() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val background = GeckoHost.background
+                val gate = ResponseReloadGate()
+                var unexpectedStop = false
+                fun stop() { if (gate.active) unexpectedStop = true; gate.cancel(); background.abortResponses() }
+                val channel = CollectorChannel(session, fixtureMode = true, onVisibleStop = { stop() },
+                    onPageDisconnect = { if (gate.active && !gate.allowOldDisconnect()) stop() }, onPageConnected = { gate.connected() })
+                // Exercise the actual Gecko callback order against the same gate used by PocActivity.
+                session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+                    override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+                        if (gate.active && !gate.allowRequest(request.uri, request.isRedirect, request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW)) stop()
+                        return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                    }
+                    override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
+                        if (gate.active && !gate.allowLocation(url)) stop()
+                    }
+                }
+                session.progressDelegate = object : GeckoSession.ProgressDelegate {
+                    override fun onPageStart(session: GeckoSession, url: String) { if (gate.active && !gate.allowLocation(url)) stop() }
+                    override fun onPageStop(session: GeckoSession, success: Boolean) { if (!success && gate.active) stop() }
+                }
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    assertTrue(background.awaitPort(10_000))
+                    session.open(GeckoHost.runtime(context)); host!!.geckoView.setSession(session); session.setActive(true)
+                    val target = server.url(groupPath, "response-load-scroll")
+                    session.loadUri(target); assertTrue(channel.awaitPort(30_000)); delay(1_000)
+                    gate.begin(target)
+                    val report = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,12_000,autoScrollConsent=true,
+                        alive={gate.active},willLoad={gate.willLoad()})
+                    assertFalse("unexpected native STOP: $report", unexpectedStop)
+                    Log.i("GeckoPocTest", "RESPONSE_COMBINED $report")
+                    for (field in listOf("responseLoadMode: 1","responseLoadNavigation: 1","responseLoadVerified: 1","responseAutoScroll: 1","responseScrollSteps: 5","responseScrollMoves: 5","responseExactIds: 2","responseCompleted: 2"))
+                        assertTrue("missing $field: $report", report?.contains(field)==true)
+                    gate.cancel()
+                    val started = android.os.SystemClock.elapsedRealtime()
+                    gate.begin(target)
+                    launch { delay(1_500); gate.cancel(); channel.abortResponseDiagnosis(); background.abortResponses() }
+                    assertNull(ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,25_000,autoScrollConsent=true,
+                        alive={gate.active},willLoad={gate.willLoad()}))
+                    assertTrue("abort waited for deadline", android.os.SystemClock.elapsedRealtime()-started<8_000)
+                    delay(300); gate.begin(target)
+                    val clean = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,4_000,
+                        alive={gate.active},willLoad={gate.willLoad()})
+                    assertFalse(unexpectedStop)
+                    assertTrue("clean=$clean", clean?.contains("responseExactIds: 1")==true)
+                    assertTrue(clean?.contains("responseAutoScroll: 0")==true)
+                    assertTrue(clean?.contains("responseScrollSteps: 0")==true)
+                    assertFalse(clean.orEmpty().contains("PRIVATE"))
+                } finally { gate.cancel(); background.abortResponses(); channel.close(); host!!.geckoView.releaseSession(); session.close(); server.close() }
             } } }
         }
     }

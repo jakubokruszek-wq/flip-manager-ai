@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><title>Local initial and scroll fixture</title><body style="min-height:6000px"><div>Local combined diagnostic</div><script>
+fetch('/ajax/feed/?fixture=response-data').then(r=>r.text()).then(text=>{if(text.includes('550000000000003'))document.body.appendChild(document.createElement('article'));}).catch(()=>{});
+window.addEventListener('scroll',()=>{void fetch('/ajax/scroll/?fixture=response-scroll-data').then(r=>r.text()).catch(()=>{});},{once:true});
+</script></body>

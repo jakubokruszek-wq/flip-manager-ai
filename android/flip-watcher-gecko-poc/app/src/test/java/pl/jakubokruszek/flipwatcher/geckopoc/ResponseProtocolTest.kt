@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ResponseProtocolTest {
     private fun reply() = JSONObject().put("type", "responseDiagnosisResult").put("nonce", "fresh").put("status", "OK").put("counts", JSONObject().apply { ResponseProtocol.keys.forEach { put(it, 0) } })
-    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.2")) }
+    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.3")) }
     @Test fun wrongNonceTypeAndStatusAreRejected() {
         assertNull(ResponseProtocol.report(reply(), "old"))
         assertNull(ResponseProtocol.report(reply().put("type", "scanResult"), "fresh"))
@@ -61,7 +61,7 @@ class ResponseProtocolTest {
         assertNull(ResponseProtocol.report(r,"fresh"))
         c.put("responseLoadNavigation",1); assertNull(ResponseProtocol.report(r,"fresh"))
         c.put("responseLoadVerified",1); assertNotNull(ResponseProtocol.report(r,"fresh"))
-        c.put("responseAutoScroll",1); assertNull(ResponseProtocol.report(r,"fresh"))
+        c.put("responseAutoScroll",1).put("responseScrollSteps",5).put("responseScrollMoves",5); assertNotNull(ResponseProtocol.report(r,"fresh"))
     }
     @Test fun loadCountersCannotLeakIntoManualModeOrExceedLimits() {
         for ((key,value) in listOf("responseLoadMode" to 2,"responseLoadNavigation" to 1,"responseLoadVerified" to 1,"responseQueuedBodies" to 1)) {

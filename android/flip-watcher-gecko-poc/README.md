@@ -1,3 +1,5 @@
+Aktualna diagnostyka: [0.3.3 — otwarcie i przewijanie](docs/poc-033.md).
+
 Aktualna diagnostyka: [0.3.2 — odpowiedzi od otwarcia](docs/poc-032.md).
 
 # Aktualizacja 0.3.1

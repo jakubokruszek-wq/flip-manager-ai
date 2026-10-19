@@ -5,13 +5,13 @@ const {create,keys,groupURL}=require('../../main/extension/response-diagnosis.js
 const group='lodzsprzedazzakupwynajem',url=`https://www.facebook.com/groups/${group}/`;
 const sender={tab:{id:7},frameId:0,url},msg={consent:true,nonce:'fresh-consent-123',groupId:group,windowMs:15000};
 function harness(apiAvailable=true){
- const filters=[],timers=[];
+ const filters=[],timers=[];let clock=0;
  const api={webRequest:{onBeforeRequest:{addListener(fn){this.listener=fn;}}}};
  if(apiAvailable)api.webRequest.filterResponseData=id=>{const f={id,writes:[],write(b){this.writes.push(Buffer.from(b));},close(){this.closed=true;},disconnect(){this.disconnected=true;}};filters.push(f);return f;};
- const d=create(api,core,{setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){}});
+ const d=create(api,core,{performance:{now:()=>clock},setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){}});
  const request=(extra={})=>{const details={tabId:7,frameId:0,type:'xmlhttprequest',url:'https://www.facebook.com/ajax/feed/',documentUrl:url,requestId:String(filters.length),...extra};d.observe(details);return d.before(details);};
  const stream=(body,extra={})=>{request(extra);const f=filters.at(-1);const b=Buffer.from(body);for(let i=0;i<b.length;i+=7)f.ondata({data:Uint8Array.from(b.subarray(i,i+7)).buffer});f.onstop();return f;};
- return {d,filters,timers,request,stream,arm:(m=msg,s=sender)=>d.arm(m,s),read:(m=msg,s=sender)=>d.read(m,s)};
+ return {d,filters,timers,request,stream,jump(ms){clock+=ms;},arm:(m=msg,s=sender)=>d.arm(m,s),read:(m=msg,s=sender)=>d.read(m,s)};
 }
 const story=(id='123456789',g=group)=>({__typename:'Story',post_id:id,permalink_url:`https://www.facebook.com/groups/${g}/posts/${id}/`,message:{text:'PRIVATE żółć 450 000 zł 54 m²'},actors:[{name:'PRIVATE_AUTHOR',id:'987654321'}]});
 test('idle and absent consent never instantiate a response filter',()=>{const h=harness();h.request();assert.equal(h.filters.length,0);for(const consent of [false,undefined,'true'])assert.equal(h.arm({...msg,consent}).status,'STOP');h.request();assert.equal(h.filters.length,0);});
@@ -77,3 +77,27 @@ test('scoped cancellation revokes late arm and cannot cancel a later unrelated w
  const next={...msg,nonce:'second-fresh-consent'};assert.equal(h.arm(next).status,'ARMED');h.d.abortLoad(msg);assert.equal(h.read(next).status,'OK');
 });
 test('load timer is bounded to 25 seconds and cannot extend the old 15 second mode',()=>{const h=harness();h.arm({...loadMsg,windowMs:999999});assert.equal(h.timers[0].ms,25000);h.d.abort();h.arm({...msg,windowMs:999999});assert.equal(h.timers[1].ms,15000);});
+
+test('load scroll context carries only strict fresh scroll consent and bounded remaining time',()=>{
+ for(const value of [undefined,false,'true',true]){const h=harness();h.arm({...loadMsg,autoScrollConsent:value});navigate(h);const info=h.d.loadContext(sender);assert.equal(info.autoScrollConsent,value===true);assert(info.remainingMs>0 && info.remainingMs<=25000);assert(!JSON.stringify(info).includes('PRIVATE'));}
+});
+test('load scroll records need verified bound session, exact nonce and sequential boolean steps',()=>{
+ const h=harness();h.arm({...loadMsg,autoScrollConsent:true});navigate(h);
+ const step={nonce:msg.nonce,step:1,moved:true};assert.equal(h.d.recordLoadScroll(step,sender),false);verify(h);
+ for(const bad of [{...step,nonce:'wrong-nonce'},{...step,step:2},{...step,step:1.5},{...step,moved:'true'}])assert.equal(h.d.recordLoadScroll(bad,sender),false);
+ assert.equal(h.d.recordLoadScroll(step,{...sender,tab:{id:8}}),false);assert.equal(h.d.recordLoadScroll(step,{...sender,frameId:1}),false);
+ assert.equal(h.d.recordLoadScroll(step,sender),true);assert.equal(h.d.recordLoadScroll(step,sender),false);
+ for(let i=2;i<=5;i++)assert.equal(h.d.recordLoadScroll({...step,step:i,moved:i%2===0},sender),true);
+ assert.equal(h.d.recordLoadScroll({...step,step:6},sender),false);
+ const c=h.d.readLoad(msg).counts;assert.equal(c.responseAutoScroll,1);assert.equal(c.responseScrollSteps,5);assert.equal(c.responseScrollMoves,3);
+});
+test('ordinary load, expired or aborted windows reject scrolling',()=>{
+ for(const action of ['no-consent','expire','abort']){const h=harness();h.arm({...loadMsg,autoScrollConsent:action==='no-consent'?false:true});navigate(h);verify(h);if(action==='expire')h.timers[0].fn();if(action==='abort')h.d.abort();assert.equal(h.d.recordLoadScroll({nonce:msg.nonce,step:1,moved:true},sender),false);}
+});
+
+test('monotonic expiry rejects delayed callbacks and scrolling even before timeout callback runs',()=>{
+ const h=harness();h.arm({...loadMsg,autoScrollConsent:true});navigate(h);verify(h);h.request();const f=h.filters[0];h.jump(25001);
+ assert.equal(h.d.loadContext(sender).active,false);assert.equal(h.d.recordLoadScroll({nonce:msg.nonce,step:1,moved:true},sender),false);
+ f.ondata({data:Uint8Array.from(Buffer.from(JSON.stringify(story()))).buffer});f.onstop();h.request();const c=h.d.readLoad(msg).counts;
+ assert.equal(h.filters.length,1);assert.equal(c.responseBytes,0);assert.equal(c.responseExactIds,0);assert.equal(c.responseScrollSteps,0);
+});

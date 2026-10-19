@@ -130,10 +130,10 @@ class CollectorChannel(
         return VisiblePostsProtocol.report(reply, nonce)
     }
 
-    suspend fun prepareResponseLoad(consent: Boolean, groupId: String, windowMs: Int, nonce: String = UUID.randomUUID().toString()): String? {
+    suspend fun prepareResponseLoad(consent: Boolean, groupId: String, windowMs: Int, nonce: String = UUID.randomUUID().toString(), autoScrollConsent: Boolean = false): String? {
         if (!consent) return null
         val reply = request(nonce, JSONObject().put("type", "prepareResponseLoad").put("nonce", nonce)
-            .put("consent", true).put("reloadConsent", true).put("groupId", groupId).put("allowLoopback", fixtureMode)
+            .put("consent", true).put("reloadConsent", true).put("autoScrollConsent", autoScrollConsent).put("groupId", groupId).put("allowLoopback", fixtureMode)
             .put("windowMs", windowMs.coerceIn(1_000, 25_000)), 8_000) ?: return null
         return nonce.takeIf { reply.optString("type") == "responseLoadArmed" && reply.optString("nonce") == nonce &&
             reply.optString("status") == "ARMED" && reply.keys().asSequence().toSet() == setOf("type", "nonce", "status") }

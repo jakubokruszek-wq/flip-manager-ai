@@ -20,7 +20,7 @@ object ResponseProtocol {
         if (counts.getInt("responseAutoScroll") == 0 && counts.getInt("responseScrollSteps") != 0) return null
         if (listOf("responseLoadMode", "responseLoadNavigation", "responseLoadVerified").any { counts.getInt(it) > 1 } || counts.getInt("responseQueuedBodies") > 8) return null
         if (counts.getInt("responseLoadMode") == 0 && (counts.getInt("responseLoadNavigation") != 0 || counts.getInt("responseLoadVerified") != 0 || counts.getInt("responseQueuedBodies") != 0)) return null
-        if (status == "OK" && counts.getInt("responseLoadMode") == 1 && (counts.getInt("responseLoadNavigation") != 1 || counts.getInt("responseLoadVerified") != 1 || counts.getInt("responseAutoScroll") != 0)) return null
+        if (status == "OK" && counts.getInt("responseLoadMode") == 1 && (counts.getInt("responseLoadNavigation") != 1 || counts.getInt("responseLoadVerified") != 1)) return null
         val transport = when {
             status != "OK" -> status
             counts.getInt("responseObserved") == 0 -> "BRAK ZDARZEŃ w oknie; parser nie otrzymał danych."
@@ -31,7 +31,7 @@ object ResponseProtocol {
             counts.getInt("responseExactIds") == 0 -> "DANE ODCZYTANE, BRAK POTWIERDZONYCH ID."
             else -> "POTWIERDZONE ID W ODCZYTANYCH DANYCH; kompletność ofert niepotwierdzona."
         }
-        return "ODPOWIEDZI 0.3.2 • tylko lokalnie • $status\n" + "Ocena transportu: $transport\n" + keys.joinToString("\n") { "$it: ${counts.getInt(it)}" } +
+        return "ODPOWIEDZI 0.3.3 • tylko lokalnie • $status\n" + "Ocena transportu: $transport\n" + keys.joinToString("\n") { "$it: ${counts.getInt(it)}" } +
             "\nID: dokładny identyfikator i permalink zatwierdzonej grupy z parsera rozszerzenia. Cena/metraż: sygnały heurystyczne. Same liczniki nie potwierdzają kompletności ofert. UNSUPPORTED: API odpowiedzi niedostępne; STOP: przerwana próba. Brak skanu i zapisu treści."
     }
 }
