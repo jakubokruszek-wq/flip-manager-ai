@@ -11,3 +11,15 @@ test("fake IDs, photo fbid, foreign groups and arbitrary numbers rejected",()=>{
 test("cap 20, deduplicate ID; mobile candidates remain heuristic",()=>{const out=v.analyze({...input,cards:Array(30).fill({...input.cards[0],semantic:false})});assert.equal(out.counts.candidates,20);assert.equal(out.counts.confirmedIds,1);assert.equal(out.counts.heuristicCandidates,20);});
 test("no retained results after clear or session interruption",()=>{v.analyze(input);assert.equal(v.analyze({...input,consent:false,cards:[]}).status,"STOP");assert.equal(v.analyze({...input,cards:[]}).counts.confirmedIds,0);});
 test("diagnosis module isolated from storage, network and scan",()=>{const fs=require("node:fs");const src=fs.readFileSync(require.resolve("../../main/extension/visible-posts.js"),"utf8");assert.doesNotMatch(src,/fetch\s*\(|XMLHttpRequest|localStorage|cookies|filterResponseData|scan\s*\(|console\./);});
+test("without consent rendered DOM is never queried",()=>{
+  const win={document:{querySelector(){throw Error('unauthorized DOM read')}},location:{href}};
+  assert.equal(v.read(win,{consent:false,groupId}).status,"STOP");
+});
+test("page interruption and data clearing dispose the observer",()=>{
+  let callback, disconnected=0, stopped=0;
+  const listeners=new Map();
+  const win={location:{href},document:{title:"group",body:{innerText:""},visibilityState:"visible",documentElement:{},querySelector(){return null},addEventListener(n,f){listeners.set(n,f)},removeEventListener(n){listeners.delete(n)}},MutationObserver:class{constructor(f){callback=f}observe(){}disconnect(){disconnected++}},addEventListener(n,f){listeners.set(n,f)},removeEventListener(n){listeners.delete(n)}};
+  const clear=v.watch(win,{groupId},()=>stopped++);
+  clear(); assert.equal(disconnected,1);assert.equal(stopped,0);assert.equal(listeners.size,0);
+  v.watch(win,{groupId},()=>stopped++);win.location.href=href.replace(groupId,"other");callback();assert.equal(stopped,1);assert.equal(disconnected,2);assert.equal(listeners.size,0);
+});
