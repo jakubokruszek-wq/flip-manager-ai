@@ -1,3 +1,4 @@
+require("../../../../../../extensions/facebook-collector/collector-core.js");
 const {test} = require("node:test");
 const assert = require("node:assert/strict");
 const v = require("../../main/extension/visible-posts.js");
@@ -27,4 +28,23 @@ test("page interruption and data clearing dispose the observer",()=>{
 test("lost group access stops before card extraction",()=>{
  const win={innerWidth:500,innerHeight:900,location:{href},document:{title:"Facebook",body:{innerText:"Ta zawartość jest niedostępna"},visibilityState:"visible",querySelector(){return null},querySelectorAll(){throw Error("cards read after STOP")}}};
  assert.equal(v.read(win,{consent:true,groupId}).status,"STOP");
+});
+
+test("shared desktop parser accepts bound story links, rejects unbound and conflicting cards",()=>{
+ assert.equal(v.exact(`https://www.facebook.com/story.php?story_fbid=123456789&id=${groupId}`,groupId),"123456789");
+ assert.equal(v.exact("https://www.facebook.com/story.php?story_fbid=123456789",groupId),null);
+ const out=v.analyze({...input,cards:[{...input.cards[0],hrefs:[href+"posts/123456789/",href+"posts/987654321/"]}]});
+ assert.equal(out.counts.confirmedIds,0);assert.equal(out.counts.ambiguousCards,1);
+});
+
+function fakeWindow(mode) {
+ const block={innerText:"Sprzedam mieszkanie bez podanej ceny",parentElement:{closest(){return null}},closest(){return null},matches(){return false},contains(){return false},querySelectorAll(){return []},getBoundingClientRect(){return {width:300,height:100,top:10,left:10,bottom:110,right:310}}};
+ const win={innerWidth:400,innerHeight:800,location:{href},getComputedStyle(){return {visibility:"visible",display:"block",opacity:"1"}},document:{title:"Grupa",body:{innerText:block.innerText},visibilityState:"visible",querySelector(){return null},querySelectorAll(s){return mode==="mobile" && s.includes("TextArea") ? [block] : mode==="desktop" && s.includes("post_message") ? [block] : []},createTreeWalker(){let used=false;return {nextNode(){if(used)return null;used=true;return {nodeValue:block.innerText,parentElement:block}}}}}};
+ return win;
+}
+for(const mode of ["desktop","mobile","fallback"]) test(`rendered ${mode} text without price or article is diagnosed`,()=>{
+ const out=v.read(fakeWindow(mode),{consent:true,groupId});
+ assert.equal(out.status,"GROUP_OK");assert.equal(out.counts.candidates,1);assert.equal(out.counts.priceCandidates,0);assert.equal(out.counts.confirmedIds,0);
+ assert.equal(out.counts[mode==="desktop"?"desktopMessageBlocks":mode==="mobile"?"mobileTextBlocks":"fallbackTextBlocks"],1);
+ assert.ok(!JSON.stringify(out).includes("Sprzedam"));
 });

@@ -454,6 +454,16 @@ class GeckoFixtureTest {
                     assertTrue("report=$report", report?.contains("confirmedIds: 1") == true)
                     assertTrue(report?.contains("priceCandidates: 1") == true)
                     assertFalse(report.orEmpty().contains("450 000"))
+                    for ((fixture, key) in listOf("visible-mobile-text" to "mobileTextBlocks", "visible-plain-text" to "fallbackTextBlocks")) {
+                        session.loadUri(server.url(groupPath, fixture))
+                        delay(1_000)
+                        assertTrue(channel.awaitPort(30_000))
+                        val mobileReport = channel.visiblePosts(true, FIXTURE_GROUP_ID)
+                        assertTrue("$fixture report=$mobileReport", mobileReport?.contains("$key: 1") == true)
+                        assertTrue(mobileReport?.contains("candidates: 1") == true)
+                        assertTrue(mobileReport?.contains("priceCandidates: 0") == true)
+                        assertFalse(mobileReport.orEmpty().contains("Sprzedam"))
+                    }
                     session.loadUri(server.url("/login/", "login"))
                     delay(2_000)
                     assertTrue(stopped)

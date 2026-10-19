@@ -1,3 +1,7 @@
+# Wersja 0.2.6
+
+Poprawka po zerowym raporcie na Samsungu: [porównanie z rozszerzeniem i instrukcja](docs/poc-026.md). Wspólny parser linków, znaczniki treści z rozszerzenia i lokalne liczniki tekstu bez wymagania ceny. Bez skanu i odczytu odpowiedzi sieciowych.
+
 # Wersja 0.2.5
 
 Nowa lokalna funkcja „Sprawdź widoczne posty”: [instrukcja i ograniczenia](docs/poc-025.md). Wymaga osobnej, nowej zgody na każdą próbę.
