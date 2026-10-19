@@ -80,3 +80,9 @@ test("ancestor traversal depth and hidden containers are bounded",()=>{
  const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);assert.equal(out.ancestorContainers,6);assert.equal(out.ancestorMaxDepth,6);assert.equal(out.ancestorDepthStops,1);
  assert.equal(v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>false).ancestorContainers,0);
 });
+
+test("foreign story.php source cannot hide behind the desktop profile classification",()=>{
+ const f=ancestorFixture({links:[href+"posts/123456789/","https://www.facebook.com/story.php?story_fbid=987654321&id=999999999"]});
+ const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);
+ assert.equal(out.ancestorForeignContainers,1);assert.equal(out.ancestorWithExactId,0);
+});

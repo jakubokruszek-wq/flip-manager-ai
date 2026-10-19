@@ -66,7 +66,7 @@
           const shared = universe.filter(el => node === el || node.contains(el)).length > 1;
           const anchors = Array.from(node.querySelectorAll('a[href]')).slice(0,100).filter(visible);
           const ids = new Set(anchors.map(a=>exact(a.href,groupId)).filter(Boolean));
-          const foreign = anchors.some(a=>{const link=root.FlipFacebookCollectorCore?.parsePostLink(a.href);return link?.sourceType === "GROUP" && link.sourceId !== groupId;});
+          const foreign = anchors.some(a=>{if (exact(a.href,groupId)) return false; return Boolean(root.FlipFacebookCollectorCore?.parsePostLink(a.href));});
           const photos = Array.from(node.querySelectorAll('img')).slice(0,100).filter(visible).length;
           if (shared) out.ancestorSharedContainers++;
           if (ids.size > 1) out.ancestorAmbiguousContainers++;
