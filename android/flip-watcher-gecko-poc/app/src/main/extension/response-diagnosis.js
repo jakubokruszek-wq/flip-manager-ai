@@ -31,6 +31,24 @@
       if(!senderOK({...sender}, {...m,consent:true,groupId:s.group,fixture:s.fixture})){abort();return {status:"STOP",counts:fresh(true)};}
       const counts={...s.counts};current=null;release(s);return {status:"OK",counts};
     }
+    // The desktop parser may supply a missing group from its source context.
+    // Independently require an explicit group URL in a structured link field
+    // before accepting its canonicalized result. No bare/profile IDs promoted.
+    function explicitIds(body,group) {
+      const ids=new Set();let seen=0;
+      for(const match of body.matchAll(/"(?:permalink|permalink_url|url)"\s*:\s*("(?:[^"\\]|\\.)*")/g)) {
+        if(++seen>400)break;if(match[1].length>4096)continue;
+        try {
+          const u=new URL(JSON.parse(match[1]),"https://www.facebook.com");
+          if(u.protocol!=="https:" || u.port || u.username || u.password || !["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname))continue;
+          const g=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);
+          if(!(g?.[1]===group || (u.pathname==="/story.php" && u.searchParams.get("id")===group)))continue;
+          const link=core.parsePostLink(u.href);if(link && (!g || link.postId===g[2]))ids.add(link.postId);
+          if(ids.size>=20)break;
+        }catch{}
+      }
+      return ids;
+    }
     function parse(s,body) {
       if(current!==s || s.closed || s.expired) return;
       // Conservative STOP on response-level verification pages, before parsing posts.
@@ -38,10 +56,11 @@
       inc(s,"responseKeyPostId",Math.min(2000,(body.match(/"post_id"\s*:/g)||[]).length));
       inc(s,"responseKeyStoryId",Math.min(2000,(body.match(/"(?:top_level_post_id|story_fbid)"\s*:/g)||[]).length));
       const source={sourceType:"GROUP",sourceId:s.group,sourceUrl:"https://www.facebook.com/groups/"+s.group+"/",allowGroupRedirect:false};
+      const explicit=explicitIds(body,s.group);
       let records=[];
       try {records=core.extractStructuredRecordsFromText(body,"NETWORK",source,0)||[];}catch{inc(s,"responseDecodeErrors");return;}
       for(const r of records.slice(0,100)) {
-        if(!/^\d{5,30}$/.test(r.postId) || r.sourceType!=="GROUP" || r.sourceId!==s.group || core.parsePostLink(r.permalink,source)?.postId!==r.postId) continue;
+        if(!explicit.has(r.postId) || !/^\d{5,30}$/.test(r.postId) || r.sourceType!=="GROUP" || r.sourceId!==s.group || core.parsePostLink(r.permalink,source)?.postId!==r.postId) continue;
         if(s.ids.has(r.postId)){inc(s,"responseDuplicateIds");continue;}
         if(s.ids.size>=20){inc(s,"responseLimitSkipped");continue;}
         s.ids.add(r.postId);s.counts.responseExactIds=s.ids.size;

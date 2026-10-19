@@ -518,6 +518,10 @@ class GeckoFixtureTest {
                     assertFalse(report.orEmpty().contains("PRIVATE")); assertFalse(report.orEmpty().contains("550000000000003"))
                     // The page creates an article ONLY after receiving the original UTF8 body.
                     assertEquals(1, channel.probe()!!.articles)
+                    val cancelStarted = android.os.SystemClock.elapsedRealtime()
+                    launch { delay(500); channel.abortResponseDiagnosis() }
+                    assertNull(channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 15_000))
+                    assertTrue("native abort waited for full window", android.os.SystemClock.elapsedRealtime() - cancelStarted < 10_000)
                     val again = channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 2_000)
                     assertTrue("again=$again", again?.contains("responseExactIds: 1") == true)
                     launch { delay(500); session.loadUri(server.url("/login/", "login")) }
