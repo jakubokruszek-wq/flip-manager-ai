@@ -41,8 +41,8 @@
   }
   function read(win, request) {
     const doc = win.document;
-    const blocked = () => !!doc.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[data-testid*="checkpoint"]') || /checkpoint|captcha|zaloguj się|log in|log into facebook/i.test((doc.title || "") + " " + ((doc.body && doc.body.innerText) || "").slice(0, 4000));
-    if (request.consent !== true || !context(win.location.href, request.groupId, request.allowLoopback) || blocked() || doc.visibilityState !== "visible") return {status:"STOP"};
+    const blocked = () => !!doc.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[data-testid*="checkpoint"]') || /checkpoint|captcha|zaloguj się|log in|log into facebook|content isn.t available|group is private|join group to see|ta zawartość jest niedostępna|ta treść jest niedostępna|dołącz do grupy, aby/i.test((doc.title || "") + " " + ((doc.body && doc.body.innerText) || "").slice(0, 4000));
+    if (request.consent !== true || !context(win.location.href, request.groupId, request.allowLoopback) || blocked() || doc.visibilityState !== "visible" || !(win.innerWidth > 0 && win.innerHeight > 0)) return {status:"STOP"};
     const visible = el => {
       const b = el.getBoundingClientRect(), s = win.getComputedStyle(el);
       return b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < win.innerHeight && b.right > 0 && b.left < win.innerWidth && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
@@ -55,7 +55,7 @@
     let cards = nodes.filter(semantic).filter(el => !el.parentElement.closest('article,[role="article"]'));
     if (!cards.length) cards = nodes.filter(el => !semantic(el) && !el.querySelector(selector) && /\d\s*(?:zł|PLN|m²|m2)/i.test(el.innerText || ""));
     const result = analyze({consent:true, href:win.location.href, groupId:request.groupId, fixture:request.allowLoopback, visible:true, blocked:blocked(), cards:cards.slice(0,20).map(el => ({semantic:semantic(el), text:el.innerText, hrefs:Array.from(el.querySelectorAll('a[href]')).filter(visible).map(a=>a.href), photos:Array.from(el.querySelectorAll('img')).filter(visible).length}))});
-    if (blocked() || !context(win.location.href, request.groupId, request.allowLoopback) || doc.visibilityState !== "visible") return {status:"STOP"};
+    if (blocked() || !context(win.location.href, request.groupId, request.allowLoopback) || doc.visibilityState !== "visible" || !(win.innerWidth > 0 && win.innerHeight > 0)) return {status:"STOP"};
     return result;
   }
   function watch(win, request, stop) {
@@ -64,7 +64,7 @@
     const check = () => {
       if (!context(win.location.href, request.groupId, request.allowLoopback) || win.document.visibilityState !== "visible" ||
           win.document.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="checkpoint"],[data-testid*="captcha"]') ||
-          /checkpoint|captcha|zaloguj się|log in|log into facebook/i.test((win.document.title || "") + " " + ((win.document.body && win.document.body.innerText) || "").slice(0,4000))) finish();
+          /checkpoint|captcha|zaloguj się|log in|log into facebook|content isn.t available|group is private|join group to see|ta zawartość jest niedostępna|ta treść jest niedostępna|dołącz do grupy, aby/i.test((win.document.title || "") + " " + ((win.document.body && win.document.body.innerText) || "").slice(0,4000))) finish();
     };
     const observer = new win.MutationObserver(check);
     observer.observe(win.document.documentElement, {childList:true, subtree:true, attributes:true, characterData:true});

@@ -23,3 +23,8 @@ test("page interruption and data clearing dispose the observer",()=>{
   clear(); assert.equal(disconnected,1);assert.equal(stopped,0);assert.equal(listeners.size,0);
   v.watch(win,{groupId},()=>stopped++);win.location.href=href.replace(groupId,"other");callback();assert.equal(stopped,1);assert.equal(disconnected,2);assert.equal(listeners.size,0);
 });
+
+test("lost group access stops before card extraction",()=>{
+ const win={innerWidth:500,innerHeight:900,location:{href},document:{title:"Facebook",body:{innerText:"Ta zawartość jest niedostępna"},visibilityState:"visible",querySelector(){return null},querySelectorAll(){throw Error("cards read after STOP")}}};
+ assert.equal(v.read(win,{consent:true,groupId}).status,"STOP");
+});
