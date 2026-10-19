@@ -27,7 +27,7 @@ concurrency:
 jobs:
   guard:
     name: Isolation, collector-core and adapter tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
 
   build:
     name: Compile, unit tests, APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 40
     defaults:
       run:
@@ -114,7 +114,7 @@ jobs:
 
   instrumented:
     name: GeckoView instrumented tests (Android 16 emulator, local HTML)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
