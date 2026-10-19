@@ -351,7 +351,7 @@ class GeckoFixtureTest {
     }
 
     @Test fun loadMeasurementIgnoresAnotherTab() {
-        val r = measureLoad("load-group", otherTab = "network-control")
+        val r = measureLoad("load-group", otherTab = "load-noise")
         assertEquals(LoadStatus.PASS, r.status)
         assertEquals(2, r.counts["loadPageXhr"]) // the other tab polls, but only this tab's 2 fetches count
         assertTrue(r.counts["loadOtherTab"]!! >= 1)
